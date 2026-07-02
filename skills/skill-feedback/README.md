@@ -17,16 +17,28 @@ Reports are evidence. They are not canonical skill instructions.
 
 ## Start Here
 
+Open the front-door dashboard:
+
+```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
+```
+
 Inspect help:
 
 ```bash
-bun --filter skill-feedback-scripts skill-feedback-runner -- --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
 ```
 
 Check inbox health:
 
 ```bash
-bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
+```
+
+Use JSON for automation:
+
+```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health
 ```
 
 Read shared language before interpreting trust terms:
@@ -60,31 +72,74 @@ come only from capture, closeout, `correlate --execute`, or `purge --execute`.
 
 ## CLI Commands
 
+Run operational commands from the target repo root. The zero-arg direct runner
+aliases `dashboard`, which emits the human launch surface. Human read commands
+support plain output and `--json` result envelopes. Machine-readable diagnostic
+commands emit raw JSON unless `--plain` is supported and passed.
+Package-filtered Bun commands are package-maintenance helpers and prefix stdout.
+
 Use JSON for automation. Use `--plain` for compact human reading where supported.
+Use `reports`, `report`, `usage`, and `queue` for human dashboard workflows.
+Use `review` and `health` for diagnostics and claim-safe ledger detail.
+
+| Command | Output | Repo targeting | Mutation |
+| --- | --- | --- | --- |
+| `dashboard` | plain | `--repo <path>` | read-only |
+| `reports` | plain, JSON | `--repo <path>` | read-only |
+| `report <report:id>` | plain, JSON | `--repo <path>` | read-only |
+| `usage` | plain, JSON | `--repo <path>` | read-only |
+| `queue` | plain, JSON | `--repo <path>` | read-only |
+| `record` | JSON | current repo only | writes report |
+| `closeout` | JSON | current repo only | writes closeout report |
+| `review` | JSON, plain | `--repo <path>` | read-only |
+| `health` | JSON, plain | `--repo <path>` | read-only |
+| `correlate` | JSON, plain | `--repo <path>` | preview; `--execute` writes witnesses |
+| `purge` | JSON | current repo only | preview; `--execute` deletes selected reports |
+
+`purge` does not support `--repo`; run it from the target repo root.
 
 ```bash
 # Health and discovery
-bun --filter skill-feedback-scripts skill-feedback-runner -- --help
-bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
+bun run skills/skill-feedback/src/skill-feedback-runner.ts dashboard
+bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
+
+# Human dashboard paths
+bun run skills/skill-feedback/src/skill-feedback-runner.ts reports --limit 10
+bun run skills/skill-feedback/src/skill-feedback-runner.ts reports --lane all --json
+bun run skills/skill-feedback/src/skill-feedback-runner.ts report report:<id>
+bun run skills/skill-feedback/src/skill-feedback-runner.ts usage --limit 10
+bun run skills/skill-feedback/src/skill-feedback-runner.ts queue --include-weak
+
+# Diagnostics
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 
 # Review
-bun --filter skill-feedback-scripts skill-feedback-runner -- review
-bun --filter skill-feedback-scripts skill-feedback-runner -- review --plain
-bun --filter skill-feedback-scripts skill-feedback-runner -- review --repo /path/to/repo
+bun run skills/skill-feedback/src/skill-feedback-runner.ts review
+bun run skills/skill-feedback/src/skill-feedback-runner.ts review --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts review --repo /path/to/repo
 
 # Correlation repair
-bun --filter skill-feedback-scripts skill-feedback-runner -- correlate --plain
-bun --filter skill-feedback-scripts skill-feedback-runner -- correlate --execute
+bun run skills/skill-feedback/src/skill-feedback-runner.ts correlate --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts correlate --repo /path/to/repo
+bun run skills/skill-feedback/src/skill-feedback-runner.ts correlate --repo /path/to/repo --execute
 
-# Retention purge
-bun --filter skill-feedback-scripts skill-feedback-runner -- purge --help
-bun --filter skill-feedback-scripts skill-feedback-runner -- purge --lane all --older-than 14d
+# Retention purge preview
+bun run skills/skill-feedback/src/skill-feedback-runner.ts purge --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts purge --lane all --older-than 14d
+bun run skills/skill-feedback/src/skill-feedback-runner.ts purge --lane low-signal --keep-latest 5
+
+# Retention purge execute after inspecting preview
+bun run skills/skill-feedback/src/skill-feedback-runner.ts purge --lane all --older-than 14d --execute
 
 # Capture and closeout
 git check-ignore --quiet .skill-feedback/
-bun --filter skill-feedback-scripts skill-feedback-runner -- record --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts record --help
 bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.json
 ```
+
+In purge output, `mode:"preview"` and `deleted_count:0` mean no deletion ran.
 
 Read [references/closeout-receipt.md](./references/closeout-receipt.md) before
 filing closeout. Public closeout input cannot create trust, proof, witness, or
@@ -113,11 +168,22 @@ skills/skill-feedback/
     report-shape.md          Report and result reading rules
   src/
     command-contract.ts      CLI contracts, schemas, enums, result types
-    skill-feedback-runner.ts CLI engine and command behavior
+    runtime-contract.ts      Runtime and read-target interfaces
+    runtime-file-safety.ts   Shared filesystem safety helpers
+    raw-object.ts            Shared raw JSON object helpers
+    decision-surface.ts      Review and health result assembly
+    skill-feedback-runner.ts CLI dispatch, default runtime, writes, orchestration, renderers
+    report-normalizer.ts     Persisted v0/v1/v2 parsing and proof-context normalization
+    inbox-read-model.ts      Safe inbox reads, proof facts, health facts, purge candidates
+    correlation-witness-artifacts.ts Private witness and diagnostic artifact IO
+    correlation-witness-workflow.ts Witness finalization, repair classification, overlays
     review-ledger-reducer.ts Review ledger and allowed claims
     ledger-anchor-adapter.ts Owner path anchor derivation
     capture-adapters.ts      Harness capture adapter seams
     redaction.ts             Agent-authored field redaction
+    report-helpers.ts        Evidence-gap helpers and stable report ids
+    branch-station-catalog.ts Branch coverage catalog
+    branch-station-evidence.ts Station evidence projection helpers
 ```
 
 Private runtime evidence lives under the target repo's gitignored
@@ -130,7 +196,9 @@ Private runtime evidence lives under the target repo's gitignored
 - Keep health and review mutation-free.
 - Use `correlate` preview before `correlate --execute`.
 - Use `purge` preview before `purge --execute`.
-- Resolve `report:<id>` through review JSON by `report_id`, not filename.
+- Resolve `report:<id>` through `reports`; unsafe, unknown, or duplicate refs
+  fail before detail rendering.
+- Open low-signal-only refs with `report <report:id> --low-signal`.
 - Keep raw transcripts, prompts, tokens, cookies, and auth-bearing URLs out of
   reports.
 - Change source owners when evidence points to source drift.

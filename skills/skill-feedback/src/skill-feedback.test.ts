@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with command scenario fixtures; package runner invokes this file without static imports.
 import {
 	chmod,
 	mkdtemp,
@@ -22,8 +24,11 @@ import type {
 	SkillFeedbackCorrelateResultData,
 } from "./command-contract";
 import {
+	SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+	SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
@@ -1401,6 +1406,86 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		).toHaveLength(1);
 	});
 
+	test("correlate execute dedupes duplicate repair diagnostics in one run", async () => {
+		const root = await makeIgnoredGitRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-duplicate-repair",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-duplicate-repair",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-duplicate-repair",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		const diagnosticBody = {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(root, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		} as const;
+		await writeCorrelationDiagnostic(
+			root,
+			"diagnostic_dededededededede.json",
+			diagnosticBody,
+		);
+		await writeCorrelationDiagnostic(
+			root,
+			"diagnostic_eeeeeeeeeeeeeeee.json",
+			diagnosticBody,
+		);
+
+		const execute = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-duplicate-repair-execute",
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const data = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts).toMatchObject({
+			candidate_count: 2,
+			repairable_count: 1,
+			already_linked_count: 1,
+			written_count: 1,
+			failed_count: 0,
+		});
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toHaveLength(1);
+	});
+
 	test("correlate preview keeps sparse missing-candidate diagnostics evidence-only", async () => {
 		const root = await makeRoot();
 		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
@@ -1694,6 +1779,91 @@ describe("skill-feedback U6 redaction and write gate", () => {
 				(entry) => entry.startsWith("witness_"),
 			),
 		).toHaveLength(1);
+	});
+
+	test("correlate execute writes witnesses to explicit repo target", async () => {
+		const callerRoot = await makeIgnoredGitRoot();
+		const targetRoot = await makeIgnoredGitRoot();
+		const targetRuntime = stubRuntime(targetRoot, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: targetRuntime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-explicit-target",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-explicit-target",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: targetRuntime,
+			runId: "closeout-correlate-explicit-target",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await writeCorrelationDiagnostic(targetRoot, "diagnostic_1212121212121212.json", {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(targetRoot, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		});
+		const runtime = stubRuntime(callerRoot, {
+			nowIso: () => GENERATED_TS,
+			resolveReadTarget: async (targetPath) => ({
+				ok: true,
+				explicit: true,
+				seedPath: targetPath ?? callerRoot,
+				repoRoot: targetRoot,
+				inboxPath: join(targetRoot, ".skill-feedback"),
+			}),
+		});
+
+		const execute = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-explicit-target-execute",
+			targetPath: targetRoot,
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const data = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: targetRoot,
+			inbox_path: join(targetRoot, ".skill-feedback"),
+		});
+		expect(data.counts).toMatchObject({
+			repairable_count: 1,
+			written_count: 1,
+		});
+		expect(
+			(
+				await readdir(join(targetRoot, ".skill-feedback", ".correlation"))
+			).filter((entry) => entry.startsWith("witness_")),
+		).toHaveLength(1);
+		await expect(readdir(join(callerRoot, ".skill-feedback"))).rejects.toThrow();
 	});
 
 	test("correlate execute reports partial changed state after a later write fails", async () => {
@@ -2730,6 +2900,17 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
 		});
 
+		const dashboardHelp = await runCli(["dashboard", "--help"]);
+		expect(dashboardHelp.exitCode).toBe(0);
+		expect(dashboardHelp.stderr).toBe("");
+		expect(dashboardHelp.stdout).toContain("dashboard [--repo <path>]");
+		assertCommandHelpFlagSurface({
+			command: "dashboard",
+			contract: skillFeedbackContracts.dashboard,
+			help: dashboardHelp.stdout,
+			absentFlags: ["--plain", "--goal", "--friction", "--model"],
+		});
+
 		const reviewHelp = await runCli(["review", "--help"]);
 		expect(reviewHelp.exitCode).toBe(0);
 		expect(reviewHelp.stderr).toBe("");
@@ -2792,10 +2973,195 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("skill-feedback                  Show read-only dashboard");
+		expect(result.stdout).toContain("dashboard [--repo <path>]");
+		expect(result.stdout).toContain("reports [--json]");
+		expect(result.stdout).toContain("report <report:id|id>");
+		expect(result.stdout).toContain("usage [--json]");
+		expect(result.stdout).toContain("queue [--json]");
 		expect(result.stdout).toContain("record --skill");
 		expect(result.stdout).toContain("health [--plain]");
 		expect(result.stdout).toContain("purge [--lane");
 		expect(result.stdout).toContain("correlate [--plain]");
+	});
+
+	test("runner zero-arg front door renders a read-only human dashboard", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli([], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(result.stdout).toContain("skill-feedback usage");
+		expect(result.stdout).toContain("skill-feedback queue");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+	});
+
+	test("runner dashboard command mirrors the zero-arg front door", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["dashboard"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard usage errors return a dashboard contract envelope", async () => {
+		const result = await runCli(["dashboard", "--plain"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("runner dashboard renders populated inbox checks", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(root, "dashboard-populated.json", {
+			reportId: "report-dashboard-populated",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["dashboard"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).toContain(
+			"Open latest report - `skill-feedback report report:report-dashboard-populated`.",
+		);
+		expect(result.stdout).toContain("Recent:");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard --repo resolves the explicit target", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller-a.json", {
+			reportId: "report-dashboard-caller-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(caller, "caller-b.json", {
+			reportId: "report-dashboard-caller-b",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+		await writeV1CloseoutInboxReport(target, "target.json", {
+			reportId: "report-dashboard-target",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["dashboard", "--repo", nestedTarget], {
+			cwd: caller,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).not.toContain("Reports: primary=2");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard routes blocked witness diagnostics to correlate", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:dashboard-correlate-preview",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-dashboard-correlate-preview",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+
+		const result = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "dashboard-correlate-preview",
+			dashboard: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("skill-feedback correlate --plain");
+		expect(result.stdout).toContain("skill-feedback reports");
+	});
+
+	test("runner dashboard routes retention warnings to purge help", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 100; index += 1) {
+			await writeV1CloseoutInboxReport(root, `dashboard-old-${index}.json`, {
+				reportId: `report-dashboard-old-${index}`,
+				generatedTs: "2026-05-20T00:00:00.000Z",
+				correlationStatus: "linked",
+				skillRunId: `run-dashboard-old-${index}`,
+				skillRunIdProvenance: "correlation_owned",
+			});
+		}
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "dashboard-retention",
+			dashboard: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Reports: primary=100 low-signal=0");
+		expect(result.stdout).toContain("skill-feedback purge --help");
+		expect(result.stdout).toContain("skill-feedback reports");
+	});
+
+	test("runner dashboard exits nonzero for unsafe inbox roots", async () => {
+		for (const setup of ["symlink", "file"] as const) {
+			const root = await makeIgnoredGitRoot();
+			if (setup === "symlink") {
+				const outside = await makeRoot();
+				await symlink(outside, join(root, ".skill-feedback"));
+			} else {
+				await writeFile(join(root, ".skill-feedback"), "not a directory");
+			}
+
+			const result = await runCli(["dashboard"], { cwd: root });
+
+			expect(result.exitCode, setup).toBe(1);
+			expect(result.stderr, setup).toBe("");
+			expect(result.stdout, setup).toContain("Skill Feedback");
+			expect(result.stdout, setup).toContain("Signal: inbox is unsafe");
+			expect(result.stdout, setup).toContain("skill-feedback health --plain");
+			expect(() => JSON.parse(result.stdout)).toThrow();
+		}
 	});
 
 	test("CLI usage errors return JSON without writing", async () => {
@@ -2874,6 +3240,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(plain.stderr).toBe("");
 		expect(plain.stdout).toContain("Skill Feedback Correlate");
 		expect(plain.stdout).toContain("repairable=1");
+		expect(plain.stdout).toContain(
+			`Next action: ${data.next_action.action_id} - ${data.next_action.summary}`,
+		);
 
 		const invalid = await runCli(["correlate", "--hook-report-id", "x"], {
 			cwd: root,
@@ -3366,6 +3735,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stdout).toContain("Warnings:");
 		expect(result.stdout).toContain("- inbox_missing:");
 		expect(result.stdout).toContain("Readiness:");
+		for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+			expect(result.stdout).toContain(`- ${surface.label}:`);
+		}
 		expect(result.stdout).toContain("Correlation: none linked=0 unlinked=0");
 		expect(result.stdout).toContain("Next action: confirm-capture-path");
 	});
@@ -3777,6 +4149,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.counts.low_signal).toBe(1);
 		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 	});
 
 		test("health does not warn below the low-signal threshold", async () => {
@@ -4202,7 +4577,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			.resolves.toContain("report-old");
 	});
 
-	test("purge preview ignores private correlation witness files", async () => {
+	test("purge preview ignores private correlation witness and diagnostic files", async () => {
 		const root = await makeRoot();
 		await writeInboxReport(
 			root,
@@ -4217,6 +4592,10 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		await writeFile(
 			join(witnessDir, "witness_1111111111111111.json"),
 			`${JSON.stringify({ schema_version: "1", witness_id: "witness_1111111111111111" })}\n`,
+		);
+		await writeFile(
+			join(witnessDir, "diagnostic_1111111111111111.json"),
+			`${JSON.stringify({ schema_version: "1", kind: "correlation_diagnostic" })}\n`,
 		);
 
 		const result = await purgeSkillFeedbackInbox({
@@ -4240,6 +4619,47 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		await expect(
 			readFile(join(witnessDir, "witness_1111111111111111.json"), "utf-8"),
 		).resolves.toContain("witness_1111111111111111");
+		await expect(
+			readFile(join(witnessDir, "diagnostic_1111111111111111.json"), "utf-8"),
+		).resolves.toContain("correlation_diagnostic");
+	});
+
+	test("purge keeps interrupted temp artifacts as invalid-health evidence", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old-temp",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const tempPath = join(root, ".skill-feedback", "partial.json.tmp-fixture");
+		await writeFile(tempPath, "{}");
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-temp-invalid-evidence",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			deleted_count: number;
+			invalid_count: number;
+			invalid_paths: string[];
+		};
+		expect(data.deleted_count).toBe(1);
+		expect(data.invalid_count).toBe(1);
+		expect(data.invalid_paths).toEqual([
+			".skill-feedback/partial.json.tmp-fixture",
+		]);
+		await expect(readFile(tempPath, "utf-8")).resolves.toBe("{}");
 	});
 
 	test("purge execute deletes selected low-signal reports only", async () => {
@@ -4468,6 +4888,42 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		).resolves.toContain("report-newest");
 	});
 
+	test("purge execute leaves the pilot marker manual and source-owned", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old-pilot-marker",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		await writeFile(markerPath, "2026-06-01T00:00:00.000Z\n", "utf-8");
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-keeps-pilot-marker",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.deleted_count).toBe(1);
+		expect(data.deleted_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(readFile(markerPath, "utf-8")).resolves.toBe(
+			"2026-06-01T00:00:00.000Z\n",
+		);
+	});
+
 	test("purge reports unsafe and invalid artifacts without following them", async () => {
 		const root = await makeRoot();
 		await writeInboxReport(
@@ -4692,13 +5148,21 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			coverage: { total_reports: number };
 			inbox_health: { primary_count: number; low_signal_count: number };
 			ledger_entries: Array<{ owner_paths: string[]; allowed_claims: string[] }>;
-			claim_readiness: { runtime_capture: { status: string } };
+			claim_readiness: {
+				runtime_capture: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
+			};
 		};
 		expect(data.schema_version).toBe(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION);
 		expect(data.coverage.total_reports).toBe(1);
 		expect(data.inbox_health.primary_count).toBe(1);
 		expect(data.inbox_health.low_signal_count).toBe(1);
 		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 		expect(data.ledger_entries).toHaveLength(1);
 		expect(data.ledger_entries[0]?.owner_paths).toEqual([
 			"skills/fallow/SKILL.md",
@@ -4742,10 +5206,21 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const data = parseEnvelope(review.stdout).data as {
 			coverage: { total_reports: number; capture_only_count: number };
 			inbox_health: { low_signal_count: number };
+			claim_readiness: {
+				claude_daily_pilot: { status: string; reason_ids: string[] };
+				codex_trusted_skill_identity: { status: string };
+			};
 		};
 		expect(data.coverage.total_reports).toBe(1);
 		expect(data.coverage.capture_only_count).toBe(1);
 		expect(data.inbox_health.low_signal_count).toBe(0);
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("ready");
+		expect(data.claim_readiness.claude_daily_pilot.reason_ids).toContain(
+			"decision_44_claude_supported",
+		);
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 	});
 
 	test("primary hook capture and closeout with one strong anchor show mixed evidence only", async () => {
@@ -5089,26 +5564,51 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 	});
 
-	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
-		const root = await makeIgnoredGitRoot();
-		await writeInboxReport(root, "plain-heavy.json", {
+	async function writePlainReviewCloseoutReport(
+		root: string,
+		name: string,
+		input: {
+			reportId: string;
+			reportCard?: Partial<CloseoutReceipt>;
+			evidenceGaps?: unknown[];
+			generatedTs?: string;
+			skillRunId?: string;
+		},
+	): Promise<void> {
+		await writeInboxReport(root, name, {
 			schema_version: "1",
-			report_id: "report-plain-heavy",
+			report_id: input.reportId,
 			untrusted_evidence: true,
-			generated_ts: "2020-01-01T00:00:00.000Z",
+			generated_ts: input.generatedTs ?? GENERATED_TS,
 			evidence_source: "driver_closeout",
 			correlation_status: "linked",
-			skill_run_id: "run-plain",
+			...(input.skillRunId ? { skill_run_id: input.skillRunId } : {}),
 			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
 			report_card: {
 				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [],
+				...input.reportCard,
+			},
+			evidence_gaps: input.evidenceGaps ?? [],
+		});
+	}
+
+	test("review --plain renders open actions, retention, and pilot checkpoint", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writePlainReviewCloseoutReport(root, "plain-heavy.json", {
+			reportId: "report-plain-heavy",
+			generatedTs: "2020-01-01T00:00:00.000Z",
+			skillRunId: "run-plain",
+			reportCard: {
 				friction: { category: "tool_failure", note: "Tool failed." },
 				verification_burden: {
 					level: "heavy",
 					note: "Needed full verification.",
 				},
 			},
-			evidence_gaps: [
+			evidenceGaps: [
 				{
 					code: "missing_runtime_git_sha",
 					path: "runtime.git_sha",
@@ -5129,7 +5629,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 		expect(direct.exitCode).toBe(0);
 		expect(direct.stderr).toBe("");
-		expect(direct.stdout).toContain("Open items:");
+		expect(direct.stdout).toContain("Open actions:");
 
 		const result = await runCli(["review", "--plain"], { cwd: root });
 
@@ -5137,13 +5637,219 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("Skill Feedback Review");
 		expect(result.stdout).toContain("Reports: 1");
-		expect(result.stdout).toContain("Open items:");
-		expect(result.stdout).toContain("- high_verification_burden:");
-		expect(result.stdout).toContain("- evidence_gap:");
+		expect(result.stdout).toContain("Open actions:");
+		expect(result.stdout).toContain("Engineering signals:");
+		expect(result.stdout.indexOf("top_warning=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("- next_action=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("Engineering signals:")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("Readiness:")).toBeLessThan(
+			result.stdout.indexOf("Open actions:"),
+		);
+		expect(result.stdout.indexOf("Open actions:")).toBeLessThan(
+			result.stdout.indexOf("Ledger:"),
+		);
+		expect(result.stdout).toContain("- action=action:");
+		expect(result.stdout).toContain(
+			"next=Inspect the verification burden note against source and tests.",
+		);
+		expect(result.stdout).toContain("evidence=report:report-plain-heavy");
+		expect(result.stdout).toContain("reason=high_verification_burden");
+		expect(result.stdout).toContain("owner=skills/create-skill/SKILL.md");
+		expect(result.stdout).toContain("full_evidence=json");
 		expect(result.stdout).toContain(
 			"Retention: Inbox is ready for a future gated purge workflow.",
 		);
 		expect(result.stdout).toContain("Pilot checkpoint:");
+	});
+
+	test("review --plain caps open actions while JSON keeps complete evidence", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 11; index += 1) {
+			await writePlainReviewCloseoutReport(root, `action-${index}.json`, {
+				reportId: `report-action-${index}`,
+				reportCard: {
+					observations: [
+						{
+							kind: "tool_failure",
+							target: {
+								type: "path",
+								value: `skills/skill-feedback/action-${index}.md`,
+							},
+							summary: `Owner path ${index} needs inspection.`,
+							evidence_basis: "driver_observed",
+						},
+					],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.open_actions).toHaveLength(11);
+		const actionLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- action="));
+		expect(actionLines).toHaveLength(10);
+		expect(actionLines[0]?.startsWith("- action=action:")).toBe(true);
+		expect(actionLines[0]).toContain(" next=Inspect the owner path");
+		expect(actionLines[0]).toContain(" evidence=report:");
+		expect(plain.stdout).toContain("truncated_open_actions=1");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps ledger anchors while JSON ledger stays complete", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 21; index += 1) {
+			await writePlainReviewCloseoutReport(root, `ledger-${index}.json`, {
+				reportId: `report-ledger-${index}`,
+				reportCard: {
+					touched_surfaces: [
+						{
+							type: "path",
+							value: `skills/skill-feedback/ledger-${index}.md`,
+						},
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.ledger_entries).toHaveLength(21);
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(ledgerLines).toHaveLength(20);
+		expect(ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/")).toBe(
+			true,
+		);
+		expect(plain.stdout).toContain("truncated_ledger_entries=1");
+		expect(plain.stdout).not.toContain("truncated_open_actions=");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps per-row evidence refs and reports omitted counts", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 5; index += 1) {
+			await writePlainReviewCloseoutReport(root, `repeat-${index}.json`, {
+				reportId: `repeat-${index}`,
+				reportCard: {
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during verification.",
+					},
+					touched_surfaces: [
+						{ type: "path", value: "skills/skill-feedback/shared.md" },
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-evidence-ref-cap",
+			plain: true,
+		});
+
+		const actionLine = plain.stdout
+			.split("\n")
+			.find((line) => line.includes("reason=repeated_friction"));
+		expect(actionLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(actionLine ?? "").toContain("evidence_refs_omitted=2");
+		const signalLine = plain.stdout
+			.split("\n")
+			.find((line) => line.includes("reason=repeated_anchor"));
+		expect(signalLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(signalLine ?? "").toContain("evidence_refs_omitted=2");
+		const ledgerLine = plain.stdout
+			.split("\n")
+			.find((line) => line.startsWith("- owner=skills/skill-feedback/shared.md"));
+		expect(ledgerLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(ledgerLine ?? "").toContain("evidence_refs_omitted=2");
+	});
+
+	test("review --plain ranks open ledger anchors before no-action unknown owners", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "label.json", {
+			schema_version: "1",
+			report_id: "label-only",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [{ type: "label", value: "runtime" }],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+		await writeInboxReport(root, "path.json", {
+			schema_version: "1",
+			report_id: "path-owned",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [
+					{ type: "path", value: "skills/skill-feedback/open.md" },
+				],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-rank-owner",
+			plain: true,
+		});
+
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(
+			ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/open.md"),
+		).toBe(true);
+		expect(ledgerLines).toContainEqual(
+			expect.stringContaining("- owner=unknown evidence=report:label-only"),
+		);
 	});
 
 	test("review pilot density counts closeouts with open signal when action exists", async () => {
@@ -5289,11 +5995,17 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			pilot_checkpoint?: { age_days: number; density: number };
+			pilot_checkpoint?: {
+				age_days: number;
+				density: number;
+				next_action: string;
+			};
 		};
 		expect(data.pilot_checkpoint).toMatchObject({
 			age_days: 7,
 			density: 1,
+			next_action:
+				"Review pilot density; keep the marker as manual source evidence.",
 		});
 		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
 	});
@@ -5405,7 +6117,10 @@ describe("skill-feedback U6 review v2 renderers", () => {
 				evidence_tier: string;
 				allowed_claims: string[];
 			}>;
-			claim_readiness: { runtime_capture: { status: string } };
+			claim_readiness: {
+				runtime_capture: { status: string };
+				claude_daily_pilot: { status: string };
+			};
 			allowed_claims?: unknown;
 		};
 		expect(data.review_units).toHaveLength(2);
@@ -5424,6 +6139,7 @@ describe("skill-feedback U6 review v2 renderers", () => {
 		// Claude Stop capture is not Codex runtime evidence, so Codex runtime
 		// capture readiness stays blocked (R19: Claude Stop does not prove Codex).
 		expect(data.claim_readiness.runtime_capture.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
 		// Claims stay entry-local; no global allowed_claims (Decision 24).
 		expect(data.allowed_claims).toBeUndefined();
 	});
@@ -5466,6 +6182,9 @@ describe("skill-feedback U6 review v2 renderers", () => {
 		expect(out).toContain("mixed_evidence_sources");
 		expect(out).toContain("runtimes=codex_stop");
 		expect(out).not.toContain("corroborated");
+		for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+			expect(out).toContain(`- ${surface.label}:`);
+		}
 	});
 
 	test("untrusted labels with control characters cannot spoof plain sections (AE8)", async () => {
@@ -5665,13 +6384,19 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 				runtime_capture: { status: string; reason_ids: string[] };
 				trusted_skill_identity: { status: string };
 				daily_pilot: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
 			};
 		};
 		// Codex Stop evidence is runtime_observed only (R18): runtime capture is
-		// evidence_only, identity and daily pilot stay blocked.
+		// evidence_only; Codex identity and the Claude pilot stay separate.
 		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
 		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
 			"hook_approval_state_not_machine_observable",
 		);
@@ -5682,7 +6407,8 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 			plain: true,
 		});
 		expect(plain.stdout).toContain("runtime capture: evidence_only");
-		expect(plain.stdout).toContain("trusted skill identity: blocked");
+		expect(plain.stdout).toContain("Claude daily pilot: blocked");
+		expect(plain.stdout).toContain("Codex Trusted skill identity: blocked");
 	});
 
 	test("trusted Codex Stop provenance with placeholder runtime stays evidence-only", async () => {
@@ -5723,12 +6449,16 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 			claim_readiness: {
 				runtime_capture: { status: string };
 				trusted_skill_identity: { status: string };
+				codex_trusted_skill_identity: { status: string };
 			};
 		};
 		// Placeholder runtime values cannot prove trusted skill identity; runtime
 		// capture is still evidence_only, identity stays blocked.
 		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 	});
 
 		test("trusted Codex Stop identity stays evidence-only, never ready (R18)", async () => {
@@ -5760,15 +6490,22 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 				runtime_capture: { status: string; reason_ids: string[] };
 				trusted_skill_identity: { status: string };
 				daily_pilot: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
 			};
 			coverage: { evidence_gap_count: number };
 		};
 		// Even trusted-provenance Codex Stop evidence cannot reach `ready`: it is
-		// runtime_observed only (R18). Runtime capture is evidence_only; identity
-		// and daily pilot stay blocked. This is the readiness collapse U5 prevents.
+		// runtime_observed only (R18). Runtime capture is evidence_only; Codex
+		// identity and the Claude pilot stay blocked. This is the readiness
+		// collapse U5 prevents.
 		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
 		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
 		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
 			"hook_approval_state_not_machine_observable",
 		);

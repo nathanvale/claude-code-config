@@ -423,7 +423,7 @@ scripts/
 
 **Approach:** Move process-boundary tests out of the larger unit-style `skill-feedback.test.ts` where that improves ownership. Use direct runner invocation, not `bun --filter`, for stdin-fed commands. Derive integration rows from the Branch Station Catalog and record observed evidence in a small v1 evidence manifest during the test run. Keep pure engine and parser tests in the existing test file.
 
-**Patterns to follow:** `skills/skill-feedback/SKILL.md` closeout workflow, `skills/create-cli/references/cli-command-facade.md` `bun --filter` warning, existing `runCli` helper behavior, and the U5 Branch Station Catalog scaffold.
+**Patterns to follow:** `skills/skill-feedback/SKILL.md` closeout workflow, `skills/cli-author/references/cli-command-facade.md` `bun --filter` warning, existing `runCli` helper behavior, and the U5 Branch Station Catalog scaffold.
 
 **Test scenarios:**
 
@@ -457,9 +457,9 @@ scripts/
 
 **Approach:** Extend the existing facade-backed auditor CLI rather than creating a sibling tool. Add `station-map <target> [--json] [--ledger <path>]` as a separate command. It reads target facade discovery, the package Branch Station Catalog, and any station evidence manifest; emits canonical JSON; and converts missing or drifted required stations into station findings. Preserve existing `audit` lane clause behavior and ledger writes.
 
-**Execution note:** Use create-cli proof discipline because this changes a facade-backed CLI surface.
+**Execution note:** Use cli-author proof discipline because this changes a facade-backed CLI surface.
 
-**Patterns to follow:** `skills/cli-execution-auditor/src/audit-engine.ts`, `skills/cli-execution-auditor/src/auditor.ts`, `skills/cli-execution-auditor/src/clause-catalog.ts`, and `skills/create-cli/references/cli-command-facade.md`.
+**Patterns to follow:** `skills/cli-execution-auditor/src/audit-engine.ts`, `skills/cli-execution-auditor/src/auditor.ts`, `skills/cli-execution-auditor/src/clause-catalog.ts`, and `skills/cli-author/references/cli-command-facade.md`.
 
 **Test scenarios:**
 
@@ -486,25 +486,25 @@ scripts/
 
 **Dependencies:** U1 through U7.
 
-**Files:** `skills/create-cli/references/cli-command-facade.md`, `skills/cli-execution-auditor/SKILL.md`, `skills/agent-reliability-guardrails/references/test-matrix.md`, `CONTEXT.md`.
+**Files:** `skills/cli-author/references/cli-command-facade.md`, `skills/cli-execution-auditor/SKILL.md`, `skills/agent-reliability-guardrails/references/test-matrix.md`, `CONTEXT.md`.
 
 **Approach:** Document Station Maps as an optional facade-backed CLI proof path. Keep exact field contracts in code. The docs should name owners and next safe actions rather than copying schemas. For new facade-backed CLIs, document the package-owned Branch Station Catalog as a contract-time scaffold created beside `command-contract.ts` before runner behavior and process integration rows.
 
-**Patterns to follow:** AGENTS.md skill authoring rules, `skills/create-cli/references/agent-native-cli-design.md`, and `CONTEXT.md` vocabulary style.
+**Patterns to follow:** AGENTS.md skill authoring rules, `skills/cli-author/references/agent-native-cli-design.md`, and `CONTEXT.md` vocabulary style.
 
 **Test scenarios:**
 
-- `create-cli` reference points to Station Map owners without duplicating schema.
-- `create-cli` reference tells agents to scaffold package-owned Branch Station Catalogs with command contracts for new facade-backed CLIs.
-- `create-cli` reference tells planning agents to name initial Branch Station ids before implementation writes the package catalog.
+- `cli-author` reference points to Station Map owners without duplicating schema.
+- `cli-author` reference tells agents to scaffold package-owned Branch Station Catalogs with command contracts for new facade-backed CLIs.
+- `cli-author` reference tells planning agents to name initial Branch Station ids before implementation writes the package catalog.
 - `cli-execution-auditor` skill names the `station-map <target> [--json] [--ledger <path>]` report as an optional workflow after implementation lands.
-- Covers AE6. Documentation states Station Map checks stay optional and are not promoted to create-cli or create-skill gates in this iteration.
+- Covers AE6. Documentation states Station Map checks stay optional and are not promoted to cli-author or create-skill gates in this iteration.
 - Documentation names the promotion trigger: revisit gate status after repeated real misses across distinct CLIs.
 - Agent-reliability test matrix mentions Station Maps as optional Declared Branch Coverage.
 - `CONTEXT.md` defines any new durable terms used across packages.
 - YAML frontmatter still parses for touched `SKILL.md` files.
 
-**Verification:** A future agent can find the Station Map path from `create-cli` and `cli-execution-auditor` without startup instruction changes.
+**Verification:** A future agent can find the Station Map path from `cli-author` and `cli-execution-auditor` without startup instruction changes.
 
 ---
 
@@ -532,7 +532,7 @@ scripts/
 - Rich durable station evidence receipt files written by tests; v1 uses a minimal evidence manifest.
 - Generated test source files from Station Maps.
 - HTML branch workbench report with visual coverage tables.
-- Mandatory create-cli or create-skill gate.
+- Mandatory cli-author or create-skill gate.
 - Persisted per-CLI lane markers for non-facade and hand-rolled CLI lanes.
 - Hand-rolled CLI Station Map support beyond static best-effort checks.
 - Auto-fixing safe station findings.
@@ -587,6 +587,6 @@ scripts/
 - `skills/cli-execution-auditor/src/audit-engine.ts`
 - `skills/cli-execution-auditor/src/auditor.ts`
 - `skills/cli-execution-auditor/src/clause-catalog.ts`
-- `skills/create-cli/references/agent-native-cli-design.md`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-command-facade.md`
 - `context/code-style.md`

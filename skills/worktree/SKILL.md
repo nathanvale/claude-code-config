@@ -30,7 +30,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 - `runtime/agent-worktree`: hard dependency for live worktree discovery, main-owner resolution, lifecycle verbs, cleanup preview, and recovery vocabulary.
 - `code` on PATH (or `defaults.codeBin`): needed only by `worktree open <name>`. Other verbs do not launch VS Code.
 - `codex` on PATH: needed by `worktree app <branch>` and best-effort thread archival during `worktree rm`. App launch absence → `codex_app_not_found`; removal still completes with partial cleanup metadata.
-- `create-cli`: hard dependency before changing the CLI contract surface.
+- `cli-author`: hard dependency before changing the CLI contract surface.
 
 ## Safety
 

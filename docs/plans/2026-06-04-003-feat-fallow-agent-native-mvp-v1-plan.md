@@ -340,7 +340,7 @@ module before runtime logic.
 - Add script-local `test` and `typecheck` commands.
 - Depend on `@side-quest/cli-command-facade`, `typescript`, and `bun-types`
   through the script-local package, following
-  `skills/create-cli/references/cli-command-facade.md`.
+  `skills/cli-author/references/cli-command-facade.md`.
 - Make `bun install` from `skills/fallow/scripts` the dependency setup path.
 - Add a setup check that imports `@side-quest/cli-command-facade` before runtime
   implementation begins.
@@ -759,10 +759,10 @@ runtime contracts.
 
 ## Existing Patterns
 
-- `skills/create-cli/SKILL.md` owns the CLI design brief shape.
-- `skills/create-cli/references/agent-native-cli-design.md` owns the
+- `skills/cli-author/SKILL.md` owns the CLI design brief shape.
+- `skills/cli-author/references/agent-native-cli-design.md` owns the
   agent-native runtime-contract minimum.
-- `skills/create-cli/references/cli-command-facade.md` owns the facade-backed
+- `skills/cli-author/references/cli-command-facade.md` owns the facade-backed
   implementation path.
 - `skills/browser-use/scripts/command-contract.ts` shows local facade contract
   ownership and package-owned vocabulary placement.
@@ -812,10 +812,10 @@ runtime contracts.
 - `docs/decisions/2026-06-04-fallow-agent-native-decision-log.md`.
 - `docs/research/2026-06-04-fallow-ai-code-quality-tool.md`.
 - `docs/research/2026-06-04-fallow-agent-lens.md`.
-- `skills/create-cli/SKILL.md`.
-- `skills/create-cli/references/cli-guidelines.md`.
-- `skills/create-cli/references/agent-native-cli-design.md`.
-- `skills/create-cli/references/cli-command-facade.md`.
+- `skills/cli-author/SKILL.md`.
+- `skills/cli-author/references/cli-guidelines.md`.
+- `skills/cli-author/references/agent-native-cli-design.md`.
+- `skills/cli-author/references/cli-command-facade.md`.
 - `skills/browser-use/scripts/command-contract.ts`.
 - `skills/browser-use/scripts/browser-use.test.ts`.
 - `skills/browser-use/scripts/preflight-browser-adapter.test.ts`.

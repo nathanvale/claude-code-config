@@ -333,7 +333,7 @@ stateDiagram-v2
 - Hook runtime owner: `hooks/skill-feedback-runtime.ts`.
 - Claude Stop hook owner: `hooks/skill-feedback-stop.ts`.
 - Existing proof tests: `skills/skill-feedback/src/skill-feedback.test.ts`, `skills/skill-feedback/src/command-contract.test.ts`, `hooks/skill-feedback-hooks.test.ts`.
-- Facade CLI guidance: `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
+- Facade CLI guidance: `skills/cli-author/references/agent-native-cli-design.md`, `skills/cli-author/references/cli-command-facade.md`.
 
 ## Deferred / Open Questions
 

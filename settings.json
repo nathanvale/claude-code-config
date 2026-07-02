@@ -40,6 +40,7 @@
     ],
     "defaultMode": "auto"
   },
+  "model": "claude-fable-5[1m]",
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
   "hooks": {
@@ -182,11 +183,9 @@
     }
   },
   "alwaysThinkingEnabled": false,
-  "effortLevel": "max",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "autoCompactEnabled": true,
-  "skipAutoPermissionPrompt": true,
-  "model": "opus[1m]"
+  "skipAutoPermissionPrompt": true
 }

@@ -23,18 +23,43 @@ Rules:
 
 ## Timeline Index
 
-| Date | Outcome | Trust Added | Active Follow-Up |
+| Date | Outcome | Trust Added | Follow-Up / Current Status |
 | --- | --- | --- | --- |
 | 2026-06-11 | v0 capture package | Hook-owned report writes, gitignore gate, redaction | Later report-card and review work |
-| 2026-06-12 | report-card v1 | Driver closeout, typed gaps, mutation-free review | Daily pilot gate |
-| 2026-06-13 | claim-safe v2 review | Entry-local claims, owner-path anchors, readiness split | Correlation and Codex identity |
-| 2026-06-13 | review merge hardening | Low-signal lane, purge containment, stable refs | Health command |
-| 2026-06-15 | health command | False-empty prevention, next-action routing | Correlation health |
-| 2026-06-24 | writer proof | Local `.trust/`, proof health, evidence-only fallback | Trusted identity remains separate |
-| 2026-06-25 | correlation witnesses | Private Claude hook-to-closeout links | Backfill repair |
-| 2026-06-28 | correlation backfill plan | Preview/execute repair contract direction | Durable candidate source |
-| 2026-06-29 | docs router and tracker uplift | Package docs split, tracker lanes, ICA vocabulary cleanup | `TASKS.md` active queue |
-| 2026-06-29 | correlation backfill shipped | `correlate` preview/execute, durable finalizer-authored candidate source, verified on main | Trusted skill identity |
+| 2026-06-12 | report-card v1 | Driver closeout, typed gaps, mutation-free review | Claude daily pilot supported; Codex identity deferred |
+| 2026-06-13 | claim-safe v2 review | Entry-local claims, owner-path anchors, readiness split | Correlation shipped; Codex identity deferred |
+| 2026-06-13 | review merge hardening | Low-signal lane, purge containment, stable refs | Health command shipped |
+| 2026-06-15 | health command | False-empty prevention, next-action routing | Correlation health shipped |
+| 2026-06-24 | writer proof | Local `.trust/`, proof health, evidence-only fallback | Codex Trusted skill identity stays separate and deferred |
+| 2026-06-25 | correlation witnesses | Private Claude hook-to-closeout links | Backfill repair shipped |
+| 2026-06-28 | correlation backfill plan | Preview/execute repair contract direction | Durable candidate source resolved in code |
+| 2026-06-29 | docs router and tracker uplift | Package docs split, tracker lanes, ICA vocabulary cleanup | Current queue lives in `TASKS.md` |
+| 2026-06-29 | correlation backfill shipped | `correlate` preview/execute, durable finalizer-authored candidate source, verified on main | Codex lifecycle watch; Trusted skill identity deferred |
+| 2026-06-29 | Claude daily-pilot readiness scoped | Claude readiness separated from Codex Trusted skill identity | Codex lifecycle watch |
+| 2026-06-29 | P0/P1 ownership refactor closed | Normalizer, inbox read, and witness workflow owners split from runner/catalog | P2 renderer and harness work later closed |
+| 2026-06-30 | Decision Surface Renderer | Plain readiness labels are contract-owned; correlate action text stays result-owned | Branch Station scenario harness later closed |
+| 2026-06-30 | P2 queue closed | Station helpers and retention no-build contracts pinned by tests | No open P2 tasks |
+| 2026-06-30 | Dirty-tree review follow-ups closed | Artifact and runtime ownership split; plan directives made imperative | One P3 purge output parity question remains |
+| 2026-06-30 | Decision surface and bounded review plain closed | Review/health assembly owner split; plain review bounded around next action | One P3 purge output parity question remains |
+| 2026-06-30 | Inherited Fallow cleanup closed | Audit, dead-code, dupes, and health clean for skill-feedback | One P3 purge output parity question remains |
+| 2026-07-02 | Human dashboard MVP | Reports, detail, usage, and queue commands give humans safe read paths | Review findings patched; current queue lives in `TASKS.md` |
+
+## 2026-07-02 - Human Dashboard MVP
+
+- Outcome: the zero-arg dashboard became a human launch surface, with read-only
+  `reports`, `report`, `usage`, and `queue` commands.
+- Trust added: humans can inspect report refs, low-signal gates, skill usage,
+  and evidence-backed improvement candidates without entering diagnostic review
+  first.
+- Evidence: `skills/skill-feedback/docs/plans/2026-07-02-001-feat-skill-feedback-human-observability-mvp-plan.md`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/branch-station-catalog.ts`.
+- Decisions: `report:<id>` is the human continuation boundary; unsafe, unknown,
+  duplicate, and low-signal-only refs fail closed. Queue rows prefer owner-path
+  evidence, fall back to skill rows only after filters, and keep weak evidence
+  opt-in.
+- Follow-up: keep active review follow-ups in `TASKS.md`.
 
 ## 2026-06-11 - V0 Capture Package
 
@@ -133,8 +158,8 @@ Rules:
   `skills/skill-feedback/src/command-contract.ts`;
   `skills/skill-feedback/src/skill-feedback-runner.ts`.
 - Decisions: execute recomputes current private evidence before writing.
-- Follow-up: define durable repairable candidate source or narrow execute scope
-  in `TASKS.md`.
+- Follow-up: durable repairable candidate source shipped in the 2026-06-29
+  correlation backfill.
 
 ## 2026-06-29 - Correlation Backfill Shipped
 
@@ -163,7 +188,58 @@ Rules:
   clean; merged to main at `1c38f90a`.
 - Decisions: legacy sparse diagnostics remain unrecoverable by design; durable
   candidate sources are finalizer-authored, never public input.
-- Follow-up: trusted skill identity remains the daily-pilot blocker.
+- Follow-up: Codex Trusted skill identity remains deferred/watchpoint; Claude
+  daily pilot is supported.
+
+## 2026-06-29 - Claude Daily-Pilot Readiness Scoped
+
+- Outcome: `health` and `review` now render Claude daily-pilot support as a
+  runtime-scoped readiness fact while Codex Trusted skill identity remains
+  blocked/deferred.
+- Trust added: agents can use Claude Code daily-pilot wording without claiming
+  Codex can prove Trusted skill identity.
+- Evidence: `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`;
+  `skills/skill-feedback/CONTEXT.md`;
+  `skills/skill-feedback/references/report-shape.md`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`.
+- Verification: `health --plain` shows Claude daily pilot `ready` and Codex
+  Trusted skill identity `blocked`; `review` JSON schema is `7`; health schema
+  is `4`; package tests pass (7 files, 274 tests, 0 failed); typecheck clean.
+- Caveat: Fallow still reports reviewed introduced private-helper prompts
+  around the Claude Stop trust predicate; behavior is covered through public
+  health and review tests.
+- Decisions: Decision 44 supersedes the old Codex E2E daily-pilot blocker for
+  Claude-supported daily use.
+- Follow-up: Codex Trusted skill identity remains deferred/watchpoint; no
+  active `TASKS.md` item tracks it until an engine-owned source appears.
+
+## 2026-06-29 - P0/P1 Ownership Refactor Closed
+
+- Outcome: the six open P1s from `TASKS.md` closed without expanding into the
+  P2 queue. Codex lifecycle support remains a watchpoint, native
+  skill-attributed cost remains `cost_unavailable`, and `report:<id>` remains a
+  documented review JSON lookup.
+- Trust added: command discovery, help, parser rules, result contracts, and
+  schema versions remain facade-owned while persisted report normalization,
+  inbox evidence reads, and correlation witness workflow behavior have narrower
+  source owners.
+- Evidence: `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/report-normalizer.ts`;
+  `skills/skill-feedback/src/inbox-read-model.ts`;
+  `skills/skill-feedback/src/correlation-witness-workflow.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/references/report-shape.md`;
+  `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`.
+- Verification: package tests pass (9 files, 276 tests, 0 failed); typecheck
+  clean; help, health, review, and whitespace gates pass.
+- Decisions: official Codex docs refreshed on 2026-06-29 showed skill
+  invocation and hook events but no engine-owned skill-use lifecycle event, so
+  Codex Trusted skill identity remains deferred. No trusted native
+  skill-attributed cost source was named. No downstream raw report lookup
+  friction justified a public resolver command.
+- Follow-up: P2 renderer and harness work later closed on 2026-06-30.
 
 ## 2026-06-29 - Docs Router And Tracker Uplift
 
@@ -180,3 +256,107 @@ Rules:
 - Decisions: `SKILL.md` remains workflow owner; `AGENTS.md` routes package
   maintenance.
 - Follow-up: use `TASKS.md` for current queue.
+
+## 2026-06-30 - Decision Surface Renderer
+
+- Outcome: `health --plain` and `review --plain` now render readiness labels
+  from `SKILL_FEEDBACK_DECISION_READINESS_SURFACES`; `correlate --plain`
+  next-action text is asserted from correlate result data.
+- Trust added: plain renderers repeat contract-owned decision surfaces and
+  result-owned actions instead of choosing readiness claims in renderer code.
+- Evidence: `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/command-contract.test.ts`;
+  `skills/skill-feedback/src/skill-feedback.test.ts`.
+- Verification: package tests pass (9 files, 277 tests, 0 failed); typecheck,
+  help, health, review, correlate, and whitespace gates pass.
+- Follow-up: Branch Station scenario harness later closed on 2026-06-30.
+
+## 2026-06-30 - P2 Queue Closed
+
+- Outcome: the remaining P2 queue closed. Branch Station integration rows now
+  use named station helpers for repeated ignored-git setup, runner execution,
+  envelope parsing, and evidence return. Retention decisions stayed no-build:
+  interrupted temp artifacts remain invalid-health evidence only; purge skips
+  `.correlation/` witness and diagnostic artifacts; `pilot_started_at` remains
+  manual source evidence with no purge coupling.
+- Trust added: process-boundary station coverage stays catalog-driven while
+  repeated fixture setup is behind named helpers, and retention boundaries are
+  proved by behavior tests instead of future-command prose.
+- Evidence: `skills/skill-feedback/src/skill-feedback.integration.test.ts`;
+  `skills/skill-feedback/src/skill-feedback.test.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/references/report-shape.md`;
+  `skills/skill-feedback/ARCHITECTURE.md`;
+  `skills/skill-feedback/CONTEXT.md`.
+- Verification: package tests pass (9 files, 279 tests, 0 failed); typecheck,
+  help, health, review, correlate, and whitespace gates pass.
+- Decisions: no temp-GC command, correlation-artifact purge command, or pilot
+  marker cleanup command was added because current evidence supports preserving
+  those artifacts as health or source evidence.
+- Follow-up: no open P2 tasks remain in `TASKS.md`.
+
+## 2026-06-30 - Dirty-Tree Review Follow-Ups Closed
+
+- Outcome: dirty-tree review follow-ups closed. Correlation artifact ownership
+  moved to `src/correlation-witness-artifacts.ts`; runtime contract ownership
+  moved to `src/runtime-contract.ts`; KTD2 and KTD7 in the P0/P1 plan now use
+  imperative directives.
+- Trust added: artifact read/parse/classify helpers and safe witness filesystem
+  helpers have a narrow owner; runtime interfaces no longer live in the runner
+  dependency cycle; plan text no longer reads like implementation-ready policy.
+- Evidence: `skills/skill-feedback/src/correlation-witness-artifacts.ts`;
+  `skills/skill-feedback/src/runtime-contract.ts`;
+  `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md`;
+  `skills/skill-feedback/TASKS.md`.
+- Verification: package runner passed 10 files and 282 tests; `bun --filter
+  skill-feedback-scripts typecheck` passed; `git diff --check --
+  skills/skill-feedback docs/decisions docs/research` clean.
+- Decisions: no active P1/P2 queue remains. The only later item is the P3 purge
+  plain-output parity question in `TASKS.md`.
+- Follow-up: review/commit prep only unless new tasks appear.
+
+## 2026-06-30 - Decision Surface And Bounded Review Plain Closed
+
+- Outcome: review and health result assembly moved to
+  `skills/skill-feedback/src/decision-surface.ts`; `review --plain` became a
+  bounded decision surface around health, next action, top open actions, and top
+  ledger anchors.
+- Trust added: maintainers can change warnings, next action, readiness,
+  retention, pilot checkpoint, and read-target projection without treating the
+  runner as the decision owner. Agents get bounded plain output plus
+  `full_evidence=json` when full arrays are needed.
+- Evidence: `skills/skill-feedback/src/decision-surface.ts`;
+  `skills/skill-feedback/src/decision-surface.test.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/skill-feedback.test.ts`;
+  `skills/skill-feedback/references/report-shape.md`.
+- Verification: focused decision-surface tests, runner tests, command-contract
+  tests, branch-station catalog tests, and typecheck passed during the slice.
+- Decisions: no schema version, parser rule, command flag, or JSON evidence
+  field changed; caps stay runner-owned and fixed.
+- Follow-up: the P3 purge plain-output parity question remains the only tracker
+  item.
+
+## 2026-06-30 - Inherited Fallow Cleanup Closed
+
+- Outcome: inherited Fallow debt for `skills/skill-feedback` closed. `audit`
+  reports `introduced=0 inherited=0`; `dead-code`, `dupes`, and `health`
+  report zero findings.
+- Trust added: public Branch Station and capture adapter seams are retained with
+  local analyzer proof; Bun test entrypoints are marked as runner-invoked; test
+  fixture duplication is marked where scenario literals are intentional;
+  line-level complexity suppressions sit next to covered owner-local defensive
+  branches; shared raw-object helpers remove the one production duplicate.
+- Evidence: `skills/skill-feedback/src/raw-object.ts`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/report-normalizer.ts`;
+  `skills/skill-feedback/src/branch-station-catalog.ts`;
+  `skills/skill-feedback/src/capture-adapters.ts`;
+  `skills/skill-feedback/AGENTS.md`.
+- Verification: Fallow `audit`, `dead-code`, `dupes`, and `health` are clean;
+  package tests pass (13 files, 299 tests, 0 failed); typecheck passed.
+- Decisions: no public command flags, schema versions, parser acceptance,
+  result contract ids, or JSON result fields changed.
+- Follow-up: the P3 purge plain-output parity question remains the only tracker
+  item.

@@ -23,8 +23,8 @@ architecture pressure.
 - Skill decision log: `docs/decisions/2026-06-13-001-gof-pressure-lens-skill-decision-log.md`.
 - ICA workflow owner: `skills/improve-codebase-architecture/SKILL.md`.
 - ICA vocabulary owner: `skills/improve-codebase-architecture/LANGUAGE.md`.
-- Skill authoring owner: `skills/create-skill/references/skill-design-decision-runbook.md`.
-- Deferred ICA output envelope: no owner path exists yet; use `skills/create-cli/SKILL.md` before adding one.
+- Skill authoring owner: `skills/skill-author/references/skill-design-decision-runbook.md`.
+- Deferred ICA output envelope: no owner path exists yet; use `skills/cli-author/SKILL.md` before adding one.
 
 ## Pick One
 
@@ -108,7 +108,7 @@ Return:
 ## V2
 
 - Add a runtime validator only after repeated prose-gate failure or machine-readable output need.
-- Introduce an ICA facade-backed output envelope only through ICA and `create-cli`.
+- Introduce an ICA facade-backed output envelope only through ICA and `cli-author`.
 - Overlay ICA references only if standalone discoverability creates duplicate-review behavior.
 
 ## Next Safe Action

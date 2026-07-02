@@ -22,7 +22,7 @@ Canonical home for durable per-domain browser knowledge.
 - Stop if it exits non-zero. The result names the missing prototype source, replay dependency, or facade link and the repair action. Do not start runtime units on a red gate.
 - The gate owns the prototype/dependency inventory (`prerequisites.ts`). Do not re-list those paths in prose.
 - Read the active plan, then start the first vertical slice: U0, U0a, U0b, U0c, U1, U1a.
-- Run `create-cli` before authoring CLI contracts.
+- Run `cli-author` before authoring CLI contracts.
 - Build code under `skills/browser-domain-memory/scripts/`.
 - Mirror `skills/browser-use/scripts/` for facade CLI topology.
 - Use `browser-use` Warm Chrome Preflight for browser entry.

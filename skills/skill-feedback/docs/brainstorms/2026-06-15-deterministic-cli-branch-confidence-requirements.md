@@ -100,7 +100,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 
 **Adoption And Documentation**
 
-- R30. `create-cli` guidance names planning-stage station sets and package-owned branch catalogs as the reusable path for facade-backed CLI branch confidence.
+- R30. `cli-author` guidance names planning-stage station sets and package-owned branch catalogs as the reusable path for facade-backed CLI branch confidence.
 - R31. `cli-execution-auditor` guidance names station-map reporting as an optional workflow until real catches justify a gate.
 - R32. Shared docs name owners and next safe actions, not copied schemas that drift from code.
 - R33. Future facade-backed CLI plans can reference this requirements doc as the durable WHAT before writing HOW.
@@ -114,7 +114,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - R38. Branch coverage instrumentation can become a secondary completeness signal, especially for hand-rolled CLIs.
 - R39. Generated test source can be considered after generated data and hand-written tests prove the station model shape.
 - R40. A branch workbench report can render station coverage, gaps, skipped rationale, drift, and next safe action for maintainers.
-- R41. Mandatory create-cli or create-skill gates can ship only after the station-map path catches repeated real misses across distinct CLIs.
+- R41. Mandatory cli-author or create-skill gates can ship only after the station-map path catches repeated real misses across distinct CLIs.
 - R42. Non-facade and hand-rolled CLI support can expand after lane markers and coverage instrumentation make completeness claims honest.
 - R43. Safe auto-fixes can be explored after station findings prove stable and repair classes are clearly bounded.
 
@@ -194,7 +194,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - AE6. Future gate waits for evidence
   - **Covers:** R31, R41.
   - **Given:** The station-map workflow has only one pilot.
-  - **When:** A create-cli or create-skill workflow runs.
+  - **When:** A cli-author or create-skill workflow runs.
   - **Then:** Station-map checks remain optional until repeated real misses justify promotion.
 
 ---
@@ -220,7 +220,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - Branch coverage instrumentation with c8 or Istanbul.
 - Generated test source from station maps.
 - HTML branch workbench reports.
-- Mandatory create-cli or create-skill enforcement gates.
+- Mandatory cli-author or create-skill enforcement gates.
 - Persisted per-CLI lane markers.
 - Hand-rolled CLI station-map support beyond static best-effort checks.
 - Safe auto-fixes for stable station findings.

@@ -17,7 +17,7 @@ Capture a durable, structured observability record each time a skill run reaches
 
 `skill-feedback` is a **runtime-backed Bun workspace package**, not a prose skill. It **reuses** the existing `@side-quest/cli-command-facade` infrastructure (the Facade) rather than inventing one. Per-harness telemetry differences (Claude Code OTel spans vs Codex `codex exec --json` events) are absorbed by a **CaptureAdapter** seam (the Adapter pattern), with **both** adapters shipping in v0 so the second implementation proves the seam holds. Live hook capture is Claude-only in v0; Codex notify is a dispatch-only coexistence path until a skill identity source is wired. Redaction, the gitignore fail-closed gate, deterministic timestamps, and the untrusted-evidence marker are carried as first-class, code-enforced, test-backed units.
 
-This revision supersedes the prior thin-prose plan. It moves the safety contract from prose-plus-fixtures into a typed runtime package on rails the repo already runs (fallow, test-runner), routes the CLI through `create-cli`'s facade-backed lane, and gates shipping on the existing `cli-execution-auditor`.
+This revision supersedes the prior thin-prose plan. It moves the safety contract from prose-plus-fixtures into a typed runtime package on rails the repo already runs (fallow, test-runner), routes the CLI through `cli-author`'s facade-backed lane, and gates shipping on the existing `cli-execution-auditor`.
 
 ---
 
@@ -338,7 +338,7 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 
 ---
 
-### U7. Author `SKILL.md` and pass create-cli + cli-execution-auditor
+### U7. Author `SKILL.md` and pass cli-author + cli-execution-auditor
 
 **Goal:** The command is invocable and discoverable; skill closes are detectable by the harness hooks (wired in U8); the facade CLI passes its contract and audit gates.
 
@@ -351,9 +351,9 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - `skills/skill-feedback/references/report-shape.md` (create — record template + Truth Stance / untrusted-evidence header)
 - `skills/skill-feedback/PROVENANCE.md` (create)
 
-**Approach:** Author `SKILL.md` per the runbook and `create-cli`'s facade-backed lane: first screen carries trigger, boundary, owner paths (point at `references/report-shape.md` and `references/redaction.md` — the stable docs, not `src/` test artifacts; do not copy contracts), the fail-closed gate, and the next safe action. `description:` double-quoted, trigger-shaped, no personal names, `role: tool-workflow`. Name the **six owners** (Contract / Model / Engine / Discovery / CLI / Test) and produce the **Command Surface Alignment Proof** across the four drift surfaces (discovery metadata, rendered help, public argv accept/reject, runtime semantics). Embed the Truth Stance / untrusted-evidence header in `references/report-shape.md` (copy the stance text into the template, mirroring `skills/skill-self-audit-loop`'s `## Loop File Template`). Harness-hook wiring is **not** here — it is U8. Run `cli-execution-auditor` over the facade CLI as the ship gate.
+**Approach:** Author `SKILL.md` per the runbook and `cli-author`'s facade-backed lane: first screen carries trigger, boundary, owner paths (point at `references/report-shape.md` and `references/redaction.md` — the stable docs, not `src/` test artifacts; do not copy contracts), the fail-closed gate, and the next safe action. `description:` double-quoted, trigger-shaped, no personal names, `role: tool-workflow`. Name the **six owners** (Contract / Model / Engine / Discovery / CLI / Test) and produce the **Command Surface Alignment Proof** across the four drift surfaces (discovery metadata, rendered help, public argv accept/reject, runtime semantics). Embed the Truth Stance / untrusted-evidence header in `references/report-shape.md` (copy the stance text into the template, mirroring `skills/skill-self-audit-loop`'s `## Loop File Template`). Harness-hook wiring is **not** here — it is U8. Run `cli-execution-auditor` over the facade CLI as the ship gate.
 
-**Patterns to follow:** `skills/fallow/SKILL.md` and `skills/test-runner/SKILL.md` (`## Owner` section shape, facade CLI prose); `skills/skill-self-audit-loop/SKILL.md` (Truth Stance + Safety blocks); `skills/create-cli/references/cli-command-facade.md` (facade-lane requirements).
+**Patterns to follow:** `skills/fallow/SKILL.md` and `skills/test-runner/SKILL.md` (`## Owner` section shape, facade CLI prose); `skills/skill-self-audit-loop/SKILL.md` (Truth Stance + Safety blocks); `skills/cli-author/references/cli-command-facade.md` (facade-lane requirements).
 
 **Test scenarios:**
 - Frontmatter: after editing, `description` is double-quoted and the file YAML-parses (AGENTS.md rule).
@@ -424,7 +424,7 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - Promote **adapter selection** from a `switch` to a registry map at adapter #3.
 - Resurrect or re-home `context/skill-design-philosophy.md` — named as the composability-principle owner by the 2026-05-30 research but the file does not exist (dangling reference).
 - Optional per-skill **close enrichment** (a skill opts in to emit a clean/failed/handoff signal at its close) — detection works harness-level without it; enrichment adds richer signal. v1 fork.
-- **Mandatory fleet-wide close emission** as skill-authoring policy (a `create-cli`/`create-skill` gate) — a governance decision deferred to v1; v0 is built so either future is reachable.
+- **Mandatory fleet-wide close emission** as skill-authoring policy (a `cli-author`/`create-skill` gate) — a governance decision deferred to v1; v0 is built so either future is reachable.
 
 (Note: the Claude Stop hook is now **in v0 scope**, not deferred — see KTD6 / ADR-0014. The rough second emitter, `cli-execution-auditor`, is also in v0 — see Risks and Success Criterion.)
 
@@ -467,6 +467,6 @@ EFC-grounded (arXiv 2605.29682): actionable-feedback **density** predicts value,
 - `prototypes/skill-feedback-architecture/redaction-strategy.stub.ts` — deferred Strategy seam marker.
 - `skills/agent-reliability-guardrails/references/logging-redaction-rules.md` — always-redact set owner.
 - `skills/context-advisor/references/storage-routing.md` — ignored-inbox storage rule + safety defaults.
-- `skills/create-cli/references/cli-command-facade.md` — facade-backed lane requirements (six owners, four drift surfaces).
+- `skills/cli-author/references/cli-command-facade.md` — facade-backed lane requirements (six owners, four drift surfaces).
 - `skills/cli-execution-auditor/SKILL.md` — facade CLI ship-gate audit.
 - `skills/skill-self-audit-loop/SKILL.md` — Truth Stance header (R18a), Safety/redaction block.

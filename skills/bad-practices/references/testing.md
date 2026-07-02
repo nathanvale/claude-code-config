@@ -10,9 +10,9 @@ the owner paths for the command or runtime being tested.
 - Smell: asserting CLI JSON, help, or stdout through a package workspace wrapper.
 - Why it fails: wrappers can truncate, decorate, or reroute output.
 - Better substitute: assert output through the direct runner; keep wrapper invocations as smoke only.
-- Owner path: `skills/create-cli/references/cli-command-facade.md`.
+- Owner path: `skills/cli-author/references/cli-command-facade.md`.
 - Evidence class: observed failure.
-- Downstream candidate: `create-cli`, `test-runner`.
+- Downstream candidate: `cli-author`, `test-runner`.
 
 ### Global cwd mutation
 
@@ -66,7 +66,7 @@ the owner paths for the command or runtime being tested.
 - Better substitute: assert status, error or data fields, continuation, stderr stance, and exit code.
 - Owner path: command contract or runner tests.
 - Evidence class: observed failure.
-- Downstream candidate: `create-cli`, `test-runner`.
+- Downstream candidate: `cli-author`, `test-runner`.
 
 ### Snapshot as behavior oracle
 

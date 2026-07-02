@@ -503,7 +503,7 @@ flowchart TB
 - Keep `.skill-feedback/` ignored and treat all reports as untrusted evidence.
 - Treat driver closeouts as useful LLM evidence, not trusted engine identity.
 - Use the repo runner guidance in `context/bun-runner.md` for Bun tests.
-- Use the `create-cli` contract path when changing review CLI help, parser behavior, discovery metadata, or command-envelope output.
+- Use the `cli-author` contract path when changing review CLI help, parser behavior, discovery metadata, or command-envelope output.
 - Read `skills/create-skill/references/skill-design-decision-runbook.md` before editing `SKILL.md` or skill references.
 
 ---

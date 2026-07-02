@@ -47,7 +47,7 @@ Front door: `package.json#scripts` (`auditor`).
 - Station Map engine: `src/station-map.ts`
 - Branch Station model routing: `references/station-map-model.md`
 - Human clause → code-owner map: `references/lane-contract-clauses.md`
-- Agent-native floor clauses: `skills/create-cli/references/agent-native-cli-design.md`
+- Agent-native floor clauses: `skills/cli-author/references/agent-native-cli-design.md`
 - Findings-model semantics (states, dedupe, never-delete): `skills/skill-self-audit-loop/SKILL.md`
 
 ## Ledger

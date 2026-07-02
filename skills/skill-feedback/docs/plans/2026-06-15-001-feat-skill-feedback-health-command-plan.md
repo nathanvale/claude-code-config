@@ -375,7 +375,7 @@ flowchart TB
 
 **Execution note:** Before editing `skills/skill-feedback/SKILL.md`, read `skills/create-skill/references/skill-design-decision-runbook.md`.
 
-**Patterns to follow:** Existing docs owner checks in `skill-feedback.test.ts`; create-cli facade-backed proof guidance; `skills/skill-feedback/SKILL.md` owner map.
+**Patterns to follow:** Existing docs owner checks in `skill-feedback.test.ts`; cli-author facade-backed proof guidance; `skills/skill-feedback/SKILL.md` owner map.
 
 **Test scenarios:**
 
@@ -469,5 +469,5 @@ flowchart TB
 - Current package tests: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/skill-feedback.test.ts`.
 - Prior review hardening plan: `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
 - Claim-safe review plan: `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
-- CLI guidance: `skills/create-cli/references/cli-guidelines.md`, `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
+- CLI guidance: `skills/cli-author/references/cli-guidelines.md`, `skills/cli-author/references/agent-native-cli-design.md`, `skills/cli-author/references/cli-command-facade.md`.
 - Code-style pressure gate: `context/code-style.md`.

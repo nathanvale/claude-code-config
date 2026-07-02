@@ -47,11 +47,11 @@ the work. The success criterion below tests this directly.
 A skill that deterministically audits a CLI's agent-execution experience against a per-lane
 contract — exercise the surface, check each invocation's execution against the lane contract.
 
-**v1: opt-in tool, facade lane.** The auditor exists and is invoked manually during create-cli
+**v1: opt-in tool, facade lane.** The auditor exists and is invoked manually during cli-author
 work. It targets facade-backed CLIs (the lane with a real enumerable surface) and reproduces the
 known heal-skill bugs via static contract assertions + facade-surface enumeration.
 
-**v2: earn the gate.** Promote to a mandatory create-cli / create-skill gate only after N≥3
+**v2: earn the gate.** Promote to a mandatory cli-author / create-skill gate only after N≥3
 distinct real-bug catches across different CLIs. The gate, when it lands, has a logged override
 (`--audit-override="<reason>"` recorded as accepted risk) — a mandatory gate with no escape hatch
 on a captive single-maintainer toolchain gets silently routed around, which is worse than a soft gate.
@@ -106,7 +106,7 @@ Deltas this skill adds (propose upstream to skill-self-audit-loop if they genera
 
 ### Enforcement gate (v2 — earned, not v1)
 
-- Not in v1. Promote to a `create-cli` / `create-skill` gate only after N≥3 distinct real-bug
+- Not in v1. Promote to a `cli-author` / `create-skill` gate only after N≥3 distinct real-bug
   catches across different CLIs prove the floor's value and false-positive rate.
 - When it lands: a named check with a **logged override** (`--audit-override="<reason>"` recorded
   in the findings ledger as accepted risk, visible in review). Mandatory-with-recorded-escape, not
@@ -131,7 +131,7 @@ Deltas this skill adds (propose upstream to skill-self-audit-loop if they genera
 ### In scope (v1)
 - Facade-backed CLIs (the lane with a real enumerable discovery surface).
 - Per-lane contract checks: static assertions + facade-surface exercise.
-- The auditor as an opt-in tool invoked during create-cli work.
+- The auditor as an opt-in tool invoked during cli-author work.
 
 ### Deferred for later
 - The mandatory enforcement gate (v2, at N≥3) and its lane-marker prerequisite.
@@ -163,8 +163,8 @@ Deltas this skill adds (propose upstream to skill-self-audit-loop if they genera
 
 ## Dependencies / assumptions
 
-- Depends on the facade contract owner (`runtime/cli-command-facade/`) and create-cli lane
-  definitions (`skills/create-cli/references/`).
+- Depends on the facade contract owner (`runtime/cli-command-facade/`) and cli-author lane
+  definitions (`skills/cli-author/references/`).
 - Reuses `skills/skill-self-audit-loop/` findings ledger + proof-method patterns by reference
   (verified: that catalog is written for cross-skill reuse — no ownership conflict).
 - Verified codebase facts: ~29 facade CLIs (enumerable) vs ~30 hand-rolled `process.argv` CLIs
@@ -178,11 +178,11 @@ The v1 oracle is **`skills/classic-cinema/src/heal-skill.ts`, rebuilt facade-bac
 has `check/repair/explain` + `--json` + `--help` (hand-rolled, agent-native lane); migrating it to
 `@side-quest/cli-command-facade` gives it a declarative enumerable surface — the clean facade-lane
 target v1 needs. This supersedes the SKILL.md-only `skills/heal-skill/` (whose defects are
-skill-workflow issues, not CLI behavior). Build the facade CLI first (via create-cli), then the
+skill-workflow issues, not CLI behavior). Build the facade CLI first (via cli-author), then the
 auditor audits it.
 
 ## Outstanding questions
-- Where does the v2 gate wire in (create-skill verification, create-cli proof, or both), and how is
+- Where does the v2 gate wire in (create-skill verification, cli-author proof, or both), and how is
   the lane marker persisted?
 - How does facade-surface enumeration handle interdependent flags (flag A only valid with subcommand B)?
 - Who/what generates the contract-derived re-check, and is it provably non-symptom-level?

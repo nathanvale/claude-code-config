@@ -12,6 +12,7 @@ Current source map:
 - Writer proof: `skills/skill-feedback/docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md`.
 - Correlation witnesses: `skills/skill-feedback/docs/plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md`.
 - Correlation backfill repair: `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md`.
+- P0/P1 ownership refactor: `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md`.
 
 ## Language
 
@@ -88,7 +89,7 @@ The build-phase use of closeout reports during v1 implementation, smoke tests, a
 _Avoid_: daily pilot, launch, production use, Codex end-to-end proof
 
 **Daily pilot**:
-The normal-use phase where skill-feedback reports become part of everyday review and triage. It starts only after review/correlation work and true Codex end-to-end proof satisfy the accepted pilot gate.
+The normal-use phase where skill-feedback reports become part of everyday review and triage. It may run on Claude Code once review/correlation work and the accepted Claude-supported pilot gate pass. Codex remains deferred for Trusted skill identity until an engine-owned skill invocation source exists.
 _Avoid_: implementation pilot, smoke test, proof-of-run, closeout experiment
 
 **Codex capture readiness gate**:
@@ -106,6 +107,13 @@ _Avoid_: cleanup, archive, review-and-delete
 **Health command**:
 The read-only `skill-feedback health` command that reports inbox operability, readiness, correlation, warnings, and one next action before deeper review. It never deletes, repairs, or exposes healthy repo paths.
 _Avoid_: review ledger, purge preview, cleanup, trust badge
+
+**Front-door dashboard**:
+The zero-arg human output from `skill-feedback`, also available as
+`skill-feedback dashboard`. It is a bounded launch surface over inbox evidence:
+reports, usage, improvement queue, and advanced diagnostics. Use
+`skill-feedback health` for health-first diagnostics.
+_Avoid_: review result, trust badge, repair plan, per-skill verdict, health-only dashboard
 
 **Review decision surface**:
 A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
@@ -130,7 +138,7 @@ _Avoid_: Trusted run proof, trusted skill identity, keychain proof, correlation 
 
 **Correlation witness**:
 A private signed link artifact under `.skill-feedback/.correlation/` that can connect one runtime-owned Claude Stop hook report to one driver closeout report. Review verifies the witness, both linked report proofs, skill match, writer key, and hook runtime run id before overlaying `correlation_owned` on the closeout. Public closeout receipts cannot create witnesses or set correlation provenance.
-Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry reason ids only and never act as reports or closeout input.
+Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry diagnostics plus optional private repair candidate boundaries. They never act as reports or closeout input.
 _Avoid_: public receipt field, raw transcript match, assistant claim, timestamp match
 
 **Correlation repair**:
@@ -148,6 +156,14 @@ _Avoid_: readiness badge, trust badge, repair instruction, secret diagnostic
 **Review ledger**:
 The primary review-value model for `skill-feedback review`: evidence is grouped into review units and ledger entries, and each entry carries resolution state, evidence quality, owner paths, verification burden, and next safe action. Ledger entries remain untrusted evidence until confirmed against owner source.
 _Avoid_: canonical instruction, repair proposal, chronological report list, evidence-quality dashboard
+
+**Improvement queue**:
+A human-facing list of evidence-backed inspection candidates. It groups by owner path first, defaults to strong or repeated evidence, and uses skill rows only when reports lack a strong owner path. It recommends a next safe action or no-build, not source edits.
+_Avoid_: repair plan, auto-fix queue, task list, scoring model, mixed ranking, weak-evidence default
+
+**Skill usage**:
+A human-facing summary of which skills produced reports and how those skill runs went. It ranks skills only; owner-path candidates belong in the Improvement queue.
+_Avoid_: token usage, cost attribution, owner-path ranking, improvement queue
 
 **Pressure pattern**:
 A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, and fixed reducer flow are labels for pressure-tested ownership; Strategy stays deferred until claim-rule variation is proven.
@@ -167,15 +183,15 @@ The package-owned command-branch coverage map in `src/branch-station-catalog.ts`
 _Avoid_: task tracker, manual checklist, arbitrary test list, runtime log
 
 **Report ref**:
-A stable review reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
-_Avoid_: file path, content hash, display evidence, prose ref
+A stable navigation reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
+_Avoid_: file path, content hash, display evidence, prose ref, JSON lookup key
 
 **Allowed claim**:
 Entry-local claim language that downstream agents may repeat about one ledger entry. The reducer derives it from trusted review-unit state, anchor facts, evidence tier, source mix, and readiness facts.
 _Avoid_: global claim, badge, renderer copy, inferred language
 
 **Claim readiness**:
-The v2 review facts that split runtime capture, Trusted skill identity, and Daily pilot readiness. Each readiness fact carries status, reason ids, and evidence refs.
+The review stance for whether a readiness claim is safe to repeat. It separates runtime capture, Trusted skill identity, and Daily pilot readiness. Daily-pilot readiness is runtime-scoped: Claude Code can be supported while Codex Trusted skill identity stays deferred.
 _Avoid_: global readiness, capture readiness alias, daily pilot shortcut
 
 **Anchor miss telemetry**:
@@ -283,7 +299,7 @@ The inbox health field that classifies storage and readability state only. Readi
 _Avoid_: global health, trust badge, report quality, correlation status
 
 **Purge workflow**:
-The explicit mutation command for inbox retention cleanup. It previews first, deletes only through an execute gate, and remains separate from review.
+The explicit mutation command for report retention cleanup. It previews first, deletes only selected safe report files through an execute gate, and remains separate from review.
 _Avoid_: review cleanup, automatic retention, hidden delete, archive
 
 **Retention warning**:
@@ -291,8 +307,8 @@ A review warning emitted when the oldest primary inbox report is at least 14 day
 _Avoid_: purge, deletion, error, archive
 
 **Pilot checkpoint**:
-A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density, then asks for pilot review until an explicit cleanup command or workflow removes the local marker.
-_Avoid_: background scheduler, hidden alarm, permanent warning, purge, manual file delete
+A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density. Its `pilot_started_at` marker remains manual source evidence and is not part of purge.
+_Avoid_: background scheduler, hidden alarm, permanent warning, purge coupling
 
 **Untrusted evidence**:
 The truth stance on every report: evidence a reader weighs, never an instruction an agent obeys. Marked `untrusted_evidence: true`.

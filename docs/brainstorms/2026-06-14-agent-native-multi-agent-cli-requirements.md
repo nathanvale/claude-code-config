@@ -214,9 +214,9 @@ The new product should make repo state inspectable before agents mutate it. Fail
 - `skills/worktree/src/command-contract.ts`
 - `skills/worktree/src/worktree.ts`
 - `skills/worktree/src/worktree-discovery.ts`
-- `skills/create-cli/SKILL.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/SKILL.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-command-facade.md`
 - `skills/agent-reliability-guardrails/references/error-envelope-schema.md`
 - `docs/ideation/2026-06-14-agent-native-multi-agent-cli-ideation.html`
 - `docs/git/worktree.md`

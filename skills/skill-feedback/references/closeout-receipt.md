@@ -76,7 +76,7 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 
 ```json
 {
-	"skill": "create-skill",
+	"skill": "skill-author",
 	"outcome": "confirmed",
 	"goal": "Repair the skill authoring route.",
 	"friction": {
@@ -88,14 +88,14 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 		"note": "YAML parse and owner-path checks were enough."
 	},
 	"touched_surfaces": [
-		{ "type": "path", "value": "skills/create-skill/SKILL.md" }
+		{ "type": "path", "value": "skills/skill-author/SKILL.md" }
 	],
 	"observations": [
 		{
 			"kind": "missing_context",
 			"target": {
 				"type": "path",
-				"value": "skills/create-skill/references/skill-design-decision-runbook.md"
+				"value": "skills/skill-author/references/skill-design-decision-runbook.md"
 			},
 			"summary": "The route was ambiguous without the owner runbook.",
 			"evidence_basis": "driver_observed"

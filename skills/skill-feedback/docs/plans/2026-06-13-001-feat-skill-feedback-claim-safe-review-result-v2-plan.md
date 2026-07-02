@@ -527,7 +527,7 @@ Pattern naming guardrail:
 - Keep `skills/skill-feedback/src/command-contract.ts` as the source owner for result fields, enum values, reason ids, and contract output.
 - Keep `skills/skill-feedback/src/skill-feedback-runner.ts` or extracted pure modules as the reducer owner.
 - Keep `skills/skill-feedback/references/report-shape.md` as a thin field-ownership map, not a copied schema.
-- Use `create-cli` if review CLI flags, help, discovery metadata, or command envelope semantics change.
+- Use `cli-author` if review CLI flags, help, discovery metadata, or command envelope semantics change.
 - Read `skills/create-skill/references/skill-design-decision-runbook.md` before editing `skills/skill-feedback/SKILL.md` or skill references.
 
 ---

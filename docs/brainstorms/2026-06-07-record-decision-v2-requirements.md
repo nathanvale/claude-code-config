@@ -12,7 +12,7 @@ source:
   - docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md
   - docs/research/2026-06-11-agent-cli-seam-contract.md
   - docs/research/2026-06-11-agent-cli-evaluation-rubric.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
 ---
 
 # Record Decision V2 Requirements
@@ -47,7 +47,7 @@ It should make one operation reliable: record an accepted decision in a repo dec
 - **Supersession is two-sided.** Same-log supersession appends the replacement and updates old entries.
 - **Writes are atomic per log.** Execute mode renders, validates, temp-writes, and atomically replaces the target file.
 - **Dry-run planning proves the seam first.** The first implementation slice proves dry-run planning, structured repair, command discovery, and alignment checks without enabling execute writes.
-- **Command names remain candidates until `create-cli`.** The proof slice can carry candidate spellings, but `create-cli` finalizes the CLI surface before implementation.
+- **Command names remain candidates until `cli-author`.** The proof slice can carry candidate spellings, but `cli-author` finalizes the CLI surface before implementation.
 - **Existing log language stays canonical.** The proof slice keeps `V2 Ideas`; a `Future Ideas` rename needs a separate storage-shape decision.
 
 ---
@@ -114,7 +114,7 @@ It should make one operation reliable: record an accepted decision in a repo dec
 - R32. The mutation plan names target log, proposed decision id, planned append, validation summary, no-write evidence, and next safe action.
 - R33. The first proofed negative fixture is `accepted` missing or not true.
 - R34. The proof slice includes generated command discovery metadata and tests that align help, parser behavior, discovery metadata, JSON envelopes, and dry-run semantics.
-- R35. Candidate spellings are `record-decision --input decision.md --json` for dry-run planning and `record-decision commands --json` for discovery; `create-cli` confirms or replaces them before implementation.
+- R35. Candidate spellings are `record-decision --input decision.md --json` for dry-run planning and `record-decision commands --json` for discovery; `cli-author` confirms or replaces them before implementation.
 
 ---
 
@@ -290,7 +290,7 @@ flowchart TB
 
 - Dry-run planning proof slice before execute writes.
 - Hybrid Markdown input for the proof slice.
-- Candidate command spelling for `create-cli` to confirm.
+- Candidate command spelling for `cli-author` to confirm.
 - `record-decision` input parser and validation.
 - Dry-run mutation planning.
 - Execute-mode write engine.
@@ -300,7 +300,7 @@ flowchart TB
 
 **Deferred**
 
-- Final command spelling until `create-cli`.
+- Final command spelling until `cli-author`.
 - Rich source anchors beyond repo-relative paths and human labels.
 - `Future Ideas` rename.
 - Execute writes inside the first proof slice.
@@ -322,8 +322,8 @@ flowchart TB
 ## Dependencies And Assumptions
 
 - `@side-quest/cli-command-facade` remains the output transport owner.
-- `create-cli` shapes the final command surface before implementation.
-- The proof-slice candidate command spelling may change during `create-cli`.
+- `cli-author` shapes the final command surface before implementation.
+- The proof-slice candidate command spelling may change during `cli-author`.
 - Historical decision logs may not match the new v2-compatible shape.
 - The implementation can use same-directory atomic replacement on the target platform.
 - Exact owner file paths for contract, model, engine, discovery, CLI, and tests are chosen during planning.
@@ -338,7 +338,7 @@ flowchart TB
 
 **Deferred To Planning**
 
-- Run `create-cli` to finalize command spelling, discovery spelling, and owner paths.
+- Run `cli-author` to finalize command spelling, discovery spelling, and owner paths.
 - Choose concrete owner files for input contract, output data, engine, CLI facade binding, discovery metadata, and tests.
 - Decide temp naming, cleanup, fsync, permission preservation, and platform-specific rename behavior.
 - Decide how much rendered Markdown preview belongs in dry-run output without making it primary data.
@@ -355,4 +355,4 @@ flowchart TB
 - `docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md`
 - `docs/research/2026-06-11-agent-cli-seam-contract.md`
 - `docs/research/2026-06-11-agent-cli-evaluation-rubric.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
+- `skills/cli-author/references/agent-native-cli-design.md`

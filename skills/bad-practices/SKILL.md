@@ -16,7 +16,7 @@ anti-pattern list, or future scaffold/review-skill input.
 - Name the better substitute, not only the smell.
 - Separate architecture, testing, CLI/runtime, and agent-workflow debt.
 - Do not run broad code review unless the user asks.
-- Do not replace `improve-codebase-architecture`, `seam-scaffold`, `gof-pressure-lens`, `create-cli`, or `test-runner`.
+- Do not replace `improve-codebase-architecture`, `seam-scaffold`, `gof-pressure-lens`, `cli-author`, or `test-runner`.
 - Treat catalog entries as advisory until another owner makes them executable.
 
 ## Owner Map
@@ -26,7 +26,7 @@ anti-pattern list, or future scaffold/review-skill input.
 - Pattern pressure gate: `context/code-style.md`.
 - Seam planning workflow: `skills/seam-scaffold/SKILL.md`.
 - Pattern naming referee: `skills/gof-pressure-lens/SKILL.md`.
-- CLI design owner: `skills/create-cli/SKILL.md`.
+- CLI design owner: `skills/cli-author/SKILL.md`.
 - Test execution owner: `skills/test-runner/SKILL.md`.
 - Knowledge bank index: `references/catalog.md`.
 - Architecture bad practices: `references/architecture.md`.
@@ -48,7 +48,7 @@ anti-pattern list, or future scaffold/review-skill input.
 - Better substitute.
 - Owner path.
 - Evidence class: observed failure, review finding, adversarial probe, or research.
-- Candidate downstream skill: `seam-scaffold`, `improve-codebase-architecture`, `gof-pressure-lens`, `create-cli`, `test-runner`, or review skill.
+- Candidate downstream skill: `seam-scaffold`, `improve-codebase-architecture`, `gof-pressure-lens`, `cli-author`, `test-runner`, or review skill.
 - Next safe action.
 
 ## Safety
@@ -61,7 +61,7 @@ anti-pattern list, or future scaffold/review-skill input.
 ## Verification
 
 - YAML-parse this file after frontmatter edits.
-- Run `bun run skills/create-skill/scripts/check-owner-paths.ts --json` after owner-path edits.
+- Run `bun run skills/skill-author/scripts/check-owner-paths.ts --json` after owner-path edits.
 
 ## Next Safe Action
 

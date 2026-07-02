@@ -1,0 +1,19 @@
+{
+	"name": "cli-author-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Local Bun package for the cli-author skill. Holds the workspace @side-quest/cli-command-facade so generated CommandFacadeContract skeletons can be type-checked and run against the real runtime validator (defineCommandFacadeContract / parseCommandFacadeContract).",
+	"scripts": {
+		"cli-author-facade-smoke": "./src/facade-resolution-smoke.ts",
+		"smoke": "bun run src/facade-resolution-smoke.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

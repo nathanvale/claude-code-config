@@ -6,7 +6,7 @@
 - Source brainstorm: `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`.
 - Hook decision: `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`.
 - Package anatomy: `skills/fallow/`.
-- Facade lane: `skills/create-cli/references/cli-command-facade.md`.
+- Facade lane: `skills/cli-author/references/cli-command-facade.md`.
 - Truth stance pattern: `skills/skill-self-audit-loop/SKILL.md`.
 - Redaction owner: `skills/agent-reliability-guardrails/references/logging-redaction-rules.md`.
 - Storage routing owner: `skills/context-advisor/references/storage-routing.md`.

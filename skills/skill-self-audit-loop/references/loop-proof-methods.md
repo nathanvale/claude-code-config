@@ -9,7 +9,7 @@ Use when adding or changing a loop feature: find the loop part you touched, run 
 - Organize by loop part, not by test type. Spine: what are you proving.
 - Every method carries a trust condition. No trust condition = theater.
 - Trust conditions: `oracle` (known answer), `independence` (blind replication), `adversarial` (incentivized to break), `falsifiability` (a defined way to fail).
-- Growth gate: a method earns a slot only after it has proven or broken a real loop change. No speculative methods. Same earned-entry discipline as the gotcha pattern in `skills/create-skill/references/skill-design-decision-runbook.md`.
+- Growth gate: a method earns a slot only after it has proven or broken a real loop change. No speculative methods. Same earned-entry discipline as the gotcha pattern in `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Unearned slots name the part and its failure; mark the method `unearned`.
 - Entry shape: claim proven -> method -> trust condition -> pass criterion -> worked example.
 
@@ -69,7 +69,7 @@ Fold these into a part's method; do not give them their own slot.
 - Method: resume-honesty replication — hand a converged loop file to a blind agent; it must continue from the file alone without re-discovering closed findings.
 - Trust: independence + oracle (the known answer is "already converged with these closed signatures").
 - Pass: blind resume is no-op or append-only; no closed signature re-opened; history never deleted.
-- Worked example: blind agent resumed the `create-cli` loop file, re-derived all 3 closed signatures as non-contradictions, re-opened none, confirmed convergence.
+- Worked example: blind agent resumed the `cli-author` loop file, re-derived all 3 closed signatures as non-contradictions, re-opened none, confirmed convergence.
 - Companions (unearned): frontmatter-body consistency oracle (static invariants); golden-ledger drift (freeze the ledger; diff after a rule or model change).
 
 ### Idempotency / resume-safety — unearned
@@ -92,7 +92,7 @@ Fold these into a part's method; do not give them their own slot.
 - Method: blind downstream actionability — hand the repair candidate to a blind repair agent; it must locate the conflict and propose a fix from the candidate alone.
 - Trust: independence + oracle.
 - Pass: blind agent locates both sources and proposes a valid fix without the audit narrative.
-- Worked example: blind `create-skill` agent acted on RC-1, quoted both conflicting sources, proposed a valid fix, did not need the narrative.
+- Worked example: blind `skill-author` agent acted on RC-1, quoted both conflicting sources, proposed a valid fix, did not need the narrative.
 - Companion (unearned): over-reach tripwire — watch the working tree during a run; assert only the audit file mutates, never source.
 
 ### Design decision — earned (out-of-loop)

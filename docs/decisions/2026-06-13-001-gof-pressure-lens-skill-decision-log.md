@@ -120,7 +120,7 @@ Rationale:
 - Four routing labels cover accepted use cases without creating four workflows.
 - The six-field pressure gate makes `No pressure -> no pattern` executable in prose.
 - The output shape forces agents to show why each pattern name survived.
-- An ICA envelope is useful, but it changes CLI/runtime ownership and needs `create-cli` facade-backed proof.
+- An ICA envelope is useful, but it changes CLI/runtime ownership and needs `cli-author` facade-backed proof.
 
 Consequences:
 
@@ -138,6 +138,6 @@ Next:
 
 V2 Ideas:
 
-- Add an ICA-owned `ArchitecturePressureResult`-style envelope through `create-cli`.
+- Add an ICA-owned `ArchitecturePressureResult`-style envelope through `cli-author`.
 - Add a runtime validator for the pressure gate if prose output drifts.
 - Add an ICA reference overlay if standalone invocation causes duplicate-review behavior.

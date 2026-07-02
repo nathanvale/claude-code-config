@@ -313,7 +313,7 @@
 			<p><strong>Existing front door:</strong> <code>skills/worktree</code> already proves the pattern: a thin skill points to owner files, a facade-backed command contract owns discovery/help/runtime behavior, and the CLI delegates worktree CRUD instead of duplicating it.</p>
 			<p><strong>SideQuest carry-over:</strong> SideQuest has useful worktree lifecycle logic: create, list, check, delete, clean, recover, sync, status, orphan branch detection, dry-run cleanup, backup refs, and health metadata. Its product gap is not the logic. It was not born as a failure-designed multi-agent CLI.</p>
 			<p><strong>External signal:</strong> Public writing around AI coding workflows increasingly frames git worktrees as the practical substrate for parallel agents. CLI-Anything and adjacent agent-native CLI writing reinforce structured output as baseline, but the stronger opportunity here is recoverable orchestration state, not just <code>--json</code>.</p>
-			<p><strong>Prior local learning:</strong> The <code>create-cli</code> lane already separates Basic CLI, Agent-native CLI, and Facade-backed CLI. The new product should sit firmly in the Agent-native plus Facade-backed lane, with deterministic help, parser acceptance, runtime semantics, and proof that the surfaces cannot drift.</p>
+			<p><strong>Prior local learning:</strong> The <code>cli-author</code> lane already separates Basic CLI, Agent-native CLI, and Facade-backed CLI. The new product should sit firmly in the Agent-native plus Facade-backed lane, with deterministic help, parser acceptance, runtime semantics, and proof that the surfaces cannot drift.</p>
 		</div>
 	</section>
 
@@ -484,7 +484,7 @@
 			<p><strong>Description:</strong> Ship a simulator that runs each command through discovery metadata, rendered help, accepted/rejected argv, JSON success, JSON error, no-input behavior, and representative runtime semantics. Keep a smoke corpus of failure fixtures: missing dependency, dirty worktree, stale dir, bad registry, drift block, upstream CLI failure, interrupted run.</p>
 			<dl>
 				<dt>Axis</dt><dd>Command contract</dd>
-				<dt>Basis</dt><dd>direct: <code>create-cli</code> requires proving discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift for changed CLI surfaces. <code>agent-reliability-guardrails</code> supplies output and error invariant tests.</dd>
+				<dt>Basis</dt><dd>direct: <code>cli-author</code> requires proving discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift for changed CLI surfaces. <code>agent-reliability-guardrails</code> supplies output and error invariant tests.</dd>
 				<dt>Rationale</dt><dd>This turns "agent-native" from aspiration into a regression suite. It also lets <code>worktree</code> and future skills trust the CLI instead of restating its behavior.</dd>
 				<dt>Downsides</dt><dd>Less flashy than user-facing commands. Best paired with <code>doctor</code> so value is visible early.</dd>
 				<dt>Confidence</dt><dd>82%</dd>
@@ -504,7 +504,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				<tr><td>1</td><td>Generic <code>--json</code> everywhere</td><td>Already baseline in create-cli and facade guidance; too small to define this product.</td></tr>
+				<tr><td>1</td><td>Generic <code>--json</code> everywhere</td><td>Already baseline in cli-author and facade guidance; too small to define this product.</td></tr>
 				<tr><td>2</td><td>Bigger SideQuest wrapper</td><td>Preserves the old product shape instead of building the failure-designed multi-agent CLI.</td></tr>
 				<tr><td>3</td><td>Full task tracker</td><td>Useful later, but too broad and risks duplicating issue trackers before repo state is solved.</td></tr>
 				<tr><td>4</td><td>Auto-merge queue first</td><td>High-risk mutation before doctor, leases, and failure recovery exist.</td></tr>
@@ -521,7 +521,7 @@
 	<section aria-labelledby="sources">
 		<h2 id="sources">Reference Index</h2>
 		<div class="panel">
-			<p><strong>Repo:</strong> <code>AGENTS.md</code>, <code>skills/worktree/SKILL.md</code>, <code>skills/worktree/src/command-contract.ts</code>, <code>skills/worktree/src/worktree.ts</code>, <code>skills/create-cli/SKILL.md</code>, <code>skills/create-cli/references/cli-command-facade.md</code>, <code>skills/agent-reliability-guardrails/references/error-envelope-schema.md</code>, <code>docs/git/worktree.md</code>.</p>
+			<p><strong>Repo:</strong> <code>AGENTS.md</code>, <code>skills/worktree/SKILL.md</code>, <code>skills/worktree/src/command-contract.ts</code>, <code>skills/worktree/src/worktree.ts</code>, <code>skills/cli-author/SKILL.md</code>, <code>skills/cli-author/references/cli-command-facade.md</code>, <code>skills/agent-reliability-guardrails/references/error-envelope-schema.md</code>, <code>docs/git/worktree.md</code>.</p>
 			<p><strong>SideQuest:</strong> <code>/Users/nathanvale/code/side-quest-git/src/worktree/cli/commands.ts</code>, <code>/Users/nathanvale/code/side-quest-git/src/worktree/clean.ts</code>, <code>/Users/nathanvale/code/side-quest-git/src/worktree/orphans.ts</code>.</p>
 			<p><strong>External:</strong> CLI-Anything agent-native CLI prior art, Upsun and Nx articles on git worktrees for parallel AI coding agents, and 2026 worktree workflow writing surfaced during the web pass.</p>
 		</div>

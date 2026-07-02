@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with contract fixture literals; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
@@ -14,15 +16,25 @@ import {
 	SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
 	SKILL_FEEDBACK_CONTRACT_ID,
-	SKILL_FEEDBACK_COST_STATUS,
+	SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+	SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
+	SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+	SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
 	type HealthResultData,
 	type Receipt,
 	type ReviewResultData,
@@ -34,15 +46,22 @@ import {
 	createWriterProof,
 	deriveWriterOwnedSkillRunId,
 	isSafeCorrelationWitnessFileName,
-	normalizeReport,
 	parseCloseoutReceipt,
 	parseCorrelateResultData,
 	parseHealthResultData,
+	parseQueueResultData,
+	parseReportDetailData,
+	parseReportsResultData,
 	parsePurgeResultData,
 	parseReviewResultData,
+	parseUsageResultData,
 	parseReceipt,
 	skillFeedbackContracts,
+	type SkillFeedbackQueueResultData,
 	type SkillFeedbackPurgeResultData,
+	type SkillFeedbackReportDetailData,
+	type SkillFeedbackReportsResultData,
+	type SkillFeedbackUsageResultData,
 	verifyCorrelationWitness,
 	verifyWriterProof,
 } from "./command-contract";
@@ -185,6 +204,18 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			next_safe_action: "Wait for a repo-contained path before grouping.",
 		},
 	],
+	engineering_signals: [
+		{
+			signal_key: "signal:create-skill",
+			reason: "repeated_anchor",
+			owner_path: "skills/create-skill/SKILL.md",
+			evidence_refs: ["report:report_1"],
+			evidence_tier: "driver_declared",
+			source_mix: ["driver_closeout"],
+			allowed_claims: ["repeated_anchor"],
+			next_safe_action: "Open the referenced owner path and verify evidence.",
+		},
+	],
 	anchor_miss_telemetry: [
 		{
 			weak_anchor_reason: "label_only",
@@ -216,8 +247,24 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			evidence_refs: [],
 		},
 		daily_pilot: {
+			status: "ready",
+			reason_ids: [
+				"decision_44_claude_supported",
+				"claude_stop_skill_detected",
+			],
+			evidence_refs: ["report_1"],
+		},
+		claude_daily_pilot: {
+			status: "ready",
+			reason_ids: [
+				"decision_44_claude_supported",
+				"claude_stop_skill_detected",
+			],
+			evidence_refs: ["report_1"],
+		},
+		codex_trusted_skill_identity: {
 			status: "blocked",
-			reason_ids: ["pilot_gate_not_accepted"],
+			reason_ids: ["missing_engine_owned_identity"],
 			evidence_refs: [],
 		},
 	},
@@ -270,8 +317,22 @@ const MINIMAL_HEALTH_RESULT = {
 			reason_ids: ["missing_engine_owned_identity"],
 		},
 		daily_pilot: {
+			status: "ready",
+			reason_ids: [
+				"decision_44_claude_supported",
+				"claude_stop_skill_detected",
+			],
+		},
+		claude_daily_pilot: {
+			status: "ready",
+			reason_ids: [
+				"decision_44_claude_supported",
+				"claude_stop_skill_detected",
+			],
+		},
+		codex_trusted_skill_identity: {
 			status: "blocked",
-			reason_ids: ["pilot_gate_not_accepted"],
+			reason_ids: ["missing_engine_owned_identity"],
 		},
 	},
 	correlation: {
@@ -342,8 +403,138 @@ const MINIMAL_CORRELATE_RESULT = {
 	},
 } as const satisfies SkillFeedbackCorrelateResultData;
 
+const MINIMAL_REPORTS_RESULT = {
+	contract: SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+	filters: {
+		limit: 10,
+		lane: "all",
+		source: "all",
+	},
+	counts: {
+		primary_count: 1,
+		low_signal_count: 1,
+		returned_count: 2,
+		skipped_unsafe_count: 0,
+		invalid_count: 0,
+	},
+	reports: [
+		{
+			report_ref: "report:report_primary",
+			report_id: "report_primary",
+			detail_command: "skill-feedback report report:report_primary",
+			generated_ts: "2026-06-11T08:00:00.000Z",
+			skill: "create-skill",
+			outcome: "confirmed",
+			goal: "Repair the skill authoring route.",
+			lane: "primary",
+			source: "driver_closeout",
+		},
+		{
+			report_ref: "report:report_low",
+			report_id: "report_low",
+			detail_command: "skill-feedback report report:report_low --low-signal",
+			generated_ts: "2026-06-11T08:01:00.000Z",
+			skill: "create-skill",
+			outcome: "ambiguous",
+			lane: "low-signal",
+			source: "hook_capture",
+			low_signal_reason_id: "unknown_skill_codex_stop",
+		},
+	],
+} as const satisfies SkillFeedbackReportsResultData;
+
+const MINIMAL_REPORT_DETAIL_RESULT = {
+	contract: SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+	report_ref: "report:report_primary",
+	report_id: "report_primary",
+	lane: "primary",
+	generated_ts: "2026-06-11T08:00:00.000Z",
+	skill: "create-skill",
+	outcome: "confirmed",
+	source: "driver_closeout",
+	correlation_status: "linked",
+	goal: "Repair the skill authoring route.",
+	friction: {
+		category: "missing_context",
+		note: "The owner path was split across two references.",
+	},
+	verification_burden: {
+		level: "moderate",
+		note: "Had to inspect the rendered skill and the owner runbook.",
+	},
+	touched_surfaces: [{ type: "path", value: "skills/create-skill/SKILL.md" }],
+	observations: [],
+	evidence_gaps: [
+		{
+			code: "cost_unavailable",
+			path: "cost",
+			message: "Skill-attributed cost is unavailable in v1.",
+		},
+	],
+	missing_fields: ["observations"],
+} as const satisfies SkillFeedbackReportDetailData;
+
+const MINIMAL_USAGE_RESULT = {
+	contract: SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
+	filters: {
+		limit: 10,
+	},
+	counts: {
+		primary_count: 1,
+		low_signal_count: 1,
+		returned_count: 1,
+	},
+	skills: [
+		{
+			skill: "create-skill",
+			primary_count: 1,
+			low_signal_count: 1,
+			outcomes: {
+				confirmed: 1,
+				failed: 0,
+				ambiguous: 0,
+			},
+			closeout_count: 1,
+			capture_count: 0,
+			last_seen_generated_ts: "2026-06-11T08:00:00.000Z",
+			common_friction: "missing_context",
+			common_verification_burden: "moderate",
+			report_refs: ["report:report_primary"],
+		},
+	],
+} as const satisfies SkillFeedbackUsageResultData;
+
+const MINIMAL_QUEUE_RESULT = {
+	contract: SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+	filters: {
+		limit: 10,
+		include_weak: true,
+	},
+	counts: {
+		primary_count: 1,
+		low_signal_count: 1,
+		returned_count: 1,
+		weak_available_count: 1,
+	},
+	rows: [
+		{
+			target_type: "owner_path",
+			target: "skills/create-skill/SKILL.md",
+			reason: "repeated owner-path evidence",
+			evidence_strength: "strong",
+			skill: "create-skill",
+			report_refs: ["report:report_primary"],
+			next_safe_action: "Inspect the owner path.",
+		},
+	],
+} as const satisfies SkillFeedbackQueueResultData;
+
 describe("skill-feedback U2 command contract", () => {
-	test("declares valid facade-backed record, closeout, review, health, purge, and correlate commands", () => {
+	test("declares valid facade-backed record, closeout, dashboard, human, diagnostic, purge, and correlate commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
 			path: "skills/skill-feedback/src/command-contract.ts",
 			writeImplyingMutations: new Set([
@@ -358,6 +549,11 @@ describe("skill-feedback U2 command contract", () => {
 		expect(Object.keys(skillFeedbackContracts)).toEqual([
 			"record",
 			"closeout",
+			"dashboard",
+			"reports",
+			"report",
+			"usage",
+			"queue",
 			"review",
 			"health",
 			"purge",
@@ -371,11 +567,36 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
 		});
+		expect(discoveryTree().commands.reports?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+		});
+		expect(discoveryTree().commands.report?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+		});
+		expect(discoveryTree().commands.usage?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
+		});
+		expect(discoveryTree().commands.queue?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+		});
 		expect(discoveryTree().commands.review?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
-		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("6");
+		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("8");
+		expect(SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION).toBe("4");
+		expect(discoveryTree().commands.dashboard).toMatchObject({
+			json: false,
+			output_modes: ["plain"],
+		});
+		expect(discoveryTree().commands.dashboard?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+		});
 		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -437,6 +658,20 @@ describe("skill-feedback U2 command contract", () => {
 		});
 	}
 
+	test("dashboard exposes a read-only plain front door with repo targeting", () => {
+		const contract = skillFeedbackContracts.dashboard;
+
+		expect(contract.usage).toEqual(["dashboard [--repo <path>]"]);
+		expect(Object.keys(contract.flags)).toEqual(["--repo"]);
+		expect(contract.sideEffects).toEqual(["read"]);
+		expect(contract.outputModes).toEqual(["plain"]);
+		expect(contract.json).toBe(false);
+		expect(contract.resultContract).toMatchObject({
+			id: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+		});
+	});
+
 	test("correlate flags expose preview and execute without trust-bearing inputs", () => {
 		const flags = Object.keys(skillFeedbackContracts.correlate.flags).sort();
 
@@ -457,6 +692,21 @@ describe("skill-feedback U2 command contract", () => {
 			"--trust",
 		]) {
 			expect(flags).not.toContain(reserved);
+		}
+	});
+
+	test("declares plain decision readiness surfaces from result contracts", () => {
+		expect(SKILL_FEEDBACK_DECISION_READINESS_SURFACES).toEqual([
+			{ key: "runtime_capture", label: "runtime capture" },
+			{ key: "claude_daily_pilot", label: "Claude daily pilot" },
+			{
+				key: "codex_trusted_skill_identity",
+				label: "Codex Trusted skill identity",
+			},
+		]);
+		for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+			expect(surface.key in healthResultFixture().claim_readiness).toBe(true);
+			expect(surface.key in reviewResultV2Fixture().claim_readiness).toBe(true);
 		}
 	});
 
@@ -590,18 +840,6 @@ describe("skill-feedback U2 command contract", () => {
 		);
 	});
 
-	test("normalizes v0 null explanation as absent", () => {
-		const normalized = normalizeReport({
-			...usableReport(COMPLETE_RECEIPT),
-			explanation: null,
-		});
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.source_schema_version).toBe("v0");
-		expect(normalized.report.evidence_source).toBe("hook_capture");
-		expect(normalized.report.goal).toBe(COMPLETE_RECEIPT.goal);
-	});
 });
 
 describe("skill-feedback U1 review result v2 contract", () => {
@@ -615,6 +853,10 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 		);
 		expect(parsed.data.inbox_status).toBe("populated");
+		expect(parsed.data.claim_readiness.claude_daily_pilot.status).toBe("ready");
+		expect(
+			parsed.data.claim_readiness.codex_trusted_skill_identity.status,
+		).toBe("blocked");
 		expect(parsed.data.next_action.action_id).toBe("run-review");
 	});
 
@@ -781,6 +1023,152 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		});
 	});
 
+	test("validates human dashboard result data contracts", () => {
+		expect(parseReportsResultData(MINIMAL_REPORTS_RESULT)).toMatchObject({
+			kind: "ok",
+		});
+		expect(parseReportDetailData(MINIMAL_REPORT_DETAIL_RESULT)).toMatchObject({
+			kind: "ok",
+		});
+		expect(parseUsageResultData(MINIMAL_USAGE_RESULT)).toMatchObject({
+			kind: "ok",
+		});
+		expect(parseQueueResultData(MINIMAL_QUEUE_RESULT)).toMatchObject({
+			kind: "ok",
+		});
+	});
+
+	test("rejects malformed report-list result data", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "unsafe report id",
+				mutate: (data) => {
+					data.reports[0].report_id = "../primary";
+				},
+				path: "reports[0].report_id",
+				reason: "invalid_report_id",
+			},
+			{
+				name: "missing low signal continuation",
+				mutate: (data) => {
+					data.reports[1].detail_command =
+						"skill-feedback report report:report_low";
+				},
+				path: "reports[1].detail_command",
+				reason: "invalid_detail_command",
+			},
+			{
+				name: "invalid lane filter",
+				mutate: (data) => {
+					data.filters.lane = "archive";
+				},
+				path: "filters.lane",
+				reason: "invalid_lane",
+			},
+			{
+				name: "invalid source filter",
+				mutate: (data) => {
+					data.filters.source = "manual";
+				},
+				path: "filters.source",
+				reason: "invalid_source",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = structuredClone(MINIMAL_REPORTS_RESULT) as Record<string, any>;
+			scenario.mutate(data);
+			expect(parseReportsResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
+			});
+		}
+	});
+
+	test("rejects malformed report detail result data", () => {
+		expect(
+			parseReportDetailData({
+				...MINIMAL_REPORT_DETAIL_RESULT,
+				touched_surfaces: [{ type: "path", value: "../outside" }],
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "touched_surfaces[0].value",
+			reason: "invalid_owner_path",
+		});
+		expect(
+			parseReportDetailData({
+				...MINIMAL_REPORT_DETAIL_RESULT,
+				missing_fields: ["cost"],
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "missing_fields[0]",
+			reason: "invalid_missing_field",
+		});
+		expect(
+			parseReportDetailData({
+				...MINIMAL_REPORT_DETAIL_RESULT,
+				evidence_gaps: [
+					{
+						code: "missing_magic",
+						path: "magic",
+						message: "Unknown gap.",
+					},
+				],
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "evidence_gaps[0].code",
+			reason: "invalid_gap_code",
+		});
+	});
+
+	test("rejects malformed usage and queue result data", () => {
+		const badUsage = structuredClone(MINIMAL_USAGE_RESULT) as Record<string, any>;
+		badUsage.skills[0].outcomes.confirmed = "1";
+		expect(parseUsageResultData(badUsage)).toMatchObject({
+			kind: "invalid",
+			path: "skills[0].outcomes.confirmed",
+			reason: "expected_number",
+		});
+		const badUsageRef = structuredClone(MINIMAL_USAGE_RESULT) as Record<
+			string,
+			any
+		>;
+		badUsageRef.skills[0].report_refs = ["report:../outside"];
+		expect(parseUsageResultData(badUsageRef)).toMatchObject({
+			kind: "invalid",
+			path: "skills[0].report_refs[0]",
+			reason: "invalid_report_ref",
+		});
+
+		const badQueue = structuredClone(MINIMAL_QUEUE_RESULT) as Record<string, any>;
+		badQueue.rows[0].target_type = "label";
+		expect(parseQueueResultData(badQueue)).toMatchObject({
+			kind: "invalid",
+			path: "rows[0].target_type",
+			reason: "invalid_target_type",
+		});
+
+		const badOwnerPath = structuredClone(MINIMAL_QUEUE_RESULT) as Record<
+			string,
+			any
+		>;
+		badOwnerPath.rows[0].target = "../outside";
+		expect(parseQueueResultData(badOwnerPath)).toMatchObject({
+			kind: "invalid",
+			path: "rows[0].target",
+			reason: "invalid_owner_path",
+		});
+	});
+
 	test("validates minimal v2 review output and keeps claims entry-local", () => {
 		const parsed = parseReviewResultData(reviewResultV2Fixture());
 
@@ -791,6 +1179,7 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		);
 		expect(parsed.data.review_units).toHaveLength(2);
 		expect(parsed.data.ledger_entries).toHaveLength(2);
+		expect(parsed.data.engineering_signals).toHaveLength(1);
 		expect(parsed.data.anchor_miss_telemetry).toHaveLength(1);
 		expect(parsed.data.open_actions).toHaveLength(1);
 		expect(parsed.data.inbox_status).toBe("populated");
@@ -806,6 +1195,10 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		expect(parsed.data.claim_readiness.runtime_capture.status).toBe(
 			"evidence_only",
 		);
+		expect(parsed.data.claim_readiness.claude_daily_pilot.status).toBe("ready");
+		expect(
+			parsed.data.claim_readiness.codex_trusted_skill_identity.status,
+		).toBe("blocked");
 		expect("allowed_claims" in parsed.data).toBe(false);
 		expect("capture_readiness" in parsed.data).toBe(false);
 	});
@@ -967,6 +1360,20 @@ describe("skill-feedback U1 review result v2 contract", () => {
 				path: "ledger_entries[0].allowed_claims[0]",
 			},
 			{
+				name: "engineering signal reason",
+				mutate: (data) => {
+					data.engineering_signals[0].reason = "mystery_signal";
+				},
+				path: "engineering_signals[0].reason",
+			},
+			{
+				name: "engineering signal source",
+				mutate: (data) => {
+					data.engineering_signals[0].source_mix[0] = "manual_note";
+				},
+				path: "engineering_signals[0].source_mix[0]",
+			},
+			{
 				name: "readiness status",
 				mutate: (data) => {
 					data.claim_readiness.runtime_capture.status = "waiting";
@@ -995,6 +1402,67 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			expect(parseReviewResultData(data), name).toMatchObject({
 				kind: "invalid",
 				path,
+			});
+		}
+	});
+
+	test("rejects malformed engineering signal shape", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "missing signal array",
+				mutate: (data) => {
+					delete data.engineering_signals;
+				},
+				path: "engineering_signals",
+				reason: "expected_array",
+			},
+			{
+				name: "non-array signal field",
+				mutate: (data) => {
+					data.engineering_signals = {};
+				},
+				path: "engineering_signals",
+				reason: "expected_array",
+			},
+			{
+				name: "unsafe owner path",
+				mutate: (data) => {
+					data.engineering_signals[0].owner_path = "../outside";
+				},
+				path: "engineering_signals[0].owner_path",
+				reason: "invalid_owner_path",
+			},
+			{
+				name: "unknown signal field",
+				mutate: (data) => {
+					data.engineering_signals[0].severity = "high";
+				},
+				path: "engineering_signals[0].severity",
+				reason: "unknown_field",
+			},
+			{
+				name: "malformed evidence refs",
+				mutate: (data) => {
+					data.engineering_signals[0].evidence_refs = ["report:ok", 42];
+				},
+				path: "engineering_signals[0].evidence_refs[1]",
+				reason: "expected_string",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = reviewResultV2Fixture() as Record<string, any>;
+			scenario.mutate(data);
+
+			expect(parseReviewResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
 			});
 		}
 	});
@@ -1112,6 +1580,7 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			open_actions: [],
 			review_units: [],
 			ledger_entries: [],
+			engineering_signals: [],
 			anchor_miss_telemetry: [],
 			no_action: { rationale: "No high-signal report exists." },
 		} satisfies ReviewResultData;
@@ -1385,225 +1854,6 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		});
 	});
 
-	test("normalizes v0 reports into the v1 review model", () => {
-		const v0 = usableReport({
-			...COMPLETE_RECEIPT,
-			friction: "Hook captured no transcript payload.",
-		});
-		const normalized = normalizeReport(v0);
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.source_schema_version).toBe("v0");
-		expect(normalized.report.schema_version).toBe(SKILL_FEEDBACK_SCHEMA_VERSION);
-		expect(normalized.report.evidence_source).toBe("hook_capture");
-		expect(normalized.report.correlation_status).toBe("unlinked");
-		expect(normalized.report.cost.status).toBe(SKILL_FEEDBACK_COST_STATUS.UNAVAILABLE);
-		expect(normalized.report.evidence_gaps.map((gap) => gap.code)).toContain(
-			"cost_unavailable",
-		);
-		expect(normalized.report.friction).toBeUndefined();
-	});
-
-	test("normalizes missing v0 usage as unavailable cost without zero telemetry", () => {
-		const { usage: _usage, ...missingUsageReceipt } = COMPLETE_RECEIPT;
-		const v0 = usableReport(missingUsageReceipt);
-		const normalized = normalizeReport(v0);
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		const costGaps = normalized.report.evidence_gaps.filter(
-			(gap) => gap.code === "cost_unavailable",
-		);
-		expect(costGaps).toHaveLength(1);
-		expect(normalized.report.runtime.usage).toBeUndefined();
-	});
-
-	test("normalizes v1 reports without treating optional lanes as gaps", () => {
-		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
-		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
-		const normalized = normalizeReport({
-			schema_version: "1",
-			report_id: "report_v1_1",
-			untrusted_evidence: true,
-			generated_ts: COMPLETE_RECEIPT.generated_ts,
-			evidence_source: "driver_closeout",
-			correlation_status: "linked",
-			skill_run_id: "run-explicit-1",
-			runtime: {
-				git_sha: COMPLETE_RECEIPT.git_sha,
-				skill_version: COMPLETE_RECEIPT.skill_version,
-				model: COMPLETE_RECEIPT.model,
-			},
-			report_card: parsed.receipt,
-			evidence_gaps: parsed.evidence_gaps,
-		});
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.source_schema_version).toBe("v1");
-		expect(normalized.report.report_id).toBe("report_v1_1");
-		expect(normalized.report.touched_surfaces).toHaveLength(2);
-		expect(normalized.report.observations).toHaveLength(1);
-		expect(normalized.report.evidence_gaps).not.toContain("observations");
-	});
-
-	test("normalizes schema 2 closeout report with legacy report-card skill-run id as evidence-only", () => {
-		const normalized = normalizeReport(
-			schema2Report({
-				evidence_source: "driver_closeout",
-				capture_runtime: undefined,
-				skill_identity_provenance: undefined,
-				skill_run_id: undefined,
-				skill_run_id_provenance: undefined,
-				report_card: {
-					...COMPLETE_CLOSEOUT,
-					skill_run_id: "legacy-closeout-run",
-				},
-			}),
-		);
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.evidence_source).toBe("driver_closeout");
-		expect(normalized.report.skill_run_id).toBeUndefined();
-		expect(normalized.report.skill_run_id_provenance).toBeUndefined();
-		expect(normalized.report.skill).toBe(COMPLETE_CLOSEOUT.skill);
-	});
-
-	test("normalizes capture provenance fields and rejects invalid values", () => {
-		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
-		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
-		const baseReport = {
-			schema_version: "1",
-			report_id: "report_v1_capture",
-			untrusted_evidence: true,
-			generated_ts: COMPLETE_RECEIPT.generated_ts,
-			evidence_source: "hook_capture",
-			correlation_status: "unlinked",
-			runtime: {
-				git_sha: COMPLETE_RECEIPT.git_sha,
-				skill_version: COMPLETE_RECEIPT.skill_version,
-				model: COMPLETE_RECEIPT.model,
-			},
-			report_card: parsed.receipt,
-			evidence_gaps: parsed.evidence_gaps,
-		};
-
-		const normalized = normalizeReport({
-			...baseReport,
-			capture_runtime: "codex_stop",
-			skill_identity_provenance: {
-				source: "none",
-				trusted: false,
-				reason: "codex_stop_payload_has_no_trusted_skill_identity",
-			},
-		});
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.capture_runtime).toBe("codex_stop");
-		expect(normalized.report.skill_identity_provenance).toMatchObject({
-			source: "none",
-			trusted: false,
-		});
-
-		expect(
-			normalizeReport({ ...baseReport, capture_runtime: "not-a-runtime" }),
-		).toMatchObject({
-			kind: "invalid",
-			path: "capture_runtime",
-			reason: "invalid",
-		});
-		expect(
-			normalizeReport({
-				...baseReport,
-				skill_identity_provenance: { source: "none", trusted: "yes" },
-			}),
-		).toMatchObject({
-			kind: "invalid",
-			path: "skill_identity_provenance",
-			reason: "invalid",
-		});
-	});
-
-	test("normalizes skill-run provenance as evidence-only and rejects invalid trust labels", () => {
-		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
-		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
-		const baseReport = {
-			schema_version: "1",
-			report_id: "report_v1_run_provenance",
-			untrusted_evidence: true,
-			generated_ts: COMPLETE_RECEIPT.generated_ts,
-			evidence_source: "driver_closeout",
-			correlation_status: "linked",
-			skill_run_id: "run-trusted-1",
-			runtime: {
-				git_sha: COMPLETE_RECEIPT.git_sha,
-				skill_version: COMPLETE_RECEIPT.skill_version,
-				model: COMPLETE_RECEIPT.model,
-			},
-			report_card: parsed.receipt,
-			evidence_gaps: parsed.evidence_gaps,
-		};
-
-		const normalized = normalizeReport({
-			...baseReport,
-			skill_run_id_provenance: "correlation_owned",
-		});
-
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.skill_run_id).toBe("run-trusted-1");
-		expect(normalized.report.skill_run_id_provenance).toBeUndefined();
-
-		const runtimeOwned = normalizeReport({
-			...baseReport,
-			skill_run_id_provenance: "runtime_owned",
-		});
-
-		expect(runtimeOwned.kind).toBe("ok");
-		if (runtimeOwned.kind !== "ok") throw new Error("expected normalized report");
-		expect(runtimeOwned.report.skill_run_id).toBe("run-trusted-1");
-		expect(runtimeOwned.report.skill_run_id_provenance).toBeUndefined();
-
-		expect(
-			normalizeReport({
-				...baseReport,
-				skill_run_id_provenance: "assistant_claimed",
-			}),
-		).toMatchObject({
-			kind: "invalid",
-			path: "skill_run_id_provenance",
-			reason: "invalid",
-		});
-	});
-
-	test("preserves schema 2 run provenance only after valid writer proof", () => {
-		const unsigned = schema2Report();
-		const unsignedNormalized = normalizeReport(unsigned);
-
-		expect(unsignedNormalized.kind).toBe("ok");
-		if (unsignedNormalized.kind !== "ok") {
-			throw new Error("expected normalized unsigned report");
-		}
-		expect(unsignedNormalized.report.skill_run_id).toBe("run-runtime-1");
-		expect(unsignedNormalized.report.skill_run_id_provenance).toBeUndefined();
-
-		const signed = {
-			...unsigned,
-			writer_proof: createWriterProof(unsigned, WRITER_PROOF_KEY, "ab".repeat(16)),
-		};
-		const proof = verifyWriterProof(signed, WRITER_PROOF_KEY);
-		const normalized = normalizeReport(signed, proof);
-
-		expect(proof).toEqual({ verified: true, diagnostics: [] });
-		expect(normalized.kind).toBe("ok");
-		if (normalized.kind !== "ok") throw new Error("expected normalized report");
-		expect(normalized.report.skill_run_id_provenance).toBe("runtime_owned");
-		expect(normalized.report.writer_proof_verified).toBe(true);
-	});
-
 	test("rejects invalid writer proof nonces before signing", () => {
 		const report = schema2Report();
 
@@ -1723,106 +1973,6 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		);
 	});
 
-	test("valid writer proof preserves only Claude Stop runtime-owned provenance", () => {
-		const correlationOwnedHook = schema2Report({
-			skill_run_id_provenance: "correlation_owned",
-			correlation_status: "linked",
-		});
-		const signedCorrelationOwnedHook = {
-			...correlationOwnedHook,
-			writer_proof: createWriterProof(
-				correlationOwnedHook,
-				WRITER_PROOF_KEY,
-				"ac".repeat(16),
-			),
-		};
-		const normalizedCorrelationOwnedHook = normalizeReport(
-			signedCorrelationOwnedHook,
-			verifyWriterProof(signedCorrelationOwnedHook, WRITER_PROOF_KEY),
-		);
-
-		expect(normalizedCorrelationOwnedHook.kind).toBe("ok");
-		if (normalizedCorrelationOwnedHook.kind !== "ok") {
-			throw new Error("expected signed hook report to normalize");
-		}
-		expect(
-			normalizedCorrelationOwnedHook.report.skill_run_id_provenance,
-		).toBeUndefined();
-		expect(normalizedCorrelationOwnedHook.report.writer_proof_verified).toBe(true);
-
-		const {
-			capture_runtime: _captureRuntime,
-			skill_identity_provenance: _skillIdentityProvenance,
-			...driverCloseout
-		} = schema2Report({
-			evidence_source: "driver_closeout",
-			skill_run_id_provenance: "correlation_owned",
-			correlation_status: "linked",
-		});
-		const signedDriverCloseout = {
-			...driverCloseout,
-			writer_proof: createWriterProof(
-				driverCloseout,
-				WRITER_PROOF_KEY,
-				"ad".repeat(16),
-			),
-		};
-		const normalizedDriverCloseout = normalizeReport(
-			signedDriverCloseout,
-			verifyWriterProof(signedDriverCloseout, WRITER_PROOF_KEY),
-		);
-
-		expect(normalizedDriverCloseout.kind).toBe("ok");
-		if (normalizedDriverCloseout.kind !== "ok") {
-			throw new Error("expected signed closeout report to normalize");
-		}
-		expect(
-			normalizedDriverCloseout.report.skill_run_id_provenance,
-		).toBeUndefined();
-		expect(normalizedDriverCloseout.report.writer_proof_verified).toBe(true);
-	});
-
-	test("downgrades copied or wrong-scope writer proof to evidence-only", () => {
-		const report = schema2Report();
-		const signed = {
-			...report,
-			writer_proof: createWriterProof(report, WRITER_PROOF_KEY, "cd".repeat(16)),
-		};
-		const tampered = {
-			...signed,
-			report_card: {
-				...(signed.report_card as Record<string, unknown>),
-				goal: "Tampered goal.",
-			},
-		};
-		const tamperedProof = verifyWriterProof(tampered, WRITER_PROOF_KEY);
-		const tamperedNormalized = normalizeReport(tampered, tamperedProof);
-
-		expect(tamperedProof.verified).toBe(false);
-		expect(tamperedProof.diagnostics).toContain(
-			"writer_proof_content_digest_mismatch",
-		);
-		expect(tamperedNormalized.kind).toBe("ok");
-		if (tamperedNormalized.kind !== "ok") {
-			throw new Error("expected tampered report to stay readable");
-		}
-		expect(tamperedNormalized.report.skill_run_id_provenance).toBeUndefined();
-
-		const wrongScope = {
-			...signed,
-			writer_proof: {
-				...signed.writer_proof,
-				signed_fields: signed.writer_proof.signed_fields.filter(
-					(field) => field !== "skill_run_id_provenance",
-				),
-			},
-		};
-		expect(verifyWriterProof(wrongScope, WRITER_PROOF_KEY)).toMatchObject({
-			verified: false,
-			diagnostics: ["writer_proof_signed_fields_mismatch"],
-		});
-	});
-
 	test("writer proof covers every persisted schema 2 report field", () => {
 		const report = schema2Report();
 		const signed = {
@@ -1919,14 +2069,6 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		).toMatchObject({
 			verified: false,
 			diagnostics: ["writer_proof_signature_mismatch"],
-		});
-	});
-
-	test("normalization rejects unsupported schema 2 dispatch versions", () => {
-		expect(normalizeReport({ ...schema2Report(), schema_version: "3" })).toEqual({
-			kind: "invalid",
-			path: "schema_version",
-			reason: "unsupported",
 		});
 	});
 

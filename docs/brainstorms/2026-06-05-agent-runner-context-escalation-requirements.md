@@ -28,7 +28,7 @@ The current compact runner proves smaller output helps, but it still behaves lik
 - **Separate context states.** Repair mode assumes hot file context; triage mode assumes cold or broad-suite context.
 - **Keep visible repair output token-minimal.** Repair mode emits facts and lookup handles, not a compressed Bun transcript.
 - **Keep the full truth structured.** JSON and detail lookup expose the richer run model without forcing it into every visible response.
-- **Use facade-backed CLI mechanics.** `create-cli` can produce the command surface, contract ownership, discovery metadata, repair hints, and validation path needed for the prototype.
+- **Use facade-backed CLI mechanics.** `cli-author` can produce the command surface, contract ownership, discovery metadata, repair hints, and validation path needed for the prototype.
 - **Reuse the browser-use pattern.** Browser-use already proves the shape where agents get a mechanical map, recovery guidance, and lookup-backed detail instead of prose-only instructions.
 - **Benchmark repair and triage separately.** Repair mode competes with MCP on token cost; triage mode competes with raw Bun on orientation value.
 
@@ -94,7 +94,7 @@ flowchart TB
 
 - R21. `SKILL.md` stays thin and routes agents by context state: repair, triage, detail lookup, JSON, or benchmark.
 - R22. Deterministic behavior lives in CLI help, contract metadata, tests, and runtime checks.
-- R23. The command surface follows `create-cli` agent-native and facade-backed guidance.
+- R23. The command surface follows `cli-author` agent-native and facade-backed guidance.
 - R24. The prototype names owners for command contract, result model, renderer modes, lookup behavior, recovery hints, tests, and benchmark evidence.
 - R25. The prototype avoids copying facade schemas, parser states, or output payload catalogues into skill prose.
 
@@ -168,7 +168,7 @@ flowchart TB
 
 - The current `test-runner` prototype can evolve into an agent runner without abandoning the existing benchmark harness.
 - Browser-use provides a proven adjacent pattern for mechanical maps, recovery guidance, and lookup-backed detail.
-- `create-cli` can provide the facade-backed CLI design path for command contract, discovery, repair hints, and proof.
+- `cli-author` can provide the facade-backed CLI design path for command contract, discovery, repair hints, and proof.
 - Same-run detail lookup may require a short-lived artifact, in-memory state, or generated evidence file; planning will choose the storage shape.
 - Line numbers and assertion facts are available often enough to make repair mode useful, with bounded fallback for unparsed failures.
 
@@ -196,4 +196,4 @@ flowchart TB
 - Current runner proof: `skills/test-runner/SKILL.md`.
 - Domain language: `CONTEXT.md`.
 - Browser-use adjacent pattern: `skills/browser-use/`.
-- Create CLI owner: `skills/create-cli/SKILL.md`.
+- CLI Author owner: `skills/cli-author/SKILL.md`.

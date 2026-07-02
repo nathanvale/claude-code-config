@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with process-boundary fixtures; package runner invokes this file without static imports.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmod,
@@ -25,11 +27,16 @@ import {
 	type SkillFeedbackBranchStationEvidence,
 	listMissingSkillFeedbackBranchStationEvidence,
 	projectSkillFeedbackBranchStationEvidence,
+	skillFeedbackBranchStationEvidence,
 } from "./branch-station-evidence";
 import {
 	type CloseoutReceipt,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	SKILL_FEEDBACK_USAGE_CONTRACT_ID,
 	createCorrelationWitness,
 	createWriterProof,
 } from "./command-contract";
@@ -42,6 +49,8 @@ const cleanupPaths: string[] = [];
 
 type SkillFeedbackStationId =
 	(typeof skillFeedbackBranchStationCatalog)[number]["id"];
+type SkillFeedbackBranchStation =
+	(typeof skillFeedbackBranchStationCatalog)[number];
 
 type RuntimeEnvelope = {
 	status?: "ok" | "error";
@@ -50,7 +59,28 @@ type RuntimeEnvelope = {
 };
 
 type StationScenario = {
-	run: (station: (typeof skillFeedbackBranchStationCatalog)[number]) => Promise<SkillFeedbackBranchStationEvidence>;
+	run: (station: SkillFeedbackBranchStation) => Promise<SkillFeedbackBranchStationEvidence>;
+};
+
+type StationProbe = {
+	root: string;
+	result: CliProcessResult;
+	envelope: RuntimeEnvelope;
+};
+
+type IgnoredGitStationOptions = {
+	args: readonly string[];
+	stdin?: string;
+	label?: string;
+	prepare?: (root: string) => Promise<void>;
+	assert?: (probe: StationProbe) => Promise<void> | void;
+};
+
+type ExistingRootStationOptions = {
+	root: string;
+	args: readonly string[];
+	label?: string;
+	assert?: (probe: StationProbe) => Promise<void> | void;
 };
 
 const BASE_CLOSEOUT: CloseoutReceipt = {
@@ -78,6 +108,33 @@ const stationScenarios = {
 	"closeout.proof_attached": { run: runCloseoutProofAttached },
 	"closeout.proof_unavailable": { run: runCloseoutProofUnavailable },
 	"closeout.invalid_receipt": { run: runCloseoutInvalidReceipt },
+	"dashboard.missing_inbox": { run: runDashboardMissingInbox },
+	"dashboard.populated_inbox": { run: runDashboardPopulatedInbox },
+	"dashboard.unsafe_inbox": { run: runDashboardUnsafeInbox },
+	"reports.primary_recent": { run: runReportsPrimaryRecent },
+	"reports.low_signal_opt_in": { run: runReportsLowSignalOptIn },
+	"reports.empty_inbox": { run: runReportsEmptyInbox },
+	"reports.invalid_usage": { run: runReportsInvalidUsage },
+	"report.primary_detail": { run: runReportPrimaryDetail },
+	"report.low_signal_requires_opt_in": { run: runReportLowSignalRequiresOptIn },
+	"report.low_signal_detail_opt_in": { run: runReportLowSignalDetailOptIn },
+	"report.unknown_ref": { run: runReportUnknownRef },
+	"report.duplicate_ref": { run: runReportDuplicateRef },
+	"report.cross_lane_duplicate_ref": { run: runReportCrossLaneDuplicateRef },
+	"report.invalid_ref_path": { run: runReportInvalidRefPath },
+	"report.invalid_usage": { run: runReportInvalidUsage },
+	"usage.skill_ranking": { run: runUsageSkillRanking },
+	"usage.separates_low_signal": { run: runUsageSeparatesLowSignal },
+	"usage.empty_inbox": { run: runUsageEmptyInbox },
+	"usage.invalid_usage": { run: runUsageInvalidUsage },
+	"queue.owner_path_strong": { run: runQueueOwnerPathStrong },
+	"queue.skill_fallback": { run: runQueueSkillFallback },
+	"queue.skill_filter_fallback": { run: runQueueSkillFilterFallback },
+	"queue.weak_requires_opt_in": { run: runQueueWeakRequiresOptIn },
+	"queue.weak_opt_in": { run: runQueueWeakOptIn },
+	"queue.no_build": { run: runQueueNoBuild },
+	"queue.empty_inbox": { run: runQueueEmptyInbox },
+	"queue.invalid_usage": { run: runQueueInvalidUsage },
 	"review.empty_inbox": { run: runReviewEmptyInbox },
 	"review.target_resolution_failed": { run: runReviewTargetResolutionFailed },
 	"health.populated_inbox": { run: runHealthPopulatedInbox },
@@ -119,6 +176,7 @@ describe("skill-feedback Branch Station integration", () => {
 		}
 
 		expect(listMissingSkillFeedbackBranchStationEvidence(evidence)).toEqual([]);
+		expect(evidence).toEqual(skillFeedbackBranchStationEvidence);
 		const stationMap = projectSkillFeedbackBranchStationEvidence(evidence);
 		expect(stationMap.drift).toEqual([]);
 		expect(stationMap.findings).toEqual([]);
@@ -132,7 +190,7 @@ describe("skill-feedback Branch Station integration", () => {
 				.sort((left, right) => left.id.localeCompare(right.id))
 				.map((station) => [station.id, "covered"]),
 		);
-	});
+	}, 15_000);
 
 	test("shared process JSON parse failures include process context", async () => {
 		const result = await runSkillFeedback(["--help"], {
@@ -143,14 +201,31 @@ describe("skill-feedback Branch Station integration", () => {
 			/label=skill-feedback help non-json[\s\S]*argv=[\s\S]*stdout=/,
 		);
 	});
+
+	test("zero-arg front door renders the dashboard through the process boundary", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runSkillFeedback([], {
+			cwd: root,
+			label: "skill-feedback front-door dashboard",
+		});
+
+		expect(result.exitCode, describeCliProcessRun(result)).toBe(0);
+		expect(result.stderr, describeCliProcessRun(result)).toBe("");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(() => parseCliProcessJson(result)).toThrow();
+		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+	});
 });
 
 async function runRecordSuccess(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -165,20 +240,20 @@ async function runRecordSuccess(
 			"--explanation",
 			"Process evidence.",
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.skill, describeCliProcessRun(result)).toBe("create-skill");
-	expect(await listInboxJsonFiles(root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, result, envelope }) => {
+			expect(envelope.data?.skill, describeCliProcessRun(result)).toBe(
+				"create-skill",
+			);
+			expect(await listInboxJsonFiles(root)).toHaveLength(1);
+		},
+	});
 }
 
 async function runRecordProofAttached(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -191,24 +266,24 @@ async function runRecordProofAttached(
 			"--generated-ts",
 			GENERATED_TS,
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(envelope.data?.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(envelope.data?.proof_status).toBe("attached");
-	expect(envelope.data?.proof_diagnostics).toEqual([]);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+			expect(envelope.data?.writer_proof).toMatchObject({
+				algorithm: "hmac-sha256",
+			});
+			expect(envelope.data?.proof_status).toBe("attached");
+			expect(envelope.data?.proof_diagnostics).toEqual([]);
+		},
+	});
 }
 
 async function runRecordProofUnavailable(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeUnusableTrustKey(root);
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		prepare: writeUnusableTrustKey,
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -221,113 +296,587 @@ async function runRecordProofUnavailable(
 			"--generated-ts",
 			GENERATED_TS,
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toBeUndefined();
-	expect(envelope.data?.writer_proof).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("unavailable");
-	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toBeUndefined();
+			expect(envelope.data?.writer_proof).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("unavailable");
+			expect(envelope.data?.proof_diagnostics).toEqual([
+				"trust_store_key_unusable",
+			]);
+		},
+	});
 }
 
 async function runRecordInvalidUsage(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["record", "--skill", "create-skill"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["record", "--skill", "create-skill"],
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutSuccessStdin(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, result, envelope }) => {
+			expect(envelope.data?.contract, describeCliProcessRun(result)).toBe(
+				SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+			);
+			const writtenPath = envelope.data?.written_path;
+			expect(typeof writtenPath, describeCliProcessRun(result)).toBe("string");
+			expect((await stat(join(root, writtenPath as string))).isFile()).toBe(true);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.contract, describeCliProcessRun(result)).toBe(
-		SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
-	);
-	const writtenPath = envelope.data?.written_path;
-	expect(typeof writtenPath, describeCliProcessRun(result)).toBe("string");
-	expect((await stat(join(root, writtenPath as string))).isFile()).toBe(true);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutProofAttached(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+			expect(report.skill_run_id_provenance).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("attached");
+			expect(envelope.data?.proof_diagnostics).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(report.skill_run_id_provenance).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("attached");
-	expect(envelope.data?.proof_diagnostics).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutProofUnavailable(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeUnusableTrustKey(root);
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writeUnusableTrustKey,
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("unavailable");
+			expect(envelope.data?.proof_diagnostics).toEqual([
+				"trust_store_key_unusable",
+			]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("unavailable");
-	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutInvalidReceipt(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
+		stdin: "[]\n",
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toEqual([]);
+		},
+	});
+}
+
+async function runDashboardMissingInbox(
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
+	const result = await runSkillFeedback(["dashboard"], {
 		cwd: root,
 		label: station.id,
-		stdin: "[]\n",
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+	expect(result.stdout).toContain("Dashboard paths:");
+	expect(result.stdout).toContain("1. Browse recent reports - `skill-feedback reports`.");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+	return evidenceForPlain(station, result);
+}
+
+async function runDashboardPopulatedInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await writeInboxReport(
+		root,
+		"dashboard-populated.json",
+		v1CloseoutReport("report-dashboard-populated", GENERATED_TS),
+	);
+	const result = await runSkillFeedback(["dashboard"], {
+		cwd: root,
+		label: station.id,
+	});
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+	expect(result.stdout).toContain(
+		"Open latest report - `skill-feedback report report:report-dashboard-populated`.",
+	);
+	expect(result.stdout).toContain("Recent:");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	return evidenceForPlain(station, result);
+}
+
+async function runDashboardUnsafeInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const outside = await makeRoot();
+	await symlink(outside, join(root, ".skill-feedback"));
+	const result = await runSkillFeedback(["dashboard"], {
+		cwd: root,
+		label: station.id,
+	});
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+	expect(result.stdout).toContain("Signal: inbox is unsafe");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	return evidenceForPlain(station, result);
+}
+
+async function runReportsPrimaryRecent(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"older.json",
+				v1HumanReport({ reportId: "report-older", generatedTs: "2026-06-01T00:00:00.000Z" }),
+			);
+			await writeInboxReport(
+				root,
+				"newer.json",
+				v1HumanReport({ reportId: "report-newer", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["reports", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_REPORTS_CONTRACT_ID);
+			const reports = (envelope.data?.reports as Array<{ report_ref: string }>);
+			expect(reports.map((report) => report.report_ref)).toEqual([
+				"report:report-newer",
+				"report:report-older",
+			]);
+		},
+	});
+}
+
+async function runReportsLowSignalOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-signal", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["reports", "--json", "--lane", "low-signal"],
+		assert: ({ envelope }) => {
+			const reports = envelope.data?.reports as Array<{
+				lane: string;
+				report_ref: string;
+				detail_command: string;
+			}>;
+			expect(reports).toEqual([
+				expect.objectContaining({
+					lane: "low-signal",
+					report_ref: "report:report-low-signal",
+					detail_command:
+						"skill-feedback report report:report-low-signal --low-signal",
+				}),
+			]);
+		},
+	});
+}
+
+async function runReportsEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["reports", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.reports).toEqual([]);
+		},
+	});
+}
+
+async function runReportsInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["reports", "--lane", "archive"],
+	});
+}
+
+async function runReportPrimaryDetail(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"primary.json",
+				v1HumanReport({ reportId: "report-primary", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-primary", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_REPORT_CONTRACT_ID);
+			expect(envelope.data).toMatchObject({
+				report_ref: "report:report-primary",
+				lane: "primary",
+			});
+		},
+	});
+}
+
+async function runReportLowSignalRequiresOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-only", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-low-only", "--json"],
+	});
+}
+
+async function runReportLowSignalDetailOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-detail", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-low-detail", "--json", "--low-signal"],
+		assert: ({ envelope }) => {
+			expect(envelope.data).toMatchObject({
+				report_ref: "report:report-low-detail",
+				lane: "low-signal",
+			});
+		},
+	});
+}
+
+async function runReportUnknownRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "report:missing", "--json"],
+	});
+}
+
+async function runReportDuplicateRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"dup-one.json",
+				v1HumanReport({ reportId: "report-dup", generatedTs: GENERATED_TS }),
+			);
+			await writeInboxReport(
+				root,
+				"dup-two.json",
+				v1HumanReport({ reportId: "report-dup", generatedTs: "2026-06-12T00:00:00.000Z" }),
+			);
+		},
+		args: ["report", "report:report-dup", "--json"],
+	});
+}
+
+async function runReportCrossLaneDuplicateRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"primary.json",
+				v1HumanReport({ reportId: "report-cross-dup", generatedTs: GENERATED_TS }),
+			);
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({
+					reportId: "report-cross-dup",
+					generatedTs: "2026-06-12T00:00:00.000Z",
+				}),
+			);
+		},
+		args: ["report", "report:report-cross-dup", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.error?.code).toBe("report_ref_duplicate");
+		},
+	});
+}
+
+async function runReportInvalidRefPath(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "report:../outside", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.error?.code).toBe("report_ref_invalid");
+		},
+	});
+}
+
+async function runReportInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "--json"],
+	});
+}
+
+async function runUsageSkillRanking(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "a1.json", v1HumanReport({ reportId: "a1", skill: "alpha", generatedTs: GENERATED_TS }));
+			await writeInboxReport(root, "a2.json", v1HumanReport({ reportId: "a2", skill: "alpha", generatedTs: "2026-06-12T00:00:00.000Z" }));
+			await writeInboxReport(root, "b1.json", v1HumanReport({ reportId: "b1", skill: "beta", generatedTs: "2026-06-11T00:00:00.000Z" }));
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_USAGE_CONTRACT_ID);
+			const skills = envelope.data?.skills as Array<{ skill: string; primary_count: number }>;
+			expect(skills[0]).toMatchObject({ skill: "alpha", primary_count: 2 });
+		},
+	});
+}
+
+async function runUsageSeparatesLowSignal(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "primary.json", v1HumanReport({ reportId: "primary", skill: "alpha", generatedTs: GENERATED_TS }));
+			await writeLowSignalInboxReport(root, "low.json", v1HumanReport({ reportId: "low", skill: "alpha", generatedTs: "2026-06-12T00:00:00.000Z" }));
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			const row = (envelope.data?.skills as Array<{ skill: string; primary_count: number; low_signal_count: number }>)[0];
+			expect(row).toMatchObject({
+				skill: "alpha",
+				primary_count: 1,
+				low_signal_count: 1,
+			});
+		},
+	});
+}
+
+async function runUsageEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.skills).toEqual([]);
+		},
+	});
+}
+
+async function runUsageInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["usage", "--limit", "0"],
+	});
+}
+
+async function runQueueOwnerPathStrong(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"owner.json",
+				v1HumanReport({
+					reportId: "queue-owner",
+					generatedTs: GENERATED_TS,
+					verificationLevel: "heavy",
+					touchedSurfaces: [{ type: "path", value: "skills/skill-feedback/SKILL.md" }],
+				}),
+			);
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_QUEUE_CONTRACT_ID);
+			const rows = envelope.data?.rows as Array<{ target: string; evidence_strength: string }>;
+			expect(rows[0]).toMatchObject({
+				target: "skills/skill-feedback/SKILL.md",
+				evidence_strength: "strong",
+			});
+		},
+	});
+}
+
+async function runQueueSkillFallback(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "skill-a.json", v1HumanReport({ reportId: "skill-a", skill: "fallow", generatedTs: GENERATED_TS, touchedSurfaces: [] }));
+			await writeInboxReport(root, "skill-b.json", v1HumanReport({ reportId: "skill-b", skill: "fallow", generatedTs: "2026-06-12T00:00:00.000Z", touchedSurfaces: [] }));
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{ target_type: string; target: string }>;
+			expect(rows[0]).toMatchObject({ target_type: "skill", target: "fallow" });
+		},
+	});
+}
+
+async function runQueueSkillFilterFallback(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"owner.json",
+				v1HumanReport({
+					reportId: "owner",
+					skill: "create-skill",
+					generatedTs: GENERATED_TS,
+					verificationLevel: "heavy",
+					touchedSurfaces: [{ type: "path", value: "skills/create-skill/SKILL.md" }],
+				}),
+			);
+			await writeInboxReport(root, "fallow-a.json", v1HumanReport({ reportId: "fallow-a", skill: "fallow", generatedTs: "2026-06-12T00:00:00.000Z", touchedSurfaces: [] }));
+			await writeInboxReport(root, "fallow-b.json", v1HumanReport({ reportId: "fallow-b", skill: "fallow", generatedTs: "2026-06-13T00:00:00.000Z", touchedSurfaces: [] }));
+		},
+		args: ["queue", "--json", "--skill", "fallow"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{ target_type: string; target: string }>;
+			expect(rows[0]).toMatchObject({ target_type: "skill", target: "fallow" });
+			expect(envelope.data?.no_build).toBeUndefined();
+		},
+	});
+}
+
+async function runQueueWeakRequiresOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: writeWeakQueueFixture,
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+			expect(
+				(envelope.data?.counts as { weak_available_count?: number })
+					.weak_available_count,
+			).toBeGreaterThan(0);
+		},
+	});
+}
+
+async function runQueueWeakOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: writeWeakQueueFixture,
+		args: ["queue", "--json", "--include-weak"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{
+				evidence_strength: string;
+				target_type: string;
+				target: string;
+			}>;
+			expect(rows[0]).toMatchObject({
+				evidence_strength: "weak",
+				target_type: "owner_path",
+				target: "skills/skill-feedback/SKILL.md",
+			});
+		},
+	});
+}
+
+async function runQueueNoBuild(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"single.json",
+				v1HumanReport({ reportId: "single", generatedTs: GENERATED_TS, touchedSurfaces: [] }),
+			);
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+			expect(envelope.data?.no_build).toBeDefined();
+		},
+	});
+}
+
+async function runQueueEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+		},
+	});
+}
+
+async function runQueueInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["queue", "--limit", "0"],
+	});
 }
 
 async function runReviewEmptyInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await mkdir(join(root, ".skill-feedback"), { recursive: true });
-	const result = await runSkillFeedback(["review"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.coverage).toMatchObject({ total_reports: 0 });
-	expect(envelope.data?.inbox_status).toBe("empty");
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["review"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.coverage).toMatchObject({ total_reports: 0 });
+			expect(envelope.data?.inbox_status).toBe("empty");
+		},
+	});
 }
 
 async function runReviewTargetResolutionFailed(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const nonRepo = await makeRoot();
 	const result = await runSkillFeedback(["review", "--repo", nonRepo], {
@@ -342,75 +891,55 @@ async function runReviewTargetResolutionFailed(
 }
 
 async function runHealthPopulatedInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeInboxReport(
-		root,
-		"populated.json",
-		v1CloseoutReport("report-health-populated", GENERATED_TS),
-	);
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.inbox_status).toBe("populated");
-	expect(envelope.data?.counts).toMatchObject({ primary: 1 });
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"populated.json",
+				v1CloseoutReport("report-health-populated", GENERATED_TS),
+			);
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.inbox_status).toBe("populated");
+			expect(envelope.data?.counts).toMatchObject({ primary: 1 });
+		},
+	});
 }
 
 async function runHealthProofDiagnostics(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await runSkillFeedback(
-		[
-			"record",
-			"--skill",
-			"create-skill",
-			"--goal",
-			"Health proof diagnostics station.",
-			"--outcome",
-			"confirmed",
-			"--friction",
-			"Clean run.",
-			"--generated-ts",
-			GENERATED_TS,
-		],
-		{ cwd: root, label: `${station.id}:setup` },
-	);
-	await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
-	await chmod(join(root, ".skill-feedback", ".trust", "key"), 0o600);
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.proof_health).toMatchObject({
-		verified_count: 0,
-		evidence_only_count: 1,
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await runRecordFixture(root, `${station.id}:setup`, {
+				goal: "Health proof diagnostics station.",
+			});
+			await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+			await chmod(join(root, ".skill-feedback", ".trust", "key"), 0o600);
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.proof_health).toMatchObject({
+				verified_count: 0,
+				evidence_only_count: 1,
+			});
+			expect(
+				(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
+			).toContain("trust_store_key_unusable");
+		},
 	});
-	expect(
-		(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
-	).toContain("trust_store_key_unusable");
-	return evidenceFor(station, result, envelope);
 }
 
 async function runHealthCorrelationWitnessDiagnostics(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const root = await makeIgnoredGitRoot();
-	await runSkillFeedback(
-		[
-			"record",
-			"--skill",
-			"create-skill",
-			"--goal",
-			"Health witness diagnostics station.",
-			"--outcome",
-			"confirmed",
-			"--friction",
-			"Clean run.",
-			"--generated-ts",
-			GENERATED_TS,
-		],
-		{ cwd: root, label: `${station.id}:setup` },
-	);
+	await runRecordFixture(root, `${station.id}:setup`, {
+		goal: "Health witness diagnostics station.",
+	});
 	const key = Buffer.from(
 		(await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf8")).trim(),
 		"hex",
@@ -449,103 +978,100 @@ async function runHealthCorrelationWitnessDiagnostics(
 }
 
 async function runHealthUnsafeInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const outside = await makeRoot();
-	await symlink(outside, join(root, ".skill-feedback"));
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.inbox_status).toBe("unsafe");
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			const outside = await makeRoot();
+			await symlink(outside, join(root, ".skill-feedback"));
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.inbox_status).toBe("unsafe");
+		},
+	});
 }
 
 async function runPurgePreview(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(["purge", "--keep-latest", "1"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--keep-latest", "1"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				mode: "preview",
+				candidate_count: 1,
+				deleted_count: 0,
+			});
+			expect(await listInboxJsonFiles(root)).toHaveLength(2);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-		mode: "preview",
-		candidate_count: 1,
-		deleted_count: 0,
-	});
-	expect(await listInboxJsonFiles(root)).toHaveLength(2);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runPurgeExecute(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(
-		["purge", "--keep-latest", "1", "--execute"],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-		mode: "execute",
-		candidate_count: 1,
-		deleted_count: 1,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--keep-latest", "1", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				mode: "execute",
+				candidate_count: 1,
+				deleted_count: 1,
+			});
+			expect(await listInboxJsonFiles(root)).toHaveLength(1);
+		},
 	});
-	expect(await listInboxJsonFiles(root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runPurgeInvalidUsage(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(["purge", "--execute"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--execute"],
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toHaveLength(2);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toHaveLength(2);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelatePreviewRepairable(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeRepairableCorrelationFixture("preview");
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { repairable_count: 1, written_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { repairable_count: 1, written_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateExecuteWritten(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeRepairableCorrelationFixture("execute");
-	const result = await runSkillFeedback(["correlate", "--execute"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "execute",
+				counts: { repairable_count: 1, written_count: 1 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toHaveLength(1);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "execute",
-		counts: { repairable_count: 1, written_count: 1 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateAlreadyLinked(
@@ -556,51 +1082,51 @@ async function runCorrelateAlreadyLinked(
 		cwd: setup.root,
 		label: `${station.id}:setup`,
 	});
-	const result = await runSkillFeedback(["correlate", "--execute"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "execute",
+				counts: { already_linked_count: 1, written_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toHaveLength(1);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "execute",
-		counts: { already_linked_count: 1, written_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateAmbiguous(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeAmbiguousCorrelationFixture();
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { ambiguous_count: 1, repairable_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { ambiguous_count: 1, repairable_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateInsufficientEvidence(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeInsufficientCorrelationFixture();
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: ({ envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { insufficient_evidence_count: 1, repairable_count: 0 },
+				next_action: { action_id: "no_repair_available" },
+			});
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { insufficient_evidence_count: 1, repairable_count: 0 },
-		next_action: { action_id: "no_repair_available" },
-	});
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateUnsafeInbox(
@@ -649,20 +1175,73 @@ async function runSkillFeedback(
 	});
 }
 
+async function coverIgnoredGitStation(
+	station: SkillFeedbackBranchStation,
+	options: IgnoredGitStationOptions,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await options.prepare?.(root);
+	const result = await runSkillFeedback(options.args, {
+		cwd: root,
+		label: options.label ?? station.id,
+		stdin: options.stdin,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	await options.assert?.({ root, result, envelope });
+	return evidenceFor(station, result, envelope);
+}
+
+async function coverExistingRootStation(
+	station: SkillFeedbackBranchStation,
+	options: ExistingRootStationOptions,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const result = await runSkillFeedback(options.args, {
+		cwd: options.root,
+		label: options.label ?? station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	await options.assert?.({ root: options.root, result, envelope });
+	return evidenceFor(station, result, envelope);
+}
+
+async function runRecordFixture(
+	root: string,
+	label: string,
+	input: { goal: string },
+): Promise<CliProcessResult> {
+	return runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			input.goal,
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label },
+	);
+}
+
 function expectStationEnvelope(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 	result: CliProcessResult,
 ): RuntimeEnvelope {
+	const expected = stationEnvelopeExpectation(station);
 	expect(result.exitCode, describeCliProcessRun(result)).toBe(
 		station.expectedExitCode,
 	);
 	const envelope = parseCliProcessJson<RuntimeEnvelope>(result);
 	expect(envelope.status, describeCliProcessRun(result)).toBe(
-		station.expectedEnvelopeStatus,
+		expected.envelopeStatus,
 	);
 	const observedContract = observedResultContractId(envelope);
 	expect(observedContract, describeCliProcessRun(result)).toBe(
-		station.expectedResultContractId,
+		expected.resultContractId,
 	);
 	const expectedErrorCode =
 		"expectedErrorCode" in station ? station.expectedErrorCode : undefined;
@@ -674,8 +1253,37 @@ function expectStationEnvelope(
 	return envelope;
 }
 
+function stationEnvelopeExpectation(station: SkillFeedbackBranchStation): {
+	envelopeStatus: "ok" | "error";
+	resultContractId: string;
+} {
+	if (
+		!("expectedEnvelopeStatus" in station) ||
+		!("expectedResultContractId" in station)
+	) {
+		throw new Error(`${station.id} does not declare a JSON envelope expectation.`);
+	}
+	return {
+		envelopeStatus: station.expectedEnvelopeStatus,
+		resultContractId: station.expectedResultContractId,
+	};
+}
+
+function expectDashboardPlainResult(
+	station: SkillFeedbackBranchStation,
+	result: CliProcessResult,
+): void {
+	expect(result.exitCode, describeCliProcessRun(result)).toBe(
+		station.expectedExitCode,
+	);
+	expect(result.stderr, describeCliProcessRun(result)).toBe("");
+	expect(result.stdout, describeCliProcessRun(result)).toContain(
+		"Dashboard paths:",
+	);
+}
+
 function evidenceFor(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 	result: CliProcessResult,
 	envelope: RuntimeEnvelope,
 ): SkillFeedbackBranchStationEvidence {
@@ -686,6 +1294,17 @@ function evidenceFor(
 		observedEnvelopeStatus: envelope.status,
 		observedResultContractId: observedResultContractId(envelope),
 		...(envelope.error?.code ? { observedErrorCode: envelope.error.code } : {}),
+	};
+}
+
+function evidenceForPlain(
+	station: SkillFeedbackBranchStation,
+	result: CliProcessResult,
+): SkillFeedbackBranchStationEvidence {
+	return {
+		stationId: station.id,
+		status: "covered",
+		observedExitCode: result.exitCode ?? undefined,
 	};
 }
 
@@ -730,6 +1349,31 @@ async function writeInboxReport(
 	const inbox = join(root, ".skill-feedback");
 	await mkdir(inbox, { recursive: true });
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeLowSignalInboxReport(
+	root: string,
+	name: string,
+	value: unknown,
+): Promise<void> {
+	const inbox = join(root, ".skill-feedback", "low-signal");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeWeakQueueFixture(root: string): Promise<void> {
+	await writeInboxReport(
+		root,
+		"weak.json",
+		v1HumanReport({
+			reportId: "queue-weak",
+			generatedTs: GENERATED_TS,
+			verificationLevel: "light",
+			touchedSurfaces: [
+				{ type: "path", value: "skills/skill-feedback/SKILL.md" },
+			],
+		}),
+	);
 }
 
 async function readOnlyInboxReport(root: string): Promise<Record<string, unknown>> {
@@ -992,5 +1636,28 @@ function v1CloseoutReport(reportId: string, generatedTs: string) {
 		runtime: { git_sha: "1234567890abcdef1234567890abcdef12345678" },
 		report_card: BASE_CLOSEOUT,
 		evidence_gaps: [],
+	};
+}
+
+function v1HumanReport(input: {
+	reportId: string;
+	generatedTs: string;
+	skill?: string;
+	outcome?: "confirmed" | "failed" | "ambiguous";
+	verificationLevel?: "none" | "light" | "moderate" | "heavy";
+	touchedSurfaces?: Array<{ type: "path" | "label"; value: string }>;
+}) {
+	return {
+		...v1CloseoutReport(input.reportId, input.generatedTs),
+		report_card: {
+			...BASE_CLOSEOUT,
+			skill: input.skill ?? BASE_CLOSEOUT.skill,
+			outcome: input.outcome ?? BASE_CLOSEOUT.outcome,
+			verification_burden: {
+				level: input.verificationLevel ?? BASE_CLOSEOUT.verification_burden.level,
+				note: "Integration verification burden.",
+			},
+			touched_surfaces: input.touchedSurfaces ?? BASE_CLOSEOUT.touched_surfaces,
+		},
 	};
 }

@@ -15,7 +15,7 @@ Use when validating that the audit loop rejects a near-miss and converges clean.
 
 ## Owner Paths
 
-- Repair owner: `skills/create-skill/SKILL.md`.
+- Repair owner: `skills/skill-author/SKILL.md`.
 
 ## Workflow
 
