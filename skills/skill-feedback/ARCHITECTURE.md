@@ -19,26 +19,9 @@ Its interface is:
 - Zero-arg dashboard alias over the human dashboard read surface.
 - Private repo-local inbox files under `.skill-feedback/`.
 
-Implementation modules behind that interface are:
-
-- command contracts and result types in `src/command-contract.ts`,
-- runtime and read-target interfaces in `src/runtime-contract.ts`,
-- shared filesystem and raw object helpers in `src/runtime-file-safety.ts` and
-  `src/raw-object.ts`,
-- review and health decision assembly in `src/decision-surface.ts`,
-- persisted report parsing in `src/report-normalizer.ts`,
-- safe inbox read projections in `src/inbox-read-model.ts`,
-- private correlation witness artifact IO in
-  `src/correlation-witness-artifacts.ts`,
-- private correlation witness workflow in `src/correlation-witness-workflow.ts`,
-- CLI dispatch, writes, dashboard command output, and renderers in
-  `src/skill-feedback-runner.ts`,
-- review ledger reduction in `src/review-ledger-reducer.ts`,
-- owner path anchoring in `src/ledger-anchor-adapter.ts`,
-- harness adapter seams in `src/capture-adapters.ts`,
-- redaction in `src/redaction.ts`,
-- branch station coverage in `src/branch-station-catalog.ts`,
-- branch station evidence projection in `src/branch-station-evidence.ts`.
+The Module Map below is the single per-module owner list. `AGENTS.md` and
+`README.md` point here instead of repeating it; `src/docs-drift.test.ts`
+keeps the map complete in both directions.
 
 ## CLI Entry Flow
 
@@ -83,33 +66,6 @@ flowchart TD
   Correlate --> Output
 ```
 
-- `package.json`: exposes `skill-feedback-runner`, `test`, and `typecheck`.
-- `src/command-contract.ts`: command metadata, parser rules, schemas, result
-  contracts, help/discovery contract, proof and witness artifact contracts.
-- `src/runtime-contract.ts`: `ReadTargetResolution`, `StdinTelemetry`, and
-  `SkillFeedbackRuntime` interfaces shared by runner, inbox reads, and
-  correlation owners.
-- `src/runtime-file-safety.ts`: shared path containment, optional lstat,
-  safe realpath, private-mode, and Node error-code helpers.
-- `src/raw-object.ts`: shared unknown JSON object string-field and duplicate
-  string helpers.
-- `src/decision-surface.ts`: review and health result assembly from safe inbox
-  reads, reducer facts, warnings, next action, readiness, retention, pilot
-  checkpoint, and read-target diagnostics.
-- `src/report-normalizer.ts`: persisted v0/v1/v2 report parsing, evidence-gap
-  normalization, cost-unavailable projection, and proof-context application.
-- `src/inbox-read-model.ts`: safe inbox scans, raw report reads, duplicate and
-  proof facts, low-signal classification, health facts, and purge candidates.
-- `src/correlation-witness-artifacts.ts`: private witness and diagnostic
-  artifact schemas, safe correlation directory access, reads, classification,
-  and diagnostic writes.
-- `src/correlation-witness-workflow.ts`: finalization, verification overlays,
-  repair classification, and execute orchestration.
-- `src/skill-feedback-runner.ts`: CLI entry, default runtime wiring,
-  read-target resolution implementation, safe report writes, command
-  orchestration, process envelopes, dashboard command output, and plain
-  renderers.
-
 The command facade contract is the external seam. Tests cover discovery
 metadata, help rendering, parser acceptance, runtime semantics, and branch
 station evidence.
@@ -138,6 +94,7 @@ agents.
 
 ## Module Map
 
+- `package.json`: exposes `skill-feedback-runner`, `test`, and `typecheck`.
 - `src/command-contract.ts`: contract ids, schema versions, command metadata,
   parsed types, result envelopes, writer proof, and correlation witness
   artifact contracts.
@@ -175,6 +132,9 @@ agents.
   branch coverage.
 - `src/branch-station-evidence.ts`: station evidence projection and missing
   station helpers.
+- `src/*.test.ts`: one suite per module, plus
+  `src/skill-feedback.integration.test.ts` process-boundary stations and
+  `src/docs-drift.test.ts` module-map drift.
 
 ## Report And Trust Flow
 
@@ -256,13 +216,3 @@ flowchart TD
 Purge deletes selected safe report files only. It skips `.trust/`,
 `.correlation/`, interrupted temp artifacts, and `pilot_started_at`; those stay
 health or source evidence unless a future command contract names them.
-
-## Locality
-
-The package stays deep when callers use the CLI and read owner docs:
-
-- Contracts, schemas, flags, and enums live in code.
-- `CONTEXT.md` owns vocabulary.
-- References explain reading rules, not copied schemas.
-- `.skill-feedback/` stores private evidence, not source truth.
-- `TASKS.md` tracks active work; archive stores completed trust.

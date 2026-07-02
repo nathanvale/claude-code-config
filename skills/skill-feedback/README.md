@@ -147,44 +147,12 @@ run-id authority.
 
 ## Files
 
-```text
-skills/skill-feedback/
-  AGENTS.md                  Package maintenance guide
-  ARCHITECTURE.md            Module map and flow diagrams
-  CONTEXT.md                 Ubiquitous language
-  README.md                  This file
-  SKILL.md                   Agent workflow route
-  TASKS.md                   Active project tracker
-  TASKS.archive.md           Completed trust and decision history
-  PROVENANCE.md              Source lineage
-  docs/
-    INDEX.md                 Brainstorm, ideation, and plan map
-    brainstorms/             Local copies of source brainstorms
-    ideation/                Local copies of source ideation artifacts
-    plans/                   Local copies of source plans
-  references/
-    closeout-receipt.md      Driver closeout receipt guide
-    redaction.md             Redaction policy
-    report-shape.md          Report and result reading rules
-  src/
-    command-contract.ts      CLI contracts, schemas, enums, result types
-    runtime-contract.ts      Runtime and read-target interfaces
-    runtime-file-safety.ts   Shared filesystem safety helpers
-    raw-object.ts            Shared raw JSON object helpers
-    decision-surface.ts      Review and health result assembly
-    skill-feedback-runner.ts CLI dispatch, default runtime, writes, orchestration, renderers
-    report-normalizer.ts     Persisted v0/v1/v2 parsing and proof-context normalization
-    inbox-read-model.ts      Safe inbox reads, proof facts, health facts, purge candidates
-    correlation-witness-artifacts.ts Private witness and diagnostic artifact IO
-    correlation-witness-workflow.ts Witness finalization, repair classification, overlays
-    review-ledger-reducer.ts Review ledger and allowed claims
-    ledger-anchor-adapter.ts Owner path anchor derivation
-    capture-adapters.ts      Harness capture adapter seams
-    redaction.ts             Agent-authored field redaction
-    report-helpers.ts        Evidence-gap helpers and stable report ids
-    branch-station-catalog.ts Branch coverage catalog
-    branch-station-evidence.ts Station evidence projection helpers
-```
+Per-module owners live in [ARCHITECTURE.md](./ARCHITECTURE.md) Module Map.
+Package docs: [AGENTS.md](./AGENTS.md) maintenance routing,
+[SKILL.md](./SKILL.md) workflow route, [CONTEXT.md](./CONTEXT.md) vocabulary,
+[TASKS.md](./TASKS.md) active work plus archive, `PROVENANCE.md` source
+lineage, [docs/INDEX.md](./docs/INDEX.md) brainstorm/ideation/plan map, and
+`references/` reading rules (closeout receipt, redaction, report shape).
 
 Private runtime evidence lives under the target repo's gitignored
 `.skill-feedback/` directory.
@@ -219,12 +187,3 @@ bun --filter skill-feedback-scripts typecheck
 
 After command changes, prove discovery, help, parser behavior, runtime behavior,
 and branch station coverage.
-
-## More Detail
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md): module map and flows.
-- [CONTEXT.md](./CONTEXT.md): vocabulary and avoid terms.
-- [docs/INDEX.md](./docs/INDEX.md): brainstorms, ideation, plans.
-- [references/report-shape.md](./references/report-shape.md): output reading
-  rules.
-- [TASKS.md](./TASKS.md): active work.

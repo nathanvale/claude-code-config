@@ -62,7 +62,9 @@ function printHelp(): void {
 Checks backticked local owner paths in changed skill docs.
 
 Without file arguments, checks changed skills/*/SKILL.md and skills/*/references/*.md files.
-Relative paths such as references/foo.md and scripts/foo.ts resolve from the owning skill root.
+Explicit file arguments may name any repo-local doc (skills/, runtime/, docs/, ...).
+Relative paths such as references/foo.md and scripts/foo.ts resolve from the owning
+skills/<name> or runtime/<name> package root.
 
 Options:
   --root <dir>  Repo root. Defaults to current working directory.
@@ -115,9 +117,11 @@ function changedSkillDocs(root: string): string[] {
 		.filter(Boolean);
 }
 
-function skillRootForFile(relativeFile: string): string | undefined {
+const PACKAGE_ROOT_PARENTS = new Set(["skills", "runtime"]);
+
+function packageRootForFile(relativeFile: string): string | undefined {
 	const parts = relativeFile.split("/");
-	if (parts.length < 3 || parts[0] !== "skills") return undefined;
+	if (parts.length < 3 || !PACKAGE_ROOT_PARENTS.has(parts[0] ?? "")) return undefined;
 	return parts.slice(0, 2).join("/");
 }
 
@@ -146,7 +150,8 @@ function classifyOwnerPath(token: string): "repo" | "skill" | undefined {
 	if (SKILL_RELATIVE_PREFIXES.some((prefix) => token.startsWith(prefix))) return "skill";
 	if (SKILL_ROOT_FILES.has(token)) return "skill";
 	if (REPO_ROOT_FILES.has(token)) return "repo";
-	if (token.startsWith("./") || token.startsWith("../")) return "skill";
+	// "./" tokens are target-repo config examples (e.g. `./skills`), not owner paths.
+	if (token.startsWith("../")) return "skill";
 	return undefined;
 }
 
@@ -161,18 +166,18 @@ function resolveOwner(root: string, file: string, token: string): string | undef
 	if (!kind) return undefined;
 	if (kind === "repo") return path.join(root, cleanToken);
 
-	const skillRoot = skillRootForFile(file);
-	if (!skillRoot) return undefined;
-	return path.normalize(path.join(root, skillRoot, cleanToken));
+	const packageRoot = packageRootForFile(file);
+	if (!packageRoot) return undefined;
+	return path.normalize(path.join(root, packageRoot, cleanToken));
 }
 
 function resolveExistingOwner(root: string, file: string, token: string): string | undefined {
 	const cleanToken = stripAnchor(token);
 	if (!cleanToken) return undefined;
 
-	const skillRoot = skillRootForFile(file);
-	if (skillRoot && SKILL_RELATIVE_PREFIXES.some((prefix) => cleanToken.startsWith(prefix))) {
-		const skillCandidate = path.normalize(path.join(root, skillRoot, cleanToken));
+	const packageRoot = packageRootForFile(file);
+	if (packageRoot && SKILL_RELATIVE_PREFIXES.some((prefix) => cleanToken.startsWith(prefix))) {
+		const skillCandidate = path.normalize(path.join(root, packageRoot, cleanToken));
 		if (existsSync(skillCandidate)) return skillCandidate;
 		const repoCandidate = path.join(root, cleanToken);
 		if (existsSync(repoCandidate)) return repoCandidate;
@@ -216,7 +221,7 @@ function checkFile(root: string, file: string): Diagnostic[] {
 function check(options: Options): CheckResult {
 	const files = (options.files.length > 0 ? options.files : changedSkillDocs(options.root))
 		.map((file) => path.relative(options.root, path.resolve(options.root, file)))
-		.filter((file) => file.startsWith("skills/"))
+		.filter((file) => REPO_LOCAL_PREFIXES.some((prefix) => file.startsWith(prefix)))
 		.sort();
 	const diagnostics = files.flatMap((file) => checkFile(options.root, file));
 	return {
