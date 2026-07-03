@@ -1,0 +1,29 @@
+{
+	"name": "@side-quest/warm-chrome",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Warm Chrome browser-entry proof runtime: check, status, launch, repair.",
+	"sideQuest": {
+		"sourceLinkedBin": true
+	},
+	"bin": {
+		"warm-chrome": "./src/cli.ts"
+	},
+	"exports": {
+		".": "./src/index.ts",
+		"./cli": "./src/cli.ts"
+	},
+	"scripts": {
+		"warm-chrome": "bun run src/cli.ts",
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}
