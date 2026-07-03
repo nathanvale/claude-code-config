@@ -10,7 +10,10 @@ import {
 import { userInfo } from "node:os";
 import { basename } from "node:path";
 
-import { WARM_CHROME_BROWSER_ENTRY_EXIT_CODE } from "./model.ts";
+import {
+	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE,
+	type WarmChromeRuntimeActionId,
+} from "./model.ts";
 
 /**
  * Numeric browser-entry exit code (plan U2 R3).
@@ -56,7 +59,7 @@ export type WarmChromeRuntimeErrorOptions = {
 	 * action here so the agent keeps a known-good repair action at the
 	 * deepest point in the launch flow.
 	 */
-	secondaryActionIds?: readonly string[];
+	secondaryActionIds?: readonly WarmChromeRuntimeActionId[];
 	/**
 	 * Structured payload for the error envelope `data` field. Listener detail
 	 * must pass through {@link redactListenerDetail} before it lands here —

@@ -41,6 +41,7 @@ import {
 } from "./command-contract.ts";
 import {
 	WARM_CHROME_CLI_NAME,
+	WARM_CHROME_COMMANDS,
 	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
@@ -533,10 +534,8 @@ function isWarmChromeCommand(
 	value: string | undefined,
 ): value is WarmChromeCommand {
 	return (
-		value === "check" ||
-		value === "status" ||
-		value === "launch" ||
-		value === "repair"
+		value !== undefined &&
+		(WARM_CHROME_COMMANDS as readonly string[]).includes(value)
 	);
 }
 
@@ -643,7 +642,7 @@ type NormalizedWarmChromeError = {
 	hintDocsUrl?: string;
 	failureDomain: WarmChromeFailureDomain;
 	primaryActionId?: "inspect_listener";
-	secondaryActionIds?: readonly string[];
+	secondaryActionIds?: readonly WarmChromeRuntimeActionId[];
 	data?: Record<string, unknown>;
 	runtimeActions: RuntimeActionGuidance[];
 };
@@ -714,13 +713,7 @@ function failureDomainForRuntimeError(
 	if (error.exitCode === RUNTIME_FAILURE_EXIT_CODE) {
 		return "runtime_diagnostics";
 	}
-	switch (error.code) {
-		case "non_loopback_endpoint":
-		case "profile_mismatch":
-			return "input";
-		default:
-			return "browser_entry_handoff";
-	}
+	return "browser_entry_handoff";
 }
 
 function structuredErrorInput(
@@ -823,64 +816,10 @@ function hintForRuntimeError(error: WarmChromeRuntimeError): {
 	docsUrl?: string;
 	recoverability: "none" | "change_input" | "repair_state";
 } {
+	// Canonical check codes carry their hints from proof.ts's per-code
+	// envelope options; this switch is the fallback for codes thrown without
+	// an explicit hintSummary.
 	switch (error.code) {
-		case "unsupported_platform":
-			return {
-				summary: "Stop; Warm Chrome currently supports macOS only.",
-				action: undefined,
-				recoverability: "none",
-			};
-		case "non_loopback_endpoint":
-			return {
-				summary:
-					"Use a loopback CDP endpoint such as http://127.0.0.1:<port>.",
-				action: "change_input",
-				recoverability: "change_input",
-			};
-		case "profile_mismatch":
-			return {
-				summary:
-					"Use the profile attached to the listener, or choose the matching CDP port.",
-				action: "change_input",
-				recoverability: "change_input",
-			};
-		case "warm_chrome_already_running":
-			return {
-				summary:
-					"Choose a free CDP port, then rerun the same command with an explicit --port value.",
-				action: "change_input",
-				recoverability: "change_input",
-			};
-		case "default_profile":
-		case "throwaway_profile":
-			return {
-				summary: "Choose a dedicated persistent Warm Chrome profile.",
-				action: "repair_state",
-				recoverability: "repair_state",
-			};
-		case "unsafe_profile_permissions":
-			return {
-				summary: "Run warm-chrome repair with the same port and profile.",
-				action: "repair_state",
-				recoverability: "repair_state",
-			};
-		case "chrome_for_testing":
-		case "not_real_google_chrome":
-		case "missing_profile":
-		case "port_mismatch":
-			return {
-				summary:
-					"Stop; attach to real Google Chrome with a dedicated persistent profile.",
-				action: "repair_state",
-				recoverability: "repair_state",
-			};
-		case "listener_missing":
-			return {
-				summary:
-					"Inspect the requested port; CDP answered but no local listener was found.",
-				action: "repair_state",
-				recoverability: "repair_state",
-			};
 		case "endpoint_unreachable":
 			return {
 				summary:
@@ -889,15 +828,6 @@ function hintForRuntimeError(error: WarmChromeRuntimeError): {
 				docsUrl: CHROME_REMOTE_DEBUGGING_DOCS_URL,
 				recoverability: "repair_state",
 			};
-		case "profile_missing":
-			return {
-				summary:
-					"Run warm-chrome launch with a dedicated persistent profile.",
-				action: "repair_state",
-				recoverability: "repair_state",
-			};
-		case "invalid_cdp_version":
-		case "non_loopback_websocket":
 		case "listener_uninspectable":
 		case "listener_mismatch":
 			return {
@@ -915,16 +845,6 @@ function hintForRuntimeError(error: WarmChromeRuntimeError): {
 	}
 }
 
-// Wrong-browser readiness failures: a non-Google Chrome is the thing the agent
-// would run. These can land in the `input` domain (the caller supplied a bad
-// --chrome/CHROME_BIN) yet still carry the same cold-browser/adapter-fallback
-// temptation as a browser_entry_handoff. Guard them regardless of domain so an
-// agent never reads "input was wrong" as permission to drive the wrong Chrome.
-const WRONG_BROWSER_CODES = new Set([
-	"chrome_for_testing",
-	"not_real_google_chrome",
-]);
-
 /**
  * The no_adapter_fallback continuation constraint (plan U4 R12).
  *
@@ -941,13 +861,16 @@ export function noAdapterFallbackConstraint(): RuntimeContinuationConstraint {
 }
 
 // Single predicate that owns the no_adapter_fallback decision. Every exit-20
-// envelope carries the constraint (R12); wrong-browser codes carry it even
-// when they surface in another domain with a different exit code.
+// envelope carries the constraint (R12); wrong_browser carries it even when
+// it surfaces in another domain with a different exit code — a non-Google
+// Chrome carries the same cold-browser/adapter-fallback temptation as a
+// browser_entry_handoff, so "input was wrong" is never permission to drive
+// the wrong Chrome.
 function forbidsAdapterFallback(error: NormalizedWarmChromeError): boolean {
 	return (
 		error.exitCode === WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER ||
 		error.failureDomain === "browser_entry_handoff" ||
-		WRONG_BROWSER_CODES.has(error.code)
+		error.code === "wrong_browser"
 	);
 }
 
@@ -1021,10 +944,7 @@ function primaryRuntimeActionForError(
 	if (error.primaryActionId === "inspect_listener") {
 		return warmChromeRuntimeAction("inspect_listener");
 	}
-	if (
-		error.code === "warm_chrome_already_running" ||
-		error.code === "port_occupied_foreign"
-	) {
+	if (error.code === "port_occupied_foreign") {
 		return warmChromeRuntimeAction("rerun_with_explicit_port");
 	}
 	if (
@@ -1037,22 +957,9 @@ function primaryRuntimeActionForError(
 		case "endpoint_unreachable":
 			return warmChromeRuntimeAction("launch_warm_chrome");
 		case "unsafe_profile":
-		case "unsafe_profile_permissions":
 			return warmChromeRuntimeAction("repair_profile");
-		case "profile_mismatch":
-		case "non_loopback_endpoint":
-			return warmChromeRuntimeAction("change_input");
-		case "listener_missing":
 		case "listener_mismatch":
-		case "chrome_for_testing":
-		case "default_profile":
-		case "throwaway_profile":
-		case "invalid_cdp_version":
-		case "missing_profile":
-		case "non_loopback_websocket":
 		case "listener_uninspectable":
-		case "not_real_google_chrome":
-		case "port_mismatch":
 			return warmChromeRuntimeAction("inspect_listener");
 		default:
 			return warmChromeRuntimeAction("launch_warm_chrome");

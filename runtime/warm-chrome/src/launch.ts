@@ -366,7 +366,7 @@ type SpawnedUnverifiedInput = {
 	message: string;
 	hintSummary: string;
 	data: Record<string, unknown>;
-	secondaryActionIds?: readonly string[];
+	secondaryActionIds?: readonly WarmChromeRuntimeActionId[];
 };
 
 // launch.spawned_unverified builder. The catalog pins inspect_diagnostics as
