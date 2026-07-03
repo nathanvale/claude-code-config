@@ -52,12 +52,14 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       `tests/parity.test.ts` (intended divergences are consumer-visible
       behavior changes: exit-2 → exit-20 rows, warm_chrome_already_running →
       ok envelope, canonical code collapse).
-- [ ] P1 Manual real-Chrome validation Lane: Verification. Done when: one
-      interleaved-launch run against real Chrome is recorded as switchover
-      checklist input (plan Verification Contract row; also the only
-      calibration signal for the 15s readiness budget). Next: run
-      `bun run runtime/warm-chrome/src/cli.ts launch --json` twice
-      concurrently on a workstation and file the observed stations.
+- [ ] P2 Race-converges-via-repair calibration Lane: Lifecycle. Done when: a
+      decision records whether the interleaved-launch outcome observed on
+      2026-07-03 (both racers land `spawned_unverified` reason
+      `endpoint_id_mismatch`; recovery is `repair` → `check.verified`) should
+      instead converge inside one `launch` invocation (e.g. re-read
+      `DevToolsActivePort` after the survivor settles). See the validation
+      record in Latest Signals. Next: record in the package decision log
+      alongside the platform-guard decision.
 - [ ] P2 Platform guard decision Lane: Proof Chain. Done when: a decision
       records whether the package needs the old preflight's
       `unsupported_platform` refusal (exit 1 on non-darwin) or the seam's
@@ -87,6 +89,20 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-03: Manual real-Chrome validation run recorded (switchover
+  checklist input, plan Verification Contract row). Observed on macOS with
+  Chrome 149.0.7827.201: (1) `check` verified a warm Chrome the legacy
+  browser-use preflight had launched — cross-implementation compatibility;
+  (2) `launch` against it landed `already_verified`, no spawn; (3) two
+  interleaved launches on a freed port both spawned, ProcessSingleton
+  retired one child, and BOTH landed `launch.spawned_unverified` reason
+  `endpoint_id_mismatch` — the retired loser left a stale
+  `DevToolsActivePort`, so even the surviving winner's post-spawn proof
+  failed (fixture expectation "winner lands `launched`" does not hold on
+  real Chrome); (4) `repair` performed exactly one mutation
+  (`devtools_active_port` hygiene rewrite) and the final `check` verified
+  the survivor. Readiness budget (15s) never tripped. The designed recovery
+  loop (launch → spawned_unverified → repair → verified) converges.
 - 2026-07-03: U8 closed: measured parity harness over shared seam fixtures
   (46 rows, station/exit/envelope), intended divergences enumerated and
   report printed for the switchover checklist; package joined the repo
@@ -101,8 +117,6 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 - 2026-07-03: U1–U4 closed: package scaffold, command contract, the
   sixteen-station catalog with drift gate and evidence manifest, and the
   facade-backed chassis with R13 redaction chokepoints.
-- 2026-07-03: Charter and station table accepted (decision log); station
-  sixteen (`launch.spawned_unverified`) added by post-review amendment.
 
 ## Command Shortcuts
 
