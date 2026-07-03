@@ -166,8 +166,8 @@ Reason details (non-exhaustive): `wrong_browser` ← `chrome_for_testing`;
 
 Mutation pins: `launch.launched` `writes_browser_state`;
 `launch.already_verified` `no_spawn`; `launch.port_occupied_foreign`
-`fails_closed_without_spawn` (research test requirement: prove no spawn when
-`9222` is foreign-occupied); `launch.spawned_unverified`
+`fails_closed_without_spawn` (research test requirement: prove no spawn when the
+requested CDP port is held by a foreign listener); `launch.spawned_unverified`
 `writes_browser_state`; `repair.repaired` `repairs_profile_state`;
 `repair.unrepairable` `fails_closed`.
 

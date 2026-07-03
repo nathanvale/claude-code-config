@@ -768,6 +768,25 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		expect(run.stdout).not.toContain("hostile message");
 	});
 
+	// An unexpected findListener fault reached via the UNREACHABLE-classification
+	// path (endpoint probe also failed) must never collapse to no_listener — the
+	// one reason launch's gate treats as safe to spawn. It rethrows to
+	// runtime_failure, fail-closed, exactly like resolveListener's path above.
+	test("runtime_failure: an unexpected findListener fault during unreachable classification never becomes no_listener", async () => {
+		const fixture = warmChromeFixture({
+			version: CONNECTION_REFUSED(),
+			findListenerError: new Error("lsof segfaulted mid-classify"),
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expect(run.exitCode).toBe(1);
+		const envelope = parseEnvelope(run);
+		expect(envelope.error?.code).toBe("runtime_failure");
+		// Critically NOT the spawn-licensing endpoint_unreachable/no_listener.
+		expect(envelope.error?.code).not.toBe("endpoint_unreachable");
+		expect(run.stdout).not.toContain("segfaulted");
+	});
+
 	test("invalid_usage: unsupported flags exit 2 before any probe", async () => {
 		const fixture = warmChromeFixture();
 		const run = await runWarmChrome(["check", "--bogus"], fixture);

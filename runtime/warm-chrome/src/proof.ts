@@ -835,9 +835,11 @@ async function classifyUnreachable(
 				"The CDP listener probe is unavailable, so the port cannot be proven free.",
 			);
 		}
-		// findListener returned no attributable listener; the operational
-		// verdict stays endpoint_unreachable / no_listener below.
-		listener = null;
+		// An unexpected error reached this catch — a thrown fault, never a
+		// no-listener null. It is not proof the port is free, so it must never
+		// collapse to no_listener (launch's spawn-licensing reason). Rethrow,
+		// mirroring resolveListener; the runtime_failure net owns the verdict.
+		throw error;
 	}
 	if (listener !== null) {
 		const parsed = parseProcessCommand(listener.command);
