@@ -128,10 +128,10 @@ id: first-branch-station-catalog
 status: accepted
 ```
 
-Fifteen stations as originally accepted; extended to sixteen by the
-2026-07-03 post-review amendment below (`launch.spawned_unverified`). Proof
-failures exit `20` (browser entry), envelope `error`, mutation `read_only`
-unless noted.
+Sixteen stations: fifteen as originally accepted, plus
+`launch.spawned_unverified` added to the table on 2026-07-03 by the
+post-review amendment below. Proof failures exit `20` (browser entry),
+envelope `error`, mutation `read_only` unless noted.
 
 | station id | exit | envelope | error code | primary action |
 | --- | --- | --- | --- | --- |
@@ -148,8 +148,15 @@ unless noted.
 | `launch.launched` | 0 | ok | — | `use_verified_endpoint` |
 | `launch.already_verified` | 0 | ok | — | `use_verified_endpoint` |
 | `launch.port_occupied_foreign` | 20 | error | `port_occupied_foreign` | `rerun_with_explicit_port` |
+| `launch.spawned_unverified` | 20 | error | `spawned_unverified` | `inspect_diagnostics` |
 | `repair.repaired` | 0 | ok | — | `use_verified_endpoint` |
 | `repair.unrepairable` | 20 | error | `unrepairable` | `inspect_diagnostics` |
+
+Dated note 2026-07-03 on the sixteenth row: `launch.spawned_unverified`
+exists because a post-spawn proof failure has mutated the workspace where a
+read-only `check` failure has not, and the 1:1 station = code = mutation-pin
+drift gate cannot express that difference through the re-emit rule (full
+rationale in the post-plan-review amendment below).
 
 Reason details (non-exhaustive): `wrong_browser` ← `chrome_for_testing`;
 `unsafe_profile` ← `default_profile`, `throwaway_profile`,
@@ -160,7 +167,8 @@ Reason details (non-exhaustive): `wrong_browser` ← `chrome_for_testing`;
 Mutation pins: `launch.launched` `writes_browser_state`;
 `launch.already_verified` `no_spawn`; `launch.port_occupied_foreign`
 `fails_closed_without_spawn` (research test requirement: prove no spawn when
-`9222` is foreign-occupied); `repair.repaired` `repairs_profile_state`;
+`9222` is foreign-occupied); `launch.spawned_unverified`
+`writes_browser_state`; `repair.repaired` `repairs_profile_state`;
 `repair.unrepairable` `fails_closed`.
 
 **Amendment 2026-07-03 (post-plan review): sixteenth station.** Multi-lens plan
@@ -190,6 +198,24 @@ a foreign instance), `listener_uninspectable`; `invalid_cdp` ← `ws_only_no_htt
 `non_loopback` ← `localhost_alias`; `spawned_unverified` ← `own_child_kill_failed`.
 Full provenance in the research capture and the implementation plan
 `docs/plans/2026-07-03-001-feat-warm-chrome-runtime-package-plan.md`.
+
+**Amendment 2026-07-03 (implementation closure): reason unions as landed in
+code.** The TDD port (U5–U7) finalized the seeded vocabulary with additions
+this log had not yet recorded: `endpoint_unreachable` ← `no_listener`;
+`invalid_cdp` ← `malformed_json_version`; `port_occupied_foreign` ←
+`foreign_listener`; `listener_mismatch` ← `pid_mismatch` (the untrusted-input
+cross-check when `/json/version` reports a pid disagreeing with the observed
+listener, and the final-consistency re-check); `spawned_unverified` ←
+`readiness_timeout`, `prior_launch_mid_startup` (SingletonLock pre-bind
+refusal) — launch additionally passes any check reason through unchanged on a
+post-spawn proof failure; `wrong_browser` ← `launch_binary_not_real_chrome`
+(launch-owned); and the repair-owned `unrepairable` union ←
+`foreign_listener_on_port`, `profile_not_owned`, `profile_dir_uncreatable`,
+`devtools_active_port_symlink`. Owners:
+`runtime/warm-chrome/src/model.ts` (check union),
+`runtime/warm-chrome/src/launch.ts` (launch-local reasons),
+`runtime/warm-chrome/src/repair.ts` (repair reasons); each reason is pinned
+by a station test before the runtime may emit it.
 
 ```yaml
 id: package-owned-contract-id

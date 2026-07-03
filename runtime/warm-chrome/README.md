@@ -5,8 +5,9 @@ correct warm Chrome — real browser, dedicated profile, loopback CDP,
 browser-level websocket, listener/profile/port consistency — or fail with a
 repair path before any adapter acts.
 
-Package docs: `AGENTS.md` routes maintainers. `ARCHITECTURE.md` (module map),
-`CONTEXT.md` (vocabulary), and `TASKS.md` land with the implementation units.
+Package docs: `AGENTS.md` routes maintainers, `ARCHITECTURE.md` owns the
+module map and flows, `CONTEXT.md` owns vocabulary, and `TASKS.md` tracks
+active and deferred work.
 
 ## Commands
 
