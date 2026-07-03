@@ -234,10 +234,13 @@ requirements R6a–R6c, R7a, R17 and reason-detail vocabulary.
 
 - **Identity over liveness.** A listener answering `9222` is not proof of *our*
   warm Chrome — Skyvern documents silently *adopting* an existing instance on an
-  occupied port; other CDP clients do the same. Prove process identity
-  (`findListener` pid cross-checked against the `/json/version` pid), not just
-  that something answers. This is the sharpest confirmation of the false-
-  confidence core.
+  occupied port; other CDP clients do the same. `/json/version` exposes only
+  browser metadata (`Browser`, `User-Agent`, `webSocketDebuggerUrl`), never a
+  PID, so process identity comes from a local process lookup: take the listener
+  PID from `findListener` (the `lsof`/`ps` path) and cross-check its process
+  binary against the endpoint before trusting the endpoint — do not expect the
+  discovery response to carry a PID. This is the sharpest confirmation of the
+  false-confidence core.
 - **A parseable `/json/version` does not prove an attachable browser.** Plain
   `launch()` targets expose a context with zero attachable pages (Playwright
   #11442); Cypress `--remote-debugging-pipe` puts CDP over a file descriptor so

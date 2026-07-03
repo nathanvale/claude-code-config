@@ -31,7 +31,11 @@ supersedes: 0008-browser-use-owns-warm-chrome-binding-lifecycle.md
 - When `9222` is occupied by a non-Warm-Chrome listener, failure diagnostics
   may include an informational `suggested_explicit_port` from a loopback scan.
 - The suggestion is a repair hint, not an allocator: no launch, no
-  persistence, no rebinding on the suggested port.
+  persistence, no rebinding on the suggested port. It is never authoritative —
+  never persisted, never read back, never reused as allocator state.
+- The candidate comes from a bounded loopback scan window (a small
+  unprivileged range near `9222`, never below `1024`); the scan must not be
+  widened to arbitrary ports.
 - A suggested port becomes usable only after an explicit rerun with
   `--port`/`--endpoint` and a successful Warm Chrome proof.
 - Detail: `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`.
