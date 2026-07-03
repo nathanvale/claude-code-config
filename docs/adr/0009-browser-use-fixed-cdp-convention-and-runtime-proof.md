@@ -25,3 +25,13 @@ supersedes: 0008-browser-use-owns-warm-chrome-binding-lifecycle.md
 - Stale adapter bindings surface before browser action.
 - Multi-profile fleets need a separate decision.
 - Durable browser knowledge consumes proof output; it does not own readiness policy.
+
+## Amendment 2026-07-03
+
+- When `9222` is occupied by a non-Warm-Chrome listener, failure diagnostics
+  may include an informational `suggested_explicit_port` from a loopback scan.
+- The suggestion is a repair hint, not an allocator: no launch, no
+  persistence, no rebinding on the suggested port.
+- A suggested port becomes usable only after an explicit rerun with
+  `--port`/`--endpoint` and a successful Warm Chrome proof.
+- Detail: `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`.
