@@ -294,24 +294,25 @@ describe("warm-chrome dispatch (U4)", () => {
 		expect(result.stdout).toContain("run_id=status-run");
 	});
 
-	// U5 (check) and U7 (repair) wired real handlers into the default
-	// registry, so only the launch (U6) stub still emits not_implemented.
-	test("not-yet-implemented stubs emit a runtime-failure-style envelope with exit 1", async () => {
-		for (const command of ["launch"] as const) {
-			const result = await runCli([command, "--json", "--run-id", "stub-run"]);
+	// All three default handlers are real (U5-U7); the typed stubs stay
+	// exported for tests that need an inert registry entry, and their
+	// envelope contract stays pinned through injection.
+	test("an injected not-yet-implemented stub emits a runtime-failure-style envelope with exit 1", async () => {
+		const result = await runCli(["launch", "--json", "--run-id", "stub-run"], {
+			handlers: { launch: notYetImplementedHandlers.launch },
+		});
 
-			expect(result.exitCode).toBe(1);
-			const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
-				code: "not_implemented",
-				recoverability: "none",
-				errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
+		expect(result.exitCode).toBe(1);
+		const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
+			code: "not_implemented",
+			recoverability: "none",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 1,
-				runId: "stub-run",
-				failureDomain: "runtime_diagnostics",
-			});
-			expect(envelope.runtime_actions?.[0]?.id).toBe("inspect_diagnostics");
-			expect(envelope.continuation?.constraints).toBeUndefined();
-		}
+			runId: "stub-run",
+			failureDomain: "runtime_diagnostics",
+		});
+		expect(envelope.runtime_actions?.[0]?.id).toBe("inspect_diagnostics");
+		expect(envelope.continuation?.constraints).toBeUndefined();
 		expect(Object.keys(notYetImplementedHandlers).sort()).toEqual([
 			"check",
 			"launch",

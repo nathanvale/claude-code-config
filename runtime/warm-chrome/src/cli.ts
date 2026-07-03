@@ -51,6 +51,7 @@ import {
 	createCheckCommandHandler,
 	nonLoopbackEndpointError,
 } from "./proof.ts";
+import { createLaunchCommandHandler } from "./launch.ts";
 import { createRepairCommandHandler } from "./repair.ts";
 import {
 	createDefaultRuntime,
@@ -157,13 +158,13 @@ export const notYetImplementedHandlers: WarmChromeCommandHandlers = {
 };
 
 /**
- * Default dispatch registry. `check` (and its `status` presentation alias)
- * runs the real U5 proof chain and `repair` the U7 lifecycle; `launch` stays
- * a typed stub until U6 lands its handler.
+ * Default dispatch registry: `check` (and its `status` presentation alias)
+ * runs the U5 proof chain, `launch` the U6 lifecycle, `repair` the U7
+ * lifecycle.
  */
 export const defaultCommandHandlers: WarmChromeCommandHandlers = {
-	...notYetImplementedHandlers,
 	check: createCheckCommandHandler(),
+	launch: createLaunchCommandHandler(),
 	repair: createRepairCommandHandler(),
 };
 
@@ -642,6 +643,7 @@ type NormalizedWarmChromeError = {
 	hintDocsUrl?: string;
 	failureDomain: WarmChromeFailureDomain;
 	primaryActionId?: "inspect_listener";
+	secondaryActionIds?: readonly string[];
 	data?: Record<string, unknown>;
 	runtimeActions: RuntimeActionGuidance[];
 };
@@ -683,6 +685,9 @@ function normalizeError(error: unknown): NormalizedWarmChromeError {
 			failureDomain,
 			...(error.options.primaryActionId
 				? { primaryActionId: error.options.primaryActionId }
+				: {}),
+			...(error.options.secondaryActionIds?.length
+				? { secondaryActionIds: error.options.secondaryActionIds }
 				: {}),
 			...(error.options.data ? { data: error.options.data } : {}),
 			runtimeActions: [],
@@ -950,10 +955,21 @@ function guidanceForError(error: NormalizedWarmChromeError): {
 	runtimeActions: RuntimeActionGuidance[];
 	continuation: RuntimeContinuationGuidance & { next_action_id: string };
 } {
-	const runtimeActions =
+	const primaryActions =
 		error.runtimeActions.length > 0
 			? error.runtimeActions
 			: [primaryRuntimeActionForError(error)];
+	// A post-spawn failure whose reason is a check-failure reason keeps that
+	// check station's primary action as a secondary entry (plan: the agent
+	// must not lose a known-good repair action at its deepest point).
+	const secondaryActions = (error.secondaryActionIds ?? [])
+		.filter(
+			(id): id is WarmChromeRuntimeActionId =>
+				warmChromeRuntimeActionById.has(id) &&
+				!primaryActions.some((action) => action.id === id),
+		)
+		.map((id) => warmChromeRuntimeAction(id));
+	const runtimeActions = [...primaryActions, ...secondaryActions];
 	const nextActionId = runtimeActions[0]?.id;
 	if (!nextActionId) {
 		throw new Error("Warm Chrome guidance must emit one runtime action.");

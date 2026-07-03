@@ -2,6 +2,7 @@ export * from "./branch-station-catalog.ts";
 export * from "./branch-station-evidence.ts";
 export * from "./cli.ts";
 export * from "./command-contract.ts";
+export * from "./launch.ts";
 export * from "./model.ts";
 export * from "./proof.ts";
 export * from "./repair.ts";

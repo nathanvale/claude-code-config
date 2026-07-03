@@ -51,6 +51,13 @@ export type WarmChromeRuntimeErrorOptions = {
 	// "inspect" when a real Chrome already occupies the port without CDP.
 	primaryActionId?: "inspect_listener";
 	/**
+	 * Runtime actions appended after the primary. A post-spawn failure whose
+	 * reason is a check-failure reason carries that check station's primary
+	 * action here so the agent keeps a known-good repair action at the
+	 * deepest point in the launch flow.
+	 */
+	secondaryActionIds?: readonly string[];
+	/**
 	 * Structured payload for the error envelope `data` field. Listener detail
 	 * must pass through {@link redactListenerDetail} before it lands here —
 	 * the emitter trusts this payload as already redacted.
