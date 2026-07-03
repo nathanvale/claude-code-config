@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 // U4 chassis: facade-backed entrypoint, ADR-0010 envelope wiring, diagnostics,
-// and the redaction chokepoints. Command handlers are typed dispatch stubs in
-// `notYetImplementedHandlers`; U5 (check proof chain), U6 (launch), and U7
-// (repair) replace those registry entries with real handlers.
+// and the redaction chokepoints. U5 wires the real `check` proof chain into
+// `defaultCommandHandlers`; U6 (launch) and U7 (repair) replace the remaining
+// typed dispatch stubs.
 
 import {
 	type CliDiagnosticRedactor,
@@ -41,10 +41,16 @@ import {
 } from "./command-contract.ts";
 import {
 	WARM_CHROME_CLI_NAME,
+	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
+	WARM_CHROME_SCHEMA_VERSION,
 	type WarmChromeCommand,
 	type WarmChromeRuntimeActionId,
 } from "./model.ts";
+import {
+	createCheckCommandHandler,
+	nonLoopbackEndpointError,
+} from "./proof.ts";
 import {
 	createDefaultRuntime,
 	expandHome,
@@ -150,6 +156,16 @@ export const notYetImplementedHandlers: WarmChromeCommandHandlers = {
 };
 
 /**
+ * Default dispatch registry. `check` (and its `status` presentation alias)
+ * runs the real U5 proof chain; `launch` and `repair` stay typed stubs until
+ * U6/U7 land their handlers.
+ */
+export const defaultCommandHandlers: WarmChromeCommandHandlers = {
+	...notYetImplementedHandlers,
+	check: createCheckCommandHandler(),
+};
+
+/**
  * Injectable dependencies for {@link main}; tests replace runtime, handlers,
  * and writers to run the full entrypoint in-process.
  */
@@ -192,7 +208,7 @@ export async function main(
 ): Promise<number> {
 	const runtime = deps.runtime ?? createDefaultRuntime();
 	const handlers: WarmChromeCommandHandlers = {
-		...notYetImplementedHandlers,
+		...defaultCommandHandlers,
 		...deps.handlers,
 	};
 	const stdout = deps.stdout ?? process.stdout;
@@ -459,10 +475,9 @@ function normalizeEndpoint(input: { port: string; endpoint: string }): {
 		throw usageError("--endpoint must use http");
 	}
 	if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
-		throw new WarmChromeRuntimeError(
-			"non_loopback_endpoint",
-			"Warm Chrome CDP endpoint must be loopback.",
-		);
+		// Canonical station code (check.non_loopback, reason
+		// non_loopback_endpoint); the proof chain owns the localhost-alias case.
+		throw nonLoopbackEndpointError();
 	}
 	if (!parsed.port) {
 		throw usageError("--endpoint must include a port");
@@ -581,7 +596,14 @@ function emitCliError(input: {
 			error: createCliRuntimeError(
 				structuredErrorInput(input.runId, error),
 			),
-			...(error.data ? { data: error.data } : {}),
+			// Every error envelope self-describes its result contract (R12); the
+			// chassis owns the merge so station evidence can observe the contract
+			// id even on chassis-owned stations (invalid_usage, runtime_failure).
+			data: {
+				contract_id: WARM_CHROME_CONTRACT_ID,
+				schema_version: WARM_CHROME_SCHEMA_VERSION,
+				...error.data,
+			},
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,
 		}),
@@ -981,7 +1003,10 @@ function primaryRuntimeActionForError(
 	if (error.primaryActionId === "inspect_listener") {
 		return warmChromeRuntimeAction("inspect_listener");
 	}
-	if (error.code === "warm_chrome_already_running") {
+	if (
+		error.code === "warm_chrome_already_running" ||
+		error.code === "port_occupied_foreign"
+	) {
 		return warmChromeRuntimeAction("rerun_with_explicit_port");
 	}
 	if (
@@ -993,6 +1018,7 @@ function primaryRuntimeActionForError(
 	switch (error.code) {
 		case "endpoint_unreachable":
 			return warmChromeRuntimeAction("launch_warm_chrome");
+		case "unsafe_profile":
 		case "unsafe_profile_permissions":
 			return warmChromeRuntimeAction("repair_profile");
 		case "profile_mismatch":

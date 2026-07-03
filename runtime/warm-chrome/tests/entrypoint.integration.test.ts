@@ -10,6 +10,7 @@ import {
 	type WarmChromeCommandHandlers,
 	type WarmChromeExecuteInvocation,
 } from "../src/cli.ts";
+import { warmChromeContracts } from "../src/command-contract.ts";
 import {
 	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
@@ -22,6 +23,15 @@ import {
 } from "../src/runtime.ts";
 
 const CLI_PATH = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+// Every error envelope self-describes the package result contract (R12); the
+// expectation references the contract so tests cannot drift from it.
+const WARM_CHROME_ERROR_RESULT_CONTRACT = warmChromeContracts.check
+	.resultContract as {
+	id: typeof WARM_CHROME_CONTRACT_ID;
+	kind: string;
+	schema_version: typeof WARM_CHROME_SCHEMA_VERSION;
+};
 
 interface MemoryWriter {
 	output: string;
@@ -185,6 +195,7 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 		assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "invalid_usage",
 			recoverability: "change_input",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 2,
 			runId: "usage-run",
 			failureDomain: "input",
@@ -204,6 +215,7 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 		const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "invalid_usage",
 			recoverability: "change_input",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 2,
 		});
 		expect(envelope.error.message).toContain("mutually exclusive");
@@ -216,6 +228,7 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 		assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "invalid_usage",
 			recoverability: "change_input",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 2,
 		});
 	});
@@ -227,6 +240,7 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 		assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "invalid_usage",
 			recoverability: "change_input",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 2,
 		});
 	});
@@ -280,15 +294,18 @@ describe("warm-chrome dispatch (U4)", () => {
 		expect(result.stdout).toContain("run_id=status-run");
 	});
 
+	// U5 wired the real check handler into the default registry, so only the
+	// launch (U6) and repair (U7) stubs still emit not_implemented envelopes.
 	test("not-yet-implemented stubs emit a runtime-failure-style envelope with exit 1", async () => {
-		for (const command of ["check", "launch", "repair"] as const) {
+		for (const command of ["launch", "repair"] as const) {
 			const result = await runCli([command, "--json", "--run-id", "stub-run"]);
 
 			expect(result.exitCode).toBe(1);
 			const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 				code: "not_implemented",
 				recoverability: "none",
-				processExitCode: 1,
+				errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
+			processExitCode: 1,
 				runId: "stub-run",
 				failureDomain: "runtime_diagnostics",
 			});
@@ -318,6 +335,7 @@ describe("warm-chrome dispatch (U4)", () => {
 		const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "endpoint_unreachable",
 			recoverability: "repair_state",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 20,
 			runId: "handoff-run",
 			failureDomain: "browser_entry_handoff",

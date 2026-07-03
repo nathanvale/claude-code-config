@@ -101,3 +101,63 @@ export type WarmChromeRuntimeActionId =
  */
 export const WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID =
 	"no_adapter_fallback" as const;
+
+/**
+ * Closed reason-detail union for the `check` proof chain (plan U5 R5).
+ *
+ * One station carries one canonical error code; fine-grained cause lives in
+ * the machine-readable `data.reason` field, never in the error code. The
+ * union is package-owned and closed: a new reason lands here first and a
+ * station test pins it before the runtime may emit it.
+ */
+export const WARM_CHROME_CHECK_REASONS = {
+	endpoint_unreachable: ["no_listener", "pipe_only_no_tcp", "attach_timeout"],
+	non_loopback: [
+		"localhost_alias",
+		"non_loopback_endpoint",
+		"non_loopback_websocket",
+	],
+	invalid_cdp: [
+		"malformed_json_version",
+		"ws_only_no_http",
+		"endpoint_id_mismatch",
+		"cdp_contention",
+		"roundtrip_failed",
+	],
+	port_occupied_foreign: [
+		"foreign_listener",
+		"json_answers_on_default_profile",
+		"listener_uninspectable",
+	],
+	wrong_browser: [
+		"headless_not_headed",
+		"chrome_for_testing",
+		"chromium",
+		"electron_or_other",
+		"isolated_context",
+	],
+	unsafe_profile: [
+		"default_profile",
+		"throwaway_profile",
+		"unsafe_profile_permissions",
+		"invalid_profile_path",
+		"profile_dir_remap",
+	],
+	listener_mismatch: [
+		"port_mismatch",
+		"profile_mismatch",
+		"listener_missing",
+		"pid_mismatch",
+	],
+} as const;
+
+/**
+ * Canonical check-station error code union (the exit-20 check verdicts).
+ */
+export type WarmChromeCheckErrorCode = keyof typeof WARM_CHROME_CHECK_REASONS;
+
+/**
+ * Closed reason-detail union across every check error code.
+ */
+export type WarmChromeCheckReason =
+	(typeof WARM_CHROME_CHECK_REASONS)[WarmChromeCheckErrorCode][number];

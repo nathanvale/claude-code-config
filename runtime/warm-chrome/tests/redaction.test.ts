@@ -29,6 +29,14 @@ import {
 	type WarmChromeRuntime,
 } from "../src/runtime.ts";
 
+// Every error envelope self-describes the package result contract (R12).
+const WARM_CHROME_ERROR_RESULT_CONTRACT = warmChromeContracts.check
+	.resultContract as {
+	id: typeof WARM_CHROME_CONTRACT_ID;
+	kind: string;
+	schema_version: typeof WARM_CHROME_SCHEMA_VERSION;
+};
+
 interface MemoryWriter {
 	output: string;
 	write(chunk: string): true;
@@ -177,6 +185,7 @@ describe("warm-chrome envelope redaction boundary (R12/R13)", () => {
 		const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "listener_mismatch",
 			recoverability: "repair_state",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 20,
 			runId: "redaction-run",
 			failureDomain: "browser_entry_handoff",
@@ -215,6 +224,7 @@ describe("warm-chrome envelope redaction boundary (R12/R13)", () => {
 		const envelope = assertJsonErrorEnvelope(JSON.parse(result.stdout), {
 			code: "runtime_failure",
 			recoverability: "none",
+			errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
 			processExitCode: 1,
 			runId: "flush-run",
 			failureDomain: "runtime_diagnostics",
