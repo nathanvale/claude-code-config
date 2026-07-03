@@ -121,10 +121,24 @@ export async function readSkillsLock(
 	}
 
 	const entries: SkillsLockEntry[] = [];
+	const seenCanonical = new Map<string, string>();
 	for (const [name, record] of raw) {
 		// A crafted lock key must not smuggle an arbitrary directory past the
 		// blocker model: only single path-component tokens enter the external set.
 		if (!isValidLockId(name)) continue;
+		// Two ids that fold to the same canonical key (e.g. `Fallow`/`fallow`, or
+		// NFC/NFD variants) name one filesystem path. Downstream folds to that key,
+		// so a last-writer-wins map would let one lock record silently hide
+		// another. Fail closed: a canonical collision degrades to a parse failure
+		// rather than trusting an ambiguous lock.
+		const canonical = canonicalSkillId(name);
+		const prior = seenCanonical.get(canonical);
+		if (prior !== undefined) {
+			return parseFailure(
+				`ids '${prior}' and '${name}' fold to the same canonical key '${canonical}'; one lock record would hide the other.`,
+			);
+		}
+		seenCanonical.set(canonical, name);
 		entries.push({
 			id: name,
 			source: recordString(record, "source"),

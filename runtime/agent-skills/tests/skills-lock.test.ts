@@ -148,6 +148,25 @@ describe("skills-lock reader", () => {
 		expect(lock.entries).toEqual([]);
 		expect(lock.parseFailure).toBeUndefined();
 	});
+
+	test("two ids folding to one canonical key fail closed as a parse failure", async () => {
+		const root = await tempRoot("canonical-collision");
+		await writeLock(root, {
+			version: 1,
+			skills: {
+				Fallow: { source: "anthropics/skills" },
+				fallow: { source: "someone/else" },
+			},
+		});
+
+		const lock = await readSkillsLock(root);
+
+		// A last-writer-wins map would silently keep only one record and hide the
+		// other; instead the ambiguous lock degrades to no entries plus a named
+		// diagnostic so the collision is triaged, not trusted.
+		expect(lock.entries).toEqual([]);
+		expect(lock.parseFailure).toContain("canonical key");
+	});
 });
 
 async function tempRoot(name: string): Promise<string> {

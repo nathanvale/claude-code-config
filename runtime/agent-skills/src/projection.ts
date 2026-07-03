@@ -221,8 +221,17 @@ export async function planProjection(input: {
 	const externalCanonicalOnDisk = new Set(
 		externals.map((entry) => canonicalSkillId(entry.id)),
 	);
+	// A benign self-install is projected as a managed catalog link, never as an
+	// `external` disk entry, so it is absent from externalCanonicalOnDisk by
+	// design. Excluding it here keeps it out of missing_external_ids — reporting
+	// a self-install alias as a missing external is false status for the case
+	// the model deliberately treats as benign.
 	const missingExternalIds = lock.entries
-		.filter((entry) => !externalCanonicalOnDisk.has(canonicalSkillId(entry.id)))
+		.filter(
+			(entry) =>
+				!externalCanonicalOnDisk.has(canonicalSkillId(entry.id)) &&
+				!isSelfInstall(entry, input.repoRoot, catalogRoot, entry.id),
+		)
 		.map((entry) => entry.id)
 		.sort();
 	const blockers: ProjectionBlocker[] = [

@@ -49,7 +49,9 @@ community `skills` CLI is the package manager for external acquisition.
 _Avoid_: package manager, installer, updater, marketplace client
 
 **External entry**:
-A projection-root entry whose id appears in the repo's `skills-lock.json`.
+A projection-root entry for a genuinely foreign skill: a disk entry whose lock
+id is not a benign self-install and that lacks tool-owned symlink evidence into
+the catalog, so it classifies `external` rather than managed.
 Externals are counted by `status`, explained by `list --why`, and never
 created, modified, or removed by `sync` or `unlink`. Each external carries an
 informational disk shape, `real_entry` or `symlink`; the shape reuses the
@@ -86,12 +88,14 @@ _Avoid_: verified external, content guarantee, drift detection
 
 **Skills lock**:
 The git-tracked `skills-lock.json` written by the community `skills` CLI.
-External dependencies only — the npm-lockfile analogy: the repo's own
-`skills/` catalog never appears in it, exactly as `src/` never appears in
-`package-lock.json`. agent-skills reads it as read-only input; a second
-writer would drift (ADR 0016). Lock keys are validated as single
-path-component tokens before entering the external set.
-_Avoid_: agent-skills state, snapshot, writable config, local skill registry
+Mostly external dependencies — the npm-lockfile analogy: the repo's own
+`skills/` catalog is not tracked here as `src/` is not in `package-lock.json`.
+The exception is a **benign self-install**: the CLI can record a local install
+that binds back to the repo's own catalog id, which aliases rather than adds a
+dependency. agent-skills reads the lock as read-only input; a second writer
+would drift (ADR 0016). Lock keys are validated as single path-component
+tokens before classification.
+_Avoid_: external dependencies only, agent-skills state, snapshot, writable config, local skill registry
 
 **Lock parse failure**:
 The named diagnostic when `skills-lock.json` is present but unreadable, or its

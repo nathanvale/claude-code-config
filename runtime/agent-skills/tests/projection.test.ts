@@ -416,6 +416,10 @@ describe("agent-skills projection hardening (adversarial audit)", () => {
 			plan.status.blockers.filter((b) => b.reason === "catalog_conflict"),
 		).toEqual([]);
 		expect(plan.status.health).not.toBe("blocked");
+		// A benign self-install is projected as a managed catalog link, never as an
+		// `external` disk entry, so it must not surface as a missing external —
+		// reporting it there would be false status for the benign case.
+		expect(plan.status.missing_external_ids).toEqual([]);
 	});
 
 	// Finding #3: a catalog skill whose dir resolves outside the catalog must be

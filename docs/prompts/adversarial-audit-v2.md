@@ -64,7 +64,7 @@ the BugBot "Ralph Wiggum loop":
 
 ## Workflow skeleton (the orchestrator writes this)
 
-```
+```ts
 export const meta = {
   name: 'adversarial-audit-v2',
   description: 'Loop adversarial finders to coverage-exhaustion, then verify survivors',
