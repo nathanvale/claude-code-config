@@ -111,7 +111,12 @@ export const WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID =
  * station test pins it before the runtime may emit it.
  */
 export const WARM_CHROME_CHECK_REASONS = {
-	endpoint_unreachable: ["no_listener", "pipe_only_no_tcp", "attach_timeout"],
+	endpoint_unreachable: [
+		"no_listener",
+		"pipe_only_no_tcp",
+		"attach_timeout",
+		"probe_unavailable",
+	],
 	non_loopback: [
 		"localhost_alias",
 		"non_loopback_endpoint",

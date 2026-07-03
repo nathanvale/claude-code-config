@@ -601,10 +601,12 @@ function emitCliError(input: {
 			// Every error envelope self-describes its result contract (R12); the
 			// chassis owns the merge so station evidence can observe the contract
 			// id even on chassis-owned stations (invalid_usage, runtime_failure).
+			// The stamp is spread last so a handler's data can never override the
+			// chassis-owned contract identity.
 			data: {
+				...error.data,
 				contract_id: WARM_CHROME_CONTRACT_ID,
 				schema_version: WARM_CHROME_SCHEMA_VERSION,
-				...error.data,
 			},
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,

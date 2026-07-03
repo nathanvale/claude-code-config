@@ -101,7 +101,7 @@ export const warmChromeFailureActions = [
 	{
 		id: "rerun_with_explicit_port",
 		summary:
-			"Choose a free CDP port, then rerun the same command with an explicit --port value.",
+			"Rerun the same command with an explicit --port value; the response data field suggested_explicit_port carries a free port when one was found.",
 		sideEffects: ["check"],
 	},
 	{

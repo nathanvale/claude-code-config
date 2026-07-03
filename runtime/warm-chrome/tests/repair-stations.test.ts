@@ -433,6 +433,38 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
 		expectNoProcessAffectingCalls(fixture);
 	});
+
+	// A --profile symlink resolving into the default Chrome tree passes the
+	// textual mutation gate; statProfile returns the realpath, so the gate must
+	// also refuse based on the resolved path. Repair mutates nothing and
+	// re-emits the accurate unsafe_profile verdict rather than chmodding or
+	// writing inside the user's everyday profile.
+	test("a --profile symlinked into the default Chrome tree is never mutated", async () => {
+		const symlink = `${HOME}/warm-link`;
+		const fixture = repairFixture({
+			profiles: {
+				[symlink]: profileStat(symlink, {
+					mode: "755",
+					realPath: `${HOME}/Library/Application Support/Google/Chrome/Default`,
+				}),
+			},
+		});
+		const run = await runRepair(["repair", "--profile", symlink], fixture);
+
+		expect(run.exitCode).toBe(20);
+		expect(parseEnvelope(run).error?.code).toBe("unsafe_profile");
+		// The resolved-path gate blocked every mutation against the default
+		// Chrome profile: nothing was chmodded or written, and no dir was
+		// created at the resolved default-profile realpath.
+		expect(fixture.calls.chmodPaths).toEqual([]);
+		expect(fixture.calls.writes).toEqual([]);
+		expect(
+			fixture.calls.ensureProfileDirPaths.some((path) =>
+				path.includes("Google/Chrome"),
+			),
+		).toBe(false);
+		expectNoProcessAffectingCalls(fixture);
+	});
 });
 
 describe("warm-chrome repair.unrepairable (U7): fail closed without touching unverified state", () => {

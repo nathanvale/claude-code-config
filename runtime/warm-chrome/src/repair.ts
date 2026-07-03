@@ -201,9 +201,9 @@ export function createRepairCommandHandler(
 
 		// Never mutate the everyday default profile or a throwaway temp path —
 		// the proof chain owns those verdicts and repair re-emits them untouched.
-		const mutationsAllowed =
-			!isDefaultChromeProfilePath(target, runtime.env) &&
-			!runtime.isTemporaryPath(target);
+		const targetSafeToMutate = (path: string): boolean =>
+			!isDefaultChromeProfilePath(path, runtime.env) &&
+			!runtime.isTemporaryPath(path);
 
 		const mutations: WarmChromeRepairMutation[] = [];
 		let profile: ProfileStat | null = null;
@@ -212,6 +212,14 @@ export function createRepairCommandHandler(
 		} catch {
 			profile = null;
 		}
+
+		// Gate on the RESOLVED path too: statProfile returns the realpath, so a
+		// --profile symlink pointing into the default Chrome tree passes the
+		// textual `target` check but resolves into a profile repair must never
+		// chmod or write inside. All mutations below land on profile.realPath.
+		const mutationsAllowed =
+			targetSafeToMutate(target) &&
+			(profile === null || targetSafeToMutate(profile.realPath));
 
 		if (mutationsAllowed) {
 			// 3. Profile dir creation (ported: preflight launch ensureProfileDir).
@@ -225,6 +233,17 @@ export function createRepairCommandHandler(
 						"Warm Chrome profile directory does not exist and could not be created.",
 						context,
 						{ profile_dir: target },
+					);
+				}
+				// ensureProfileDir resolves symlinks: re-check the created path
+				// before recording the mutation, in case the target symlinked into
+				// a profile repair must not own.
+				if (!targetSafeToMutate(profile.realPath)) {
+					throw unrepairableError(
+						"profile_not_owned",
+						"Repair target resolves into a profile Warm Chrome must not mutate.",
+						context,
+						{ profile_dir: profile.realPath },
 					);
 				}
 				mutations.push({ id: "profile_dir_created", path: profile.realPath });

@@ -143,8 +143,12 @@ type LaunchFixtureOptions = {
 	profiles?: Record<string, ProfileStat>;
 	/** SingletonLock answers keyed by profile dir; absent means no lock. */
 	singletonLocks?: Record<string, SingletonLock | null>;
-	/** DevToolsActivePort file content; null means the file is absent. */
-	activePort?: { port: string; wsPath: string } | null;
+	/**
+	 * DevToolsActivePort file content; null means the file is absent. An array
+	 * is played per read (last entry sticks) so a stale value can settle across
+	 * readiness polls.
+	 */
+	activePort?: Script<{ port: string; wsPath: string } | null>;
 	/** Spawn behavior; the default binds a healthy Warm Chrome on the port. */
 	spawn?: (input: LaunchChromeInput, controls: FixtureControls) => SpawnedChrome;
 };
@@ -290,6 +294,8 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 			options.singletonLocks?.[profileDir] ?? null,
 	});
 
+	const activePortScript = toScript(options.activePort ?? null);
+	let activePortCursor = 0;
 	const deps: WarmChromeProofDeps = {
 		cdpRoundTrip: async (_wsUrl, method) => {
 			const entry = cdp[method];
@@ -297,7 +303,14 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 			if (entry instanceof Error) throw entry;
 			return entry;
 		},
-		readDevToolsActivePort: async () => options.activePort ?? null,
+		readDevToolsActivePort: async () => {
+			const step =
+				activePortScript[
+					Math.min(activePortCursor, activePortScript.length - 1)
+				];
+			activePortCursor += 1;
+			return step ?? null;
+		},
 	};
 
 	return { runtime, deps, calls, elapsedMs: () => clock - startedAt };
@@ -690,6 +703,54 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		expect(parsed.data?.launch_performed).toBe(false);
 		expect(fixture.calls.killCalls).toBe(1);
 	});
+
+	// A mid-startup rival leaves a stale DevToolsActivePort (mismatched wsPath)
+	// until its own startup settles. The winner's first post-spawn proof reads
+	// invalid_cdp/endpoint_id_mismatch; the readiness loop must keep polling
+	// (transient contention, not a terminal failure) so the race can resolve
+	// once the file settles. Observed on real Chrome: without this, both racers
+	// landed spawned_unverified and needed a separate repair to converge.
+	test("transient stale DevToolsActivePort during startup: the poll recovers and lands launched", async () => {
+		const fixture = launchFixture({
+			// First read: a stale wsPath from the retired loser (mismatch). Second
+			// read onward: the file settled (absent), so the proof verifies.
+			activePort: [{ port: "9222", wsPath: "/devtools/browser/stale-token" }, null],
+		});
+		const argv = ["launch", "--run-id", "stale-recover"] as const;
+		const run = await runWarmChrome(argv, fixture);
+
+		expect(run.exitCode).toBe(0);
+		assertStationEnvelope(
+			stationById("launch.launched"),
+			toProcessResult("launch.launched", argv, run),
+		);
+		const parsed = parseEnvelope(run);
+		expect(parsed.data?.launch_performed).toBe(true);
+		// The loop re-entered the proof at least twice: once on the stale read,
+		// then again after it settled.
+		expect(fixture.calls.fetchJsonUrls.length).toBeGreaterThanOrEqual(2);
+	});
+
+	// If the mismatch never settles within the readiness budget, the launch
+	// still fails closed at spawned_unverified — carrying the last transient
+	// reason so the agent can see it was a contention timeout, not a clean pass.
+	test("persistent endpoint_id_mismatch past the budget lands spawned_unverified naming the transient reason", async () => {
+		const fixture = launchFixture({
+			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
+		});
+		const argv = ["launch", "--run-id", "stale-timeout"] as const;
+		const run = await runWarmChrome(argv, fixture);
+
+		const envelope = expectSpawnedUnverified(
+			run,
+			"readiness_timeout",
+			"persistent mismatch",
+		);
+		expect(envelope.data?.last_check_reason).toBe("endpoint_id_mismatch");
+		expect(fixture.elapsedMs()).toBeGreaterThanOrEqual(
+			WARM_CHROME_LAUNCH_READINESS_BUDGET_MS,
+		);
+	});
 });
 
 describe("warm-chrome launch pre-spawn guards (U6)", () => {
@@ -728,6 +789,33 @@ describe("warm-chrome launch pre-spawn guards (U6)", () => {
 		expect(parsed.continuation?.next_action_id).toBe("repair_profile");
 		expect(fixture.calls.spawnChrome).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
+	});
+
+	// A dedicated-looking --profile that is a SYMLINK resolving into the default
+	// Chrome tree passes the textual guard; statProfile resolves the realpath,
+	// so posture must be re-asserted against it and the launch must fail closed
+	// BEFORE ensureProfileDir chmods or spawnChrome attaches to the everyday
+	// profile.
+	test("launch --profile symlinked into the default Chrome tree fails closed before any spawn or chmod", async () => {
+		const symlink = `${HOME}/warm-link`;
+		const fixture = launchFixture({
+			profiles: {
+				// The realpath resolves into the default Chrome profile.
+				[symlink]: profileStat(symlink, {
+					realPath: `${DEFAULT_PROFILE_ROOT}/Default`,
+				}),
+			},
+		});
+		const run = await runWarmChrome(["launch", "--profile", symlink], fixture);
+
+		expect(run.exitCode).toBe(20);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("unsafe_profile");
+		expect(parsed.data?.reason).toBe("default_profile");
+		// No mutation and no spawn against the resolved default profile.
+		expect(fixture.calls.spawnChrome).toBe(0);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.chmod).toBe(0);
 	});
 });
 

@@ -12,6 +12,12 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+// ESM cycle with cli.ts: safe only because warmChromeRuntimeAction is called
+// at invocation time (inside the handler this module returns), never at module
+// parse time. cli.ts's defaultCommandHandlers evaluates after imports resolve,
+// so function-declaration hoisting covers the cycle. Do not add a module-scope
+// call into a cli.ts binding here — that would read undefined under the
+// proof-first import order the tests use.
 import {
 	type WarmChromeCommandHandler,
 	warmChromeRuntimeAction,
@@ -813,9 +819,24 @@ async function classifyUnreachable(
 	let listener: ListenerProcess | null = null;
 	try {
 		listener = await runtime.findListener(input.port);
-	} catch {
-		// Nothing answered and the probe cannot attribute the port; the
-		// operational verdict stays endpoint_unreachable.
+	} catch (error) {
+		if (
+			error instanceof WarmChromeRuntimeError &&
+			error.code === "listener_uninspectable"
+		) {
+			// The endpoint probe failed AND the listener probe cannot attribute
+			// the port (lsof blocked: EACCES/ENOENT). We cannot prove the port is
+			// free, so this must NOT collapse to no_listener — that is the one
+			// reason launch's gate treats as "safe to spawn". Fail closed with a
+			// distinct reason that never licenses a spawn.
+			return fail(
+				"endpoint_unreachable",
+				"probe_unavailable",
+				"The CDP listener probe is unavailable, so the port cannot be proven free.",
+			);
+		}
+		// findListener returned no attributable listener; the operational
+		// verdict stays endpoint_unreachable / no_listener below.
 		listener = null;
 	}
 	if (listener !== null) {
@@ -848,10 +869,30 @@ async function classifyUnreachable(
 			);
 		}
 	}
+	// A fetch that aborted/timed out is a hang, not proof the port is free — it
+	// must not license a spawn. (The default runtime's abort sits above the
+	// attach budget so the proof's own timeout wins first, but an injected
+	// fetchJson may still surface an AbortError here.)
+	if (isAbortError(probeError)) {
+		return fail(
+			"endpoint_unreachable",
+			"attach_timeout",
+			"The CDP endpoint accepted the connection but did not answer within the attach budget.",
+		);
+	}
 	return fail(
 		"endpoint_unreachable",
 		"no_listener",
 		"No Chrome DevTools endpoint answered on the resolved CDP endpoint.",
+	);
+}
+
+// AbortError / TimeoutError from an aborted fetch — a hang, distinct from a
+// connection refusal.
+function isAbortError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(error.name === "AbortError" || error.name === "TimeoutError")
 	);
 }
 

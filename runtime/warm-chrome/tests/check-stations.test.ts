@@ -345,6 +345,35 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "attach_timeout",
 	},
 	{
+		// A fetch that ABORTED (timeout) is a hang, not proof the port is free:
+		// it must classify as attach_timeout, never no_listener — the reason
+		// launch's spawn gate treats as safe to spawn.
+		label: "aborted fetch (AbortError) is an attach timeout, not a free port",
+		fixture: () => {
+			const abort = new Error("The operation timed out");
+			abort.name = "TimeoutError";
+			return warmChromeFixture({ version: abort, listeners: {} });
+		},
+		code: "endpoint_unreachable",
+		reason: "attach_timeout",
+	},
+	{
+		// The endpoint probe failed AND the listener probe is unavailable
+		// (lsof blocked). The port cannot be proven free, so this must fail
+		// closed with a distinct reason that never licenses a launch spawn.
+		label: "listener probe unavailable while nothing answers: probe_unavailable, not no_listener",
+		fixture: () =>
+			warmChromeFixture({
+				version: CONNECTION_REFUSED(),
+				findListenerError: new WarmChromeRuntimeError(
+					"listener_uninspectable",
+					"lsof is unavailable.",
+				),
+			}),
+		code: "endpoint_unreachable",
+		reason: "probe_unavailable",
+	},
+	{
 		label: "localhost alias endpoint is rejected before any probe trusts it",
 		argv: ["check", "--endpoint", "http://localhost:9222"],
 		fixture: () => warmChromeFixture(),

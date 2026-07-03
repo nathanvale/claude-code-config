@@ -25,6 +25,19 @@ export const WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER = Number(
 );
 
 /**
+ * Backstop abort for the default fetchJson.
+ *
+ * Deliberately ABOVE proof.ts's `WARM_CHROME_ATTACH_TIMEOUT_MS` (3000ms) so the
+ * proof chain's own attach-budget sentinel decides a hang, not this fetch. A
+ * value at or below the attach budget makes a hang reject here first and
+ * classify as `no_listener` — the one reason that licenses a launch spawn.
+ * Pinned by an ordering assertion in the runtime tests.
+ *
+ * @defaultValue 5000
+ */
+export const DEFAULT_FETCH_ABORT_MS = 5000;
+
+/**
  * The one binary the real-Chrome identity check accepts (plan R6 vocabulary).
  */
 export const REAL_GOOGLE_CHROME_BINARY =
@@ -179,8 +192,13 @@ export function createDefaultRuntime(
 		platform: process.platform,
 		now: () => Date.now(),
 		fetchJson: async (url: string) => {
+			// The proof chain owns the attach budget (probeJsonVersion races this
+			// fetch against sleep(WARM_CHROME_ATTACH_TIMEOUT_MS)); this backstop
+			// abort must sit ABOVE that budget so a hang resolves as the proof's
+			// attach_timeout verdict, not a fetch rejection that classifies as
+			// no_listener and licenses a spawn against an occupied port.
 			const response = await fetch(url, {
-				signal: AbortSignal.timeout(2000),
+				signal: AbortSignal.timeout(DEFAULT_FETCH_ABORT_MS),
 			});
 			if (!response.ok) {
 				throw new Error(`request failed: ${response.status}`);
@@ -216,7 +234,11 @@ export function createDefaultRuntime(
 			}
 			return {
 				pid,
-				kill: async () => child.kill("SIGTERM"),
+				// The boolean means "the child is gone", not "a signal was sent":
+				// the race policy lands already_verified only when the loser child
+				// is actually dead, so a SIGTERM-ignoring Chrome must be escalated
+				// to SIGKILL rather than reported as terminated.
+				kill: () => terminateChild(child),
 			};
 		},
 		readSingletonLock: async (profileDir: string) =>
@@ -294,6 +316,47 @@ type SpawnableChild = {
 	once(event: string, listener: (...args: unknown[]) => void): unknown;
 	unref?(): void;
 };
+
+// The slice terminateChild drives. `exitCode` is non-null once the process has
+// exited; `kill` returns false when signal delivery fails (ESRCH: already gone).
+export type KillableChild = SpawnableChild & {
+	kill(signal?: NodeJS.Signals): boolean;
+	readonly exitCode: number | null;
+};
+
+// Grace window for a SIGTERM before escalating to SIGKILL.
+export const TERMINATE_GRACE_MS = 2000;
+
+// Resolve true only once the child is confirmed gone. SIGTERM first (let Chrome
+// close cleanly), then SIGKILL if it outlives the grace window. A kill() that
+// returns false means ESRCH — the pid is already gone, which is success.
+export async function terminateChild(
+	child: KillableChild,
+	graceMs: number = TERMINATE_GRACE_MS,
+): Promise<boolean> {
+	if (child.exitCode !== null) return true;
+	const exited = new Promise<void>((resolve) => {
+		child.once("exit", () => resolve());
+	});
+	if (!child.kill("SIGTERM")) {
+		return child.exitCode !== null;
+	}
+	if (await raceExit(exited, graceMs)) return true;
+	// SIGTERM ignored: escalate. A false here is ESRCH (it exited in the gap).
+	child.kill("SIGKILL");
+	if (await raceExit(exited, graceMs)) return true;
+	return child.exitCode !== null;
+}
+
+// Resolve true if `exited` settles within the grace window, false on timeout.
+function raceExit(exited: Promise<void>, graceMs: number): Promise<boolean> {
+	return Promise.race([
+		exited.then(() => true),
+		new Promise<boolean>((resolve) => {
+			setTimeout(() => resolve(false), graceMs).unref?.();
+		}),
+	]);
+}
 
 // `child.once("error")` only fires for spawn *failure* (ENOENT, EACCES). A Chrome
 // that spawns then dies milliseconds later emits "exit", not "error" — without an

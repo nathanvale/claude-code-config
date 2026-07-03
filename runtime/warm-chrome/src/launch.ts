@@ -211,6 +211,19 @@ export function createLaunchCommandHandler(
 		}
 		const expandedProfile = expandHome(profileInput, runtime.env);
 		assertLaunchProfilePosture(expandedProfile, runtime, context);
+		// Resolve an existing target before any mutation: statProfile returns the
+		// realpath, so a --profile symlink into the default Chrome tree is
+		// rejected here, BEFORE ensureProfileDir chmods the resolved dir. (A
+		// symlink to a not-yet-existing path has nothing to resolve; the
+		// post-ensureProfileDir re-check below covers create-through-symlink.)
+		try {
+			const resolved = await runtime.statProfile(expandedProfile);
+			assertLaunchProfilePosture(resolved.realPath, runtime, context);
+		} catch (error) {
+			if (error instanceof WarmChromeRuntimeError) throw error;
+			// statProfile threw because the path does not exist yet — fine; the
+			// dir is created fresh below and re-checked after resolution.
+		}
 		const lock = await runtime.readSingletonLock(expandedProfile);
 		if (lock !== null) {
 			throw spawnedUnverifiedError({
@@ -243,6 +256,12 @@ export function createLaunchCommandHandler(
 				},
 			);
 		}
+		// Re-assert posture against the RESOLVED profile path: the pre-spawn
+		// guard above checks the caller's textual path, but ensureProfileDir
+		// returns the realpath, so a symlink to the default Chrome profile (or a
+		// temp dir) only reveals itself here. Fail before spawn — after
+		// spawnChrome, Chrome would already be attached to the everyday profile.
+		assertLaunchProfilePosture(profileDir, runtime, context);
 		const child = await runtime.spawnChrome({
 			chromeBin: invocation.chromeBin,
 			port: invocation.port,
@@ -259,7 +278,10 @@ export function createLaunchCommandHandler(
 			if (outcome.kind === "verified") {
 				return resolveSpawnRace(invocation, outcome.proof, child, context);
 			}
-			if (outcome.error.code !== "endpoint_unreachable") {
+			if (
+				outcome.error.code !== "endpoint_unreachable" &&
+				!isTransientStartupFailure(outcome.error)
+			) {
 				// Waiting cannot repair a post-spawn proof failure: the check
 				// reason passes through and the check station's primary action is
 				// carried so the agent keeps a known-good repair path.
@@ -286,6 +308,21 @@ export function createLaunchCommandHandler(
 			await runtime.sleep(WARM_CHROME_LAUNCH_READINESS_POLL_INTERVAL_MS);
 		}
 	};
+}
+
+// A mid-startup rival Chrome leaves a stale DevToolsActivePort until its own
+// startup settles, so the winner's post-spawn proof transiently reads
+// invalid_cdp/endpoint_id_mismatch (id disagreement) or invalid_cdp/
+// cdp_contention (multi-client contention) — the same class the check chain's
+// R7a re-probe treats as "not dead, retry". Inside the readiness budget these
+// are transient: keep polling rather than mint spawned_unverified, so the race
+// policy can run once the survivor's endpoint settles. (Observed on real
+// Chrome: both racers otherwise landed spawned_unverified/endpoint_id_mismatch
+// and needed a separate repair to converge.)
+function isTransientStartupFailure(error: WarmChromeRuntimeError): boolean {
+	if (error.code !== "invalid_cdp") return false;
+	const reason = error.options.data?.reason;
+	return reason === "endpoint_id_mismatch" || reason === "cdp_contention";
 }
 
 // R10 race policy: the verified listener pid decides. If it is not our own
