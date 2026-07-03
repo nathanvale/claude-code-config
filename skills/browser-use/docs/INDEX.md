@@ -33,6 +33,7 @@ records. They are linked below but not moved.
 ## Research
 
 - [Connecting browser-use to a warm real Chrome](research/2026-05-30-browser-use-warm-chrome-findings.md) — CDP/9222, dedicated profile, dual-mode adapter, pre-flight state record.
+- [Warm Chrome CDP gotchas and port policy](research/2026-07-03-warm-chrome-cdp-gotchas-and-port-policy.md) — public gotchas across Chrome/CDP, Playwright, Puppeteer, agent-browser, and Chrome DevTools MCP; recommends `9222` as convention plus explicit suggested-port repair when occupied.
 - [Tape format for record-replay browser automation](research/2026-05-30-tape-format-record-replay-browser-automation.md) — deterministic JSON spine, variable-slot layer, tiered self-healing.
 - [Browser Adapter Router research stock](research/2026-06-02-browser-adapter-router-research-stock.md) — capability matrix for Playwright MCP, Chrome DevTools MCP, agent-browser.
 - [Multi-engine facade — N=5 spike findings](research/2026-06-12-multi-engine-facade-n5-spike-findings.md) — live proof of one facade over 5 engines: vocabulary-bound transport, two-axis mapping, measured cost-routing, differential oracle, graceful degradation.

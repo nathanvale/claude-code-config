@@ -38,6 +38,17 @@ _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory ski
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
 
+**Warm Chrome Runtime Package**:
+The independently hardened browser-entry layer inside `browser-use`. It owns Warm Chrome readiness semantics while `browser-use` remains the agent-facing browser product.
+_Avoid_: Warm Chrome product, separate browser product, browser-use replacement
+
+**Suggested Explicit Port**:
+An informational repair hint emitted when the Warm Chrome convention port is
+occupied by a foreign listener. It is advisory only — never an allocation,
+binding, or identity. It becomes usable only after an explicit rerun passes
+the Warm Chrome proof.
+_Avoid_: port allocation, automatic rebinding, durable port binding, port authority
+
 **Warm Chrome Preflight**:
 A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
 _Avoid_: manual checklist, browser-domain-memory preflight
@@ -219,4 +230,3 @@ Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is determini
 
 Dev: "Which mode is the default for a fresh capture?"
 Domain expert: "Prose mode — the flexible default while memory is still maturing. Runbook and deterministic modes are faster opt-ins once the path proves stable. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."
-
