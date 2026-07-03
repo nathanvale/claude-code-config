@@ -3,9 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
-import { readSkillsLock } from "../src/skills-lock.ts";
+import { canonicalSkillId, readSkillsLock } from "../src/skills-lock.ts";
 
 describe("skills-lock reader", () => {
+	test("canonical skill id folds APFS-equivalent Unicode variants", () => {
+		expect(canonicalSkillId("straße")).toBe(canonicalSkillId("STRASSE"));
+		expect(canonicalSkillId("σος")).toBe(canonicalSkillId("σοσ"));
+		expect(canonicalSkillId("ﬃxture")).toBe(canonicalSkillId("ffixture"));
+	});
+
 	test("normalizes the observed object shape with source and computedHash", async () => {
 		const root = await tempRoot("object-shape");
 		await writeLock(root, {
@@ -27,6 +33,7 @@ describe("skills-lock reader", () => {
 			{
 				id: "frontend-design",
 				source: "anthropics/skills",
+				sourceType: "github",
 				computedHash: "abc123",
 			},
 		]);
@@ -140,6 +147,25 @@ describe("skills-lock reader", () => {
 
 		expect(lock.entries).toEqual([]);
 		expect(lock.parseFailure).toBeUndefined();
+	});
+
+	test("two ids folding to one canonical key fail closed as a parse failure", async () => {
+		const root = await tempRoot("canonical-collision");
+		await writeLock(root, {
+			version: 1,
+			skills: {
+				Fallow: { source: "anthropics/skills" },
+				fallow: { source: "someone/else" },
+			},
+		});
+
+		const lock = await readSkillsLock(root);
+
+		// A last-writer-wins map would silently keep only one record and hide the
+		// other; instead the ambiguous lock degrades to no entries plus a named
+		// diagnostic so the collision is triaged, not trusted.
+		expect(lock.entries).toEqual([]);
+		expect(lock.parseFailure).toContain("canonical key");
 	});
 });
 

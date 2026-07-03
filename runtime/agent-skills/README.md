@@ -3,10 +3,9 @@
 Repo-local skill projection runtime for Codex, Claude Code, humans, and CI.
 
 Package docs: `AGENTS.md` routes maintainers, `CONTEXT.md` owns vocabulary,
-`ARCHITECTURE.md` owns the module map and flows, `PROVENANCE.md` traces
-source lineage, `TASKS.md` tracks active work, and
-`runtime/agent-skills/docs/INDEX.md` indexes source brainstorms, ideation,
-and plans.
+`ARCHITECTURE.md` owns the module map and flows, `TASKS.md` tracks active
+work, and `runtime/agent-skills/docs/INDEX.md` indexes source brainstorms,
+ideation, plans, and lineage.
 
 `agent-skills` reads one skill catalog, writes local projection links for agent
 runtimes, and reports projection health through a small facade-backed CLI.
@@ -314,6 +313,23 @@ Blocker reasons:
 Entries named by `skills-lock.json` are `external`, not blockers, whatever
 their disk shape. A present-but-unparseable lock degrades to no external
 entries plus a named parse-failure note, so triage points at the lockfile.
+
+Lock ids fold to the same compatibility-aware canonical key before lock
+lookup, catalog-conflict comparison, and ignore matching, so case, NFC/NFD,
+ligature, ß/SS, and final-sigma variants cannot bypass `catalog_conflict`. A
+lock entry whose `sourceType` is `local` and whose `source` realpath equals the
+catalog entry for the same id is a benign self-install: it aliases that catalog
+id instead of conflicting. Projection-root disk entries still need symlink
+evidence into the catalog before they classify managed.
+
+Scope notes:
+
+- `bunx skills add ... -a '*'` can also write a non-hidden `agent/skills/<id>`
+  tree outside the two projection roots; agent-skills never scans, manages, or
+  garbage-collects it (`bunx skills remove` owns cleanup).
+- External `computedHash` is a provider pin, not verified by agent-skills;
+  `has_hash` reports only that a hash exists. A drifted or
+  `experimental_install`-restored external is not integrity-checked here.
 
 Repair path:
 

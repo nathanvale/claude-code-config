@@ -49,20 +49,53 @@ community `skills` CLI is the package manager for external acquisition.
 _Avoid_: package manager, installer, updater, marketplace client
 
 **External entry**:
-A projection-root entry whose id appears in the repo's `skills-lock.json`.
+A projection-root entry for a genuinely foreign skill: a disk entry whose lock
+id is not a benign self-install and that lacks tool-owned symlink evidence into
+the catalog, so it classifies `external` rather than managed.
 Externals are counted by `status`, explained by `list --why`, and never
 created, modified, or removed by `sync` or `unlink`. Each external carries an
 informational disk shape, `real_entry` or `symlink`; the shape reuses the
 `real_entry` spelling from the blocker vocabulary but never makes an external
-a blocker.
+a blocker. A symlink resolving (or raw-pointing) into the catalog is a
+tool-owned artifact and classifies managed/broken first, so `unlink` keeps its
+escape hatch even when a lock entry later claims the same id.
 _Avoid_: unmanaged blocker, catalog entry, agent-skills-owned link
+
+**Canonical id fold**:
+The case-folded, compatibility-normalized key (`canonicalSkillId`) used for
+every lock lookup, catalog-conflict comparison, and ignore match.
+Case-insensitive volumes and Unicode normalization collapse ids that differ by
+case, NFC/NFD form, compatibility ligature, ß/SS, or final-sigma shape to one
+path; folding both sides identically stops a variant lock id from bypassing
+the fail-closed `catalog_conflict` guard.
+_Avoid_: exact-string key, raw id compare, filesystem-name trust
+
+**Benign self-install**:
+A lock entry whose `sourceType` is `local` and whose `source` realpath equals
+the catalog entry for the same id: the community CLI recorded the repo's own
+catalog skill (the experience-sdk install topology). Such ids alias catalog ids
+rather than conflicting, so they never raise `catalog_conflict`; projection
+root disk entries still need symlink evidence into the catalog before they
+classify managed.
+_Avoid_: catalog conflict, foreign external, package-manager install
+
+**External hash gap**:
+`skills-lock.json` `computedHash` pins external content, but agent-skills does
+not re-hash externals against it: a drifted or `experimental_install`-restored
+copy is not verified. `has_hash` reports only the presence of a pinned hash.
+Integrity of external content is the provider's responsibility.
+_Avoid_: verified external, content guarantee, drift detection
 
 **Skills lock**:
 The git-tracked `skills-lock.json` written by the community `skills` CLI.
-agent-skills reads it as read-only input; a second writer would drift
-(ADR 0016). Lock keys are validated as single path-component tokens before
-entering the external set.
-_Avoid_: agent-skills state, snapshot, writable config
+Mostly external dependencies — the npm-lockfile analogy: the repo's own
+`skills/` catalog is not tracked here as `src/` is not in `package-lock.json`.
+The exception is a **benign self-install**: the CLI can record a local install
+that binds back to the repo's own catalog id, which aliases rather than adds a
+dependency. agent-skills reads the lock as read-only input; a second writer
+would drift (ADR 0016). Lock keys are validated as single path-component
+tokens before classification.
+_Avoid_: external dependencies only, agent-skills state, snapshot, writable config, local skill registry
 
 **Lock parse failure**:
 The named diagnostic when `skills-lock.json` is present but unreadable, or its

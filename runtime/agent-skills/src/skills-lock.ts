@@ -17,8 +17,37 @@ export interface SkillsLockEntry {
 	id: string;
 	/** Best-effort install source; the provider may omit it. */
 	source?: string;
+	/** Best-effort install source type (`local`, `github`, ...) when present. */
+	sourceType?: string;
 	/** Content hash recorded at install time, when present. */
 	computedHash?: string;
+}
+
+/**
+ * Fold a skill id to a canonical key for collision-safe comparison.
+ *
+ * Case-insensitive volumes (macOS APFS default, Windows) and Unicode
+ * normalization collapse ids that differ by full case-fold or compatibility
+ * forms to one filesystem path. Exact-string map keys would then classify the
+ * same path two ways: the classifier and the conflict check must fold
+ * identically or a case/normalization-variant lock id can bypass the
+ * fail-closed `catalog_conflict` guard.
+ *
+ * @param id - Raw skill id from a lock record, catalog dir, or disk entry
+ * @returns Case-folded, compatibility-normalized key
+ *
+ * @example
+ * ```typescript
+ * canonicalSkillId("Fallow") === canonicalSkillId("fallow")
+ * ```
+ */
+export function canonicalSkillId(id: string): string {
+	return id
+		.normalize("NFKC")
+		.toLowerCase()
+		.replaceAll("ß", "ss")
+		.replaceAll("ς", "σ")
+		.normalize("NFC");
 }
 
 /**
@@ -92,13 +121,28 @@ export async function readSkillsLock(
 	}
 
 	const entries: SkillsLockEntry[] = [];
+	const seenCanonical = new Map<string, string>();
 	for (const [name, record] of raw) {
 		// A crafted lock key must not smuggle an arbitrary directory past the
 		// blocker model: only single path-component tokens enter the external set.
 		if (!isValidLockId(name)) continue;
+		// Two ids that fold to the same canonical key (e.g. `Fallow`/`fallow`, or
+		// NFC/NFD variants) name one filesystem path. Downstream folds to that key,
+		// so a last-writer-wins map would let one lock record silently hide
+		// another. Fail closed: a canonical collision degrades to a parse failure
+		// rather than trusting an ambiguous lock.
+		const canonical = canonicalSkillId(name);
+		const prior = seenCanonical.get(canonical);
+		if (prior !== undefined) {
+			return parseFailure(
+				`ids '${prior}' and '${name}' fold to the same canonical key '${canonical}'; one lock record would hide the other.`,
+			);
+		}
+		seenCanonical.set(canonical, name);
 		entries.push({
 			id: name,
 			source: recordString(record, "source"),
+			sourceType: recordString(record, "sourceType"),
 			computedHash:
 				recordString(record, "computedHash") ?? recordString(record, "hash"),
 		});
