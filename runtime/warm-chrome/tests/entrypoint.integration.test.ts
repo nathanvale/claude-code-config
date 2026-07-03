@@ -294,10 +294,10 @@ describe("warm-chrome dispatch (U4)", () => {
 		expect(result.stdout).toContain("run_id=status-run");
 	});
 
-	// U5 wired the real check handler into the default registry, so only the
-	// launch (U6) and repair (U7) stubs still emit not_implemented envelopes.
+	// U5 (check) and U7 (repair) wired real handlers into the default
+	// registry, so only the launch (U6) stub still emits not_implemented.
 	test("not-yet-implemented stubs emit a runtime-failure-style envelope with exit 1", async () => {
-		for (const command of ["launch", "repair"] as const) {
+		for (const command of ["launch"] as const) {
 			const result = await runCli([command, "--json", "--run-id", "stub-run"]);
 
 			expect(result.exitCode).toBe(1);

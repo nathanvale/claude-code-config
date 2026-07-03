@@ -4,4 +4,5 @@ export * from "./cli.ts";
 export * from "./command-contract.ts";
 export * from "./model.ts";
 export * from "./proof.ts";
+export * from "./repair.ts";
 export * from "./runtime.ts";

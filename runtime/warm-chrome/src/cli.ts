@@ -51,6 +51,7 @@ import {
 	createCheckCommandHandler,
 	nonLoopbackEndpointError,
 } from "./proof.ts";
+import { createRepairCommandHandler } from "./repair.ts";
 import {
 	createDefaultRuntime,
 	expandHome,
@@ -157,12 +158,13 @@ export const notYetImplementedHandlers: WarmChromeCommandHandlers = {
 
 /**
  * Default dispatch registry. `check` (and its `status` presentation alias)
- * runs the real U5 proof chain; `launch` and `repair` stay typed stubs until
- * U6/U7 land their handlers.
+ * runs the real U5 proof chain and `repair` the U7 lifecycle; `launch` stays
+ * a typed stub until U6 lands its handler.
  */
 export const defaultCommandHandlers: WarmChromeCommandHandlers = {
 	...notYetImplementedHandlers,
 	check: createCheckCommandHandler(),
+	repair: createRepairCommandHandler(),
 };
 
 /**
