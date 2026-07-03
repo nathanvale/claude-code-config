@@ -52,14 +52,15 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       `tests/parity.test.ts` (intended divergences are consumer-visible
       behavior changes: exit-2 → exit-20 rows, warm_chrome_already_running →
       ok envelope, canonical code collapse).
-- [ ] P2 Race-converges-via-repair calibration Lane: Lifecycle. Done when: a
-      decision records whether the interleaved-launch outcome observed on
-      2026-07-03 (both racers land `spawned_unverified` reason
-      `endpoint_id_mismatch`; recovery is `repair` → `check.verified`) should
-      instead converge inside one `launch` invocation (e.g. re-read
-      `DevToolsActivePort` after the survivor settles). See the validation
-      record in Latest Signals. Next: record in the package decision log
-      alongside the platform-guard decision.
+- [ ] P3 Race-convergence follow-up Lane: Lifecycle. Mostly resolved by the
+      2026-07-03 code review: the readiness loop now treats a rival's
+      transient `invalid_cdp/endpoint_id_mismatch|cdp_contention` as
+      non-terminal and keeps polling within budget, so the winner converges
+      inside one `launch` invocation instead of needing a separate `repair`
+      (tests: launch-stations transient-recovery + persistent-mismatch). Done
+      when: a calibration decision records whether the 15s budget is the right
+      window for real-Chrome startup contention. Next: fold into the manual
+      real-Chrome calibration run.
 - [ ] P2 Platform guard decision Lane: Proof Chain. Done when: a decision
       records whether the package needs the old preflight's
       `unsupported_platform` refusal (exit 1 on non-darwin) or the seam's
@@ -70,10 +71,22 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       DevToolsActivePort write uses an O_NOFOLLOW/tmp-rename seam primitive
       instead of lstat-then-write (narrow race noted in `src/repair.ts`).
       Next: extend the U4 seam deliberately; seam changes are plan-gated.
-- [ ] P2 DEFAULT_PROFILE_DIR duplication Lane: CLI Contract. Done when: the
-      `~/.agent-warm-profile` literal has one owner (`src/cli.ts` and
-      `src/repair.ts` both carry it today, flagged in `src/repair.ts`).
-      Next: move the constant into `src/model.ts`.
+- [ ] P2 Profile-predicate + DEFAULT_PROFILE_DIR duplication Lane: CLI
+      Contract. Done when: the `~/.agent-warm-profile` literal and the
+      default-Chrome-profile predicate each have one owner. Today `src/cli.ts`
+      and `src/repair.ts` both carry the literal, and `isDefaultProfilePath`
+      is copied across `src/proof.ts`, `src/launch.ts`, and `src/repair.ts`
+      (three-way, flagged in `src/repair.ts`). Next: move both into
+      `src/model.ts`.
+- [ ] P3 primaryActionId type openness Lane: CLI Contract. Done when:
+      `WarmChromeRuntimeErrorOptions.primaryActionId` and the
+      `NormalizedWarmChromeError` mirror widen from the single `"inspect_listener"`
+      literal to `WarmChromeRuntimeActionId`, so a future override needs no type
+      change. Cosmetic; no behavior change.
+- [ ] P3 Leading-zero port normalization Lane: Proof Chain. Done when:
+      `--port 09222` cannot yield a spurious `non_loopback_websocket` verdict
+      (URL normalizes `ws.port` to `9222` while `input.port` stays `09222`).
+      Next: normalize the port in `assertPort` or compare numerically.
 
 ## Later
 
