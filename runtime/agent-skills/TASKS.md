@@ -52,6 +52,11 @@ agent-skills status --json
       disk for externals, or names the provider surface that does. Next:
       check whether `skills update` verifies hashes; record in the
       division-of-labor decision log.
+- [ ] P2 Non-destructive blocker affordance Lane: CLI Contract. Done when a
+      `real_entry`/`foreign_symlink` blocker gives an autonomous agent an
+      executable next verb other than `rm` (e.g. adopt/quarantine/ignore),
+      keeping fail-closed. Next: design in `cli-author`; today `inspect_blocker`
+      dead-ends and the only unwedge move destroys provenance.
 
 ## Later
 
@@ -68,6 +73,12 @@ agent-skills status --json
 
 ## Latest Signals
 
+- 2026-07-03: Adversarial audit hardening landed: compatibility-aware id fold
+  closes Unicode-variant `catalog_conflict` bypasses; `catalog_conflict` fires
+  only on visible catalog ids; benign self-install recognition is id-bound;
+  `applyProjection` re-reads the lock per path and never rms a real dir (no
+  mid-apply crash/clobber); tool-owned catalog symlinks stay removable; `lstat`
+  tolerates vanished children. See `docs/decisions/`.
 - 2026-07-03: Docs de-drift closed: `ARCHITECTURE.md` Module Map is the only
   per-module owner list, `tests/docs-drift.test.ts` enforces it both ways, and
   `check-owner-paths.ts` now checks explicitly passed `runtime/**` docs (P3

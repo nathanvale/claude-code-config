@@ -65,6 +65,12 @@ describe("agent-skills catalog", () => {
 			false,
 		);
 	});
+
+	test("glob matching folds case and APFS-equivalent Unicode variants", () => {
+		expect(matchesSkillIdGlob("Fallow", "fallow")).toBe(true);
+		expect(matchesSkillIdGlob("straße", "STRASSE")).toBe(true);
+		expect(matchesSkillIdGlob("fixture-ß", "fixture-SS")).toBe(true);
+	});
 });
 
 async function tempCatalog(name: string): Promise<string> {

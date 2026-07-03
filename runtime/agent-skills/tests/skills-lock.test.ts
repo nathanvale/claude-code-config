@@ -3,9 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
-import { readSkillsLock } from "../src/skills-lock.ts";
+import { canonicalSkillId, readSkillsLock } from "../src/skills-lock.ts";
 
 describe("skills-lock reader", () => {
+	test("canonical skill id folds APFS-equivalent Unicode variants", () => {
+		expect(canonicalSkillId("straße")).toBe(canonicalSkillId("STRASSE"));
+		expect(canonicalSkillId("σος")).toBe(canonicalSkillId("σοσ"));
+		expect(canonicalSkillId("ﬃxture")).toBe(canonicalSkillId("ffixture"));
+	});
+
 	test("normalizes the observed object shape with source and computedHash", async () => {
 		const root = await tempRoot("object-shape");
 		await writeLock(root, {
@@ -27,6 +33,7 @@ describe("skills-lock reader", () => {
 			{
 				id: "frontend-design",
 				source: "anthropics/skills",
+				sourceType: "github",
 				computedHash: "abc123",
 			},
 		]);

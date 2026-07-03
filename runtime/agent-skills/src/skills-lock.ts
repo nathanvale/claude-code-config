@@ -17,8 +17,37 @@ export interface SkillsLockEntry {
 	id: string;
 	/** Best-effort install source; the provider may omit it. */
 	source?: string;
+	/** Best-effort install source type (`local`, `github`, ...) when present. */
+	sourceType?: string;
 	/** Content hash recorded at install time, when present. */
 	computedHash?: string;
+}
+
+/**
+ * Fold a skill id to a canonical key for collision-safe comparison.
+ *
+ * Case-insensitive volumes (macOS APFS default, Windows) and Unicode
+ * normalization collapse ids that differ by full case-fold or compatibility
+ * forms to one filesystem path. Exact-string map keys would then classify the
+ * same path two ways: the classifier and the conflict check must fold
+ * identically or a case/normalization-variant lock id can bypass the
+ * fail-closed `catalog_conflict` guard.
+ *
+ * @param id - Raw skill id from a lock record, catalog dir, or disk entry
+ * @returns Case-folded, compatibility-normalized key
+ *
+ * @example
+ * ```typescript
+ * canonicalSkillId("Fallow") === canonicalSkillId("fallow")
+ * ```
+ */
+export function canonicalSkillId(id: string): string {
+	return id
+		.normalize("NFKC")
+		.toLowerCase()
+		.replaceAll("ß", "ss")
+		.replaceAll("ς", "σ")
+		.normalize("NFC");
 }
 
 /**
@@ -99,6 +128,7 @@ export async function readSkillsLock(
 		entries.push({
 			id: name,
 			source: recordString(record, "source"),
+			sourceType: recordString(record, "sourceType"),
 			computedHash:
 				recordString(record, "computedHash") ?? recordString(record, "hash"),
 		});

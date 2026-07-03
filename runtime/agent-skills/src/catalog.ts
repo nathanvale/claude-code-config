@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { SkillCatalogEntry, SkillVisibility } from "./model.ts";
+import { canonicalSkillId } from "./skills-lock.ts";
 
 /**
  * Discover direct child skill entries in a catalog root.
@@ -96,9 +97,10 @@ export function applyVisibility(
  * ```
  */
 export function matchesSkillIdGlob(id: string, pattern: string): boolean {
-	const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+	const foldedPattern = canonicalSkillId(pattern);
+	const escaped = foldedPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 	const regex = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`);
-	return regex.test(id);
+	return regex.test(canonicalSkillId(id));
 }
 
 async function readCatalogEntry(
