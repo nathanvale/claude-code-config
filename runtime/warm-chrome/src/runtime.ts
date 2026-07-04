@@ -633,16 +633,16 @@ function fetchLoopbackJson(url: string): Promise<unknown> {
 			clearTimeout(deadline);
 			finish();
 		};
-		// Hard wall-clock cap. The request `timeout` option is idle-only: a peer
-		// dribbling bytes under the threshold never trips it. Because settle is
-		// single-fire, the `close` that `req.destroy` emits converts this into a
-		// guaranteed rejection even when no `error` event follows.
-		const deadline = setTimeout(() => {
-			const error = new Error("request timed out");
-			error.name = "TimeoutError";
-			timedOut = true;
-			req.destroy(error);
-		}, DEFAULT_FETCH_ABORT_MS);
+		// Hard wall-clock cap, ARMED ONLY AFTER request() RETURNS (below). The
+		// request `timeout` option is idle-only: a peer dribbling bytes under
+		// the threshold never trips it. Because settle is single-fire, the
+		// `close` that `req.destroy` emits converts this into a guaranteed
+		// rejection even when no `error` event follows. Arming before request()
+		// left a live timer when request() threw synchronously (non-http:
+		// protocol): the promise had already rejected, and 5s later the callback
+		// touched `req` in its temporal dead zone — an uncaught ReferenceError
+		// that crashed the process (live-reproduced).
+		let deadline: ReturnType<typeof setTimeout> | undefined;
 		let timedOut = false;
 		const rejectClosed = () =>
 			settle(() =>
@@ -723,6 +723,14 @@ function fetchLoopbackJson(url: string): Promise<unknown> {
 		req.on("close", () => {
 			if (!responseSeen) rejectClosed();
 		});
+		// Arm the deadline only now that `req` exists: if request() threw
+		// synchronously above the promise already rejected and no timer leaked.
+		deadline = setTimeout(() => {
+			const error = new Error("request timed out");
+			error.name = "TimeoutError";
+			timedOut = true;
+			req.destroy(error);
+		}, DEFAULT_FETCH_ABORT_MS);
 		req.end();
 	});
 }

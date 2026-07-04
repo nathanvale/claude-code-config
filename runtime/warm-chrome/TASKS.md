@@ -70,7 +70,15 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 - [ ] P2 Symlink-write TOCTOU closure Lane: Seam. Done when: the repair
       DevToolsActivePort write uses an O_NOFOLLOW/tmp-rename seam primitive
       instead of lstat-then-write (narrow race noted in `src/repair.ts`).
-      Next: extend the U4 seam deliberately; seam changes are plan-gated.
+      Also covers the sixth-pass sequencing finding: both `launch.ts`
+      (post-`ensureProfileDir` `assertLaunchProfilePosture`, ~line 293) and
+      `repair.ts` (post-`ensureProfileDir` `profile_not_owned`, ~line 281)
+      run `ensureProfileDir` — which `mkdir`s and `chmod 0o700`s the resolved
+      realpath — BEFORE the symlink-into-default re-check, so a `--profile`
+      symlink into the everyday Chrome profile gets that profile chmodded to
+      700 before the refusal, and the refusal envelope neither names the
+      created path nor records the mutation. Next: resolve-then-verify BEFORE
+      any mkdir/chmod when extending the U4 seam; seam changes are plan-gated.
 - [ ] P2 Profile-predicate + DEFAULT_PROFILE_DIR duplication Lane: CLI
       Contract. Done when: the `~/.agent-warm-profile` literal and the
       default-Chrome-profile predicate each have one owner. Today `src/cli.ts`
@@ -99,6 +107,31 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       `--port 09222` cannot yield a spurious `non_loopback_websocket` verdict
       (URL normalizes `ws.port` to `9222` while `input.port` stays `09222`).
       Next: normalize the port in `assertPort` or compare numerically.
+- [ ] P3 Sixth-pass robustness nits Lane: Proof Chain. Low-severity,
+      pathological-trigger findings docketed together: (1)
+      `scanSuggestedExplicitPort` (`src/proof.ts` ~1067) runs up to 77
+      sequential `findListener`/`lsof` probes with no aggregate budget, so if
+      `lsof` consistently hits its 3s `DEFAULT_SYSTEM_PROBE_TIMEOUT_MS` the
+      `port_occupied_foreign` envelope is delayed ~4 min; (2)
+      `fetchLoopbackJson` (`src/runtime.ts` ~681) accumulates the response
+      body with no size cap, so an untrusted loopback listener can drive a
+      large allocation within the 5s deadline before any identity check; (3)
+      `readSingletonLock` (`src/runtime.ts` ~340) throws uncatalogued
+      `listener_uninspectable` on any non-ENOENT `readlink` fault, so a
+      SingletonLock materialized as a regular file (EINVAL) blocks launch with
+      no repair path. Next: aggregate scan budget, body cap, and an EINVAL
+      arm; each is in-runtime and needs a pin.
+- [ ] P3 Default-profile redaction consistency Lane: CLI Contract. Sixth-pass
+      findings, folds into the P2 profile-predicate duplication item: the
+      relative-`--user-data-dir` rejection in `src/proof.ts` (~420) passes
+      `redactListenerDetail` without `env`/`forceForeign`, and
+      `redactListenerProfileDir` (`src/repair.ts` ~207) plus the
+      `profile_not_owned` `profile_dir` echo (~285) only redact ABSOLUTE
+      default-profile spellings — a relative spelling reaches the envelope
+      verbatim. Low severity (relative paths do not carry the OS account name;
+      the resolved-realpath echo is the operator's own HOME on their own
+      terminal). Next: route every default-profile-path echo through one
+      redactor when the predicate gets a single owner.
 
 ## Later
 
@@ -114,6 +147,25 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-04: Sixth-pass close-out (Opus fan-out review, 10 findings, all
+  verified by hand against source since the fan-out's own verifier stage died
+  on a session limit). Two genuine bugs fixed + pinned: (1) HIGH TDZ crash in
+  `fetchLoopbackJson` — the wall-clock deadline was armed BEFORE `request()`,
+  so a synchronous `request()` throw (non-http: protocol) rejected the promise
+  but left a live timer that 5s later touched `req` in its temporal dead zone,
+  an uncaught ReferenceError that crashed the process (live-reproduced); fix
+  arms the deadline only after `request()` returns. (2) HIGH competing-instance
+  guard escape — a not-yet-existing `--profile` made the convention probe fail
+  `unsafe_profile/invalid_profile_path` (profile-validity is checked before
+  profile-match) instead of `listener_mismatch/profile_mismatch`, so the guard
+  keyed on `listener_mismatch` fell through and spawned a SECOND Warm Chrome
+  (the adapter-drift feeder it exists to block); fix re-probes the convention
+  port WITHOUT the caller profile and, if a verified Warm Chrome holds it,
+  re-emits the caller's profiled verdict rather than spawning. The other 8
+  findings are low-severity nits or already-docketed classes (symlink
+  chmod-before-refusal → P2 TOCTOU item; scan budget / body cap / EINVAL lock
+  → new P3 robustness item; relative default-profile redaction → new P3
+  consistency item). 254 tests green; typecheck + biome clean.
 - 2026-07-04: Fifth-pass close-out: the last unverified `fetchLoopbackJson`
   branch (response stalls after headers + partial body) hid a real defect —
   under Bun the deadline's `req.destroy` flushes the buffered partial body as
@@ -168,13 +220,6 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
   (46 rows, station/exit/envelope), intended divergences enumerated and
   report printed for the switchover checklist; package joined the repo
   entrypoint gate and the docs-drift gate landed with `ARCHITECTURE.md`.
-- 2026-07-03: U6/U7 closed: launch lifecycle (pre-spawn short-circuit,
-  competing-instance guard, SingletonLock pre-bind refusal, readiness budget,
-  own-child race policy) and repair lifecycle (R11 refusal stance, ownership
-  gate, diagnosed DevToolsActivePort hygiene, never-follow-symlink guard).
-- 2026-07-03: U5 closed: the full check proof chain with the research reject
-  rules (headless UA, isolated context, default-profile foreignness,
-  endpoint-id cross-check, cdp_contention re-probe, suggested explicit port).
 
 ## Command Shortcuts
 

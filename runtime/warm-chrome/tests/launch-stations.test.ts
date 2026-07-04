@@ -583,6 +583,34 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.spawnChrome).toBe(0);
 	});
 
+	test("competing-instance guard escape (sixth-pass HIGH): a not-yet-existing --profile must still block the spawn, not fall through", async () => {
+		// Same as the honors-explicit-profile test, but the caller's --profile
+		// does NOT exist yet. The convention probe against 9222 reaches the
+		// provided-profile step and statProfile throws, so the proof fails with
+		// unsafe_profile/invalid_profile_path — NOT listener_mismatch. The guard
+		// keyed only on listener_mismatch would fall through and spawn a second
+		// Warm Chrome (the adapter-drift feeder the guard exists to block).
+		const missingProfile = `${HOME}/.warm-not-yet`;
+		const fixture = launchFixture({
+			listeners: { "9222": chromeListener() },
+			versions: { "9222": healthyVersionFor("9222") },
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+				// missingProfile deliberately absent — statProfile throws for it.
+			},
+		});
+		const run = await runWarmChrome(
+			["launch", "--port", "9300", "--profile", missingProfile],
+			fixture,
+		);
+
+		// A verified Warm Chrome already holds the convention port: refuse loudly
+		// and never spawn a second instance, regardless of the --profile verdict
+		// shape. Exit 20, no spawn, no profile writes.
+		expect(fixture.calls.spawnChrome).toBe(0);
+		expect(run.exitCode).toBe(20);
+	});
+
 	test("launch.port_occupied_foreign: foreign listener fails closed without spawn and carries a suggestion", async () => {
 		const fixture = foreignPortFixture();
 		const argv = ["launch", "--run-id", "foreign-run"] as const;

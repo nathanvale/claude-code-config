@@ -199,13 +199,25 @@ export function createLaunchCommandHandler(
 			if (convention.kind === "verified") {
 				return launchSuccess(invocation, convention.proof, false);
 			}
-			if (
-				convention.error.code === "listener_mismatch" &&
-				convention.error.options.data?.reason === "profile_mismatch"
-			) {
-				// The convention Chrome verified except for the caller's explicit
-				// profile expectation: re-emit check's listener_mismatch station.
-				// Spawning a second Warm Chrome here would be adapter drift.
+			// The profiled probe failed — but its verdict may be about the caller's
+			// --profile input (unsafe_profile/invalid_profile_path for a not-yet
+			// existing or relative --profile), which the proof checks BEFORE the
+			// profile-match step. That must not license a spawn: re-probe the
+			// convention port WITHOUT the caller profile to answer the only question
+			// the guard cares about — does a verified Warm Chrome already hold 9222.
+			// If yes, the caller cannot have a second Warm Chrome regardless of the
+			// --profile verdict shape, so re-emit their profiled verdict (the honest
+			// reason their invocation can't be satisfied); spawning would be drift.
+			const conventionNoProfile = await runProofOutcome(
+				{
+					command: invocation.displayCommand,
+					endpoint: `http://127.0.0.1:${WARM_CHROME_CONVENTION_PORT}`,
+					port: WARM_CHROME_CONVENTION_PORT,
+				},
+				runtime,
+				deps,
+			);
+			if (conventionNoProfile.kind === "verified") {
 				throw convention.error;
 			}
 			// Convention port holds no verified Warm Chrome; the requested-port

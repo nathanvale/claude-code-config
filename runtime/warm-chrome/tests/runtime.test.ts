@@ -223,6 +223,28 @@ describe("default loopback fetch", () => {
 		}
 	});
 
+	// Regression (sixth-pass HIGH): request() throwing synchronously (e.g. a
+	// non-http: protocol) rejects the promise via the executor, but a deadline
+	// timer armed BEFORE request() was never cleared — and its callback then
+	// touched `req` in its temporal dead zone, an uncaught ReferenceError that
+	// crashed the whole process 5s after an already-handled rejection. The fix
+	// arms the deadline only after request() returns; this test fails pre-fix
+	// because the stray timer's ReferenceError escapes as an uncaught error.
+	test(
+		"synchronous request() throw rejects without arming a stray deadline timer",
+		async () => {
+			const runtime = createDefaultRuntime({});
+			await expect(
+				runtime.fetchJson("https://127.0.0.1:1/json/version"),
+			).rejects.toThrow(/protocol/i);
+			// Outlive the deadline window: pre-fix the leaked timer fires here.
+			await new Promise((resolve) =>
+				setTimeout(resolve, DEFAULT_FETCH_ABORT_MS + 500),
+			);
+		},
+		DEFAULT_FETCH_ABORT_MS + 5000,
+	);
+
 	// Regression (fifth-pass): a response that stalls after headers + partial
 	// body (no reset, no FIN, no further bytes) must reject at the wall-clock
 	// deadline with TimeoutError. Under Bun, the deadline's req.destroy flushes
