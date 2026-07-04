@@ -96,12 +96,27 @@ function profileStat(path: string, overrides: Partial<ProfileStat> = {}): Profil
 
 type CdpEntry = Record<string, unknown> | Error;
 
+// Real Chrome stamps default-context page targets with the same non-empty
+// GUID getBrowserContexts reports as defaultBrowserContextId (empirically
+// confirmed on Chrome 149); the baseline fixture must model that shape.
+const DEFAULT_CONTEXT_ID = "13DC4DAD9E537E4F4485D2F948EEA31E";
+
 function healthyCdp(overrides: Record<string, CdpEntry> = {}): Record<string, CdpEntry> {
 	return {
 		"Browser.getVersion": { product: OBSERVED_BUILD, userAgent: HEADED_UA },
-		"Target.getBrowserContexts": { browserContextIds: [] },
+		"Target.getBrowserContexts": {
+			browserContextIds: [],
+			defaultBrowserContextId: DEFAULT_CONTEXT_ID,
+		},
 		"Target.getTargets": {
-			targetInfos: [{ type: "page", targetId: "page-1", url: "https://example.com/" }],
+			targetInfos: [
+				{
+					type: "page",
+					targetId: "page-1",
+					url: "https://example.com/",
+					browserContextId: DEFAULT_CONTEXT_ID,
+				},
+			],
 		},
 		...overrides,
 	};
@@ -314,6 +329,7 @@ type FailureScenario = {
 
 const CONNECTION_REFUSED = () => new Error("connect ECONNREFUSED");
 const HTTP_404 = () => new Error("request failed: 404");
+const SOCKET_HANG_UP = () => new Error("socket hang up");
 
 const failureScenarios: readonly FailureScenario[] = [
 	{
@@ -339,6 +355,16 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "pipe_only_no_tcp",
 	},
 	{
+		label: "real Chrome listener with failed HTTP probe is not a free port",
+		fixture: () =>
+			warmChromeFixture({
+				version: CONNECTION_REFUSED(),
+				listeners: { "9222": chromeListener() },
+			}),
+		code: "invalid_cdp",
+		reason: "roundtrip_failed",
+	},
+	{
 		label: "HTTP hang past the bounded attach timeout",
 		fixture: () => warmChromeFixture({ version: "hang" }),
 		code: "endpoint_unreachable",
@@ -358,6 +384,22 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "attach_timeout",
 	},
 	{
+		// The abort classification must win even when a real Chrome listener
+		// occupies the port — an aborted probe is a hang, not a CDP round-trip
+		// verdict on the listener.
+		label: "aborted fetch with a real Chrome listener present is still an attach timeout",
+		fixture: () => {
+			const abort = new Error("The operation was aborted");
+			abort.name = "AbortError";
+			return warmChromeFixture({
+				version: abort,
+				listeners: { "9222": chromeListener() },
+			});
+		},
+		code: "endpoint_unreachable",
+		reason: "attach_timeout",
+	},
+	{
 		// The endpoint probe failed AND the listener probe is unavailable
 		// (lsof blocked). The port cannot be proven free, so this must fail
 		// closed with a distinct reason that never licenses a launch spawn.
@@ -372,6 +414,26 @@ const failureScenarios: readonly FailureScenario[] = [
 			}),
 		code: "endpoint_unreachable",
 		reason: "probe_unavailable",
+	},
+	{
+		label: "unattributed socket fault is not proof of a free port",
+		fixture: () =>
+			warmChromeFixture({
+				version: SOCKET_HANG_UP(),
+				listeners: {},
+			}),
+		code: "endpoint_unreachable",
+		reason: "probe_unavailable",
+	},
+	{
+		label: "unattributed HTTP response is treated as occupied",
+		fixture: () =>
+			warmChromeFixture({
+				version: HTTP_404(),
+				listeners: {},
+			}),
+		code: "port_occupied_foreign",
+		reason: "listener_uninspectable",
 	},
 	{
 		label: "localhost alias endpoint is rejected before any probe trusts it",
@@ -556,6 +618,17 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "default_profile",
 	},
 	{
+		label: "listener uses a relative --user-data-dir",
+		fixture: () =>
+			warmChromeFixture({
+				listeners: {
+					"9222": chromeListener({ profile: "relative-warm-profile" }),
+				},
+			}),
+		code: "unsafe_profile",
+		reason: "invalid_profile_path",
+	},
+	{
 		label: "throwaway temporary listener profile",
 		fixture: () =>
 			warmChromeFixture({
@@ -712,6 +785,68 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		expect(envelope.continuation?.next_action_id).toBe("use_verified_endpoint");
 	});
 
+	test("healthy warm Chrome can verify with no open page targets", async () => {
+		const fixture = warmChromeFixture({
+			cdp: healthyCdp({
+				"Target.getTargets": { targetInfos: [] },
+			}),
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const envelope = parseEnvelope(run);
+		expect(envelope.status).toBe("ok");
+	});
+
+	test("late isolated context target fails closed instead of counting as default context", async () => {
+		const fixture = warmChromeFixture({
+			cdp: healthyCdp({
+				"Target.getBrowserContexts": { browserContextIds: [] },
+				"Target.getTargets": {
+					targetInfos: [{ type: "page", browserContextId: "ctx-late" }],
+				},
+			}),
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expectProofFailure(
+			run,
+			{ code: "wrong_browser", reason: "isolated_context" },
+			"late isolated context",
+		);
+	});
+
+	test("page without a browserContextId still counts as default context", async () => {
+		const fixture = warmChromeFixture({
+			cdp: healthyCdp({
+				"Target.getTargets": {
+					targetInfos: [{ type: "page", targetId: "page-1" }],
+				},
+			}),
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(parseEnvelope(run).status).toBe("ok");
+	});
+
+	test("isolated page fails closed even when defaultBrowserContextId is reported", async () => {
+		const fixture = warmChromeFixture({
+			cdp: healthyCdp({
+				"Target.getTargets": {
+					targetInfos: [{ type: "page", browserContextId: "ctx-incognito" }],
+				},
+			}),
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expectProofFailure(
+			run,
+			{ code: "wrong_browser", reason: "isolated_context" },
+			"isolated page with default id present",
+		);
+	});
+
 	test("localhost alias is rejected before any network or listener probe runs", async () => {
 		const fixture = warmChromeFixture();
 		const run = await runWarmChrome(
@@ -726,6 +861,23 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		);
 		expect(fixture.calls.fetchJsonUrls).toEqual([]);
 		expect(fixture.calls.findListenerPorts).toEqual([]);
+	});
+
+	test("parser-minted non-loopback errors carry command endpoint and port context", async () => {
+		const fixture = warmChromeFixture();
+		const run = await runWarmChrome(
+			["check", "--endpoint", "http://192.168.1.20:9222"],
+			fixture,
+		);
+
+		const envelope = expectProofFailure(
+			run,
+			{ code: "non_loopback", reason: "non_loopback_endpoint" },
+			"non-loopback parser context",
+		);
+		expect(envelope.data?.command).toBe("check");
+		expect(envelope.data?.endpoint).toBe("http://192.168.1.20:9222");
+		expect(envelope.data?.port).toBe("9222");
 	});
 
 	test("cdp_contention re-probes /json/version before any browser-down verdict (R7a)", async () => {
@@ -743,7 +895,24 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		expect(fixture.calls.fetchJsonUrls.length).toBe(2);
 	});
 
-	test("contention with a dead re-probe lands endpoint_unreachable, not cdp_contention", async () => {
+	test("only no_listener endpoint_unreachable routes to launch", async () => {
+		const noListener = warmChromeFixture({
+			version: CONNECTION_REFUSED(),
+			listeners: {},
+		});
+		const noListenerRun = await runWarmChrome(["check"], noListener);
+		expect(parseEnvelope(noListenerRun).continuation?.next_action_id).toBe(
+			"launch_warm_chrome",
+		);
+
+		const attachTimeout = warmChromeFixture({ version: "hang" });
+		const timeoutRun = await runWarmChrome(["check"], attachTimeout);
+		expect(parseEnvelope(timeoutRun).continuation?.next_action_id).toBe(
+			"inspect_listener",
+		);
+	});
+
+	test("contention with a dead re-probe fails closed instead of licensing spawn", async () => {
 		const fixture = warmChromeFixture({
 			version: [contentionVersion(), CONNECTION_REFUSED()],
 		});
@@ -751,7 +920,7 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 
 		expectProofFailure(
 			run,
-			{ code: "endpoint_unreachable", reason: "no_listener" },
+			{ code: "invalid_cdp", reason: "roundtrip_failed" },
 			"dead re-probe",
 		);
 	});

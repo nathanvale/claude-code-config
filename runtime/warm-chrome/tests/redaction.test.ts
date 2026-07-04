@@ -163,9 +163,47 @@ describe("warm-chrome foreign listener redaction (R13)", () => {
 		// The rest of the observed cmdline never survives the chokepoint.
 		assertNoRuntimeContractFixtureLeaks(detail);
 	});
+
+	// Re-audit (medium/low): a real Chrome on the operator's DEFAULT profile is a
+	// foreign instance; its user_data_dir discloses the OS account / HOME layout
+	// and must never reach the envelope, even though the binary matches.
+	test("real-Chrome listener on the default profile drops its user-data-dir when env is supplied", () => {
+		const detail = redactListenerDetail(
+			{
+				pid: 7,
+				command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=9222 --user-data-dir=/Users/example/Library/Application Support/Google/Chrome`,
+			},
+			{ env: { HOME: "/Users/example" } },
+		);
+
+		expect(detail.foreign).toBe(false);
+		expect(detail.user_data_dir).toBeUndefined();
+		assertNoRuntimeContractFixtureLeaks(detail);
+	});
+
+	test("forceForeign redacts a real-Chrome listener to pid and basename only", () => {
+		const detail = redactListenerDetail(
+			{
+				pid: 7,
+				command: `${REAL_GOOGLE_CHROME_BINARY} --user-data-dir=/Users/example/Library/Application Support/Google/Chrome`,
+			},
+			{ forceForeign: true },
+		);
+
+		expect(detail).toEqual({ pid: 7, process: "Google Chrome", foreign: true });
+		assertNoRuntimeContractFixtureLeaks(detail);
+	});
 });
 
 describe("warm-chrome envelope redaction boundary (R12/R13)", () => {
+	test("usage redaction scrubs path values attached with equals", async () => {
+		const result = await runCli(["check", `--bogus=${localPathFixture}`], {});
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stdout).toContain("[redacted]");
+		expect(result.stdout).not.toContain(localPathFixture);
+	});
+
 	test("listener_mismatch envelope keeps the observed user-data-dir and the no_adapter_fallback constraint", async () => {
 		const observed = redactListenerDetail({
 			pid: 7,

@@ -9,8 +9,8 @@
 // the browser websocket URL is taken verbatim from a live /json/version
 // round-trip — never synthesized, never trusted from argv tokens.
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 // ESM cycle with cli.ts: safe only because warmChromeRuntimeAction is called
 // at invocation time (inside the handler this module returns), never at module
@@ -32,6 +32,7 @@ import {
 import {
 	expandHome,
 	extractUserDataDir,
+	isDefaultChromeProfilePath,
 	type ListenerProcess,
 	parseProcessCommand,
 	type ProfileStat,
@@ -172,9 +173,19 @@ async function defaultReadDevToolsActivePort(
 ): Promise<WarmChromeDevToolsActivePort | null> {
 	let text: string;
 	try {
-		text = await readFile(join(profileDir, "DevToolsActivePort"), "utf8");
-	} catch {
-		return null;
+		const path = join(profileDir, "DevToolsActivePort");
+		const info = await lstat(path);
+		if (!info.isFile()) {
+			throw new Error("DevToolsActivePort is not a regular file.");
+		}
+		text = await readFile(path, {
+			encoding: "utf8",
+			signal: AbortSignal.timeout(WARM_CHROME_ATTACH_TIMEOUT_MS),
+		});
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException)?.code;
+		if (code === "ENOENT") return null;
+		throw error;
 	}
 	const [portLine = "", wsLine = ""] = text
 		.split("\n")
@@ -263,8 +274,19 @@ type CheckProofErrorInput = {
 function checkProofError(input: CheckProofErrorInput): WarmChromeRuntimeError {
 	// Result-contract metadata (contract_id, schema_version) is stamped by the
 	// cli.ts error-envelope chokepoint; the proof owns only the reason detail.
+	const endpointUnreachableOverride =
+		input.code === "endpoint_unreachable" && input.reason !== "no_listener"
+			? {
+					primaryActionId: "inspect_listener" as const,
+					recoverability: "repair_state" as const,
+					hintAction: "repair_state" as const,
+					hintSummary:
+						"The CDP port was not proven free; inspect the listener before any launch.",
+				}
+			: {};
 	return new WarmChromeRuntimeError(input.code, input.message, {
 		...CHECK_ERROR_ENVELOPE_OPTIONS[input.code],
+		...endpointUnreachableOverride,
 		data: {
 			reason: input.reason,
 			...input.data,
@@ -278,11 +300,14 @@ function checkProofError(input: CheckProofErrorInput): WarmChromeRuntimeError {
  * `--endpoint` names a non-loopback host, so the rejection carries the same
  * canonical code and reason detail as the in-chain loopback assertions.
  */
-export function nonLoopbackEndpointError(): WarmChromeRuntimeError {
+export function nonLoopbackEndpointError(
+	data: Record<string, unknown> = {},
+): WarmChromeRuntimeError {
 	return checkProofError({
 		code: "non_loopback",
 		reason: "non_loopback_endpoint",
 		message: "Warm Chrome CDP endpoint must be numeric loopback 127.0.0.1.",
+		data,
 	});
 }
 
@@ -387,7 +412,18 @@ export async function runWarmChromeCheckProof(
 	const userDataDirRaw = extractUserDataDir(listener.command);
 	const userDataDir =
 		userDataDirRaw === null ? null : expandHome(userDataDirRaw, runtime.env);
-	if (userDataDir === null || isDefaultProfilePath(userDataDir, runtime.env)) {
+	if (userDataDir !== null && !isAbsolute(userDataDir)) {
+		throw fail(
+			"unsafe_profile",
+			"invalid_profile_path",
+			"Chrome --user-data-dir is relative and cannot be verified safely.",
+			{ listener: redactListenerDetail(listener) },
+		);
+	}
+	if (
+		userDataDir === null ||
+		isDefaultChromeProfilePath(userDataDir, runtime.env)
+	) {
 		throw await portOccupiedForeignError({
 			input,
 			runtime,
@@ -437,24 +473,33 @@ export async function runWarmChromeCheckProof(
 		);
 	}
 
-	const webSocketDebuggerUrl = stringField(version, "webSocketDebuggerUrl");
-	if (webSocketDebuggerUrl === null) {
+		const webSocketDebuggerUrl = stringField(version, "webSocketDebuggerUrl");
+		if (webSocketDebuggerUrl === null) {
 		// R7a: a target missing its websocket under multi-client contention is
 		// not a dead browser. Re-probe before any browser-down verdict.
 		const reProbe = await probeJsonVersion(input.endpoint, runtime);
-		if (reProbe.kind === "value") {
+			if (reProbe.kind === "value") {
+				throw fail(
+					"invalid_cdp",
+				"cdp_contention",
+					"CDP target is missing its webSocketDebuggerUrl while the browser stays live; another client likely holds it.",
+				);
+			}
+			if (reProbe.kind === "timeout") {
+				throw fail(
+					"endpoint_unreachable",
+					"attach_timeout",
+					"CDP endpoint stopped answering /json/version within the attach budget.",
+					{ listener: redactListenerDetail(listener) },
+				);
+			}
 			throw fail(
 				"invalid_cdp",
-				"cdp_contention",
-				"CDP target is missing its webSocketDebuggerUrl while the browser stays live; another client likely holds it.",
+				"roundtrip_failed",
+				"CDP endpoint failed during webSocketDebuggerUrl contention re-probe.",
+				{ listener: redactListenerDetail(listener) },
 			);
 		}
-		throw fail(
-			"endpoint_unreachable",
-			"no_listener",
-			"CDP endpoint stopped answering /json/version during verification.",
-		);
-	}
 
 	let ws: URL;
 	try {
@@ -487,7 +532,16 @@ export async function runWarmChromeCheckProof(
 
 	// R6c: the browser-ws derives from one authoritative source; a
 	// DevToolsActivePort id disagreeing with the live /json/version id fails.
-	const activePort = await deps.readDevToolsActivePort(userDataDir);
+		let activePort: WarmChromeDevToolsActivePort | null;
+		try {
+			activePort = await deps.readDevToolsActivePort(userDataDir);
+		} catch {
+			throw fail(
+				"invalid_cdp",
+				"endpoint_id_mismatch",
+				"DevToolsActivePort could not be inspected safely.",
+			);
+		}
 	if (
 		activePort !== null &&
 		(activePort.port !== input.port || activePort.wsPath !== ws.pathname)
@@ -571,7 +625,7 @@ export async function runWarmChromeCheckProof(
 			listenerData,
 		);
 	}
-	if (isDefaultProfilePath(profile.realPath, runtime.env)) {
+		if (isDefaultChromeProfilePath(profile.realPath, runtime.env)) {
 		throw await portOccupiedForeignError({
 			input,
 			runtime,
@@ -633,7 +687,7 @@ export async function runWarmChromeCheckProof(
 	}
 	if (input.profileInput !== undefined) {
 		const providedPath = expandHome(input.profileInput, runtime.env);
-		if (isDefaultProfilePath(providedPath, runtime.env)) {
+			if (isDefaultChromeProfilePath(providedPath, runtime.env)) {
 			throw fail(
 				"unsafe_profile",
 				"default_profile",
@@ -657,7 +711,7 @@ export async function runWarmChromeCheckProof(
 				"Provided profile directory does not exist.",
 			);
 		}
-		if (isDefaultProfilePath(provided.realPath, runtime.env)) {
+			if (isDefaultChromeProfilePath(provided.realPath, runtime.env)) {
 			throw fail(
 				"unsafe_profile",
 				"default_profile",
@@ -859,7 +913,7 @@ async function classifyUnreachable(
 				"endpoint_unreachable",
 				"pipe_only_no_tcp",
 				"Chrome runs pipe-only remote debugging; no TCP CDP listener answers.",
-				{ listener: redactListenerDetail(listener) },
+				{ listener: redactListenerDetail(listener, { env: runtime.env }) },
 			);
 		}
 		if (isHttpStatusFailure(probeError)) {
@@ -867,9 +921,35 @@ async function classifyUnreachable(
 				"invalid_cdp",
 				"ws_only_no_http",
 				"Listener answers HTTP but serves no /json/version; CDP appears websocket-only.",
-				{ listener: redactListenerDetail(listener) },
+				{ listener: redactListenerDetail(listener, { env: runtime.env }) },
 			);
 		}
+		// An aborted/timed-out probe is a hang, not a CDP verdict on the
+		// listener — it must classify as attach_timeout even with a real
+		// Chrome listener present, never fall through to roundtrip_failed.
+		if (isAbortError(probeError)) {
+			return fail(
+				"endpoint_unreachable",
+				"attach_timeout",
+				"The CDP endpoint accepted the connection but did not answer within the attach budget.",
+			);
+		}
+		return fail(
+			"invalid_cdp",
+			"roundtrip_failed",
+			"CDP endpoint failed while a real Google Chrome listener occupied the port.",
+			{ listener: redactListenerDetail(listener, { env: runtime.env }) },
+		);
+	}
+	if (isHttpStatusFailure(probeError)) {
+		return portOccupiedForeignError({
+			input,
+			runtime,
+			reason: "listener_uninspectable",
+			message:
+				"A CDP-like HTTP server answers on the port but no inspectable local listener owns it.",
+			fail,
+		});
 	}
 	// A fetch that aborted/timed out is a hang, not proof the port is free — it
 	// must not license a spawn. (The default runtime's abort sits above the
@@ -880,6 +960,13 @@ async function classifyUnreachable(
 			"endpoint_unreachable",
 			"attach_timeout",
 			"The CDP endpoint accepted the connection but did not answer within the attach budget.",
+		);
+	}
+	if (!isConnectionRefusedError(probeError)) {
+		return fail(
+			"endpoint_unreachable",
+			"probe_unavailable",
+			"The endpoint probe failed without proving the CDP port is free.",
 		);
 	}
 	return fail(
@@ -895,6 +982,18 @@ function isAbortError(error: unknown): boolean {
 	return (
 		error instanceof Error &&
 		(error.name === "AbortError" || error.name === "TimeoutError")
+	);
+}
+
+function isConnectionRefusedError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	// The canonical errno field is the sturdy signal; the message regex keeps
+	// matching injected fetchJson errors that carry only prose. This check
+	// licenses a spawn (no_listener), so a miss only over-refuses — but it
+	// must not depend on Bun's exact message wording alone.
+	if ((error as NodeJS.ErrnoException).code === "ECONNREFUSED") return true;
+	return /\b(?:ECONNREFUSED|connection refused|connect refused)\b/i.test(
+		error.message,
 	);
 }
 
@@ -955,8 +1054,11 @@ async function portOccupiedForeignError(options: {
 	// plus a successful proof.
 	const suggested = await scanSuggestedExplicitPort(options.runtime, options.input.port);
 	return options.fail("port_occupied_foreign", options.reason, options.message, {
+		// This station has DECLARED the listener a foreign instance; redact it as
+		// foreign (pid + basename only) so a real Chrome on the default profile
+		// does not leak its user_data_dir into the envelope.
 		...(options.listener
-			? { listener: redactListenerDetail(options.listener) }
+			? { listener: redactListenerDetail(options.listener, { forceForeign: true }) }
 			: {}),
 		...(suggested === undefined ? {} : { suggested_explicit_port: suggested }),
 	});
@@ -1007,16 +1109,6 @@ function classifyListenerBinary(executable: string): ListenerBinaryClass {
 	return "foreign";
 }
 
-function isDefaultProfilePath(
-	path: string,
-	env: Record<string, string | undefined>,
-): boolean {
-	const home = env.HOME;
-	if (!home) return false;
-	const root = `${home}/Library/Application Support/Google/Chrome`;
-	return path === root || path.startsWith(`${root}/`);
-}
-
 function hasRemoteDebuggingPort(args: string, port: string): boolean {
 	const tokens = tokenizeCommandArgs(args);
 	return tokens.some((token, index) => {
@@ -1029,19 +1121,26 @@ function hasDefaultContextPage(
 	browserContexts: WarmChromeCdpResult,
 	targets: WarmChromeCdpResult,
 ): boolean {
-	const isolatedIds = new Set(
-		Array.isArray(browserContexts.browserContextIds)
-			? browserContexts.browserContextIds.filter(
-					(id): id is string => typeof id === "string",
-				)
-			: [],
-	);
+	// Real Chrome stamps default-context page targets with the same non-empty
+	// GUID getBrowserContexts reports as defaultBrowserContextId; only pages
+	// whose id is absent/empty or equal to that GUID are default-context. Any
+	// other id — including one minted between the two snapshots — fails closed.
+	const defaultContextId =
+		typeof browserContexts.defaultBrowserContextId === "string" &&
+		browserContexts.defaultBrowserContextId !== ""
+			? browserContexts.defaultBrowserContextId
+			: null;
 	const targetInfos = Array.isArray(targets.targetInfos) ? targets.targetInfos : [];
-	return targetInfos.some((target) => {
-		if (!isRecord(target) || target.type !== "page") return false;
-		const contextId = target.browserContextId;
-		return typeof contextId !== "string" || !isolatedIds.has(contextId);
-	});
+	let sawPage = false;
+	return (
+		targetInfos.some((target) => {
+			if (!isRecord(target) || target.type !== "page") return false;
+			sawPage = true;
+			const contextId = target.browserContextId;
+			if (typeof contextId !== "string" || contextId === "") return true;
+			return contextId === defaultContextId;
+		}) || !sawPage
+	);
 }
 
 // The default runtime's fetchJson throws `request failed: <status>` when the

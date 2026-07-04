@@ -123,6 +123,9 @@ type RepairFixtureOptions = {
 	/** Paths whose lstat probe reports a planted symlink. */
 	symlinkPaths?: readonly string[];
 	ensureProfileDirError?: Error;
+	chmodError?: Error;
+	chmodNoOp?: boolean;
+	writeTextFileError?: Error;
 };
 
 type RepairFixture = {
@@ -198,6 +201,8 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		},
 		chmod: async (path, mode) => {
 			calls.chmodPaths.push(path);
+			if (options.chmodError) throw options.chmodError;
+			if (options.chmodNoOp) return;
 			for (const stat of Object.values(profiles)) {
 				if (stat.realPath === path) {
 					stat.mode = (mode & 0o777).toString(8);
@@ -206,6 +211,7 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		},
 		writeTextFile: async (path, content) => {
 			calls.writes.push({ path, content });
+			if (options.writeTextFileError) throw options.writeTextFileError;
 			const [port = "", wsPath = ""] = content
 				.split("\n")
 				.map((line) => line.trim());
@@ -401,6 +407,19 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expectNoProcessAffectingCalls(fixture);
 	});
 
+	test("listenerless repair with no --profile targets the expanded dedicated default, not a literal tilde", async () => {
+		const fixture = repairFixture({
+			version: new Error("connect ECONNREFUSED"),
+			listeners: {},
+			profiles: {},
+		});
+		await runRepair(["repair"], fixture);
+
+		// The documented listenerless default is ~/.agent-warm-profile under
+		// HOME; an un-expanded literal would mkdir a "./~" dir in cwd instead.
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
+	});
+
 	test("stale DevToolsActivePort is rewritten from the live endpoint and the re-prove verifies", async () => {
 		const fixture = repairFixture({
 			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
@@ -452,7 +471,9 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		const run = await runRepair(["repair", "--profile", symlink], fixture);
 
 		expect(run.exitCode).toBe(20);
-		expect(parseEnvelope(run).error?.code).toBe("unsafe_profile");
+		const envelope = parseEnvelope(run);
+		expect(envelope.error?.code).toBe("unrepairable");
+		expect(envelope.data?.reason).toBe("profile_mismatch");
 		// The resolved-path gate blocked every mutation against the default
 		// Chrome profile: nothing was chmodded or written, and no dir was
 		// created at the resolved default-profile realpath.
@@ -534,6 +555,89 @@ describe("warm-chrome repair.unrepairable (U7): fail closed without touching unv
 		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
 		// The hostile seam error message never leaks into the envelope.
 		expect(run.stdout).not.toContain("EACCES");
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("explicit --profile mismatch refuses before mutating listener profile", async () => {
+		const otherProfile = `${HOME}/other-warm-profile`;
+		const fixture = repairFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, { mode: "755" }),
+				[otherProfile]: profileStat(otherProfile),
+			},
+		});
+		const run = await runRepair(["repair", "--profile", otherProfile], fixture);
+
+		const envelope = expectUnrepairable(run, "profile_mismatch");
+		expect(envelope.data?.listener_profile_dir).toBe(DEDICATED_PROFILE);
+		expect(envelope.data?.profile_dir).toBe(otherProfile);
+		expect(fixture.calls.chmodPaths).toEqual([]);
+		expect(fixture.calls.writes).toEqual([]);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("chmod filesystem fault is unrepairable, not runtime_failure", async () => {
+		const fixture = repairFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, { mode: "755" }),
+			},
+			chmodError: new Error("EROFS"),
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		const envelope = expectUnrepairable(run, "profile_permissions_unrepairable");
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		expect(run.stdout).not.toContain("EROFS");
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("chmod no-op is unrepairable instead of a repair loop", async () => {
+		const fixture = repairFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, { mode: "777" }),
+			},
+			chmodNoOp: true,
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		const envelope = expectUnrepairable(run, "profile_permissions_unrepairable");
+		expect(envelope.data?.observed_mode).toBe("777");
+		expect(fixture.calls.chmodPaths).toEqual([DEDICATED_PROFILE]);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("DevToolsActivePort write fault is unrepairable, not runtime_failure", async () => {
+		const fixture = repairFixture({
+			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
+			writeTextFileError: new Error("ENOSPC"),
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		const envelope = expectUnrepairable(run, "devtools_active_port_unwritable");
+		expect(envelope.data?.devtools_active_port_path).toBe(ACTIVE_PORT_PATH);
+		expect(run.stdout).not.toContain("ENOSPC");
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("proof failure after a mutation reports repair_actions and repair_mutations", async () => {
+		const fixture = repairFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, { mode: "755" }),
+			},
+			cdp: healthyCdp({
+				"Browser.getVersion": new Error("socket closed"),
+			}),
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseEnvelope(run);
+		expect(envelope.error?.code).toBe("invalid_cdp");
+		expect(envelope.data?.reason).toBe("roundtrip_failed");
+		expect(envelope.data?.repair_actions).toEqual(["profile_permissions"]);
+		expect(envelope.data?.repair_mutations).toEqual([
+			{ id: "profile_permissions", path: DEDICATED_PROFILE },
+		]);
 		expectNoProcessAffectingCalls(fixture);
 	});
 

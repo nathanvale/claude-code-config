@@ -18,6 +18,7 @@ import {
 } from "../src/model.ts";
 import {
 	projectWarmChromeCommandDiscoveryTree,
+	WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS,
 	WARM_CHROME_PREVIEW_NOTES,
 	warmChromeContractEntries,
 	warmChromeContracts,
@@ -28,6 +29,7 @@ import {
 
 const CONTRACT_PATH = "runtime/warm-chrome/src/command-contract.ts";
 const MUTATING_COMMANDS = ["launch", "repair"] as const;
+const GLOBAL_DIAGNOSTIC_FLAGS = WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS;
 
 describe("warm-chrome command contract (U2 R2/R3)", () => {
 	test("declares exactly the four public commands on the warm-chrome script", () => {
@@ -113,6 +115,39 @@ describe("warm-chrome help flag surface (U2)", () => {
 				...(command === "launch" ? {} : { absentFlags: ["--chrome"] }),
 			});
 		}
+	});
+
+	test("global diagnostic flags are discovery-visible without becoming command flags", () => {
+		const tree = projectWarmChromeCommandDiscoveryTree();
+		for (const command of WARM_CHROME_COMMANDS) {
+			for (const flag of GLOBAL_DIAGNOSTIC_FLAGS) {
+				expect(Object.keys(warmChromeContracts[command].flags)).not.toContain(
+					flag,
+				);
+				expect(tree.commands[command]?.global_diagnostic_flags).toContain(flag);
+			}
+		}
+	});
+
+	test("mutating profile flag descriptions disclose filesystem writes", () => {
+		expect(warmChromeContracts.check.flags["--profile"]?.description).toContain(
+			"verifies only",
+		);
+		expect(warmChromeContracts.launch.flags["--profile"]?.description).toContain(
+			"create and chmod",
+		);
+		expect(warmChromeContracts.repair.flags["--profile"]?.description).toContain(
+			"rewrite local profile",
+		);
+		const chromeFlag = Object.entries(warmChromeContracts.launch.flags).find(
+			([flag]) => flag === "--chrome",
+		)?.[1];
+		expect(chromeFlag?.description).toContain(
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		);
+		expect(warmChromeContracts.check.flags["--endpoint"]?.description).toContain(
+			"Numeric loopback",
+		);
 	});
 
 	test("check cannot accept launch-only input", () => {

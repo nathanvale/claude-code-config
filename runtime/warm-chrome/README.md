@@ -24,6 +24,22 @@ Unlinked environments run the same commands through Bun:
 bun run runtime/warm-chrome/src/cli.ts check --json
 ```
 
+No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
+help as `--help`.
+
+## Inputs
+
+- `--port`: CDP port. Mutually exclusive with `--endpoint`.
+- `--endpoint`: numeric loopback endpoint, `http://127.0.0.1:<port>`.
+- `--profile`: dedicated profile. `check`/`status` verify it; `launch` may
+  create/chmod it; `repair` may create, chmod, or rewrite proof state in it.
+- `--chrome`: `launch` only; accepted binary path is
+  `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`.
+- Global diagnostics: `--run-id`, `--quiet`, `--verbose`, `--debug`.
+
+Environment fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
+`WARM_CHROME_RUN_ID`, and `CHROME_BIN` (`launch` only).
+
 ## Authority
 
 - Charter: `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`

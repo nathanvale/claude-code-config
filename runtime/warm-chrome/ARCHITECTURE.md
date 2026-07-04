@@ -15,6 +15,8 @@ Its interface is:
 - `warm-chrome` bin (`src/cli.ts`, source-linked via the package `bin`).
 - `src/command-contract.ts` command facade contract built on
   `@side-quest/cli-command-facade`.
+- No-arg `warm-chrome` and `warm-chrome help [command]` render help without
+  browser work.
 - JSON result envelopes carrying `contract_id` `warm-chrome.browser-entry`
   and `schema_version` for agents; plain output for humans (`status`).
 - Package-owned exit code `20` (browser-entry failure, never adapter
@@ -60,6 +62,10 @@ flowchart TD
 Exit codes are contract-owned: `0` verified, `1` runtime failure, `2` invalid
 usage, `20` browser entry required (`no_adapter_fallback` rides every exit-20
 envelope).
+
+Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
+`WARM_CHROME_RUN_ID`, and launch-only `CHROME_BIN`. Global diagnostic flags:
+`--run-id`, `--quiet`, `--verbose`, `--debug`.
 
 ## Module Map
 

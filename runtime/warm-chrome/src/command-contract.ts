@@ -40,6 +40,13 @@ const resultContract = {
 	schema_version: WARM_CHROME_SCHEMA_VERSION,
 } as const satisfies NonNullable<WarmChromeCommandContract["resultContract"]>;
 
+export const WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS = [
+	"--run-id",
+	"--quiet",
+	"--verbose",
+	"--debug",
+] as const;
+
 // --port and --endpoint are mutually exclusive inputs; the contract declares
 // that in every usage line and both flag descriptions, and the parser (U4)
 // enforces it with exit 2.
@@ -50,11 +57,12 @@ const readFlags = {
 	},
 	"--endpoint": {
 		type: "string",
-		description: "Loopback CDP endpoint. Mutually exclusive with --port.",
+		description:
+			"Numeric loopback CDP endpoint (127.0.0.1 with explicit port). Mutually exclusive with --port.",
 	},
 	"--profile": {
 		type: "path",
-		description: "Expected dedicated profile directory.",
+		description: "Expected dedicated profile directory; verifies only.",
 	},
 	"--json": { type: "boolean", description: "Emit JSON envelope." },
 	"--plain": { type: "boolean", description: "Emit stable text." },
@@ -62,9 +70,24 @@ const readFlags = {
 
 const launchFlags = {
 	...readFlags,
+	"--profile": {
+		type: "path",
+		description:
+			"Dedicated profile directory; launch may create and chmod local profile state.",
+	},
 	"--chrome": {
 		type: "path",
-		description: "Real Google Chrome binary path.",
+		description:
+			"Stable Google Chrome app binary; accepted path is /Applications/Google Chrome.app/Contents/MacOS/Google Chrome.",
+	},
+} as const satisfies WarmChromeCommandContract["flags"];
+
+const repairFlags = {
+	...readFlags,
+	"--profile": {
+		type: "path",
+		description:
+			"Dedicated profile directory; repair may create, chmod, or rewrite local profile proof state.",
 	},
 } as const satisfies WarmChromeCommandContract["flags"];
 
@@ -235,7 +258,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			resultContract,
 			actionAffordances,
-			flags: readFlags,
+			flags: repairFlags,
 			exitCodes: warmChromeExitCodes,
 		},
 	} as const satisfies Record<WarmChromeCommand, WarmChromeCommandContract>,
@@ -269,6 +292,8 @@ export const WARM_CHROME_PREVIEW_NOTES = {
 type WarmChromePreviewNoteAugment = {
 	/** Agent-visible preview boundary note for mutating commands. */
 	preview_note?: string;
+	/** Facade-owned global diagnostics accepted before command parsing. */
+	global_diagnostic_flags: typeof WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS;
 };
 
 /**
@@ -286,7 +311,10 @@ export function projectWarmChromeCommandDiscoveryTree() {
 							command as keyof typeof WARM_CHROME_PREVIEW_NOTES
 						]
 					: undefined;
-			return note === undefined ? {} : { preview_note: note };
+			return {
+				global_diagnostic_flags: WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS,
+				...(note === undefined ? {} : { preview_note: note }),
+			};
 		},
 	});
 }

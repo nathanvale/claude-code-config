@@ -30,7 +30,7 @@ import {
 } from "../../../skills/browser-use/src/preflight-warm-chrome";
 
 import { main } from "../src/cli.ts";
-import { createCheckCommandHandler, type WarmChromeProofDeps } from "../src/proof.ts";
+import { createCheckCommandHandler } from "../src/proof.ts";
 import { createLaunchCommandHandler } from "../src/launch.ts";
 import {
 	createRepairCommandHandler,
@@ -379,6 +379,7 @@ function buildNewRuntime(
 		},
 		readSingletonLock: async (profileDir) =>
 			spec.singletonLocks?.[profileDir] ?? null,
+		isProcessAlive: async () => true,
 		sleep: async (ms) => {
 			state.advanceClock(ms);
 			await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1272,7 +1273,12 @@ const PARITY_ROWS: readonly ParityRow[] = [
 			listeners: {},
 			versions: {},
 			singletonLocks: {
-				[DEDICATED_PROFILE]: { raw: "warm-host-77", hostname: "warm-host", pid: 77 },
+				[DEDICATED_PROFILE]: {
+				raw: "warm-host-77",
+				hostname: "warm-host",
+				pid: 77,
+				local: true,
+			},
 			},
 			spawn: "bind_healthy",
 		},

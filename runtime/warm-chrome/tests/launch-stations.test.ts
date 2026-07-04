@@ -141,8 +141,12 @@ type LaunchFixtureOptions = {
 	cdp?: Record<string, CdpEntry>;
 	/** statProfile answers keyed by requested path; unknown paths throw. */
 	profiles?: Record<string, ProfileStat>;
-	/** SingletonLock answers keyed by profile dir; absent means no lock. */
-	singletonLocks?: Record<string, SingletonLock | null>;
+	/** SingletonLock answers keyed by profile dir; absent means no lock. Arrays play per read; the last entry repeats. */
+	singletonLocks?: Record<string, Script<SingletonLock | null>>;
+	/** Process-liveness answers keyed by pid; absent means alive. */
+	processAlive?: Record<number, boolean>;
+	/** Extra env vars merged over the fixture's HOME. */
+	env?: Record<string, string>;
 	/**
 	 * DevToolsActivePort file content; null means the file is absent. An array
 	 * is played per read (last entry sticks) so a stale value can settle across
@@ -218,6 +222,13 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 	for (const [port, script] of Object.entries(options.versions ?? {})) {
 		controls.setVersion(port, script);
 	}
+	const lockScripts = new Map<
+		string,
+		{ script: readonly (SingletonLock | null)[]; cursor: number }
+	>();
+	for (const [dir, script] of Object.entries(options.singletonLocks ?? {})) {
+		lockScripts.set(dir, { script: toScript(script), cursor: 0 });
+	}
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
 	};
@@ -233,7 +244,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 	let clock = startedAt;
 
 	const runtime = createDefaultRuntime({
-		env: { HOME },
+		env: { HOME, ...options.env },
 		now: () => clock,
 		sleep: async (ms: number) => {
 			clock += ms;
@@ -290,8 +301,14 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 				},
 			};
 		},
-		readSingletonLock: async (profileDir) =>
-			options.singletonLocks?.[profileDir] ?? null,
+		readSingletonLock: async (profileDir) => {
+			const entry = lockScripts.get(profileDir);
+			if (!entry) return null;
+			const step = entry.script[Math.min(entry.cursor, entry.script.length - 1)];
+			entry.cursor += 1;
+			return step ?? null;
+		},
+		isProcessAlive: async (pid) => options.processAlive?.[pid] ?? true,
 	});
 
 	const activePortScript = toScript(options.activePort ?? null);
@@ -484,6 +501,44 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.ensureProfileDir).toBe(0);
 	});
 
+		test("zero-flag launch reuses any verified dedicated profile instead of injecting the default", async () => {
+			const otherProfile = `${HOME}/other-warm-profile`;
+			const fixture = launchFixture({
+				listeners: { "9222": chromeListener({ profile: otherProfile }) },
+				versions: { "9222": healthyVersionFor("9222") },
+				profiles: { [otherProfile]: profileStat(otherProfile) },
+			});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.data?.profile_dir).toBe(otherProfile);
+		expect(parsed.data?.launch_performed).toBe(false);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("WARM_CHROME_PROFILE_DIR env supplies the launch profile when --profile is absent", async () => {
+		const envProfile = `${HOME}/env-warm-profile`;
+		const fixture = launchFixture({
+			env: { WARM_CHROME_PROFILE_DIR: envProfile },
+			profiles: { [envProfile]: profileStat(envProfile) },
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(fixture.calls.spawnInputs[0]?.profileDir).toBe(envProfile);
+	});
+
+	test("explicitly-empty WARM_CHROME_PROFILE_DIR still falls back to the dedicated default profile", async () => {
+		const fixture = launchFixture({
+			env: { WARM_CHROME_PROFILE_DIR: "" },
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(fixture.calls.spawnInputs[0]?.profileDir).toBe(DEDICATED_PROFILE);
+	});
+
 	test("competing-instance guard (R10a): launch --port 9250 with healthy Warm Chrome on 9222 lands already_verified carrying the 9222 endpoint, no spawn", async () => {
 		const fixture = healthyWarmChromeFixture();
 		const run = await runWarmChrome(["launch", "--port", "9250"], fixture);
@@ -501,6 +556,31 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		);
 		expect(fixture.calls.spawnChrome).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
+	});
+
+	test("competing-instance guard honors an explicit --profile: a verified convention Chrome on another profile fails loudly, no spawn, no exit 0", async () => {
+		const otherProfile = `${HOME}/.warm-b`;
+		const fixture = launchFixture({
+			listeners: { "9222": chromeListener() },
+			versions: { "9222": healthyVersionFor("9222") },
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+				[otherProfile]: profileStat(otherProfile),
+			},
+		});
+		const run = await runWarmChrome(
+			["launch", "--port", "9300", "--profile", otherProfile],
+			fixture,
+		);
+
+		// The caller's declared profile expectation is violated by the verified
+		// 9222 Chrome: never an exit-0 already_verified with the wrong profile,
+		// and never a second Warm Chrome spawn.
+		expect(run.exitCode).toBe(20);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("listener_mismatch");
+		expect(parsed.data?.reason).toBe("profile_mismatch");
+		expect(fixture.calls.spawnChrome).toBe(0);
 	});
 
 	test("launch.port_occupied_foreign: foreign listener fails closed without spawn and carries a suggestion", async () => {
@@ -562,6 +642,7 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 					raw: "warm-mac.local-4321",
 					hostname: "warm-mac.local",
 					pid: 4321,
+					local: true,
 				},
 			},
 		});
@@ -577,6 +658,55 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.spawnChrome).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
 		expect(fixture.calls.writeTextFile).toBe(0);
+	});
+
+	test("stale SingletonLock with a dead pid does not permanently brick launch", async () => {
+		const fixture = launchFixture({
+			singletonLocks: {
+				[DEDICATED_PROFILE]: {
+					raw: "warm-mac.local-4321",
+					hostname: "warm-mac.local",
+					pid: 4321,
+					local: true,
+				},
+			},
+			processAlive: { 4321: false },
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.status).toBe("ok");
+		expect(parsed.data?.launch_performed).toBe(true);
+		expect(fixture.calls.spawnChrome).toBe(1);
+		expect(fixture.calls.ensureProfileDir).toBe(1);
+	});
+
+	// Regression (re-audit): a foreign-host lock (synced/NFS home shared across a
+	// fleet) names a pid the local kernel cannot probe. Its remote pid must NOT be
+	// aliased onto a live local process — that would re-brick launch exactly like
+	// the stale same-host lock the liveness gate was added to fix. processAlive
+	// reports the aliased pid alive, but launch must ignore the foreign lock and
+	// spawn anyway.
+	test("foreign-host SingletonLock does not brick launch even when its pid aliases a live local process", async () => {
+		const fixture = launchFixture({
+			singletonLocks: {
+				[DEDICATED_PROFILE]: {
+					raw: "other-host-77",
+					hostname: "other-host",
+					pid: 77,
+					local: false,
+				},
+			},
+			processAlive: { 77: true },
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.status).toBe("ok");
+		expect(parsed.data?.launch_performed).toBe(true);
+		expect(fixture.calls.spawnChrome).toBe(1);
 	});
 
 	test("readiness budget exhaustion: a spawn that never binds lands spawned_unverified within the exported budget", async () => {
@@ -640,6 +770,34 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(envelope.error?.hint?.summary).toContain("browser state");
 		expect(envelope.error?.hint?.summary).toContain("Repair owner-only");
 	});
+
+	test("spawn failure lands spawned_unverified instead of generic runtime_failure", async () => {
+		const fixture = launchFixture({
+			spawn: () => {
+				throw new Error("ENOENT");
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		const envelope = expectSpawnedUnverified(run, "spawn_failed", "spawn failed");
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		expect(fixture.calls.spawnChrome).toBe(1);
+		expect(fixture.calls.ensureProfileDir).toBe(1);
+	});
+
+	test("spawned child exit during readiness poll lands spawned_unverified without burning the full budget", async () => {
+		const fixture = launchFixture({
+			spawn: () => ({ pid: 777, kill: async () => true }),
+			processAlive: { 777: false },
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		const envelope = expectSpawnedUnverified(run, "spawn_failed", "spawn exit");
+		expect(envelope.data?.spawned_pid).toBe(777);
+		expect(fixture.elapsedMs()).toBeLessThan(
+			WARM_CHROME_LAUNCH_READINESS_BUDGET_MS,
+		);
+	});
 });
 
 describe("warm-chrome launch race policy (U6 R10)", () => {
@@ -669,7 +827,7 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		const parsed = parseEnvelope(run);
 		// Exactly one surviving Chrome: the verified winner, never our child.
 		expect(parsed.data?.browser_pid).toBe(100);
-		expect(parsed.data?.launch_performed).toBe(false);
+		expect(parsed.data?.launch_performed).toBe(true);
 		expect(fixture.calls.spawnChrome).toBe(1);
 		expect(fixture.calls.killCalls).toBe(1);
 	});
@@ -688,6 +846,48 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		expect(fixture.calls.killCalls).toBe(1);
 	});
 
+	test("loser child dead before the winner's endpoint verifies: the poll keeps going and converges on already_verified", async () => {
+		// The retired loser (pid 200, already exited) must not mint spawn_failed
+		// while the winner (pid 100, holding the SingletonLock) is still binding
+		// its endpoint — the exact interleaved-launch window resolveSpawnRace
+		// exists to converge.
+		const fixture = launchFixture({
+			listeners: {
+				"9222": [
+					null, // pre-spawn gate: port silent, spawn licensed
+					null, // readiness poll 1: winner not bound yet
+					{
+						pid: 100,
+						command: chromeCommand({ port: "9222", profile: DEDICATED_PROFILE }),
+					},
+				],
+			},
+			versions: {
+				"9222": [CONNECTION_REFUSED(), CONNECTION_REFUSED(), healthyVersionFor("9222")],
+			},
+			spawn: () => ({ pid: 200, kill: async () => true }),
+			processAlive: { 200: false, 100: true },
+			singletonLocks: {
+				[DEDICATED_PROFILE]: [
+					null, // pre-bind check: no lock yet, spawn proceeds
+					{
+					raw: "warm-mac.local-100",
+					hostname: "warm-mac.local",
+					pid: 100,
+					local: true,
+				},
+				],
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.status).toBe("ok");
+		expect(parsed.data?.browser_pid).toBe(100);
+		expect(parsed.data?.launch_performed).toBe(true);
+	});
+
 	test("ProcessSingleton pre-retired the child: kill on the already-exited pid does not change the station", async () => {
 		const fixture = launchFixture({
 			spawn: loserSpawn(async () => {
@@ -700,7 +900,7 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		const parsed = parseEnvelope(run);
 		expect(parsed.status).toBe("ok");
 		expect(parsed.data?.browser_pid).toBe(100);
-		expect(parsed.data?.launch_performed).toBe(false);
+		expect(parsed.data?.launch_performed).toBe(true);
 		expect(fixture.calls.killCalls).toBe(1);
 	});
 
@@ -728,6 +928,46 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		expect(parsed.data?.launch_performed).toBe(true);
 		// The loop re-entered the proof at least twice: once on the stale read,
 		// then again after it settled.
+		expect(fixture.calls.fetchJsonUrls.length).toBeGreaterThanOrEqual(2);
+	});
+
+	test("transient listener disappearance during startup keeps polling and recovers", async () => {
+		const fixture = launchFixture({
+			spawn: (input, controls) => {
+				controls.setListener(input.port, [
+					{
+						pid: SPAWNED_PID,
+						command: chromeCommand({
+							port: input.port,
+							profile: input.profileDir,
+						}),
+					},
+					null,
+					{
+						pid: SPAWNED_PID,
+						command: chromeCommand({
+							port: input.port,
+							profile: input.profileDir,
+						}),
+					},
+					{
+						pid: SPAWNED_PID,
+						command: chromeCommand({
+							port: input.port,
+							profile: input.profileDir,
+						}),
+					},
+				]);
+				controls.setVersion(input.port, healthyVersionFor(input.port));
+				return { pid: SPAWNED_PID, kill: async () => true };
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.status).toBe("ok");
+		expect(parsed.data?.launch_performed).toBe(true);
 		expect(fixture.calls.fetchJsonUrls.length).toBeGreaterThanOrEqual(2);
 	});
 
@@ -786,7 +1026,7 @@ describe("warm-chrome launch pre-spawn guards (U6)", () => {
 		const parsed = parseEnvelope(run);
 		expect(parsed.error?.code).toBe("unsafe_profile");
 		expect(parsed.data?.reason).toBe("default_profile");
-		expect(parsed.continuation?.next_action_id).toBe("repair_profile");
+		expect(parsed.continuation?.next_action_id).toBe("change_input");
 		expect(fixture.calls.spawnChrome).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
 	});
@@ -812,6 +1052,7 @@ describe("warm-chrome launch pre-spawn guards (U6)", () => {
 		const parsed = parseEnvelope(run);
 		expect(parsed.error?.code).toBe("unsafe_profile");
 		expect(parsed.data?.reason).toBe("default_profile");
+		expect(parsed.continuation?.next_action_id).toBe("change_input");
 		// No mutation and no spawn against the resolved default profile.
 		expect(fixture.calls.spawnChrome).toBe(0);
 		expect(fixture.calls.ensureProfileDir).toBe(0);
@@ -823,6 +1064,7 @@ describe("warm-chrome launch re-emit rule (U6 via U3 map)", () => {
 	type ReemitScenario = {
 		label: string;
 		stationId: string;
+		expectedActionId?: string;
 		argv?: readonly string[];
 		fixture: () => Fixture;
 	};
@@ -837,6 +1079,7 @@ describe("warm-chrome launch re-emit rule (U6 via U3 map)", () => {
 		{
 			label: "attach hang past the bounded budget (port occupied, fail closed)",
 			stationId: "check.endpoint_unreachable",
+			expectedActionId: "inspect_listener",
 			fixture: () => launchFixture({ versions: { "9222": "hang" } }),
 		},
 		{
@@ -929,7 +1172,7 @@ describe("warm-chrome launch re-emit rule (U6 via U3 map)", () => {
 			if (expectation.expectedActionId) {
 				const parsed = parseEnvelope(run);
 				expect(parsed.continuation?.next_action_id).toBe(
-					expectation.expectedActionId,
+					scenario.expectedActionId ?? expectation.expectedActionId,
 				);
 			}
 			// Every re-emitted verdict fails closed: nothing spawned.
@@ -1013,20 +1256,28 @@ describe("warm-chrome launch station evidence (U6)", () => {
 });
 
 describe("warm-chrome launch reason ownership (U6)", () => {
-	test("launch-local reasons never collide with the check reason union", () => {
+	test("spawned_unverified local reasons stay separate while wrong_browser reuses browser-class reasons", () => {
 		const checkReasons = new Set<string>(
 			Object.values(WARM_CHROME_CHECK_REASONS).flat(),
 		);
-		for (const reasons of Object.values(WARM_CHROME_LAUNCH_REASONS)) {
-			for (const reason of reasons) {
-				expect(checkReasons.has(reason)).toBe(false);
-			}
+		for (const reason of WARM_CHROME_LAUNCH_REASONS.spawned_unverified) {
+			expect(checkReasons.has(reason)).toBe(false);
 		}
 		expect(WARM_CHROME_LAUNCH_REASONS.spawned_unverified).toContain(
 			"readiness_timeout",
 		);
 		expect(WARM_CHROME_LAUNCH_REASONS.spawned_unverified).toContain(
+			"spawn_failed",
+		);
+		expect(WARM_CHROME_LAUNCH_REASONS.spawned_unverified).toContain(
 			"own_child_kill_failed",
+		);
+		expect(WARM_CHROME_LAUNCH_REASONS.wrong_browser).toContain(
+			"chrome_for_testing",
+		);
+		expect(WARM_CHROME_LAUNCH_REASONS.wrong_browser).toContain("chromium");
+		expect(WARM_CHROME_LAUNCH_REASONS.wrong_browser).toContain(
+			"launch_binary_not_real_chrome",
 		);
 	});
 });

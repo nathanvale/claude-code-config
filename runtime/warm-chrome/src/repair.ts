@@ -10,7 +10,7 @@
 // state.
 
 import { lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import {
 	type WarmChromeCommandHandler,
@@ -24,8 +24,12 @@ import {
 	type WarmChromeVerifiedProof,
 } from "./proof.ts";
 import {
+	WARM_CHROME_DEFAULT_PROFILE_DIR,
+} from "./model.ts";
+import {
 	expandHome,
 	extractUserDataDir,
+	isDefaultChromeProfilePath,
 	type ListenerProcess,
 	parseProcessCommand,
 	type ProfileStat,
@@ -35,11 +39,6 @@ import {
 	type WarmChromeRuntime,
 	WarmChromeRuntimeError,
 } from "./runtime.ts";
-
-// Mirrors the cli.ts parser default for launch; the parser does not default
-// --profile for repair, so a listenerless repair still targets the dedicated
-// profile. Report-worthy duplication: cli.ts owns the same private literal.
-const DEFAULT_PROFILE_DIR = "~/.agent-warm-profile";
 
 /**
  * Closed repair-owned reason union for the `unrepairable` station (plan U7).
@@ -52,8 +51,11 @@ export const WARM_CHROME_REPAIR_REASONS = {
 	unrepairable: [
 		"foreign_listener_on_port",
 		"profile_not_owned",
+		"profile_mismatch",
 		"profile_dir_uncreatable",
+		"profile_permissions_unrepairable",
 		"devtools_active_port_symlink",
+		"devtools_active_port_unwritable",
 	],
 } as const;
 
@@ -194,10 +196,47 @@ export function createRepairCommandHandler(
 		// --profile, then the dedicated default.
 		const listenerDir =
 			listener === null ? null : extractUserDataDir(listener.command);
-		const target = expandHome(
-			listenerDir ?? invocation.profileInput ?? DEFAULT_PROFILE_DIR,
-			runtime.env,
-		);
+		const listenerTarget =
+			listenerDir === null ? null : expandHome(listenerDir, runtime.env);
+		if (listenerTarget !== null && !isAbsolute(listenerTarget)) {
+			throw unrepairableError(
+				"profile_mismatch",
+				"Listener profile path is relative and cannot be repaired safely.",
+				context,
+				{
+					listener_profile_dir: redactListenerProfileDir(
+						runtime,
+						listenerTarget,
+					),
+				},
+			);
+		}
+		const explicitTarget =
+			invocation.profileInput === undefined
+				? null
+				: expandHome(invocation.profileInput, runtime.env);
+		if (
+			listenerTarget !== null &&
+			explicitTarget !== null &&
+			!(await sameProfileTarget(runtime, listenerTarget, explicitTarget))
+		) {
+			throw unrepairableError(
+				"profile_mismatch",
+				"Explicit --profile does not match the listener profile repair would mutate.",
+				context,
+				{
+					listener_profile_dir: redactListenerProfileDir(
+						runtime,
+						listenerTarget,
+					),
+					profile_dir: explicitTarget,
+				},
+			);
+		}
+		const target =
+			listenerTarget ??
+			explicitTarget ??
+			expandHome(WARM_CHROME_DEFAULT_PROFILE_DIR, runtime.env);
 
 		// Never mutate the everyday default profile or a throwaway temp path —
 		// the proof chain owns those verdicts and repair re-emits them untouched.
@@ -261,7 +300,25 @@ export function createRepairCommandHandler(
 						{ profile_dir: profile.realPath },
 					);
 				}
-				await runtime.chmod(profile.realPath, 0o700);
+				try {
+					await runtime.chmod(profile.realPath, 0o700);
+					profile = await runtime.statProfile(profile.realPath);
+				} catch {
+					throw unrepairableError(
+						"profile_permissions_unrepairable",
+						"Profile permissions could not be repaired.",
+						context,
+						{ profile_dir: profile.realPath },
+					);
+				}
+				if (profile.mode !== "700") {
+					throw unrepairableError(
+						"profile_permissions_unrepairable",
+						"Profile permissions did not become owner-only after repair.",
+						context,
+						{ profile_dir: profile.realPath, observed_mode: profile.mode },
+					);
+				}
 				mutations.push({ id: "profile_permissions", path: profile.realPath });
 			}
 		}
@@ -282,6 +339,9 @@ export function createRepairCommandHandler(
 			proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
 		} catch (error) {
 			if (!mutationsAllowed || !isStaleDevToolsActivePort(error)) {
+				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
+					throw withRepairMutationData(error, mutations);
+				}
 				throw error;
 			}
 			const activePortPath = join(
@@ -298,7 +358,10 @@ export function createRepairCommandHandler(
 					"devtools_active_port_symlink",
 					"A symlink is planted at DevToolsActivePort; repair refuses to follow it and did not write.",
 					context,
-					{ devtools_active_port_path: activePortPath },
+					{
+						devtools_active_port_path: activePortPath,
+						...repairMutationData(mutations),
+					},
 				);
 			}
 			const liveWsPath = await readLiveBrowserWsPath(
@@ -306,13 +369,39 @@ export function createRepairCommandHandler(
 				invocation.endpoint,
 				invocation.port,
 			);
-			if (liveWsPath === null) throw error;
-			await runtime.writeTextFile(
-				activePortPath,
-				`${invocation.port}\n${liveWsPath}\n`,
-			);
+			if (liveWsPath === null) {
+				// The original stale-port verdict re-throws, but earlier mutations
+				// (chmod, dir creation) already landed and must stay on the envelope.
+				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
+					throw withRepairMutationData(error, mutations);
+				}
+				throw error;
+			}
+			try {
+				await runtime.writeTextFile(
+					activePortPath,
+					`${invocation.port}\n${liveWsPath}\n`,
+				);
+			} catch {
+				throw unrepairableError(
+					"devtools_active_port_unwritable",
+					"DevToolsActivePort could not be rewritten.",
+					context,
+					{
+						devtools_active_port_path: activePortPath,
+						...repairMutationData(mutations),
+					},
+				);
+			}
 			mutations.push({ id: "devtools_active_port", path: activePortPath });
-			proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
+			try {
+				proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
+			} catch (verifyError) {
+				if (verifyError instanceof WarmChromeRuntimeError) {
+					throw withRepairMutationData(verifyError, mutations);
+				}
+				throw verifyError;
+			}
 		}
 
 		// 6. Repaired. The mutation pin enumerates every cross-tool-visible
@@ -348,6 +437,31 @@ export function createRepairCommandHandler(
 	};
 }
 
+function repairMutationData(
+	mutations: readonly WarmChromeRepairMutation[],
+): Record<string, unknown> {
+	return {
+		repair_actions: mutations.map((mutation) => mutation.id),
+		repair_mutations: mutations.map((mutation) => ({
+			id: mutation.id,
+			path: mutation.path,
+		})),
+	};
+}
+
+function withRepairMutationData(
+	error: WarmChromeRuntimeError,
+	mutations: readonly WarmChromeRepairMutation[],
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError(error.code, error.message, {
+		...error.options,
+		data: {
+			...(error.options.data ?? {}),
+			...repairMutationData(mutations),
+		},
+	});
+}
+
 async function inspectListener(
 	runtime: WarmChromeRuntime,
 	port: string,
@@ -368,16 +482,34 @@ function isRealGoogleChrome(listener: ListenerProcess): boolean {
 	);
 }
 
-// Mirrors proof.ts's private default-profile predicate; report-worthy
-// duplication if a third module needs it.
-function isDefaultChromeProfilePath(
-	path: string,
-	env: Record<string, string | undefined>,
-): boolean {
-	const home = env.HOME;
-	if (!home) return false;
-	const root = `${home}/Library/Application Support/Google/Chrome`;
-	return path === root || path.startsWith(`${root}/`);
+// The observed listener's profile is another instance's directory. When it is
+// the operator's everyday DEFAULT Chrome profile, its raw path discloses the OS
+// account name and HOME layout — the foreign-listener redaction doctrine forbids
+// emitting it. Report a non-path marker instead so the mismatch stays legible.
+function redactListenerProfileDir(
+	runtime: WarmChromeRuntime,
+	listenerTarget: string,
+): string {
+	return isDefaultChromeProfilePath(listenerTarget, runtime.env)
+		? "<default-chrome-profile>"
+		: listenerTarget;
+}
+
+async function sameProfileTarget(
+	runtime: WarmChromeRuntime,
+	left: string,
+	right: string,
+): Promise<boolean> {
+	if (left === right) return true;
+	try {
+		const [leftProfile, rightProfile] = await Promise.all([
+			runtime.statProfile(left),
+			runtime.statProfile(right),
+		]);
+		return leftProfile.realPath === rightProfile.realPath;
+	} catch {
+		return false;
+	}
 }
 
 function isStaleDevToolsActivePort(error: unknown): boolean {

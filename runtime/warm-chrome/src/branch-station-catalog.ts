@@ -171,12 +171,13 @@ export const warmChromeBranchStationCatalog = [
 		command: "launch",
 		classification: "required",
 		intent: "success",
-		trigger: "existing endpoint already proves Warm Chrome so nothing spawns",
+		trigger:
+			"verified Warm Chrome is reused, either before spawn or after a launch-race child is retired",
 		expectedExitCode: 0,
 		expectedEnvelopeStatus: "ok",
 		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
 		expectedActionId: "use_verified_endpoint",
-		mutationExpectation: "no_spawn",
+		mutationExpectation: "no_surviving_new_child",
 	},
 	{
 		id: "launch.port_occupied_foreign",

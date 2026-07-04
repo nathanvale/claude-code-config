@@ -78,11 +78,23 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       is copied across `src/proof.ts`, `src/launch.ts`, and `src/repair.ts`
       (three-way, flagged in `src/repair.ts`). Next: move both into
       `src/model.ts`.
-- [ ] P3 primaryActionId type openness Lane: CLI Contract. Done when:
-      `WarmChromeRuntimeErrorOptions.primaryActionId` and the
-      `NormalizedWarmChromeError` mirror widen from the single `"inspect_listener"`
-      literal to `WarmChromeRuntimeActionId`, so a future override needs no type
-      change. Cosmetic; no behavior change.
+- [ ] P2 Station-contract residuals decision Lane: CLI Contract. Done when: a
+      recorded decision resolves the three review residuals that each change a
+      Station-Map contract: (1) launch `unsafe_profile` routes `change_input`
+      while the catalog's only `unsafe_profile` station says `repair_profile` —
+      needs a launch-owned station or a documented re-emit exception; (2)
+      `check.endpoint_unreachable` catalog action is `launch_warm_chrome` but
+      the runtime override routes most reasons to `inspect_listener` —
+      single-action-per-station cannot express per-reason routing; (3) the
+      pre-bind refusal reuses `launch.spawned_unverified` whose trigger and
+      mutation pins claim a spawn happened. Next: `record-decision` against
+      the catalog drift gate.
+- [ ] P3 CLI-surface minors Lane: CLI Contract. Done when: `help <typo>`
+      exits 2 not 0, per-command rendered help lists the global diagnostic
+      flags (`WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS` now rides the discovery
+      tree only), and the `check.non_loopback` trigger wording covers the
+      `localhost_alias` reason. Next: fix in `src/cli.ts` +
+      `src/branch-station-catalog.ts` with `tests/cli-surface.test.ts` pins.
 - [ ] P3 Leading-zero port normalization Lane: Proof Chain. Done when:
       `--port 09222` cannot yield a spurious `non_loopback_websocket` verdict
       (URL normalizes `ws.port` to `9222` while `input.port` stays `09222`).
@@ -102,6 +114,42 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-04: Fifth-pass close-out: the last unverified `fetchLoopbackJson`
+  branch (response stalls after headers + partial body) hid a real defect —
+  under Bun the deadline's `req.destroy` flushes the buffered partial body as
+  a response `end` with `complete` still false, so a truncated-but-parseable
+  body RESOLVED as a healthy answer and an unparseable one rejected as
+  SyntaxError instead of TimeoutError. Fixed with a `response.complete` state
+  guard on the `end` handler (same state-not-timing design), pinned in
+  `tests/runtime.test.ts`; `isConnectionRefusedError` also now checks the
+  errno `code` before the message regex (spawn-licensing path must not rest
+  on Bun's message wording). Inline review of the full working diff found no
+  other issues; station-contract residuals docketed as tasks above.
+- 2026-07-04: Post-audit review regressions fixed (review handoff
+  `/private/tmp/warm-chrome-review-handoff/review-result.json`, 41/46 fixed,
+  9 regressions): (1) CRITICAL `hasDefaultContextPage` now cross-references
+  `defaultBrowserContextId` — real Chrome stamps default-context pages with
+  that non-empty GUID, so the prior any-non-empty-id-is-isolated rule
+  refused every healthy warm Chrome with an open tab; fixtures now model the
+  real shape. (2) `classifyUnreachable` tests `isAbortError` before the
+  real-listener `roundtrip_failed` fallthrough. (3) Repair's listenerless
+  default profile is `expandHome`-wrapped again (literal `~` dir in cwd
+  otherwise). (4) Explicitly-empty `WARM_CHROME_PROFILE_DIR` falls back to
+  the dedicated default. (5) `fetchLoopbackJson` gained a hard wall-clock
+  abort plus response-stream error settlement (mid-body reset no longer
+  leaks a pending promise; idle `timeout` option dropped). (6) The readiness
+  poll's dead-child gate defers to a live rival SingletonLock
+  (`hasLiveRivalLaunch`) so the race policy can converge; dead child with no
+  rival still fast-fails `spawn_failed`. (7) The competing-instance guard
+  threads the caller's `--profile` into the convention probe and re-emits
+  `check.listener_mismatch`/`profile_mismatch` instead of exit-0 with the
+  wrong profile. Review residuals NOT fixed (design decisions, see review
+  handoff): launch `unsafe_profile` `change_input` vs catalog
+  `repair_profile`; `check.endpoint_unreachable` catalog action vs
+  `inspect_listener` override; pre-bind refusal reusing
+  `launch.spawned_unverified` trigger/mutation pins; `help <typo>` exit 0;
+  diagnostic flags absent from per-command help; `non_loopback` trigger
+  wording vs localhost_alias.
 - 2026-07-03: Manual real-Chrome validation run recorded (switchover
   checklist input, plan Verification Contract row). Observed on macOS with
   Chrome 149.0.7827.201: (1) `check` verified a warm Chrome the legacy
@@ -127,9 +175,6 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 - 2026-07-03: U5 closed: the full check proof chain with the research reject
   rules (headless UA, isolated context, default-profile foreignness,
   endpoint-id cross-check, cdp_contention re-probe, suggested explicit port).
-- 2026-07-03: U1–U4 closed: package scaffold, command contract, the
-  sixteen-station catalog with drift gate and evidence manifest, and the
-  facade-backed chassis with R13 redaction chokepoints.
 
 ## Command Shortcuts
 

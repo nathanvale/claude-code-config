@@ -15,7 +15,6 @@
 // secondary affordance so the agent never loses a known-good repair path.
 
 import type { BranchStation } from "@side-quest/cli-command-facade";
-import { usageError } from "@side-quest/cli-command-facade";
 
 import { warmChromeBranchStationCatalog } from "./branch-station-catalog.ts";
 import {
@@ -24,7 +23,10 @@ import {
 	type WarmChromeExecuteInvocation,
 	warmChromeRuntimeAction,
 } from "./cli.ts";
-import type { WarmChromeRuntimeActionId } from "./model.ts";
+import {
+	WARM_CHROME_DEFAULT_PROFILE_DIR,
+	type WarmChromeRuntimeActionId,
+} from "./model.ts";
 import {
 	createDefaultProofDeps,
 	runWarmChromeCheckProof,
@@ -34,7 +36,9 @@ import {
 } from "./proof.ts";
 import {
 	expandHome,
+	isDefaultChromeProfilePath,
 	REAL_GOOGLE_CHROME_BINARY,
+	type SingletonLock,
 	type SpawnedChrome,
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
 	type WarmChromeRuntime,
@@ -81,10 +85,15 @@ const WARM_CHROME_LAUNCH_STARTUP_URL = "https://example.com/";
 export const WARM_CHROME_LAUNCH_REASONS = {
 	spawned_unverified: [
 		"readiness_timeout",
+		"spawn_failed",
 		"own_child_kill_failed",
 		"prior_launch_mid_startup",
 	],
-	wrong_browser: ["launch_binary_not_real_chrome"],
+	wrong_browser: [
+		"chrome_for_testing",
+		"chromium",
+		"launch_binary_not_real_chrome",
+	],
 } as const;
 
 /**
@@ -169,21 +178,35 @@ export function createLaunchCommandHandler(
 		// 2. Competing-instance guard (R10a): --port/--endpoint naming another
 		// port does not license a second Warm Chrome when the 9222 convention
 		// already runs verified — a second instance is an adapter-drift feeder.
-		// The guard probes WITHOUT the caller profile so any verified convention
-		// Warm Chrome blocks the spawn, and the ok envelope carries the 9222
-		// endpoint (R8: the envelope is the only endpoint authority).
+		// The caller's --profile expectation rides the probe so a verified
+		// convention Chrome on a DIFFERENT profile fails loudly instead of
+		// returning an exit-0 envelope that silently drops --profile semantics;
+		// on success the ok envelope carries the 9222 endpoint (R8: the envelope
+		// is the only endpoint authority).
 		if (invocation.port !== WARM_CHROME_CONVENTION_PORT) {
 			const convention = await runProofOutcome(
 				{
 					command: invocation.displayCommand,
 					endpoint: `http://127.0.0.1:${WARM_CHROME_CONVENTION_PORT}`,
 					port: WARM_CHROME_CONVENTION_PORT,
+					...(invocation.profileInput === undefined
+						? {}
+						: { profileInput: invocation.profileInput }),
 				},
 				runtime,
 				deps,
 			);
 			if (convention.kind === "verified") {
 				return launchSuccess(invocation, convention.proof, false);
+			}
+			if (
+				convention.error.code === "listener_mismatch" &&
+				convention.error.options.data?.reason === "profile_mismatch"
+			) {
+				// The convention Chrome verified except for the caller's explicit
+				// profile expectation: re-emit check's listener_mismatch station.
+				// Spawning a second Warm Chrome here would be adapter drift.
+				throw convention.error;
 			}
 			// Convention port holds no verified Warm Chrome; the requested-port
 			// verdict stays authoritative.
@@ -205,10 +228,8 @@ export function createLaunchCommandHandler(
 		// claims the profile SingletonLock before binding its CDP port, so a
 		// present lock while the port looks free means a prior launch is
 		// mid-startup. Profile-state inspection, not an ownership record.
-		const profileInput = invocation.profileInput;
-		if (profileInput === undefined) {
-			throw usageError("--profile is required for launch");
-		}
+		const profileInput =
+			invocation.profileInput ?? WARM_CHROME_DEFAULT_PROFILE_DIR;
 		const expandedProfile = expandHome(profileInput, runtime.env);
 		assertLaunchProfilePosture(expandedProfile, runtime, context);
 		// Resolve an existing target before any mutation: statProfile returns the
@@ -225,18 +246,26 @@ export function createLaunchCommandHandler(
 			// dir is created fresh below and re-checked after resolution.
 		}
 		const lock = await runtime.readSingletonLock(expandedProfile);
-		if (lock !== null) {
-			throw spawnedUnverifiedError({
-				reason: "prior_launch_mid_startup",
-				message:
-					"A prior Warm Chrome launch holds the profile SingletonLock while the port is not answering; refusing to spawn a second Chrome.",
-				hintSummary:
-					"A launch is mid-startup on this profile; wait, rerun warm-chrome check, and inspect diagnostics before any respawn.",
-				data: {
-					...context,
-					...(lock.pid === null ? {} : { lock_pid: lock.pid }),
-				},
-			});
+		// A foreign-host lock (synced/NFS home shared across a fleet) names a pid
+		// this machine cannot probe; its host owns that Chrome, not us, so it can
+		// never hold our local port. Ignore it rather than aliasing its remote pid
+		// onto a local process and permanently bricking launch.
+		if (lock?.local) {
+			const lockAlive =
+				lock.pid === null ? true : await isLockPidAlive(runtime, lock.pid);
+			if (lockAlive) {
+				throw spawnedUnverifiedError({
+					reason: "prior_launch_mid_startup",
+					message:
+						"A prior Warm Chrome launch holds the profile SingletonLock while the port is not answering; refusing to spawn a second Chrome.",
+					hintSummary:
+						"A launch is mid-startup on this profile; wait, rerun warm-chrome check, and inspect diagnostics before any respawn.",
+					data: {
+						...context,
+						...(lock.pid === null ? {} : { lock_pid: lock.pid }),
+					},
+				});
+			}
 		}
 
 		// 5. Spawn through the seam's handle-returning spawnChrome.
@@ -262,12 +291,27 @@ export function createLaunchCommandHandler(
 		// temp dir) only reveals itself here. Fail before spawn — after
 		// spawnChrome, Chrome would already be attached to the everyday profile.
 		assertLaunchProfilePosture(profileDir, runtime, context);
-		const child = await runtime.spawnChrome({
-			chromeBin: invocation.chromeBin,
-			port: invocation.port,
-			profileDir,
-			startupUrl: WARM_CHROME_LAUNCH_STARTUP_URL,
-		});
+		let child: SpawnedChrome;
+		try {
+			child = await runtime.spawnChrome({
+				chromeBin: invocation.chromeBin,
+				port: invocation.port,
+				profileDir,
+				startupUrl: WARM_CHROME_LAUNCH_STARTUP_URL,
+			});
+		} catch {
+			throw spawnedUnverifiedError({
+				reason: "spawn_failed",
+				message:
+					"Chrome launch wrote profile state but the browser process did not start.",
+				hintSummary:
+					"Chrome failed during startup; inspect diagnostics before any adapter work.",
+				data: {
+					...context,
+					profile_dir: profileDir,
+				},
+			});
+		}
 
 		// 6. Bounded readiness poll re-entering the U5 proof chain (R7). Budget
 		// exhaustion or a non-transient post-spawn proof failure lands
@@ -286,6 +330,31 @@ export function createLaunchCommandHandler(
 				// reason passes through and the check station's primary action is
 				// carried so the agent keeps a known-good repair path.
 				throw spawnedUnverifiedFromCheckFailure(outcome.error, child, context);
+			}
+			// A dead child is a failed spawn UNLESS a rival launch is mid-startup:
+			// Chrome's ProcessSingleton retires the loser BECAUSE the winner holds
+			// the profile SingletonLock, so a live foreign lock means the race
+			// policy can still converge on the winner's verified endpoint — keep
+			// polling instead of aborting the recovery.
+			if (
+				!(await isSpawnedProcessAlive(runtime, child.pid)) &&
+				!(await hasLiveRivalLaunch(runtime, profileDir, child.pid))
+			) {
+				throw spawnedUnverifiedError({
+					reason: "spawn_failed",
+					message:
+						"Chrome spawned but exited before its DevTools endpoint verified.",
+					hintSummary:
+						"Chrome exited during startup; inspect diagnostics before any adapter work.",
+					data: {
+						...context,
+						spawned_pid: child.pid,
+						last_check_code: outcome.error.code,
+						...(typeof outcome.error.options.data?.reason === "string"
+							? { last_check_reason: outcome.error.options.data.reason }
+							: {}),
+					},
+				});
 			}
 			if (runtime.now() >= deadline) {
 				throw spawnedUnverifiedError({
@@ -320,9 +389,18 @@ export function createLaunchCommandHandler(
 // Chrome: both racers otherwise landed spawned_unverified/endpoint_id_mismatch
 // and needed a separate repair to converge.)
 function isTransientStartupFailure(error: WarmChromeRuntimeError): boolean {
-	if (error.code !== "invalid_cdp") return false;
 	const reason = error.options.data?.reason;
-	return reason === "endpoint_id_mismatch" || reason === "cdp_contention";
+	if (error.code === "invalid_cdp") {
+		return (
+			reason === "endpoint_id_mismatch" ||
+			reason === "cdp_contention" ||
+			reason === "roundtrip_failed"
+		);
+	}
+	if (error.code === "listener_mismatch") {
+		return reason === "pid_mismatch" || reason === "listener_missing";
+	}
+	return false;
 }
 
 // R10 race policy: the verified listener pid decides. If it is not our own
@@ -363,7 +441,7 @@ async function resolveSpawnRace(
 			},
 		});
 	}
-	return launchSuccess(invocation, proof, false);
+	return launchSuccess(invocation, proof, true);
 }
 
 function launchSuccess(
@@ -374,7 +452,7 @@ function launchSuccess(
 	const action = warmChromeRuntimeAction("use_verified_endpoint");
 	return {
 		// The proof's ok payload is the endpoint authority (R8); launch only adds
-		// whether the verified browser came from this run's spawn.
+		// whether this invocation performed a browser spawn/write.
 		data: { ...proof.data, launch_performed: launchPerformed },
 		plain: [
 			"browser_ready",
@@ -511,13 +589,15 @@ function assertLaunchProfilePosture(
 	runtime: WarmChromeRuntime,
 	context: LaunchContext,
 ): void {
-	if (isDefaultProfilePath(path, runtime.env)) {
+	if (isDefaultChromeProfilePath(path, runtime.env)) {
 		throw new WarmChromeRuntimeError(
 			"unsafe_profile",
 			"Warm Chrome cannot launch on the everyday default Chrome profile.",
 			{
-				recoverability: "repair_state",
-				hintAction: "repair_state",
+				exitCode: WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
+				failureDomain: "input",
+				recoverability: "change_input",
+				hintAction: "change_input",
 				hintSummary: "Choose a dedicated persistent Warm Chrome profile.",
 				data: { reason: "default_profile", ...context },
 			},
@@ -528,8 +608,10 @@ function assertLaunchProfilePosture(
 			"unsafe_profile",
 			"Warm Chrome profile must be persistent, not a throwaway temporary directory.",
 			{
-				recoverability: "repair_state",
-				hintAction: "repair_state",
+				exitCode: WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
+				failureDomain: "input",
+				recoverability: "change_input",
+				hintAction: "change_input",
 				hintSummary: "Choose a dedicated persistent Warm Chrome profile.",
 				data: { reason: "throwaway_profile", ...context },
 			},
@@ -537,15 +619,49 @@ function assertLaunchProfilePosture(
 	}
 }
 
-// Local copy of the proof chain's default-profile predicate (proof.ts keeps
-// its own private; the launch guard must fire BEFORE any spawn, where the
-// proof chain never reaches its profile steps on a free port).
-function isDefaultProfilePath(
-	path: string,
-	env: Record<string, string | undefined>,
-): boolean {
-	const home = env.HOME;
-	if (!home) return false;
-	const root = `${home}/Library/Application Support/Google/Chrome`;
-	return path === root || path.startsWith(`${root}/`);
+// Post-spawn rival detection for the readiness poll's dead-child gate. A
+// SingletonLock owned by a live pid that is not our own child is a rival
+// launch mid-startup (the pre-bind refusal's mirror image); an absent lock,
+// our own child's lingering lock, or a dead owner proves no rival is coming.
+async function hasLiveRivalLaunch(
+	runtime: WarmChromeRuntime,
+	profileDir: string,
+	ownPid: number,
+): Promise<boolean> {
+	let lock: SingletonLock | null;
+	try {
+		lock = await runtime.readSingletonLock(profileDir);
+	} catch {
+		return false;
+	}
+	if (lock === null) return false;
+	// A foreign-host lock is another machine's launch, never our local rival.
+	if (!lock.local) return false;
+	if (lock.pid === ownPid) return false;
+	// An unparseable owner pid mirrors the pre-bind fail-closed posture: treat
+	// the launch as mid-startup rather than minting a premature spawn_failed.
+	if (lock.pid === null) return true;
+	return isLockPidAlive(runtime, lock.pid);
+}
+
+async function isLockPidAlive(
+	runtime: WarmChromeRuntime,
+	pid: number,
+): Promise<boolean> {
+	try {
+		return await runtime.isProcessAlive(pid);
+	} catch {
+		return true;
+	}
+}
+
+async function isSpawnedProcessAlive(
+	runtime: WarmChromeRuntime,
+	pid: number,
+): Promise<boolean> {
+	try {
+		return await runtime.isProcessAlive(pid);
+	} catch {
+		return true;
+	}
 }

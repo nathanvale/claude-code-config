@@ -146,6 +146,16 @@ describe("warm-chrome entrypoint surface (U4)", () => {
 		for (const command of ["check", "status", "launch", "repair"]) {
 			expect(result.stdout).toContain(command);
 		}
+		expect(result.stdout).toContain("help     Show help");
+		expect(result.stdout).toContain("--run-id");
+		expect(result.stdout).toContain("WARM_CHROME_CDP_PORT");
+	});
+
+	test("no args renders help without probing the browser", async () => {
+		const result = await runCli([]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Usage: warm-chrome <command> [flags]");
 	});
 
 	test("command help renders the facade contract usage", async () => {
@@ -154,6 +164,14 @@ describe("warm-chrome entrypoint surface (U4)", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("warm-chrome launch");
 		expect(result.stdout).toContain("--chrome");
+	});
+
+	test("help subcommand renders command help", async () => {
+		const result = await runCli(["help", "repair"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("warm-chrome repair");
+		expect(result.stdout).toContain("--profile");
 	});
 
 	test("bin keeps its executable bit and bun shebang", async () => {
@@ -219,6 +237,23 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 			processExitCode: 2,
 		});
 		expect(envelope.error.message).toContain("mutually exclusive");
+	});
+
+	test("--endpoint accepts an explicit default-scheme port", async () => {
+		const seen: WarmChromeExecuteInvocation[] = [];
+		const handler = okHandler();
+		const result = await runCli(["check", "--endpoint", "http://127.0.0.1:80"], {
+			handlers: {
+				check: async (invocation, runtime) => {
+					seen.push(invocation);
+					return handler(invocation, runtime);
+				},
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(seen[0]?.endpoint).toBe("http://127.0.0.1:80");
+		expect(seen[0]?.port).toBe("80");
 	});
 
 	test("--chrome is rejected outside launch", async () => {

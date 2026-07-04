@@ -43,6 +43,7 @@ import {
 	WARM_CHROME_CLI_NAME,
 	WARM_CHROME_COMMANDS,
 	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_DEFAULT_PROFILE_DIR,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
 	type WarmChromeCommand,
@@ -67,7 +68,6 @@ import {
 
 const VERSION = "0.1.0";
 const DEFAULT_PORT = "9222";
-const DEFAULT_PROFILE_DIR = "~/.agent-warm-profile";
 const CHROME_REMOTE_DEBUGGING_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
 const RUNTIME_FAILURE_EXIT_CODE = 1;
@@ -326,6 +326,9 @@ function parseWarmChromeArgv(
 	argv: readonly string[],
 	runtime: WarmChromeRuntime,
 ): ParsedWarmChromeArgv {
+	if (argv.length === 0) {
+		return { kind: "help" };
+	}
 	if (argv.includes("--help") || argv.includes("-h")) {
 		return { kind: "help", ...helpCommand(findCommand(argv)) };
 	}
@@ -351,8 +354,11 @@ function parseWarmChromeArgv(
 	let outputMode: OutputMode = displayCommand === "status" ? "plain" : "json";
 	let port = "";
 	let endpoint = "";
+	// An explicitly-empty env value must not defeat the documented
+	// ~/.agent-warm-profile fallback downstream (`??` treats "" as supplied).
 	let profileInput =
-		typeof runtime.env.WARM_CHROME_PROFILE_DIR === "string"
+		typeof runtime.env.WARM_CHROME_PROFILE_DIR === "string" &&
+		runtime.env.WARM_CHROME_PROFILE_DIR.trim() !== ""
 			? runtime.env.WARM_CHROME_PROFILE_DIR
 			: undefined;
 	let chromeBin = runtime.env.CHROME_BIN ?? REAL_GOOGLE_CHROME_BINARY;
@@ -409,15 +415,12 @@ function parseWarmChromeArgv(
 	}
 
 	const normalized = normalizeEndpoint({
+		command: displayCommand,
 		port:
 			port ||
 			(endpoint ? "" : runtime.env.WARM_CHROME_CDP_PORT || DEFAULT_PORT),
 		endpoint,
 	});
-
-	if (command === "launch" && !profileInput) {
-		profileInput = DEFAULT_PROFILE_DIR;
-	}
 
 	return {
 		kind: "execute",
@@ -460,7 +463,11 @@ function requireInlineValue(arg: string, flag: string): string {
 	return value;
 }
 
-function normalizeEndpoint(input: { port: string; endpoint: string }): {
+function normalizeEndpoint(input: {
+	command: WarmChromeCommand;
+	port: string;
+	endpoint: string;
+}): {
 	endpoint: string;
 	port: string;
 } {
@@ -481,16 +488,29 @@ function normalizeEndpoint(input: { port: string; endpoint: string }): {
 	if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
 		// Canonical station code (check.non_loopback, reason
 		// non_loopback_endpoint); the proof chain owns the localhost-alias case.
-		throw nonLoopbackEndpointError();
+		throw nonLoopbackEndpointError({
+			command: input.command,
+			endpoint: redactEndpointCredentials(input.endpoint),
+			port: readExplicitPort(input.endpoint),
+		});
 	}
-	if (!parsed.port) {
+	const explicitPort = readExplicitPort(input.endpoint);
+	const port = parsed.port || explicitPort;
+	if (!port) {
 		throw usageError("--endpoint must include a port");
 	}
-	assertPort(parsed.port, "endpoint port");
+	assertPort(port, "endpoint port");
 	return {
-		endpoint: `http://${parsed.hostname}:${parsed.port}`,
-		port: parsed.port,
+		endpoint: `http://${parsed.hostname}:${port}`,
+		port,
 	};
+}
+
+function readExplicitPort(endpoint: string): string {
+	const match = /^http:\/\/(?:\[[^\]]+\]|[^/:?#]+):([0-9]+)(?:[/?#]|$)/i.exec(
+		endpoint,
+	);
+	return match?.[1] ?? "";
 }
 
 function assertPort(value: string, label: string): void {
@@ -513,6 +533,7 @@ function renderHelp(command?: WarmChromeCommand): string {
 		"",
 		"Commands:",
 		...commandLines,
+		"  help     Show help for all commands or one command.",
 		"",
 		"Global diagnostic flags:",
 		"  --run-id <id>   Set run correlation id.",
@@ -520,6 +541,12 @@ function renderHelp(command?: WarmChromeCommand): string {
 		"  --verbose       Emit info diagnostics to stderr.",
 		"  --debug         Emit debug diagnostics to stderr.",
 		"  --version       Print version.",
+		"",
+		"Environment:",
+		"  WARM_CHROME_CDP_PORT      Default CDP port when --port/--endpoint is absent.",
+		`  WARM_CHROME_PROFILE_DIR   Default profile input; launch/repair fallback is ${WARM_CHROME_DEFAULT_PROFILE_DIR}.`,
+		"  WARM_CHROME_RUN_ID        Default run correlation id.",
+		"  CHROME_BIN                Launch binary override for launch.",
 		"",
 	].join("\n");
 }
@@ -643,7 +670,7 @@ type NormalizedWarmChromeError = {
 	hintAction: "change_input" | "repair_state" | undefined;
 	hintDocsUrl?: string;
 	failureDomain: WarmChromeFailureDomain;
-	primaryActionId?: "inspect_listener";
+	primaryActionId?: WarmChromeRuntimeActionId;
 	secondaryActionIds?: readonly WarmChromeRuntimeActionId[];
 	data?: Record<string, unknown>;
 	runtimeActions: RuntimeActionGuidance[];
@@ -797,13 +824,30 @@ function isUnsafeUsageValue(value: string): boolean {
 	);
 }
 
+// A rejected --endpoint is echoed into the non_loopback envelope so the caller
+// can see what they passed, but userinfo (user:pass@host) in that URL would leak
+// verbatim into the exit-20 JSON. Strip credentials while keeping the host/port
+// the caller needs to recognize their input.
+function redactEndpointCredentials(endpoint: string): string {
+	try {
+		const parsed = new URL(endpoint);
+		if (parsed.username === "" && parsed.password === "") return endpoint;
+		parsed.username = "";
+		parsed.password = "";
+		return parsed.toString();
+	} catch {
+		// Not a parseable URL — fall back to the general path/secret redactor.
+		return redactUnsafeText(endpoint);
+	}
+}
+
 function redactUnsafeText(value: string): string {
 	return value
 		.replace(/\bop:\/\/\S+/gi, "[redacted]")
 		.replace(/--[A-Za-z0-9][\w-]*(?:=\S*)?/g, (match) =>
 			hasSensitiveOptionName(match) ? "[redacted]" : match,
 		)
-		.replace(/(^|[\s:(])(?:~\/|\/)\S+/g, "$1[redacted]");
+		.replace(/(^|[\s:(=])(?:~\/|\/)\S+/g, "$1[redacted]");
 }
 
 function hasSensitiveOptionName(value: string): boolean {
@@ -825,7 +869,7 @@ function hintForRuntimeError(error: WarmChromeRuntimeError): {
 		case "endpoint_unreachable":
 			return {
 				summary:
-					"Remote debugging is off; enable it in chrome://inspect/#remote-debugging, then rerun warm-chrome check.",
+					"No Chrome DevTools endpoint answered; launch Warm Chrome or inspect diagnostics if a listener is present.",
 				action: "repair_state",
 				docsUrl: CHROME_REMOTE_DEBUGGING_DOCS_URL,
 				recoverability: "repair_state",
@@ -943,8 +987,8 @@ function primaryRuntimeActionForError(
 	}
 	// An explicit per-error override wins when the code alone is ambiguous
 	// (e.g. endpoint_unreachable after Chrome spawned: inspect that listener).
-	if (error.primaryActionId === "inspect_listener") {
-		return warmChromeRuntimeAction("inspect_listener");
+	if (error.primaryActionId) {
+		return warmChromeRuntimeAction(error.primaryActionId);
 	}
 	if (error.code === "port_occupied_foreign") {
 		return warmChromeRuntimeAction("rerun_with_explicit_port");

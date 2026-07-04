@@ -71,6 +71,14 @@ carries the actual endpoint — for the competing-instance guard that is the
 verified convention endpoint, not the port the caller asked to spawn on.
 _Avoid_: convention-derived endpoints, synthesized websocket URLs
 
+**CLI input fallback**:
+Flags win over environment. `WARM_CHROME_CDP_PORT` supplies the default port,
+`WARM_CHROME_PROFILE_DIR` supplies the default profile input,
+`WARM_CHROME_RUN_ID` supplies diagnostics correlation, and `CHROME_BIN` supplies
+the launch binary input. `--endpoint` accepts only numeric loopback
+`http://127.0.0.1:<port>`; `localhost` is intentionally rejected by proof.
+_Avoid_: hidden env behavior, hostname alias trust, proxy-derived endpoints
+
 **Mutation pin**:
 The per-station declaration of cross-tool-visible state change the drift gate
 checks: `check` stations are read-only, `launch.launched` and

@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { spawn } from "node:child_process";
 import {
 	chmod,
@@ -7,7 +8,7 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
-import { userInfo } from "node:os";
+import { hostname, userInfo } from "node:os";
 import { basename } from "node:path";
 
 import {
@@ -38,6 +39,16 @@ export const WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER = Number(
 export const DEFAULT_FETCH_ABORT_MS = 5000;
 
 /**
+ * Backstop for system identity probes.
+ *
+ * lsof/ps are part of the browser-entry proof chain; a blocked probe is a
+ * verdict, not permission to wait forever.
+ *
+ * @defaultValue 3000
+ */
+export const DEFAULT_SYSTEM_PROBE_TIMEOUT_MS = 3000;
+
+/**
  * The one binary the real-Chrome identity check accepts (plan R6 vocabulary).
  */
 export const REAL_GOOGLE_CHROME_BINARY =
@@ -65,7 +76,7 @@ export type WarmChromeRuntimeErrorOptions = {
 	// Override the per-run primary runtime action when the error code alone is
 	// ambiguous. `endpoint_unreachable` means "launch" when nothing answers but
 	// "inspect" when a real Chrome already occupies the port without CDP.
-	primaryActionId?: "inspect_listener";
+		primaryActionId?: WarmChromeRuntimeActionId;
 	/**
 	 * Runtime actions appended after the primary. A post-spawn failure whose
 	 * reason is a check-failure reason carries that check station's primary
@@ -135,6 +146,15 @@ export type SingletonLock = {
 	raw: string;
 	hostname: string | null;
 	pid: number | null;
+	/**
+	 * True only when the lock's hostname matches this machine, so `pid` names a
+	 * process the local kernel can probe. A foreign-host lock (synced/NFS home
+	 * shared across a fleet) carries a pid that is meaningless locally; callers
+	 * must never feed it to `isProcessAlive`, which would alias it onto whatever
+	 * local process happens to share that number. Mirrors Chrome's own
+	 * ProcessSingleton, which compares the lock hostname before trusting the pid.
+	 */
+	local: boolean;
 };
 
 /**
@@ -166,11 +186,12 @@ export type WarmChromeRuntime = {
 	ensureProfileDir: (path: string) => Promise<string>;
 	chmod: (path: string, mode: number) => Promise<void>;
 	writeTextFile: (path: string, content: string) => Promise<void>;
-	spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
-	readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
-	sleep: (ms: number) => Promise<void>;
-	isTemporaryPath: (path: string) => boolean;
-};
+		spawnChrome: (input: LaunchChromeInput) => Promise<SpawnedChrome>;
+		readSingletonLock: (profileDir: string) => Promise<SingletonLock | null>;
+		isProcessAlive: (pid: number) => Promise<boolean>;
+		sleep: (ms: number) => Promise<void>;
+		isTemporaryPath: (path: string) => boolean;
+	};
 
 /**
  * Build the default macOS runtime adapter.
@@ -191,20 +212,7 @@ export function createDefaultRuntime(
 		env,
 		platform: process.platform,
 		now: () => Date.now(),
-		fetchJson: async (url: string) => {
-			// The proof chain owns the attach budget (probeJsonVersion races this
-			// fetch against sleep(WARM_CHROME_ATTACH_TIMEOUT_MS)); this backstop
-			// abort must sit ABOVE that budget so a hang resolves as the proof's
-			// attach_timeout verdict, not a fetch rejection that classifies as
-			// no_listener and licenses a spawn against an occupied port.
-			const response = await fetch(url, {
-				signal: AbortSignal.timeout(DEFAULT_FETCH_ABORT_MS),
-			});
-			if (!response.ok) {
-				throw new Error(`request failed: ${response.status}`);
-			}
-			return response.json();
-		},
+			fetchJson: async (url: string) => fetchLoopbackJson(url),
 		findListener: async (port: string) => findListenerWithSystemTools(port),
 		currentUser: async () => String(userInfo().uid),
 		statProfile: async (path: string) => statProfile(path),
@@ -241,9 +249,10 @@ export function createDefaultRuntime(
 				kill: () => terminateChild(child),
 			};
 		},
-		readSingletonLock: async (profileDir: string) =>
-			readSingletonLock(profileDir),
-		sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+			readSingletonLock: async (profileDir: string) =>
+				readSingletonLock(profileDir),
+			isProcessAlive: async (pid: number) => isProcessAlive(pid),
+			sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
 		isTemporaryPath: (path: string) =>
 			path.startsWith("/tmp/") ||
 			path.startsWith("/private/tmp/") ||
@@ -260,12 +269,43 @@ export function expandHome(
 	path: string,
 	env: Record<string, string | undefined>,
 ): string {
-	if (path === "~") return env.HOME ?? path;
-	if (path.startsWith("~/")) {
+	if (path === "~" || path.startsWith("~/")) {
 		const home = env.HOME;
-		return home ? `${home}/${path.slice(2)}` : path;
+		if (!home) {
+			throw new WarmChromeRuntimeError(
+				"invalid_usage",
+				"HOME is required to expand a ~ profile or binary path.",
+				{
+					exitCode: 2,
+					failureDomain: "input",
+					recoverability: "change_input",
+					hintAction: "change_input",
+					hintSummary: "Set HOME or pass an absolute path.",
+				},
+			);
+		}
+		if (path === "~") return home;
+		return `${home}/${path.slice(2)}`;
 	}
 	return path;
+}
+
+/**
+ * Detect the everyday Chrome profile path.
+ *
+ * With HOME present this is exact. With HOME absent, fail closed for explicit
+ * absolute Chrome profile paths instead of disabling the guard.
+ */
+export function isDefaultChromeProfilePath(
+	path: string,
+	env: Record<string, string | undefined>,
+): boolean {
+	const home = env.HOME;
+	if (home) {
+		const root = `${home}/Library/Application Support/Google/Chrome`;
+		return path === root || path.startsWith(`${root}/`);
+	}
+	return /\/Library\/Application Support\/Google\/Chrome(?:\/|$)/.test(path);
 }
 
 async function statProfile(path: string): Promise<ProfileStat> {
@@ -294,19 +334,29 @@ async function readSingletonLock(
 	let raw: string;
 	try {
 		raw = await readlink(`${profileDir}/SingletonLock`);
-	} catch {
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException)?.code;
+		if (code === "ENOENT") return null;
+		throw new WarmChromeRuntimeError(
+			"listener_uninspectable",
+			"Could not inspect the profile SingletonLock.",
+		);
+	}
+	if (raw.trim() === "") {
 		return null;
 	}
 	const separator = raw.lastIndexOf("-");
 	if (separator <= 0 || separator === raw.length - 1) {
-		return { raw, hostname: null, pid: null };
+		return { raw, hostname: null, pid: null, local: false };
 	}
 	const pidText = raw.slice(separator + 1);
 	const pid = /^[0-9]+$/.test(pidText) ? Number(pidText) : null;
+	const lockHostname = raw.slice(0, separator);
 	return {
 		raw,
-		hostname: raw.slice(0, separator),
+		hostname: lockHostname,
 		pid,
+		local: lockHostname === hostname(),
 	};
 }
 
@@ -322,6 +372,7 @@ type SpawnableChild = {
 export type KillableChild = SpawnableChild & {
 	kill(signal?: NodeJS.Signals): boolean;
 	readonly exitCode: number | null;
+	readonly signalCode?: NodeJS.Signals | null;
 };
 
 // Grace window for a SIGTERM before escalating to SIGKILL.
@@ -334,18 +385,22 @@ export async function terminateChild(
 	child: KillableChild,
 	graceMs: number = TERMINATE_GRACE_MS,
 ): Promise<boolean> {
-	if (child.exitCode !== null) return true;
+	if (isChildGone(child)) return true;
 	const exited = new Promise<void>((resolve) => {
 		child.once("exit", () => resolve());
 	});
 	if (!child.kill("SIGTERM")) {
-		return child.exitCode !== null;
+		return isChildGone(child);
 	}
 	if (await raceExit(exited, graceMs)) return true;
 	// SIGTERM ignored: escalate. A false here is ESRCH (it exited in the gap).
 	child.kill("SIGKILL");
 	if (await raceExit(exited, graceMs)) return true;
-	return child.exitCode !== null;
+	return isChildGone(child);
+}
+
+function isChildGone(child: KillableChild): boolean {
+	return child.exitCode !== null || child.signalCode != null;
 }
 
 // Resolve true if `exited` settles within the grace window, false on timeout.
@@ -415,36 +470,54 @@ export async function findListenerWithSystemTools(
 	try {
 		pidOutput = await exec("lsof", [
 			"-nP",
-			`-iTCP:${port}`,
+			"-a",
+			`-iTCP@127.0.0.1:${port}`,
 			"-sTCP:LISTEN",
 			"-t",
 		]);
 	} catch (error) {
 		// lsof exits non-zero with no error code when nothing is listening — the
 		// expected negative result. A real ENOENT/EACCES means we never inspected.
-		if (isProbeUnavailableError(error)) {
+		if (isExpectedNoListenerLsofError(error)) return null;
+		if (isProbeUnavailableError(error) || error instanceof ExecTextError) {
 			throw new WarmChromeRuntimeError(
 				"listener_uninspectable",
 				"Could not run the CDP listener probe.",
 			);
 		}
-		return null;
+		throw error;
 	}
-	const pidText = pidOutput
-		.split("\n")
-		.map((line) => line.trim())
-		.find(Boolean);
-	if (!pidText) return null;
-	let command = "";
+	const pidTexts = [
+		...new Set(
+			pidOutput
+			.split("\n")
+			.map((line) => line.trim())
+				.filter(Boolean),
+		),
+	];
+	if (pidTexts.length === 0) return null;
+	if (pidTexts.length > 1) {
+		throw new WarmChromeRuntimeError(
+			"listener_uninspectable",
+			"More than one process is listening on the CDP loopback port.",
+		);
+	}
+	const [pidText] = pidTexts;
+	const executable = await readProcessExecutable(pidText, exec);
+	let argvCommand = "";
 	try {
-		command = await exec("ps", ["-p", pidText, "-o", "command="]);
+		argvCommand = await exec("ps", ["-p", pidText, "-o", "command="]);
 	} catch {
 		throw new WarmChromeRuntimeError(
 			"listener_uninspectable",
 			"Could not inspect the CDP listener process.",
 		);
 	}
-	return { pid: Number(pidText), command: command.trim() };
+	const argvArgs = parseProcessCommand(argvCommand.trim()).args;
+	return {
+		pid: Number(pidText),
+		command: argvArgs === "" ? executable : `${executable} ${argvArgs}`,
+	};
 }
 
 async function execText(command: string, args: string[]): Promise<string> {
@@ -452,15 +525,221 @@ async function execText(command: string, args: string[]): Promise<string> {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGKILL");
+	}, DEFAULT_SYSTEM_PROBE_TIMEOUT_MS);
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 		proc.exited,
-	]);
+	]).finally(() => clearTimeout(timer));
+	if (timedOut) {
+		throw new ExecTextError(`${command} timed out`, {
+			stdout,
+			stderr,
+			timedOut,
+		});
+	}
 	if (exitCode !== 0) {
-		throw new Error(stderr || `${command} exited ${exitCode}`);
+		throw new ExecTextError(stderr || `${command} exited ${exitCode}`, {
+			exitCode,
+			stdout,
+			stderr,
+		});
 	}
 	return stdout;
+}
+
+class ExecTextError extends Error {
+	readonly exitCode?: number;
+	readonly stdout: string;
+	readonly stderr: string;
+	readonly timedOut: boolean;
+
+	constructor(
+		message: string,
+		options: {
+			exitCode?: number;
+			stdout?: string;
+			stderr?: string;
+			timedOut?: boolean;
+		} = {},
+	) {
+		super(message);
+		this.name = "ExecTextError";
+		this.exitCode = options.exitCode;
+		this.stdout = options.stdout ?? "";
+		this.stderr = options.stderr ?? "";
+		this.timedOut = options.timedOut ?? false;
+	}
+}
+
+function isExpectedNoListenerLsofError(error: unknown): boolean {
+	return (
+		error instanceof ExecTextError &&
+		!error.timedOut &&
+		error.exitCode === 1 &&
+		error.stdout.trim() === "" &&
+		error.stderr.trim() === ""
+	);
+}
+
+async function readProcessExecutable(
+	pidText: string,
+	exec: ExecText,
+): Promise<string> {
+	let output = "";
+	try {
+		output = await exec("lsof", ["-nP", "-a", "-p", pidText, "-d", "txt", "-Fn"]);
+	} catch {
+		throw new WarmChromeRuntimeError(
+			"listener_uninspectable",
+			"Could not inspect the CDP listener executable.",
+		);
+	}
+	const executable = output
+		.split("\n")
+		.map((line) => line.trim())
+		.find((line) => line.startsWith("n/"))
+		?.slice(1);
+	if (!executable) {
+		throw new WarmChromeRuntimeError(
+			"listener_uninspectable",
+			"Could not resolve the CDP listener executable path.",
+		);
+	}
+	return executable;
+}
+
+function fetchLoopbackJson(url: string): Promise<unknown> {
+	const parsed = new URL(url);
+	return new Promise((resolve, reject) => {
+		// Single-fire settle. Every terminal event — success `end`, stream/request
+		// `error`, socket `close`, and the wall-clock `timeout` — routes through
+		// here, and only the first wins. This is the invariant the prior two
+		// implementations kept breaking: under Bun, `req.destroy(error)` on a
+		// connected-but-silent request emits `close`, NOT `error`, so a deadline
+		// abort with no `close` handler never rejected and `repair` hung forever.
+		// Single-fire alone does NOT stop a post-destroy `end` from resolving a
+		// truncated body as success — that flushed `end` is the FIRST event, so
+		// it wins the settle; the completeness guard on the `end` handler below
+		// owns that case.
+		let settled = false;
+		const settle = (finish: () => void) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(deadline);
+			finish();
+		};
+		// Hard wall-clock cap. The request `timeout` option is idle-only: a peer
+		// dribbling bytes under the threshold never trips it. Because settle is
+		// single-fire, the `close` that `req.destroy` emits converts this into a
+		// guaranteed rejection even when no `error` event follows.
+		const deadline = setTimeout(() => {
+			const error = new Error("request timed out");
+			error.name = "TimeoutError";
+			timedOut = true;
+			req.destroy(error);
+		}, DEFAULT_FETCH_ABORT_MS);
+		let timedOut = false;
+		const rejectClosed = () =>
+			settle(() =>
+				reject(
+					timedOut
+						? Object.assign(new Error("request timed out"), {
+								name: "TimeoutError",
+							})
+						: new Error("request socket closed before response"),
+				),
+			);
+		// Settle from RESPONSE-LIFECYCLE state, never from event timing. Bun's
+		// order for any request — healthy or not — is: request `close` FIRST,
+		// then (if a response arrived) response `end`/`close`. Earlier attempts to
+		// let `end` win a timing race against the request `close` (sync reject,
+		// then microtask defer) all rejected healthy multi-chunk bodies, because
+		// `end` lands a full macrotask after the request `close`. So the request
+		// `close` must NOT reject while a response is in flight: if a response was
+		// received, its own `end` (success) or `close`-with-`complete:false`
+		// (truncation) settles; the request `close` only rejects when NO response
+		// ever arrived — the connected-but-silent hang the deadline aborts.
+		let responseSeen = false;
+		const req = request(
+			{
+				protocol: parsed.protocol,
+				hostname: parsed.hostname,
+				port: parsed.port,
+				path: `${parsed.pathname}${parsed.search}`,
+				method: "GET",
+				agent: false,
+			},
+			(response) => {
+				responseSeen = true;
+				let body = "";
+				response.setEncoding("utf8");
+				response.on("data", (chunk) => {
+					body += chunk;
+				});
+				response.on("error", (error) => settle(() => reject(error)));
+				response.on("end", () => {
+					// A response that stalls after headers never ends on its own; the
+					// deadline's `req.destroy` tears the socket, and Bun flushes the
+					// buffered partial body as this `end` with `complete` still false.
+					// Trusting that flush would let a truncated-but-parseable body
+					// masquerade as a healthy answer, so resolution requires message
+					// completeness — response state, not event order. `rejectClosed`
+					// names the deadline (TimeoutError) when it fired, the truncated
+					// read otherwise.
+					if (!response.complete) {
+						rejectClosed();
+						return;
+					}
+					settle(() => {
+						const status = response.statusCode ?? 0;
+						if (status < 200 || status >= 300) {
+							reject(new Error(`request failed: ${status}`));
+							return;
+						}
+						try {
+							resolve(JSON.parse(body));
+						} catch (error) {
+							reject(error);
+						}
+					});
+				});
+				// A socket reset after headers but before the full body closes the
+				// response without `end`; `complete` stays false. Reject that as a
+				// truncated read rather than leaving the promise pending.
+				response.on("close", () => {
+					if (!response.complete) rejectClosed();
+				});
+			},
+		);
+		req.on("error", (error) => settle(() => reject(error)));
+		// Only reaches a reject when no response was ever delivered (the Bun
+		// destroy-emits-close silent-hang case). A delivered response owns its own
+		// settlement above, so this is a no-op once `responseSeen` is true.
+		req.on("close", () => {
+			if (!responseSeen) rejectClosed();
+		});
+		req.end();
+	});
+}
+
+function isProcessAlive(pid: number): boolean {
+	// `process.kill(pid, 0)` with pid <= 0 does not probe a single process:
+	// 0 signals the caller's own process group (always "alive"), and negatives
+	// signal a group. A SingletonLock pid is always a real positive pid, so any
+	// value <= 0 is malformed and must not be reported alive.
+	if (pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException)?.code;
+		return code === "EPERM";
+	}
 }
 
 /**
@@ -707,9 +986,16 @@ export type RedactedListenerDetail = {
  */
 export function redactListenerDetail(
 	listener: ListenerProcess,
+	options?: { forceForeign?: boolean; env?: NodeJS.ProcessEnv },
 ): RedactedListenerDetail {
 	const parsed = parseProcessCommand(listener.command);
-	if (parsed.executable !== REAL_GOOGLE_CHROME_BINARY) {
+	// `forceForeign` is instance identity, distinct from binary identity: a real
+	// Google Chrome running the operator's everyday DEFAULT profile is declared a
+	// FOREIGN INSTANCE (port_occupied_foreign / json_answers_on_default_profile),
+	// so it must obey the foreign-listener rule — pid + basename, no filesystem
+	// paths — rather than leaking the default-profile user_data_dir just because
+	// the binary matches.
+	if (options?.forceForeign || parsed.executable !== REAL_GOOGLE_CHROME_BINARY) {
 		return {
 			pid: listener.pid,
 			process: safeProcessBasename(parsed.executable),
@@ -717,11 +1003,21 @@ export function redactListenerDetail(
 		};
 	}
 	const userDataDir = extractUserDataDir(listener.command);
+	// Self-guard the doctrine at every call site: even a non-forced real-Chrome
+	// listener must never emit the operator's DEFAULT-profile path (it discloses
+	// the OS account and HOME layout). When env is provided and the dir is the
+	// default profile, drop it; a dedicated warm profile is safe to report.
+	const leaksDefaultProfile =
+		userDataDir !== null &&
+		options?.env !== undefined &&
+		isDefaultChromeProfilePath(userDataDir, options.env);
 	return {
 		pid: listener.pid,
 		process: safeProcessBasename(REAL_GOOGLE_CHROME_BINARY),
 		foreign: false,
-		...(userDataDir === null ? {} : { user_data_dir: userDataDir }),
+		...(userDataDir === null || leaksDefaultProfile
+			? {}
+			: { user_data_dir: userDataDir }),
 	};
 }
 

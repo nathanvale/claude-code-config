@@ -24,6 +24,16 @@ export const WARM_CHROME_SCHEMA_VERSION = "1" as const;
 export const WARM_CHROME_CLI_NAME = "warm-chrome" as const;
 
 /**
+ * Dedicated profile path used when a mutating lifecycle needs a profile target.
+ *
+ * `check` does not inject this default; launch and repair apply it only when
+ * they must create or repair local Warm Chrome profile state.
+ *
+ * @defaultValue "~/.agent-warm-profile"
+ */
+export const WARM_CHROME_DEFAULT_PROFILE_DIR = "~/.agent-warm-profile" as const;
+
+/**
  * Public v1 command ids (plan U2 R2).
  *
  * `check` is the agent proof surface (JSON default); `status` is its
