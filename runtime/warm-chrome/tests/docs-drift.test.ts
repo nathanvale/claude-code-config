@@ -11,6 +11,24 @@ const architecture = readFileSync(
 	"utf8",
 );
 
+const maintainerDocs = [
+	"AGENTS.md",
+	"ARCHITECTURE.md",
+	"CONTEXT.md",
+	"README.md",
+	"TASKS.md",
+	"TASKS.archive.md",
+] as const;
+
+describe("warm-chrome maintainer docs", () => {
+	test("keeps the maintainer surface complete", () => {
+		const missing = maintainerDocs.filter(
+			(file) => !existsSync(path.join(packageRoot, file)),
+		);
+		expect(missing).toEqual([]);
+	});
+});
+
 describe("ARCHITECTURE.md module map drift", () => {
 	test("every src module is named in ARCHITECTURE.md", () => {
 		const missing = readdirSync(path.join(packageRoot, "src"))

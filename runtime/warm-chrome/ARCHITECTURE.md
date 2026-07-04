@@ -28,6 +28,19 @@ The Module Map below is the single per-module owner list. `AGENTS.md` and
 `README.md` point here instead of repeating it; `tests/docs-drift.test.ts`
 keeps the map complete in both directions.
 
+## Maintainer Surfaces
+
+- `AGENTS.md`: maintainer route, source owners, change recipes, doc drift
+  gate, debug path, safety invariants, and verification.
+- `README.md`: human front door, command posture, authority, safety rules,
+  and develop commands.
+- `CONTEXT.md`: package language for stations, proof, endpoint authority,
+  mutation, parity, and maintenance workflows.
+- `TASKS.md`: active project-manager dashboard.
+- `TASKS.archive.md`: closed task detail and long review rationale.
+- `tests/docs-drift.test.ts`: Module Map drift gate plus maintainer doc-set
+  presence check.
+
 ## CLI Entry Flow
 
 ```mermaid
