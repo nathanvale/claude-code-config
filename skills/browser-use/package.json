@@ -35,6 +35,9 @@
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
+	"dependencies": {
+		"@side-quest/warm-chrome": "workspace:*"
+	},
 	"devDependencies": {
 		"@side-quest/cli-command-facade": "0.1.0",
 		"@types/bun": "catalog:",

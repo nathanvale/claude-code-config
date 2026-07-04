@@ -86,6 +86,9 @@
         "preflight-browser-adapter": "dist/preflight-browser-adapter.js",
         "preflight-warm-chrome": "dist/preflight-warm-chrome.js",
       },
+      "dependencies": {
+        "@side-quest/warm-chrome": "workspace:*",
+      },
       "devDependencies": {
         "@side-quest/cli-command-facade": "0.1.0",
         "@types/bun": "catalog:",

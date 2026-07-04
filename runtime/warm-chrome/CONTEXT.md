@@ -50,15 +50,18 @@ owner-path check."
 _Avoid example_: "The docs look right by inspection, so skip the drift test."
 
 **Browser-use switchover**:
-The deferred cutover where `skills/browser-use` stops using its legacy
-`preflight-warm-chrome` implementation and routes through this package's
-`warm-chrome.browser-entry` contract. Until it closes, the old preflight stays
-authoritative and the parity report is checklist input.
-_Avoid_: package implementation complete, old preflight edit, adapter proof
-_Developer example_: "Use the parity report as switchover checklist input
-before editing browser-use."
-_Avoid example_: "Warm Chrome package is complete, so browser-use must already
-be using it."
+The closed cutover where `skills/browser-use` stopped using its legacy
+`preflight-warm-chrome` implementation and now routes through this package's
+`warm-chrome.browser-entry` contract. The front door
+(`skills/browser-use/src/preflight-warm-chrome.ts`) is a thin delegator to this
+package's `main()`; the adapter router gates on `data.contract_id`; the Browser
+Adapter Proof composes the package proof in-process. The legacy implementation
+and the parity harness are deleted.
+_Avoid_: deferred, old preflight authoritative, parity checklist input
+_Developer example_: "browser-use's Warm Chrome front door delegates to the
+package; edit proof behavior in `runtime/warm-chrome`, not browser-use."
+_Avoid example_: "Edit `skills/browser-use/src/preflight-warm-chrome.ts` to
+change proof behavior — it only delegates now."
 
 **Station**:
 One deterministic agent-visible command outcome in the Branch Station
@@ -174,15 +177,3 @@ _Avoid_: kill-by-port, lock files, terminating the survivor
 _Developer example_: "If another verified listener wins, kill only the child
 spawned by this launch invocation."
 _Avoid example_: "Kill whatever process owns the requested port."
-
-**Parity harness**:
-`tests/parity.test.ts`: shared runtime-seam fixtures driven through both the
-old authoritative preflight (`runForTest`) and this package (`main`),
-comparing station, exit, and envelope outcomes. Parity is measured against a
-recorded translation table; old codes with no new home are enumerated up
-front as intended divergences, and the printed station-level diff is the
-deferred switchover checklist input.
-_Avoid_: asserted equivalence, modifying the old preflight, code-keyed mapping
-_Developer example_: "Record a fixture-level intended divergence before using
-it as switchover checklist input."
-_Avoid example_: "Map old error code strings mechanically to new stations."

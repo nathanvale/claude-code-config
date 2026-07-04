@@ -43,21 +43,28 @@ Maturity tags: **shipped** (code + tests present), **partial** (works but a decl
 
 Proves real Google Chrome is running on a dedicated persistent profile via loopback CDP, enforces strict Warm Chrome invariants, and emits proof envelopes with continuation guidance.
 
+Ownership note (switchover closed 2026-07-04): `preflight-warm-chrome` is now a
+thin delegator (`skills/browser-use/src/preflight-warm-chrome.ts`) to
+`@side-quest/warm-chrome`'s `main()`. The capabilities below ship in the package
+(`runtime/warm-chrome`); per-line detail lives with the package (its
+`ARCHITECTURE.md` Module Map + station tests), so this table names package
+owners rather than browser-use line numbers.
+
 | Capability | Maturity | Evidence |
 |---|---|---|
-| `check` (read-only verify: CDP version, listener, profile ownership, targets) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:719` (`verifyWarmChrome`) |
-| `repair` (chmod 0o700 + rewrite `DevToolsActivePort`, owner-only) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:804` |
-| `launch` (spawn real Chrome detached, 15s/30×500ms poll, reject competing instances) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:565` (`launchIfNeeded`) |
-| `status` (alias to `check --plain`, stable field order) | shipped | `skills/browser-use/src/command-contract.ts:377` |
-| CDP convention enforcement (loopback only, default port 9222) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:490`, `:950` |
-| Profile invariants (reject default profile, `/tmp`, mismatch; resolve symlinks) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:1246` (`validateProfilePath`) |
-| Binary validation (real Chrome only; reject CfT/Chromium/chrome-mac/Helper) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:982` |
-| Listener inspection (`lsof` PID + `ps` command) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:1903` |
-| JSON envelope (`WarmChromeProof` + runtime_actions + continuation) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:121`, `:1358` |
-| Continuation constraint `no_adapter_fallback` on hard failure | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:1684` |
-| Exit codes 0 / 1 / 2 / 20 (ready / runtime / usage / browser_entry_handoff) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:49` |
-| LogTape JSONL diagnostics with path/URL redaction | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:322`+ |
-| Platform enforcement (macOS only) | shipped | `skills/browser-use/src/preflight-warm-chrome.ts:541` |
+| `check` (read-only verify: CDP version, listener, profile ownership, targets) | shipped | `runtime/warm-chrome/src/proof.ts` (`runWarmChromeCheckProof`) |
+| `repair` (chmod 0o700 + rewrite `DevToolsActivePort`, owner-only) | shipped | `runtime/warm-chrome/src/repair.ts` |
+| `launch` (spawn real Chrome detached, 15s/30×500ms poll, reject competing instances) | shipped | `runtime/warm-chrome/src/launch.ts` |
+| `status` (alias to `check --plain`, stable field order) | shipped | `runtime/warm-chrome/src/command-contract.ts` |
+| CDP convention enforcement (loopback only, default port 9222) | shipped | `runtime/warm-chrome/src/proof.ts` |
+| Profile invariants (reject default profile, `/tmp`, mismatch; resolve symlinks) | shipped | `runtime/warm-chrome/src/proof.ts`, `src/runtime.ts` |
+| Binary validation (real Chrome only; reject CfT/Chromium/chrome-mac/Helper) | shipped | `runtime/warm-chrome/src/proof.ts` (`classifyListenerBinary`) |
+| Listener inspection (`lsof` PID + `ps` command) | shipped | `runtime/warm-chrome/src/runtime.ts` (`findListenerWithSystemTools`) |
+| JSON envelope (`contract_id` + runtime_actions + continuation) | shipped | `runtime/warm-chrome/src/proof.ts`, `src/cli.ts` |
+| Continuation constraint `no_adapter_fallback` on hard failure | shipped | `runtime/warm-chrome/src/model.ts`, `src/branch-station-catalog.ts` |
+| Exit codes 0 / 1 / 2 / 20 (ready / runtime / usage / browser_entry_handoff) | shipped | `runtime/warm-chrome/src/model.ts` |
+| LogTape JSONL diagnostics with path/URL redaction | shipped | `runtime/warm-chrome/src/cli.ts` (`warmChromeDiagnosticRedactor`) |
+| Platform enforcement (macOS only) | deferred | dropped in the package (KTD7, macOS-only assumption); restore as a station before Linux/CI use |
 
 ### Adapter Proof + Adapter Map (`preflight-browser-adapter`, `browser-adapter-map`)
 
@@ -161,7 +168,7 @@ flowchart TD
 
 Seams (handoffs):
 
-- **Warm Chrome binding** — `preflight-warm-chrome` owns the proof; Router and adapters consume `endpoint`/`port`. `no_adapter_fallback` forbids cold/wrong-adapter fallback after hard failure.
+- **Warm Chrome binding** — `preflight-warm-chrome` is the proof front door (delegating to `@side-quest/warm-chrome`); Router and adapters consume `endpoint`/`port`. `no_adapter_fallback` forbids cold/wrong-adapter fallback after hard failure.
 - **Adapter proof** — Router's selected adapter + Warm Chrome proof → attachment verification → operation authorization. Proof emits `adapter_proof_id` (SHA256 over `warm_chrome_run_id` + adapter + `verified_endpoint_identity`).
 - **Router selection** — evidence (from `prepare` or direct flags) → ranked selection → `RouteSuccess` with binding tuple.
 - **Operation front door** — route/proof/target binding established → mcporter transport hidden behind operation semantics.

@@ -3,9 +3,10 @@ import {
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
 
-export const WARM_CHROME_PREFLIGHT_CONTRACT_ID =
-	"browser-use.warm-chrome-preflight" as const;
-export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
+// The Warm Chrome browser-entry proof contract id + schema version are owned by
+// @side-quest/warm-chrome (WARM_CHROME_CONTRACT_ID / WARM_CHROME_SCHEMA_VERSION);
+// browser-use's front door delegates to that package. Import from the package
+// where the contract id is needed rather than re-declaring it here.
 export const BROWSER_ADAPTER_PROOF_CONTRACT_ID =
 	"browser-use.browser-adapter-proof" as const;
 // v2 (plan U2 R8): proof output gained required adapter_proof_id and
@@ -15,18 +16,10 @@ export const BROWSER_ADAPTER_MAP_CONTRACT_ID =
 	"browser-use.browser-adapter-map" as const;
 export const BROWSER_ADAPTER_MAP_SCHEMA_VERSION = "1" as const;
 
-export type WarmChromePreflightCommand =
-	| "check"
-	| "repair"
-	| "launch"
-	| "status";
+// WarmChromeAudience is shared by the adapter-proof and adapter-map contracts
+// below; the Warm Chrome preflight command/mutation/contract types retired with
+// the front-door delegation to @side-quest/warm-chrome.
 type WarmChromeAudience = "agent" | "operator";
-type WarmChromeMutation = "check" | "write" | "browser";
-type WarmChromeCommandContract = CommandFacadeContract<
-	WarmChromePreflightCommand,
-	WarmChromeAudience,
-	WarmChromeMutation
->;
 export type BrowserAdapterProofCommand = "check" | "status";
 export const BROWSER_ADAPTER_PROOF_ADAPTERS = ["chrome-devtools"] as const;
 export type BrowserAdapterProofAdapter =
@@ -106,48 +99,6 @@ type BrowserAdapterMapCommandContract = CommandFacadeContract<
 	WarmChromeAudience,
 	BrowserAdapterMapMutation
 >;
-
-const readFlags = {
-	"--port": { type: "string", description: "CDP port." },
-	"--endpoint": { type: "string", description: "Loopback CDP endpoint." },
-	"--profile": {
-		type: "path",
-		description: "Expected dedicated profile directory.",
-	},
-	"--json": { type: "boolean", description: "Emit JSON envelope." },
-	"--plain": { type: "boolean", description: "Emit stable text." },
-} as const satisfies WarmChromeCommandContract["flags"];
-
-const writeFlags = {
-	...readFlags,
-	"--chrome": {
-		type: "path",
-		description: "Real Google Chrome binary path.",
-	},
-} as const satisfies WarmChromeCommandContract["flags"];
-
-const commonEnvVars = [
-	{ name: "BROWSER_USE_CDP_PORT", description: "CDP port hint." },
-	{
-		name: "BROWSER_USE_PROFILE_DIR",
-		description: "Dedicated profile directory hint.",
-	},
-	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
-	{ name: "CHROME_BIN", description: "Real Google Chrome binary override." },
-] as const satisfies WarmChromeCommandContract["envVars"];
-
-const exitCodes = {
-	"0": "Warm Chrome ready.",
-	"1": "Runtime dependency failed.",
-	"2": "Usage error.",
-	"20": "Browser entry required.",
-} as const satisfies WarmChromeCommandContract["exitCodes"];
-
-const resultContract = {
-	id: WARM_CHROME_PREFLIGHT_CONTRACT_ID,
-	kind: "Warm Chrome readiness proof.",
-	schema_version: WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
-} as const satisfies NonNullable<WarmChromeCommandContract["resultContract"]>;
 
 const adapterProofReadFlags = {
 	"--adapter": {
@@ -253,19 +204,6 @@ export const warmChromeFailureActions = [
 	},
 ] as const;
 
-export const warmChromeSuccessActions = [
-	{
-		id: "use_verified_endpoint",
-		summary: "Pass verified endpoint to the selected browser adapter.",
-		sideEffects: ["browser"],
-	},
-	{
-		id: "rerun_preflight_before_adapter_action",
-		summary: "Rerun preflight before adapter action.",
-		sideEffects: ["check"],
-	},
-] as const;
-
 export const browserAdapterProofFailureActions = [
 	...warmChromeFailureActions,
 	{
@@ -300,115 +238,11 @@ export const browserAdapterProofSuccessActions = [
 	},
 ] as const;
 
-export const warmChromePreflightContracts = defineCommandFacadeContract(
-	{
-		check: {
-			script: "preflight-warm-chrome",
-			summary: "Verify Warm Chrome without changing local state.",
-			usage: [
-				"check [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
-			],
-			json: true,
-			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check", "network"],
-			executionModes: ["check"],
-			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: commonEnvVars,
-			resultContract,
-			actionAffordances: {
-				success: warmChromeSuccessActions,
-				failure: warmChromeFailureActions,
-			},
-			flags: readFlags,
-			exitCodes,
-		},
-		repair: {
-			script: "preflight-warm-chrome",
-			summary: "Repair safe Warm Chrome profile proof, then verify.",
-			usage: [
-				"repair [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
-			],
-			json: true,
-			audience: "operator",
-			mutation: "write",
-			sideEffects: ["check", "network", "write"],
-			executionModes: ["normal"],
-			previewExemption: {
-				reason: "Repair changes local Warm Chrome profile proof state.",
-			},
-			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: commonEnvVars,
-			resultContract,
-			actionAffordances: {
-				success: warmChromeSuccessActions,
-				failure: warmChromeFailureActions,
-			},
-			flags: readFlags,
-			exitCodes,
-		},
-		launch: {
-			script: "preflight-warm-chrome",
-			summary: "Launch real Google Chrome if needed, then verify.",
-			usage: [
-				"launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
-			],
-			json: true,
-			audience: "operator",
-			mutation: "browser",
-			sideEffects: ["check", "network", "write", "browser"],
-			executionModes: ["normal"],
-			previewExemption: {
-				reason: "Launch may start local Warm Chrome.",
-			},
-			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: commonEnvVars,
-			resultContract,
-			actionAffordances: {
-				success: warmChromeSuccessActions,
-				failure: warmChromeFailureActions,
-			},
-			flags: writeFlags,
-			exitCodes,
-		},
-		status: {
-			script: "preflight-warm-chrome",
-			summary: "Show human Warm Chrome status without changing local state.",
-			usage: [
-				"status [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
-			],
-			json: true,
-			audience: "operator",
-			mutation: "check",
-			sideEffects: ["check", "network"],
-			executionModes: ["check"],
-			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: commonEnvVars,
-			resultContract,
-			actionAffordances: {
-				success: warmChromeSuccessActions,
-				failure: warmChromeFailureActions,
-			},
-			flags: readFlags,
-			exitCodes,
-			alias: {
-				command: "check",
-				defaultArgs: ["--plain"],
-			},
-		},
-	} as const satisfies Record<
-		WarmChromePreflightCommand,
-		WarmChromeCommandContract
-	>,
-	{
-		path: "skills/browser-use/src/command-contract.ts",
-		writeImplyingMutations: new Set(["write", "browser"]),
-	},
-);
+// The Warm Chrome preflight command facade (check/status/launch/repair) is now
+// owned by @side-quest/warm-chrome; its cli.ts renders help and discovery for
+// the delegating `preflight-warm-chrome` bin. browser-use keeps only the
+// Warm Chrome failure action affordances above, which the Browser Adapter Proof
+// contract re-exposes via browserAdapterProofFailureActions.
 
 export const browserAdapterProofContracts = defineCommandFacadeContract(
 	{

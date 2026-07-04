@@ -31,9 +31,11 @@ Verification.
 ## Current Priority
 
 Implementation U1-U8 closed on 2026-07-03. Sixteen stations, redaction proofs,
-entrypoint gate membership, docs-drift, and measured parity are live.
-Current risk: browser-use still owns the production preflight path until the
-deferred switchover closes.
+entrypoint gate membership, and docs-drift are live. The browser-use switchover
+closed on 2026-07-04: browser-use's front door delegates to this package's
+`main()`, the adapter router gates on `data.contract_id`, the Browser Adapter
+Proof composes the package proof in-process, and the parity harness is deleted.
+This package is now the single owner of the production Warm Chrome proof path.
 
 Next safe action:
 
@@ -47,19 +49,12 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Next
 
-- [ ] P1 browser-use switchover Lane: Switchover. Done when: `browser-use`
-      routes Warm Chrome preflight through this package, the legacy
-      `preflight-warm-chrome` surface is retired or wrapped, and browser-use
-      docs/tests point at the `warm-chrome.browser-entry` contract. Next:
-      write the switchover checklist from the parity report printed by
-      `tests/parity.test.ts` (intended divergences are consumer-visible
-      behavior changes: exit-2 -> exit-20 rows, warm_chrome_already_running ->
-      ok envelope, canonical code collapse).
 - [ ] P2 Platform guard decision Lane: Proof Chain. Done when: a decision
       records whether the package needs the old preflight's
       `unsupported_platform` refusal (exit 1 on non-darwin) or the seam's
-      macOS-only tools fail loud enough; parity row
-      `check_non_darwin_platform` measures the current gap. Next: record in
+      macOS-only tools fail loud enough. The parity row that measured this gap
+      (`check_non_darwin_platform`) is gone with the harness; re-establish the
+      gap with a station test if the decision keeps the guard. Next: record in
       the package decision log.
 - [ ] P2 Symlink-write TOCTOU closure Lane: Seam. Done when: the repair
       DevToolsActivePort write uses an O_NOFOLLOW/tmp-rename seam primitive
@@ -138,6 +133,10 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-04: browser-use switchover closed (P1 done). Front door delegates to
+  `main()`; adapter router gates on `data.contract_id`; adapter proof composes
+  the package proof in-process; legacy `preflight-warm-chrome` impl + parity
+  harness deleted. Detail: `TASKS.archive.md`.
 - 2026-07-04: Sixth-pass fixes closed two high bugs: `fetchLoopbackJson` TDZ
   deadline crash and competing-instance guard escape. Residual nits moved into
   P2/P3 tasks. Detail: `TASKS.archive.md`.
@@ -148,8 +147,6 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 - 2026-07-03: Manual real-Chrome validation recorded cross-implementation
   compatibility and launch/repair convergence behavior. Detail:
   `TASKS.archive.md`.
-- 2026-07-03: U8 closed with measured parity harness, entrypoint gate, and
-  docs-drift gate.
 
 ## Command Shortcuts
 

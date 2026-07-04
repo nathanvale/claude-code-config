@@ -402,9 +402,16 @@ describe("Warm Chrome composition", () => {
 				"adapter-run",
 			],
 			await testRuntime({
+				// Remote debugging off: the endpoint refuses and no listener owns the
+				// port, so the package proof lands endpoint_unreachable/no_listener.
 				fetchJson: async () => {
-					throw new Error("remote debugging off");
+					const error = new Error(
+						"connect ECONNREFUSED 127.0.0.1:9222",
+					) as Error & { code?: string };
+					error.code = "ECONNREFUSED";
+					throw error;
 				},
+				findListener: async () => null,
 				runCommand: async () => {
 					commandCount += 1;
 					return okCommand("{}");
@@ -413,11 +420,15 @@ describe("Warm Chrome composition", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
+		// The adapter proof passes the package proof's verdict through verbatim: an
+		// unreachable Warm Chrome is a browser-entry handoff (exit 20) whose
+		// next action is to launch Warm Chrome, and the adapter subprocess never
+		// runs. The exact warm-chrome error code/action are package-owned.
 		expect(result.exitCode).toBe(20);
 		expect(envelope.run_id).toBe("adapter-run");
 		expect(envelope.error.code).toBe("endpoint_unreachable");
 		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
-		expectContinuation(envelope, "enable_remote_debugging");
+		expectContinuation(envelope, "launch_warm_chrome");
 		expect(commandCount).toBe(0);
 	});
 });
@@ -1219,8 +1230,23 @@ async function testRuntime(
 			(async (path, content) => {
 				await writeFile(path, content, "utf-8");
 			}),
-		spawnChrome: overrides.spawnChrome ?? (async () => {}),
+		// Adapter proof only runs Warm Chrome `check`, which never spawns; a
+		// shape-correct no-op satisfies the package runtime's SpawnedChrome return.
+		spawnChrome:
+			overrides.spawnChrome ??
+			(async () => ({ pid: 0, kill: async () => true })),
 		sleep: overrides.sleep ?? (async () => {}),
+		// The package Warm Chrome proof attaches a live CDP websocket. Tests inject
+		// a healthy round-trip + absent DevToolsActivePort so `check` verifies
+		// without a real browser; failure-path tests override proofDeps.
+		proofDeps: overrides.proofDeps ?? {
+			cdpRoundTrip: async (_wsUrl, method) => {
+				const entry = healthyAdapterCdp()[method];
+				if (!entry) throw new Error(`unexpected CDP method: ${method}`);
+				return entry;
+			},
+			readDevToolsActivePort: async () => null,
+		},
 		isTemporaryPath: overrides.isTemporaryPath ?? (() => false),
 		cwd: overrides.cwd ?? (await makeDir()),
 		readTextFile:
@@ -1280,6 +1306,23 @@ function cdpVersion(input: { port: string }): Record<string, string> {
 		Browser: "Chrome/136.0.0.0",
 		"User-Agent": "Mozilla/5.0 Chrome/136.0.0.0",
 		webSocketDebuggerUrl: `ws://127.0.0.1:${input.port}/devtools/browser/test-browser`,
+	};
+}
+
+// Healthy CDP round-trip answers the package proof's Browser.getVersion +
+// Target.* attaches expect (headed UA, a page target on the default context).
+function healthyAdapterCdp(): Record<string, Record<string, unknown>> {
+	return {
+		"Browser.getVersion": {
+			product: "Chrome/136.0.0.0",
+			userAgent: "Mozilla/5.0 Chrome/136.0.0.0",
+		},
+		"Target.getBrowserContexts": { browserContextIds: [] },
+		"Target.getTargets": {
+			targetInfos: [
+				{ type: "page", targetId: "page-1", url: "https://example.com/" },
+			],
+		},
 	};
 }
 
