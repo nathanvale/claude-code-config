@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -372,6 +372,27 @@ describe("SingletonLock locality and pid liveness", () => {
 		} finally {
 			await rm(localDir, { recursive: true, force: true });
 			await rm(foreignDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("profile directory creation", () => {
+	test("refuses symlinked parents before mkdir/chmod can mutate the target", async () => {
+		const root = await mkdtemp(join(tmpdir(), "warm-chrome-profile-root-"));
+		const target = await mkdtemp(join(tmpdir(), "warm-chrome-profile-target-"));
+		try {
+			await symlink(target, join(root, "link"));
+			const runtime = createDefaultRuntime({});
+			await expect(
+				runtime.ensureProfileDir(join(root, "link", "nested", "profile")),
+			).rejects.toThrow("symbolic-link component");
+			await expect(stat(join(target, "nested"))).rejects.toHaveProperty(
+				"code",
+				"ENOENT",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+			await rm(target, { recursive: true, force: true });
 		}
 	});
 });

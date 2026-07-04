@@ -142,7 +142,7 @@ type LaunchFixtureOptions = {
 	/** statProfile answers keyed by requested path; unknown paths throw. */
 	profiles?: Record<string, ProfileStat>;
 	/** SingletonLock answers keyed by profile dir; absent means no lock. Arrays play per read; the last entry repeats. */
-	singletonLocks?: Record<string, Script<SingletonLock | null>>;
+	singletonLocks?: Record<string, Script<SingletonLock | null | Error>>;
 	/** Process-liveness answers keyed by pid; absent means alive. */
 	processAlive?: Record<number, boolean>;
 	/** Extra env vars merged over the fixture's HOME. */
@@ -224,7 +224,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 	}
 	const lockScripts = new Map<
 		string,
-		{ script: readonly (SingletonLock | null)[]; cursor: number }
+		{ script: readonly (SingletonLock | null | Error)[]; cursor: number }
 	>();
 	for (const [dir, script] of Object.entries(options.singletonLocks ?? {})) {
 		lockScripts.set(dir, { script: toScript(script), cursor: 0 });
@@ -306,6 +306,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 			if (!entry) return null;
 			const step = entry.script[Math.min(entry.cursor, entry.script.length - 1)];
 			entry.cursor += 1;
+			if (step instanceof Error) throw step;
 			return step ?? null;
 		},
 		isProcessAlive: async (pid) => options.processAlive?.[pid] ?? true,
@@ -842,6 +843,34 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		};
 	};
 
+	const deadChildBeforeWinnerFixture = (
+		lockScript: Script<SingletonLock | null | Error>,
+	) =>
+		launchFixture({
+			listeners: {
+				"9222": [
+					null,
+					null,
+					{
+						pid: 100,
+						command: chromeCommand({ port: "9222", profile: DEDICATED_PROFILE }),
+					},
+				],
+			},
+			versions: {
+				"9222": [
+					CONNECTION_REFUSED(),
+					CONNECTION_REFUSED(),
+					healthyVersionFor("9222"),
+				],
+			},
+			spawn: () => ({ pid: 200, kill: async () => true }),
+			processAlive: { 200: false, 100: true },
+			singletonLocks: {
+				[DEDICATED_PROFILE]: lockScript,
+			},
+		});
+
 	test("interleaved launches: the loser compares pids, kills only its own child, and lands already_verified", async () => {
 		const fixture = launchFixture({ spawn: loserSpawn(async () => true) });
 		const argv = ["launch", "--run-id", "race-run"] as const;
@@ -879,34 +908,29 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		// while the winner (pid 100, holding the SingletonLock) is still binding
 		// its endpoint — the exact interleaved-launch window resolveSpawnRace
 		// exists to converge.
-		const fixture = launchFixture({
-			listeners: {
-				"9222": [
-					null, // pre-spawn gate: port silent, spawn licensed
-					null, // readiness poll 1: winner not bound yet
-					{
-						pid: 100,
-						command: chromeCommand({ port: "9222", profile: DEDICATED_PROFILE }),
-					},
-				],
+		const fixture = deadChildBeforeWinnerFixture([
+			null,
+			{
+				raw: "warm-mac.local-100",
+				hostname: "warm-mac.local",
+				pid: 100,
+				local: true,
 			},
-			versions: {
-				"9222": [CONNECTION_REFUSED(), CONNECTION_REFUSED(), healthyVersionFor("9222")],
-			},
-			spawn: () => ({ pid: 200, kill: async () => true }),
-			processAlive: { 200: false, 100: true },
-			singletonLocks: {
-				[DEDICATED_PROFILE]: [
-					null, // pre-bind check: no lock yet, spawn proceeds
-					{
-					raw: "warm-mac.local-100",
-					hostname: "warm-mac.local",
-					pid: 100,
-					local: true,
-				},
-				],
-			},
-		});
+		]);
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const parsed = parseEnvelope(run);
+		expect(parsed.status).toBe("ok");
+		expect(parsed.data?.browser_pid).toBe(100);
+		expect(parsed.data?.launch_performed).toBe(true);
+	});
+
+	test("unreadable SingletonLock during a dead-child race keeps polling instead of minting spawn_failed", async () => {
+		const fixture = deadChildBeforeWinnerFixture([
+			null,
+			new Error("EACCES: SingletonLock unreadable during race"),
+		]);
 		const run = await runWarmChrome(["launch"], fixture);
 
 		expect(run.exitCode).toBe(0);

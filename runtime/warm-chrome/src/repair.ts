@@ -344,26 +344,6 @@ export function createRepairCommandHandler(
 				}
 				throw error;
 			}
-			const activePortPath = join(
-				profile?.realPath ?? target,
-				"DevToolsActivePort",
-			);
-			// Never-follow-symlink guard: chmod 0o700 does not remove an already
-			// planted symlink, and the seam's writeTextFile follows one — so the
-			// injected lstat probe refuses first. (lstat-then-write leaves a
-			// narrow TOCTOU window; closing it needs an O_NOFOLLOW/tmp-rename
-			// write primitive on the seam — deferred, seam is U4-owned.)
-			if ((await deps.lstatFileKind(activePortPath)) === "symlink") {
-				throw unrepairableError(
-					"devtools_active_port_symlink",
-					"A symlink is planted at DevToolsActivePort; repair refuses to follow it and did not write.",
-					context,
-					{
-						devtools_active_port_path: activePortPath,
-						...repairMutationData(mutations),
-					},
-				);
-			}
 			const liveWsPath = await readLiveBrowserWsPath(
 				runtime,
 				invocation.endpoint,
@@ -377,20 +357,51 @@ export function createRepairCommandHandler(
 				}
 				throw error;
 			}
+			if (
+				profile === null ||
+				!(await devToolsActivePortWriteTargetStillMatches({
+					runtime,
+					port: invocation.port,
+					expectedProfile: profile,
+					context,
+					mutations,
+				}))
+			) {
+				// The original stale-port verdict re-throws, but earlier mutations
+				// (chmod, dir creation) already landed and must stay on the envelope.
+				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
+					throw withRepairMutationData(error, mutations);
+				}
+				throw error;
+			}
 			// Ownership gate for the write, mirroring the chmod path: that gate only
 			// fires when mode !== 700, so a profile already at 700 but owned by
 			// another user would otherwise reach this write. Never rewrite proof
 			// state inside a profile we do not own.
-			if (
-				profile !== null &&
-				profile.owner !== (await runtime.currentUser())
-			) {
+			if (profile.owner !== (await runtime.currentUser())) {
 				throw unrepairableError(
 					"profile_not_owned",
 					"DevToolsActivePort repair requires a profile owned by the current user.",
 					context,
 					{
 						profile_dir: profile.realPath,
+						...repairMutationData(mutations),
+					},
+				);
+			}
+			const activePortPath = join(profile.realPath, "DevToolsActivePort");
+			// Never-follow-symlink guard: chmod 0o700 does not remove an already
+			// planted symlink, and the seam's writeTextFile follows one — so the
+			// injected lstat probe refuses first. (lstat-then-write leaves a
+			// narrow TOCTOU window; closing it needs an O_NOFOLLOW/tmp-rename
+			// write primitive on the seam — deferred, seam is U4-owned.)
+			if ((await deps.lstatFileKind(activePortPath)) === "symlink") {
+				throw unrepairableError(
+					"devtools_active_port_symlink",
+					"A symlink is planted at DevToolsActivePort; repair refuses to follow it and did not write.",
+					context,
+					{
+						devtools_active_port_path: activePortPath,
 						...repairMutationData(mutations),
 					},
 				);
@@ -536,6 +547,68 @@ function isStaleDevToolsActivePort(error: unknown): boolean {
 		error.code === "invalid_cdp" &&
 		error.options.data?.reason === "endpoint_id_mismatch"
 	);
+}
+
+async function devToolsActivePortWriteTargetStillMatches(input: {
+	runtime: WarmChromeRuntime;
+	port: string;
+	expectedProfile: ProfileStat;
+	context: RepairErrorContext;
+	mutations: readonly WarmChromeRepairMutation[];
+}): Promise<boolean> {
+	const listener = await inspectListener(input.runtime, input.port);
+	if (listener === null) return false;
+	if (!isRealGoogleChrome(listener)) {
+		throw unrepairableError(
+			"foreign_listener_on_port",
+			"A foreign process owns the requested CDP port; repair refuses to write DevToolsActivePort for an unverified listener.",
+			input.context,
+			{
+				listener: redactListenerDetail(listener),
+				...repairMutationData(input.mutations),
+			},
+		);
+	}
+	const listenerDir = extractUserDataDir(listener.command);
+	if (listenerDir === null) return false;
+	const listenerTarget = expandHome(listenerDir, input.runtime.env);
+	if (!isAbsolute(listenerTarget)) {
+		throw unrepairableError(
+			"profile_mismatch",
+			"Listener profile path is relative and cannot be repaired safely.",
+			input.context,
+			{
+				listener_profile_dir: redactListenerProfileDir(
+					input.runtime,
+					listenerTarget,
+				),
+				profile_dir: input.expectedProfile.realPath,
+				...repairMutationData(input.mutations),
+			},
+		);
+	}
+	let listenerProfile: ProfileStat;
+	try {
+		listenerProfile = await input.runtime.statProfile(listenerTarget);
+	} catch {
+		return false;
+	}
+	if (listenerProfile.realPath !== input.expectedProfile.realPath) {
+		throw unrepairableError(
+			"profile_mismatch",
+			"Listener profile changed before DevToolsActivePort could be rewritten safely.",
+			input.context,
+			{
+				listener_profile_dir: redactListenerProfileDir(
+					input.runtime,
+					listenerTarget,
+				),
+				profile_dir: input.expectedProfile.realPath,
+				...repairMutationData(input.mutations),
+			},
+		);
+	}
+	return true;
 }
 
 // Hygiene data source: the live /json/version answer, validated to the same

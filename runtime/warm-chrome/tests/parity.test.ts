@@ -1428,7 +1428,11 @@ type MeasuredRow = {
 	new: SideOutcome;
 };
 
-const measured: MeasuredRow[] = [];
+async function measureParityRow(row: ParityRow): Promise<MeasuredRow> {
+	const oldOutcome = await runOldSide(row.argv, row.fixture);
+	const newOutcome = await runNewSide(row.argv, row.fixture);
+	return { row, old: oldOutcome, new: newOutcome };
+}
 
 describe("warm-chrome parity harness (U8 R15/R16): measured golden-envelope parity", () => {
 	test("row table bookkeeping: every station-level difference references an enumerated intended divergence", () => {
@@ -1459,45 +1463,55 @@ describe("warm-chrome parity harness (U8 R15/R16): measured golden-envelope pari
 
 	for (const row of PARITY_ROWS) {
 		test(`${row.id}: old ${stationLabel(row.old)} | new ${stationLabel(row.new)}`, async () => {
-			const oldOutcome = await runOldSide(row.argv, row.fixture);
-			const newOutcome = await runNewSide(row.argv, row.fixture);
-			measured.push({ row, old: oldOutcome, new: newOutcome });
+			const measured = await measureParityRow(row);
 
 			const context = `${row.id}\nrationale: ${row.rationale}`;
 			expect(
-				{ status: oldOutcome.status, code: oldOutcome.code, exit: oldOutcome.exit },
+				{
+					status: measured.old.status,
+					code: measured.old.code,
+					exit: measured.old.exit,
+				},
 				`old side drifted from the recorded translation row\n${context}`,
 			).toEqual(row.old);
 			expect(
-				{ status: newOutcome.status, code: newOutcome.code, exit: newOutcome.exit },
+				{
+					status: measured.new.status,
+					code: measured.new.code,
+					exit: measured.new.exit,
+				},
 				`new side drifted from the recorded translation row\n${context}`,
 			).toEqual({ status: row.new.status, code: row.new.code, exit: row.new.exit });
-			expect(newOutcome.reason, context).toBe(row.new.reason);
+			expect(measured.new.reason, context).toBe(row.new.reason);
 
-			row.assertCalls?.({ old: oldOutcome.calls, new: newOutcome.calls });
+			row.assertCalls?.({ old: measured.old.calls, new: measured.new.calls });
 			row.assertEnvelopes?.({
-				old: oldOutcome.envelope,
-				new: newOutcome.envelope,
+				old: measured.old.envelope,
+				new: measured.new.envelope,
 			});
 		});
 	}
 
-	test("parity divergence report: station-level diff for the deferred switchover checklist", () => {
-		expect(measured.length).toBe(PARITY_ROWS.length);
-		const agree = measured.filter((entry) => !stationDiffers(entry.row));
-		const diverge = measured.filter((entry) => stationDiffers(entry.row));
+	test("parity divergence report: station-level diff for the deferred switchover checklist", async () => {
+		const measuredRows: MeasuredRow[] = [];
+		for (const row of PARITY_ROWS) {
+			measuredRows.push(await measureParityRow(row));
+		}
+		expect(measuredRows.length).toBe(PARITY_ROWS.length);
+		const agree = measuredRows.filter((entry) => !stationDiffers(entry.row));
+		const diverge = measuredRows.filter((entry) => stationDiffers(entry.row));
 
 		const lines: string[] = [
 			"",
 			"warm-chrome parity report (fixture-measured; old = skills/browser-use preflight, new = @side-quest/warm-chrome)",
-			`rows: ${measured.length} | station+exit agreement: ${agree.length} | station-level divergences (all intended): ${diverge.length}`,
+			`rows: ${measuredRows.length} | station+exit agreement: ${agree.length} | station-level divergences (all intended): ${diverge.length}`,
 			"",
 			"intended divergences (enumerated up front):",
 			...INTENDED_DIVERGENCES.map((entry) => `  [${entry.id}] ${entry.note}`),
 			"",
 			"station-level diff:",
 		];
-		for (const entry of measured) {
+		for (const entry of measuredRows) {
 			const marker = stationDiffers(entry.row) ? "DIVERGE" : "AGREE  ";
 			const reason = entry.new.reason === null ? "" : ` reason=${entry.new.reason}`;
 			const refs =

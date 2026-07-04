@@ -108,9 +108,10 @@ function healthyCdp(
 }
 
 type VersionStep = Record<string, unknown> | Error;
+type Script<T> = T | readonly T[];
 
 type RepairFixtureOptions = {
-	listeners?: Record<string, ListenerProcess | null>;
+	listeners?: Record<string, Script<ListenerProcess | null>>;
 	/** Raw error thrown by findListener for port 9222. */
 	findListenerError?: Error;
 	/** /json/version script. Arrays play per call; the last entry repeats. */
@@ -162,7 +163,17 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		? options.version
 		: [options.version ?? healthyVersion()];
 	let versionCursor = 0;
-	const listeners = options.listeners ?? { "9222": chromeListener() };
+	const toScript = <T,>(value: Script<T>): readonly T[] =>
+		(Array.isArray(value) ? value : [value]) as readonly T[];
+	const listenerScripts = new Map<
+		string,
+		{ script: readonly (ListenerProcess | null)[]; cursor: number }
+	>();
+	for (const [port, script] of Object.entries(
+		options.listeners ?? { "9222": chromeListener() },
+	)) {
+		listenerScripts.set(port, { script: toScript(script), cursor: 0 });
+	}
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
 	};
@@ -185,7 +196,11 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 			if (options.findListenerError && port === "9222") {
 				throw options.findListenerError;
 			}
-			return listeners[port] ?? null;
+			const entry = listenerScripts.get(port);
+			if (!entry) return null;
+			const step = entry.script[Math.min(entry.cursor, entry.script.length - 1)];
+			entry.cursor += 1;
+			return step ?? null;
 		},
 		currentUser: async () => "501",
 		statProfile: async (path) => {
@@ -461,6 +476,31 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
 		// The refusal landed BEFORE any DevToolsActivePort write.
 		expect(fixture.calls.writes).toEqual([]);
+	});
+
+	test("stale-port write revalidates the listener profile immediately before rewriting", async () => {
+		const otherProfile = `${HOME}/other-warm-profile`;
+		const fixture = repairFixture({
+			listeners: {
+				"9222": [
+					chromeListener({ profile: DEDICATED_PROFILE }),
+					chromeListener({ profile: DEDICATED_PROFILE }),
+					chromeListener({ profile: otherProfile }),
+				],
+			},
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+				[otherProfile]: profileStat(otherProfile),
+			},
+			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		const envelope = expectUnrepairable(run, "profile_mismatch");
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		expect(envelope.data?.listener_profile_dir).toBe(otherProfile);
+		expect(fixture.calls.writes).toEqual([]);
+		expect(fixture.calls.lstatPaths).toEqual([]);
 	});
 
 	test("healthy warm Chrome is idempotent: repaired with zero mutations", async () => {

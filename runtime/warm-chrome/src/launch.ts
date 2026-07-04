@@ -644,7 +644,7 @@ async function hasLiveRivalLaunch(
 	try {
 		lock = await runtime.readSingletonLock(profileDir);
 	} catch {
-		return false;
+		return true;
 	}
 	if (lock === null) return false;
 	// A foreign-host lock is another machine's launch, never our local rival.

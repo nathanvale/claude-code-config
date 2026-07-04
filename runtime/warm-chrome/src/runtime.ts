@@ -2,6 +2,7 @@ import { request } from "node:http";
 import { spawn } from "node:child_process";
 import {
 	chmod,
+	lstat,
 	mkdir,
 	readlink,
 	realpath,
@@ -9,7 +10,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { hostname, userInfo } from "node:os";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 
 import {
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE,
@@ -325,10 +326,41 @@ async function statProfile(path: string): Promise<ProfileStat> {
 }
 
 async function ensureProfileDir(path: string): Promise<string> {
+	await assertNoProfileSymlinkComponents(path);
 	await mkdir(path, { recursive: true, mode: 0o700 });
 	const realPath = await realpath(path);
 	await chmod(realPath, 0o700);
 	return realPath;
+}
+
+async function assertNoProfileSymlinkComponents(path: string): Promise<void> {
+	for (const component of profilePathComponents(path)) {
+		let info: Awaited<ReturnType<typeof lstat>>;
+		try {
+			info = await lstat(component);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+			throw error;
+		}
+		if (info.isSymbolicLink()) {
+			throw new Error("profile path contains a symbolic-link component");
+		}
+		if (!info.isDirectory()) {
+			throw new Error("profile path component is not a directory");
+		}
+	}
+}
+
+function profilePathComponents(path: string): string[] {
+	const components: string[] = [];
+	let current = path;
+	for (;;) {
+		components.push(current);
+		const parent = dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	return components.reverse();
 }
 
 async function readSingletonLock(
