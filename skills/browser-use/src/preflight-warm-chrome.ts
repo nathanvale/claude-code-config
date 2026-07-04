@@ -17,7 +17,11 @@
 //      resolved values back into process.env so the correlation id survives even
 //      the escape path.
 
-import { createDefaultRuntime, main } from "@side-quest/warm-chrome";
+import {
+	createDefaultRuntime,
+	emitUnhandledFailureEnvelope,
+	main,
+} from "@side-quest/warm-chrome";
 
 /** The three env inputs the package reads, paired with browser-use's public name. */
 const WARM_CHROME_ENV_BRIDGE = [
@@ -48,6 +52,22 @@ export function bridgeWarmChromeEnv(
 
 if (import.meta.main) {
 	const runtime = createDefaultRuntime({ env: bridgeWarmChromeEnv() });
+	// The package installs its unhandled-failure net only inside its own
+	// `import.meta.main` block, which never runs when we import main() as a
+	// function. Re-install it here so a rejection escaping main() still emits the
+	// structured envelope this bin's contract promises (not a raw stack dump), and
+	// so seam 2 above holds: the net reads process.env.WARM_CHROME_RUN_ID, which
+	// bridgeWarmChromeEnv already populated.
+	const emitUnhandled = (error: unknown): never => {
+		const exitCode = emitUnhandledFailureEnvelope(error, {
+			runId: process.env.WARM_CHROME_RUN_ID ?? "unhandled",
+			stdout: process.stdout,
+			stderr: process.stderr,
+		});
+		process.exit(exitCode);
+	};
+	process.on("unhandledRejection", emitUnhandled);
+	process.on("uncaughtException", emitUnhandled);
 	const exitCode = await main(Bun.argv.slice(2), { runtime });
 	process.exit(exitCode);
 }

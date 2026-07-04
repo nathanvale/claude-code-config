@@ -204,19 +204,6 @@ export const warmChromeFailureActions = [
 	},
 ] as const;
 
-export const warmChromeSuccessActions = [
-	{
-		id: "use_verified_endpoint",
-		summary: "Pass verified endpoint to the selected browser adapter.",
-		sideEffects: ["browser"],
-	},
-	{
-		id: "rerun_preflight_before_adapter_action",
-		summary: "Rerun preflight before adapter action.",
-		sideEffects: ["check"],
-	},
-] as const;
-
 export const browserAdapterProofFailureActions = [
 	...warmChromeFailureActions,
 	{
@@ -254,8 +241,8 @@ export const browserAdapterProofSuccessActions = [
 // The Warm Chrome preflight command facade (check/status/launch/repair) is now
 // owned by @side-quest/warm-chrome; its cli.ts renders help and discovery for
 // the delegating `preflight-warm-chrome` bin. browser-use keeps only the
-// Warm Chrome failure/success action affordances above, which the Browser
-// Adapter Proof contract re-exposes.
+// Warm Chrome failure action affordances above, which the Browser Adapter Proof
+// contract re-exposes via browserAdapterProofFailureActions.
 
 export const browserAdapterProofContracts = defineCommandFacadeContract(
 	{

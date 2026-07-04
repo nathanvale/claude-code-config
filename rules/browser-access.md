@@ -19,6 +19,6 @@ envelope, exit `20`, `no_adapter_fallback`, R8 endpoint authority).
   (`pkill -f '@playwright/mcp'`), not by assuming what holds a port. Never
   terminate a listener `warm-chrome` did not verify.
 
-Current authority: `skills/browser-use/src/preflight-warm-chrome.ts` still owns
-the live preflight path until the browser-use switchover (open P1 in
-`runtime/warm-chrome/TASKS.md`) closes; then `warm-chrome` becomes the gate.
+Current authority: `runtime/warm-chrome` (`@side-quest/warm-chrome`) is the gate.
+`skills/browser-use/src/preflight-warm-chrome.ts` is a thin delegator to its
+`main()`; the browser-use switchover is closed.

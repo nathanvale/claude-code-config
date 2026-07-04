@@ -35,7 +35,7 @@ keeps the map complete in both directions.
 - `README.md`: human front door, command posture, authority, safety rules,
   and develop commands.
 - `CONTEXT.md`: package language for stations, proof, endpoint authority,
-  mutation, parity, and maintenance workflows.
+  mutation, and maintenance workflows.
 - `TASKS.md`: active project-manager dashboard.
 - `TASKS.archive.md`: closed task detail and long review rationale.
 - `tests/docs-drift.test.ts`: Module Map drift gate plus maintainer doc-set
@@ -116,9 +116,8 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `tests/`: one suite per lifecycle (`check-stations`, `launch-stations`,
   `repair-stations`), `catalog.test.ts` drift gate, `cli-surface.test.ts`
   contract alignment, `redaction.test.ts` R13 proofs,
-  `entrypoint.integration.test.ts` process-boundary stations,
-  `parity.test.ts` measured old-preflight parity, and `docs-drift.test.ts`
-  module-map drift.
+  `entrypoint.integration.test.ts` process-boundary stations, and
+  `docs-drift.test.ts` module-map drift.
 
 ## Proof Flow
 
@@ -147,6 +146,6 @@ Station stance:
   failure has not, which the re-emit rule cannot express.
 - The ok envelope is the only endpoint authority; guidance carries the actual
   verified endpoint, never the `9222` convention.
-- `skills/browser-use/src/preflight-warm-chrome.ts` stays authoritative and
-  byte-identical until the deferred parity switchover; `tests/parity.test.ts`
-  measures station/exit/envelope parity and records intended divergences.
+- `skills/browser-use/src/preflight-warm-chrome.ts` is now a thin delegator to
+  this package's `main()`; the switchover is closed and the parity harness that
+  measured old-vs-new station/exit/envelope parity has been retired.
