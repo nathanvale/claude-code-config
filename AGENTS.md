@@ -31,7 +31,6 @@
 - Execute in small, reviewable steps.
 - Test meaningful changes.
 - Preserve unrelated user/agent changes.
-- Generated outputs: edit source, not rendered file.
 - Startup source: `AGENTS.md`; prompt-system changes use `skills/prompt-system-workflow/SKILL.md`; check delivery with `scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
 
@@ -46,6 +45,7 @@
 - Name contract, model, engine, discovery, and CLI owners before implementation.
 - Code-structure choices, a new module, or reaching for a design pattern: run the `context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
+- Before connecting a browser adapter to CDP, gate on `warm-chrome check --json`; `rules/browser-access.md`.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
@@ -116,5 +116,5 @@
 
 ## Project Truth
 
-- Prefer repo-local `AGENTS.md` and `docs/agents/` when present.
+- Prefer repo-local/package-local `AGENTS.md` when present.
 - Issue tracker, triage labels, and domain docs belong to each repo.
