@@ -377,6 +377,24 @@ export function createRepairCommandHandler(
 				}
 				throw error;
 			}
+			// Ownership gate for the write, mirroring the chmod path: that gate only
+			// fires when mode !== 700, so a profile already at 700 but owned by
+			// another user would otherwise reach this write. Never rewrite proof
+			// state inside a profile we do not own.
+			if (
+				profile !== null &&
+				profile.owner !== (await runtime.currentUser())
+			) {
+				throw unrepairableError(
+					"profile_not_owned",
+					"DevToolsActivePort repair requires a profile owned by the current user.",
+					context,
+					{
+						profile_dir: profile.realPath,
+						...repairMutationData(mutations),
+					},
+				);
+			}
 			try {
 				await runtime.writeTextFile(
 					activePortPath,

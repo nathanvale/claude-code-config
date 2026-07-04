@@ -300,7 +300,10 @@ export function isDefaultChromeProfilePath(
 	path: string,
 	env: Record<string, string | undefined>,
 ): boolean {
-	const home = env.HOME;
+	// Strip trailing slashes: a HOME like "/Users/x/" would otherwise build a
+	// "//Library/..." root that never matches the real "/Users/x/Library/..."
+	// path, silently failing the guard open on a default-profile path.
+	const home = env.HOME?.replace(/\/+$/, "");
 	if (home) {
 		const root = `${home}/Library/Application Support/Google/Chrome`;
 		return path === root || path.startsWith(`${root}/`);
@@ -1013,12 +1016,13 @@ export function redactListenerDetail(
 	const userDataDir = extractUserDataDir(listener.command);
 	// Self-guard the doctrine at every call site: even a non-forced real-Chrome
 	// listener must never emit the operator's DEFAULT-profile path (it discloses
-	// the OS account and HOME layout). When env is provided and the dir is the
-	// default profile, drop it; a dedicated warm profile is safe to report.
+	// the OS account and HOME layout). Guard UNCONDITIONALLY — callers that omit
+	// env (proof.ts/repair.ts failed-probe branches) must not skip the check and
+	// leak the path; without env, isDefaultChromeProfilePath falls back to its
+	// HOME-absent regex, which fails closed on the default-profile shape.
 	const leaksDefaultProfile =
 		userDataDir !== null &&
-		options?.env !== undefined &&
-		isDefaultChromeProfilePath(userDataDir, options.env);
+		isDefaultChromeProfilePath(userDataDir, options?.env ?? {});
 	return {
 		pid: listener.pid,
 		process: safeProcessBasename(REAL_GOOGLE_CHROME_BINARY),

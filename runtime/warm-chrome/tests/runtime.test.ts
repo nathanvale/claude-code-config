@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
-import { mkdir, mkdtemp, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
 	DEFAULT_FETCH_ABORT_MS,
 	createDefaultRuntime,
 	findListenerWithSystemTools,
+	isDefaultChromeProfilePath,
 	type KillableChild,
 	parseProcessCommand,
 	REAL_GOOGLE_CHROME_BINARY,
@@ -356,17 +357,40 @@ describe("SingletonLock locality and pid liveness", () => {
 		const runtime = createDefaultRuntime({});
 
 		const localDir = await mkdtemp(join(tmpdir(), "warm-chrome-locklocal-"));
-		await symlink(`${hostname()}-4321`, join(localDir, "SingletonLock"));
-		const localLock = await runtime.readSingletonLock(localDir);
-		expect(localLock?.local).toBe(true);
-		expect(localLock?.pid).toBe(4321);
-
 		const foreignDir = await mkdtemp(join(tmpdir(), "warm-chrome-lockforeign-"));
-		await symlink("some-other-host-77", join(foreignDir, "SingletonLock"));
-		const foreignLock = await runtime.readSingletonLock(foreignDir);
-		expect(foreignLock?.local).toBe(false);
-		expect(foreignLock?.hostname).toBe("some-other-host");
-		expect(foreignLock?.pid).toBe(77);
+		try {
+			await symlink(`${hostname()}-4321`, join(localDir, "SingletonLock"));
+			const localLock = await runtime.readSingletonLock(localDir);
+			expect(localLock?.local).toBe(true);
+			expect(localLock?.pid).toBe(4321);
+
+			await symlink("some-other-host-77", join(foreignDir, "SingletonLock"));
+			const foreignLock = await runtime.readSingletonLock(foreignDir);
+			expect(foreignLock?.local).toBe(false);
+			expect(foreignLock?.hostname).toBe("some-other-host");
+			expect(foreignLock?.pid).toBe(77);
+		} finally {
+			await rm(localDir, { recursive: true, force: true });
+			await rm(foreignDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("default Chrome profile detection", () => {
+	// CodeRabbit review (PR #226): a trailing slash on HOME must not build a
+	// double-slash root that fails the guard open on a real default-profile path.
+	test("a trailing slash on HOME still matches the default profile", () => {
+		const path = "/Users/example/Library/Application Support/Google/Chrome";
+		expect(isDefaultChromeProfilePath(path, { HOME: "/Users/example/" })).toBe(
+			true,
+		);
+		expect(isDefaultChromeProfilePath(`${path}/Default`, { HOME: "/Users/example///" })).toBe(true);
+		// A dedicated warm profile is still not the default profile.
+		expect(
+			isDefaultChromeProfilePath("/Users/example/.agent-warm-profile", {
+				HOME: "/Users/example/",
+			}),
+		).toBe(false);
 	});
 });
 
@@ -375,16 +399,24 @@ describe("default DevToolsActivePort reader", () => {
 		const dir = await mkdtemp(join(tmpdir(), "warm-chrome-profile-"));
 		const deps = createDefaultProofDeps();
 
-		await expect(deps.readDevToolsActivePort(dir)).resolves.toBeNull();
+		try {
+			await expect(deps.readDevToolsActivePort(dir)).resolves.toBeNull();
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("non-regular DevToolsActivePort fails closed", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "warm-chrome-profile-"));
-		await mkdir(join(dir, "DevToolsActivePort"));
 		const deps = createDefaultProofDeps();
 
-		await expect(deps.readDevToolsActivePort(dir)).rejects.toThrow(
-			"DevToolsActivePort is not a regular file.",
-		);
+		try {
+			await mkdir(join(dir, "DevToolsActivePort"));
+			await expect(deps.readDevToolsActivePort(dir)).rejects.toThrow(
+				"DevToolsActivePort is not a regular file.",
+			);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });

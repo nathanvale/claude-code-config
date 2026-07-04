@@ -121,17 +121,18 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
       SingletonLock materialized as a regular file (EINVAL) blocks launch with
       no repair path. Next: aggregate scan budget, body cap, and an EINVAL
       arm; each is in-runtime and needs a pin.
-- [ ] P3 Default-profile redaction consistency Lane: CLI Contract. Sixth-pass
-      findings, folds into the P2 profile-predicate duplication item: the
-      relative-`--user-data-dir` rejection in `src/proof.ts` (~420) passes
-      `redactListenerDetail` without `env`/`forceForeign`, and
-      `redactListenerProfileDir` (`src/repair.ts` ~207) plus the
-      `profile_not_owned` `profile_dir` echo (~285) only redact ABSOLUTE
-      default-profile spellings — a relative spelling reaches the envelope
-      verbatim. Low severity (relative paths do not carry the OS account name;
-      the resolved-realpath echo is the operator's own HOME on their own
-      terminal). Next: route every default-profile-path echo through one
-      redactor when the predicate gets a single owner.
+- [ ] P3 Default-profile redaction consistency Lane: CLI Contract. Partly
+      closed by the CodeRabbit round (env-less `redactListenerDetail` now
+      guards unconditionally via the HOME-absent fallback, pinned in
+      `tests/redaction.test.ts`). Remaining, folds into the P2
+      profile-predicate duplication item: `redactListenerProfileDir`
+      (`src/repair.ts` ~207) and the `profile_not_owned` `profile_dir` echo
+      (~285) only redact ABSOLUTE default-profile spellings — a relative
+      spelling reaches the envelope verbatim. Low severity (relative paths do
+      not carry the OS account name; the resolved-realpath echo is the
+      operator's own HOME on their own terminal). Next: route every
+      default-profile-path echo through one redactor when the predicate gets a
+      single owner.
 
 ## Later
 

@@ -440,6 +440,29 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expectNoProcessAffectingCalls(fixture);
 	});
 
+	// CodeRabbit review (PR #226): the ownership gate only fires on the chmod
+	// path (mode !== 700). A profile already at 700 but owned by ANOTHER user
+	// would otherwise reach the stale-port write. The write-path ownership guard
+	// must refuse it, writing nothing.
+	test("stale-port write refuses a 700 profile owned by another user (no chmod gate to catch it)", async () => {
+		const fixture = repairFixture({
+			profiles: {
+				// Mode 700 skips the chmod ownership gate entirely; foreign owner.
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, {
+					mode: "700",
+					owner: "0",
+				}),
+			},
+			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		const envelope = expectUnrepairable(run, "profile_not_owned");
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		// The refusal landed BEFORE any DevToolsActivePort write.
+		expect(fixture.calls.writes).toEqual([]);
+	});
+
 	test("healthy warm Chrome is idempotent: repaired with zero mutations", async () => {
 		const fixture = repairFixture();
 		const run = await runRepair(["repair", "--run-id", "idempotent"], fixture);

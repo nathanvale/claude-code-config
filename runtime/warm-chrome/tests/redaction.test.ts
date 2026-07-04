@@ -181,6 +181,21 @@ describe("warm-chrome foreign listener redaction (R13)", () => {
 		assertNoRuntimeContractFixtureLeaks(detail);
 	});
 
+	// CodeRabbit review (PR #226): the default-profile guard must fire even when
+	// env is omitted. proof.ts/repair.ts failed-probe branches call this without
+	// env; without the unconditional guard they leaked the default-profile path.
+	// The HOME-absent regex fallback recognizes the default-profile shape.
+	test("real-Chrome listener on the default profile drops its user-data-dir even without env", () => {
+		const detail = redactListenerDetail({
+			pid: 7,
+			command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=9222 --user-data-dir=/Users/example/Library/Application Support/Google/Chrome`,
+		});
+
+		expect(detail.foreign).toBe(false);
+		expect(detail.user_data_dir).toBeUndefined();
+		assertNoRuntimeContractFixtureLeaks(detail);
+	});
+
 	test("forceForeign redacts a real-Chrome listener to pid and basename only", () => {
 		const detail = redactListenerDetail(
 			{
