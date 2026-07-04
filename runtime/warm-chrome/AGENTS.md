@@ -36,7 +36,7 @@ Use the direct runner above for agent-operational examples.
   `ARCHITECTURE.md`, `src/model.ts`, `src/branch-station-catalog.ts`,
   `src/branch-station-evidence.ts`, and station tests.
 - **Change proof behavior** -> `ARCHITECTURE.md` Proof Flow, `src/proof.ts`,
-  `tests/check-stations.test.ts`, `tests/parity.test.ts`.
+  `tests/check-stations.test.ts`.
 - **Change launch lifecycle** -> `src/launch.ts`,
   `tests/launch-stations.test.ts`, and the Branch Station Catalog when station
   posture changes.
@@ -44,10 +44,12 @@ Use the direct runner above for agent-operational examples.
   `tests/repair-stations.test.ts`, and redaction tests when diagnostics move.
 - **Change redaction** -> `src/runtime.ts`, `src/cli.ts`,
   `tests/redaction.test.ts`, and station tests for the emitting branch.
-- **Change old/new parity or browser-use switchover** -> `tests/parity.test.ts`,
-  `skills/browser-use/src/preflight-warm-chrome.ts`, and
-  `runtime/warm-chrome/TASKS.md`; keep the old preflight unmodified until the
-  switchover task closes.
+- **Change how browser-use consumes this package** (the switchover is closed) ->
+  `skills/browser-use/src/preflight-warm-chrome.ts` (thin delegator to `main()`),
+  `skills/browser-use/src/browser-adapter-router-prepare.ts` (gates on
+  `data.contract_id`), and `skills/browser-use/src/preflight-browser-adapter.ts`
+  (composes the package proof in-process). Change proof behavior in this package,
+  not in those delegators.
 - **Choose next work** -> `TASKS.md`.
 - **Close or reclassify task detail** -> update `TASKS.md` and
   `TASKS.archive.md` in the same pass.
@@ -64,7 +66,7 @@ Reference owners:
   `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`.
 - Implementation plan:
   `docs/plans/2026-07-03-001-feat-warm-chrome-runtime-package-plan.md`.
-- Current browser-use authority:
+- browser-use front-door delegator (routes to this package's `main()`):
   `skills/browser-use/src/preflight-warm-chrome.ts`.
 - Warm Chrome research:
   `skills/browser-use/docs/research/2026-07-03-warm-chrome-cdp-gotchas-and-port-policy.md`.
@@ -87,8 +89,6 @@ Reference owners:
   negative tests before changing `src/repair.ts`.
 - **Redaction:** add or update the leak fixture first; route every emitted
   foreign-listener field through the redaction chokepoint.
-- **Parity:** record old/new divergence in `tests/parity.test.ts`; do not edit
-  the old browser-use preflight until the switchover task closes.
 - **Source owner split or move:** update `ARCHITECTURE.md` Module Map and run
   the Doc Drift Gate.
 - **Task closure:** move closed rationale from `TASKS.md` to
@@ -133,8 +133,9 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
   prose when `src/command-contract.ts`, CLI help, or tests own them.
 - Do not let `TASKS.md` become a review transcript; move closed detail to
   `TASKS.archive.md`.
-- Do not mark browser-use switchover closed while
-  `skills/browser-use/src/preflight-warm-chrome.ts` remains authoritative.
+- Do not add proof/station behavior to browser-use's delegators
+  (`skills/browser-use/src/preflight-warm-chrome.ts` and the adapter proof); the
+  switchover made this package the single owner of that behavior.
 - Do not route agents on `data.reason`; route on station action.
 
 ## Debug
@@ -143,8 +144,7 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
 2. Run `check --json` for the authoritative endpoint envelope.
 3. Inspect command help for flag or output-mode questions.
 4. Run the owning station test before source edits.
-5. Run `tests/parity.test.ts` before changing browser-use behavior.
-6. Fix source owners, not docs, when evidence points to contract drift.
+5. Fix source owners, not docs, when evidence points to contract drift.
 
 ## Safety Invariants
 
@@ -157,8 +157,8 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
 - `check` and `status` are read-only.
 - `launch` may write browser state only through declared mutation pins.
 - `repair` may write dedicated-profile proof state only after refusal gates.
-- `skills/browser-use/src/preflight-warm-chrome.ts` stays authoritative until
-  the switchover task closes.
+- This package is the single owner of Warm Chrome proof behavior; browser-use's
+  `preflight-warm-chrome.ts` only delegates to `main()`.
 
 ## Verification
 
@@ -175,8 +175,7 @@ After CLI contract changes, prove:
 - rendered help,
 - parser accept/reject behavior,
 - runtime semantics,
-- branch station evidence,
-- parity divergence report.
+- branch station evidence.
 
 Run docs checks after docs-only changes:
 

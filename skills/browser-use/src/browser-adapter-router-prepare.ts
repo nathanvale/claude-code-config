@@ -10,8 +10,8 @@
 // prove_warm_chrome -> discover_capability_report -> prove_adapter_attachment ->
 // change_prepare_input (R6). runtime_actions still lists every relevant action.
 
+import { WARM_CHROME_CONTRACT_ID } from "@side-quest/warm-chrome";
 import {
-	WARM_CHROME_PREFLIGHT_CONTRACT_ID,
 	BROWSER_ADAPTER_PROOF_CONTRACT_ID,
 	type BrowserAdapterRouterBundle,
 	type BrowserAdapterRouterMode,
@@ -110,9 +110,12 @@ export function assemblePrepare(inputs: PrepareInputs): PrepareResult {
 	}
 
 	// --- Warm Chrome proof (R3). Presence + ok proof => warm_chrome_ready.
+	// The @side-quest/warm-chrome package publishes its id under data.contract_id;
+	// the router adopts that field and value verbatim (it does not derive them).
 	const warmChrome = parseProofEnvelope(
 		inputs.warmChromeProofRaw,
-		WARM_CHROME_PREFLIGHT_CONTRACT_ID,
+		WARM_CHROME_CONTRACT_ID,
+		"contract_id",
 	);
 	if (!inputs.warmChromeProofRaw) {
 		missing.push({
@@ -283,12 +286,19 @@ type ProofParse =
 	| { ok: false; detail: string };
 
 // A proof envelope is the JSON the warm-chrome / adapter preflight emits:
-// { status: "ok", run_id, data: { ok: true, contract, ... } }. prepare treats a
-// present, ok, contract-matching envelope as evidence; anything else is "not a
-// verified proof" and routes to the proof's recovery action.
+// { status: "ok", run_id, data: { ok: true, <contractField>, ... } }. prepare
+// treats a present, ok, contract-matching envelope as evidence; anything else is
+// "not a verified proof" and routes to the proof's recovery action.
+//
+// The contract identifier lives under different keys by producer: the
+// @side-quest/warm-chrome package publishes `data.contract_id`, while the local
+// Browser Adapter Proof still emits `data.contract`. contractField selects which
+// key this envelope carries so one parser serves both without inverting who owns
+// each contract id.
 function parseProofEnvelope(
 	raw: string | undefined,
 	expectedContract: string,
+	contractField: "contract" | "contract_id" = "contract",
 ): ProofParse {
 	if (raw === undefined) return { ok: false, detail: "not supplied" };
 	const value = safeJsonObject(raw);
@@ -300,7 +310,7 @@ function parseProofEnvelope(
 	if (!data || data.ok !== true) {
 		return { ok: false, detail: "proof data is not a success proof" };
 	}
-	if (data.contract !== expectedContract) {
+	if (data[contractField] !== expectedContract) {
 		return { ok: false, detail: "proof contract id does not match" };
 	}
 	const runId =

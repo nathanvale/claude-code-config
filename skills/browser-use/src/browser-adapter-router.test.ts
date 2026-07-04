@@ -19,12 +19,14 @@ import {
 	BROWSER_ADAPTER_ROUTER_CAPABILITIES,
 	BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES,
 	BROWSER_ADAPTER_ROUTER_SUPPORT_STATES,
-	WARM_CHROME_PREFLIGHT_CONTRACT_ID,
-	WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 	type BrowserAdapterRouterCommand,
 	browserAdapterProofContracts,
 	browserAdapterRouterContracts,
 } from "./command-contract";
+import {
+	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_SCHEMA_VERSION,
+} from "@side-quest/warm-chrome";
 import {
 	type RouteEvidenceEnvelope,
 	type ValidatedRouteEvidenceEnvelope,
@@ -579,8 +581,8 @@ function warmChromeProofEnvelope(
 		data: {
 			ok: overrides.ok ?? true,
 			action: "browser_ready",
-			contract: WARM_CHROME_PREFLIGHT_CONTRACT_ID,
-			schema_version: WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
+			contract_id: WARM_CHROME_CONTRACT_ID,
+			schema_version: WARM_CHROME_SCHEMA_VERSION,
 			command: "check",
 			endpoint: "http://127.0.0.1:9333",
 			port: "9333",
@@ -770,6 +772,49 @@ describe("U1 prepare on-ramp", () => {
 		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
 			"prove_warm_chrome",
 		);
+	});
+
+	// Field-switch regression guard (plan U3): the router now reads the package's
+	// data.contract_id. A legacy envelope carrying only the retired data.contract
+	// field (old browser-use id) must NOT pass — it routes to prove_warm_chrome,
+	// proving the switch is a field change, not just a value change.
+	test("legacy data.contract-only warm Chrome proof no longer passes", async () => {
+		const legacyProof = JSON.stringify({
+			status: "ok",
+			run_id: "run-1",
+			data: {
+				ok: true,
+				action: "browser_ready",
+				contract: "browser-use.warm-chrome-preflight",
+				command: "check",
+				endpoint: "http://127.0.0.1:9333",
+				port: "9333",
+			},
+		});
+		const warm = await tmpFile("legacy-warm.json", legacyProof);
+		const proof = await tmpFile("proof.json", adapterProofEnvelope());
+		const report = await tmpFile("report.json", JSON.stringify(makeReport()));
+		const result = await runForTest(
+			[
+				"prepare",
+				"--warm-chrome-proof",
+				warm,
+				"--adapter-proof",
+				proof,
+				"--report",
+				report,
+				"--bundle",
+				"snapshot_page_action",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect(parsed.status).toBe("error");
+		expect(
+			(parsed.continuation as { next_action_id?: string }).next_action_id,
+		).toBe("prove_warm_chrome");
 	});
 
 	test("missing report emits discover_capability_report", async () => {

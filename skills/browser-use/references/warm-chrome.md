@@ -14,9 +14,13 @@ Operational map for browser entry.
 ## Owners
 
 - Warm Chrome front door: `skills/browser-use/package.json#bin` (`preflight-warm-chrome`).
-- Warm Chrome runtime: `skills/browser-use/src/preflight-warm-chrome.ts`.
-- CLI contracts: `skills/browser-use/src/command-contract.ts`.
-- Focused tests: `skills/browser-use/src/preflight-warm-chrome.test.ts`.
+- Warm Chrome runtime: `@side-quest/warm-chrome` (`runtime/warm-chrome`). The
+  front door `skills/browser-use/src/preflight-warm-chrome.ts` is a thin
+  delegator to its `main()`; proof, station, and reason behavior are owned there
+  (`runtime/warm-chrome/AGENTS.md`).
+- CLI contracts: `skills/browser-use/src/command-contract.ts` (adapter proof,
+  map, router); the Warm Chrome command contract is package-owned.
+- Focused tests: `runtime/warm-chrome/tests/` (station + proof suites).
 
 ## Operation
 

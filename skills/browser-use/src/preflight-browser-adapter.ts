@@ -41,10 +41,13 @@ import {
 	browserAdapterProofSuccessActions,
 } from "./command-contract";
 import {
+	createCheckCommandHandler,
+	createDefaultProofDeps,
 	createDefaultRuntime,
-	runPreflightWarmChromeCli,
-	type PreflightRuntime,
-} from "./preflight-warm-chrome";
+	main as runWarmChromeMain,
+	type WarmChromeProofDeps,
+	type WarmChromeRuntime,
+} from "@side-quest/warm-chrome";
 import {
 	type McporterCommandInput,
 	type McporterCommandResult,
@@ -112,10 +115,14 @@ type ParsedAdapterProofCommand =
 export type AdapterCommandInput = McporterCommandInput;
 export type AdapterCommandResult = McporterCommandResult;
 
-export type AdapterProofRuntime = PreflightRuntime & {
+export type AdapterProofRuntime = WarmChromeRuntime & {
 	cwd: string;
 	readTextFile: (path: string) => Promise<string>;
 	runCommand: (input: AdapterCommandInput) => Promise<AdapterCommandResult>;
+	// The Warm Chrome browser-entry proof (now @side-quest/warm-chrome) attaches a
+	// live CDP websocket; these seams let the adapter proof drive it and let tests
+	// inject canned round-trips. Defaults are real (createDefaultProofDeps).
+	proofDeps: WarmChromeProofDeps;
 };
 
 type WarmChromeProofResult =
@@ -266,6 +273,7 @@ export function createDefaultAdapterProofRuntime(
 		cwd: process.cwd(),
 		readTextFile: (path: string) => readFile(path, "utf-8"),
 		runCommand: (input: AdapterCommandInput) => spawnMcporterCommand(input),
+		proofDeps: createDefaultProofDeps(),
 		...overrides,
 	};
 }
@@ -621,7 +629,11 @@ async function runWarmChromePreflight(input: {
 	const stdout = new BufferWriter();
 	const stderr = new BufferWriter();
 	const startedAt = input.runtime.now();
-	const exitCode = await runPreflightWarmChromeCli(
+	// Compose the package's Warm Chrome browser-entry proof in-process. The
+	// adapter proof consumes only action/endpoint/port from the ok envelope and
+	// gates on exitCode !== 0, so the package's exit-20 (vs the retired exit-2)
+	// input-failure code is invisible here.
+	const exitCode = await runWarmChromeMain(
 		[
 			"check",
 			"--endpoint",
@@ -633,6 +645,9 @@ async function runWarmChromePreflight(input: {
 		],
 		{
 			runtime: input.runtime,
+			// Inject the check handler bound to the runtime's proof deps so tests can
+			// supply canned CDP round-trips; production uses the real defaults.
+			handlers: { check: createCheckCommandHandler(input.runtime.proofDeps) },
 			stdout,
 			stderr,
 		},

@@ -120,6 +120,41 @@ exit, and envelope outcomes. Intended divergences are enumerated and printed
 for the browser-use switchover checklist. Package joined the repo entrypoint
 gate; `ARCHITECTURE.md` docs-drift gate landed.
 
+### 2026-07-04 Browser-Use Switchover Closed (P1)
+
+Plan: `docs/plans/2026-07-04-001-feat-browser-use-warm-chrome-switchover-plan.md`.
+Decision log:
+`docs/decisions/2026-07-04-001-browser-use-warm-chrome-switchover-decision-log.md`.
+
+browser-use now routes its production Warm Chrome proof through this package:
+
+- `skills/browser-use/src/preflight-warm-chrome.ts` is a thin delegator to
+  `main()` with a `WARM_CHROME_X ?? BROWSER_USE_X` env bridge (CDP_PORT,
+  PROFILE_DIR, RUN_ID); the `preflight-warm-chrome` bin, dist entrypoint, and
+  argv contract are unchanged.
+- `skills/browser-use/src/browser-adapter-router-prepare.ts` gates the Warm
+  Chrome proof on the package's `data.contract_id == WARM_CHROME_CONTRACT_ID`
+  (a `contractField` param keeps the shared parser serving the adapter proof's
+  `data.contract`). The legacy `WARM_CHROME_PREFLIGHT_CONTRACT_ID` + preflight
+  contract surface (`warmChromePreflightContracts`) are removed.
+- `skills/browser-use/src/preflight-browser-adapter.ts` composes the package
+  proof in-process via `main(..., { handlers: { check: createCheckCommandHandler(proofDeps) } })`.
+  This was not enumerated in the plan units: the live adapter proof imported the
+  old implementation's runtime helpers, so R2's deletion forced the repoint. It
+  is behavior-preserving — the adapter proof reads only `action`/`endpoint`/`port`
+  from the inner envelope and gates on `exitCode !== 0` — but the adapter proof
+  now enforces the package's stronger CDP-attach proof and its exit-20 taxonomy
+  (its one composition-failure test moved from the old `endpoint_unreachable` /
+  `enable_remote_debugging` vocab to the package's `launch_warm_chrome`).
+
+Deleted with the cutover: the ~2030-line legacy implementation body, the parity
+harness `tests/parity.test.ts` (its 5 uniquely-covered `new`-side behaviors were
+already pinned by the `launch-stations`/`repair-stations` suites, so no coverage
+was lost), and browser-use's 3356-line preflight-warm-chrome test file that
+tested the deleted implementation. KTD6 confirmed empirically: `bun run
+src/build-dist.ts` passes and the built `dist/preflight-warm-chrome.js` carries 0
+`@side-quest` specifiers with the proof symbols inlined.
+
 ## Archived Task Rationale
 
 ### Symlink And Profile Mutation Ordering
