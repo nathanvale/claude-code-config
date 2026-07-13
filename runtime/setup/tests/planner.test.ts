@@ -49,10 +49,10 @@ describe("setup planner", () => {
 		});
 	});
 
-	test("blocks every projection operation when one target is unsafe", () => {
+	test("blocks every safe operation when one desired target is occupied", () => {
 		const inspection = fixtureInspection({
 			catalogIds: ["alpha", "beta"],
-			blocked: true,
+			ownership: [occupied("claude", "alpha", "real_entry")],
 			findings: [{
 				id: "real_entry",
 				owner: "setup.ownership",
@@ -68,7 +68,6 @@ describe("setup planner", () => {
 		expect(plan.domains[0]).toMatchObject({ planned: [], deferred: [
 			"/home/.agents/skills/alpha",
 			"/home/.agents/skills/beta",
-			"/home/.claude/skills/alpha",
 			"/home/.claude/skills/beta",
 		] });
 		expect(plan).toMatchObject({ state: "blocked", station: "sync.check_blocked" });
@@ -96,6 +95,51 @@ describe("setup planner", () => {
 		expect(planSetup(collision, "status")).toMatchObject({ state: "blocked", operations: [] });
 		expect(planSetup(unrelated, "status")).toMatchObject({ state: "clean_slate" });
 		expect(planSetup(unrelated, "status").domains[0]?.preserved).toEqual(["/home/.claude/skills/other"]);
+	});
+
+	test("preserves and diagnoses unrelated real and foreign entries without blocking", () => {
+		const inspection = fixtureInspection({
+			catalogIds: ["alpha"],
+			ownership: [
+				occupied("claude", "notes", "real_entry"),
+				occupied("codex", "foreign", "foreign_symlink"),
+			],
+			findings: [
+				{ id: "real_entry", owner: "setup.ownership", path: "/home/.claude/skills/notes", summary: "Real.", repair: "human_repair" },
+				{ id: "foreign_symlink", owner: "setup.ownership", path: "/home/.agents/skills/foreign", summary: "Foreign.", repair: "human_repair" },
+			],
+		});
+
+		const plan = planSetup(inspection, "sync");
+
+		expect(plan).toMatchObject({ state: "clean_slate", counts: { blockers: 0 } });
+		expect(plan.operations).toHaveLength(2);
+		expect(plan.findings.map((finding) => finding.id)).toEqual([
+			"foreign_symlink", "missing_link", "missing_link", "real_entry",
+		]);
+		expect(plan.domains[0]?.preserved).toEqual([
+			"/home/.agents/skills/foreign",
+			"/home/.claude/skills/notes",
+		]);
+	});
+
+	test("blocks an orphaned managed projection whose source left the catalog", () => {
+		const inspection = fixtureInspection({
+			ownership: [broken("claude", "deleted"), broken("codex", "deleted")],
+			findings: [
+				{ id: "broken_managed_link", owner: "setup.ownership", path: "/home/.claude/skills/deleted", summary: "Broken.", repair: "run_sync" },
+				{ id: "broken_managed_link", owner: "setup.ownership", path: "/home/.agents/skills/deleted", summary: "Broken.", repair: "run_sync" },
+			],
+		});
+
+		const plan = planSetup(inspection, "status");
+
+		expect(plan).toMatchObject({
+			state: "blocked",
+			station: "status.blocked",
+			counts: { blockers: 2 },
+		});
+		expect(plan.findings.filter((finding) => finding.id === "source_missing")).toHaveLength(2);
 	});
 });
 
@@ -168,5 +212,37 @@ function external(
 		shape: "directory",
 		ownership: "external_entry",
 		finding_id: "external_entry",
+	};
+}
+
+function occupied(
+	rootId: "claude" | "codex",
+	id: string,
+	ownership: "real_entry" | "foreign_symlink",
+): SetupInspection["ownership"]["entries"][number] {
+	return {
+		root_id: rootId,
+		id,
+		canonical_id: id,
+		path: `/home/.${rootId === "claude" ? "claude" : "agents"}/skills/${id}`,
+		shape: ownership === "foreign_symlink" ? "symlink" : "directory",
+		ownership,
+		finding_id: ownership,
+	};
+}
+
+function broken(
+	rootId: "claude" | "codex",
+	id: string,
+): SetupInspection["ownership"]["entries"][number] {
+	return {
+		root_id: rootId,
+		id,
+		canonical_id: id,
+		path: `/home/.${rootId === "claude" ? "claude" : "agents"}/skills/${id}`,
+		shape: "symlink",
+		ownership: "broken_managed_link",
+		target: `/repo/skills/${id}`,
+		finding_id: "broken_managed_link",
 	};
 }

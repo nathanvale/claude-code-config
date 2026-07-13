@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import { applySetup } from "../src/apply.ts";
 import { inspectSetup, type SetupInspectionInput } from "../src/inspection.ts";
-import { acquireOperationLock, inspectOperationLock } from "../src/operation-lock.ts";
+import { acquireOperationLock, acquireVisibilityLocks, inspectOperationLock } from "../src/operation-lock.ts";
 import { unlinkSetup } from "../src/unlink.ts";
 
 describe("setup operation lock", () => {
@@ -50,6 +50,28 @@ describe("setup operation lock", () => {
 		if (first.status === "acquired") await first.release();
 	});
 
+	test("keeps unrelated canonical ids independently writable", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-visibility-"));
+		const alpha = await acquireVisibilityLocks({ canonicalIds: ["alpha"], stateRoot });
+		const beta = await acquireVisibilityLocks({ canonicalIds: ["beta"], stateRoot });
+		expect(alpha.status).toBe("acquired");
+		expect(beta.status).toBe("acquired");
+		if (beta.status === "acquired") await beta.release();
+		if (alpha.status === "acquired") await alpha.release();
+	});
+
+	test("releases earlier canonical-id locks when a later id is busy", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-visibility-rollback-"));
+		const beta = await acquireVisibilityLocks({ canonicalIds: ["beta"], stateRoot });
+		const contender = await acquireVisibilityLocks({ canonicalIds: ["alpha", "beta"], stateRoot });
+		const alpha = await acquireVisibilityLocks({ canonicalIds: ["alpha"], stateRoot });
+		expect(beta.status).toBe("acquired");
+		expect(contender.status).toBe("busy");
+		expect(alpha.status).toBe("acquired");
+		if (alpha.status === "acquired") await alpha.release();
+		if (beta.status === "acquired") await beta.release();
+	});
+
 	test("serializes sync and unlink through the same scope lock", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-lock-mutations-"));
 		const source = join(root, "source");
@@ -77,4 +99,85 @@ describe("setup operation lock", () => {
 		continueInspection();
 		expect((await sync).station).toBe("sync.applied");
 	});
+
+	test("allows only one same-id user and project apply", async () => {
+		const fixture = await crossScopeFixture();
+		let continueUser = () => {};
+		const held = new Promise<void>((resolve) => { continueUser = resolve; });
+		let userEntered = () => {};
+		const entered = new Promise<void>((resolve) => { userEntered = resolve; });
+		let paused = false;
+		const user = applySetup(fixture.userInput, {
+			stateRoot: fixture.stateRoot,
+			beforeSymlink: async () => {
+				if (paused) return;
+				paused = true;
+				userEntered();
+				await held;
+			},
+		});
+		await entered;
+
+		const project = await applySetup(fixture.projectInput, { stateRoot: fixture.stateRoot });
+		expect(project).toMatchObject({ state: "blocked", station: "sync.operation_busy" });
+		expect(project.findings).toEqual([expect.objectContaining({ id: "operation_busy", repair: "retry" })]);
+		continueUser();
+		expect(await user).toMatchObject({ state: "applied", station: "sync.applied" });
+
+		expect(await exists(join(fixture.home, ".claude/skills/alpha"))).toBe(true);
+		expect(await exists(join(fixture.home, ".agents/skills/alpha"))).toBe(true);
+		expect(await exists(join(fixture.project, ".claude/skills/alpha"))).toBe(false);
+		expect(await exists(join(fixture.project, ".agents/skills/alpha"))).toBe(false);
+		expect((await inspectSetup(fixture.projectInput)).duplicate_scope_ids).toEqual(["alpha"]);
+	});
+
+	test("keeps same-id project apply out while user unlink owns visibility", async () => {
+		const fixture = await crossScopeFixture();
+		await applySetup(fixture.userInput, { stateRoot: fixture.stateRoot });
+		let continueUnlink = () => {};
+		const held = new Promise<void>((resolve) => { continueUnlink = resolve; });
+		let unlinkEntered = () => {};
+		const entered = new Promise<void>((resolve) => { unlinkEntered = resolve; });
+		let paused = false;
+		const unlink = unlinkSetup(fixture.userInput, {
+			stateRoot: fixture.stateRoot,
+			beforeRemove: async () => {
+				if (paused) return;
+				paused = true;
+				unlinkEntered();
+				await held;
+			},
+		});
+		await entered;
+
+		const project = await applySetup(fixture.projectInput, { stateRoot: fixture.stateRoot });
+		expect(project).toMatchObject({ state: "blocked", station: "sync.operation_busy" });
+		continueUnlink();
+		expect(await unlink).toMatchObject({ state: "removed", station: "unlink.removed" });
+		expect(await exists(join(fixture.project, ".agents/skills/alpha"))).toBe(false);
+	});
 });
+
+async function crossScopeFixture() {
+	const root = await mkdtemp(join(tmpdir(), "setup-lock-cross-scope-"));
+	const source = join(root, "source");
+	const home = join(root, "home");
+	const project = join(root, "project");
+	const stateRoot = join(root, "state");
+	for (const catalog of [join(source, "skills/alpha"), join(project, "skills/alpha")]) {
+		await mkdir(catalog, { recursive: true });
+		await writeFile(join(catalog, "SKILL.md"), "---\nname: alpha\ndescription: alpha\n---\n");
+	}
+	await mkdir(home);
+	return {
+		home,
+		project,
+		stateRoot,
+		userInput: { scope: "user", sourceRepoRoot: source, homeDir: home } satisfies SetupInspectionInput,
+		projectInput: { scope: "project", sourceRepoRoot: source, projectRepoRoot: project, homeDir: home } satisfies SetupInspectionInput,
+	};
+}
+
+async function exists(path: string): Promise<boolean> {
+	return lstat(path).then(() => true, () => false);
+}

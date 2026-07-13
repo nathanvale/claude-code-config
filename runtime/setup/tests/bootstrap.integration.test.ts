@@ -25,6 +25,7 @@ interface BootstrapFixture {
 	bunInstall: string;
 	bunLogDir: string;
 	curlLog: string;
+	dependencyPid: string;
 	env: NodeJS.ProcessEnv;
 }
 
@@ -54,6 +55,7 @@ describe("root setup bootstrap", () => {
 
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("bootstrap.bun_consent_required");
+		expectBootstrapError(result.stdout, "bootstrap.bun_consent_required");
 		expect(await fileOrEmpty(fixture.curlLog)).toBe("");
 	});
 
@@ -63,7 +65,15 @@ describe("root setup bootstrap", () => {
 
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stdout).toBe('{"fixture":"delegated"}\n');
-		expect(await fileOrEmpty(fixture.curlLog)).toContain("https://bun.sh/install");
+		expect((await fileOrEmpty(fixture.curlLog)).split("\n")).toEqual([
+			"-fsSL",
+			"--connect-timeout",
+			"10",
+			"--max-time",
+			"120",
+			"https://bun.sh/install",
+			"",
+		]);
 		expect(await readBunCall(fixture, 1)).toEqual(["install", "--frozen-lockfile"]);
 		expect(await readBunCall(fixture, 2)).toEqual([
 			"run",
@@ -94,8 +104,21 @@ describe("root setup bootstrap", () => {
 		const result = await runInteractive(fixture, "n\n");
 
 		expect(result.stdout + result.stderr).toContain("bootstrap.bun_declined");
+		expect(result.stdout + result.stderr).toContain('"status":"error"');
 		expect(await fileOrEmpty(fixture.curlLog)).toBe("");
 		expect(await fileOrEmpty(join(fixture.bunInstall, "bin/bun"))).toBe("");
+	});
+
+	interactiveTest("bounds dependency reconciliation after PTY consent", async () => {
+		const fixture = await makeFixture({ bunPresent: false, dependencyHang: true });
+		const result = await runInteractive(fixture, "y\n");
+		const output = result.stdout + result.stderr;
+
+		expect(output).toContain("bootstrap.dependencies_failed");
+		expect(output).toContain('"status":"error"');
+		expect(output).toContain('"code":"bootstrap.dependencies_failed"');
+		const pid = Number(await readFile(fixture.dependencyPid, "utf8"));
+		expect(processIsAlive(pid)).toBe(false);
 	});
 
 	test("reports installer failure without reconciling dependencies", async () => {
@@ -104,6 +127,17 @@ describe("root setup bootstrap", () => {
 
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("bootstrap.bun_install_failed");
+		expectBootstrapError(result.stdout, "bootstrap.bun_install_failed");
+		expect(await fileOrEmpty(join(fixture.bunLogDir, "call-count"))).toBe("");
+	});
+
+	test("bounds a downloader that would otherwise hang", async () => {
+		const fixture = await makeFixture({ bunPresent: false, installerHang: true });
+		const result = runSetup(fixture, ["--yes", "commands", "--json"]);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("fixture curl max-time enforced");
+		expectBootstrapError(result.stdout, "bootstrap.bun_install_failed");
 		expect(await fileOrEmpty(join(fixture.bunLogDir, "call-count"))).toBe("");
 	});
 
@@ -114,8 +148,35 @@ describe("root setup bootstrap", () => {
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("bootstrap.dependencies_failed");
 		expect(result.stderr).toContain("fixture dependency failure");
+		expectBootstrapError(result.stdout, "bootstrap.dependencies_failed");
 		expect(await readBunCall(fixture, 1)).toEqual(["install", "--frozen-lockfile"]);
 		expect(await fileOrEmpty(join(fixture.bunLogDir, "call-2/count"))).toBe("");
+	});
+
+	test("terminates a hung dependency reconciliation without an orphan", async () => {
+		const fixture = await makeFixture({ bunPresent: true, dependencyHang: true });
+		const result = runSetup(fixture, ["commands", "--json"]);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("bootstrap.dependencies_failed");
+		expectBootstrapError(result.stdout, "bootstrap.dependencies_failed");
+		const pid = Number(await readFile(fixture.dependencyPid, "utf8"));
+		expect(processIsAlive(pid)).toBe(false);
+	});
+
+	test("forwards a bootstrap signal and reaps dependency reconciliation", async () => {
+		const fixture = await makeFixture({ bunPresent: true, dependencyHang: true });
+		const child = spawn(fixture.setupPath, ["commands", "--json"], {
+			cwd: fixture.root,
+			env: { ...fixture.env, SETUP_DEPENDENCY_TIMEOUT_SECONDS: "30" },
+		});
+		await waitForFile(fixture.dependencyPid);
+		const dependencyPid = Number(await readFile(fixture.dependencyPid, "utf8"));
+		child.kill("SIGTERM");
+		const result = await waitForClose(child);
+
+		expect(result).toEqual({ code: null, signal: "SIGTERM" });
+		expect(processIsAlive(dependencyPid)).toBe(false);
 	});
 
 	test("preserves paths with spaces and every delegated argument", async () => {
@@ -153,7 +214,9 @@ async function makeFixture(options: {
 	copySetup?: boolean;
 	realDelegate?: boolean;
 	installerExit?: number;
+	installerHang?: boolean;
 	dependencyExit?: number;
+	dependencyHang?: boolean;
 	delegateExit?: number;
 	delegateSignal?: "TERM";
 }): Promise<BootstrapFixture> {
@@ -164,6 +227,7 @@ async function makeFixture(options: {
 	const bunInstall = join(home, ".bun space");
 	const bunLogDir = join(root, "bun calls");
 	const curlLog = join(root, "curl.log");
+	const dependencyPid = join(root, "dependency.pid");
 	const bunTemplate = join(root, "fake bun template");
 	await Promise.all([
 		mkdir(binDir, { recursive: true }),
@@ -190,7 +254,11 @@ async function makeFixture(options: {
 		SETUP_TEST_BUN_TEMPLATE: bunTemplate,
 		SETUP_TEST_CURL_LOG: curlLog,
 		SETUP_TEST_INSTALLER_EXIT: String(options.installerExit ?? 0),
+		SETUP_TEST_INSTALLER_HANG: options.installerHang ? "1" : "0",
 		SETUP_TEST_DEPENDENCY_EXIT: String(options.dependencyExit ?? 0),
+		SETUP_TEST_DEPENDENCY_HANG: options.dependencyHang ? "1" : "0",
+		SETUP_TEST_DEPENDENCY_PID: dependencyPid,
+		SETUP_DEPENDENCY_TIMEOUT_SECONDS: options.dependencyHang ? "1" : "300",
 		SETUP_TEST_DELEGATE_EXIT: String(options.delegateExit ?? 0),
 		SETUP_TEST_DELEGATE_SIGNAL: options.delegateSignal ?? "",
 		SETUP_TEST_REAL_BUN: options.realDelegate ? realBun : "",
@@ -199,7 +267,7 @@ async function makeFixture(options: {
 	if (options.bunPresent) expect(bunProbe.status).toBe(0);
 	else expect(bunProbe.status).not.toBe(0);
 
-	return { root, setupPath, binDir, bunInstall, bunLogDir, curlLog, env };
+	return { root, setupPath, binDir, bunInstall, bunLogDir, curlLog, dependencyPid, env };
 }
 
 function runSetup(fixture: BootstrapFixture, argv: string[]) {
@@ -266,6 +334,45 @@ async function fileOrEmpty(path: string): Promise<string> {
 	}
 }
 
+function expectBootstrapError(stdout: string, code: string): void {
+	expect(stdout.trim().split("\n")).toHaveLength(1);
+	expect(JSON.parse(stdout)).toMatchObject({
+		status: "error",
+		run_id: "bootstrap",
+		data: {
+			contract_id: "setup.bootstrap",
+			schema_version: "1",
+			station: code,
+			next_action: "inspect_diagnostics",
+		},
+		error: { run_id: "bootstrap", code, exit_code: 1 },
+	});
+}
+
+async function waitForFile(path: string): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (await fileOrEmpty(path)) return;
+		await Bun.sleep(10);
+	}
+	throw new Error(`Timed out waiting for ${path}`);
+}
+
+function waitForClose(child: ReturnType<typeof spawn>) {
+	return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveResult, reject) => {
+		child.once("error", reject);
+		child.once("close", (code, signal) => resolveResult({ code, signal }));
+	});
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function copyExecutable(source: string, destination: string): Promise<void> {
 	await mkdir(dirname(destination), { recursive: true });
 	await copyFile(source, destination);
@@ -294,6 +401,11 @@ for arg in "$@"; do
 	printf '%s' "$arg" > "$call_dir/arg-$index"
 done
 if [ "\${1:-}" = install ]; then
+	if [ "$SETUP_TEST_DEPENDENCY_HANG" -eq 1 ]; then
+		printf '%s' "$$" > "$SETUP_TEST_DEPENDENCY_PID"
+		trap '' HUP INT TERM
+		while :; do :; done
+	fi
 	if [ "$SETUP_TEST_DEPENDENCY_EXIT" -ne 0 ]; then
 		echo 'fixture dependency failure' >&2
 		exit "$SETUP_TEST_DEPENDENCY_EXIT"
@@ -322,6 +434,19 @@ function fakeCurlScript(): string {
 	return `#!/bin/sh
 set -eu
 printf '%s\n' "$@" > "$SETUP_TEST_CURL_LOG"
+if [ "$SETUP_TEST_INSTALLER_HANG" -eq 1 ]; then
+	max_time=""
+	previous=""
+	for arg in "$@"; do
+		if [ "$previous" = "--max-time" ]; then max_time="$arg"; fi
+		previous="$arg"
+	done
+	if [ -n "$max_time" ]; then
+		echo 'fixture curl max-time enforced' >&2
+		exit 28
+	fi
+	while :; do sleep 1; done
+fi
 cat <<'INSTALLER'
 #!/bin/sh
 set -eu

@@ -13,6 +13,23 @@ const repoRoot = resolve(import.meta.dir, "../../..");
 const retiredProjector = ["agent", "skills"].join("-");
 const retiredInstaller = ["install", "sh"].join(".");
 const retiredHookInstaller = ["scripts", "install-git-hooks.sh"].join("/");
+const historicalRoutePrefixes = [
+	"archive/",
+	"context/archive/",
+	"docs/brainstorms/",
+	"docs/decisions/",
+	"docs/ideation/",
+	"docs/plans/",
+	"docs/prompts/",
+	"docs/research/",
+	"docs/runbooks/",
+	"docs/scratch/",
+	"prompts/",
+	"research/",
+	"runtime/setup/tests/",
+	"scratch/",
+];
+const historicalRouteFiles = new Set(["TASKS.md"]);
 
 describe("setup owner cutover", () => {
 	test("pins every retained and dropped legacy capability", () => {
@@ -51,22 +68,33 @@ describe("setup owner cutover", () => {
 		expect(lock).not.toContain(`"${retiredProjector}":`);
 	});
 
-	test("routes active setup guidance to Setup plus bunx skills", () => {
-		const activeFiles = [
-			"AGENTS.md",
-			"README.md",
-			"docs/git/worktree.md",
-			"agents/prompt-contract-auditor.md",
-			"scripts/hooks/pre-commit",
-			"runbooks/issue-to-pr-v2/README.md",
-			"runbooks/issue-to-pr-v2/references/host-adapters.md",
+	test("rejects retired routes across git-tracked operational files", () => {
+		const tracked = Bun.spawnSync(["git", "-C", repoRoot, "ls-files", "-z"]);
+		expect(tracked.exitCode).toBe(0);
+		const files = new TextDecoder()
+			.decode(tracked.stdout)
+			.split("\0")
+			.filter((file) => file !== "")
+			.filter((file) => !historicalRouteFiles.has(file))
+			.filter((file) => historicalRoutePrefixes.every((prefix) => !file.startsWith(prefix)))
+			.filter((file) => !file.includes("/tests/"))
+			.filter((file) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file));
+		const retiredRoutes = [
+			{ id: "root_installer", pattern: /(?:^|[\s`'"])(?:\.\/)?install\.sh(?:$|[\s`'"])/mu },
+			{ id: "hook_installer", pattern: /scripts\/install-git-hooks\.sh/u },
+			{ id: "projector_command", pattern: /agent-skills\s+(?:status|sync|unlink|list|ignore|commands)\b/u },
+			{ id: "projector_import", pattern: /runtime\/agent-skills/u },
+			{ id: "projector_snapshot", pattern: /\.agents\/agent-skills-snapshot\.json/u },
+			{ id: "projector_config", pattern: /\.agent-skills\.ya?ml/u },
 		];
-		for (const file of activeFiles) {
+		const findings: string[] = [];
+		for (const file of files) {
 			const text = readFileSync(join(repoRoot, file), "utf8");
-			expect(text, file).not.toContain(retiredInstaller);
-			expect(text, file).not.toContain(retiredHookInstaller);
-			expect(text, file).not.toMatch(new RegExp(`${retiredProjector}\\s+(status|sync|unlink|list|ignore|commands)`, "u"));
+			for (const route of retiredRoutes) {
+				if (route.pattern.test(text)) findings.push(`${file}:${route.id}`);
+			}
 		}
+		expect(findings).toEqual([]);
 
 		const startup = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
 		expect(startup).toContain("./setup sync --check --json");

@@ -63,7 +63,59 @@ export async function acquireOperationLock(input: {
 }): Promise<OperationLockResult> {
 	await mkdir(input.stateRoot, { recursive: true });
 	const canonicalTarget = input.scope === "project" ? await canonicalPath(input.targetAnchor) : resolve(input.targetAnchor);
-	const lockPath = `${resolve(input.stateRoot)}/${lockName(input.scope, canonicalTarget)}`;
+	return acquireNamedLock({
+		name: lockName(input.scope, canonicalTarget),
+		stateRoot: input.stateRoot,
+		pid: input.pid,
+		token: input.token,
+		isProcessAlive: input.isProcessAlive,
+	});
+}
+
+/** Acquire canonical-id locks in stable order after the caller's scope lock. */
+export async function acquireVisibilityLocks(input: {
+	readonly canonicalIds: readonly string[];
+	readonly stateRoot: string;
+	readonly pid?: number;
+	readonly isProcessAlive?: (pid: number) => boolean;
+}): Promise<OperationLockResult> {
+	await mkdir(input.stateRoot, { recursive: true });
+	const ids = [...new Set(input.canonicalIds)].sort((left, right) => left.localeCompare(right));
+	const acquired: Extract<OperationLockResult, { status: "acquired" }>[] = [];
+	for (const id of ids) {
+		const lock = await acquireNamedLock({
+			name: visibilityLockName(id),
+			stateRoot: input.stateRoot,
+			pid: input.pid,
+			isProcessAlive: input.isProcessAlive,
+		});
+		if (lock.status !== "acquired") {
+			await releaseLocks(acquired);
+			return lock;
+		}
+		acquired.push(lock);
+	}
+	return {
+		status: "acquired",
+		path: ids.length === 0 ? resolve(input.stateRoot) : acquired.map((lock) => lock.path).join(","),
+		release: async () => releaseLocks(acquired),
+	};
+}
+
+async function releaseLocks(
+	locks: readonly Extract<OperationLockResult, { status: "acquired" }>[],
+): Promise<void> {
+	for (let index = locks.length - 1; index >= 0; index -= 1) await locks[index]?.release();
+}
+
+async function acquireNamedLock(input: {
+	readonly name: string;
+	readonly stateRoot: string;
+	readonly pid?: number;
+	readonly token?: string;
+	readonly isProcessAlive?: (pid: number) => boolean;
+}): Promise<OperationLockResult> {
+	const lockPath = `${resolve(input.stateRoot)}/${input.name}`;
 	const pid = input.pid ?? process.pid;
 	const token = input.token ?? randomUUID();
 	try {
@@ -97,6 +149,11 @@ function lockName(scope: SetupScope, targetAnchor: string): string {
 	const canonical = resolve(targetAnchor);
 	const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 20);
 	return `project-${digest}.lock`;
+}
+
+function visibilityLockName(canonicalId: string): string {
+	const digest = createHash("sha256").update(canonicalId).digest("hex").slice(0, 20);
+	return `visibility-${digest}.lock`;
 }
 
 async function readOwner(lockPath: string): Promise<Partial<LockOwner> | undefined> {

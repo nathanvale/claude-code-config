@@ -54,10 +54,22 @@ export function findCanonicalSkillIdCollisions(
 /** Inspect direct source-catalog children without changing the filesystem. */
 export async function inspectCatalog(
 	catalogRoot: string,
+	sourceRepositoryRoot?: string,
 ): Promise<CatalogInspection> {
 	const root = resolve(catalogRoot);
 	if (!existsSync(root)) return deepFreeze({ root, entries: [], findings: [] });
 	const canonicalRoot = await realpath(root);
+	if (sourceRepositoryRoot) {
+		let canonicalRepository: string;
+		try {
+			canonicalRepository = await realpath(sourceRepositoryRoot);
+		} catch {
+			return escapedCatalogRoot(root);
+		}
+		if (!isInsideOrEqual(canonicalRepository, canonicalRoot)) {
+			return escapedCatalogRoot(root);
+		}
+	}
 	const children = await readdir(root, { withFileTypes: true });
 	const inspected = await Promise.all(
 		children
@@ -101,6 +113,20 @@ export async function inspectCatalog(
 		findings.push(catalogFinding(entry));
 	}
 	return deepFreeze({ root, entries, findings });
+}
+
+function escapedCatalogRoot(root: string): CatalogInspection {
+	return deepFreeze({
+		root,
+		entries: [],
+		findings: [{
+			id: "catalog_escape",
+			owner: "setup.catalog",
+			path: root,
+			summary: "Catalog root resolves outside the selected source repository.",
+			repair: "human_repair",
+		}],
+	});
 }
 
 async function inspectCatalogEntry(

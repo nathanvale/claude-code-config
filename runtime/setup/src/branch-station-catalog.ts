@@ -101,6 +101,7 @@ export const setupBranchStationCatalog = [
 
 	station({ id: "catalog.listed", command: "catalog", trigger: "catalog inventory returns", exit: 0, status: "ok", action: "inspect_catalog", mutation: readOnly }),
 	station({ id: "catalog.matched", command: "catalog", trigger: "named skill resolves with visibility reasoning", exit: 0, status: "ok", action: "use_source", mutation: readOnly }),
+	station({ id: "catalog.blocked", command: "catalog", trigger: "named skill resolves to invalid escaped or colliding entries", exit: 1, status: "error", action: "human_repair", mutation: readOnly }),
 	station({ id: "catalog.not_found", command: "catalog", trigger: "named skill is absent", exit: 1, status: "ok", action: "discover_external", mutation: readOnly }),
 	station({ id: "catalog.invalid_target", command: "catalog", trigger: "project target cannot be resolved safely", exit: 1, status: "error", action: "change_input", mutation: readOnly }),
 	station({ id: "catalog.invalid_usage", command: "catalog", trigger: "unsupported argv combination", exit: 2, status: "error", action: "change_input", mutation: noRead }),

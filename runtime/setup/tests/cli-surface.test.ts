@@ -30,7 +30,7 @@ describe("setup CLI read-only surface", () => {
 		const blockedInspection = inspection({
 			catalogIds: ["alpha"],
 			blocked: true,
-			findings: [{ id: "real_entry", owner: "setup.ownership", path: "/home/.claude/skills/alpha", summary: "Occupied.", repair: "human_repair" }],
+			findings: [{ id: "invalid_skill", owner: "setup.catalog", path: "/repo/skills/draft", summary: "Invalid skill.", repair: "human_repair" }],
 		});
 
 		expect(await main(["status"], { ...missing, runtime: runtime(missingInspection) })).toBe(0);
@@ -98,6 +98,29 @@ describe("setup CLI read-only surface", () => {
 		});
 	});
 
+	test("blocks named invalid, escaped, and colliding catalog entries", async () => {
+		const cases: readonly SetupInspection["catalog"]["entries"][] = [
+			[{ id: "alpha", canonical_id: "alpha", path: "/repo/skills/alpha", state: "invalid" }],
+			[{ id: "alpha", canonical_id: "alpha", path: "/repo/skills/alpha", state: "escape" }],
+			[
+				{ id: "Alpha", canonical_id: "alpha", path: "/repo/skills/Alpha", state: "collision" },
+				{ id: "alpha", canonical_id: "alpha", path: "/repo/skills/alpha", state: "collision" },
+			],
+		];
+		for (const catalogEntries of cases) {
+			const io = capture();
+			expect(await main(["catalog", "alpha", "--json"], {
+				...io,
+				runtime: runtime(inspection({ catalogEntries })),
+			})).toBe(1);
+			expect(JSON.parse(io.stdout.text)).toMatchObject({
+				status: "error",
+				error: { code: "blocked" },
+				data: { state: "blocked", station: "catalog.blocked", next_action: "human_repair" },
+			});
+		}
+	});
+
 	test("sync check is read-only and plain sync delegates to the mutation engine", async () => {
 		const check = capture();
 		const write = capture();
@@ -113,6 +136,31 @@ describe("setup CLI read-only surface", () => {
 		expect(await main(["sync", "--json"], { ...write, runtime: adapter })).toBe(0);
 		expect(inspections).toBe(1);
 		expect(JSON.parse(write.stdout.text)).toMatchObject({ status: "ok", data: { station: "sync.applied" } });
+	});
+
+	test("renders every write-domain path category only in verbose human output", async () => {
+		const compact = capture();
+		const verbose = capture();
+		const result = {
+			...inspectionResult("sync", "partial", "sync.partial"),
+			domains: [{
+				domain: "skill_projection",
+				planned: ["/paths/planned"],
+				applied: ["/paths/applied"],
+				deferred: ["/paths/deferred"],
+				preserved: ["/paths/preserved"],
+				failed: ["/paths/failed"],
+			}],
+		};
+		const adapter = runtime(inspection(), { apply: async () => result });
+
+		await main(["sync"], { ...compact, runtime: adapter });
+		await main(["sync", "--verbose"], { ...verbose, runtime: adapter });
+
+		for (const category of ["planned", "applied", "deferred", "preserved", "failed"]) {
+			expect(compact.stdout.text).not.toContain(`/paths/${category}`);
+			expect(verbose.stdout.text).toContain(`  ${category}: /paths/${category}`);
+		}
 	});
 
 	test("keeps verbose JSON diagnostics on stderr", async () => {
@@ -158,7 +206,19 @@ describe("setup CLI read-only surface", () => {
 		expect(JSON.parse(io.stdout.text)).toMatchObject({
 			status: "error",
 			error: { code: "invalid_target", message: "The selected project target is invalid." },
+			data: { scope: "project", next_action: "change_input" },
 		});
+	});
+
+	test("renders change_input for a plain invalid project target", async () => {
+		const io = capture();
+		expect(await main([
+			"status", "--scope", "project", "--repo", "/definitely/missing/setup-project",
+		], {
+			...io,
+			runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+		})).toBe(1);
+		expect(io.stderr.text).toContain("next: change_input");
 	});
 
 	test("doctor explains blockers and exits with findings", async () => {
@@ -233,6 +293,54 @@ describe("setup CLI read-only surface", () => {
 		);
 	});
 
+	test("preserves control characters inside the Git root record", async () => {
+		const parent = await mkdtemp(join(tmpdir(), "setup-cli-control-root-"));
+		const root = join(parent, "repo\nname");
+		await mkdir(root);
+		expect(Bun.spawnSync(["git", "init", "--quiet", root]).exitCode).toBe(0);
+		await mkdir(join(root, "skills"));
+		await mkdir(join(root, "nested"));
+		const io = capture();
+
+		expect(await main([
+			"status", "--scope", "project", "--repo", join(root, "nested"), "--json",
+		], {
+			...io,
+			runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+		})).toBe(0);
+		expect(JSON.parse(io.stdout.text).data.catalog_root).toBe(await realpath(join(root, "skills")));
+	});
+
+	test("escapes terminal controls in human catalog output while preserving JSON ids", async () => {
+		const id = "alpha\u001b[31m";
+		const state = inspection({ catalogIds: [id] });
+		const human = capture();
+		const json = capture();
+
+		await main(["catalog"], { ...human, runtime: runtime(state) });
+		await main(["catalog", "--json"], { ...json, runtime: runtime(state) });
+
+		expect(human.stdout.text).not.toContain("\u001b");
+		expect(human.stdout.text).toContain("alpha\\x1b[31m");
+		expect(JSON.parse(json.stdout.text).data.catalog_entries[0].id).toBe(id);
+	});
+
+	test("retains unexpected JSON failure diagnostics", async () => {
+		const io = capture();
+		const cause = "catalog read failed at fixture boundary";
+		expect(await main(["status", "--json"], {
+			...io,
+			runtime: {
+				sourceRepoRoot: "/repo",
+				homeDir: "/home",
+				now: () => 100,
+				inspect: async () => { throw new Error(cause); },
+			},
+		})).toBe(1);
+		expect(JSON.parse(io.stdout.text).error.message).toBe(cause);
+		expect(io.stderr.text).toContain(cause);
+	});
+
 	test("renders status help from the command contract", async () => {
 		const io = capture();
 		expect(await main(["status", "--help"], io)).toBe(0);
@@ -276,6 +384,7 @@ function inspectionResult(command: "sync" | "unlink", state: SetupResult["state"
 
 function inspection(options: {
 	catalogIds?: readonly string[];
+	catalogEntries?: SetupInspection["catalog"]["entries"];
 	findings?: SetupInspection["findings"];
 	blocked?: boolean;
 } = {}): SetupInspection {
@@ -291,7 +400,7 @@ function inspection(options: {
 		},
 		catalog: {
 			root: "/repo/skills",
-			entries: (options.catalogIds ?? []).map((id) => ({
+			entries: options.catalogEntries ?? (options.catalogIds ?? []).map((id) => ({
 				id, canonical_id: id.toLowerCase(), path: `/repo/skills/${id}`,
 				state: "valid" as const, name: id, description: `${id} skill`,
 			})),

@@ -86,6 +86,28 @@ describe("setup apply engine", () => {
 		expect(result.domains[0]?.applied).toEqual([]);
 	});
 
+	test("stops when the catalog root escapes after planning", async () => {
+		const fixture = await setupFixture("user");
+		const outside = join(fixture.root, "outside-skills");
+		await mkdir(join(outside, "alpha"), { recursive: true });
+		await writeFile(join(outside, "alpha/SKILL.md"), "---\nname: alpha\ndescription: outside\n---\n");
+		let moved = false;
+
+		const result = await applySetup(fixture.input, {
+			stateRoot: fixture.state,
+			beforeSymlink: async () => {
+				if (moved) return;
+				moved = true;
+				await rename(join(fixture.source, "skills"), join(fixture.source, "trusted-skills"));
+				await symlink(outside, join(fixture.source, "skills"));
+			},
+		});
+
+		expect(result).toMatchObject({ state: "partial", station: "sync.concurrent_change" });
+		expect(result.domains[0]?.applied).toEqual([]);
+		expect(await Bun.file(join(fixture.home, ".claude/skills/alpha")).exists()).toBe(false);
+	});
+
 	test("stops after a partial syscall failure", async () => {
 		const fixture = await setupFixture("user");
 		let links = 0;

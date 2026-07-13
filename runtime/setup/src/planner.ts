@@ -12,10 +12,10 @@ import type {
 	SetupResult,
 } from "./model.ts";
 
-const BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
-	"source_missing", "real_entry", "foreign_symlink", "invalid_skill",
-	"catalog_escape", "canonical_id_collision", "duplicate_scope",
-	"malformed_provider_lock", "unsafe_root", "external_entry",
+const GLOBAL_BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
+	"source_missing", "invalid_skill", "catalog_escape",
+	"canonical_id_collision", "duplicate_scope", "malformed_provider_lock",
+	"unsafe_root",
 ]);
 
 /** Convert one immutable inspection snapshot into a deterministic read-only plan. */
@@ -25,16 +25,18 @@ export function planSetup(
 ): SetupResult {
 	const candidates = projectionCandidates(inspection);
 	const relevantInspectionFindings = inspection.findings.filter(
-		(finding) => finding.id !== "external_entry" && finding.id !== "legacy_codex_root",
+		(finding) => finding.id !== "legacy_codex_root",
 	);
-	const blocked = inspection.blocked || candidates.blocked || relevantInspectionFindings.some((finding) =>
-		BLOCKING_FINDINGS.has(finding.id)
+	const findings = mergeFindings(relevantInspectionFindings, candidates.findings);
+	const blockers = mergeFindings(
+		relevantInspectionFindings.filter((finding) => GLOBAL_BLOCKING_FINDINGS.has(finding.id)),
+		candidates.blockers,
 	);
+	const blocked = blockers.length > 0;
 	const operations = blocked ? [] : candidates.operations;
 	const deferred = blocked
 		? candidates.operations.map((operation) => operation.destination).sort(compareText)
 		: [];
-	const findings = [...relevantInspectionFindings, ...candidates.findings].sort(compareFinding);
 	const managed = inspection.ownership.entries.filter(
 		(entry) => entry.ownership === "managed_link",
 	).length;
@@ -50,7 +52,7 @@ export function planSetup(
 		? "setup_healthy" : command === "sync" ? "run_sync"
 			: cleanSlate ? "preview_sync" : "run_sync";
 	const preserved = inspection.ownership.entries
-		.filter((entry) => ["external_entry", "legacy_codex_root"].includes(entry.ownership))
+		.filter((entry) => entry.ownership !== "managed_link" && entry.ownership !== "broken_managed_link")
 		.map((entry) => entry.path)
 		.sort(compareText);
 	const domain: SetupDomainResult = {
@@ -62,8 +64,8 @@ export function planSetup(
 		root_id: root.id as "claude" | "codex",
 		root_path: root.path,
 		blocked,
-			blockers: findings.filter((finding) =>
-				BLOCKING_FINDINGS.has(finding.id) && (!finding.path || finding.path.startsWith(root.path))
+		blockers: blockers.filter((finding) =>
+				!finding.path || finding.path.startsWith(root.path)
 		),
 		operations: operations.filter((operation) => operation.root_id === root.id),
 		preserved: preserved.filter((path) => path.startsWith(root.path)),
@@ -81,7 +83,7 @@ export function planSetup(
 		counts: {
 			catalog: inspection.catalog.entries.filter((entry) => entry.state === "valid").length,
 			managed, external, planned: operations.length,
-			blockers: findings.filter((finding) => BLOCKING_FINDINGS.has(finding.id)).length,
+			blockers: blockers.length,
 		},
 		catalog_root: inspection.catalog.root,
 		destination_roots: inspection.scope.projection_roots.map((root) => root.path).sort(compareText),
@@ -94,12 +96,13 @@ export function planSetup(
 function projectionCandidates(inspection: SetupInspection): {
 	operations: SetupOperation[];
 	findings: SetupFinding[];
-	blocked: boolean;
+	blockers: SetupFinding[];
 } {
 	const operations: SetupOperation[] = [];
 	const findings: SetupFinding[] = [];
-	let blocked = false;
+	const blockers: SetupFinding[] = [];
 	const validEntries = inspection.catalog.entries.filter((entry) => entry.state === "valid");
+	const validCanonicalIds = new Set(validEntries.map((entry) => entry.canonical_id));
 	const ownershipByRoot = new Map<string, Map<string, (typeof inspection.ownership.entries)[number]>>();
 	for (const entry of inspection.ownership.entries) {
 		let entries = ownershipByRoot.get(entry.root_id);
@@ -138,20 +141,54 @@ function projectionCandidates(inspection: SetupInspection): {
 				operations.push({ ...common, action: "relink", expected_ownership: "managed_link" });
 				findings.push({ id: "wrong_link", owner: "setup.projection", path: existing.path,
 					summary: `Projection link '${catalogEntry.id}' points to the wrong source.`, repair: "run_sync" });
-			} else if (existing.ownership === "external_entry") {
-				blocked = true;
-				findings.push({
-					id: "external_entry",
-					owner: "bunx skills",
-					path: existing.path,
-					summary: `External owner occupies desired skill '${catalogEntry.id}'.`,
-					repair: "human_repair",
-				});
+			} else if (["external_entry", "real_entry", "foreign_symlink", "unknown_entry"].includes(existing.ownership)) {
+				const blocker = occupancyBlocker(existing, catalogEntry.id);
+				findings.push(blocker);
+				blockers.push(blocker);
 			}
 		}
 	}
+	const projectionRootIds = new Set(inspection.scope.projection_roots.map((root) => root.id));
+	for (const entry of inspection.ownership.entries) {
+		if (
+			entry.ownership !== "broken_managed_link" ||
+			!projectionRootIds.has(entry.root_id) ||
+			validCanonicalIds.has(entry.canonical_id)
+		) continue;
+		const blocker: SetupFinding = {
+			id: "source_missing",
+			owner: "setup.catalog",
+			path: entry.path,
+			summary: `Managed projection '${entry.id}' has no valid source skill.`,
+			repair: "human_repair",
+		};
+		findings.push(blocker);
+		blockers.push(blocker);
+	}
 	operations.sort((left, right) => compareText(left.destination, right.destination));
-	return { operations, findings, blocked };
+	return { operations, findings, blockers };
+}
+
+function occupancyBlocker(
+	entry: SetupInspection["ownership"]["entries"][number],
+	desiredId: string,
+): SetupFinding {
+	return {
+		id: entry.finding_id ?? "real_entry",
+		owner: entry.ownership === "external_entry" ? "bunx skills" : "setup.ownership",
+		path: entry.path,
+		summary: `Preserved ${entry.ownership.replaceAll("_", " ")} occupies desired skill '${desiredId}'.`,
+		repair: "human_repair",
+	};
+}
+
+function mergeFindings(...groups: readonly (readonly SetupFinding[])[]): SetupFinding[] {
+	const unique = new Map<string, SetupFinding>();
+	for (const finding of groups.flat()) {
+		const key = `${finding.id}\0${finding.path ?? ""}`;
+		if (!unique.has(key)) unique.set(key, finding);
+	}
+	return [...unique.values()].sort(compareFinding);
 }
 
 function canonicalSkillIdFromPath(path: string): string {

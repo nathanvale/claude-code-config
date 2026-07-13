@@ -7,6 +7,38 @@ import { describe, expect, test } from "bun:test";
 import { applyHookTopology, inspectHookTopology } from "../src/hook-topology.ts";
 
 describe("hook topology", () => {
+	test("reports a missing hook source as unhealthy", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-hook-missing-"));
+		const source = join(root, "missing");
+		const plan = await inspectHookTopology(source, join(root, "hooks"));
+		expect(plan.operations).toEqual([]);
+		expect(plan.findings).toEqual([
+			expect.objectContaining({
+				id: "hook_unhealthy",
+				owner: "setup.hooks",
+				path: source,
+				summary: "Git hook source directory is missing.",
+				repair: "repair_hooks",
+			}),
+		]);
+	});
+
+	test("distinguishes an unreadable hook source", async () => {
+		const source = "/repo/scripts/hooks";
+		const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+		const plan = await inspectHookTopology(source, "/repo/.git/hooks", async () => { throw denied; });
+		expect(plan.operations).toEqual([]);
+		expect(plan.findings).toEqual([
+			expect.objectContaining({
+				id: "hook_unhealthy",
+				path: source,
+				summary: "Git hook source directory is unreadable.",
+				why: "permission denied",
+				repair: "repair_hooks",
+			}),
+		]);
+	});
+
 	test("copies a missing hook and treats equal content as healthy", async () => {
 		const fixture = await hookFixture();
 		const plan = await inspectHookTopology(fixture.source, fixture.destination);

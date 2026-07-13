@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
 import type { SetupDomainResult, SetupFinding, SetupResult } from "./model.ts";
 import { classifyProjectionPath } from "./ownership.ts";
-import { acquireOperationLock } from "./operation-lock.ts";
+import { acquireOperationLock, acquireVisibilityLocks } from "./operation-lock.ts";
 import { resolveSetupScope } from "./scope.ts";
 
 export interface UnlinkSetupOptions {
@@ -23,11 +23,37 @@ export async function unlinkSetup(
 	if (options.check) return unlinkWithInspection(input, await (options.inspect ?? inspectSetup)(input), true);
 	const lock = options.lockHeld ? { status: "acquired" as const, path: "caller-owned", release: async () => {} } : await acquireOperationLock({ scope: input.scope, targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
 	if (lock.status !== "acquired") return unlinkLockResult(input, scope, lock.status, lock.path);
+	let visibilityLock: Awaited<ReturnType<typeof acquireVisibilityLocks>> | undefined;
 	try {
-		return unlinkWithInspection(input, await (options.inspect ?? inspectSetup)(input), false, options.beforeRemove);
+		const inspect = options.inspect ?? inspectSetup;
+		const preliminary = await inspect(input);
+		const lockedIds = removableIds(preliminary);
+		visibilityLock = await acquireVisibilityLocks({ canonicalIds: lockedIds, stateRoot: options.stateRoot });
+		if (visibilityLock.status !== "acquired") return unlinkLockResult(input, scope, visibilityLock.status, visibilityLock.path);
+		const inspection = await inspect(input);
+		if (removableIds(inspection).some((id) => !lockedIds.includes(id))) {
+			return unlinkConcurrentResult(input, inspection);
+		}
+		return await unlinkWithInspection(input, inspection, false, options.beforeRemove);
 	} finally {
+		if (visibilityLock?.status === "acquired") await visibilityLock.release();
 		await lock.release();
 	}
+}
+
+function removableIds(inspection: SetupInspection): string[] {
+	return [...new Set(inspection.ownership.entries
+		.filter((entry) => entry.shape === "symlink" && (entry.ownership === "managed_link" || entry.ownership === "broken_managed_link"))
+		.map((entry) => entry.canonical_id))]
+		.sort((left, right) => left.localeCompare(right));
+}
+
+function unlinkConcurrentResult(input: SetupInspectionInput, inspection: SetupInspection): SetupResult {
+	const planned = inspection.ownership.entries
+		.filter((entry) => entry.shape === "symlink" && (entry.ownership === "managed_link" || entry.ownership === "broken_managed_link"))
+		.map((entry) => entry.path)
+		.sort();
+	return unlinkResult({ input, inspection, planned, applied: [], deferred: planned, preserved: [], station: "unlink.concurrent_change" });
 }
 
 async function unlinkWithInspection(

@@ -199,9 +199,7 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 	}
 	const typedCommand = command as SetupCommand;
 	const allowed = new Set(Object.keys(setupContracts[typedCommand].flags));
-	if (["status", "doctor", "sync", "unlink"].includes(typedCommand)) {
-		allowed.add("--verbose");
-	}
+	for (const flag of SETUP_GLOBAL_DIAGNOSTIC_FLAGS) allowed.add(flag);
 	let scope: SetupScope = "user";
 	let repo: string | undefined;
 	const positionals: string[] = [];

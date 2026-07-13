@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { deepFreeze } from "./immutable.ts";
 import type { SetupFindingId, SetupScope } from "./model.ts";
@@ -30,6 +30,64 @@ export interface ResolveSetupScopeInput {
 	readonly sourceRepoRoot: string;
 	readonly projectRepoRoot?: string;
 	readonly homeDir?: string;
+}
+
+/** Typed project-target failure translated by the CLI into invalid_target. */
+export class InvalidTargetError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "InvalidTargetError";
+	}
+}
+
+/** Resolve an existing target to the owning Git root and validate its catalog. */
+export function resolveProjectRepoRoot(value: string | undefined): string {
+	if (!value || !existsSync(value)) {
+		throw new InvalidTargetError("Project target must exist and own a skills catalog.");
+	}
+	let target: string;
+	try {
+		target = realpathSync(value);
+		if (!lstatSync(target).isDirectory()) {
+			throw new InvalidTargetError("Project target must be a directory inside a Git repository.");
+		}
+	} catch (error) {
+		if (error instanceof InvalidTargetError) throw error;
+		throw new InvalidTargetError("Project target cannot be inspected.");
+	}
+	const probe = Bun.spawnSync(["git", "-C", target, "rev-parse", "--show-toplevel"], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (probe.exitCode !== 0) {
+		throw new InvalidTargetError("Project target is not inside a Git repository.");
+	}
+	let root: string;
+	try {
+		root = realpathSync(resolve(decodeGitRecord(probe.stdout)));
+	} catch {
+		throw new InvalidTargetError("Project repository root cannot be resolved safely.");
+	}
+	const targetFromRoot = relative(root, target);
+	if (
+		isAbsolute(targetFromRoot) ||
+		targetFromRoot === ".." ||
+		targetFromRoot.startsWith(`..${sep}`)
+	) {
+		throw new InvalidTargetError("Project target must remain inside its Git repository root.");
+	}
+	const catalog = resolve(root, "skills");
+	if (!existsSync(catalog) || !lstatSync(catalog).isDirectory()) {
+		throw new InvalidTargetError("Project repository must own a skills catalog.");
+	}
+	return root;
+}
+
+function decodeGitRecord(output: Uint8Array): string {
+	if (output.length < 2 || output.at(-1) !== 0x0a) {
+		throw new InvalidTargetError("Git did not return a terminated repository-root record.");
+	}
+	return new TextDecoder().decode(output.subarray(0, -1));
 }
 
 /** Resolve source and target anchors, then containment-check projection roots. */

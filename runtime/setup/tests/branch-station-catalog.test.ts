@@ -26,7 +26,7 @@ const EXPECTED_STATION_IDS = [
 	"unlink.check_removable", "unlink.check_noop", "unlink.check_blocked", "unlink.check_invalid_target",
 	"unlink.removed", "unlink.noop", "unlink.concurrent_change", "unlink.operation_busy",
 	"unlink.invalid_target", "unlink.partial_failure", "unlink.invalid_usage", "unlink.runtime_failure",
-	"catalog.listed", "catalog.matched", "catalog.not_found", "catalog.invalid_target",
+	"catalog.listed", "catalog.matched", "catalog.blocked", "catalog.not_found", "catalog.invalid_target",
 	"catalog.invalid_usage", "catalog.runtime_failure", "commands.catalog",
 	"commands.invalid_usage", "commands.runtime_failure",
 ] as const;

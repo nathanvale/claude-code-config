@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,15 +64,128 @@ describe("setup catalog-driven process evidence", () => {
 		expect(map.findings).toEqual([]);
 		expect(map.stations.every((entry) => entry.evidence.status === "covered")).toBe(true);
 	}, 120_000);
+
+	test("cycles an explicit Git project through the production process entrypoint", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-production-project-"));
+		cleanup.push(root);
+		const project = join(root, "project");
+		const home = join(root, "home");
+		await mkdir(project);
+		await mkdir(home);
+		const initialized = Bun.spawnSync(["git", "-C", project, "init", "--quiet"]);
+		expect(initialized.exitCode).toBe(0);
+		await writeSkill(project, "alpha");
+
+		const cases = [
+			{ argv: ["sync", "--check"], exitCode: 1, station: "sync.check_changes" },
+			{ argv: ["sync"], exitCode: 0, station: "sync.applied" },
+			{ argv: ["status"], exitCode: 0, station: "status.healthy" },
+			{ argv: ["unlink", "--check"], exitCode: 1, station: "unlink.check_removable" },
+			{ argv: ["unlink"], exitCode: 0, station: "unlink.removed" },
+		] as const;
+		for (const entry of cases) {
+			const result = await runCliProcess({
+				label: `production:${entry.station}`,
+				argv: [
+					process.execPath,
+					CLI_PATH,
+					...entry.argv,
+					"--scope",
+					"project",
+					"--repo",
+					project,
+					"--json",
+				],
+				cwd: PACKAGE_ROOT,
+				env: { ...process.env, HOME: home },
+			});
+			expect(result.exitCode, describeCliProcessRun(result)).toBe(entry.exitCode);
+			const envelope = JSON.parse(result.stdout) as { data?: { station?: string } };
+			expect(envelope.data?.station, describeCliProcessRun(result)).toBe(entry.station);
+		}
+
+		for (const rootName of [".agents/skills", ".claude/skills"]) {
+			expect(await lstat(join(project, rootName, "alpha")).then(() => true, () => false)).toBe(false);
+		}
+		expect(await Bun.file(join(project, "skills/alpha/SKILL.md")).exists()).toBe(true);
+	}, 30_000);
 });
 
 async function runStation(station: SetupStation): Promise<BranchStationEvidence> {
 	const fixture = await makeFixture(station.id.replaceAll(".", "-"));
 	const scenario = await prepareScenario(station.id, fixture);
+	const before = await snapshotFixture(fixture);
 	const result = await runSetup(station, fixture, scenario.argv, scenario.fault, scenario.direct);
+	const after = await snapshotFixture(fixture);
 	const envelope = assertStationEnvelope(station, result);
 	assertSetupStation(station, result, envelope);
+	assertMutationExpectation(station, before, after);
 	return buildStationEvidence(station, result, envelope);
+}
+
+function assertMutationExpectation(
+	station: SetupStation,
+	before: readonly string[],
+	after: readonly string[],
+): void {
+	const stable = new Set([
+		"read_only",
+		"no_runtime_state_read",
+		"check_only",
+		"fails_closed_without_writes",
+	]);
+	const changed = new Set([
+		"writes_selected_safe_domains",
+		"stops_remaining_writes",
+		"stops_after_failed_syscall",
+		"removes_proven_links",
+		"stops_remaining_removals",
+		"partial_proven_removal",
+	]);
+	const expectation = station.mutationExpectation;
+	expect(
+		stable.has(expectation) || changed.has(expectation),
+		`${station.id}: unknown mutation expectation '${expectation}'`,
+	).toBe(true);
+	if (stable.has(expectation)) {
+		expect(after, `${station.id}: ${expectation}`).toEqual(before);
+	} else {
+		expect(after, `${station.id}: ${expectation}`).not.toEqual(before);
+	}
+}
+
+async function snapshotFixture(fixture: Fixture): Promise<readonly string[]> {
+	const snapshot: string[] = [];
+	for (const [name, path] of Object.entries(fixture).sort(([left], [right]) => left.localeCompare(right))) {
+		await snapshotPath(path, name, snapshot);
+	}
+	return snapshot;
+}
+
+async function snapshotPath(path: string, label: string, snapshot: string[]): Promise<void> {
+	let stat: Awaited<ReturnType<typeof lstat>>;
+	try {
+		stat = await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			snapshot.push(`${label}:missing`);
+			return;
+		}
+		throw error;
+	}
+	if (stat.isSymbolicLink()) {
+		snapshot.push(`${label}:link:${await readlink(path)}`);
+		return;
+	}
+	if (stat.isDirectory()) {
+		snapshot.push(`${label}:dir:${stat.mode & 0o777}`);
+		for (const entry of (await readdir(path)).sort()) {
+			await snapshotPath(join(path, entry), `${label}/${entry}`, snapshot);
+		}
+		return;
+	}
+	const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+	snapshot.push(`${label}:file:${stat.mode & 0o777}:${digest}`);
 }
 
 async function prepareScenario(
@@ -128,6 +241,7 @@ async function prepareScenario(
 		case "unlink.partial_failure": await projectLinks(fixture); return { argv: project, fault: "unlink_failure" };
 		case "catalog.listed": return { argv: project };
 		case "catalog.matched": return { argv: ["catalog", "alpha", ...project.slice(1)] };
+		case "catalog.blocked": await rm(join(fixture.source, "skills/alpha/SKILL.md")); return { argv: ["catalog", "alpha", ...project.slice(1)] };
 		case "catalog.not_found": return { argv: ["catalog", "missing", ...project.slice(1)] };
 		case "commands.catalog": return { argv: ["commands", "--json"] };
 		default: throw new Error(`No process fixture for ${id}`);

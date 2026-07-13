@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-import { existsSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -31,6 +30,7 @@ import { inspectSetup, type SetupInspection, type SetupInspectionInput } from ".
 import { SETUP_COMMANDS, type SetupCommand, type SetupResult } from "./model.ts";
 import { planSetup } from "./planner.ts";
 import { renderCatalog, renderDoctor, renderSetupResult } from "./renderer.ts";
+import { InvalidTargetError, resolveProjectRepoRoot } from "./scope.ts";
 
 /** Runtime adapters keep command-surface tests deterministic and mutation-free. */
 export interface SetupCliRuntime {
@@ -53,21 +53,21 @@ export interface SetupCliOptions {
 	stderr?: CliWriter;
 }
 
-interface CommandExecution {
-	result: SetupResult | CommandsResult;
+type SetupResultCommand = Exclude<SetupCommand, "commands">;
+
+type CommandExecution = {
+	result: CommandsResult;
+	exitCode: 0;
+	human: "";
+	contractCommand: "commands";
+} | {
+	result: SetupResult;
 	exitCode: 0 | 1;
 	human: string;
-	contractCommand: SetupCommand;
-}
+	contractCommand: SetupResultCommand;
+};
 
 type CommandsResult = ReturnType<typeof projectSetupCommandDiscoveryTree>;
-
-class InvalidTargetError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "InvalidTargetError";
-	}
-}
 
 /** Build the filesystem-backed, read-only CLI runtime. */
 export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): SetupCliRuntime {
@@ -127,11 +127,11 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 	const startedAt = diagnostics.options.startedAtMs;
 	try {
 		const execution = await execute(invocation, runtime);
-		if ("child_output" in execution.result && execution.result.child_output) stderr.write(execution.result.child_output);
+		if (execution.contractCommand !== "commands" && execution.result.child_output) stderr.write(execution.result.child_output);
 		if (invocation.verbose) stderr.write("setup inspection complete\n");
 		if (invocation.json) {
-			const data = createResultData(execution.contractCommand, execution.result);
-			const stationId = "station" in execution.result ? execution.result.station : undefined;
+			const data = createResultData(execution);
+			const stationId = execution.contractCommand === "commands" ? undefined : execution.result.station;
 			const station = stationId
 				? setupBranchStationCatalog.find((candidate) => candidate.id === stationId)
 				: undefined;
@@ -167,36 +167,9 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 	}
 }
 
-function resolveProjectRepoRoot(value: string | undefined): string {
-	if (!value || !existsSync(value)) {
-		throw new InvalidTargetError("Project target must exist and own a skills catalog.");
-	}
-	const target = resolve(value);
-	try {
-		if (!lstatSync(target).isDirectory()) {
-			throw new InvalidTargetError("Project target must be a directory inside a Git repository.");
-		}
-	} catch (error) {
-		if (error instanceof InvalidTargetError) throw error;
-		throw new InvalidTargetError("Project target cannot be inspected.");
-	}
-	const probe = Bun.spawnSync(["git", "-C", target, "rev-parse", "--show-toplevel"], {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	if (probe.exitCode !== 0) {
-		throw new InvalidTargetError("Project target is not inside a Git repository.");
-	}
-	const root = resolve(new TextDecoder().decode(probe.stdout).trim());
-	const catalog = resolve(root, "skills");
-	if (!existsSync(catalog) || !lstatSync(catalog).isDirectory()) {
-		throw new InvalidTargetError("Project repository must own a skills catalog.");
-	}
-	return root;
-}
-
 async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRuntime): Promise<CommandExecution> {
-	if (invocation.command === "commands") {
+	const command = invocation.command;
+	if (command === "commands") {
 		return { result: await (runtime.commands?.() ?? projectSetupCommandDiscoveryTree()), exitCode: 0, human: "", contractCommand: "commands" };
 	}
 	const input: SetupInspectionInput = {
@@ -205,21 +178,21 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 		...(invocation.repo ? { projectRepoRoot: invocation.repo } : {}),
 		homeDir: runtime.homeDir,
 	};
-	if (invocation.command === "sync" && !invocation.check) {
+	if (command === "sync" && !invocation.check) {
 		const result = await runtime.apply(input);
 		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "sync" };
 	}
-	if (invocation.command === "unlink") {
+	if (command === "unlink") {
 		const result = await runtime.unlink(input, invocation.check);
 		return { result, exitCode: result.state === "removed" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "unlink" };
 	}
 	const inspection = await runtime.inspect(input);
-	if (invocation.command === "catalog") return catalogExecution(invocation, inspection);
-	let plan = planSetup(inspection, invocation.command);
-	if (runtime.checkDomains && (invocation.command === "status" || invocation.command === "doctor" || (invocation.command === "sync" && invocation.check))) {
+	if (command === "catalog") return catalogExecution(invocation, inspection);
+	let plan = planSetup(inspection, command);
+	if (runtime.checkDomains && (command === "status" || command === "doctor" || (command === "sync" && invocation.check))) {
 		plan = await runtime.checkDomains(input, plan);
 	}
-	if (invocation.command === "doctor") {
+	if (command === "doctor") {
 		const diagnosis = diagnoseFindings(plan.findings);
 		const result: SetupResult = {
 			...plan,
@@ -233,9 +206,9 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 	}
 	return {
 		result: plan,
-		exitCode: invocation.command === "sync" && plan.state !== "healthy" ? 1 : 0,
+		exitCode: command === "sync" && plan.state !== "healthy" ? 1 : 0,
 		human: renderSetupResult(plan, { verbose: invocation.verbose }),
-		contractCommand: invocation.command,
+		contractCommand: command,
 	};
 }
 
@@ -260,28 +233,30 @@ function catalogExecution(invocation: ParsedSetupInvocation, inspection: SetupIn
 		occupancy: occupancyById.get(entry.canonical_id) ?? [],
 	}));
 	const missed = requested !== undefined && entries.length === 0;
+	const matched = requested !== undefined && matching.length === 1 && matching[0]?.state === "valid";
+	const blocked = requested !== undefined && !missed && !matched;
 	const result: SetupResult = {
 		...plan,
-		state: missed ? "failed" : "healthy",
-		station: missed ? "catalog.not_found" : requested ? "catalog.matched" : "catalog.listed",
-		next_action: missed ? "discover_external" : requested ? "use_source" : "inspect_catalog",
+		state: missed ? "failed" : blocked ? "blocked" : "healthy",
+		station: missed ? "catalog.not_found" : blocked ? "catalog.blocked" : requested ? "catalog.matched" : "catalog.listed",
+		next_action: missed ? "discover_external" : blocked ? "human_repair" : requested ? "use_source" : "inspect_catalog",
 		catalog_entries: missed ? [{ id: requested, canonical_id: canonicalSkillId(requested), state: "missing", occupancy: [] }] : entries,
 	};
-	return { result, exitCode: missed ? 1 : 0, human: renderCatalog(result), contractCommand: "catalog" };
+	return { result, exitCode: missed || blocked ? 1 : 0, human: renderCatalog(result), contractCommand: "catalog" };
 }
 
-function createResultData(command: SetupCommand, result: SetupResult | CommandsResult) {
-	if (command === "commands") {
+function createResultData(execution: CommandExecution) {
+	if (execution.contractCommand === "commands") {
 		return createCommandResultData<
 			CommandsResult,
 			typeof setupContracts.commands.resultContract
-		>(setupContracts.commands, result as CommandsResult);
+		>(setupContracts.commands, execution.result);
 	}
-	return createSetupResultData(command, result as SetupResult);
+	return createSetupResultData(execution.contractCommand, execution.result);
 }
 
 function createSetupResultData(
-	command: Exclude<SetupCommand, "commands">,
+	command: SetupResultCommand,
 	result: SetupResult,
 ) {
 	const { child_output: _childOutput, ...publicResult } = result;
@@ -308,7 +283,10 @@ function emitFailure(input: {
 	const runId = input.runId ?? parseCliDiagnosticArgv([]).options.runId;
 	const message = input.error instanceof Error ? input.error.message : String(input.error);
 	if (!json) {
-		input.stderr.write(`${message}\nnext: ${input.code === "invalid_usage" ? "change_input" : "inspect_diagnostics"}\n`);
+		const nextAction = input.code === "invalid_usage" || input.code === "invalid_target"
+			? "change_input"
+			: "inspect_diagnostics";
+		input.stderr.write(`${message}\nnext: ${nextAction}\n`);
 		return input.exitCode;
 	}
 	const command = input.invocation?.command ?? input.command ?? commandFromArgv(input.argv);
@@ -316,14 +294,15 @@ function emitFailure(input: {
 		? "Setup command usage is invalid."
 		: input.code === "invalid_target"
 			? "The selected project target is invalid."
-			: "Setup could not complete read-only inspection.";
+			: message;
+	if (input.code === "runtime_failure") input.stderr.write(`${message}\n`);
 	const error = input.exitCode === 2
 		? createCliUsageRuntimeError({ run_id: runId, code: input.code, message: publicMessage })
 		: createCliRepairStateRuntimeError({ run_id: runId, code: input.code, message: publicMessage, exit_code: 1 });
 	const failureStation = input.code === "invalid_target" && input.invocation?.check
 		? `${command}.check_invalid_target`
 		: `${command}.${input.code}`;
-	const result = emptyResult(command, input.code, failureStation);
+	const result = emptyResult(command, input.code, failureStation, input.invocation?.scope);
 	const data = command === "commands"
 		? createCommandResultData<
 			SetupResult,
@@ -338,9 +317,14 @@ function emitFailure(input: {
 	return input.exitCode;
 }
 
-function emptyResult(command: SetupCommand, code: string, station = `${command}.${code}`): SetupResult {
+function emptyResult(
+	command: SetupCommand,
+	code: string,
+	station = `${command}.${code}`,
+	scope: SetupResult["scope"] = "user",
+): SetupResult {
 	return {
-		command, scope: "user", state: "failed",
+		command, scope, state: "failed",
 		findings: [], domains: [], operations: [], projection_targets: [],
 		counts: { catalog: 0, managed: 0, external: 0, planned: 0, blockers: 0 },
 		catalog_root: "unavailable", destination_roots: [],

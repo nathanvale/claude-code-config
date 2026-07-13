@@ -74,6 +74,23 @@ describe("setup catalog inspection", () => {
 			{ id: "evil", state: "escape", finding_id: "catalog_escape" },
 		]);
 	});
+
+	test("blocks a catalog root symlink that resolves outside the selected repository", async () => {
+		const repository = await mkdtemp(join(tmpdir(), "setup-catalog-repository-"));
+		const outside = await mkdtemp(join(tmpdir(), "setup-catalog-root-outside-"));
+		await writeSkill(outside, "evil");
+		await symlink(outside, join(repository, "skills"));
+
+		const result = await inspectCatalog(join(repository, "skills"), repository);
+
+		expect(result.entries).toEqual([]);
+		expect(result.findings).toEqual([
+			expect.objectContaining({
+				id: "catalog_escape",
+				path: join(repository, "skills"),
+			}),
+		]);
+	});
 });
 
 async function tempCatalog(name: string): Promise<string> {

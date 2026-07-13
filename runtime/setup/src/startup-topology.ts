@@ -1,4 +1,4 @@
-import { lstat, mkdir, readlink, realpath, rm, symlink } from "node:fs/promises";
+import { lstat, mkdir, readlink, realpath, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { SetupDomainResult, SetupFinding } from "./model.ts";
@@ -23,11 +23,12 @@ export const STARTUP_LINKS = [
 export interface StartupOperation {
 	readonly destination: string;
 	readonly source: string;
-	readonly action: "create" | "relink";
+	readonly action: "create";
 }
 
 export interface StartupTopologyPlan {
 	readonly domain: "startup";
+	readonly sourceRoot: string;
 	readonly homeRoot: string;
 	readonly operations: readonly StartupOperation[];
 	readonly findings: readonly SetupFinding[];
@@ -38,19 +39,27 @@ export async function inspectStartupTopology(sourceRoot: string, homeDir: string
 	const operations: StartupOperation[] = [];
 	const findings: SetupFinding[] = [];
 	const preserved: string[] = [];
+	const logicalSourceRoot = resolve(sourceRoot);
+	const canonicalSourceRoot = await canonicalPath(sourceRoot);
 	const homeRoot = await canonicalPath(homeDir);
 	for (const entry of STARTUP_LINKS) {
 		const unsafe = await unsafeExistingParent(homeRoot, join(homeDir, entry.destination));
 		if (unsafe) {
 			findings.push({ id: "unsafe_root", owner: "setup.startup", path: unsafe, summary: "Startup parent escapes the selected home.", repair: "human_repair" });
-			return { domain: "startup", homeRoot, operations: [], findings, preserved: STARTUP_LINKS.map((item) => join(homeDir, item.destination)) };
+			return { domain: "startup", sourceRoot: canonicalSourceRoot, homeRoot, operations: [], findings, preserved: STARTUP_LINKS.map((item) => join(homeDir, item.destination)) };
 		}
 	}
 	for (const entry of STARTUP_LINKS) {
-		const source = join(sourceRoot, entry.source);
+		const source = join(logicalSourceRoot, entry.source);
 		const destination = join(homeDir, entry.destination);
 		if (!(await exists(source))) {
 			findings.push({ id: "source_missing", owner: "setup.startup", path: source, summary: `Startup source is missing: ${entry.source}.`, repair: "human_repair" });
+			preserved.push(destination);
+			continue;
+		}
+		const trustedSource = await trustedStartupSource(canonicalSourceRoot, source);
+		if (!trustedSource) {
+			findings.push(sourceEscapeFinding(source));
 			preserved.push(destination);
 			continue;
 		}
@@ -61,7 +70,7 @@ export async function inspectStartupTopology(sourceRoot: string, homeDir: string
 		}
 		if (shape === "symlink") {
 			const target = await resolvedLink(destination);
-			if (target === await canonicalPath(source)) continue;
+			if (target === trustedSource) continue;
 			findings.push({ id: "foreign_symlink", owner: "external", path: destination, summary: "Foreign startup symlink is preserved.", repair: "human_repair" });
 			preserved.push(destination);
 			continue;
@@ -69,7 +78,7 @@ export async function inspectStartupTopology(sourceRoot: string, homeDir: string
 		findings.push({ id: "real_entry", owner: "external", path: destination, summary: "Real startup entry is preserved.", repair: "human_repair" });
 		preserved.push(destination);
 	}
-	return { domain: "startup", homeRoot, operations, findings, preserved };
+	return { domain: "startup", sourceRoot: canonicalSourceRoot, homeRoot, operations, findings, preserved };
 }
 
 export async function applyStartupTopology(
@@ -84,13 +93,14 @@ export async function applyStartupTopology(
 		if (!operation) continue;
 		try {
 			if (await unsafeExistingParent(plan.homeRoot, operation.destination)) throw new Error("unsafe_root");
-			if (!(await exists(operation.source)) || await pathShape(operation.destination) !== (operation.action === "create" ? "missing" : "symlink")) throw new Error("concurrent_change");
+			if (!(await trustedStartupSource(plan.sourceRoot, operation.source)) || await pathShape(operation.destination) !== "missing") throw new Error("concurrent_change");
 			await mkdir(dirname(operation.destination), { recursive: true });
 			if (await unsafeExistingParent(plan.homeRoot, operation.destination)) throw new Error("unsafe_root");
-			if (operation.action === "relink") await rm(operation.destination);
 			await options.beforeSymlink?.(operation.destination);
 			if (await unsafeExistingParent(plan.homeRoot, operation.destination)) throw new Error("unsafe_root");
 			if (await pathShape(operation.destination) !== "missing") throw new Error("concurrent_change");
+			const trustedSource = await trustedStartupSource(plan.sourceRoot, operation.source);
+			if (!trustedSource) throw new Error("source_escape");
 			await symlink(resolve(operation.source), operation.destination);
 			applied.push(operation.destination);
 		} catch {
@@ -102,13 +112,77 @@ export async function applyStartupTopology(
 	return { domain: "startup", planned: plan.operations.map((item) => item.destination), applied, deferred, preserved: plan.preserved, failed };
 }
 
-export async function removableStartupLinks(sourceRoot: string, homeDir: string): Promise<readonly string[]> {
-	const paths: string[] = [];
+export interface RemovableStartupLinksInspection {
+	readonly removable: readonly string[];
+	readonly preserved: readonly string[];
+	readonly findings: readonly SetupFinding[];
+}
+
+export async function inspectRemovableStartupLinks(sourceRoot: string, homeDir: string): Promise<RemovableStartupLinksInspection> {
+	const removable: string[] = [];
+	const preserved: string[] = [];
+	const findings: SetupFinding[] = [];
+	const unsafePaths = new Set<string>();
+	const logicalSourceRoot = resolve(sourceRoot);
+	const canonicalSourceRoot = await canonicalPath(sourceRoot);
+	const homeRoot = await canonicalPath(homeDir);
 	for (const entry of STARTUP_LINKS) {
 		const destination = join(homeDir, entry.destination);
-		if (await pathShape(destination) === "symlink" && await resolvedLink(destination) === await canonicalPath(resolve(sourceRoot, entry.source))) paths.push(destination);
+		const unsafe = await unsafeExistingParent(homeRoot, destination);
+		if (unsafe) {
+			preserved.push(destination);
+			if (!unsafePaths.has(unsafe)) {
+				unsafePaths.add(unsafe);
+				findings.push({ id: "unsafe_root", owner: "setup.startup", path: unsafe, summary: "Startup parent escapes the selected home.", repair: "human_repair" });
+			}
+			continue;
+		}
+		const source = resolve(logicalSourceRoot, entry.source);
+		if (!(await exists(source))) {
+			preserved.push(destination);
+			if (!unsafePaths.has(source)) {
+				unsafePaths.add(source);
+				findings.push({
+					id: "source_missing",
+					owner: "setup.startup",
+					path: source,
+					summary: `Startup source is missing: ${entry.source}.`,
+					repair: "human_repair",
+				});
+			}
+			continue;
+		}
+		const trustedSource = await trustedStartupSource(canonicalSourceRoot, source);
+		if (!trustedSource) {
+			preserved.push(destination);
+			if (!unsafePaths.has(source)) {
+				unsafePaths.add(source);
+				findings.push(sourceEscapeFinding(source));
+			}
+			continue;
+		}
+		if (await pathShape(destination) === "symlink" && await resolvedLink(destination) === trustedSource) removable.push(destination);
 	}
-	return paths;
+	return { removable, preserved, findings };
+}
+
+async function trustedStartupSource(sourceRoot: string, source: string): Promise<string | undefined> {
+	try {
+		const canonical = await realpath(source);
+		return isInsideOrEqual(sourceRoot, canonical) ? canonical : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function sourceEscapeFinding(source: string): SetupFinding {
+	return {
+		id: "unsafe_root",
+		owner: "setup.startup",
+		path: source,
+		summary: "Startup source resolves outside the selected source repository.",
+		repair: "human_repair",
+	};
 }
 
 async function unsafeExistingParent(homeRoot: string, destination: string): Promise<string | undefined> {

@@ -8,8 +8,10 @@ Own this repository's user runtime wiring and live first-party skill projection 
 
 - Contract: `src/command-contract.ts`
 - Model: `src/model.ts`
-- Engine: future inspect-plan-apply modules
-- Discovery: future catalog, scope, ownership, and inspection modules
+- Engine: `src/inspection.ts`, `src/planner.ts`, `src/apply.ts`, and `src/unlink.ts`
+- Discovery: `src/catalog.ts`, `src/scope.ts`, `src/ownership.ts`, and `src/provider-evidence.ts`
+- User domains: `src/setup-domains.ts`, `src/startup-topology.ts`, `src/hook-topology.ts`, `src/instruction-health.ts`, and `src/runbook-health.ts`
+- Branch stations: `src/branch-station-catalog.ts`
 - CLI: `src/cli.ts`
 - Tests: `tests/`
 

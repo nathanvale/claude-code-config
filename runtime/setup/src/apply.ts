@@ -5,7 +5,7 @@ import { canonicalSkillId } from "./catalog.ts";
 import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
 import type { SetupDomainResult, SetupFinding, SetupOperation, SetupResult } from "./model.ts";
 import { classifyProjectionPath } from "./ownership.ts";
-import { acquireOperationLock } from "./operation-lock.ts";
+import { acquireOperationLock, acquireVisibilityLocks } from "./operation-lock.ts";
 import { isInsideOrEqual } from "./path-safety.ts";
 import { planSetup } from "./planner.ts";
 import { resolveSetupScope } from "./scope.ts";
@@ -30,9 +30,20 @@ export async function applySetup(
 		stateRoot: options.stateRoot,
 	});
 	if (lock.status !== "acquired") return lockResult(input, initialScope, lock.status, lock.path);
+	let visibilityLock: Awaited<ReturnType<typeof acquireVisibilityLocks>> | undefined;
 	try {
-		const inspection = await (options.inspect ?? inspectSetup)(input);
+		const inspect = options.inspect ?? inspectSetup;
+		const preliminary = await inspect(input);
+		const lockedIds = visibilityIds(preliminary);
+		visibilityLock = await acquireVisibilityLocks({ canonicalIds: lockedIds, stateRoot: options.stateRoot });
+		if (visibilityLock.status !== "acquired") {
+			return lockResult(input, initialScope, visibilityLock.status, visibilityLock.path);
+		}
+		const inspection = await inspect(input);
 		const plan = planSetup(inspection, "sync");
+		if (visibilityIds(inspection).some((id) => !lockedIds.includes(id))) {
+			return mutationResult(plan, [], plan.operations.map((item) => item.destination), [], "sync.concurrent_change");
+		}
 		if (plan.state === "blocked") {
 			return { ...plan, state: "blocked", station: "sync.blocked", next_action: "human_repair" };
 		}
@@ -74,8 +85,16 @@ export async function applySetup(
 		}
 		return mutationResult(plan, applied, [], [], "sync.applied");
 	} finally {
+		if (visibilityLock?.status === "acquired") await visibilityLock.release();
 		await lock.release();
 	}
+}
+
+function visibilityIds(inspection: SetupInspection): string[] {
+	return inspection.catalog.entries
+		.filter((entry) => entry.state === "valid")
+		.map((entry) => entry.canonical_id)
+		.sort((left, right) => left.localeCompare(right));
 }
 
 function linkValue(operation: SetupOperation): string {
@@ -102,11 +121,17 @@ async function operationMatches(
 	if (!root?.safe || resolve(root.path) !== resolve(operation.root_path)) return false;
 	let source: string;
 	let catalog: string;
+	let repository: string;
 	try {
-		[source, catalog] = await Promise.all([realpath(operation.desired_source), realpath(scope.catalog_root)]);
+		[source, catalog, repository] = await Promise.all([
+			realpath(operation.desired_source),
+			realpath(scope.catalog_root),
+			realpath(scope.source_anchor),
+		]);
 	} catch {
 		return false;
 	}
+	if (!isInsideOrEqual(repository, catalog)) return false;
 	if (!isInsideOrEqual(catalog, source)) return false;
 	if (canonicalSkillId(basename(source)) !== operation.canonical_id) return false;
 	const current = await classifyProjectionPath({

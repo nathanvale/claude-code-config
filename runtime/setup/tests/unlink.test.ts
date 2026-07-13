@@ -1,11 +1,12 @@
-import { mkdtemp, mkdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
 import { applySetup } from "../src/apply.ts";
-import type { SetupInspectionInput } from "../src/inspection.ts";
+import { inspectSetup, type SetupInspectionInput } from "../src/inspection.ts";
+import { planSetup } from "../src/planner.ts";
 import { unlinkSetup } from "../src/unlink.ts";
 
 describe("setup unlink engine", () => {
@@ -34,6 +35,53 @@ describe("setup unlink engine", () => {
 		const result = await unlinkSetup(fixture.input, { stateRoot: fixture.state });
 		expect(result).toMatchObject({ state: "noop", station: "unlink.noop" });
 		expect(await readlink(join(fixture.home, ".claude/skills/foreign"))).toBe("/tmp/foreign");
+	});
+
+	test.each([
+		["object-map", { "third-party": { source: "fixture" } }],
+		["array", [{ name: "third-party", source: "fixture" }]],
+	])("sync and unlink preserve unrelated entries with %s provider evidence", async (_label, skills) => {
+		const fixture = await fixtureInput();
+		await writeFile(join(fixture.source, "skills-lock.json"), JSON.stringify({
+			skills,
+		}));
+		await mkdir(join(fixture.home, ".claude/skills/third-party"), { recursive: true });
+		await writeFile(join(fixture.home, ".claude/skills/third-party/value"), "external\n");
+		await mkdir(join(fixture.home, ".claude/skills/notes"), { recursive: true });
+		await writeFile(join(fixture.home, ".claude/skills/notes/value"), "real\n");
+		await mkdir(join(fixture.home, ".agents/skills"), { recursive: true });
+		await symlink("/tmp/foreign-skill", join(fixture.home, ".agents/skills/foreign"));
+
+		const applied = await applySetup(fixture.input, { stateRoot: fixture.state });
+		expect(applied).toMatchObject({ state: "applied", station: "sync.applied", counts: { blockers: 0 } });
+		expect(applied.findings.map((finding) => finding.id)).toEqual(expect.arrayContaining([
+			"external_entry", "foreign_symlink", "real_entry",
+		]));
+
+		const removed = await unlinkSetup(fixture.input, { stateRoot: fixture.state });
+		expect(removed).toMatchObject({ state: "removed", station: "unlink.removed" });
+		expect(await Bun.file(join(fixture.home, ".claude/skills/third-party/value")).text()).toBe("external\n");
+		expect(await Bun.file(join(fixture.home, ".claude/skills/notes/value")).text()).toBe("real\n");
+		expect(await readlink(join(fixture.home, ".agents/skills/foreign"))).toBe("/tmp/foreign-skill");
+	});
+
+	test("blocks sync after a projected source is deleted, then unlinks the orphan", async () => {
+		const fixture = await fixtureInput();
+		await applySetup(fixture.input, { stateRoot: fixture.state });
+		await rm(join(fixture.source, "skills/alpha"), { recursive: true });
+
+		const plan = planSetup(await inspectSetup(fixture.input), "status");
+		expect(plan).toMatchObject({ state: "blocked", station: "status.blocked", counts: { blockers: 2 } });
+		expect(plan.findings.filter((finding) => finding.id === "source_missing")).toHaveLength(2);
+		expect(await applySetup(fixture.input, { stateRoot: fixture.state })).toMatchObject({
+			state: "blocked",
+			station: "sync.blocked",
+		});
+
+		const removed = await unlinkSetup(fixture.input, { stateRoot: fixture.state });
+		expect(removed).toMatchObject({ state: "removed", station: "unlink.removed" });
+		expect(await lstat(join(fixture.home, ".claude/skills/alpha")).then(() => true, () => false)).toBe(false);
+		expect(await lstat(join(fixture.home, ".agents/skills/alpha")).then(() => true, () => false)).toBe(false);
 	});
 
 	test("reports exact partial removal after a syscall failure", async () => {

@@ -20,6 +20,7 @@ describe("startup topology", () => {
 		const fixture = await startupFixture();
 		const first = await inspectStartupTopology(fixture.source, fixture.home);
 		expect(first.operations).toHaveLength(13);
+		expect(first.operations.every((operation) => operation.action === "create")).toBe(true);
 		const result = await applyStartupTopology(first);
 		expect(result.applied).toHaveLength(13);
 		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(join(fixture.source, "AGENTS.md"));
@@ -50,6 +51,43 @@ describe("startup topology", () => {
 		expect((await applyStartupTopology(plan)).applied).toEqual([]);
 		expect(await lstat(join(outside, "CLAUDE.md")).then(() => true, () => false)).toBe(false);
 	});
+
+	test("preserves a startup source symlink that escapes the selected repository", async () => {
+		const fixture = await startupFixture();
+		const outside = join(fixture.root, "outside-context");
+		await mkdir(outside);
+		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "context")));
+		await symlink(outside, join(fixture.source, "context"));
+
+		const plan = await inspectStartupTopology(fixture.source, fixture.home);
+
+		expect(plan.findings).toContainEqual(expect.objectContaining({
+			id: "unsafe_root",
+			path: join(fixture.source, "context"),
+		}));
+		expect(plan.operations.map((operation) => operation.destination)).not.toContain(join(fixture.home, ".claude/context"));
+		expect(plan.preserved).toContain(join(fixture.home, ".claude/context"));
+		expect((await applyStartupTopology(plan)).applied).not.toContain(join(fixture.home, ".claude/context"));
+	});
+
+	test("revalidates startup source containment immediately before linking", async () => {
+		const fixture = await startupFixture();
+		const outside = join(fixture.root, "outside-agents");
+		await mkdir(outside);
+		const plan = await inspectStartupTopology(fixture.source, fixture.home);
+		const destination = join(fixture.home, ".claude/agents");
+
+		const result = await applyStartupTopology(plan, {
+			beforeSymlink: async (candidate) => {
+				if (candidate !== destination) return;
+				await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "agents")));
+				await symlink(outside, join(fixture.source, "agents"));
+			},
+		});
+
+		expect(result.failed).toEqual([destination]);
+		expect(await lstat(destination).then(() => true, () => false)).toBe(false);
+	});
 });
 
 async function startupFixture() {
@@ -63,5 +101,5 @@ async function startupFixture() {
 		if (entry.source.includes(".")) await writeFile(path, "fixture\n");
 		else await mkdir(path, { recursive: true });
 	}
-	return { source, home };
+	return { root, source, home };
 }

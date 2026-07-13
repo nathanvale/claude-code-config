@@ -7,8 +7,7 @@ import type { SetupDomainResult, SetupFinding, SetupResult } from "./model.ts";
 import { acquireOperationLock, inspectOperationLock } from "./operation-lock.ts";
 import { checkRunbookHealth } from "./runbook-health.ts";
 import { resolveSetupScope } from "./scope.ts";
-import { applyStartupTopology, inspectStartupTopology } from "./startup-topology.ts";
-import { removableStartupLinks } from "./startup-topology.ts";
+import { applyStartupTopology, inspectRemovableStartupLinks, inspectStartupTopology } from "./startup-topology.ts";
 import type { SetupInspection, SetupInspectionInput } from "./inspection.ts";
 import { unlinkSetup } from "./unlink.ts";
 import { rm } from "node:fs/promises";
@@ -85,7 +84,7 @@ export async function checkSetupDomains(
 		: blocked ? "sync.check_blocked" : planned > 0 ? "sync.check_changes" : "sync.check_clean";
 	const state = base.command === "status"
 		? blocked ? "blocked" : fresh ? "clean_slate" : planned > 0 ? "drift" : "healthy"
-		: blocked ? "blocked" : planned > 0 ? "changes" : "noop";
+		: blocked ? "blocked" : planned > 0 ? "changes" : "healthy";
 	return {
 		...base,
 		state,
@@ -102,11 +101,26 @@ export async function checkSetupDomains(
 export async function unlinkSetupDomains(input: SetupInspectionInput, options: UnlinkSetupDomainsOptions): Promise<SetupResult> {
 	if (input.scope === "project") return unlinkSetup(input, options);
 	const scope = await resolveSetupScope(input);
-	const removable = await removableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
+	const startupInspection = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
+	const removable = startupInspection.removable;
 	if (options.check) {
 		const projection = await unlinkSetup(input, options);
-		const startup = { domain: "startup", planned: removable, applied: [], deferred: [], preserved: [], failed: [] } satisfies SetupDomainResult;
-		return { ...projection, domains: [...projection.domains, startup], counts: { ...projection.counts, planned: projection.counts.planned + removable.length }, state: removable.length > 0 ? "changes" : projection.state, station: removable.length > 0 ? "unlink.check_removable" : projection.station, next_action: removable.length > 0 ? "run_unlink" : projection.next_action };
+		const startup = { domain: "startup", planned: removable, applied: [], deferred: [], preserved: startupInspection.preserved, failed: [] } satisfies SetupDomainResult;
+		const findings = [...projection.findings, ...startupInspection.findings];
+		const blocked = startupInspection.findings.length > 0 || projection.station === "unlink.check_blocked";
+		return {
+			...projection,
+			findings,
+			domains: [...projection.domains, startup],
+			counts: {
+				...projection.counts,
+				planned: projection.counts.planned + removable.length,
+				blockers: projection.counts.blockers + startupInspection.findings.length,
+			},
+			state: blocked ? "blocked" : removable.length > 0 ? "changes" : projection.state,
+			station: blocked ? "unlink.check_blocked" : removable.length > 0 ? "unlink.check_removable" : projection.station,
+			next_action: blocked ? "human_repair" : removable.length > 0 ? "run_unlink" : projection.next_action,
+		};
 	}
 	const lock = await acquireOperationLock({ scope: "user", targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
 	if (lock.status !== "acquired") return unlinkSetup(input, options);
@@ -114,25 +128,61 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 		const projection = await unlinkSetup(input, { ...options, lockHeld: true });
 		const applied: string[] = [];
 		const failed: string[] = [];
+		const preserved: string[] = [...startupInspection.preserved];
+		const findings: SetupFinding[] = [...startupInspection.findings];
+		let deferred: readonly string[] = [];
 		let concurrent = false;
-		for (const path of removable) {
-			if (!(await removableStartupLinks(input.sourceRepoRoot, scope.target_anchor)).includes(path)) { failed.push(path); break; }
+		for (let index = 0; index < removable.length; index += 1) {
+			const path = removable[index];
+			if (!path) continue;
+			const before = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
+			mergeStartupEvidence(before, findings, preserved);
+			if (!before.removable.includes(path)) { failed.push(path); deferred = removable.slice(index + 1); concurrent = true; break; }
 			try {
 				await options.beforeRemove?.(path);
-				if (!(await removableStartupLinks(input.sourceRepoRoot, scope.target_anchor)).includes(path)) {
+				const immediate = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
+				mergeStartupEvidence(immediate, findings, preserved);
+				if (!immediate.removable.includes(path)) {
 					failed.push(path);
+					deferred = removable.slice(index + 1);
 					concurrent = true;
 					break;
 				}
 				await rm(path);
 				applied.push(path);
-			} catch { failed.push(path); break; }
+			} catch { failed.push(path); deferred = removable.slice(index + 1); break; }
 		}
-		const startup: SetupDomainResult = { domain: "startup", planned: removable, applied, deferred: removable.slice(applied.length + failed.length), preserved: [], failed };
-		const incomplete = projection.state === "partial" || projection.state === "blocked" || failed.length > 0;
+		const startup: SetupDomainResult = { domain: "startup", planned: removable, applied, deferred, preserved, failed };
+		const allFindings = [...projection.findings, ...findings];
+		const incomplete = projection.state === "partial" || projection.state === "blocked" || failed.length > 0 || findings.length > 0;
 		const any = projection.domains.some((domain) => domain.applied.length > 0) || applied.length > 0;
-		return { ...projection, domains: [...projection.domains, startup], state: incomplete ? "partial" : any ? "removed" : "noop", station: concurrent ? "unlink.concurrent_change" : incomplete ? "unlink.partial_failure" : any ? "unlink.removed" : "unlink.noop", counts: { ...projection.counts, planned: projection.counts.planned + removable.length }, next_action: concurrent ? "rerun_check" : incomplete ? "inspect_results" : "clean_state" };
+		return {
+			...projection,
+			findings: allFindings,
+			domains: [...projection.domains, startup],
+			state: incomplete ? any ? "partial" : "blocked" : any ? "removed" : "noop",
+			station: concurrent ? "unlink.concurrent_change" : incomplete ? "unlink.partial_failure" : any ? "unlink.removed" : "unlink.noop",
+			counts: {
+				...projection.counts,
+				planned: projection.counts.planned + removable.length,
+				blockers: projection.counts.blockers + findings.length,
+			},
+			next_action: concurrent ? "rerun_check" : incomplete ? "inspect_results" : "clean_state",
+		};
 	} finally { await lock.release(); }
+}
+
+function mergeStartupEvidence(
+	inspection: Awaited<ReturnType<typeof inspectRemovableStartupLinks>>,
+	findings: SetupFinding[],
+	preserved: string[],
+): void {
+	for (const finding of inspection.findings) {
+		if (!findings.some((item) => item.id === finding.id && item.path === finding.path)) findings.push(finding);
+	}
+	for (const path of inspection.preserved) {
+		if (!preserved.includes(path)) preserved.push(path);
+	}
 }
 
 /** Compose all user domains under one lock; project scope remains skill-only. */
@@ -215,19 +265,21 @@ async function inspectHookDomain(
 
 function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], findings: readonly SetupFinding[], childOutput: string): SetupResult {
 	const all = [...base.domains, ...domains];
+	const allFindings = [...base.findings, ...findings];
 	const applied = all.some((domain) => domain.applied.length > 0);
-	const incomplete = findings.length > 0 || all.some((domain) => domain.failed.length > 0 || domain.deferred.length > 0);
-	const state = incomplete ? (applied ? "partial" : "blocked") : applied ? "applied" : "noop";
-	const station = incomplete ? (applied ? "sync.partial" : healthStation(findings)) : applied ? "sync.applied" : "sync.noop";
+	const incomplete = base.state === "blocked" || base.state === "partial" || base.counts.blockers > 0 || findings.length > 0 || all.some((domain) => domain.failed.length > 0 || domain.deferred.length > 0);
+	const partial = base.state === "partial" || (incomplete && applied);
+	const state = incomplete ? (partial ? "partial" : "blocked") : applied ? "applied" : "noop";
+	const station = incomplete ? (partial ? "sync.partial" : healthStation(allFindings)) : applied ? "sync.applied" : "sync.noop";
 	return {
 		...base,
 		state,
 		station,
-		findings: [...base.findings, ...findings],
+		findings: allFindings,
 		domains: all,
 		counts: { ...base.counts, planned: all.reduce((sum, domain) => sum + domain.planned.length, 0), blockers: base.counts.blockers + findings.length },
 		next_action: incomplete
-			? applied ? "inspect_results" : repairAction(findings)
+			? partial ? "inspect_results" : repairAction(allFindings)
 			: "setup_healthy",
 		child_output: childOutput,
 	};

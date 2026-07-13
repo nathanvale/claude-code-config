@@ -33,8 +33,6 @@ export interface SetupInspection {
 
 const BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
 	"source_missing",
-	"real_entry",
-	"foreign_symlink",
 	"invalid_skill",
 	"catalog_escape",
 	"canonical_id_collision",
@@ -49,7 +47,7 @@ export async function inspectSetup(
 ): Promise<SetupInspection> {
 	const scope = await resolveSetupScope(input);
 	const [catalog, providerEvidence] = await Promise.all([
-		inspectCatalog(scope.catalog_root),
+		inspectCatalog(scope.catalog_root, scope.source_anchor),
 		readProviderEvidence(scope.provider_evidence_root),
 	]);
 	const ownership = await inspectProjectionRoots({

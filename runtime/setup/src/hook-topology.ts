@@ -12,6 +12,8 @@ export interface HookTopologyPlan {
 	readonly preserved: readonly string[];
 }
 
+export type HookDirectoryReader = (path: string) => Promise<string[]>;
+
 export async function resolveGitHookPath(repoRoot: string): Promise<string> {
 	const child = Bun.spawnSync(["git", "-C", repoRoot, "rev-parse", "--git-path", "hooks"], { stdout: "pipe", stderr: "pipe" });
 	if (child.exitCode !== 0) throw new Error(new TextDecoder().decode(child.stderr).trim() || "Git hook path is unavailable.");
@@ -19,12 +21,21 @@ export async function resolveGitHookPath(repoRoot: string): Promise<string> {
 	return isAbsolute(path) ? path : resolve(repoRoot, path);
 }
 
-export async function inspectHookTopology(sourceDir: string, destinationDir: string): Promise<HookTopologyPlan> {
+export async function inspectHookTopology(
+	sourceDir: string,
+	destinationDir: string,
+	readDirectory: HookDirectoryReader = async (path) => readdir(path),
+): Promise<HookTopologyPlan> {
 	const operations: HookOperation[] = [];
 	const findings: SetupFinding[] = [];
 	const preserved: string[] = [];
 	let names: string[] = [];
-	try { names = await readdir(sourceDir); } catch { return { domain: "hooks", operations, findings, preserved }; }
+	try {
+		names = await readDirectory(sourceDir);
+	} catch (error) {
+		findings.push(hookSourceFinding(sourceDir, error));
+		return { domain: "hooks", operations, findings, preserved };
+	}
 	for (const name of names.sort()) {
 		const source = join(sourceDir, name);
 		const destination = join(destinationDir, name);
@@ -77,3 +88,28 @@ async function destinationShape(path: string): Promise<"missing" | "file" | "oth
 }
 async function isRegular(path: string): Promise<boolean> { try { return (await lstat(path)).isFile(); } catch { return false; } }
 async function equalFiles(left: string, right: string): Promise<boolean> { try { return Buffer.compare(await readFile(left), await readFile(right)) === 0; } catch { return false; } }
+
+function hookSourceFinding(path: string, error: unknown): SetupFinding {
+	const code = errorCode(error);
+	const summary = code === "ENOENT"
+		? "Git hook source directory is missing."
+		: code === "EACCES" || code === "EPERM"
+			? "Git hook source directory is unreadable."
+			: code === "ENOTDIR"
+				? "Git hook source path is not a directory."
+				: "Git hook source directory could not be inspected.";
+	return {
+		id: "hook_unhealthy",
+		owner: "setup.hooks",
+		path,
+		summary,
+		why: error instanceof Error ? error.message : String(error),
+		repair: "repair_hooks",
+	};
+}
+
+function errorCode(error: unknown): string | undefined {
+	return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+		? error.code
+		: undefined;
+}

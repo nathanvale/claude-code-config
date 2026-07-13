@@ -4,18 +4,107 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 install_consent=false
+json_requested=false
 forwarded=()
+
+dependency_timeout_seconds="${SETUP_DEPENDENCY_TIMEOUT_SECONDS:-300}"
+case "$dependency_timeout_seconds" in
+	"" | 0 | *[!0-9]*) dependency_timeout_seconds=300 ;;
+esac
+
+bounded_child_pid=""
+bounded_watchdog_pid=""
 
 for arg in "$@"; do
 	if [[ "$arg" == "--yes" ]]; then
 		install_consent=true
 	else
 		forwarded+=("$arg")
+		if [[ "$arg" == "--json" ]]; then
+			json_requested=true
+		fi
 	fi
 done
 
 bootstrap_error() {
 	printf 'setup: %s: %s\n' "$1" "$2" >&2
+	if [[ "$json_requested" == true ]]; then
+		printf '{"status":"error","run_id":"bootstrap","data":{"contract_id":"setup.bootstrap","schema_version":"1","station":"%s","next_action":"inspect_diagnostics"},"error":{"run_id":"bootstrap","code":"%s","message":"Setup bootstrap failed before the TypeScript CLI started.","exit_code":1,"severity":"error","recoverability":"repair_state","retryable":false},"duration_ms":0}\n' "$1" "$1"
+	fi
+}
+
+bounded_signal() {
+	local signal="$1"
+	trap '' HUP INT TERM
+	if [[ -n "$bounded_child_pid" ]]; then
+		kill -"$signal" "$bounded_child_pid" 2>/dev/null || true
+		sleep 1
+		kill -KILL "$bounded_child_pid" 2>/dev/null || true
+	fi
+	if [[ -n "$bounded_watchdog_pid" ]]; then
+		kill -TERM "$bounded_watchdog_pid" 2>/dev/null || true
+		wait "$bounded_watchdog_pid" 2>/dev/null || true
+	fi
+	if [[ -n "$bounded_child_pid" ]]; then
+		wait "$bounded_child_pid" 2>/dev/null || true
+	fi
+	trap - "$signal"
+	kill -"$signal" "$$"
+}
+
+run_bounded() {
+	local timeout_seconds="$1"
+	local child_status
+	shift
+
+	"$@" &
+	bounded_child_pid=$!
+	(
+		watchdog_sleep_pid=""
+		stop_watchdog() {
+			trap - HUP INT TERM
+			if [[ -n "$watchdog_sleep_pid" ]]; then
+				kill -TERM "$watchdog_sleep_pid" 2>/dev/null || true
+				wait "$watchdog_sleep_pid" 2>/dev/null || true
+			fi
+			exit 0
+		}
+		trap stop_watchdog HUP INT TERM
+		sleep "$timeout_seconds" &
+		watchdog_sleep_pid=$!
+		wait "$watchdog_sleep_pid" || exit 0
+		watchdog_sleep_pid=""
+		if kill -0 "$bounded_child_pid" 2>/dev/null; then
+			kill -TERM "$bounded_child_pid" 2>/dev/null || true
+			sleep 1 &
+			watchdog_sleep_pid=$!
+			wait "$watchdog_sleep_pid" || exit 0
+			watchdog_sleep_pid=""
+			kill -KILL "$bounded_child_pid" 2>/dev/null || true
+		fi
+	) </dev/null >/dev/null 2>&1 &
+	bounded_watchdog_pid=$!
+
+	trap 'bounded_signal HUP' HUP
+	trap 'bounded_signal INT' INT
+	trap 'bounded_signal TERM' TERM
+
+	if wait "$bounded_child_pid"; then
+		child_status=0
+	else
+		child_status=$?
+	fi
+	kill -TERM "$bounded_watchdog_pid" 2>/dev/null || true
+	wait "$bounded_watchdog_pid" 2>/dev/null || true
+	trap - HUP INT TERM
+	bounded_child_pid=""
+	bounded_watchdog_pid=""
+	return "$child_status"
+}
+
+reconcile_dependencies() {
+	cd "$repo_root"
+	exec "$bun_path" install --frozen-lockfile 1>&2
 }
 
 bun_path=""
@@ -48,7 +137,7 @@ if [[ -z "$bun_path" ]]; then
 		esac
 	fi
 
-	if ! curl -fsSL https://bun.sh/install | bash 1>&2; then
+	if ! curl -fsSL --connect-timeout 10 --max-time 120 https://bun.sh/install | bash 1>&2; then
 		bootstrap_error \
 			"bootstrap.bun_install_failed" \
 			"Bun installation failed. Inspect the installer diagnostics, then retry."
@@ -70,7 +159,7 @@ if [[ -z "$bun_path" ]]; then
 	fi
 fi
 
-if ! (cd "$repo_root" && "$bun_path" install --frozen-lockfile 1>&2); then
+if ! run_bounded "$dependency_timeout_seconds" reconcile_dependencies; then
 	bootstrap_error \
 		"bootstrap.dependencies_failed" \
 		"Frozen dependency reconciliation failed. Repair the lockfile, network, or toolchain, then retry."

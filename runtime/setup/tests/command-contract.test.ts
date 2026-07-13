@@ -43,9 +43,32 @@ describe("setup command contract", () => {
 		expect(() => parseSetupInvocation(["status", "--check"])).toThrow(
 			"Unsupported flag for status: --check",
 		);
-		expect(() => parseSetupInvocation(["commands", "--verbose"])).toThrow(
-			"Unsupported flag for commands: --verbose",
-		);
+		expect(parseSetupInvocation(["commands", "--json", "--verbose"]).verbose).toBe(true);
+	});
+
+	test("accepts every command flag advertised by discovery and rejects foreign flags", () => {
+		const discovery = projectSetupCommandDiscoveryTree();
+		const allFlags = new Set<string>();
+		for (const metadata of Object.values(discovery.commands)) {
+			for (const flag of Object.keys(metadata.flags)) allFlags.add(flag);
+			for (const flag of metadata.global_diagnostic_flags) allFlags.add(flag);
+		}
+
+		for (const command of SETUP_COMMANDS) {
+			const metadata = discovery.commands[command];
+			if (!metadata) throw new Error(`Missing discovery metadata for ${command}`);
+			const advertised = new Set([
+				...Object.keys(metadata.flags),
+				...metadata.global_diagnostic_flags,
+			]);
+			for (const flag of advertised) {
+				expect(() => parseSetupInvocation(argvForFlag(command, flag))).not.toThrow();
+			}
+			for (const flag of allFlags) {
+				if (advertised.has(flag)) continue;
+				expect(() => parseSetupInvocation(argvForFlag(command, flag))).toThrow();
+			}
+		}
 	});
 
 	test("routes no arguments to read-only user status", () => {
@@ -112,3 +135,14 @@ describe("setup command contract", () => {
 		});
 	});
 });
+
+function argvForFlag(command: (typeof SETUP_COMMANDS)[number], flag: string): string[] {
+	const argv: string[] = [command];
+	if (command === "commands" && flag !== "--json") argv.push("--json");
+	switch (flag) {
+		case "--scope": argv.push(flag, "user"); break;
+		case "--repo": argv.push("--scope", "project", flag, "/tmp/project"); break;
+		default: argv.push(flag);
+	}
+	return argv;
+}
