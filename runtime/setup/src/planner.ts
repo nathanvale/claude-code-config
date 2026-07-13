@@ -99,11 +99,19 @@ function projectionCandidates(inspection: SetupInspection): {
 	const operations: SetupOperation[] = [];
 	const findings: SetupFinding[] = [];
 	let blocked = false;
+	const validEntries = inspection.catalog.entries.filter((entry) => entry.state === "valid");
+	const ownershipByRoot = new Map<string, Map<string, (typeof inspection.ownership.entries)[number]>>();
+	for (const entry of inspection.ownership.entries) {
+		let entries = ownershipByRoot.get(entry.root_id);
+		if (!entries) {
+			entries = new Map();
+			ownershipByRoot.set(entry.root_id, entries);
+		}
+		if (!entries.has(entry.canonical_id)) entries.set(entry.canonical_id, entry);
+	}
 	for (const root of inspection.scope.projection_roots) {
-		for (const catalogEntry of inspection.catalog.entries.filter((entry) => entry.state === "valid")) {
-			const existing = inspection.ownership.entries.find(
-				(entry) => entry.root_id === root.id && entry.canonical_id === catalogEntry.canonical_id,
-			);
+		for (const catalogEntry of validEntries) {
+			const existing = ownershipByRoot.get(root.id)?.get(catalogEntry.canonical_id);
 			const destination = `${root.path}/${catalogEntry.id}`;
 			const common = {
 				domain: "skill_projection",

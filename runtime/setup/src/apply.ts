@@ -1,11 +1,12 @@
 import { mkdir, realpath, rm, symlink } from "node:fs/promises";
-import { dirname, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 
 import { canonicalSkillId } from "./catalog.ts";
 import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
 import type { SetupDomainResult, SetupFinding, SetupOperation, SetupResult } from "./model.ts";
 import { classifyProjectionPath } from "./ownership.ts";
 import { acquireOperationLock } from "./operation-lock.ts";
+import { isInsideOrEqual } from "./path-safety.ts";
 import { planSetup } from "./planner.ts";
 import { resolveSetupScope } from "./scope.ts";
 
@@ -107,7 +108,7 @@ async function operationMatches(
 		return false;
 	}
 	if (!isInsideOrEqual(catalog, source)) return false;
-	if (canonicalSkillId(source.split("/").at(-1) ?? "") !== operation.canonical_id) return false;
+	if (canonicalSkillId(basename(source)) !== operation.canonical_id) return false;
 	const current = await classifyProjectionPath({
 		root,
 		path: operation.destination,
@@ -164,9 +165,4 @@ function lockResult(
 		station: status === "busy" ? "sync.operation_busy" : "sync.blocked",
 		next_action: status === "busy" ? "retry" : "inspect_lock",
 	};
-}
-
-function isInsideOrEqual(root: string, path: string): boolean {
-	const child = relative(resolve(root), resolve(path));
-	return child === "" || (!child.startsWith("..") && !child.startsWith("/"));
 }

@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SetupScope } from "./model.ts";
+import { canonicalPath, hasErrorCode } from "./path-safety.ts";
 
 interface LockOwner {
 	readonly pid: number;
@@ -68,7 +69,7 @@ export async function acquireOperationLock(input: {
 	try {
 		await mkdir(lockPath);
 	} catch (error) {
-		if (!hasCode(error, "EEXIST")) throw error;
+		if (!hasErrorCode(error, "EEXIST")) throw error;
 		const owner = await readOwner(lockPath);
 		const alive = typeof owner?.pid === "number" && (input.isProcessAlive ?? processAlive)(owner.pid);
 		return { status: alive ? "busy" : "stale", path: lockPath, ...(owner ? { owner } : {}) };
@@ -98,14 +99,6 @@ function lockName(scope: SetupScope, targetAnchor: string): string {
 	return `project-${digest}.lock`;
 }
 
-async function canonicalPath(path: string): Promise<string> {
-	try {
-		return await import("node:fs/promises").then(({ realpath }) => realpath(path));
-	} catch {
-		return resolve(path);
-	}
-}
-
 async function readOwner(lockPath: string): Promise<Partial<LockOwner> | undefined> {
 	try {
 		const parsed = JSON.parse(await readFile(`${lockPath}/owner.json`, "utf8")) as Partial<LockOwner>;
@@ -120,10 +113,6 @@ function processAlive(pid: number): boolean {
 		process.kill(pid, 0);
 		return true;
 	} catch (error) {
-		return hasCode(error, "EPERM");
+		return hasErrorCode(error, "EPERM");
 	}
-}
-
-function hasCode(error: unknown, code: string): boolean {
-	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code;
 }

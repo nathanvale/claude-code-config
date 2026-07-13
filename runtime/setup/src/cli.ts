@@ -245,14 +245,19 @@ function catalogExecution(invocation: ParsedSetupInvocation, inspection: SetupIn
 	const matching = requested
 		? inspection.catalog.entries.filter((entry) => entry.canonical_id === canonicalSkillId(requested))
 		: inspection.catalog.entries;
+	const occupancyById = new Map<string, string[]>();
+	for (const owned of inspection.ownership.entries) {
+		const occupancy = occupancyById.get(owned.canonical_id) ?? [];
+		occupancy.push(`${owned.root_id}:${owned.ownership}`);
+		occupancyById.set(owned.canonical_id, occupancy);
+	}
+	for (const occupancy of occupancyById.values()) occupancy.sort();
 	const entries = matching.map((entry) => ({
 		id: entry.id,
 		canonical_id: entry.canonical_id,
 		state: entry.state,
 		path: entry.path,
-		occupancy: inspection.ownership.entries
-			.filter((owned) => owned.canonical_id === entry.canonical_id)
-			.map((owned) => `${owned.root_id}:${owned.ownership}`).sort(),
+		occupancy: occupancyById.get(entry.canonical_id) ?? [],
 	}));
 	const missed = requested !== undefined && entries.length === 0;
 	const result: SetupResult = {

@@ -1,7 +1,8 @@
 import { lstat, mkdir, readlink, realpath, rm, symlink } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { SetupDomainResult, SetupFinding } from "./model.ts";
+import { canonicalPath, isInsideOrEqual } from "./path-safety.ts";
 
 export const STARTUP_LINKS = [
 	{ destination: ".claude/CLAUDE.md", source: "CLAUDE.md" },
@@ -37,7 +38,7 @@ export async function inspectStartupTopology(sourceRoot: string, homeDir: string
 	const operations: StartupOperation[] = [];
 	const findings: SetupFinding[] = [];
 	const preserved: string[] = [];
-	const homeRoot = await canonical(homeDir);
+	const homeRoot = await canonicalPath(homeDir);
 	for (const entry of STARTUP_LINKS) {
 		const unsafe = await unsafeExistingParent(homeRoot, join(homeDir, entry.destination));
 		if (unsafe) {
@@ -60,7 +61,7 @@ export async function inspectStartupTopology(sourceRoot: string, homeDir: string
 		}
 		if (shape === "symlink") {
 			const target = await resolvedLink(destination);
-			if (target === await canonical(source)) continue;
+			if (target === await canonicalPath(source)) continue;
 			findings.push({ id: "foreign_symlink", owner: "external", path: destination, summary: "Foreign startup symlink is preserved.", repair: "human_repair" });
 			preserved.push(destination);
 			continue;
@@ -105,21 +106,17 @@ export async function removableStartupLinks(sourceRoot: string, homeDir: string)
 	const paths: string[] = [];
 	for (const entry of STARTUP_LINKS) {
 		const destination = join(homeDir, entry.destination);
-		if (await pathShape(destination) === "symlink" && await resolvedLink(destination) === await canonical(resolve(sourceRoot, entry.source))) paths.push(destination);
+		if (await pathShape(destination) === "symlink" && await resolvedLink(destination) === await canonicalPath(resolve(sourceRoot, entry.source))) paths.push(destination);
 	}
 	return paths;
-}
-
-async function canonical(path: string): Promise<string> {
-	try { return await realpath(path); } catch { return resolve(path); }
 }
 
 async function unsafeExistingParent(homeRoot: string, destination: string): Promise<string | undefined> {
 	let current = dirname(destination);
 	while (true) {
 		if (await exists(current)) {
-			const resolved = await canonical(current);
-			if (!inside(homeRoot, resolved)) return current;
+			const resolved = await canonicalPath(current);
+			if (!isInsideOrEqual(homeRoot, resolved)) return current;
 			if (resolve(resolved) === resolve(homeRoot)) return undefined;
 		}
 		if (resolve(current) === resolve(homeRoot)) return undefined;
@@ -127,11 +124,6 @@ async function unsafeExistingParent(homeRoot: string, destination: string): Prom
 		if (parent === current) return current;
 		current = parent;
 	}
-}
-
-function inside(root: string, path: string): boolean {
-	const child = relative(resolve(root), resolve(path));
-	return child === "" || (!child.startsWith("..") && !child.startsWith("/"));
 }
 
 async function exists(path: string): Promise<boolean> {

@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
+import { deepFreeze } from "./immutable.ts";
 import type { SetupFindingId, SetupScope } from "./model.ts";
+import { hasErrorCode, isInsideOrEqual } from "./path-safety.ts";
 
 export interface ProjectionRoot {
 	readonly id: "claude" | "codex" | "legacy_codex";
@@ -55,7 +57,7 @@ export async function resolveSetupScope(
 					),
 				]
 			: [];
-	return freeze({
+	return deepFreeze({
 		scope: input.scope,
 		source_anchor: source,
 		target_anchor: target,
@@ -113,26 +115,10 @@ async function nearestExistingPath(
 }
 
 function isMissing(error: unknown): boolean {
-	return typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		(error as { code?: unknown }).code === "ENOENT";
+	return hasErrorCode(error, "ENOENT");
 }
 
 function requiredProject(value: string | undefined): string {
 	if (!value) throw new Error("Project scope requires projectRepoRoot.");
-	return value;
-}
-
-function isInsideOrEqual(root: string, path: string): boolean {
-	const child = relative(resolve(root), resolve(path));
-	return child === "" || (!child.startsWith("..") && !child.startsWith("/"));
-}
-
-function freeze<T extends object>(value: T): T {
-	Object.freeze(value);
-	for (const child of Object.values(value)) {
-		if (child && typeof child === "object" && !Object.isFrozen(child)) freeze(child);
-	}
 	return value;
 }

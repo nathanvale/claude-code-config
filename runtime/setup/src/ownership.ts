@@ -1,10 +1,12 @@
 import type { Stats } from "node:fs";
 import { existsSync } from "node:fs";
 import { lstat, readdir, readlink, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { canonicalSkillId } from "./catalog.ts";
+import { deepFreeze } from "./immutable.ts";
 import type { SetupFinding, SetupFindingId } from "./model.ts";
+import { hasErrorCode, isInsideOrEqual } from "./path-safety.ts";
 import type { ProviderEvidence } from "./provider-evidence.ts";
 import type { ProjectionRoot } from "./scope.ts";
 
@@ -122,7 +124,7 @@ export async function inspectProjectionRoots(
 			if (entry.finding_id) findings.push(ownershipFinding(entry));
 		}
 	}
-	return freeze({ entries, findings });
+	return deepFreeze({ entries, findings });
 }
 
 async function classifyEntry(
@@ -274,21 +276,5 @@ function ownershipFinding(entry: OwnershipEntry): SetupFinding {
 }
 
 function isMissing(error: unknown): boolean {
-	return typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		(error as { code?: unknown }).code === "ENOENT";
-}
-
-function isInsideOrEqual(root: string, path: string): boolean {
-	const child = relative(resolve(root), resolve(path));
-	return child === "" || (!child.startsWith("..") && !child.startsWith("/"));
-}
-
-function freeze<T extends object>(value: T): T {
-	Object.freeze(value);
-	for (const child of Object.values(value)) {
-		if (child && typeof child === "object" && !Object.isFrozen(child)) freeze(child);
-	}
-	return value;
+	return hasErrorCode(error, "ENOENT");
 }

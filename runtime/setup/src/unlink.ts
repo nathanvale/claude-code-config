@@ -40,16 +40,19 @@ async function unlinkWithInspection(
 		.filter((entry) => entry.shape === "symlink" && (entry.ownership === "managed_link" || entry.ownership === "broken_managed_link"))
 		.map((entry) => entry.path)
 		.sort();
+	const removablePaths = new Set(removable);
 	const preserved = inspection.ownership.entries
-		.filter((entry) => !removable.includes(entry.path))
+		.filter((entry) => !removablePaths.has(entry.path))
 		.map((entry) => entry.path)
 		.sort();
 	if (inspection.findings.some((finding) => finding.id === "unsafe_root")) {
-		return unlinkResult(input, inspection, removable, [], removable, preserved, "unlink.check_blocked");
+		return unlinkResult({ input, inspection, planned: removable, applied: [], deferred: removable, preserved, station: "unlink.check_blocked" });
 	}
 	if (check || removable.length === 0) {
-		return unlinkResult(input, inspection, removable, [], [], preserved,
-			check && removable.length > 0 ? "unlink.check_removable" : check ? "unlink.check_noop" : "unlink.noop");
+		return unlinkResult({
+			input, inspection, planned: removable, applied: [], deferred: [], preserved,
+			station: check && removable.length > 0 ? "unlink.check_removable" : check ? "unlink.check_noop" : "unlink.noop",
+		});
 	}
 	const applied: string[] = [];
 	for (let index = 0; index < removable.length; index += 1) {
@@ -60,11 +63,11 @@ async function unlinkWithInspection(
 		const freshScope = await resolveSetupScope(input);
 		const freshRoot = freshScope.projection_roots.find((candidate) => candidate.id === entry?.root_id);
 		if (!entry || !root || !freshRoot?.safe || freshRoot.path !== root.path) {
-			return unlinkResult(input, inspection, removable, applied, removable.slice(index), preserved, "unlink.concurrent_change");
+			return unlinkResult({ input, inspection, planned: removable, applied, deferred: removable.slice(index), preserved, station: "unlink.concurrent_change" });
 		}
 		const current = await classifyProjectionPath({ root: freshRoot, path, id: entry.id, catalogRoot: freshScope.catalog_root, providerEvidence: inspection.provider_evidence });
 		if (current?.shape !== "symlink" || (current.ownership !== "managed_link" && current.ownership !== "broken_managed_link")) {
-			return unlinkResult(input, inspection, removable, applied, removable.slice(index), preserved, "unlink.concurrent_change");
+			return unlinkResult({ input, inspection, planned: removable, applied, deferred: removable.slice(index), preserved, station: "unlink.concurrent_change" });
 		}
 		try {
 			await beforeRemove?.(path);
@@ -80,35 +83,37 @@ async function unlinkWithInspection(
 				(revalidated.ownership !== "managed_link" &&
 					revalidated.ownership !== "broken_managed_link")
 			) {
-				return unlinkResult(
-					input,
-					inspection,
-					removable,
-					applied,
-					removable.slice(index),
-					preserved,
-					"unlink.concurrent_change",
-				);
+				return unlinkResult({
+					input, inspection, planned: removable, applied,
+					deferred: removable.slice(index), preserved, station: "unlink.concurrent_change",
+				});
 			}
 			await rm(path);
 			applied.push(path);
 		} catch {
-			return unlinkResult(input, inspection, removable, applied, removable.slice(index), preserved, "unlink.partial_failure", [path]);
+			return unlinkResult({
+				input, inspection, planned: removable, applied,
+				deferred: removable.slice(index), preserved, station: "unlink.partial_failure", failed: [path],
+			});
 		}
 	}
-	return unlinkResult(input, inspection, removable, applied, [], preserved, "unlink.removed");
+	return unlinkResult({ input, inspection, planned: removable, applied, deferred: [], preserved, station: "unlink.removed" });
 }
 
-function unlinkResult(
-	input: SetupInspectionInput,
-	inspection: SetupInspection,
-	planned: readonly string[],
-	applied: readonly string[],
-	deferred: readonly string[],
-	preserved: readonly string[],
-	station: string,
-	failed: readonly string[] = [],
-): SetupResult {
+interface UnlinkResultInput {
+	readonly input: SetupInspectionInput;
+	readonly inspection: SetupInspection;
+	readonly planned: readonly string[];
+	readonly applied: readonly string[];
+	readonly deferred: readonly string[];
+	readonly preserved: readonly string[];
+	readonly station: string;
+	readonly failed?: readonly string[];
+}
+
+function unlinkResult({
+	input, inspection, planned, applied, deferred, preserved, station, failed = [],
+}: UnlinkResultInput): SetupResult {
 	const domain: SetupDomainResult = { domain: "skill_projection", planned, applied, deferred, preserved, failed };
 	const state = station === "unlink.removed" ? "removed" : station === "unlink.noop" || station === "unlink.check_noop" ? "noop" : station === "unlink.check_removable" ? "changes" : "partial";
 	return {

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { canonicalSkillId } from "./catalog.ts";
+import { deepFreeze } from "./immutable.ts";
 import type { SetupFinding } from "./model.ts";
 
 export const PROVIDER_EVIDENCE_FILE = "skills-lock.json" as const;
@@ -26,7 +27,7 @@ export async function readProviderEvidence(
 	root: string,
 ): Promise<ProviderEvidence> {
 	const path = join(root, PROVIDER_EVIDENCE_FILE);
-	if (!existsSync(path)) return freeze({ path, entries: [] });
+	if (!existsSync(path)) return deepFreeze({ path, entries: [] });
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(await readFile(path, "utf8"));
@@ -65,11 +66,11 @@ export async function readProviderEvidence(
 	if (records.length > 0 && entries.length === 0) {
 		return malformed(path, "no entry has a usable skill id");
 	}
-	return freeze({ path, entries: entries.sort((a, b) => a.id.localeCompare(b.id)) });
+	return deepFreeze({ path, entries: entries.sort((a, b) => a.id.localeCompare(b.id)) });
 }
 
 function malformed(path: string, detail: string): ProviderEvidence {
-	return freeze({
+	return deepFreeze({
 		path,
 		entries: [],
 		finding: {
@@ -100,12 +101,4 @@ function stringField(value: unknown, key: string): string | undefined {
 
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function freeze<T extends object>(value: T): T {
-	Object.freeze(value);
-	for (const child of Object.values(value)) {
-		if (child && typeof child === "object" && !Object.isFrozen(child)) freeze(child);
-	}
-	return value;
 }

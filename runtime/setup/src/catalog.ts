@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir, realpath } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
+import { deepFreeze } from "./immutable.ts";
 import type { SetupFinding, SetupFindingId } from "./model.ts";
+import { isInsideOrEqual } from "./path-safety.ts";
 
 export type CatalogEntryState = "valid" | "invalid" | "escape" | "collision";
 
@@ -54,7 +56,7 @@ export async function inspectCatalog(
 	catalogRoot: string,
 ): Promise<CatalogInspection> {
 	const root = resolve(catalogRoot);
-	if (!existsSync(root)) return freeze({ root, entries: [], findings: [] });
+	if (!existsSync(root)) return deepFreeze({ root, entries: [], findings: [] });
 	const canonicalRoot = await realpath(root);
 	const children = await readdir(root, { withFileTypes: true });
 	const inspected = await Promise.all(
@@ -98,7 +100,7 @@ export async function inspectCatalog(
 		if (entry.state === "collision" || !entry.finding_id) continue;
 		findings.push(catalogFinding(entry));
 	}
-	return freeze({ root, entries, findings });
+	return deepFreeze({ root, entries, findings });
 }
 
 async function inspectCatalogEntry(
@@ -182,19 +184,4 @@ function catalogFinding(entry: CatalogEntry): SetupFinding {
 				: `Catalog skill '${entry.id}' has no valid SKILL.md.`,
 		repair: "human_repair",
 	};
-}
-
-function isInsideOrEqual(root: string, path: string): boolean {
-	const child = relative(resolve(root), resolve(path));
-	return child === "" || (!child.startsWith("..") && !child.startsWith("/"));
-}
-
-function freeze<T extends object>(value: T): T {
-	Object.freeze(value);
-	for (const child of Object.values(value)) {
-		if (child && typeof child === "object" && !Object.isFrozen(child)) {
-			freeze(child);
-		}
-	}
-	return value;
 }

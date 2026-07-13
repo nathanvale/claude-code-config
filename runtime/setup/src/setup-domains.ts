@@ -62,26 +62,20 @@ export async function checkSetupDomains(
 		}
 	}
 	if (input.scope === "project") return base;
-	const startupPlan = await inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor);
-	let hook = emptyDomain("hooks");
-	const findings: SetupFinding[] = [...startupPlan.findings];
-	try {
-		const hookRoot = await (options.hookPath ?? resolveGitHookPath)(input.sourceRepoRoot);
-		const hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, "scripts/hooks"), hookRoot);
-		hook = { domain: "hooks", planned: hookPlan.operations.map((item) => item.destination), applied: [], deferred: [], preserved: hookPlan.preserved, failed: [] };
-		findings.push(...hookPlan.findings);
-	} catch (error) {
-		findings.push({ id: "hook_unhealthy", owner: "setup.hooks", summary: error instanceof Error ? error.message : String(error), repair: "repair_hooks" });
-	}
-	const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
+	const [startupPlan, hookInspection, instruction] = await Promise.all([
+		inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor),
+		inspectHookDomain(input.sourceRepoRoot, options.hookPath),
+		checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner),
+	]);
+	const findings: SetupFinding[] = [...startupPlan.findings, ...hookInspection.findings];
 	if (instruction.finding) findings.push(instruction.finding);
 	const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
 	if (runbook.finding) findings.push(runbook.finding);
 	const domains: SetupDomainResult[] = [
 		{ domain: "startup", planned: startupPlan.operations.map((item) => item.destination), applied: [], deferred: [], preserved: startupPlan.preserved, failed: [] },
-		hook,
-		{ ...emptyDomain("instruction"), failed: instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")] },
-		{ ...emptyDomain("runbook"), failed: runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`) },
+		hookInspection.domain,
+		domainWithFailures("instruction", instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")]),
+		domainWithFailures("runbook", runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`)),
 	];
 	const planned = [...base.domains, ...domains].reduce((sum, domain) => sum + domain.planned.length, 0);
 	const blocked = findings.length > 0 || base.state === "blocked";
@@ -167,16 +161,16 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 		}
 		const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
 		if (instruction.finding) extraFindings.push(instruction.finding);
-		const instructionDomain: SetupDomainResult = {
-			domain: "instruction", planned: [], applied: [], deferred: [], preserved: [],
-			failed: instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")],
-		};
+		const instructionDomain = domainWithFailures(
+			"instruction",
+			instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")],
+		);
 		const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
 		if (runbook.finding) extraFindings.push(runbook.finding);
-		const runbookDomain: SetupDomainResult = {
-			domain: "runbook", planned: [], applied: [], deferred: [], preserved: [],
-			failed: runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`),
-		};
+		const runbookDomain = domainWithFailures(
+			"runbook",
+			runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`),
+		);
 		return aggregate(projection, [startup, hook, instructionDomain, runbookDomain], extraFindings, `${instruction.stdout}${instruction.stderr}`);
 	} finally {
 		await lock.release();
@@ -187,12 +181,44 @@ function emptyDomain(domain: string): SetupDomainResult {
 	return { domain, planned: [], applied: [], deferred: [], preserved: [], failed: [] };
 }
 
+function domainWithFailures(domain: string, failed: readonly string[]): SetupDomainResult {
+	return { ...emptyDomain(domain), failed };
+}
+
+async function inspectHookDomain(
+	repoRoot: string,
+	hookPath?: (repoRoot: string) => Promise<string>,
+): Promise<{ domain: SetupDomainResult; findings: readonly SetupFinding[] }> {
+	try {
+		const hookRoot = await (hookPath ?? resolveGitHookPath)(repoRoot);
+		const plan = await inspectHookTopology(join(repoRoot, "scripts/hooks"), hookRoot);
+		return {
+			domain: {
+				...emptyDomain("hooks"),
+				planned: plan.operations.map((item) => item.destination),
+				preserved: plan.preserved,
+			},
+			findings: plan.findings,
+		};
+	} catch (error) {
+		return {
+			domain: emptyDomain("hooks"),
+			findings: [{
+				id: "hook_unhealthy",
+				owner: "setup.hooks",
+				summary: error instanceof Error ? error.message : String(error),
+				repair: "repair_hooks",
+			}],
+		};
+	}
+}
+
 function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], findings: readonly SetupFinding[], childOutput: string): SetupResult {
 	const all = [...base.domains, ...domains];
 	const applied = all.some((domain) => domain.applied.length > 0);
 	const incomplete = findings.length > 0 || all.some((domain) => domain.failed.length > 0 || domain.deferred.length > 0);
 	const state = incomplete ? (applied ? "partial" : "blocked") : applied ? "applied" : "noop";
-	const station = incomplete ? (applied ? "sync.partial" : healthStation(findings, base.station)) : applied ? "sync.applied" : "sync.noop";
+	const station = incomplete ? (applied ? "sync.partial" : healthStation(findings)) : applied ? "sync.applied" : "sync.noop";
 	return {
 		...base,
 		state,
@@ -214,9 +240,9 @@ function repairAction(findings: readonly SetupFinding[]) {
 	return "run_doctor" as const;
 }
 
-function healthStation(findings: readonly SetupFinding[], fallback: string): string {
+function healthStation(findings: readonly SetupFinding[]): string {
 	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "sync.hook_failure";
 	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "sync.instruction_failure";
 	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "sync.runbook_failure";
-	return fallback === "sync.blocked" ? fallback : "sync.blocked";
+	return "sync.blocked";
 }

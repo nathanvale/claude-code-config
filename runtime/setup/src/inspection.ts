@@ -1,4 +1,5 @@
 import { inspectCatalog, type CatalogInspection } from "./catalog.ts";
+import { deepFreeze } from "./immutable.ts";
 import type { SetupFinding, SetupScope } from "./model.ts";
 import {
 	inspectProjectionRoots,
@@ -73,7 +74,7 @@ export async function inspectSetup(
 			}),
 		),
 	];
-	return freeze({
+	return deepFreeze({
 		scope,
 		catalog,
 		provider_evidence: providerEvidence,
@@ -106,12 +107,4 @@ async function findProjectDuplicates(
 		.filter((entry) => entry.state === "valid" && userIds.has(entry.canonical_id))
 		.map((entry) => entry.id)
 		.sort((a, b) => a.localeCompare(b));
-}
-
-function freeze<T extends object>(value: T): T {
-	Object.freeze(value);
-	for (const child of Object.values(value)) {
-		if (child && typeof child === "object" && !Object.isFrozen(child)) freeze(child);
-	}
-	return value;
 }
