@@ -4,7 +4,7 @@ import { applySetup } from "./apply.ts";
 import { applyHookTopology, inspectHookTopology, resolveGitHookPath } from "./hook-topology.ts";
 import { checkInstructionHealth, type InstructionRunner } from "./instruction-health.ts";
 import type { SetupDomainResult, SetupFinding, SetupResult } from "./model.ts";
-import { acquireOperationLock } from "./operation-lock.ts";
+import { acquireOperationLock, inspectOperationLock } from "./operation-lock.ts";
 import { checkRunbookHealth } from "./runbook-health.ts";
 import { resolveSetupScope } from "./scope.ts";
 import { applyStartupTopology, inspectStartupTopology } from "./startup-topology.ts";
@@ -18,6 +18,14 @@ export interface ApplySetupDomainsOptions {
 	readonly inspect?: (input: SetupInspectionInput) => Promise<SetupInspection>;
 	readonly instructionRunner?: InstructionRunner;
 	readonly hookPath?: (repoRoot: string) => Promise<string>;
+	/** Deterministic pre-syscall seam used to prove apply-time races and failures. */
+	readonly beforeSymlink?: (source: string, destination: string) => Promise<void>;
+}
+
+/** Read-only composition options, including optional lock-state diagnostics. */
+export interface CheckSetupDomainsOptions extends Omit<ApplySetupDomainsOptions, "stateRoot"> {
+	/** Operation-lock root inspected by doctor without mutation. */
+	readonly stateRoot?: string;
 }
 
 export interface UnlinkSetupDomainsOptions {
@@ -31,10 +39,29 @@ export interface UnlinkSetupDomainsOptions {
 export async function checkSetupDomains(
 	input: SetupInspectionInput,
 	base: SetupResult,
-	options: Omit<ApplySetupDomainsOptions, "stateRoot">,
+	options: CheckSetupDomainsOptions,
 ): Promise<SetupResult> {
-	if (input.scope === "project") return base;
 	const scope = await resolveSetupScope(input);
+	if (base.command === "doctor" && options.stateRoot) {
+		const lock = await inspectOperationLock({
+			scope: input.scope,
+			targetAnchor: scope.target_anchor,
+			stateRoot: options.stateRoot,
+		});
+		if (lock.status === "stale") {
+			return {
+				...base,
+				findings: [...base.findings, {
+					id: "stale_operation_lock",
+					owner: "setup.operation-lock",
+					path: lock.path,
+					summary: "An unreclaimed stale setup mutation lock requires inspection.",
+					repair: "inspect_lock",
+				}],
+			};
+		}
+	}
+	if (input.scope === "project") return base;
 	const startupPlan = await inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor);
 	let hook = emptyDomain("hooks");
 	const findings: SetupFinding[] = [...startupPlan.findings];
@@ -116,7 +143,7 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 
 /** Compose all user domains under one lock; project scope remains skill-only. */
 export async function applySetupDomains(input: SetupInspectionInput, options: ApplySetupDomainsOptions): Promise<SetupResult> {
-	if (input.scope === "project") return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect });
+	if (input.scope === "project") return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, beforeSymlink: options.beforeSymlink });
 	const scope = await resolveSetupScope(input);
 	const homeDir = scope.target_anchor;
 	const lock = await acquireOperationLock({ scope: "user", targetAnchor: homeDir, stateRoot: options.stateRoot });
@@ -124,7 +151,7 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 		return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect });
 	}
 	try {
-		const projection = await applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, lockHeld: true });
+		const projection = await applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, lockHeld: true, beforeSymlink: options.beforeSymlink });
 		const startupPlan = await inspectStartupTopology(input.sourceRepoRoot, homeDir);
 		const startup = await applyStartupTopology(startupPlan);
 		let hook: SetupDomainResult = emptyDomain("hooks");
@@ -173,9 +200,18 @@ function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], fin
 		findings: [...base.findings, ...findings],
 		domains: all,
 		counts: { ...base.counts, planned: all.reduce((sum, domain) => sum + domain.planned.length, 0), blockers: base.counts.blockers + findings.length },
-		next_action: incomplete ? (applied ? "inspect_results" : "run_doctor") : "setup_healthy",
+		next_action: incomplete
+			? applied ? "inspect_results" : repairAction(findings)
+			: "setup_healthy",
 		child_output: childOutput,
 	};
+}
+
+function repairAction(findings: readonly SetupFinding[]) {
+	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "repair_hooks" as const;
+	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "repair_instructions" as const;
+	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "repair_runbook" as const;
+	return "run_doctor" as const;
 }
 
 function healthStation(findings: readonly SetupFinding[], fallback: string): string {

@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import { applySetup } from "../src/apply.ts";
 import { inspectSetup, type SetupInspectionInput } from "../src/inspection.ts";
-import { acquireOperationLock } from "../src/operation-lock.ts";
+import { acquireOperationLock, inspectOperationLock } from "../src/operation-lock.ts";
 import { unlinkSetup } from "../src/unlink.ts";
 
 describe("setup operation lock", () => {
@@ -28,6 +28,17 @@ describe("setup operation lock", () => {
 		const result = await acquireOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });
 		expect(result).toMatchObject({ status: "stale", path: lockPath });
 		expect(await Bun.file(join(lockPath, "owner.json")).exists()).toBe(true);
+	});
+
+	test("inspects stale evidence without creating a missing lock", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-inspect-"));
+		const missing = await inspectOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });
+		expect(missing.status).toBe("missing");
+		const lockPath = join(stateRoot, "user.lock");
+		await mkdir(lockPath);
+		await writeFile(join(lockPath, "owner.json"), JSON.stringify({ pid: 99999999, token: "old" }));
+		const stale = await inspectOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });
+		expect(stale).toMatchObject({ status: "stale", path: lockPath });
 	});
 
 	test("uses a stable target-derived project lock", async () => {

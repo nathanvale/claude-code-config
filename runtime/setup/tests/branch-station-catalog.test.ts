@@ -7,6 +7,7 @@ import {
 	setupBranchStationCatalog,
 } from "../src/branch-station-catalog.ts";
 import {
+	SETUP_COMMANDS_CONTRACT_ID,
 	SETUP_ACTION_IDS,
 	SETUP_COMMANDS,
 	SETUP_RESULT_CONTRACT_ID,
@@ -49,13 +50,20 @@ describe("setup Branch Station Catalog", () => {
 		const stations: readonly BranchStation[] = setupBranchStationCatalog;
 		const actions = new Set<string>(SETUP_ACTION_IDS);
 		for (const station of stations) {
-			expect(station.expectedResultContractId).toBe(SETUP_RESULT_CONTRACT_ID);
+			expect(station.expectedResultContractId).toBe(
+				station.id === "commands.catalog"
+					? SETUP_COMMANDS_CONTRACT_ID
+					: SETUP_RESULT_CONTRACT_ID,
+			);
 			expect(station.expectedExitCode).toBeDefined();
 			expect([0, 1, 2]).toContain(station.expectedExitCode as number);
 			expect(station.mutationExpectation.length).toBeGreaterThan(0);
 			if (station.expectedActionId) expect(actions.has(station.expectedActionId)).toBe(true);
 			if (station.expectedEnvelopeStatus === "error") {
-				expect(station.expectedErrorCode).toBe(station.id.split(".").at(-1));
+				const expectedCode = station.id.endsWith("check_invalid_target")
+					? "invalid_target"
+					: station.id.split(".").at(-1);
+				expect(station.expectedErrorCode).toBe(expectedCode);
 			}
 		}
 	});

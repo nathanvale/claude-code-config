@@ -6,6 +6,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import { projectSetupCommandDiscoveryTree } from "./command-contract.ts";
 import {
+	SETUP_COMMANDS_CONTRACT_ID,
 	SETUP_RESULT_CONTRACT_ID,
 	type SetupActionId,
 	type SetupCommand,
@@ -17,6 +18,8 @@ type StationSpec = {
 	trigger: string;
 	exit: 0 | 1 | 2;
 	status: "ok" | "error";
+	resultContractId?: string;
+	errorCode?: string;
 	action?: SetupActionId;
 	mutation: string;
 };
@@ -30,9 +33,9 @@ function station(spec: StationSpec): BranchStation {
 		trigger: spec.trigger,
 		expectedExitCode: spec.exit,
 		expectedEnvelopeStatus: spec.status,
-		expectedResultContractId: SETUP_RESULT_CONTRACT_ID,
+		expectedResultContractId: spec.resultContractId ?? SETUP_RESULT_CONTRACT_ID,
 		...(spec.status === "error"
-			? { expectedErrorCode: spec.id.split(".").at(-1) }
+			? { expectedErrorCode: spec.errorCode ?? spec.id.split(".").at(-1) }
 			: {}),
 		...(spec.action ? { expectedActionId: spec.action } : {}),
 		mutationExpectation: spec.mutation,
@@ -68,7 +71,7 @@ export const setupBranchStationCatalog = [
 	station({ id: "sync.check_clean", command: "sync", trigger: "preview contains no operations", exit: 0, status: "ok", action: "setup_healthy", mutation: checkOnly }),
 	station({ id: "sync.check_changes", command: "sync", trigger: "preview contains safe operations", exit: 1, status: "ok", action: "run_sync", mutation: checkOnly }),
 	station({ id: "sync.check_blocked", command: "sync", trigger: "preview contains a blocked domain", exit: 1, status: "error", action: "run_doctor", mutation: noWrite }),
-	station({ id: "sync.check_invalid_target", command: "sync", trigger: "project target cannot be resolved safely", exit: 1, status: "error", action: "change_input", mutation: noWrite }),
+	station({ id: "sync.check_invalid_target", command: "sync", trigger: "project target cannot be resolved safely", exit: 1, status: "error", errorCode: "invalid_target", action: "change_input", mutation: noWrite }),
 	station({ id: "sync.applied", command: "sync", trigger: "every selected domain applies", exit: 0, status: "ok", action: "setup_healthy", mutation: writes }),
 	station({ id: "sync.noop", command: "sync", trigger: "revalidated plan contains no work", exit: 0, status: "ok", action: "setup_healthy", mutation: noWrite }),
 	station({ id: "sync.partial", command: "sync", trigger: "some domains apply while another is deferred or fails", exit: 1, status: "error", action: "inspect_results", mutation: writes }),
@@ -86,7 +89,7 @@ export const setupBranchStationCatalog = [
 	station({ id: "unlink.check_removable", command: "unlink", trigger: "proven managed links would be removed", exit: 1, status: "ok", action: "run_unlink", mutation: checkOnly }),
 	station({ id: "unlink.check_noop", command: "unlink", trigger: "no proven managed links exist", exit: 0, status: "ok", action: "clean_state", mutation: checkOnly }),
 	station({ id: "unlink.check_blocked", command: "unlink", trigger: "unsafe root or ownership blocks trustworthy preview", exit: 1, status: "error", action: "human_repair", mutation: noWrite }),
-	station({ id: "unlink.check_invalid_target", command: "unlink", trigger: "project target cannot be resolved safely", exit: 1, status: "error", action: "change_input", mutation: noWrite }),
+	station({ id: "unlink.check_invalid_target", command: "unlink", trigger: "project target cannot be resolved safely", exit: 1, status: "error", errorCode: "invalid_target", action: "change_input", mutation: noWrite }),
 	station({ id: "unlink.removed", command: "unlink", trigger: "all proven managed links remove", exit: 0, status: "ok", action: "clean_state", mutation: "removes_proven_links" }),
 	station({ id: "unlink.noop", command: "unlink", trigger: "revalidation finds nothing removable", exit: 0, status: "ok", action: "clean_state", mutation: noWrite }),
 	station({ id: "unlink.concurrent_change", command: "unlink", trigger: "ownership changes after preview", exit: 1, status: "error", action: "rerun_check", mutation: "stops_remaining_removals" }),
@@ -102,7 +105,7 @@ export const setupBranchStationCatalog = [
 	station({ id: "catalog.invalid_target", command: "catalog", trigger: "project target cannot be resolved safely", exit: 1, status: "error", action: "change_input", mutation: readOnly }),
 	station({ id: "catalog.invalid_usage", command: "catalog", trigger: "unsupported argv combination", exit: 2, status: "error", action: "change_input", mutation: noRead }),
 	station({ id: "catalog.runtime_failure", command: "catalog", trigger: "catalog or occupancy read fails", exit: 1, status: "error", action: "inspect_diagnostics", mutation: readOnly }),
-	station({ id: "commands.catalog", command: "commands", trigger: "discovery projection succeeds", exit: 0, status: "ok", mutation: readOnly }),
+	station({ id: "commands.catalog", command: "commands", trigger: "discovery projection succeeds", exit: 0, status: "ok", resultContractId: SETUP_COMMANDS_CONTRACT_ID, mutation: readOnly }),
 	station({ id: "commands.invalid_usage", command: "commands", trigger: "non-JSON or unsupported argv is supplied", exit: 2, status: "error", action: "change_input", mutation: noRead }),
 	station({ id: "commands.runtime_failure", command: "commands", trigger: "discovery projection fails validation", exit: 1, status: "error", action: "inspect_diagnostics", mutation: readOnly }),
 ] as const satisfies readonly BranchStation[];

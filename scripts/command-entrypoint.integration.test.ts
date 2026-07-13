@@ -49,6 +49,10 @@ import {
 	warmChromeContractEntries,
 	warmChromeContracts,
 } from "../runtime/warm-chrome/src/command-contract.ts";
+import {
+	setupContractEntries,
+	setupContracts,
+} from "../runtime/setup/src/command-contract.ts";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -108,6 +112,7 @@ const packageRoots = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
 	agentSkills: join(repoRoot, "runtime/agent-skills"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome"),
+	setup: join(repoRoot, "runtime/setup"),
 } as const;
 
 /**
@@ -118,6 +123,7 @@ const sourceEntries = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
 	agentSkills: join(repoRoot, "runtime/agent-skills/src/cli.ts"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome/src/cli.ts"),
+	setup: join(repoRoot, "runtime/setup/src/cli.ts"),
 } as const;
 
 /**
@@ -379,7 +385,7 @@ function runAgentWorktreeSource(
 	);
 }
 
-function runAgentSkillsPackage(
+function _runAgentSkillsPackage(
 	args: readonly string[],
 	label: string,
 ): Promise<RunResult> {
@@ -419,6 +425,32 @@ function runWarmChromeSource(
 			label,
 		}),
 	);
+}
+
+function runSetupPackage(args: readonly string[], label: string): Promise<RunResult> {
+	return runCommand(runners.packageCwd({
+		packageRoot: packageRoots.setup,
+		script: "setup",
+		args,
+		label,
+	}));
+}
+
+function runSetupSource(args: readonly string[], label: string): Promise<RunResult> {
+	return runCommand(runners.source({
+		sourcePath: sourceEntries.setup,
+		args,
+		label,
+	}));
+}
+
+function runSetupRoot(args: readonly string[], label: string): Promise<RunResult> {
+	return runCommand(runners.packageCwd({
+		packageRoot: repoRoot,
+		script: "setup",
+		args,
+		label,
+	}));
 }
 
 function expectAgentWorktreeRefFound(
@@ -636,6 +668,9 @@ const discoveredAgentSkillsCommandIds = agentSkillsContractEntries
 const discoveredWarmChromeCommandIds = warmChromeContractEntries
 	.map(([command]) => command)
 	.sort();
+const discoveredSetupCommandIds = setupContractEntries
+	.map(([command]) => command)
+	.sort();
 
 /**
  * Entrypoint scripts derived from the owning package metadata.
@@ -646,6 +681,7 @@ const wtPackageScripts = readPackageScripts(packageRoots.worktree);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
 const agentSkillsPackageScripts = readPackageScripts(packageRoots.agentSkills);
 const warmChromePackageScripts = readPackageScripts(packageRoots.warmChrome);
+const setupPackageScripts = readPackageScripts(packageRoots.setup);
 /**
  * First rendered usage line for a contract.
  *
@@ -2080,6 +2116,51 @@ describe("command entrypoint integration: preflight recovery refs", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+});
+
+describe("command entrypoint integration: setup", () => {
+	test("derives the exact setup command surface and package entrypoint", () => {
+		expect(discoveredSetupCommandIds).toEqual([
+			"catalog", "commands", "doctor", "status", "sync", "unlink",
+		]);
+		expect(setupPackageScripts.setup).toBe("bun run src/cli.ts");
+	});
+
+	test("renders setup top-level and per-command help from live contracts", async () => {
+		const top = await runSetupPackage(["--help"], "setup --help (package-cwd)");
+		expect(top.exitCode, describeRun(top)).toBe(0);
+		expect(top.stdout, describeRun(top)).toContain(firstUsageLine(setupContracts.status));
+		await expectDiscoveredCommandHelp({
+			commandIds: discoveredSetupCommandIds,
+			contracts: setupContracts,
+			packageRoot: packageRoots.setup,
+			script: "setup",
+		});
+	}, TEST_TIMEOUT_MS);
+
+	test("keeps setup package, source, and root discovery entrypoints aligned", async () => {
+		for (const result of await Promise.all([
+			runSetupPackage(["commands", "--json"], "setup commands (package-cwd)"),
+			runSetupSource(["commands", "--json"], "setup commands (source)"),
+			runSetupRoot(["commands", "--json"], "setup commands (root-script)"),
+		])) {
+			const data = expectOkEnvelope(result, "setup.commands");
+			expect(Object.keys(data.commands as object).sort(), describeRun(result)).toEqual(
+				discoveredSetupCommandIds,
+			);
+		}
+	}, TEST_TIMEOUT_MS);
+
+	test("setup invalid argv stays one structured package error envelope", async () => {
+		const result = await runSetupPackage(["doctor", "--bogus", "--json"], "setup invalid argv");
+		expect(result.exitCode, describeRun(result)).toBe(2);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status, describeRun(result)).toBe("error");
+		expect((envelope.error as Record<string, unknown>).code, describeRun(result)).toBe("invalid_usage");
+		const data = envelopeData(envelope, result);
+		expect(data.contract_id, describeRun(result)).toBe("setup.result");
+		expect(data.station, describeRun(result)).toBe("doctor.invalid_usage");
+	});
 });
 
 describe("command entrypoint integration: promotion boundary", () => {

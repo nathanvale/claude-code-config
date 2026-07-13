@@ -18,6 +18,7 @@ import {
 } from "@side-quest/cli-command-facade";
 
 import { canonicalSkillId } from "./catalog.ts";
+import { setupBranchStationCatalog } from "./branch-station-catalog.ts";
 import { applySetupDomains, checkSetupDomains, unlinkSetupDomains } from "./setup-domains.ts";
 import {
 	parseSetupInvocation,
@@ -41,6 +42,8 @@ export interface SetupCliRuntime {
 	apply: (input: SetupInspectionInput) => Promise<SetupResult>;
 	unlink: (input: SetupInspectionInput, check: boolean) => Promise<SetupResult>;
 	checkDomains?: (input: SetupInspectionInput, base: SetupResult) => Promise<SetupResult>;
+	/** Discovery adapter; tests use a failing implementation to prove wrapping. */
+	commands?: () => Promise<CommandsResult> | CommandsResult;
 }
 
 /** Optional CLI entry-point dependencies used by tests and embedded callers. */
@@ -87,7 +90,7 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
 		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetupDomains(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
 		...overrides,
 	};
-	if (!overrides.inspect) runtime.checkDomains = async (input, base) => checkSetupDomains(normalizeProjectInput(input), base, {});
+	if (!overrides.inspect) runtime.checkDomains = async (input, base) => checkSetupDomains(normalizeProjectInput(input), base, { stateRoot });
 	return runtime;
 }
 
@@ -118,7 +121,7 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 		invocation = parseSetupInvocation(argv);
 		diagnostics = parseCliDiagnosticArgv(argv);
 	} catch (error) {
-		return emitFailure({ error, argv, stdout, stderr, runtime, code: "invalid_usage", exitCode: 2 });
+		return emitFailure({ error, argv, stdout, stderr, runtime, command: commandFromArgv(argv), code: "invalid_usage", exitCode: 2 });
 	}
 
 	const startedAt = diagnostics.options.startedAtMs;
@@ -128,7 +131,23 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 		if (invocation.verbose) stderr.write("setup inspection complete\n");
 		if (invocation.json) {
 			const data = createResultData(execution.contractCommand, execution.result);
-			const envelope = createCliRuntimeSuccessEnvelope({ run_id: diagnostics.options.runId, data });
+			const stationId = "station" in execution.result ? execution.result.station : undefined;
+			const station = stationId
+				? setupBranchStationCatalog.find((candidate) => candidate.id === stationId)
+				: undefined;
+			const envelope = station?.expectedEnvelopeStatus === "error"
+				? createCliRuntimeErrorEnvelope({
+					run_id: diagnostics.options.runId,
+					process_exit_code: execution.exitCode,
+					error: createCliRepairStateRuntimeError({
+						run_id: diagnostics.options.runId,
+						code: station.expectedErrorCode ?? station.intent,
+						message: "Setup reached a repair-required terminal station.",
+						exit_code: execution.exitCode,
+					}),
+					data,
+				})
+				: createCliRuntimeSuccessEnvelope({ run_id: diagnostics.options.runId, data });
 			writeJsonEnvelope(stdout, envelope, {
 				runId: diagnostics.options.runId,
 				durationMs: Math.max(0, runtime.now() - startedAt),
@@ -178,7 +197,7 @@ function resolveProjectRepoRoot(value: string | undefined): string {
 
 async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRuntime): Promise<CommandExecution> {
 	if (invocation.command === "commands") {
-		return { result: projectSetupCommandDiscoveryTree(), exitCode: 0, human: "", contractCommand: "commands" };
+		return { result: await (runtime.commands?.() ?? projectSetupCommandDiscoveryTree()), exitCode: 0, human: "", contractCommand: "commands" };
 	}
 	const input: SetupInspectionInput = {
 		scope: invocation.scope,
@@ -274,6 +293,7 @@ function emitFailure(input: {
 	stderr: CliWriter;
 	runtime: SetupCliRuntime;
 	invocation?: ParsedSetupInvocation;
+	command?: SetupCommand;
 	runId?: string;
 	startedAt?: number;
 	code: "invalid_usage" | "invalid_target" | "runtime_failure";
@@ -286,7 +306,7 @@ function emitFailure(input: {
 		input.stderr.write(`${message}\nnext: ${input.code === "invalid_usage" ? "change_input" : "inspect_diagnostics"}\n`);
 		return input.exitCode;
 	}
-	const command = input.invocation?.command ?? "status";
+	const command = input.invocation?.command ?? input.command ?? commandFromArgv(input.argv);
 	const publicMessage = input.code === "invalid_usage"
 		? "Setup command usage is invalid."
 		: input.code === "invalid_target"
@@ -295,12 +315,16 @@ function emitFailure(input: {
 	const error = input.exitCode === 2
 		? createCliUsageRuntimeError({ run_id: runId, code: input.code, message: publicMessage })
 		: createCliRepairStateRuntimeError({ run_id: runId, code: input.code, message: publicMessage, exit_code: 1 });
+	const failureStation = input.code === "invalid_target" && input.invocation?.check
+		? `${command}.check_invalid_target`
+		: `${command}.${input.code}`;
+	const result = emptyResult(command, input.code, failureStation);
 	const data = command === "commands"
 		? createCommandResultData<
 			SetupResult,
 			typeof setupContracts.status.resultContract
-		>(setupContracts.status, emptyResult(command, input.code))
-		: createSetupResultData(command, emptyResult(command, input.code));
+		>(setupContracts.status, result)
+		: createSetupResultData(command, result);
 	const envelope = createCliRuntimeErrorEnvelope({ run_id: runId, process_exit_code: input.exitCode, error, data });
 	writeJsonEnvelope(input.stdout, envelope, {
 		runId,
@@ -309,15 +333,22 @@ function emitFailure(input: {
 	return input.exitCode;
 }
 
-function emptyResult(command: SetupCommand, code: string): SetupResult {
+function emptyResult(command: SetupCommand, code: string, station = `${command}.${code}`): SetupResult {
 	return {
 		command, scope: "user", state: "failed",
 		findings: [], domains: [], operations: [], projection_targets: [],
 		counts: { catalog: 0, managed: 0, external: 0, planned: 0, blockers: 0 },
 		catalog_root: "unavailable", destination_roots: [],
-		station: `${command}.${code}`,
+		station,
 		next_action: code === "invalid_usage" || code === "invalid_target" ? "change_input" : "inspect_diagnostics",
 	};
+}
+
+function commandFromArgv(argv: readonly string[]): SetupCommand {
+	const candidate = argv.find((arg) => !arg.startsWith("-"));
+	return candidate && SETUP_COMMANDS.includes(candidate as SetupCommand)
+		? candidate as SetupCommand
+		: "status";
 }
 
 if (import.meta.main) process.exitCode = await main(process.argv.slice(2));

@@ -14,6 +14,43 @@ export type OperationLockResult =
 	| { readonly status: "acquired"; readonly path: string; readonly release: () => Promise<void> }
 	| { readonly status: "busy" | "stale"; readonly path: string; readonly owner?: Partial<LockOwner> };
 
+/** Read-only lock state used by doctor without creating or reclaiming evidence. */
+export type OperationLockInspection =
+	| { readonly status: "missing"; readonly path: string }
+	| { readonly status: "busy" | "stale"; readonly path: string; readonly owner?: Partial<LockOwner> };
+
+/**
+ * Inspect lock evidence without creating or reclaiming state.
+ *
+ * @param input - Scope, target, state root, and optional process probe
+ * @returns Missing, busy, or stale evidence for the selected scope lock
+ *
+ * @example
+ * ```typescript
+ * await inspectOperationLock({ scope: "user", targetAnchor: home, stateRoot })
+ * ```
+ */
+export async function inspectOperationLock(input: {
+	readonly scope: SetupScope;
+	readonly targetAnchor: string;
+	readonly stateRoot: string;
+	readonly isProcessAlive?: (pid: number) => boolean;
+}): Promise<OperationLockInspection> {
+	const canonicalTarget = input.scope === "project"
+		? await canonicalPath(input.targetAnchor)
+		: resolve(input.targetAnchor);
+	const path = `${resolve(input.stateRoot)}/${lockName(input.scope, canonicalTarget)}`;
+	let owner: Partial<LockOwner> | undefined;
+	try {
+		owner = await readOwner(path);
+		await import("node:fs/promises").then(({ lstat }) => lstat(path));
+	} catch {
+		return { status: "missing", path };
+	}
+	const alive = typeof owner?.pid === "number" && (input.isProcessAlive ?? processAlive)(owner.pid);
+	return { status: alive ? "busy" : "stale", path, ...(owner ? { owner } : {}) };
+}
+
 /** Acquire one atomic mkdir lock. Existing stale evidence is diagnosed, never reclaimed. */
 export async function acquireOperationLock(input: {
 	readonly scope: SetupScope;

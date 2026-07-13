@@ -115,7 +115,10 @@ function unlinkResult(
 		command: "unlink", scope: input.scope, state, findings: inspection.findings, domains: [domain], operations: [], projection_targets: [],
 		counts: { catalog: inspection.catalog.entries.length, managed: removableCount(inspection), external: inspection.ownership.entries.filter((entry) => entry.ownership === "external_entry").length, planned: planned.length, blockers: 0 },
 		catalog_root: inspection.catalog.root, destination_roots: inspection.scope.projection_roots.map((root) => root.path), station,
-		next_action: station === "unlink.check_removable" ? "run_unlink" : station === "unlink.concurrent_change" ? "rerun_check" : station === "unlink.partial_failure" ? "inspect_results" : "clean_state",
+		next_action: station === "unlink.check_removable" ? "run_unlink"
+			: station === "unlink.check_blocked" ? "human_repair"
+				: station === "unlink.concurrent_change" ? "rerun_check"
+					: station === "unlink.partial_failure" ? "inspect_results" : "clean_state",
 	};
 }
 
