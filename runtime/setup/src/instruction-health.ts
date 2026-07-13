@@ -30,11 +30,16 @@ export interface InstructionHealthResult extends ChildResult {
 	readonly finding?: SetupFinding;
 }
 
+/** Canonical location of the instruction-health script; consumers must not re-spell the path. */
+export function instructionScriptPath(repoRoot: string): string {
+	return join(repoRoot, "scripts/agent-instructions.sh");
+}
+
 export async function checkInstructionHealth(
 	repoRoot: string,
 	runner: InstructionRunner = runInstructionCheck,
 ): Promise<InstructionHealthResult> {
-	const script = join(repoRoot, "scripts/agent-instructions.sh");
+	const script = instructionScriptPath(repoRoot);
 	try {
 		const child = await runner(script);
 		if (child.exitCode === 0) return { healthy: true, ...child };

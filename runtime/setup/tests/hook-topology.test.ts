@@ -1,10 +1,10 @@
-import { chmod, lstat, mkdtemp, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, realpath, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
-import { applyHookTopology, inspectHookTopology } from "../src/hook-topology.ts";
+import { applyHookTopology, inspectHookTopology, resolveGitHookPath } from "../src/hook-topology.ts";
 import {
 	HOOK_PROVENANCE_SCHEMA_VERSION,
 	hashHookBytes,
@@ -14,6 +14,27 @@ import {
 } from "../src/hook-provenance.ts";
 
 describe("hook topology", () => {
+	test("resolves the default hook path inside the repository Git directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-hook-default-path-"));
+		const repository = join(root, "repository");
+		await mkdir(repository);
+		expect(Bun.spawnSync(["git", "init", "--quiet", repository]).exitCode).toBe(0);
+
+		expect(await resolveGitHookPath(repository)).toBe(await realpath(join(repository, ".git/hooks")));
+	});
+
+	test("rejects a configured hook path outside the repository Git directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-hook-path-"));
+		const repository = join(root, "repository");
+		const externalHooks = join(root, "global-hooks");
+		await mkdir(repository);
+		await mkdir(externalHooks);
+		expect(Bun.spawnSync(["git", "init", "--quiet", repository]).exitCode).toBe(0);
+		expect(Bun.spawnSync(["git", "-C", repository, "config", "core.hooksPath", externalHooks]).exitCode).toBe(0);
+
+		await expect(resolveGitHookPath(repository)).rejects.toThrow("Git hook path escapes this repository's Git directory");
+	});
+
 	test("reports a missing hook source as unhealthy", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-hook-missing-"));
 		const source = join(root, "missing");

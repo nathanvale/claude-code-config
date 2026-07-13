@@ -28,9 +28,14 @@ done
 
 bootstrap_error() {
 	local exit_code="$3"
+	local next_action="inspect_diagnostics"
+	# model.ts pins bun_consent_required as the only input-kind bootstrap station.
+	if [[ "$1" == "bootstrap.bun_consent_required" ]]; then
+		next_action="change_input"
+	fi
 	printf 'setup: %s: %s\n' "$1" "$2" >&2
 	if [[ "$json_requested" == true ]]; then
-		printf '{"status":"error","run_id":"bootstrap","data":{"contract_id":"setup.bootstrap","schema_version":"1","station":"%s","next_action":"inspect_diagnostics"},"error":{"run_id":"bootstrap","code":"%s","message":"Setup bootstrap failed before the TypeScript CLI started.","exit_code":%s,"severity":"error","recoverability":"repair_state","retryable":false},"duration_ms":0}\n' "$1" "$1" "$exit_code"
+		printf '{"status":"error","run_id":"bootstrap","data":{"contract_id":"setup.bootstrap","schema_version":"1","station":"%s","next_action":"%s"},"error":{"run_id":"bootstrap","code":"%s","message":"Setup bootstrap failed before the TypeScript CLI started.","exit_code":%s,"severity":"error","recoverability":"repair_state","retryable":false},"duration_ms":0}\n' "$1" "$next_action" "$1" "$exit_code"
 	fi
 	return "$exit_code"
 }

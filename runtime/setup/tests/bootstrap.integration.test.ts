@@ -381,7 +381,7 @@ function expectBootstrapError(stdout: string, code: SetupBootstrapErrorStation):
 			contract_id: SETUP_BOOTSTRAP_CONTRACT_ID,
 			schema_version: SETUP_SCHEMA_VERSION,
 			station: code,
-			next_action: "inspect_diagnostics",
+			next_action: expected.kind === "input" ? "change_input" : "inspect_diagnostics",
 		},
 		error: { run_id: "bootstrap", code, exit_code: expected.exit_code },
 	});

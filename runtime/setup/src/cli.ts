@@ -113,7 +113,8 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 
 	try {
 		if (argv.includes("--help") || argv.includes("-h")) {
-			const candidate = argv.find((arg) => !arg.startsWith("-"));
+			// Only argv[0] can be a command; later bare tokens are flag values such as `--scope user`.
+			const candidate = argv[0] !== undefined && !argv[0].startsWith("-") ? argv[0] : undefined;
 			if (candidate !== undefined && !SETUP_COMMANDS.includes(candidate as SetupCommand)) {
 				throw new CliUsageError(`Unknown command: ${candidate}`, { exitCode: 2, showMessage: true });
 			}
@@ -350,7 +351,7 @@ function emptyResult(
 }
 
 function commandFromArgv(argv: readonly string[]): SetupCommand {
-	const candidate = argv.find((arg) => !arg.startsWith("-"));
+	const candidate = argv[0] !== undefined && !argv[0].startsWith("-") ? argv[0] : undefined;
 	return candidate && SETUP_COMMANDS.includes(candidate as SetupCommand)
 		? candidate as SetupCommand
 		: "status";

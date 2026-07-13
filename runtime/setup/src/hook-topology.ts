@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, link, lstat, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import {
@@ -17,7 +17,7 @@ import {
 } from "./hook-provenance.ts";
 import { deepFreeze } from "./immutable.ts";
 import type { SetupDomainResult, SetupFinding } from "./model.ts";
-import { hasErrorCode } from "./path-safety.ts";
+import { hasErrorCode, isInsideOrEqual } from "./path-safety.ts";
 
 /** Mutation route selected from immutable hook and receipt evidence. */
 export type HookOperationKind =
@@ -81,10 +81,25 @@ export interface ApplyHookTopologyOptions {
  * ```
  */
 export async function resolveGitHookPath(repoRoot: string): Promise<string> {
-	const child = Bun.spawnSync(["git", "-C", repoRoot, "rev-parse", "--git-path", "hooks"], { stdout: "pipe", stderr: "pipe" });
+	const child = Bun.spawnSync([
+		"git",
+		"-C",
+		repoRoot,
+		"rev-parse",
+		"--path-format=absolute",
+		"--git-path",
+		"hooks",
+		"--git-common-dir",
+	], { stdout: "pipe", stderr: "pipe" });
 	if (child.exitCode !== 0) throw new Error(new TextDecoder().decode(child.stderr).trim() || "Git hook path is unavailable.");
-	const path = new TextDecoder().decode(child.stdout).trim();
-	return isAbsolute(path) ? path : resolve(repoRoot, path);
+	const [hookPath, commonGitDir, ...unexpected] = new TextDecoder().decode(child.stdout).trim().split("\n");
+	if (!hookPath || !commonGitDir || unexpected.length > 0) throw new Error("Git hook path evidence is malformed.");
+	const resolvedHookPath = await realpath(isAbsolute(hookPath) ? hookPath : resolve(repoRoot, hookPath));
+	const resolvedCommonGitDir = await realpath(isAbsolute(commonGitDir) ? commonGitDir : resolve(repoRoot, commonGitDir));
+	if (!isInsideOrEqual(resolvedCommonGitDir, resolvedHookPath)) {
+		throw new Error(`Git hook path escapes this repository's Git directory: ${resolvedHookPath}`);
+	}
+	return resolvedHookPath;
 }
 
 /**
@@ -372,7 +387,8 @@ async function replaceHook(
 		await assertEvidence(operation, destination, receipt);
 		if (destination.shape === "missing") {
 			await link(temporaryPath, operation.destination);
-			await rm(temporaryPath);
+			// The hook is installed once link() succeeds; a failed tmp cleanup must not surface as a failed install.
+			await rm(temporaryPath).catch(() => undefined);
 		} else {
 			await rename(temporaryPath, operation.destination);
 		}

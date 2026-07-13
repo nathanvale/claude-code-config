@@ -35,6 +35,37 @@ describe("setup catalog inspection", () => {
 		]);
 	});
 
+	test("skips the reserved archive child while still flagging other malformed children", async () => {
+		const catalog = await tempCatalog("archive");
+		await writeSkill(catalog, "fallow");
+		// Archived skills keep nested SKILL.md files, but the graveyard is not a
+		// deployable skill and must never surface as an entry, finding, or
+		// collision candidate.
+		await writeSkill(join(catalog, "archive"), "fallow");
+		await writeSkill(join(catalog, "archive"), "retired");
+		await mkdir(join(catalog, "draft"));
+
+		const result = await inspectCatalog(catalog);
+
+		expect(result.entries.map((entry) => entry.id)).toEqual([
+			"draft",
+			"fallow",
+		]);
+		expect(result.entries).toMatchObject([
+			{ id: "draft", state: "invalid", finding_id: "invalid_skill" },
+			{ id: "fallow", state: "valid", name: "fallow" },
+		]);
+		expect(result.findings.map((finding) => finding.id)).toEqual([
+			"invalid_skill",
+		]);
+		expect(
+			result.entries.some((entry) => entry.id === "archive"),
+		).toBe(false);
+		expect(
+			result.findings.some((finding) => finding.path?.endsWith("/archive")),
+		).toBe(false);
+	});
+
 	test("folds case, compatibility, sharp-s, and sigma before collision checks", async () => {
 		expect(canonicalSkillId("Fallow")).toBe(canonicalSkillId("fallow"));
 		expect(canonicalSkillId("ﬃxture")).toBe(canonicalSkillId("ffixture"));

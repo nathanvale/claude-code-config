@@ -1,6 +1,6 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -64,6 +64,8 @@ describe("hook provenance", () => {
 			{ ...stableReceipt(identity, DESIRED_DIGEST), hook: "commit-msg" },
 			{ ...stableReceipt(identity, DESIRED_DIGEST), installed_digest: "not-a-digest" },
 			{ ...stableReceipt(identity, DESIRED_DIGEST), source_digest: "ABCDEF".padEnd(64, "0") },
+			{ ...pendingReceipt(identity, { state: "missing" }), desired_digest: "not-a-digest" },
+			pendingReceipt(identity, { state: "digest", digest: "ABCDEF".padEnd(64, "0") }),
 		];
 		await mkdir(dirname(identity.receipt_path), { recursive: true });
 		for (const value of cases) {
@@ -83,6 +85,16 @@ describe("hook provenance", () => {
 		await import("node:fs/promises").then(({ rm }) => rm(identity.receipt_path));
 		await symlink(target, identity.receipt_path);
 		expect((await readHookProvenance(identity)).status).toBe("invalid");
+
+		const foreignNamespace = join(fixture.root, "foreign-namespace");
+		await mkdir(foreignNamespace, { recursive: true });
+		await writeFile(join(foreignNamespace, basename(identity.receipt_path)), `${JSON.stringify(stableReceipt(identity, DESIRED_DIGEST))}\n`, { mode: 0o600 });
+		await rm(identity.namespace_path, { recursive: true, force: true });
+		await symlink(foreignNamespace, identity.namespace_path);
+		expect(await readHookProvenance(identity)).toMatchObject({
+			status: "invalid",
+			reason: "provenance namespace is linked or not a directory",
+		});
 	});
 
 	test("accepts only applicable missing, prior, or desired pending destination states", async () => {
@@ -97,6 +109,11 @@ describe("hook provenance", () => {
 		expect(classifyHookOwnership(digestPrior, DESIRED_DIGEST)).toBe("pending_desired");
 		expect(classifyHookOwnership(digestPrior, undefined)).toBe("unproven");
 		expect(classifyHookOwnership(digestPrior, SETUP_V1_DIGEST)).toBe("unproven");
+
+		const stable = stableReceipt(identity, DESIRED_DIGEST);
+		expect(classifyHookOwnership(stable, DESIRED_DIGEST)).toBe("stable");
+		expect(classifyHookOwnership(stable, PRIOR_DIGEST)).toBe("unproven");
+		expect(classifyHookOwnership(stable, undefined)).toBe("unproven");
 	});
 
 	test("atomic write failure preserves the prior complete receipt", async () => {

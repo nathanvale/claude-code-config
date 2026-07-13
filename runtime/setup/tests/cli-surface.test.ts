@@ -364,6 +364,12 @@ describe("setup CLI read-only surface", () => {
 		expect(await main(["bogus", "--help"], io)).toBe(2);
 		expect(io.stderr.text).toContain("Unknown command: bogus");
 	});
+
+	test("renders status help when flag values precede --help", async () => {
+		const io = capture();
+		expect(await main(["--scope", "user", "--help"], io)).toBe(0);
+		expect(io.stdout.text).toContain("Usage: setup status");
+	});
 });
 
 function capture() {

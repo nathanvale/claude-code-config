@@ -9,7 +9,10 @@ interface LockOwner {
 	readonly pid: number;
 	readonly token: string;
 	readonly acquired_at: string;
+	readonly process_identity?: string;
 }
+
+type ProcessIdentityReader = (pid: number) => string | undefined;
 
 export type OperationLockResult =
 	| { readonly status: "acquired"; readonly path: string; readonly release: () => Promise<void> }
@@ -37,12 +40,13 @@ export async function inspectOperationLock(input: {
 	readonly targetAnchor: string;
 	readonly stateRoot: string;
 	readonly isProcessAlive?: (pid: number) => boolean;
+	readonly readProcessIdentity?: ProcessIdentityReader;
 }): Promise<OperationLockInspection> {
 	const canonicalTarget = input.scope === "project"
 		? await canonicalPath(input.targetAnchor)
 		: resolve(input.targetAnchor);
 	const path = `${resolve(input.stateRoot)}/${lockName(input.scope, canonicalTarget)}`;
-	return inspectLockPath(path, input.isProcessAlive);
+	return inspectLockPath(path, input.isProcessAlive, input.readProcessIdentity);
 }
 
 /**
@@ -59,6 +63,7 @@ export async function inspectOperationLock(input: {
 export async function inspectStaleVisibilityLocks(input: {
 	readonly stateRoot: string;
 	readonly isProcessAlive?: (pid: number) => boolean;
+	readonly readProcessIdentity?: ProcessIdentityReader;
 }): Promise<readonly Extract<OperationLockInspection, { readonly status: "stale" }>[]> {
 	const stateRoot = resolve(input.stateRoot);
 	let names: string[];
@@ -71,7 +76,7 @@ export async function inspectStaleVisibilityLocks(input: {
 	const inspections = await Promise.all(names
 		.filter((name) => /^visibility-[a-f0-9]{20}\.lock$/u.test(name))
 		.sort((left, right) => left.localeCompare(right))
-		.map((name) => inspectLockPath(`${stateRoot}/${name}`, input.isProcessAlive)));
+		.map((name) => inspectLockPath(`${stateRoot}/${name}`, input.isProcessAlive, input.readProcessIdentity)));
 	return inspections.filter(
 		(inspection): inspection is Extract<OperationLockInspection, { readonly status: "stale" }> =>
 			inspection.status === "stale",
@@ -81,6 +86,7 @@ export async function inspectStaleVisibilityLocks(input: {
 async function inspectLockPath(
 	path: string,
 	isProcessAlive?: (pid: number) => boolean,
+	readProcessIdentity?: ProcessIdentityReader,
 ): Promise<OperationLockInspection> {
 	let owner: Partial<LockOwner> | undefined;
 	try {
@@ -89,7 +95,7 @@ async function inspectLockPath(
 	} catch {
 		return { status: "missing", path };
 	}
-	const alive = typeof owner?.pid === "number" && (isProcessAlive ?? processAlive)(owner.pid);
+	const alive = lockOwnerIsLive(owner, isProcessAlive, readProcessIdentity);
 	return alive
 		? { status: "busy", path, ...(owner ? { owner } : {}) }
 		: { status: "stale", path, ...(owner ? { owner } : {}) };
@@ -103,6 +109,7 @@ export async function acquireOperationLock(input: {
 	readonly pid?: number;
 	readonly token?: string;
 	readonly isProcessAlive?: (pid: number) => boolean;
+	readonly readProcessIdentity?: ProcessIdentityReader;
 }): Promise<OperationLockResult> {
 	await mkdir(input.stateRoot, { recursive: true });
 	const canonicalTarget = input.scope === "project" ? await canonicalPath(input.targetAnchor) : resolve(input.targetAnchor);
@@ -112,6 +119,7 @@ export async function acquireOperationLock(input: {
 		pid: input.pid,
 		token: input.token,
 		isProcessAlive: input.isProcessAlive,
+		readProcessIdentity: input.readProcessIdentity,
 	});
 }
 
@@ -121,6 +129,7 @@ export async function acquireVisibilityLocks(input: {
 	readonly stateRoot: string;
 	readonly pid?: number;
 	readonly isProcessAlive?: (pid: number) => boolean;
+	readonly readProcessIdentity?: ProcessIdentityReader;
 }): Promise<OperationLockResult> {
 	await mkdir(input.stateRoot, { recursive: true });
 	const ids = [...new Set(input.canonicalIds)].sort((left, right) => left.localeCompare(right));
@@ -131,6 +140,7 @@ export async function acquireVisibilityLocks(input: {
 			stateRoot: input.stateRoot,
 			pid: input.pid,
 			isProcessAlive: input.isProcessAlive,
+			readProcessIdentity: input.readProcessIdentity,
 		});
 		if (lock.status !== "acquired") {
 			await releaseLocks(acquired);
@@ -165,6 +175,7 @@ async function acquireNamedLock(input: {
 	readonly pid?: number;
 	readonly token?: string;
 	readonly isProcessAlive?: (pid: number) => boolean;
+	readonly readProcessIdentity?: ProcessIdentityReader;
 }): Promise<OperationLockResult> {
 	const lockPath = `${resolve(input.stateRoot)}/${input.name}`;
 	const pid = input.pid ?? process.pid;
@@ -174,10 +185,16 @@ async function acquireNamedLock(input: {
 	} catch (error) {
 		if (!hasErrorCode(error, "EEXIST")) throw error;
 		const owner = await readOwner(lockPath);
-		const alive = typeof owner?.pid === "number" && (input.isProcessAlive ?? processAlive)(owner.pid);
+		const alive = lockOwnerIsLive(owner, input.isProcessAlive, input.readProcessIdentity);
 		return { status: alive ? "busy" : "stale", path: lockPath, ...(owner ? { owner } : {}) };
 	}
-	const owner: LockOwner = { pid, token, acquired_at: new Date().toISOString() };
+	const processIdentity = (input.readProcessIdentity ?? readProcessIdentity)(pid);
+	const owner: LockOwner = {
+		pid,
+		token,
+		acquired_at: new Date().toISOString(),
+		...(processIdentity ? { process_identity: processIdentity } : {}),
+	};
 	try {
 		await writeFile(`${lockPath}/owner.json`, `${JSON.stringify(owner)}\n`, { flag: "wx" });
 	} catch (error) {
@@ -223,4 +240,25 @@ function processAlive(pid: number): boolean {
 	} catch (error) {
 		return hasErrorCode(error, "EPERM");
 	}
+}
+
+function lockOwnerIsLive(
+	owner: Partial<LockOwner> | undefined,
+	isProcessAlive: ((pid: number) => boolean) | undefined,
+	processIdentity: ProcessIdentityReader | undefined,
+): boolean {
+	if (typeof owner?.pid !== "number" || !(isProcessAlive ?? processAlive)(owner.pid)) return false;
+	if (typeof owner.process_identity !== "string") return true;
+	return (processIdentity ?? readProcessIdentity)(owner.pid) === owner.process_identity;
+}
+
+function readProcessIdentity(pid: number): string | undefined {
+	const child = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], {
+		stdout: "pipe",
+		stderr: "ignore",
+		env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+	});
+	if (child.exitCode !== 0) return undefined;
+	const startedAt = new TextDecoder().decode(child.stdout).trim();
+	return startedAt || undefined;
 }

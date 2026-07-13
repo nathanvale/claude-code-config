@@ -8,6 +8,13 @@ import { isInsideOrEqual } from "./path-safety.ts";
 
 export type CatalogEntryState = "valid" | "invalid" | "escape" | "collision";
 
+/**
+ * Direct catalog children reserved for non-skill use. `archive/` is a tracked
+ * graveyard of retired skills; it holds nested SKILL.md files but is never a
+ * deployable skill, so the catalog skips it before inspection.
+ */
+const NON_CATALOG_CHILDREN = new Set(["archive"]);
+
 export interface CatalogEntry {
 	readonly id: string;
 	readonly canonical_id: string;
@@ -74,6 +81,7 @@ export async function inspectCatalog(
 	const inspected = await Promise.all(
 		children
 			.filter((child) => child.isDirectory() || child.isSymbolicLink())
+			.filter((child) => !NON_CATALOG_CHILDREN.has(child.name))
 			.map((child) => inspectCatalogEntry(root, canonicalRoot, child.name)),
 	);
 	const byCanonical = new Map<string, CatalogEntry[]>();

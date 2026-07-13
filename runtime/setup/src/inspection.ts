@@ -31,7 +31,8 @@ export interface SetupInspection {
 	readonly blocked: boolean;
 }
 
-const BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
+/** Finding ids that block every projection plan; shared with the planner so the two gates cannot drift. */
+export const BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
 	"source_missing",
 	"invalid_skill",
 	"catalog_escape",

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { applySetup } from "./apply.ts";
+import { applyLockResult, applySetup } from "./apply.ts";
 import {
 	applyHookTopology,
 	inspectHookTopology,
@@ -8,7 +8,7 @@ import {
 	resolveGitHookPath,
 	type HookMutationPhase,
 } from "./hook-topology.ts";
-import { checkInstructionHealth, type InstructionRunner } from "./instruction-health.ts";
+import { checkInstructionHealth, instructionScriptPath, type InstructionRunner } from "./instruction-health.ts";
 import type { SetupActionId, SetupDomainResult, SetupFinding, SetupFindingId, SetupResult } from "./model.ts";
 import { acquireOperationLock, inspectOperationLock, inspectStaleVisibilityLocks } from "./operation-lock.ts";
 import { checkRunbookHealth } from "./runbook-health.ts";
@@ -16,12 +16,17 @@ import { resolveSetupScope } from "./scope.ts";
 import { applyStartupTopology, inspectRemovableStartupLinks, inspectStartupTopology } from "./startup-topology.ts";
 import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
 import { planSetup } from "./planner.ts";
-import { unlinkSetup } from "./unlink.ts";
+import { unlinkLockResult, unlinkSetup } from "./unlink.ts";
 import { rm } from "node:fs/promises";
+
+const RUNBOOK_SUBPATH = "runbooks/issue-to-pr-v2";
+const HOOK_SOURCE_SUBPATH = "scripts/hooks";
 
 export interface ApplySetupDomainsOptions {
 	readonly stateRoot: string;
 	readonly inspect?: (input: SetupInspectionInput) => Promise<SetupInspection>;
+	/** Deterministic lock seam used to prove composed busy outcomes never retry a projection-only apply. */
+	readonly acquireLock?: typeof acquireOperationLock;
 	readonly instructionRunner?: InstructionRunner;
 	readonly hookPath?: (repoRoot: string) => Promise<string>;
 	/** Deterministic pre-syscall seam used to prove apply-time races and failures. */
@@ -40,6 +45,8 @@ export interface UnlinkSetupDomainsOptions {
 	readonly check?: boolean;
 	readonly stateRoot: string;
 	readonly inspect?: (input: SetupInspectionInput) => Promise<SetupInspection>;
+	/** Deterministic lock seam used to prove composed busy outcomes never retry a projection-only unlink. */
+	readonly acquireLock?: typeof acquireOperationLock;
 	readonly beforeRemove?: (path: string) => Promise<void>;
 }
 
@@ -59,20 +66,21 @@ export async function checkSetupDomains(
 	]);
 	const findings: SetupFinding[] = [...lockFindings, ...startupPlan.findings, ...hookInspection.findings];
 	if (instruction.finding) findings.push(instruction.finding);
-	const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
+	const runbook = checkRunbookHealth(join(input.sourceRepoRoot, RUNBOOK_SUBPATH));
 	if (runbook.finding) findings.push(runbook.finding);
 	const domains: SetupDomainResult[] = [
 		{ domain: "startup", planned: startupPlan.operations.map((item) => item.destination), applied: [], deferred: [], preserved: startupPlan.preserved, failed: [] },
 		hookInspection.domain,
-		domainWithFailures("instruction", instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")]),
+		domainWithFailures("instruction", instruction.healthy ? [] : [instructionScriptPath(input.sourceRepoRoot)]),
 		domainWithFailures("runbook", runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`)),
 	];
 	const planned = [...base.domains, ...domains].reduce((sum, domain) => sum + domain.planned.length, 0);
 	const blocked = findings.length > 0 || base.state === "blocked";
+	const busy = findings.some((finding) => finding.id === "operation_busy");
 	const fresh = base.command === "status" && base.state === "clean_slate";
 	const station = base.command === "status"
 		? blocked ? "status.blocked" : fresh ? "status.clean_slate" : planned > 0 ? "status.drift" : "status.healthy"
-		: blocked ? "sync.check_blocked" : planned > 0 ? "sync.check_changes" : "sync.check_clean";
+		: busy ? "sync.operation_busy" : blocked ? "sync.check_blocked" : planned > 0 ? "sync.check_changes" : "sync.check_clean";
 	const state = base.command === "status"
 		? blocked ? "blocked" : fresh ? "clean_slate" : planned > 0 ? "drift" : "healthy"
 		: blocked ? "blocked" : planned > 0 ? "changes" : "healthy";
@@ -83,7 +91,7 @@ export async function checkSetupDomains(
 		findings: [...base.findings, ...findings],
 		domains: [...base.domains, ...domains],
 		counts: { ...base.counts, planned, blockers: base.counts.blockers + findings.length },
-		next_action: blocked ? "run_doctor" : fresh ? "preview_sync" : planned > 0 ? "run_sync" : "setup_healthy",
+		next_action: busy ? "retry" : blocked ? "run_doctor" : fresh ? "preview_sync" : planned > 0 ? "run_sync" : "setup_healthy",
 		child_output: `${instruction.stdout}${instruction.stderr}`,
 	};
 }
@@ -96,36 +104,44 @@ async function inspectReadOnlyLockFindings(
 ): Promise<readonly SetupFinding[]> {
 	if (command !== "doctor" && command !== "sync") return [];
 	const stalePaths = (await inspectStaleVisibilityLocks({ stateRoot })).map((lock) => lock.path);
-	if (command === "doctor") {
-		const lock = await inspectOperationLock({
-			scope: input.scope,
-			targetAnchor,
-			stateRoot,
-		});
-		if (lock.status === "stale") stalePaths.unshift(lock.path);
-	}
-	return [...new Map(stalePaths.map((path) => [path, staleLockFinding(path)])).values()];
+	const scopeLock = await inspectOperationLock({
+		scope: input.scope,
+		targetAnchor,
+		stateRoot,
+	});
+	const scopeFindings = scopeLock.status === "missing"
+		? []
+		: command === "sync" || scopeLock.status === "stale"
+			? [operationLockFinding(scopeLock.status, scopeLock.path)]
+			: [];
+	return [...new Map([
+		...scopeFindings,
+		...stalePaths.map((path) => operationLockFinding("stale", path)),
+	].map((finding) => [finding.path, finding])).values()];
 }
 
-function staleLockFinding(path: string): SetupFinding {
+function operationLockFinding(status: "busy" | "stale", path: string): SetupFinding {
 	return {
-		id: "stale_operation_lock",
+		id: status === "busy" ? "operation_busy" : "stale_operation_lock",
 		owner: "setup.operation-lock",
 		path,
-		summary: "An unreclaimed stale setup mutation lock requires inspection.",
-		repair: "inspect_lock",
+		summary: status === "busy"
+			? "Another setup mutation owns this lock."
+			: "An unreclaimed stale setup mutation lock requires inspection.",
+		repair: status === "busy" ? "retry" : "inspect_lock",
 	};
 }
 
 function mergeReadOnlyLockFindings(base: SetupResult, findings: readonly SetupFinding[]): SetupResult {
 	if (findings.length === 0) return base;
 	const blocked = base.command === "sync";
+	const busy = findings.some((finding) => finding.id === "operation_busy");
 	return {
 		...base,
 		...(blocked ? {
 			state: "blocked" as const,
-			station: "sync.check_blocked",
-			next_action: "run_doctor" as const,
+			station: busy ? "sync.operation_busy" : "sync.check_blocked",
+			next_action: busy ? "retry" as const : "run_doctor" as const,
 		} : {}),
 		findings: [...base.findings, ...findings],
 		counts: { ...base.counts, blockers: base.counts.blockers + findings.length },
@@ -169,8 +185,8 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 			next_action: blocked ? "human_repair" : removable.length > 0 ? "run_unlink" : projection.next_action,
 		};
 	}
-	const lock = await acquireOperationLock({ scope: "user", targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
-	if (lock.status !== "acquired") return unlinkSetup(input, options);
+	const lock = await (options.acquireLock ?? acquireOperationLock)({ scope: "user", targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
+	if (lock.status !== "acquired") return unlinkLockResult(input, scope, lock.status, lock.path);
 	try {
 		const projection = await unlinkSetup(input, { ...options, lockHeld: true });
 		const applied: string[] = [];
@@ -237,9 +253,9 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 	if (input.scope === "project") return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, beforeSymlink: options.beforeSymlink });
 	const scope = await resolveSetupScope(input);
 	const homeDir = scope.target_anchor;
-	const lock = await acquireOperationLock({ scope: "user", targetAnchor: homeDir, stateRoot: options.stateRoot });
+	const lock = await (options.acquireLock ?? acquireOperationLock)({ scope: "user", targetAnchor: homeDir, stateRoot: options.stateRoot });
 	if (lock.status !== "acquired") {
-		return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect });
+		return applyLockResult(input, scope, lock.status, lock.path);
 	}
 	try {
 		const inspect = options.inspect ?? inspectSetup;
@@ -255,14 +271,14 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 		const extraFindings: SetupFinding[] = [...startupPlan.findings];
 		try {
 			const hookRoot = await (options.hookPath ?? resolveGitHookPath)(input.sourceRepoRoot);
-			hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, "scripts/hooks"), hookRoot, options.stateRoot);
+			hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, HOOK_SOURCE_SUBPATH), hookRoot, options.stateRoot);
 			hookPreview = projectHookTopologyPlan(hookPlan);
 			extraFindings.push(...hookPlan.findings);
 		} catch (error) {
 			extraFindings.push({ id: "hook_unhealthy", owner: "setup.hooks", summary: error instanceof Error ? error.message : String(error), repair: "repair_hooks" });
 			hookPreview = { ...hookPreview, failed: ["git-hook-path"] };
 		}
-		const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
+		const runbook = checkRunbookHealth(join(input.sourceRepoRoot, RUNBOOK_SUBPATH));
 		if (runbook.finding) extraFindings.push(runbook.finding);
 		const runbookDomain = domainWithFailures(
 			"runbook",
@@ -314,7 +330,7 @@ function domainWithFailures(domain: string, failed: readonly string[]): SetupDom
 }
 
 function instructionResultDomain(repoRoot: string, healthy: boolean): SetupDomainResult {
-	return domainWithFailures("instruction", healthy ? [] : [join(repoRoot, "scripts/agent-instructions.sh")]);
+	return domainWithFailures("instruction", healthy ? [] : [instructionScriptPath(repoRoot)]);
 }
 
 async function inspectHookDomain(
@@ -324,7 +340,7 @@ async function inspectHookDomain(
 ): Promise<{ domain: SetupDomainResult; findings: readonly SetupFinding[] }> {
 	try {
 		const hookRoot = await (hookPath ?? resolveGitHookPath)(repoRoot);
-		const plan = await inspectHookTopology(join(repoRoot, "scripts/hooks"), hookRoot, stateRoot);
+		const plan = await inspectHookTopology(join(repoRoot, HOOK_SOURCE_SUBPATH), hookRoot, stateRoot);
 		return {
 			domain: projectHookTopologyPlan(plan),
 			findings: plan.findings,

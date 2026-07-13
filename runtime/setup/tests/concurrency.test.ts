@@ -13,7 +13,7 @@ import {
 	inspectStaleVisibilityLocks,
 } from "../src/operation-lock.ts";
 import { unlinkSetup } from "../src/unlink.ts";
-import { applySetupDomains } from "../src/setup-domains.ts";
+import { applySetupDomains, unlinkSetupDomains } from "../src/setup-domains.ts";
 
 describe("setup operation lock", () => {
 	test("serializes one user mutation across callers", async () => {
@@ -34,6 +34,32 @@ describe("setup operation lock", () => {
 		const result = await acquireOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });
 		expect(result).toMatchObject({ status: "stale", path: lockPath });
 		expect(await Bun.file(join(lockPath, "owner.json")).exists()).toBe(true);
+	});
+
+	test("treats a reused live pid as stale when the process identity changed", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-pid-reuse-"));
+		const first = await acquireOperationLock({
+			scope: "user",
+			targetAnchor: "/home",
+			stateRoot,
+			pid: 4242,
+			readProcessIdentity: () => "old-process-start",
+		});
+		expect(first.status).toBe("acquired");
+
+		const contender = await acquireOperationLock({
+			scope: "user",
+			targetAnchor: "/home",
+			stateRoot,
+			isProcessAlive: () => true,
+			readProcessIdentity: () => "reused-process-start",
+		});
+
+		expect(contender).toMatchObject({
+			status: "stale",
+			owner: { pid: 4242, process_identity: "old-process-start" },
+		});
+		if (first.status === "acquired") await first.release();
 	});
 
 	test("inspects stale evidence without creating a missing lock", async () => {
@@ -233,6 +259,37 @@ describe("setup operation lock", () => {
 		expect(second).toMatchObject({ state: "blocked", station: "sync.operation_busy" });
 		releaseMutation();
 		expect((await first).domains.find((domain) => domain.domain === "hooks")?.failed).toEqual([]);
+	});
+
+	test.each([
+		{ command: "sync", run: (input: SetupInspectionInput, stateRoot: string) => applySetupDomains(input, {
+			stateRoot,
+			acquireLock: async () => ({ status: "busy", path: join(stateRoot, "user.lock") }),
+			inspect: async () => { throw new Error("busy composition must not retry projection alone"); },
+		}) },
+		{ command: "unlink", run: (input: SetupInspectionInput, stateRoot: string) => unlinkSetupDomains(input, {
+			stateRoot,
+			acquireLock: async () => ({ status: "busy", path: join(stateRoot, "user.lock") }),
+			inspect: async () => { throw new Error("busy composition must not retry projection alone"); },
+		}) },
+	] as const)("returns the composed $command busy result without a projection-only retry", async ({ command, run }) => {
+		const root = await mkdtemp(join(tmpdir(), `setup-${command}-busy-fallback-`));
+		const source = join(root, "source");
+		const home = join(root, "home");
+		const stateRoot = join(root, "state");
+		await mkdir(join(source, "skills/alpha"), { recursive: true });
+		await writeFile(join(source, "skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: alpha\n---\n");
+		await mkdir(home);
+
+		const result = await run({ scope: "user", sourceRepoRoot: source, homeDir: home }, stateRoot);
+
+		expect(result).toMatchObject({
+			state: "blocked",
+			station: command === "sync" ? "sync.operation_busy" : "unlink.operation_busy",
+			next_action: "retry",
+		});
+		expect(result.domains).toEqual([]);
+		expect(await exists(join(home, ".agents/skills/alpha"))).toBe(false);
 	});
 });
 

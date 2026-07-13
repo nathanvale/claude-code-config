@@ -8,7 +8,7 @@ import { STARTUP_LINKS } from "../src/startup-topology.ts";
 import { diagnoseFindings } from "../src/doctor.ts";
 import { hookProvenanceIdentity, readHookProvenance } from "../src/hook-provenance.ts";
 import { inspectSetup } from "../src/inspection.ts";
-import { acquireVisibilityLocks } from "../src/operation-lock.ts";
+import { acquireOperationLock, acquireVisibilityLocks } from "../src/operation-lock.ts";
 import { planSetup } from "../src/planner.ts";
 import {
 	applySetupDomains,
@@ -141,6 +141,54 @@ describe("setup domain composition", () => {
 		expect(userDomainProbes).toBe(scope === "user" ? 4 : 0);
 	});
 
+	test("surfaces a busy scope lock during sync preview", async () => {
+		const fixture = await userFixture();
+		const lock = await acquireOperationLock({
+			scope: "user",
+			targetAnchor: fixture.home,
+			stateRoot: fixture.state,
+		});
+		if (lock.status !== "acquired") throw new Error("fixture scope lock was not acquired");
+
+		const result = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "sync"),
+			{
+				stateRoot: fixture.state,
+				hookPath: async () => fixture.hooks,
+				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			},
+		);
+
+		expect(result).toMatchObject({ state: "blocked", station: "sync.operation_busy", next_action: "retry" });
+		expect(result.findings).toContainEqual(expect.objectContaining({
+			id: "operation_busy",
+			path: lock.path,
+			repair: "retry",
+		}));
+		await lock.release();
+	});
+
+	test("surfaces a busy project lock during sync preview without user-domain probes", async () => {
+		const fixture = await projectFixture();
+		const lock = await acquireOperationLock({
+			scope: "project",
+			targetAnchor: fixture.input.projectRepoRoot,
+			stateRoot: fixture.state,
+		});
+		if (lock.status !== "acquired") throw new Error("fixture project lock was not acquired");
+
+		const result = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "sync"),
+			{ stateRoot: fixture.state },
+		);
+
+		expect(result).toMatchObject({ state: "blocked", station: "sync.operation_busy", next_action: "retry" });
+		expect(result.findings).toContainEqual(expect.objectContaining({ id: "operation_busy", path: lock.path }));
+		await lock.release();
+	});
+
 	test("labels a fresh user topology clean slate with preview as the next action", async () => {
 		const fixture = await userFixture();
 		const base = planSetup(await inspectSetup(fixture.input), "status");
@@ -207,7 +255,7 @@ describe("setup domain composition", () => {
 		expect(preview.findings).toContainEqual(expect.objectContaining({ id: "hook_ownership_unproven" }));
 	});
 
-	test("repairs startup before instruction health while keeping hooks behind success", async () => {
+	test("repairs startup before full instruction health while keeping hooks behind success", async () => {
 		const fixture = await userFixture();
 		await writeFile(join(fixture.hooks, "pre-commit"), "hook\n", { mode: 0o755 });
 		const identity = await hookProvenanceIdentity({
@@ -225,6 +273,28 @@ describe("setup domain composition", () => {
 		expect(result).toMatchObject({ state: "partial", station: "sync.partial", next_action: "inspect_results" });
 		expect((await readHookProvenance(identity)).status).toBe("missing");
 		expect(await Bun.file(join(fixture.home, ".codex/AGENTS.md")).exists()).toBe(true);
+	});
+
+	test("reaches instruction failure without writes when startup is already healthy", async () => {
+		const fixture = await userFixture();
+		await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		});
+
+		const result = await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 1, stdout: "", stderr: "instruction failed\n" }),
+		});
+
+		expect(result).toMatchObject({
+			state: "blocked",
+			station: "sync.instruction_failure",
+			next_action: "repair_instructions",
+		});
+		expect(result.domains.every((domain) => domain.applied.length === 0)).toBe(true);
 	});
 
 	test("keeps station and action aligned when ownership and health both block", async () => {

@@ -29,7 +29,7 @@ export async function applySetup(
 		targetAnchor: initialScope.target_anchor,
 		stateRoot: options.stateRoot,
 	});
-	if (lock.status !== "acquired") return lockResult(input, initialScope, lock.status, lock.path);
+	if (lock.status !== "acquired") return applyLockResult(input, initialScope, lock.status, lock.path);
 	let visibilityLock: Awaited<ReturnType<typeof acquireVisibilityLocks>> | undefined;
 	try {
 		const inspect = options.inspect ?? inspectSetup;
@@ -37,7 +37,7 @@ export async function applySetup(
 		const lockedIds = visibilityIds(preliminary);
 		visibilityLock = await acquireVisibilityLocks({ canonicalIds: lockedIds, stateRoot: options.stateRoot });
 		if (visibilityLock.status !== "acquired") {
-			return lockResult(input, initialScope, visibilityLock.status, visibilityLock.path);
+			return applyLockResult(input, initialScope, visibilityLock.status, visibilityLock.path);
 		}
 		const inspection = await inspect(input);
 		const plan = planSetup(inspection, "sync");
@@ -173,7 +173,17 @@ function mutationResult(
 	};
 }
 
-function lockResult(
+/**
+ * Project a failed sync lock acquisition without retrying or mutating another domain.
+ *
+ * @param input - Selected setup scope and source roots
+ * @param scope - Resolved catalog and projection roots
+ * @param status - Busy or stale lock classification
+ * @param path - Exact lock evidence path
+ * @returns Blocked sync result with the lock-owned repair action
+ * @internal
+ */
+export function applyLockResult(
 	input: SetupInspectionInput,
 	scope: Awaited<ReturnType<typeof resolveSetupScope>>,
 	status: "busy" | "stale",

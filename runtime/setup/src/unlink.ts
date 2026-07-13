@@ -160,7 +160,17 @@ function removableCount(inspection: SetupInspection): number {
 	return inspection.ownership.entries.filter((entry) => entry.ownership === "managed_link" || entry.ownership === "broken_managed_link").length;
 }
 
-function unlinkLockResult(
+/**
+ * Project a failed unlink lock acquisition without retrying or mutating another domain.
+ *
+ * @param input - Selected setup scope and source roots
+ * @param scope - Resolved catalog and projection roots
+ * @param status - Busy or stale lock classification
+ * @param path - Exact lock evidence path
+ * @returns Blocked unlink result with the lock-owned repair action
+ * @internal
+ */
+export function unlinkLockResult(
 	input: SetupInspectionInput,
 	scope: Awaited<ReturnType<typeof resolveSetupScope>>,
 	status: "busy" | "stale",

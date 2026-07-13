@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 
 import { canonicalSkillId } from "./catalog.ts";
-import type { SetupInspection } from "./inspection.ts";
+import { BLOCKING_FINDINGS, type SetupInspection } from "./inspection.ts";
 import type {
 	SetupCommand,
 	SetupDomainResult,
@@ -11,12 +11,6 @@ import type {
 	SetupProjectionTargetPlan,
 	SetupResult,
 } from "./model.ts";
-
-const GLOBAL_BLOCKING_FINDINGS = new Set<SetupFinding["id"]>([
-	"source_missing", "invalid_skill", "catalog_escape",
-	"canonical_id_collision", "duplicate_scope", "malformed_provider_lock",
-	"unsafe_root",
-]);
 
 /** Convert one immutable inspection snapshot into a deterministic read-only plan. */
 export function planSetup(
@@ -29,7 +23,7 @@ export function planSetup(
 	);
 	const findings = mergeFindings(relevantInspectionFindings, candidates.findings);
 	const blockers = mergeFindings(
-		relevantInspectionFindings.filter((finding) => GLOBAL_BLOCKING_FINDINGS.has(finding.id)),
+		relevantInspectionFindings.filter((finding) => BLOCKING_FINDINGS.has(finding.id)),
 		candidates.blockers,
 	);
 	const blocked = blockers.length > 0;
