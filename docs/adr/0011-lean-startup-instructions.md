@@ -28,6 +28,14 @@ Prompt fragments, committed Codex generated output, and
 Setup owns runtime topology and surfaces instruction health without generating
 prompt content.
 
+The pre-commit adapter enforces instruction health at the commit boundary.
+Setup owns the topology boundary: hook installation, inspection, and safe
+reconciliation of copied hooks backed by provenance.
+
+Missing provenance alone does not transfer ownership to Setup. Equal-current
+or recognized migration evidence may rebuild it; every other existing copy is
+preserved and routed to human repair after state loss.
+
 Claude and Codex delivery should target root `AGENTS.md` directly. A managed
 copy is acceptable only as an install artifact checked against `AGENTS.md`.
 
@@ -60,6 +68,7 @@ Lean authoring keeps the model simple:
 - Codex user startup: `~/.codex/AGENTS.md` symlinks to, or is a managed copy of, the configured owner `AGENTS.md`.
 - Skill projection: `skills/` is the first-party source; Setup creates direct per-skill links in `~/.claude/skills/` and `~/.agents/skills/`. A real entry or foreign symlink that shadows a source skill is preserved and diagnosed.
 - Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, and startup delivery drift. Setup composes that evidence with topology health.
+- Hook topology: Setup reconciles copied hooks only from provenance-backed or recognized migration evidence; unproven content is preserved for human repair.
 
 ## Registered Owners
 

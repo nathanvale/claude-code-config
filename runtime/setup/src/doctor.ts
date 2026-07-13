@@ -10,6 +10,7 @@ export interface SetupDiagnosis {
 const BLOCKERS = new Set<SetupFindingId>([
 	"source_missing", "real_entry", "foreign_symlink", "invalid_skill",
 	"catalog_escape", "canonical_id_collision", "malformed_provider_lock", "unsafe_root", "external_entry",
+	"hook_ownership_unproven",
 ]);
 const REPAIRABLE = new Set<SetupFindingId>([
 	"missing_link", "wrong_link", "broken_managed_link",
@@ -55,6 +56,7 @@ function repairFor(id: SetupFindingId, fallback: SetupActionId): SetupActionId {
 		case "missing_link": case "wrong_link": case "broken_managed_link": return "run_sync";
 		case "dependency_unhealthy": return "repair_dependency";
 		case "hook_unhealthy": return "repair_hooks";
+		case "hook_ownership_unproven": return "human_repair";
 		case "instruction_unhealthy": return "repair_instructions";
 		case "runbook_artifact_unhealthy": return "repair_runbook";
 		case "stale_operation_lock": return "inspect_lock";

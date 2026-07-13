@@ -8,6 +8,7 @@ import {
 	INSTALL_SH_FEATURE_DISPOSITION,
 	SETUP_COMMANDS,
 } from "../src/model.ts";
+import { hashHookBytes } from "../src/hook-provenance.ts";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const retiredProjector = ["agent", "skills"].join("-");
@@ -113,5 +114,21 @@ describe("setup owner cutover", () => {
 			readFileSync(join(repoRoot, "README.md"), "utf8"),
 		].join("\n");
 		expect(guidance).toContain("bunx skills");
+	});
+
+	test("pins both migration predecessors while the released hook delegates staged health", () => {
+		const fixtures = [
+			["pre-commit-setup-v1", "462ff0f88ce44e72474d8aea4a0bbf567962d1604d6b43b955e949d59652eede"],
+			["pre-commit-legacy-installer", "c58eb459e043374bf66e5da2a65fe4f9e4d8ce3aca1daeb9127087e296fe517f"],
+		] as const;
+		for (const [name, expectedDigest] of fixtures) {
+			const bytes = readFileSync(join(repoRoot, "runtime/setup/tests/fixtures", name));
+			expect(hashHookBytes(bytes)).toBe(expectedDigest);
+		}
+
+		const hook = readFileSync(join(repoRoot, "scripts/hooks/pre-commit"), "utf8");
+		expect(hook).toMatch(/bash "\$\{CHECK_SCRIPT\}" check --staged/u);
+		expect(hook).not.toContain("PROMPT_SYSTEM_PATHS");
+		expect(hook).not.toMatch(/git\s+diff\s+--cached/u);
 	});
 });

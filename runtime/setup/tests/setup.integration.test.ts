@@ -21,6 +21,11 @@ import {
 	projectSetupStationMap,
 	setupBranchStationCatalog,
 } from "../src/branch-station-catalog.ts";
+import {
+	hashHookBytes,
+	hookProvenanceIdentity,
+	readHookProvenance,
+} from "../src/hook-provenance.ts";
 import { STARTUP_LINKS } from "../src/startup-topology.ts";
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -108,6 +113,67 @@ describe("setup catalog-driven process evidence", () => {
 			expect(await lstat(join(project, rootName, "alpha")).then(() => true, () => false)).toBe(false);
 		}
 		expect(await Bun.file(join(project, "skills/alpha/SKILL.md")).exists()).toBe(true);
+	}, 30_000);
+});
+
+describe("setup copied-hook migration process", () => {
+	test.each([
+		"pre-commit-setup-v1",
+		"pre-commit-legacy-installer",
+	] as const)("previews, migrates, verifies, and retains the %s predecessor", async (fixtureName) => {
+		const fixture = await makeFixture(`migration-${fixtureName}`);
+		const evidence = await prepareHookMigration(fixture, fixtureName);
+
+		const preview = await runSetup(`${fixtureName}:preview`, fixture, ["sync", "--check", "--json"]);
+		expect(preview.exitCode, describeCliProcessRun(preview)).toBe(1);
+		expect(JSON.parse(preview.stdout).data.station).toBe("sync.check_changes");
+		expect(await readFile(evidence.destination)).toEqual(evidence.predecessorBytes);
+		expect(await Bun.file(evidence.identity.receipt_path).exists()).toBe(false);
+
+		const applied = await runSetup(`${fixtureName}:apply`, fixture, ["sync", "--json"]);
+		expect(applied.exitCode, describeCliProcessRun(applied)).toBe(0);
+		expect(JSON.parse(applied.stdout).data.station).toBe("sync.applied");
+		expect(await readFile(evidence.destination)).toEqual(evidence.sourceBytes);
+		expect(await readHookProvenance(evidence.identity)).toMatchObject({
+			status: "valid",
+			receipt: {
+				state: "stable",
+				installed_digest: hashHookBytes(evidence.sourceBytes),
+				source_digest: hashHookBytes(evidence.sourceBytes),
+			},
+		});
+
+		const status = await runSetup(`${fixtureName}:status`, fixture, ["status", "--json"]);
+		expect(status.exitCode, describeCliProcessRun(status)).toBe(0);
+		expect(JSON.parse(status.stdout).data.station).toBe("status.healthy");
+
+		const hookAfterSync = await readFile(evidence.destination);
+		const receiptAfterSync = await readFile(evidence.identity.receipt_path);
+		const unlinked = await runSetup(`${fixtureName}:unlink`, fixture, ["unlink", "--json"]);
+		expect(unlinked.exitCode, describeCliProcessRun(unlinked)).toBe(0);
+		expect(JSON.parse(unlinked.stdout).data.station).toBe("unlink.removed");
+		expect(await readFile(evidence.destination)).toEqual(hookAfterSync);
+		expect(await readFile(evidence.identity.receipt_path)).toEqual(receiptAfterSync);
+	}, 30_000);
+
+	test("preserves a one-byte predecessor variant without creating provenance", async () => {
+		const fixture = await makeFixture("migration-one-byte-variant");
+		const evidence = await prepareHookMigration(fixture, "pre-commit-setup-v1");
+		const variant = Buffer.from(evidence.predecessorBytes);
+		variant[0] = variant[0] === 0x23 ? 0x24 : 0x23;
+		await writeFile(evidence.destination, variant, { mode: 0o755 });
+
+		const preview = await runSetup("variant:preview", fixture, ["sync", "--check", "--json"]);
+		expect(preview.exitCode, describeCliProcessRun(preview)).toBe(1);
+		expect(JSON.parse(preview.stdout).data.station).toBe("sync.check_blocked");
+		expect(await readFile(evidence.destination)).toEqual(variant);
+		expect(await Bun.file(evidence.identity.receipt_path).exists()).toBe(false);
+
+		const applied = await runSetup("variant:apply", fixture, ["sync", "--json"]);
+		expect(applied.exitCode, describeCliProcessRun(applied)).toBe(1);
+		expect(["sync.blocked", "sync.partial"]).toContain(JSON.parse(applied.stdout).data.station);
+		expect(await readFile(evidence.destination)).toEqual(variant);
+		expect(await Bun.file(evidence.identity.receipt_path).exists()).toBe(false);
 	}, 30_000);
 });
 
@@ -249,14 +315,14 @@ async function prepareScenario(
 }
 
 async function runSetup(
-	station: SetupStation,
+	label: SetupStation | string,
 	fixture: Fixture,
 	argv: readonly string[],
 	fault = "none",
 	direct = false,
 ): Promise<CliProcessResult> {
 	return runCliProcess({
-		label: station.id,
+		label: typeof label === "string" ? label : label.id,
 		argv: [process.execPath, direct ? CLI_PATH : FIXTURE_RUNNER, ...argv],
 		cwd: PACKAGE_ROOT,
 		env: {
@@ -356,6 +422,27 @@ async function userSource(fixture: Fixture, includeContext: boolean): Promise<vo
 		await writeFile(join(fixture.source, "runbooks/issue-to-pr-v2", directory, "item"), "x\n");
 	}
 	await writeFile(join(fixture.source, "runbooks/issue-to-pr-v2/cli.ts"), "export {};\n");
+}
+
+async function prepareHookMigration(
+	fixture: Fixture,
+	fixtureName: "pre-commit-setup-v1" | "pre-commit-legacy-installer",
+) {
+	await userSource(fixture, true);
+	const source = join(fixture.source, "scripts/hooks/pre-commit");
+	const destination = join(fixture.hooks, "pre-commit");
+	const sourceBytes = await readFile(join(PACKAGE_ROOT, "../../scripts/hooks/pre-commit"));
+	const predecessorBytes = await readFile(join(PACKAGE_ROOT, `tests/fixtures/${fixtureName}`));
+	await writeFile(source, sourceBytes, { mode: 0o755 });
+	await writeFile(destination, predecessorBytes, { mode: 0o755 });
+	await chmod(source, 0o755);
+	await chmod(destination, 0o755);
+	const identity = await hookProvenanceIdentity({
+		stateRoot: fixture.state,
+		hookDirectory: fixture.hooks,
+		hookName: "pre-commit",
+	});
+	return { source, destination, sourceBytes, predecessorBytes, identity };
 }
 
 async function healthyUser(fixture: Fixture): Promise<void> {

@@ -8,6 +8,7 @@ import { applySetup } from "../src/apply.ts";
 import { inspectSetup, type SetupInspectionInput } from "../src/inspection.ts";
 import { acquireOperationLock, acquireVisibilityLocks, inspectOperationLock } from "../src/operation-lock.ts";
 import { unlinkSetup } from "../src/unlink.ts";
+import { applySetupDomains } from "../src/setup-domains.ts";
 
 describe("setup operation lock", () => {
 	test("serializes one user mutation across callers", async () => {
@@ -155,6 +156,49 @@ describe("setup operation lock", () => {
 		continueUnlink();
 		expect(await unlink).toMatchObject({ state: "removed", station: "unlink.removed" });
 		expect(await exists(join(fixture.project, ".agents/skills/alpha"))).toBe(false);
+	});
+
+	test("serializes hook and receipt mutation through the existing user lock", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-hook-lock-"));
+		const source = join(root, "source");
+		const home = join(root, "home");
+		const hooks = join(root, "hooks");
+		const stateRoot = join(root, "state");
+		await mkdir(join(source, "skills"), { recursive: true });
+		await mkdir(join(source, "scripts/hooks"), { recursive: true });
+		await mkdir(home);
+		await mkdir(hooks);
+		await writeFile(join(source, "scripts/hooks/pre-commit"), "hook\n", { mode: 0o755 });
+		for (const directory of ["lib", "references", "templates"]) {
+			await mkdir(join(source, "runbooks/issue-to-pr-v2", directory), { recursive: true });
+			await writeFile(join(source, "runbooks/issue-to-pr-v2", directory, "item"), "fixture\n");
+		}
+		await writeFile(join(source, "runbooks/issue-to-pr-v2/cli.ts"), "fixture\n");
+		const input: SetupInspectionInput = { scope: "user", sourceRepoRoot: source, homeDir: home };
+		let releaseMutation = () => {};
+		const held = new Promise<void>((resolve) => { releaseMutation = resolve; });
+		let mutationEntered = () => {};
+		const entered = new Promise<void>((resolve) => { mutationEntered = resolve; });
+		const first = applySetupDomains(input, {
+			stateRoot,
+			hookPath: async () => hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			beforeHookMutation: async (phase) => {
+				if (phase !== "pending_receipt") return;
+				mutationEntered();
+				await held;
+			},
+		});
+		await entered;
+
+		const second = await applySetupDomains(input, {
+			stateRoot,
+			hookPath: async () => { throw new Error("hook inspection must remain behind the lock"); },
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		});
+		expect(second).toMatchObject({ state: "blocked", station: "sync.operation_busy" });
+		releaseMutation();
+		expect((await first).domains.find((domain) => domain.domain === "hooks")?.failed).toEqual([]);
 	});
 });
 

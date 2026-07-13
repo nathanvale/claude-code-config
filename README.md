@@ -47,11 +47,17 @@ scripts/agent-instructions.sh check
 
 ```sh
 ./setup status          # bounded health and next action
+./setup doctor          # diagnose topology and ownership evidence
 ./setup sync --check    # preview current evidence
 ./setup sync            # apply safe first-party wiring
 ./setup unlink --check  # preview managed removal
 ./setup unlink          # remove proven Setup-owned links
 ```
+
+Setup reconciles copied hooks only when provenance or recognized migration
+evidence proves ownership. Missing or unproven evidence preserves the hook and
+routes repair to a human; inspect with `./setup status`, `./setup doctor`, or
+`./setup sync --check` before applying a safe plan with `./setup sync`.
 
 Use `./setup catalog <id>` before third-party acquisition. Use
 `bunx skills add <source> -s <skill>` for third-party acquisition. Use the

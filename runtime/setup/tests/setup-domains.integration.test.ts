@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { STARTUP_LINKS } from "../src/startup-topology.ts";
+import { hookProvenanceIdentity, readHookProvenance } from "../src/hook-provenance.ts";
 import { inspectSetup } from "../src/inspection.ts";
 import { planSetup } from "../src/planner.ts";
 import {
@@ -24,8 +25,48 @@ describe("setup domain composition", () => {
 		expect(result).toMatchObject({ state: "applied", station: "sync.applied" });
 		expect(result.domains.map((domain) => domain.domain)).toEqual(["skill_projection", "startup", "hooks", "instruction", "runbook"]);
 		expect(await lstat(join(fixture.home, ".config/context")).then((entry) => entry.isSymbolicLink())).toBe(true);
+		const identity = await hookProvenanceIdentity({
+			stateRoot: fixture.state,
+			hookDirectory: fixture.hooks,
+			hookName: "pre-commit",
+		});
+		expect(await readHookProvenance(identity)).toMatchObject({ status: "valid", receipt: { state: "stable" } });
 		expect(result.child_output).toBe("captured child stdout\n");
 	});
+
+	test("boots a clean home through the production instruction child", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-domains-real-child-"));
+		const source = join(import.meta.dir, "../../..");
+		const home = join(root, "home");
+		const hooks = join(root, "hooks");
+		await mkdir(home);
+		await mkdir(hooks);
+
+		const result = await applySetupDomains(
+			{ scope: "user", sourceRepoRoot: source, homeDir: home },
+			{
+				stateRoot: join(root, "state"),
+				hookPath: async () => hooks,
+				instructionRunner: async (script) => {
+					const child = Bun.spawn(["bash", script, "check"], {
+						env: { ...process.env, HOME: home },
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					const [exitCode, stdout, stderr] = await Promise.all([
+						child.exited,
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+					]);
+					return { exitCode, stdout, stderr };
+				},
+			},
+		);
+
+		expect(result).toMatchObject({ state: "applied", station: "sync.applied", next_action: "setup_healthy" });
+		expect(await lstat(join(home, ".codex/AGENTS.md")).then((entry) => entry.isSymbolicLink())).toBe(true);
+		expect(result.findings.find((finding) => finding.id === "instruction_unhealthy")).toBeUndefined();
+	}, 30_000);
 
 	test("project scope performs zero user-domain probes", async () => {
 		const fixture = await projectFixture();
@@ -45,6 +86,7 @@ describe("setup domain composition", () => {
 		const base = await import("../src/planner.ts").then(async ({ planSetup }) =>
 			planSetup(await import("../src/inspection.ts").then(({ inspectSetup }) => inspectSetup(fixture.input)), "status"));
 		const result = await import("../src/setup-domains.ts").then(({ checkSetupDomains }) => checkSetupDomains(fixture.input, base, {
+			stateRoot: fixture.state,
 			hookPath: async () => { probes += 1; throw new Error("must not run"); },
 			instructionRunner: async () => { probes += 1; throw new Error("must not run"); },
 		}));
@@ -56,6 +98,7 @@ describe("setup domain composition", () => {
 		const fixture = await userFixture();
 		const base = planSetup(await inspectSetup(fixture.input), "status");
 		const result = await checkSetupDomains(fixture.input, base, {
+			stateRoot: fixture.state,
 			hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		});
@@ -65,6 +108,7 @@ describe("setup domain composition", () => {
 			station: "status.clean_slate",
 			next_action: "preview_sync",
 		});
+		expect(await Bun.file(join(fixture.state, "hook-provenance")).exists()).toBe(false);
 	});
 
 	test("reports partial when safe user domains apply beside a blocked projection", async () => {
@@ -94,6 +138,70 @@ describe("setup domain composition", () => {
 		expect(result.domains.find((domain) => domain.domain === "hooks")?.applied).not.toHaveLength(0);
 	});
 
+	test("routes edited receipt-proven hooks through existing blocked stations", async () => {
+		const fixture = await userFixture();
+		await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		});
+		await writeFile(join(fixture.hooks, "pre-commit"), "local edit\n", { mode: 0o755 });
+		const preview = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "sync"),
+			{
+				stateRoot: fixture.state,
+				hookPath: async () => fixture.hooks,
+				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			},
+		);
+
+		expect(preview).toMatchObject({ state: "blocked", station: "sync.check_blocked", next_action: "run_doctor" });
+		expect(preview.findings).toContainEqual(expect.objectContaining({ id: "hook_ownership_unproven" }));
+	});
+
+	test("repairs startup before instruction health while keeping hooks behind success", async () => {
+		const fixture = await userFixture();
+		await writeFile(join(fixture.hooks, "pre-commit"), "hook\n", { mode: 0o755 });
+		const identity = await hookProvenanceIdentity({
+			stateRoot: fixture.state,
+			hookDirectory: fixture.hooks,
+			hookName: "pre-commit",
+		});
+
+		const result = await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 1, stdout: "", stderr: "instruction failed\n" }),
+		});
+
+		expect(result).toMatchObject({ state: "partial", station: "sync.partial", next_action: "inspect_results" });
+		expect((await readHookProvenance(identity)).status).toBe("missing");
+		expect(await Bun.file(join(fixture.home, ".codex/AGENTS.md")).exists()).toBe(true);
+	});
+
+	test("keeps station and action aligned when ownership and health both block", async () => {
+		const fixture = await userFixture();
+		await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		});
+		await writeFile(join(fixture.hooks, "pre-commit"), "foreign hook\n", { mode: 0o755 });
+
+		const result = await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 1, stdout: "", stderr: "instruction failed\n" }),
+		});
+
+		expect(result).toMatchObject({ state: "blocked", station: "sync.blocked", next_action: "human_repair" });
+		expect(result.findings.map((finding) => finding.id)).toEqual(expect.arrayContaining([
+			"hook_ownership_unproven",
+			"instruction_unhealthy",
+		]));
+	});
+
 	test("unlink removes proven startup and skill links but retains copied hooks", async () => {
 		const fixture = await userFixture();
 		await applySetupDomains(fixture.input, {
@@ -104,6 +212,8 @@ describe("setup domain composition", () => {
 		const result = await unlinkSetupDomains(fixture.input, { stateRoot: fixture.state });
 		expect(result.state).toBe("removed");
 		expect(await Bun.file(join(fixture.hooks, "pre-commit")).exists()).toBe(true);
+		const identity = await hookProvenanceIdentity({ stateRoot: fixture.state, hookDirectory: fixture.hooks, hookName: "pre-commit" });
+		expect((await readHookProvenance(identity)).status).toBe("valid");
 		expect(await lstat(join(fixture.home, ".codex/AGENTS.md")).then(() => true, () => false)).toBe(false);
 		expect(await lstat(join(fixture.home, ".config/context")).then(() => true, () => false)).toBe(false);
 	});
@@ -204,6 +314,7 @@ describe("setup domain composition", () => {
 			fixture.input,
 			planSetup(await inspectSetup(fixture.input), "sync"),
 			{
+				stateRoot: fixture.state,
 				hookPath: async () => fixture.hooks,
 				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 			},
@@ -221,6 +332,7 @@ describe("setup domain composition", () => {
 			fixture.input,
 			planSetup(await inspectSetup(fixture.input), "sync"),
 			{
+				stateRoot: fixture.state,
 				hookPath: async () => fixture.hooks,
 				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 			},
@@ -231,6 +343,7 @@ describe("setup domain composition", () => {
 			fixture.input,
 			planSetup(await inspectSetup(fixture.input), "status"),
 			{
+				stateRoot: fixture.state,
 				hookPath: async () => fixture.hooks,
 				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 			},

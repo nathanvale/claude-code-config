@@ -1,14 +1,21 @@
 import { join } from "node:path";
 
 import { applySetup } from "./apply.ts";
-import { applyHookTopology, inspectHookTopology, resolveGitHookPath } from "./hook-topology.ts";
+import {
+	applyHookTopology,
+	inspectHookTopology,
+	projectHookTopologyPlan,
+	resolveGitHookPath,
+	type HookMutationPhase,
+} from "./hook-topology.ts";
 import { checkInstructionHealth, type InstructionRunner } from "./instruction-health.ts";
 import type { SetupDomainResult, SetupFinding, SetupResult } from "./model.ts";
 import { acquireOperationLock, inspectOperationLock } from "./operation-lock.ts";
 import { checkRunbookHealth } from "./runbook-health.ts";
 import { resolveSetupScope } from "./scope.ts";
 import { applyStartupTopology, inspectRemovableStartupLinks, inspectStartupTopology } from "./startup-topology.ts";
-import type { SetupInspection, SetupInspectionInput } from "./inspection.ts";
+import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
+import { planSetup } from "./planner.ts";
 import { unlinkSetup } from "./unlink.ts";
 import { rm } from "node:fs/promises";
 
@@ -19,12 +26,14 @@ export interface ApplySetupDomainsOptions {
 	readonly hookPath?: (repoRoot: string) => Promise<string>;
 	/** Deterministic pre-syscall seam used to prove apply-time races and failures. */
 	readonly beforeSymlink?: (source: string, destination: string) => Promise<void>;
+	/** Deterministic hook transaction seam used to prove lock and race behavior. */
+	readonly beforeHookMutation?: (phase: HookMutationPhase, path: string) => Promise<void>;
 }
 
-/** Read-only composition options, including optional lock-state diagnostics. */
+/** Read-only composition options, including lock and provenance state diagnostics. */
 export interface CheckSetupDomainsOptions extends Omit<ApplySetupDomainsOptions, "stateRoot"> {
-	/** Operation-lock root inspected by doctor without mutation. */
-	readonly stateRoot?: string;
+	/** Existing Setup state root inspected without creating provenance or lock state. */
+	readonly stateRoot: string;
 }
 
 export interface UnlinkSetupDomainsOptions {
@@ -41,7 +50,7 @@ export async function checkSetupDomains(
 	options: CheckSetupDomainsOptions,
 ): Promise<SetupResult> {
 	const scope = await resolveSetupScope(input);
-	if (base.command === "doctor" && options.stateRoot) {
+	if (base.command === "doctor") {
 		const lock = await inspectOperationLock({
 			scope: input.scope,
 			targetAnchor: scope.target_anchor,
@@ -63,7 +72,7 @@ export async function checkSetupDomains(
 	if (input.scope === "project") return base;
 	const [startupPlan, hookInspection, instruction] = await Promise.all([
 		inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor),
-		inspectHookDomain(input.sourceRepoRoot, options.hookPath),
+		inspectHookDomain(input.sourceRepoRoot, options.stateRoot, options.hookPath),
 		checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner),
 	]);
 	const findings: SetupFinding[] = [...startupPlan.findings, ...hookInspection.findings];
@@ -195,32 +204,63 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 		return applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect });
 	}
 	try {
-		const projection = await applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, lockHeld: true, beforeSymlink: options.beforeSymlink });
+		const inspect = options.inspect ?? inspectSetup;
+		const projectionPlan = planSetup(await inspect(input), "sync");
 		const startupPlan = await inspectStartupTopology(input.sourceRepoRoot, homeDir);
-		const startup = await applyStartupTopology(startupPlan);
-		let hook: SetupDomainResult = emptyDomain("hooks");
+		const startupPreview: SetupDomainResult = {
+			...emptyDomain("startup"),
+			planned: startupPlan.operations.map((item) => item.destination),
+			preserved: startupPlan.preserved,
+		};
+		let hookPlan: Awaited<ReturnType<typeof inspectHookTopology>> | undefined;
+		let hookPreview = emptyDomain("hooks");
 		const extraFindings: SetupFinding[] = [...startupPlan.findings];
 		try {
 			const hookRoot = await (options.hookPath ?? resolveGitHookPath)(input.sourceRepoRoot);
-			const hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, "scripts/hooks"), hookRoot);
-			hook = await applyHookTopology(hookPlan);
+			hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, "scripts/hooks"), hookRoot, options.stateRoot);
+			hookPreview = projectHookTopologyPlan(hookPlan);
 			extraFindings.push(...hookPlan.findings);
 		} catch (error) {
 			extraFindings.push({ id: "hook_unhealthy", owner: "setup.hooks", summary: error instanceof Error ? error.message : String(error), repair: "repair_hooks" });
-			hook = { ...hook, failed: ["git-hook-path"] };
+			hookPreview = { ...hookPreview, failed: ["git-hook-path"] };
 		}
-		const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
-		if (instruction.finding) extraFindings.push(instruction.finding);
-		const instructionDomain = domainWithFailures(
-			"instruction",
-			instruction.healthy ? [] : [join(input.sourceRepoRoot, "scripts/agent-instructions.sh")],
-		);
 		const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
 		if (runbook.finding) extraFindings.push(runbook.finding);
 		const runbookDomain = domainWithFailures(
 			"runbook",
 			runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`),
 		);
+		const preMutationBlocked = extraFindings.some((finding) =>
+			finding.id === "hook_unhealthy"
+			|| finding.id === "runbook_artifact_unhealthy");
+		if (preMutationBlocked) {
+			const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
+			if (instruction.finding) extraFindings.push(instruction.finding);
+			return aggregate(
+				projectionPlan,
+				[startupPreview, hookPreview, instructionResultDomain(input.sourceRepoRoot, instruction.healthy), runbookDomain],
+				extraFindings,
+				`${instruction.stdout}${instruction.stderr}`,
+			);
+		}
+
+		const startup = await applyStartupTopology(startupPlan);
+		const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
+		if (instruction.finding) extraFindings.push(instruction.finding);
+		const instructionDomain = instructionResultDomain(input.sourceRepoRoot, instruction.healthy);
+		if (!instruction.healthy) {
+			return aggregate(
+				projectionPlan,
+				[startup, hookPreview, instructionDomain, runbookDomain],
+				extraFindings,
+				`${instruction.stdout}${instruction.stderr}`,
+			);
+		}
+
+		const projection = await applySetup(input, { stateRoot: options.stateRoot, inspect: options.inspect, lockHeld: true, beforeSymlink: options.beforeSymlink });
+		const hook = hookPlan
+			? await applyHookTopology(hookPlan, { beforeMutation: options.beforeHookMutation })
+			: hookPreview;
 		return aggregate(projection, [startup, hook, instructionDomain, runbookDomain], extraFindings, `${instruction.stdout}${instruction.stderr}`);
 	} finally {
 		await lock.release();
@@ -235,19 +275,20 @@ function domainWithFailures(domain: string, failed: readonly string[]): SetupDom
 	return { ...emptyDomain(domain), failed };
 }
 
+function instructionResultDomain(repoRoot: string, healthy: boolean): SetupDomainResult {
+	return domainWithFailures("instruction", healthy ? [] : [join(repoRoot, "scripts/agent-instructions.sh")]);
+}
+
 async function inspectHookDomain(
 	repoRoot: string,
+	stateRoot: string,
 	hookPath?: (repoRoot: string) => Promise<string>,
 ): Promise<{ domain: SetupDomainResult; findings: readonly SetupFinding[] }> {
 	try {
 		const hookRoot = await (hookPath ?? resolveGitHookPath)(repoRoot);
-		const plan = await inspectHookTopology(join(repoRoot, "scripts/hooks"), hookRoot);
+		const plan = await inspectHookTopology(join(repoRoot, "scripts/hooks"), hookRoot, stateRoot);
 		return {
-			domain: {
-				...emptyDomain("hooks"),
-				planned: plan.operations.map((item) => item.destination),
-				preserved: plan.preserved,
-			},
+			domain: projectHookTopologyPlan(plan),
 			findings: plan.findings,
 		};
 	} catch (error) {
@@ -286,6 +327,7 @@ function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], fin
 }
 
 function repairAction(findings: readonly SetupFinding[]) {
+	if (findings.some((finding) => finding.id === "hook_ownership_unproven")) return "human_repair" as const;
 	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "repair_hooks" as const;
 	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "repair_instructions" as const;
 	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "repair_runbook" as const;
@@ -293,6 +335,7 @@ function repairAction(findings: readonly SetupFinding[]) {
 }
 
 function healthStation(findings: readonly SetupFinding[]): string {
+	if (findings.some((finding) => finding.id === "hook_ownership_unproven")) return "sync.blocked";
 	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "sync.hook_failure";
 	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "sync.instruction_failure";
 	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "sync.runbook_failure";

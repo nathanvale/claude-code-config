@@ -47,6 +47,7 @@ export const SETUP_FINDING_IDS = [
 	"stale_operation_lock",
 	"dependency_unhealthy",
 	"hook_unhealthy",
+	"hook_ownership_unproven",
 	"instruction_unhealthy",
 	"runbook_artifact_unhealthy",
 ] as const;
