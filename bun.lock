@@ -62,6 +62,20 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/setup": {
+      "name": "@side-quest/setup",
+      "version": "0.1.0",
+      "bin": {
+        "setup": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/warm-chrome": {
       "name": "@side-quest/warm-chrome",
       "version": "0.1.0",
@@ -233,6 +247,8 @@
     "@side-quest/cli-test-fixtures": ["@side-quest/cli-test-fixtures@workspace:runtime/cli-test-fixtures"],
 
     "@side-quest/foundry-dx": ["@side-quest/foundry-dx@workspace:runners/foundry-dx"],
+
+    "@side-quest/setup": ["@side-quest/setup@workspace:runtime/setup"],
 
     "@side-quest/warm-chrome": ["@side-quest/warm-chrome@workspace:runtime/warm-chrome"],
 
