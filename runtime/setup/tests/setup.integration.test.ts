@@ -224,9 +224,9 @@ async function duplicateScope(fixture: Fixture): Promise<void> {
 	await symlink(join(fixture.source, "skills/alpha"), join(fixture.home, ".claude/skills/alpha"));
 }
 
-async function userSource(fixture: Fixture, includeMemory: boolean): Promise<void> {
+async function userSource(fixture: Fixture, includeContext: boolean): Promise<void> {
 	for (const entry of STARTUP_LINKS) {
-		if (!includeMemory && entry.source === "memory") continue;
+		if (!includeContext && entry.source === "context") continue;
 		const source = join(fixture.source, entry.source);
 		if (entry.source.includes(".")) {
 			await mkdir(dirname(source), { recursive: true });

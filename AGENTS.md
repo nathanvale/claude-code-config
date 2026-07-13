@@ -55,8 +55,8 @@
 
 ## Skill Authoring
 
-- Create skills in `skills/` only; never in `~/.claude/skills/` or `~/.codex/skills/`. Those are deploy targets symlinked by `install.sh`; a skill written there drifts from the repo and is invisible to git.
-- Repo-local skill visibility: humans inspect with `agent-skills status`; agents/CI gate with `agent-skills sync --check --json`; repair with `agent-skills sync`. External skills: check the id against `agent-skills list` (catalog inventory) first, then `bunx skills add <source> -s <skill>`; raw add overwrites a same-name skill and `status` only flags the collision after install.
+- Create first-party skills in `skills/` only; never author in generated `~/.claude/skills/` or `~/.agents/skills/` roots.
+- First-party visibility: inspect with `./setup catalog`; agents/CI gate with `./setup sync --check --json`; repair with `./setup sync`. Third-party skills: preflight with `./setup catalog <id>`, acquire only with `bunx skills add <source> -s <skill>`, then diagnose with `./setup doctor`.
 - Never author, review, heal, or repair a `SKILL.md` before reading `skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.

@@ -6,7 +6,7 @@ superseded_by: docs/decisions/2026-07-02-npx-skills-division-of-labor.md
 # Skillporter naming and source location
 
 > **Status note (2026-07-02):** Skillporter is not being built for now. Direct
-> `bunx skills` usage plus agent-skills lock recognition replaces it — see
+> `bunx skills` acquisition plus Setup collision diagnosis replaces it — see
 > `docs/decisions/2026-07-02-npx-skills-division-of-labor.md`. This ADR's
 > naming/location decisions stand if Skillporter is revived.
 

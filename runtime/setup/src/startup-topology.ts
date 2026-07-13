@@ -16,7 +16,7 @@ export const STARTUP_LINKS = [
 	{ destination: ".claude/settings.json", source: "settings.json" },
 	{ destination: ".claude/.mcp.json", source: ".mcp.json" },
 	{ destination: ".codex/AGENTS.md", source: "AGENTS.md" },
-	{ destination: ".config/memory", source: "memory" },
+	{ destination: ".config/context", source: "context" },
 ] as const;
 
 export interface StartupOperation {

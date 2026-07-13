@@ -11,9 +11,15 @@ source:
   - runtime/agent-skills/src/skills-lock.ts
   - docs/decisions/2026-07-02-npx-skills-division-of-labor.md
 decision_metadata_format: fenced-yaml-per-decision
+amended_by: docs/plans/2026-07-13-001-feat-agent-setup-cli-plan.md
 ---
 
 # Agent Skills Projection Hardening Decision Log
+
+> **Setup supersession note (2026-07-13):** Setup inherited the accepted
+> canonical folding, containment, ownership, lstat, and apply-time revalidation
+> invariants. The retired projector names, source paths, commands, and test
+> counts below remain historical audit evidence, not executable routes.
 
 An adversarial audit (7 finder lenses + refute-by-default verification, live
 probes against `bunx skills@1.5.14` on a case-insensitive APFS volume) surfaced

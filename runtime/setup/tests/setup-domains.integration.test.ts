@@ -14,16 +14,16 @@ import {
 } from "../src/setup-domains.ts";
 
 describe("setup domain composition", () => {
-	test("applies safe user domains and reports missing memory as partial", async () => {
-		const fixture = await userFixture(false);
+	test("applies every safe user domain from a clean baseline", async () => {
+		const fixture = await userFixture();
 		const result = await applySetupDomains(fixture.input, {
 			stateRoot: fixture.state,
 			hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "captured child stdout\n", stderr: "" }),
 		});
-		expect(result).toMatchObject({ state: "partial", station: "sync.partial" });
+		expect(result).toMatchObject({ state: "applied", station: "sync.applied" });
 		expect(result.domains.map((domain) => domain.domain)).toEqual(["skill_projection", "startup", "hooks", "instruction", "runbook"]);
-		expect(result.findings).toContainEqual(expect.objectContaining({ id: "source_missing", path: join(fixture.source, "memory") }));
+		expect(await lstat(join(fixture.home, ".config/context")).then((entry) => entry.isSymbolicLink())).toBe(true);
 		expect(result.child_output).toBe("captured child stdout\n");
 	});
 
@@ -53,7 +53,7 @@ describe("setup domain composition", () => {
 	});
 
 	test("labels a fresh user topology clean slate with preview as the next action", async () => {
-		const fixture = await userFixture(true);
+		const fixture = await userFixture();
 		const base = planSetup(await inspectSetup(fixture.input), "status");
 		const result = await checkSetupDomains(fixture.input, base, {
 			hookPath: async () => fixture.hooks,
@@ -68,7 +68,7 @@ describe("setup domain composition", () => {
 	});
 
 	test("unlink removes proven startup and skill links but retains copied hooks", async () => {
-		const fixture = await userFixture(true);
+		const fixture = await userFixture();
 		await applySetupDomains(fixture.input, {
 			stateRoot: fixture.state,
 			hookPath: async () => fixture.hooks,
@@ -78,10 +78,11 @@ describe("setup domain composition", () => {
 		expect(result.state).toBe("removed");
 		expect(await Bun.file(join(fixture.hooks, "pre-commit")).exists()).toBe(true);
 		expect(await lstat(join(fixture.home, ".codex/AGENTS.md")).then(() => true, () => false)).toBe(false);
+		expect(await lstat(join(fixture.home, ".config/context")).then(() => true, () => false)).toBe(false);
 	});
 
 	test("unlink preserves a foreign startup replacement introduced after preview", async () => {
-		const fixture = await userFixture(true);
+		const fixture = await userFixture();
 		await applySetupDomains(fixture.input, {
 			stateRoot: fixture.state, hookPath: async () => fixture.hooks,
 			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -99,9 +100,61 @@ describe("setup domain composition", () => {
 		expect(result.domains.at(-1)?.failed).toEqual([target]);
 		expect(await Bun.file(target).text()).toBe("foreign replacement\n");
 	});
+
+	test("cycles a clean user baseline through check, apply, health, and unlink", async () => {
+		const fixture = await userFixture();
+		const check = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "sync"),
+			{
+				hookPath: async () => fixture.hooks,
+				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			},
+		);
+		expect(check).toMatchObject({ state: "changes", station: "sync.check_changes" });
+
+		const applied = await applySetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+		});
+		expect(applied.state).toBe("applied");
+
+		const healthy = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "status"),
+			{
+				hookPath: async () => fixture.hooks,
+				instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			},
+		);
+		expect(healthy).toMatchObject({ state: "healthy", station: "status.healthy" });
+
+		const removed = await unlinkSetupDomains(fixture.input, { stateRoot: fixture.state });
+		expect(removed.state).toBe("removed");
+		expect(await Bun.file(join(fixture.home, ".claude/skills/alpha")).exists()).toBe(false);
+	});
+
+	test("cycles an explicit project baseline without touching user domains", async () => {
+		const fixture = await projectFixture();
+		const preview = planSetup(await inspectSetup(fixture.input), "sync");
+		expect(preview).toMatchObject({ state: "clean_slate", station: "sync.check_changes" });
+
+		const applied = await applySetupDomains(fixture.input, { stateRoot: fixture.state });
+		expect(applied).toMatchObject({ state: "applied", station: "sync.applied" });
+		expect(await lstat(join(fixture.input.projectRepoRoot, ".agents/skills/alpha")).then((entry) => entry.isSymbolicLink())).toBe(true);
+		expect(await lstat(join(fixture.input.homeDir, ".agents/skills/alpha")).then(() => true, () => false)).toBe(false);
+
+		const healthy = planSetup(await inspectSetup(fixture.input), "status");
+		expect(healthy).toMatchObject({ state: "healthy", station: "status.healthy" });
+
+		const removed = await unlinkSetupDomains(fixture.input, { stateRoot: fixture.state });
+		expect(removed).toMatchObject({ state: "removed", station: "unlink.removed" });
+		expect(await lstat(join(fixture.input.projectRepoRoot, ".agents/skills/alpha")).then(() => true, () => false)).toBe(false);
+	});
 });
 
-async function userFixture(includeMemory: boolean) {
+async function userFixture() {
 	const root = await mkdtemp(join(tmpdir(), "setup-domains-"));
 	const source = join(root, "source");
 	const home = join(root, "home");
@@ -112,7 +165,6 @@ async function userFixture(includeMemory: boolean) {
 	await mkdir(home);
 	await mkdir(hooks);
 	for (const entry of STARTUP_LINKS) {
-		if (entry.source === "memory" && !includeMemory) continue;
 		const path = join(source, entry.source);
 		if (entry.source.includes(".")) await writeFile(path, "fixture\n");
 		else await mkdir(path, { recursive: true });

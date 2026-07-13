@@ -107,8 +107,8 @@ roots to boolean presence:
 }
 ```
 
-The walk follows symlinks (the install topology is symlink-only per the
-`install.sh` contract; the v2 install lives at
+The walk follows symlinks (the startup topology is symlink-only per the
+Setup contract; the v2 install lives at
 `~/.claude/runbooks/issue-to-pr-v2/` and dereferences through
 `~/.claude/runbooks → ${REPO}/runbooks`). A visited-realpath set bounds
 the walk against symlink loops, and a depth cap is the belt-and-braces
@@ -124,7 +124,7 @@ stop-required signal alongside the runbook-version skew gate.
 
 A genuinely missing root (deleted from disk, never installed, empty
 subdirectory) reports `false`. The orchestrator is expected to
-re-run `install.sh` and re-invoke the CLI rather than dispatch into a
+run `./setup doctor`, repair with `./setup sync`, and re-invoke the CLI rather than dispatch into a
 broken install.
 
 ## See also

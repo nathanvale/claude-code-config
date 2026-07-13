@@ -227,7 +227,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			executionModes: ["normal"],
 			// The facade write-preview cross-check is per-command; launch owns no
 			// check/dry_run mode, so it declares an exemption naming the check
-			// command as the package preview surface (agent-skills ignore precedent).
+			// command as the package preview surface (former projection CLI precedent).
 			previewExemption: {
 				reason:
 					"Launch may start local Warm Chrome; warm-chrome check is the read-only preview surface, and launch-only input such as --chrome is validated by launch itself and cannot be previewed.",

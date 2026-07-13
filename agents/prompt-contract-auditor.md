@@ -22,7 +22,7 @@ Check that instruction-topology decisions, health checks, skills, and runbooks a
 You audit alignment between these surfaces:
 
 1. **Decision:** `docs/adr/0011-lean-startup-instructions.md`
-2. **Implementation:** `scripts/agent-instructions.sh`, `install.sh`
+2. **Implementation:** `setup`, `runtime/setup/`, `scripts/agent-instructions.sh`
 3. **Startup source:** `AGENTS.md`, `CLAUDE.md`
 4. **Workflow front doors:** `skills/prompt-system-router/SKILL.md`, `skills/prompt-system-workflow/SKILL.md`
 5. **Runbooks:** relevant `docs/runbooks/`, `runbooks/`, and skill references that describe instruction delivery, routing, or health checks
@@ -38,7 +38,7 @@ You audit alignment between these surfaces:
 
 ## Workflow
 
-1. Read the ADR, health script, install script, startup files, workflow skills, and relevant runbooks.
+1. Read the ADR, Setup CLI, health script, startup files, workflow skills, and relevant runbooks.
 2. For each contract invariant in the ADR or health script, check whether implementation and runbooks are consistent with it.
 3. For each runbook procedure, check whether it still matches the ADR and actual implementation.
 4. Report findings ordered by severity: Critical > High > Medium > Low.

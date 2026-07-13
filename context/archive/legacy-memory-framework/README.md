@@ -1,14 +1,14 @@
 # Memory OS
 
-This directory is the canonical source for Nathan's shared user-scope Memory OS contract.
+This directory preserves the retired user-scope Memory OS contract.
 
-Stable runtime path:
+Historical runtime path:
 - `~/.config/context`
 
-Canonical repo path:
+Historical repo path:
 - `~/code/claude-code-config/memory`
 
-Use `../install.sh --status` to verify the `~/.config/context` symlink points here.
+Archived reference only. Current durable context lives in the repository root `context/` and is wired by `./setup sync`.
 
 Start with:
 1. `AGENTS.md`

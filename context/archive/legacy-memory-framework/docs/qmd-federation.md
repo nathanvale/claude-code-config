@@ -49,13 +49,9 @@ npm install -g @tobilu/qmd
 
 ### Symlinks
 
-From the `claude-code-config` repo root:
-
-```sh
-./install.sh
-```
-
-This creates `~/.config/context` → `<repo>/context/`, which all QMD wrapper scripts resolve through.
+This topology is retired. Setup links `~/.config/context` to the current root
+`context/`; it does not expose this archive's QMD wrappers. Treat the commands
+below as historical evidence unless QMD receives a new active owner.
 
 ### Bootstrap federation
 
@@ -77,7 +73,7 @@ This runs three steps sequentially:
 
 ### MCP server
 
-The `.mcp.json` in this repo is symlinked to `~/.claude/.mcp.json` by `install.sh`. It points to the stable wrapper:
+The historical `.mcp.json` topology was symlinked into `~/.claude/.mcp.json`. QMD is no longer an active runtime route; this section is retained as archive evidence.
 
 ```sh
 ~/.config/context/scripts/qmd-mcp.sh

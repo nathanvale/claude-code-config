@@ -42,10 +42,6 @@ import {
 	agentWorktreeContracts,
 } from "../runtime/agent-worktree/src/command-contract.ts";
 import {
-	agentSkillsContractEntries,
-	agentSkillsContracts,
-} from "../runtime/agent-skills/src/command-contract.ts";
-import {
 	warmChromeContractEntries,
 	warmChromeContracts,
 } from "../runtime/warm-chrome/src/command-contract.ts";
@@ -110,7 +106,6 @@ interface RunResult extends RunnerCommand, CliProcessResult {}
 const packageRoots = {
 	worktree: join(repoRoot, "skills/worktree"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
-	agentSkills: join(repoRoot, "runtime/agent-skills"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome"),
 	setup: join(repoRoot, "runtime/setup"),
 } as const;
@@ -121,7 +116,6 @@ const packageRoots = {
 const sourceEntries = {
 	worktree: join(repoRoot, "skills/worktree/src/worktree.ts"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
-	agentSkills: join(repoRoot, "runtime/agent-skills/src/cli.ts"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome/src/cli.ts"),
 	setup: join(repoRoot, "runtime/setup/src/cli.ts"),
 } as const;
@@ -132,7 +126,6 @@ const sourceEntries = {
 const filterPackageNames = {
 	worktree: "worktree-scripts",
 	agentWorktree: "agent-worktree",
-	agentSkills: "agent-skills",
 	warmChrome: "@side-quest/warm-chrome",
 } as const;
 
@@ -385,35 +378,6 @@ function runAgentWorktreeSource(
 	);
 }
 
-function _runAgentSkillsPackage(
-	args: readonly string[],
-	label: string,
-): Promise<RunResult> {
-	return runCommand(
-		runners.packageCwd({
-			packageRoot: packageRoots.agentSkills,
-			script: "agent-skills",
-			args,
-			label,
-		}),
-	);
-}
-
-function runAgentSkillsSource(
-	args: readonly string[],
-	label: string,
-	cwd?: string,
-): Promise<RunResult> {
-	return runCommand(
-		runners.source({
-			sourcePath: sourceEntries.agentSkills,
-			args,
-			label,
-			cwd,
-		}),
-	);
-}
-
 function runWarmChromeSource(
 	args: readonly string[],
 	label: string,
@@ -662,9 +626,6 @@ const discoveredWtCommandIds = Object.keys(worktreeContracts).sort();
 const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
 	.map(([command]) => command)
 	.sort();
-const discoveredAgentSkillsCommandIds = agentSkillsContractEntries
-	.map(([command]) => command)
-	.sort();
 const discoveredWarmChromeCommandIds = warmChromeContractEntries
 	.map(([command]) => command)
 	.sort();
@@ -679,7 +640,6 @@ const discoveredSetupCommandIds = setupContractEntries
  */
 const wtPackageScripts = readPackageScripts(packageRoots.worktree);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
-const agentSkillsPackageScripts = readPackageScripts(packageRoots.agentSkills);
 const warmChromePackageScripts = readPackageScripts(packageRoots.warmChrome);
 const setupPackageScripts = readPackageScripts(packageRoots.setup);
 /**
@@ -725,7 +685,6 @@ function errorMessage(error: unknown): string {
 
 const wtTopLevelUsageLine = "Usage: worktree <command> --json";
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
-const agentSkillsTopLevelUsageLine = firstUsageLine(agentSkillsContracts.status);
 // warm-chrome renders a package-owned top-level help header, not a contract
 // usage line; per-command help renders the contract usage.
 const warmChromeTopLevelUsageLine = "Usage: warm-chrome <command> [flags]";
@@ -755,29 +714,23 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("derives the exact agent-skills command id set from exported contracts", async () => {
-		expect(discoveredAgentSkillsCommandIds).toEqual(
-			["commands", "ignore", "list", "status", "sync", "unlink"],
-		);
-	});
-
 	test("derives the exact warm-chrome command id set from exported contracts", async () => {
 		expect(discoveredWarmChromeCommandIds).toEqual(
 			["check", "launch", "repair", "status"],
 		);
 	});
 
-	test("package scripts expose the worktree, agent-worktree, agent-skills, and warm-chrome entrypoint scripts", async () => {
+	test("package scripts expose the worktree, agent-worktree, warm-chrome, and setup entrypoint scripts", async () => {
 		expect(Object.keys(wtPackageScripts)).toContain("worktree");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
-		expect(Object.keys(agentSkillsPackageScripts)).toContain("agent-skills");
 		expect(Object.keys(warmChromePackageScripts)).toContain("warm-chrome");
+		expect(Object.keys(setupPackageScripts)).toContain("setup");
 	});
 });
 
 describe("command entrypoint integration: help contracts", () => {
 	test(
-		"worktree, agent-worktree, agent-skills, and warm-chrome top-level help renders the contract usage line",
+		"worktree, agent-worktree, and warm-chrome top-level help renders the contract usage line",
 		async () => {
 			const topLevelHelp = [
 				{
@@ -797,15 +750,6 @@ describe("command entrypoint integration: help contracts", () => {
 						label: "agent-worktree --help (package-cwd)",
 					}),
 					usageLine: agentWorktreeTopLevelUsageLine,
-				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentSkills,
-						script: "agent-skills",
-						args: ["--help"],
-						label: "agent-skills --help (package-cwd)",
-					}),
-					usageLine: agentSkillsTopLevelUsageLine,
 				},
 				{
 					command: runners.packageCwd({
@@ -854,19 +798,6 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"every discovered agent-skills command help renders its first contract usage line",
-		async () => {
-			await expectDiscoveredCommandHelp({
-				commandIds: discoveredAgentSkillsCommandIds,
-				contracts: agentSkillsContracts,
-				packageRoot: packageRoots.agentSkills,
-				script: "agent-skills",
-			});
-		},
-		TEST_TIMEOUT_MS,
-	);
-
-	test(
 		"every discovered warm-chrome command help renders its first contract usage line",
 		async () => {
 			await expectDiscoveredCommandHelp({
@@ -880,7 +811,7 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"worktree, agent-worktree, agent-skills, and warm-chrome source entries support --version and top-level help",
+		"worktree, agent-worktree, and warm-chrome source entries support --version and top-level help",
 		async () => {
 			const sourceProbes = [
 				{
@@ -894,12 +825,6 @@ describe("command entrypoint integration: help contracts", () => {
 					label: "agent-worktree source",
 					versionSubstring: "agent-worktree 0.1.0",
 					usageLine: agentWorktreeTopLevelUsageLine,
-				},
-				{
-					sourcePath: sourceEntries.agentSkills,
-					label: "agent-skills source",
-					versionSubstring: "agent-skills 0.1.0",
-					usageLine: agentSkillsTopLevelUsageLine,
 				},
 				{
 					sourcePath: sourceEntries.warmChrome,
@@ -1250,63 +1175,6 @@ describe("command entrypoint integration: help contracts", () => {
 		TEST_TIMEOUT_MS,
 	);
 	test(
-		"agent-skills source entry preserves the runtime JSON command matrix",
-		async () => {
-			const commands = await runAgentSkillsSource(
-				["commands", "--json"],
-				"agent-skills source commands --json",
-			);
-			expectOkEnvelope(commands, "agent-skills.projection");
-
-			const invalid = await runAgentSkillsSource(
-				["definitely-not-a-command", "--json"],
-				"agent-skills source invalid command",
-			);
-			expectUsageError(invalid);
-
-			await withTempRoot("agent-skills-source-matrix", async (root) => {
-				const skillsRoot = join(root, "skills");
-				mkdirSync(join(skillsRoot, "fallow"), { recursive: true });
-				writeFileSync(
-					join(skillsRoot, "fallow", "SKILL.md"),
-					`---\nname: fallow\ndescription: "Test skill."\n---\n\n# fallow\n`,
-				);
-
-				const check = await runAgentSkillsSource(
-					["sync", "--check", "--json"],
-					"agent-skills source sync --check",
-					root,
-				);
-				expect(check.exitCode, describeRun(check)).toBe(1);
-				const checkEnvelope = parseEnvelope(check);
-				expect(checkEnvelope.status, describeRun(check)).toBe("ok");
-				const checkData = envelopeData(checkEnvelope, check);
-				expect(checkData.contract_id, describeRun(check)).toBe(
-					"agent-skills.projection",
-				);
-				expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(false);
-
-				const sync = await runAgentSkillsSource(
-					["sync", "--json"],
-					"agent-skills source sync",
-					root,
-				);
-				expectOkEnvelope(sync, "agent-skills.projection");
-				expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(true);
-
-				const status = await runAgentSkillsSource(
-					["status", "--json"],
-					"agent-skills source status",
-					root,
-				);
-				const statusData = expectOkEnvelope(status, "agent-skills.projection");
-				expect(statusData.health, describeRun(status)).toBe("clean");
-			});
-		},
-		TEST_TIMEOUT_MS,
-	);
-
-	test(
 		"warm-chrome source entry preserves the runtime JSON command matrix",
 		async () => {
 			// Hermetic probes only: every row fails at the parser/normalizer
@@ -1367,7 +1235,7 @@ describe("command entrypoint integration: help contracts", () => {
 
 describe("command entrypoint integration: runtime json", () => {
 	test(
-		"worktree, agent-worktree, agent-skills, and warm-chrome --version work through package scripts",
+		"worktree, agent-worktree, and warm-chrome --version work through package scripts",
 		async () => {
 			const versionProbes = [
 				{
@@ -1387,15 +1255,6 @@ describe("command entrypoint integration: runtime json", () => {
 						label: "agent-worktree --version (package-cwd)",
 					}),
 					substring: "agent-worktree 0.1.0",
-				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentSkills,
-						script: "agent-skills",
-						args: ["--version"],
-						label: "agent-skills --version (package-cwd)",
-					}),
-					substring: "agent-skills 0.1.0",
 				},
 				{
 					command: runners.packageCwd({
@@ -1434,14 +1293,6 @@ describe("command entrypoint integration: runtime json", () => {
 						packageName: filterPackageNames.agentWorktree,
 						script: "agent-worktree",
 						label: "agent-worktree --version (workspace-filter)",
-					}),
-					substring: "0.1.0",
-				},
-				{
-					command: runners.workspaceFilter({
-						packageName: filterPackageNames.agentSkills,
-						script: "agent-skills",
-						label: "agent-skills --version (workspace-filter)",
 					}),
 					substring: "0.1.0",
 				},
@@ -1486,15 +1337,6 @@ describe("command entrypoint integration: runtime json", () => {
 						label: "agent-worktree commands --json (package-cwd)",
 					}),
 					contractId: "agent-worktree.commands",
-				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentSkills,
-						script: "agent-skills",
-						args: ["commands", "--json"],
-						label: "agent-skills commands --json (package-cwd)",
-					}),
-					contractId: "agent-skills.projection",
 				},
 			];
 
@@ -1541,12 +1383,6 @@ describe("command entrypoint integration: runtime json", () => {
 					script: "agent-worktree",
 					args: ["definitely-not-a-command", "--json"],
 					label: "agent-worktree invalid command (package-cwd)",
-				}),
-				runners.packageCwd({
-					packageRoot: packageRoots.agentSkills,
-					script: "agent-skills",
-					args: ["definitely-not-a-command", "--json"],
-					label: "agent-skills invalid command (package-cwd)",
 				}),
 			];
 

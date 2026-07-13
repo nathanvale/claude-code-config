@@ -2,7 +2,7 @@
 # pre-commit hook: block commits that would break instruction health.
 # Only fires when staged changes touch instruction files.
 #
-# Install with: ./scripts/install-git-hooks.sh
+# Install and diagnose with: ./setup sync
 
 set -uo pipefail
 

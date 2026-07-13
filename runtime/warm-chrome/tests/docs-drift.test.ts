@@ -1,4 +1,4 @@
-// U8: ARCHITECTURE.md module-map drift gate (agent-skills precedent).
+// U8: ARCHITECTURE.md module-map drift gate (former projection CLI precedent).
 // The old preflight test's doc-text assertions point at browser-use SKILL.md
 // and deliberately do not port; this package's docs are gated here instead.
 import { describe, expect, test } from "bun:test";

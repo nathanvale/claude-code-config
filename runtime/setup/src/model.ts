@@ -180,7 +180,7 @@ export interface SetupResult {
 	child_output?: string;
 }
 
-/** Explicit migration disposition for superseded agent-skills behavior. */
+/** Explicit migration disposition for superseded projector behavior. */
 export const AGENT_SKILLS_FEATURE_DISPOSITION = {
 	status: "keep",
 	check_apply: "keep",
@@ -195,7 +195,7 @@ export const AGENT_SKILLS_FEATURE_DISPOSITION = {
 	external_acquisition: "external",
 } as const;
 
-/** Explicit migration disposition for superseded install.sh behavior. */
+/** Explicit migration disposition for superseded installer behavior. */
 export const INSTALL_SH_FEATURE_DISPOSITION = {
 	startup_links: "keep",
 	hook_installation: "keep_stronger_safety",

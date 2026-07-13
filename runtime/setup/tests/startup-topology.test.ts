@@ -12,7 +12,7 @@ describe("startup topology", () => {
 			".claude/CLAUDE.md", ".claude/AGENTS.md", ".claude/context", ".claude/rules",
 			".claude/commands", ".claude/agents", ".claude/runbooks", ".claude/hooks",
 			".claude/hooks.json", ".claude/settings.json", ".claude/.mcp.json",
-			".codex/AGENTS.md", ".config/memory",
+			".codex/AGENTS.md", ".config/context",
 		]);
 	});
 
@@ -24,9 +24,9 @@ describe("startup topology", () => {
 		expect(result.applied).toHaveLength(13);
 		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(join(fixture.source, "AGENTS.md"));
 
-		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "memory")));
+		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "context")));
 		const missing = await inspectStartupTopology(fixture.source, fixture.home);
-		expect(missing.findings).toContainEqual(expect.objectContaining({ id: "source_missing", path: join(fixture.source, "memory") }));
+		expect(missing.findings).toContainEqual(expect.objectContaining({ id: "source_missing", path: join(fixture.source, "context") }));
 	});
 
 	test("preserves a foreign link and real-file conflict", async () => {

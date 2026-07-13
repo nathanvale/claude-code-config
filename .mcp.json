@@ -1,9 +1,5 @@
 {
 	"mcpServers": {
-		"qmd": {
-			"command": "${HOME}/.config/memory/scripts/qmd-mcp.sh",
-			"args": []
-		},
 		"bun-runner": {
 			"command": "bunx",
 			"args": ["--bun", "@side-quest/bun-runner"]
