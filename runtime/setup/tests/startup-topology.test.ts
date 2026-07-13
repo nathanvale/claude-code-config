@@ -1,0 +1,67 @@
+import { lstat, mkdtemp, mkdir, readlink, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, test } from "bun:test";
+
+import { applyStartupTopology, inspectStartupTopology, STARTUP_LINKS } from "../src/startup-topology.ts";
+
+describe("startup topology", () => {
+	test("owns the exact thirteen non-skill startup links", () => {
+		expect(STARTUP_LINKS.map((entry) => entry.destination)).toEqual([
+			".claude/CLAUDE.md", ".claude/AGENTS.md", ".claude/context", ".claude/rules",
+			".claude/commands", ".claude/agents", ".claude/runbooks", ".claude/hooks",
+			".claude/hooks.json", ".claude/settings.json", ".claude/.mcp.json",
+			".codex/AGENTS.md", ".config/memory",
+		]);
+	});
+
+	test("plans and creates missing links while deferring a missing source", async () => {
+		const fixture = await startupFixture();
+		const first = await inspectStartupTopology(fixture.source, fixture.home);
+		expect(first.operations).toHaveLength(13);
+		const result = await applyStartupTopology(first);
+		expect(result.applied).toHaveLength(13);
+		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(join(fixture.source, "AGENTS.md"));
+
+		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "memory")));
+		const missing = await inspectStartupTopology(fixture.source, fixture.home);
+		expect(missing.findings).toContainEqual(expect.objectContaining({ id: "source_missing", path: join(fixture.source, "memory") }));
+	});
+
+	test("preserves a foreign link and real-file conflict", async () => {
+		const fixture = await startupFixture();
+		await mkdir(join(fixture.home, ".claude"), { recursive: true });
+		await symlink("/tmp/foreign", join(fixture.home, ".claude/CLAUDE.md"));
+		await writeFile(join(fixture.home, ".claude/AGENTS.md"), "foreign\n");
+		const plan = await inspectStartupTopology(fixture.source, fixture.home);
+		expect(plan.findings.filter((finding) => finding.id === "foreign_symlink")).toHaveLength(1);
+		expect(plan.findings.filter((finding) => finding.id === "real_entry")).toHaveLength(1);
+	});
+
+	test("blocks every startup write when an existing parent escapes home", async () => {
+		const fixture = await startupFixture();
+		const outside = join(fixture.source, "outside");
+		await mkdir(outside);
+		await symlink(outside, join(fixture.home, ".claude"));
+		const plan = await inspectStartupTopology(fixture.source, fixture.home);
+		expect(plan.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: join(fixture.home, ".claude") }));
+		expect(plan.operations).toEqual([]);
+		expect((await applyStartupTopology(plan)).applied).toEqual([]);
+		expect(await lstat(join(outside, "CLAUDE.md")).then(() => true, () => false)).toBe(false);
+	});
+});
+
+async function startupFixture() {
+	const root = await mkdtemp(join(tmpdir(), "setup-startup-"));
+	const source = join(root, "source");
+	const home = join(root, "home");
+	await mkdir(source);
+	await mkdir(home);
+	for (const entry of STARTUP_LINKS) {
+		const path = join(source, entry.source);
+		if (entry.source.includes(".")) await writeFile(path, "fixture\n");
+		else await mkdir(path, { recursive: true });
+	}
+	return { source, home };
+}

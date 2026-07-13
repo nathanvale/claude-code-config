@@ -13,6 +13,8 @@ export interface ApplySetupOptions {
 	readonly stateRoot: string;
 	readonly inspect?: (input: SetupInspectionInput) => Promise<SetupInspection>;
 	readonly beforeSymlink?: (source: string, destination: string) => Promise<void>;
+	/** Caller already owns the scope lock while composing independent domains. */
+	readonly lockHeld?: boolean;
 }
 
 /** Reinspect, lock, preflight the full projection, then apply serially. */
@@ -21,7 +23,7 @@ export async function applySetup(
 	options: ApplySetupOptions,
 ): Promise<SetupResult> {
 	const initialScope = await resolveSetupScope(input);
-	const lock = await acquireOperationLock({
+	const lock = options.lockHeld ? { status: "acquired" as const, path: "caller-owned", release: async () => {} } : await acquireOperationLock({
 		scope: input.scope,
 		targetAnchor: initialScope.target_anchor,
 		stateRoot: options.stateRoot,

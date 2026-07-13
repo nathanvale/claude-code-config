@@ -11,6 +11,7 @@ export interface UnlinkSetupOptions {
 	readonly stateRoot: string;
 	readonly inspect?: (input: SetupInspectionInput) => Promise<SetupInspection>;
 	readonly beforeRemove?: (path: string) => Promise<void>;
+	readonly lockHeld?: boolean;
 }
 
 /** Preview or remove only links whose current target proves selected-catalog ownership. */
@@ -20,7 +21,7 @@ export async function unlinkSetup(
 ): Promise<SetupResult> {
 	const scope = await resolveSetupScope(input);
 	if (options.check) return unlinkWithInspection(input, await (options.inspect ?? inspectSetup)(input), true);
-	const lock = await acquireOperationLock({ scope: input.scope, targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
+	const lock = options.lockHeld ? { status: "acquired" as const, path: "caller-owned", release: async () => {} } : await acquireOperationLock({ scope: input.scope, targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
 	if (lock.status !== "acquired") return unlinkLockResult(input, scope, lock.status, lock.path);
 	try {
 		return unlinkWithInspection(input, await (options.inspect ?? inspectSetup)(input), false, options.beforeRemove);

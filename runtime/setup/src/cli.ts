@@ -18,7 +18,7 @@ import {
 } from "@side-quest/cli-command-facade";
 
 import { canonicalSkillId } from "./catalog.ts";
-import { applySetup } from "./apply.ts";
+import { applySetupDomains, checkSetupDomains, unlinkSetupDomains } from "./setup-domains.ts";
 import {
 	parseSetupInvocation,
 	projectSetupCommandDiscoveryTree,
@@ -30,7 +30,6 @@ import { inspectSetup, type SetupInspection, type SetupInspectionInput } from ".
 import { SETUP_COMMANDS, type SetupCommand, type SetupResult } from "./model.ts";
 import { planSetup } from "./planner.ts";
 import { renderCatalog, renderDoctor, renderSetupResult } from "./renderer.ts";
-import { unlinkSetup } from "./unlink.ts";
 
 /** Runtime adapters keep command-surface tests deterministic and mutation-free. */
 export interface SetupCliRuntime {
@@ -41,6 +40,7 @@ export interface SetupCliRuntime {
 	inspect: (input: SetupInspectionInput) => Promise<SetupInspection>;
 	apply: (input: SetupInspectionInput) => Promise<SetupResult>;
 	unlink: (input: SetupInspectionInput, check: boolean) => Promise<SetupResult>;
+	checkDomains?: (input: SetupInspectionInput, base: SetupResult) => Promise<SetupResult>;
 }
 
 /** Optional CLI entry-point dependencies used by tests and embedded callers. */
@@ -83,10 +83,11 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
 				projectRepoRoot: resolveProjectRepoRoot(input.projectRepoRoot),
 			});
 		},
-		apply: async (input: SetupInspectionInput) => applySetup(normalizeProjectInput(input), { stateRoot, inspect: runtime.inspect }),
-		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetup(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
+		apply: async (input: SetupInspectionInput) => applySetupDomains(normalizeProjectInput(input), { stateRoot, inspect: runtime.inspect }),
+		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetupDomains(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
 		...overrides,
 	};
+	if (!overrides.inspect) runtime.checkDomains = async (input, base) => checkSetupDomains(normalizeProjectInput(input), base, {});
 	return runtime;
 }
 
@@ -123,6 +124,7 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 	const startedAt = diagnostics.options.startedAtMs;
 	try {
 		const execution = await execute(invocation, runtime);
+		if ("child_output" in execution.result && execution.result.child_output) stderr.write(execution.result.child_output);
 		if (invocation.verbose) stderr.write("setup inspection complete\n");
 		if (invocation.json) {
 			const data = createResultData(execution.contractCommand, execution.result);
@@ -194,7 +196,10 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 	}
 	const inspection = await runtime.inspect(input);
 	if (invocation.command === "catalog") return catalogExecution(invocation, inspection);
-	const plan = planSetup(inspection, invocation.command);
+	let plan = planSetup(inspection, invocation.command);
+	if (runtime.checkDomains && (invocation.command === "status" || invocation.command === "doctor" || (invocation.command === "sync" && invocation.check))) {
+		plan = await runtime.checkDomains(input, plan);
+	}
 	if (invocation.command === "doctor") {
 		const diagnosis = diagnoseFindings(plan.findings);
 		const result: SetupResult = {
@@ -255,10 +260,11 @@ function createSetupResultData(
 	command: Exclude<SetupCommand, "commands">,
 	result: SetupResult,
 ) {
+	const { child_output: _childOutput, ...publicResult } = result;
 	return createCommandResultData<
 		SetupResult,
 		typeof setupContracts.status.resultContract
-	>(setupContracts[command], result);
+	>(setupContracts[command], publicResult);
 }
 
 function emitFailure(input: {

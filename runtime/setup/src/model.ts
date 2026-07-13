@@ -176,6 +176,8 @@ export interface SetupResult {
 	station: string;
 	next_action?: SetupActionId;
 	evidence_fingerprint?: string;
+	/** Captured child diagnostics; CLI writes this only to stderr. */
+	child_output?: string;
 }
 
 /** Explicit migration disposition for superseded agent-skills behavior. */

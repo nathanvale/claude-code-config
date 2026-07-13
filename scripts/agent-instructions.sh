@@ -325,36 +325,6 @@ check_projection_drift() {
 	fi
 }
 
-# Fail when a deploy target holds a real directory whose name also exists as a
-# repo skill: a drifted duplicate of the canonical source. Codex-only dirs (no
-# repo twin) are ignored automatically, so the check is self-maintaining — no
-# allowlist to grow. Repair: back up the copy and symlink it, or run install.sh.
-check_skill_deploy_drift() {
-	local repo_skills="$STARTUP_OWNER/skills"
-	local drift_found=false
-	local target entry name
-	for target in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
-		[[ -d "$target" ]] || continue
-		# A whole-folder symlink (Claude's model) is the source itself — its
-		# children are repo skills, not per-skill drift. Only scan real
-		# directories that mix sources (Codex's model).
-		[[ -L "$target" ]] && continue
-		for entry in "$target"/*/; do
-			[[ -d "$entry" ]] || continue
-			entry="${entry%/}"
-			[[ -L "$entry" ]] && continue
-			name="$(basename "$entry")"
-			if [[ -d "$repo_skills/$name" ]]; then
-				drift_found=true
-				add_fail "Skill deploy drift: ${target/#$HOME/~}/$name is a real directory shadowing skills/$name; back it up and symlink, or run ./install.sh"
-			fi
-		done
-	done
-	if [[ "$drift_found" == false ]]; then
-		add_pass "no skill deploy drift in ~/.claude/skills or ~/.codex/skills"
-	fi
-}
-
 run_checks() {
 	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
@@ -367,7 +337,6 @@ run_checks() {
 	check_owner_paths
 	check_appendices
 	check_projection_drift
-	check_skill_deploy_drift
 }
 
 json_array() {
@@ -430,7 +399,7 @@ echo "startup: AGENTS.md"
 echo "claude: CLAUDE.md"
 echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
 	echo "checks: scripts/agent-instructions.sh"
-	echo "skills: skills/* plus discovery projections"
+	echo "skills: setup projections plus bunx skills acquisition"
 	echo "repo truth: docs/agents/"
 	echo "git docs: docs/git/"
 	echo "vocabulary: CONTEXT.md plus scoped CONTEXT.md files"
@@ -445,7 +414,7 @@ Usage:
   scripts/agent-instructions.sh status [--json]
 
 Commands:
-  check   Read-only health gate for startup budgets, owner paths, leakage, appendices, and projection drift.
+  check   Read-only health gate for startup budgets, owner paths, leakage, appendices, and startup delivery.
   status  Compact owner map plus check results.
 
 Exit codes:

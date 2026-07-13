@@ -41,6 +41,22 @@ describe("setup CLI read-only surface", () => {
 		expect(blocked.stdout.text).toContain("next: run_doctor");
 	});
 
+	test("composes user-domain health into default status and doctor", async () => {
+		let checks = 0;
+		const domainFinding = { id: "hook_unhealthy" as const, owner: "setup.hooks", summary: "Hook differs.", repair: "repair_hooks" as const };
+		const checkDomains: NonNullable<SetupCliRuntime["checkDomains"]> = async (_input, base) => {
+			checks += 1;
+			return { ...base, state: "blocked", station: base.command === "status" ? "status.blocked" : base.station, findings: [domainFinding], next_action: "run_doctor" };
+		};
+		const statusIo = capture();
+		const doctorIo = capture();
+		expect(await main(["status", "--json"], { ...statusIo, runtime: { ...runtime(inspection()), checkDomains } })).toBe(0);
+		expect(JSON.parse(statusIo.stdout.text).data.station).toBe("status.blocked");
+		expect(await main(["doctor", "--json"], { ...doctorIo, runtime: { ...runtime(inspection()), checkDomains } })).toBe(1);
+		expect(JSON.parse(doctorIo.stdout.text).data).toMatchObject({ station: "doctor.setup_dependency_unhealthy", findings: [{ id: "hook_unhealthy" }] });
+		expect(checks).toBe(2);
+	});
+
 	test("renders compact output by default and path evidence with verbose", async () => {
 		const compact = capture();
 		const verbose = capture();
@@ -105,6 +121,19 @@ describe("setup CLI read-only surface", () => {
 
 		expect(() => JSON.parse(io.stdout.text)).not.toThrow();
 		expect(io.stderr.text).toContain("setup inspection complete");
+	});
+
+	test("keeps captured child stdout out of the JSON envelope", async () => {
+		const io = capture();
+		const result = { ...inspectionResult("sync", "partial", "sync.partial"), child_output: "child prose\n" };
+		const exit = await main(["sync", "--json"], {
+			...io,
+			runtime: runtime(inspection(), { apply: async () => result }),
+		});
+		expect(exit).toBe(1);
+		expect(() => JSON.parse(io.stdout.text)).not.toThrow();
+		expect(io.stdout.text).not.toContain("child prose");
+		expect(io.stderr.text).toContain("child prose");
 	});
 
 	test("emits command discovery directly from the facade contract", async () => {
