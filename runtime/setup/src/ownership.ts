@@ -183,6 +183,45 @@ async function classifyEntry(
 	};
 }
 
+/** Reclassify one destination immediately before a mutation syscall. */
+export async function classifyProjectionPath(input: {
+	readonly root: ProjectionRoot;
+	readonly path: string;
+	readonly id: string;
+	readonly catalogRoot: string;
+	readonly providerEvidence: ProviderEvidence;
+}): Promise<OwnershipEntry | undefined> {
+	let stats: Stats;
+	try {
+		stats = await lstat(input.path);
+	} catch (error) {
+		if (isMissing(error)) return undefined;
+		return {
+			root_id: input.root.id,
+			id: input.id,
+			canonical_id: canonicalSkillId(input.id),
+			path: input.path,
+			shape: "unknown",
+			ownership: "unknown_entry",
+			finding_id: "real_entry",
+		};
+	}
+	const canonicalCatalog = existsSync(input.catalogRoot)
+		? await realpath(input.catalogRoot)
+		: resolve(input.catalogRoot);
+	const provider = input.providerEvidence.entries.find(
+		(entry) => entry.canonical_id === canonicalSkillId(input.id),
+	);
+	return classifyEntry(
+		input.root,
+		input.id,
+		input.path,
+		stats,
+		canonicalCatalog,
+		provider,
+	);
+}
+
 function legacyEntry(
 	root: ProjectionRoot,
 	id: string,

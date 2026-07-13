@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import type { SetupInspection } from "../src/inspection.ts";
-import { main } from "../src/cli.ts";
+import { main, type SetupCliRuntime } from "../src/cli.ts";
+import type { SetupResult } from "../src/model.ts";
 
 describe("setup CLI read-only surface", () => {
 	test("routes flag-only invocation to status and emits one JSON envelope", async () => {
@@ -81,19 +82,21 @@ describe("setup CLI read-only surface", () => {
 		});
 	});
 
-	test("sync check is read-only and plain sync fails before inspection", async () => {
+	test("sync check is read-only and plain sync delegates to the mutation engine", async () => {
 		const check = capture();
 		const write = capture();
 		let inspections = 0;
+		const applied = { ...inspectionResult("sync", "applied", "sync.applied"), domains: [{ domain: "skill_projection", planned: ["/home/.claude/skills/alpha"], applied: ["/home/.claude/skills/alpha"], deferred: [], preserved: [], failed: [] }] };
 		const adapter = runtime(inspection({ catalogIds: ["alpha"] }), {
 			onInspect: () => { inspections += 1; },
+			apply: async () => applied,
 		});
 
 		expect(await main(["sync", "--check", "--json"], { ...check, runtime: adapter })).toBe(1);
 		expect(JSON.parse(check.stdout.text).data.station).toBe("sync.check_changes");
-		expect(await main(["sync", "--json"], { ...write, runtime: adapter })).toBe(2);
+		expect(await main(["sync", "--json"], { ...write, runtime: adapter })).toBe(0);
 		expect(inspections).toBe(1);
-		expect(JSON.parse(write.stdout.text)).toMatchObject({ status: "error", error: { code: "invalid_usage" } });
+		expect(JSON.parse(write.stdout.text)).toMatchObject({ status: "ok", data: { station: "sync.applied" } });
 	});
 
 	test("keeps verbose JSON diagnostics on stderr", async () => {
@@ -223,7 +226,7 @@ function capture() {
 
 function runtime(
 	state: SetupInspection,
-	options: { env?: Record<string, string>; onInspect?: () => void } = {},
+	options: { env?: Record<string, string>; onInspect?: () => void; apply?: SetupCliRuntime["apply"] } = {},
 ) {
 	return {
 		sourceRepoRoot: "/repo",
@@ -234,7 +237,12 @@ function runtime(
 			options.onInspect?.();
 			return state;
 		},
+		...(options.apply ? { apply: options.apply } : {}),
 	};
+}
+
+function inspectionResult(command: "sync" | "unlink", state: SetupResult["state"], station: string): SetupResult {
+	return { command, scope: "user", state, findings: [], domains: [], operations: [], projection_targets: [], counts: { catalog: 0, managed: 0, external: 0, planned: 0, blockers: 0 }, catalog_root: "/repo/skills", destination_roots: [], station, next_action: "setup_healthy" };
 }
 
 function inspection(options: {

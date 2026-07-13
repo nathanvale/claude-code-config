@@ -2,7 +2,7 @@
 
 import { existsSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
 	type CliWriter,
@@ -18,6 +18,7 @@ import {
 } from "@side-quest/cli-command-facade";
 
 import { canonicalSkillId } from "./catalog.ts";
+import { applySetup } from "./apply.ts";
 import {
 	parseSetupInvocation,
 	projectSetupCommandDiscoveryTree,
@@ -29,6 +30,7 @@ import { inspectSetup, type SetupInspection, type SetupInspectionInput } from ".
 import { SETUP_COMMANDS, type SetupCommand, type SetupResult } from "./model.ts";
 import { planSetup } from "./planner.ts";
 import { renderCatalog, renderDoctor, renderSetupResult } from "./renderer.ts";
+import { unlinkSetup } from "./unlink.ts";
 
 /** Runtime adapters keep command-surface tests deterministic and mutation-free. */
 export interface SetupCliRuntime {
@@ -37,6 +39,8 @@ export interface SetupCliRuntime {
 	now: () => number;
 	env: Readonly<Record<string, string | undefined>>;
 	inspect: (input: SetupInspectionInput) => Promise<SetupInspection>;
+	apply: (input: SetupInspectionInput) => Promise<SetupResult>;
+	unlink: (input: SetupInspectionInput, check: boolean) => Promise<SetupResult>;
 }
 
 /** Optional CLI entry-point dependencies used by tests and embedded callers. */
@@ -64,10 +68,12 @@ class InvalidTargetError extends Error {
 
 /** Build the filesystem-backed, read-only CLI runtime. */
 export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): SetupCliRuntime {
-	const sourceRepoRoot = resolve(import.meta.dir, "../../..");
-	return {
+	const sourceRepoRoot = overrides.sourceRepoRoot ?? resolve(import.meta.dir, "../../..");
+	const homeDir = overrides.homeDir ?? homedir();
+	const stateRoot = join(homeDir, ".local/state/setup");
+	const runtime: SetupCliRuntime = {
 		sourceRepoRoot,
-		homeDir: homedir(),
+		homeDir,
 		now: () => Date.now(),
 		env: process.env,
 		inspect: async (input) => {
@@ -77,8 +83,17 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
 				projectRepoRoot: resolveProjectRepoRoot(input.projectRepoRoot),
 			});
 		},
+		apply: async (input: SetupInspectionInput) => applySetup(normalizeProjectInput(input), { stateRoot, inspect: runtime.inspect }),
+		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetup(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
 		...overrides,
 	};
+	return runtime;
+}
+
+function normalizeProjectInput(input: SetupInspectionInput): SetupInspectionInput {
+	return input.scope === "project"
+		? { ...input, projectRepoRoot: resolveProjectRepoRoot(input.projectRepoRoot) }
+		: input;
 }
 
 /** Run the Setup CLI and return its process exit without mutating setup state. */
@@ -163,18 +178,21 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 	if (invocation.command === "commands") {
 		return { result: projectSetupCommandDiscoveryTree(), exitCode: 0, human: "", contractCommand: "commands" };
 	}
-	if (invocation.command === "sync" && !invocation.check) {
-		throw new CliUsageError("sync writes are unavailable until the apply engine is active.", { exitCode: 2, showMessage: true });
-	}
-	if (invocation.command === "unlink") {
-		throw new CliUsageError("unlink is unavailable until the apply engine is active.", { exitCode: 2, showMessage: true });
-	}
-	const inspection = await runtime.inspect({
+	const input: SetupInspectionInput = {
 		scope: invocation.scope,
 		sourceRepoRoot: runtime.sourceRepoRoot,
 		...(invocation.repo ? { projectRepoRoot: invocation.repo } : {}),
 		homeDir: runtime.homeDir,
-	});
+	};
+	if (invocation.command === "sync" && !invocation.check) {
+		const result = await runtime.apply(input);
+		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "sync" };
+	}
+	if (invocation.command === "unlink") {
+		const result = await runtime.unlink(input, invocation.check);
+		return { result, exitCode: result.state === "removed" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "unlink" };
+	}
+	const inspection = await runtime.inspect(input);
 	if (invocation.command === "catalog") return catalogExecution(invocation, inspection);
 	const plan = planSetup(inspection, invocation.command);
 	if (invocation.command === "doctor") {
