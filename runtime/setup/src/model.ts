@@ -102,7 +102,52 @@ export interface SetupFinding {
 	owner: string;
 	path?: string;
 	summary: string;
+	why?: string;
 	repair: SetupActionId;
+}
+
+/** One deterministic filesystem operation proposed from immutable evidence. */
+export interface SetupOperation {
+	domain: string;
+	action: "create_link" | "relink";
+	root_id: "claude" | "codex";
+	root_path: string;
+	id: string;
+	canonical_id: string;
+	destination: string;
+	desired_source: string;
+	expected_ownership: "missing" | "managed_link" | "broken_managed_link";
+	link_form: "absolute" | "relative";
+}
+
+/** Per-root preflight evidence retained for apply-time atomicity checks. */
+export interface SetupProjectionTargetPlan {
+	root_id: "claude" | "codex";
+	root_path: string;
+	blocked: boolean;
+	blockers: readonly SetupFinding[];
+	operations: readonly SetupOperation[];
+	preserved: readonly string[];
+}
+
+/** Bounded counts used by status without hiding verbose path evidence. */
+export interface SetupCounts {
+	catalog: number;
+	managed: number;
+	external: number;
+	planned: number;
+	blockers: number;
+}
+
+/** Catalog entry projected into stable command output. */
+export interface SetupCatalogResultEntry {
+	id: string;
+	canonical_id: string;
+	state: "valid" | "invalid" | "escape" | "collision" | "missing";
+	path?: string;
+	name?: string;
+	description?: string;
+	occupancy: readonly string[];
 }
 
 /** Exact path evidence returned by every write-domain result. */
@@ -122,6 +167,13 @@ export interface SetupResult {
 	state: SetupResultState;
 	findings: readonly SetupFinding[];
 	domains: readonly SetupDomainResult[];
+	operations: readonly SetupOperation[];
+	projection_targets: readonly SetupProjectionTargetPlan[];
+	counts: SetupCounts;
+	catalog_root: string;
+	destination_roots: readonly string[];
+	catalog_entries?: readonly SetupCatalogResultEntry[];
+	station: string;
 	next_action?: SetupActionId;
 	evidence_fingerprint?: string;
 }

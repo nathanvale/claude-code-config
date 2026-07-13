@@ -1,0 +1,269 @@
+import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, test } from "bun:test";
+
+import type { SetupInspection } from "../src/inspection.ts";
+import { main } from "../src/cli.ts";
+
+describe("setup CLI read-only surface", () => {
+	test("routes flag-only invocation to status and emits one JSON envelope", async () => {
+		const io = capture();
+		const exit = await main(["--json"], { ...io, runtime: runtime(inspection()) });
+
+		expect(exit).toBe(0);
+		expect(io.stderr.text).toBe("");
+		const envelope = JSON.parse(io.stdout.text);
+		expect(envelope).toMatchObject({
+			status: "ok",
+			data: { contract_id: "setup.result", command: "status", station: "status.healthy" },
+		});
+		expect(io.stdout.text.trim().split("\n").filter((line) => line.startsWith("{")).length).toBe(1);
+	});
+
+	test("keeps status drift and blockers successful while naming one next action", async () => {
+		const missing = capture();
+		const blocked = capture();
+		const missingInspection = inspection({ catalogIds: ["alpha"] });
+		const blockedInspection = inspection({
+			catalogIds: ["alpha"],
+			blocked: true,
+			findings: [{ id: "real_entry", owner: "setup.ownership", path: "/home/.claude/skills/alpha", summary: "Occupied.", repair: "human_repair" }],
+		});
+
+		expect(await main(["status"], { ...missing, runtime: runtime(missingInspection) })).toBe(0);
+		expect(missing.stdout.text).toContain("state: clean_slate");
+		expect(missing.stdout.text).toContain("next: preview_sync");
+		expect(await main(["status"], { ...blocked, runtime: runtime(blockedInspection) })).toBe(0);
+		expect(blocked.stdout.text).toContain("state: blocked");
+		expect(blocked.stdout.text).toContain("next: run_doctor");
+	});
+
+	test("renders compact output by default and path evidence with verbose", async () => {
+		const compact = capture();
+		const verbose = capture();
+		const state = inspection({ catalogIds: ["alpha"] });
+
+		await main(["status"], { ...compact, runtime: runtime(state) });
+		await main(["status", "--verbose"], { ...verbose, runtime: runtime(state) });
+
+		expect(compact.stdout.text).not.toContain("/home/.agents/skills/alpha");
+		expect(verbose.stdout.text).toContain("/home/.agents/skills/alpha");
+		expect(verbose.stderr.text).toContain("setup inspection complete");
+	});
+
+	test("never emits ANSI when color is disabled or the terminal is dumb", async () => {
+		for (const argv of [["status", "--no-color"], ["status"]]) {
+			const io = capture();
+			await main(argv, {
+				...io,
+				runtime: runtime(inspection(), { env: { NO_COLOR: "1", TERM: "dumb" } }),
+			});
+			expect(io.stdout.text).not.toContain("\u001b[");
+		}
+	});
+
+	test("catalog explains named match and named miss", async () => {
+		const matched = capture();
+		const missed = capture();
+		const state = inspection({ catalogIds: ["Fallow"] });
+
+		expect(await main(["catalog", "fallow", "--json"], { ...matched, runtime: runtime(state) })).toBe(0);
+		expect(JSON.parse(matched.stdout.text).data).toMatchObject({
+			station: "catalog.matched",
+			catalog_entries: [{ id: "Fallow", state: "valid" }],
+		});
+		expect(await main(["catalog", "missing", "--json"], { ...missed, runtime: runtime(state) })).toBe(1);
+		expect(JSON.parse(missed.stdout.text)).toMatchObject({
+			status: "ok",
+			data: { station: "catalog.not_found", next_action: "discover_external" },
+		});
+	});
+
+	test("sync check is read-only and plain sync fails before inspection", async () => {
+		const check = capture();
+		const write = capture();
+		let inspections = 0;
+		const adapter = runtime(inspection({ catalogIds: ["alpha"] }), {
+			onInspect: () => { inspections += 1; },
+		});
+
+		expect(await main(["sync", "--check", "--json"], { ...check, runtime: adapter })).toBe(1);
+		expect(JSON.parse(check.stdout.text).data.station).toBe("sync.check_changes");
+		expect(await main(["sync", "--json"], { ...write, runtime: adapter })).toBe(2);
+		expect(inspections).toBe(1);
+		expect(JSON.parse(write.stdout.text)).toMatchObject({ status: "error", error: { code: "invalid_usage" } });
+	});
+
+	test("keeps verbose JSON diagnostics on stderr", async () => {
+		const io = capture();
+		await main(["status", "--json", "--verbose"], { ...io, runtime: runtime(inspection()) });
+
+		expect(() => JSON.parse(io.stdout.text)).not.toThrow();
+		expect(io.stderr.text).toContain("setup inspection complete");
+	});
+
+	test("emits command discovery directly from the facade contract", async () => {
+		const io = capture();
+		expect(await main(["commands", "--json"], { ...io, runtime: runtime(inspection()) })).toBe(0);
+
+		const data = JSON.parse(io.stdout.text).data;
+		expect(data.contract_id).toBe("setup.commands");
+		expect(data.commands.status.summary).toContain("bounded setup health");
+	});
+
+	test("returns a typed invalid-target envelope without inspecting a missing project", async () => {
+		const io = capture();
+		const exit = await main([
+			"status", "--scope", "project", "--repo", "/definitely/missing/setup-project", "--json",
+		], {
+			...io,
+			runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+		});
+
+		expect(exit).toBe(1);
+		expect(JSON.parse(io.stdout.text)).toMatchObject({
+			status: "error",
+			error: { code: "invalid_target", message: "The selected project target is invalid." },
+		});
+	});
+
+	test("doctor explains blockers and exits with findings", async () => {
+		const io = capture();
+		const state = inspection({
+			blocked: true,
+			findings: [{ id: "duplicate_scope", owner: "setup.scope", summary: "Duplicate.", repair: "human_repair" }],
+		});
+
+		expect(await main(["doctor", "--json"], { ...io, runtime: runtime(state) })).toBe(1);
+		expect(JSON.parse(io.stdout.text).data).toMatchObject({
+			station: "doctor.duplicate_scope",
+			next_action: "human_repair",
+			findings: [{ id: "duplicate_scope", why: expect.any(String) }],
+		});
+	});
+
+	test("rejects existing non-repositories and repository roots without skills", async () => {
+		const nonRepo = await mkdtemp(join(tmpdir(), "setup-cli-non-repo-"));
+		await mkdir(join(nonRepo, "skills"));
+		const noSkills = await mkdtemp(join(tmpdir(), "setup-cli-no-skills-"));
+		await mkdir(join(noSkills, ".git"));
+
+		for (const target of [nonRepo, noSkills]) {
+			const io = capture();
+			const exit = await main([
+				"status", "--scope", "project", "--repo", target, "--json",
+			], {
+				...io,
+				runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+			});
+			expect(exit).toBe(1);
+			expect(JSON.parse(io.stdout.text).error.code).toBe("invalid_target");
+		}
+	});
+
+	test("rejects a forged Git marker", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-cli-forged-git-"));
+		await writeFile(join(root, ".git"), "gitdir: /tmp/fixture-git-dir\n");
+		await mkdir(join(root, "skills"));
+		const io = capture();
+
+		const exit = await main([
+			"status", "--scope", "project", "--repo", root, "--json",
+		], {
+			...io,
+			runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+		});
+
+		expect(exit).toBe(1);
+		expect(JSON.parse(io.stdout.text).error.code).toBe("invalid_target");
+	});
+
+	test("resolves a Git root from a child path", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-cli-git-root-"));
+		const initialized = Bun.spawnSync(["git", "init", "--quiet", root]);
+		expect(initialized.exitCode).toBe(0);
+		await mkdir(join(root, "skills"));
+		await mkdir(join(root, "nested"));
+		const io = capture();
+
+		const exit = await main([
+			"status", "--scope", "project", "--repo", join(root, "nested"), "--json",
+		], {
+			...io,
+			runtime: { sourceRepoRoot: "/repo", homeDir: "/home", now: () => 100 },
+		});
+
+		expect(exit).toBe(0);
+		expect(JSON.parse(io.stdout.text).data.catalog_root).toBe(
+			await realpath(join(root, "skills")),
+		);
+	});
+
+	test("renders status help from the command contract", async () => {
+		const io = capture();
+		expect(await main(["status", "--help"], io)).toBe(0);
+		expect(io.stdout.text).toContain("Usage: setup status");
+		expect(io.stdout.text).toContain("--scope");
+	});
+
+	test("handles an unknown help command as invalid usage", async () => {
+		const io = capture();
+		expect(await main(["bogus", "--help"], io)).toBe(2);
+		expect(io.stderr.text).toContain("Unknown command: bogus");
+	});
+});
+
+function capture() {
+	const stdout = { text: "", write(chunk: string) { this.text += chunk; } };
+	const stderr = { text: "", write(chunk: string) { this.text += chunk; } };
+	return { stdout, stderr };
+}
+
+function runtime(
+	state: SetupInspection,
+	options: { env?: Record<string, string>; onInspect?: () => void } = {},
+) {
+	return {
+		sourceRepoRoot: "/repo",
+		homeDir: "/home",
+		now: () => 100,
+		env: options.env ?? {},
+		inspect: async () => {
+			options.onInspect?.();
+			return state;
+		},
+	};
+}
+
+function inspection(options: {
+	catalogIds?: readonly string[];
+	findings?: SetupInspection["findings"];
+	blocked?: boolean;
+} = {}): SetupInspection {
+	return {
+		scope: {
+			scope: "user", source_anchor: "/repo", target_anchor: "/home",
+			catalog_root: "/repo/skills", provider_evidence_root: "/repo",
+			projection_roots: [
+				{ id: "claude", path: "/home/.claude/skills", safe: true },
+				{ id: "codex", path: "/home/.agents/skills", safe: true },
+			],
+			legacy_roots: [],
+		},
+		catalog: {
+			root: "/repo/skills",
+			entries: (options.catalogIds ?? []).map((id) => ({
+				id, canonical_id: id.toLowerCase(), path: `/repo/skills/${id}`,
+				state: "valid" as const, name: id, description: `${id} skill`,
+			})),
+			findings: [],
+		},
+		provider_evidence: { path: "/repo/skills-lock.json", entries: [] },
+		ownership: { entries: [], findings: [] },
+		duplicate_scope_ids: [],
+		findings: options.findings ?? [],
+		blocked: options.blocked ?? false,
+	};
+}

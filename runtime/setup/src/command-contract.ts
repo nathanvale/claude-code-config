@@ -192,7 +192,8 @@ export interface ParsedSetupInvocation {
 /** Parse the public grammar from the same command contracts used by help. */
 export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvocation {
 	const noArgs = argv.length === 0;
-	const command = noArgs ? "status" : argv[0];
+	const flagOnlyAlias = argv[0]?.startsWith("-") === true;
+	const command = noArgs || flagOnlyAlias ? "status" : argv[0];
 	if (!SETUP_COMMANDS.includes(command as SetupCommand)) {
 		throw usageError(`Unknown command: ${command ?? "(missing)"}`);
 	}
@@ -209,7 +210,7 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 	let noColor = false;
 	let check = false;
 
-	for (let index = noArgs ? 0 : 1; index < argv.length; index += 1) {
+	for (let index = noArgs || flagOnlyAlias ? 0 : 1; index < argv.length; index += 1) {
 		const arg = argv[index] ?? "";
 		const [flag, inlineValue] = splitFlag(arg);
 		if (flag.startsWith("-") && !allowed.has(flag)) {
@@ -250,7 +251,7 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 
 	return {
 		command: typedCommand, scope, ...(repo ? { repo } : {}), positionals,
-		json, verbose, noColor, check, ...(noArgs ? { alias: "no_args" as const } : {}),
+		json, verbose, noColor, check, ...(noArgs || flagOnlyAlias ? { alias: "no_args" as const } : {}),
 	};
 }
 
