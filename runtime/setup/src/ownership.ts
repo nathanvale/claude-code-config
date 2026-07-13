@@ -45,11 +45,13 @@ export interface OwnershipInput {
 export interface OwnershipIo {
 	readonly readdir: (path: string) => Promise<readonly string[]>;
 	readonly lstat: (path: string) => Promise<Stats>;
+	readonly realpath?: (path: string) => Promise<string>;
 }
 
 const defaultIo: OwnershipIo = {
 	readdir: async (path) => readdir(path),
 	lstat,
+	realpath,
 };
 
 /** Classify every stable disk child once. Never creates, removes, or rewrites. */
@@ -57,8 +59,9 @@ export async function inspectProjectionRoots(
 	input: OwnershipInput,
 	io: OwnershipIo = defaultIo,
 ): Promise<OwnershipInspection> {
+	const resolveRealpath = io.realpath ?? realpath;
 	const canonicalCatalog = existsSync(input.catalogRoot)
-		? await realpath(input.catalogRoot)
+		? await resolveRealpath(input.catalogRoot)
 		: resolve(input.catalogRoot);
 	const providers = new Map(
 		input.providerEvidence.entries.map((entry) => [entry.canonical_id, entry]),
@@ -119,6 +122,7 @@ export async function inspectProjectionRoots(
 						stats,
 						canonicalCatalog,
 						providers.get(canonicalSkillId(id)),
+						resolveRealpath,
 					);
 			entries.push(entry);
 			if (entry.finding_id) findings.push(ownershipFinding(entry));
@@ -134,6 +138,7 @@ async function classifyEntry(
 	stats: Stats,
 	catalogRoot: string,
 	provider: ProviderEvidence["entries"][number] | undefined,
+	resolveRealpath: (path: string) => Promise<string> = realpath,
 ): Promise<OwnershipEntry> {
 	const common = {
 		root_id: root.id,
@@ -143,12 +148,20 @@ async function classifyEntry(
 	};
 	if (stats.isSymbolicLink()) {
 		try {
-			const target = await realpath(path);
+			const target = await resolveRealpath(path);
 			if (isInsideOrEqual(catalogRoot, target)) {
 				return { ...common, shape: "symlink", ownership: "managed_link", target };
 			}
-		} catch {
-			const target = await danglingTarget(path);
+		} catch (error) {
+			if (!isMissing(error)) {
+				return {
+					...common,
+					shape: "symlink",
+					ownership: "unknown_entry",
+					finding_id: "real_entry",
+				};
+			}
+			const target = await danglingTarget(path, resolveRealpath);
 			if (target && isInsideOrEqual(catalogRoot, target)) {
 				return {
 					...common,
@@ -241,12 +254,15 @@ function legacyEntry(
 	};
 }
 
-async function danglingTarget(path: string): Promise<string | undefined> {
+async function danglingTarget(
+	path: string,
+	resolveRealpath: (path: string) => Promise<string>,
+): Promise<string | undefined> {
 	try {
 		const raw = await readlink(path);
 		const target = isAbsolute(raw) ? resolve(raw) : resolve(dirname(path), raw);
 		try {
-			return join(await realpath(dirname(target)), basename(target));
+			return join(await resolveRealpath(dirname(target)), basename(target));
 		} catch {
 			return target;
 		}

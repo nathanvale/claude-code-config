@@ -12,7 +12,7 @@ interface LockOwner {
 	readonly process_identity?: string;
 }
 
-type ProcessIdentityReader = (pid: number) => string | undefined;
+type ProcessIdentityReader = (pid: number) => string | undefined | Promise<string | undefined>;
 
 export type OperationLockResult =
 	| { readonly status: "acquired"; readonly path: string; readonly release: () => Promise<void> }
@@ -95,7 +95,7 @@ async function inspectLockPath(
 	} catch {
 		return { status: "missing", path };
 	}
-	const alive = lockOwnerIsLive(owner, isProcessAlive, readProcessIdentity);
+	const alive = await lockOwnerIsLive(owner, isProcessAlive, readProcessIdentity);
 	return alive
 		? { status: "busy", path, ...(owner ? { owner } : {}) }
 		: { status: "stale", path, ...(owner ? { owner } : {}) };
@@ -180,21 +180,21 @@ async function acquireNamedLock(input: {
 	const lockPath = `${resolve(input.stateRoot)}/${input.name}`;
 	const pid = input.pid ?? process.pid;
 	const token = input.token ?? randomUUID();
-	try {
-		await mkdir(lockPath);
-	} catch (error) {
-		if (!hasErrorCode(error, "EEXIST")) throw error;
-		const owner = await readOwner(lockPath);
-		const alive = lockOwnerIsLive(owner, input.isProcessAlive, input.readProcessIdentity);
-		return { status: alive ? "busy" : "stale", path: lockPath, ...(owner ? { owner } : {}) };
-	}
-	const processIdentity = (input.readProcessIdentity ?? readProcessIdentity)(pid);
+	const processIdentity = await (input.readProcessIdentity ?? readProcessIdentity)(pid);
 	const owner: LockOwner = {
 		pid,
 		token,
 		acquired_at: new Date().toISOString(),
 		...(processIdentity ? { process_identity: processIdentity } : {}),
 	};
+	try {
+		await mkdir(lockPath);
+	} catch (error) {
+		if (!hasErrorCode(error, "EEXIST")) throw error;
+		const owner = await readOwner(lockPath);
+		const alive = await lockOwnerIsLive(owner, input.isProcessAlive, input.readProcessIdentity);
+		return { status: alive ? "busy" : "stale", path: lockPath, ...(owner ? { owner } : {}) };
+	}
 	try {
 		await writeFile(`${lockPath}/owner.json`, `${JSON.stringify(owner)}\n`, { flag: "wx" });
 	} catch (error) {
@@ -242,14 +242,14 @@ function processAlive(pid: number): boolean {
 	}
 }
 
-function lockOwnerIsLive(
+async function lockOwnerIsLive(
 	owner: Partial<LockOwner> | undefined,
 	isProcessAlive: ((pid: number) => boolean) | undefined,
 	processIdentity: ProcessIdentityReader | undefined,
-): boolean {
+): Promise<boolean> {
 	if (typeof owner?.pid !== "number" || !(isProcessAlive ?? processAlive)(owner.pid)) return false;
 	if (typeof owner.process_identity !== "string") return true;
-	return (processIdentity ?? readProcessIdentity)(owner.pid) === owner.process_identity;
+	return await (processIdentity ?? readProcessIdentity)(owner.pid) === owner.process_identity;
 }
 
 function readProcessIdentity(pid: number): string | undefined {

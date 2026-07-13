@@ -98,7 +98,7 @@ async function findProjectDuplicates(
 	);
 	const userOwnership = await inspectProjectionRoots({
 		catalogRoot: userScope.catalog_root,
-		roots: userScope.projection_roots,
+		roots: [...userScope.projection_roots, ...userScope.legacy_roots],
 		providerEvidence,
 	});
 	const userIds = new Set(userOwnership.entries.map((entry) => entry.canonical_id));

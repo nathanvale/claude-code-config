@@ -62,6 +62,35 @@ describe("setup operation lock", () => {
 		if (first.status === "acquired") await first.release();
 	});
 
+	test("does not publish the lock directory while the process identity probe is blocked", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-identity-probe-"));
+		const lockPath = join(stateRoot, "user.lock");
+		let enterProbe = () => {};
+		const probeEntered = new Promise<void>((resolve) => { enterProbe = resolve; });
+		let releaseProbe = () => {};
+		const blockedProbe = new Promise<string>((resolve) => { releaseProbe = () => resolve("process-start"); });
+
+		const acquisition = acquireOperationLock({
+			scope: "user",
+			targetAnchor: "/home",
+			stateRoot,
+			readProcessIdentity: async () => {
+				enterProbe();
+				return blockedProbe;
+			},
+		});
+		await probeEntered;
+
+		expect(await exists(lockPath)).toBe(false);
+		releaseProbe();
+		const acquired = await acquisition;
+		expect(acquired).toMatchObject({ status: "acquired", path: lockPath });
+		expect(await Bun.file(join(lockPath, "owner.json")).json()).toMatchObject({
+			process_identity: "process-start",
+		});
+		if (acquired.status === "acquired") await acquired.release();
+	});
+
 	test("inspects stale evidence without creating a missing lock", async () => {
 		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-inspect-"));
 		const missing = await inspectOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });

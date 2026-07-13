@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
 
-import { canonicalSkillId } from "./catalog.ts";
 import { BLOCKING_FINDINGS, type SetupInspection } from "./inspection.ts";
 import type {
 	SetupCommand,
@@ -130,7 +128,7 @@ function projectionCandidates(inspection: SetupInspection): {
 				operations.push({ ...common, action: "relink", expected_ownership: "broken_managed_link" });
 			} else if (
 				existing.ownership === "managed_link" &&
-				(!existing.target || canonicalSkillIdFromPath(existing.target) !== catalogEntry.canonical_id)
+				(!existing.target || existing.target !== (catalogEntry.canonical_path ?? catalogEntry.path))
 			) {
 				operations.push({ ...common, action: "relink", expected_ownership: "managed_link" });
 				findings.push({ id: "wrong_link", owner: "setup.projection", path: existing.path,
@@ -183,10 +181,6 @@ function mergeFindings(...groups: readonly (readonly SetupFinding[])[]): SetupFi
 		if (!unique.has(key)) unique.set(key, finding);
 	}
 	return [...unique.values()].sort(compareFinding);
-}
-
-function canonicalSkillIdFromPath(path: string): string {
-	return canonicalSkillId(basename(path));
 }
 
 function stationFor(command: string, state: SetupResult["state"]): string {

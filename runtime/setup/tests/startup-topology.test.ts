@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, readlink, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,7 +23,7 @@ describe("startup topology", () => {
 		expect(first.operations.every((operation) => operation.action === "create")).toBe(true);
 		const result = await applyStartupTopology(first);
 		expect(result.applied).toHaveLength(13);
-		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(join(fixture.source, "AGENTS.md"));
+		expect(await readlink(join(fixture.home, ".codex/AGENTS.md"))).toBe(await realpath(join(fixture.source, "AGENTS.md")));
 
 		await import("node:fs/promises").then(({ rmdir }) => rmdir(join(fixture.source, "context")));
 		const missing = await inspectStartupTopology(fixture.source, fixture.home);
@@ -87,6 +87,22 @@ describe("startup topology", () => {
 
 		expect(result.failed).toEqual([destination]);
 		expect(await lstat(destination).then(() => true, () => false)).toBe(false);
+	});
+
+	test("links the exact canonical startup source returned by validation", async () => {
+		const fixture = await startupFixture();
+		const logicalSource = join(fixture.source, "agents");
+		const canonicalSource = join(fixture.source, "canonical-agents");
+		await import("node:fs/promises").then(({ rmdir }) => rmdir(logicalSource));
+		await mkdir(canonicalSource);
+		await symlink(canonicalSource, logicalSource);
+		const plan = await inspectStartupTopology(fixture.source, fixture.home);
+		const destination = join(fixture.home, ".claude/agents");
+
+		const result = await applyStartupTopology(plan);
+
+		expect(result.failed).toEqual([]);
+		expect(await readlink(destination)).toBe(await realpath(canonicalSource));
 	});
 });
 

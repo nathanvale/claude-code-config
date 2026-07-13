@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -88,6 +88,55 @@ describe("setup ownership inspection", () => {
 
 		expect(calls).toBe(1);
 		expect(result.entries).toEqual([]);
+	});
+
+	test("blocks a symlink when target resolution fails for a reason other than absence", async () => {
+		const root = await fixtureRoot("realpath-error");
+		const catalog = join(root, "catalog");
+		const projection = join(root, "projection");
+		const blocked = join(projection, "blocked");
+		await mkdir(join(catalog, "blocked"), { recursive: true });
+		await mkdir(projection);
+		await symlink(join(catalog, "blocked"), blocked);
+
+		const result = await inspectProjectionRoots(
+			{
+				catalogRoot: catalog,
+				roots: [{ id: "codex", path: projection, safe: true }],
+				providerEvidence: {
+					path: join(root, "skills-lock.json"),
+					entries: [{ id: "blocked", canonical_id: "blocked" }],
+				},
+			},
+			{
+				readdir: async () => ["blocked"],
+				lstat,
+				realpath: async (path) => {
+					if (path === blocked) {
+						throw Object.assign(new Error("permission denied"), {
+							code: "EACCES",
+						});
+					}
+					return realpath(path);
+				},
+			},
+		);
+
+		expect(result.entries).toMatchObject([
+			{
+				id: "blocked",
+				shape: "symlink",
+				ownership: "unknown_entry",
+				finding_id: "real_entry",
+			},
+		]);
+		expect(result.findings).toMatchObject([
+			{
+				owner: "setup.ownership",
+				path: blocked,
+				repair: "human_repair",
+			},
+		]);
 	});
 });
 

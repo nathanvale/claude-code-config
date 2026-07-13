@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -28,7 +28,12 @@ describe("setup catalog inspection", () => {
 
 		expect(result.entries).toMatchObject([
 			{ id: "draft", state: "invalid", finding_id: "invalid_skill" },
-			{ id: "fallow", state: "valid", name: "fallow" },
+			{
+				id: "fallow",
+				canonical_path: await realpath(join(catalog, "fallow")),
+				state: "valid",
+				name: "fallow",
+			},
 		]);
 		expect(result.findings.map((finding) => finding.id)).toEqual([
 			"invalid_skill",

@@ -145,6 +145,21 @@ function parseReport(result: ProcessResult): StagedReport {
 	}
 }
 
+function findContrastingSortLocale(): string | undefined {
+	const locales = run("locale", ["-a"]);
+	if (locales.exitCode !== 0) return undefined;
+
+	return locales.stdout
+		.split("\n")
+		.find((locale) => {
+			if (locale.length === 0) return false;
+			const comparison = run("bash", ["-c", "[[ Z.md > a.md ]]"], {
+				env: { ...process.env, LC_ALL: locale },
+			});
+			return comparison.exitCode === 0;
+		});
+}
+
 describe("agent instruction staged health", () => {
 	test("mirrors REGISTERED_OWNER_PATHS from the bash source exactly", () => {
 		const source = readFileSync(sourceScript, "utf8");
@@ -227,6 +242,30 @@ describe("agent instruction staged health", () => {
 			const result = runScript(fixture, ["check", "--staged", "--json"]);
 			expect(result.exitCode).toBe(0);
 			expect(parseReport(result).staged.matched_paths).toEqual([appendixPath]);
+		});
+	});
+
+	test("sorts appendix reports in byte order regardless of the caller locale", () => {
+		const contrastingLocale = findContrastingSortLocale();
+		if (!contrastingLocale) {
+			expect(readFileSync(sourceScript, "utf8")).toContain("check_appendices() {\n\tlocal LC_ALL=C\n");
+		}
+
+		withFixture((fixture) => {
+			writeRepositoryFile(fixture.repository, "instruction-appendices/a.md", "# Lowercase\n");
+			writeRepositoryFile(fixture.repository, "instruction-appendices/Z.md", "# Uppercase\n");
+
+			const result = run("bash", [fixture.script, "check", "--json"], {
+				cwd: fixture.repository,
+				env: { ...process.env, HOME: fixture.home, LC_ALL: contrastingLocale ?? "C" },
+			});
+			const appendixPasses = parseReport(result).passes.filter((item) => item.startsWith("appendix line budget:"));
+
+			expect(result.exitCode).toBe(0);
+			expect(appendixPasses).toEqual([
+				"appendix line budget: instruction-appendices/Z.md 1 <= 25",
+				"appendix line budget: instruction-appendices/a.md 1 <= 25",
+			]);
 		});
 	});
 

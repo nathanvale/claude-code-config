@@ -32,7 +32,7 @@ describe("setup planner", () => {
 		const drift = fixtureInspection({
 			catalogIds: ["alpha"],
 			ownership: [
-				owned("claude", "alpha", "/repo/skills/old-alpha"),
+				owned("claude", "alpha", "/old-repo/skills/alpha"),
 				owned("codex", "alpha", "/repo/skills/alpha"),
 			],
 		});
@@ -46,6 +46,22 @@ describe("setup planner", () => {
 			state: "drift",
 			station: "status.drift",
 			next_action: "run_sync",
+		});
+	});
+
+	test("accepts a managed projection resolved through the catalog's canonical root", () => {
+		const inspection = fixtureInspection({
+			catalogIds: ["alpha"],
+			catalogCanonicalRoot: "/canonical-repo/skills",
+			ownership: [
+				owned("claude", "alpha", "/canonical-repo/skills/alpha"),
+				owned("codex", "alpha", "/canonical-repo/skills/alpha"),
+			],
+		});
+
+		expect(planSetup(inspection, "status")).toMatchObject({
+			state: "healthy",
+			operations: [],
 		});
 	});
 
@@ -145,6 +161,7 @@ describe("setup planner", () => {
 
 function fixtureInspection(options: {
 	catalogIds?: readonly string[];
+	catalogCanonicalRoot?: string;
 	ownership?: readonly SetupInspection["ownership"]["entries"][number][];
 	findings?: SetupInspection["findings"];
 	blocked?: boolean;
@@ -170,6 +187,9 @@ function fixtureInspection(options: {
 				id,
 				canonical_id: id,
 				path: `/repo/skills/${id}`,
+				...(options.catalogCanonicalRoot
+					? { canonical_path: `${options.catalogCanonicalRoot}/${id}` }
+					: {}),
 				state: "valid" as const,
 				name: id,
 				description: `${id} skill`,

@@ -19,6 +19,7 @@ export interface CatalogEntry {
 	readonly id: string;
 	readonly canonical_id: string;
 	readonly path: string;
+	readonly canonical_path?: string;
 	readonly state: CatalogEntryState;
 	readonly name?: string;
 	readonly description?: string;
@@ -165,6 +166,7 @@ async function inspectCatalogEntry(
 			id,
 			canonical_id: canonicalSkillId(id),
 			path,
+			canonical_path: target,
 			state: "valid",
 			name: parsed.name,
 			description: parsed.description,

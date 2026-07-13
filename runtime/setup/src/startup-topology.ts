@@ -101,7 +101,7 @@ export async function applyStartupTopology(
 			if (await pathShape(operation.destination) !== "missing") throw new Error("concurrent_change");
 			const trustedSource = await trustedStartupSource(plan.sourceRoot, operation.source);
 			if (!trustedSource) throw new Error("source_escape");
-			await symlink(resolve(operation.source), operation.destination);
+			await symlink(trustedSource, operation.destination);
 			applied.push(operation.destination);
 		} catch {
 			failed.push(operation.destination);

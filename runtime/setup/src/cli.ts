@@ -103,7 +103,7 @@ function normalizeProjectInput(input: SetupInspectionInput): SetupInspectionInpu
 		: input;
 }
 
-/** Run the Setup CLI and return its process exit without mutating setup state. */
+/** Run the Setup CLI and return its process exit code. */
 export async function main(argv: readonly string[], options: SetupCliOptions = {}): Promise<number> {
 	const stdout = options.stdout ?? process.stdout;
 	const stderr = options.stderr ?? process.stderr;

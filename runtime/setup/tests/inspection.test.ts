@@ -142,6 +142,27 @@ describe("setup inspection", () => {
 		expect(Object.isFrozen(inspection)).toBe(true);
 	});
 
+	test("blocks project ids already visible in the legacy Codex user root", async () => {
+		const sourceRepo = await fixtureRepo("legacy-source");
+		const projectRepo = await fixtureRepo("legacy-project");
+		const home = await mkdtemp(join(tmpdir(), "setup-inspection-home-"));
+		await writeSkill(projectRepo, "fallow");
+		await mkdir(join(home, ".codex/skills/fallow"), { recursive: true });
+
+		const inspection = await inspectSetup({
+			scope: "project",
+			sourceRepoRoot: sourceRepo,
+			projectRepoRoot: projectRepo,
+			homeDir: home,
+		});
+
+		expect(inspection.duplicate_scope_ids).toEqual(["fallow"]);
+		expect(inspection.findings).toContainEqual(expect.objectContaining({
+			id: "duplicate_scope",
+		}));
+		expect(inspection.blocked).toBe(true);
+	});
+
 	test("invalid source skills block the selected catalog", async () => {
 		const sourceRepo = await fixtureRepo("invalid");
 		await mkdir(join(sourceRepo, "skills/draft"), { recursive: true });

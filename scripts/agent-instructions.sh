@@ -343,6 +343,7 @@ check_staged_worktree_alignment() {
 }
 
 check_appendices() {
+	local LC_ALL=C
 	local dir="$SCRIPT_DIR/instruction-appendices"
 	if [[ ! -d "$dir" ]]; then
 		add_pass "instruction appendices absent"

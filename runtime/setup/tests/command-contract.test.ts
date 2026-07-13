@@ -37,6 +37,13 @@ describe("setup command contract", () => {
 		}
 	});
 
+	test("advertises the global diagnostic flag wherever the parser accepts it", () => {
+		for (const command of SETUP_COMMANDS) {
+			expect(renderCommandUsage(setupContracts[command])).toContain("--verbose");
+			expect(() => parseSetupInvocation(argvForFlag(command, "--verbose"))).not.toThrow();
+		}
+	});
+
 	test("keeps command-foreign flags out of help and parser acceptance", () => {
 		expect(renderCommandUsage(setupContracts.status)).not.toContain("--check");
 		expect(renderCommandUsage(setupContracts.commands)).not.toContain("--scope");
@@ -104,6 +111,19 @@ describe("setup command contract", () => {
 			noColor: true,
 			check: true,
 		});
+	});
+
+	test("rejects inline values for boolean flags", () => {
+		for (const [command, flag] of [
+			["status", "--json"],
+			["status", "--verbose"],
+			["status", "--no-color"],
+			["sync", "--check"],
+		] as const) {
+			expect(() => parseSetupInvocation([command, `${flag}=true`])).toThrow(
+				`${flag} does not accept a value`,
+			);
+		}
 	});
 
 	test("rejects invalid scope and repo combinations", () => {

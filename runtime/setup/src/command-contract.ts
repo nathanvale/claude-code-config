@@ -150,7 +150,7 @@ export const setupContracts = defineCommandFacadeContract(
 		catalog: {
 			script: SETUP_CLI_NAME,
 			summary: "Inspect source visibility and destination occupancy decisions.",
-			usage: ["setup catalog [skill] [options]"],
+			usage: ["setup catalog [skill] [options] [--verbose]"],
 			json: true, audience: "operator", mutation: "check",
 			sideEffects: ["read"], executionModes: ["check"], outputModes: ["plain", "json"], interactivity: "none",
 			resultContract, actionAffordances, flags: catalogFlags, exitCodes: setupExitCodes,
@@ -158,7 +158,7 @@ export const setupContracts = defineCommandFacadeContract(
 		commands: {
 			script: SETUP_CLI_NAME,
 			summary: "Emit machine-readable Setup command discovery metadata.",
-			usage: ["setup commands --json"],
+			usage: ["setup commands --json [--verbose]"],
 			json: true, audience: "agent", mutation: "check",
 			sideEffects: ["read"], executionModes: ["check"], outputModes: ["json"], interactivity: "none",
 			resultContract: commandsResultContract, flags: { "--json": commonFlags["--json"] }, exitCodes: setupExitCodes,
@@ -227,10 +227,22 @@ export function parseSetupInvocation(argv: readonly string[]): ParsedSetupInvoca
 				if (inlineValue === undefined) index += 1;
 				break;
 			}
-			case "--json": json = true; break;
-			case "--verbose": verbose = true; break;
-			case "--no-color": noColor = true; break;
-			case "--check": check = true; break;
+			case "--json":
+				rejectBooleanInlineValue(flag, inlineValue);
+				json = true;
+				break;
+			case "--verbose":
+				rejectBooleanInlineValue(flag, inlineValue);
+				verbose = true;
+				break;
+			case "--no-color":
+				rejectBooleanInlineValue(flag, inlineValue);
+				noColor = true;
+				break;
+			case "--check":
+				rejectBooleanInlineValue(flag, inlineValue);
+				check = true;
+				break;
 			default:
 				if (arg.startsWith("-")) throw usageError(`Unsupported flag for ${typedCommand}: ${arg}`);
 				positionals.push(arg);
@@ -259,4 +271,8 @@ function splitFlag(value: string): [string, string | undefined] {
 	const inline = value.slice(index + 1);
 	if (!inline) throw usageError(`${value.slice(0, index)} requires a value`);
 	return [value.slice(0, index), inline];
+}
+
+function rejectBooleanInlineValue(flag: string, inlineValue: string | undefined): void {
+	if (inlineValue !== undefined) throw usageError(`${flag} does not accept a value`);
 }
