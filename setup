@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+install_consent=false
+forwarded=()
+
+for arg in "$@"; do
+	if [[ "$arg" == "--yes" ]]; then
+		install_consent=true
+	else
+		forwarded+=("$arg")
+	fi
+done
+
+bootstrap_error() {
+	printf 'setup: %s: %s\n' "$1" "$2" >&2
+}
+
+bun_path=""
+if command -v bun >/dev/null 2>&1; then
+	bun_path="$(command -v bun)"
+fi
+
+if [[ -z "$bun_path" ]]; then
+	if [[ "$install_consent" != true ]]; then
+		if [[ ! -t 0 ]]; then
+			bootstrap_error \
+				"bootstrap.bun_consent_required" \
+				"Bun is missing and installation needs consent. Re-run with --yes or install Bun from https://bun.sh/."
+			exit 1
+		fi
+
+		printf 'Bun is required but was not found. Install Bun now? [y/N] ' >&2
+		response=""
+		IFS= read -r response || true
+		case "$response" in
+			y | Y | yes | Yes | YES)
+				install_consent=true
+				;;
+			*)
+				bootstrap_error \
+					"bootstrap.bun_declined" \
+					"Bun installation declined; no bootstrap changes were made."
+				exit 1
+				;;
+		esac
+	fi
+
+	if ! curl -fsSL https://bun.sh/install | bash 1>&2; then
+		bootstrap_error \
+			"bootstrap.bun_install_failed" \
+			"Bun installation failed. Inspect the installer diagnostics, then retry."
+		exit 1
+	fi
+
+	if command -v bun >/dev/null 2>&1; then
+		bun_path="$(command -v bun)"
+	else
+		bun_home="${BUN_INSTALL:-${HOME:-}/.bun}"
+		if [[ -n "$bun_home" && -x "$bun_home/bin/bun" ]]; then
+			bun_path="$bun_home/bin/bun"
+		else
+			bootstrap_error \
+				"bootstrap.bun_install_failed" \
+				"The installer completed without creating an executable Bun binary."
+			exit 1
+		fi
+	fi
+fi
+
+if ! (cd "$repo_root" && "$bun_path" install --frozen-lockfile 1>&2); then
+	bootstrap_error \
+		"bootstrap.dependencies_failed" \
+		"Frozen dependency reconciliation failed. Repair the lockfile, network, or toolchain, then retry."
+	exit 1
+fi
+
+exec "$bun_path" run "$repo_root/runtime/setup/src/cli.ts" "${forwarded[@]}"
