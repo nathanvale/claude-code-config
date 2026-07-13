@@ -146,6 +146,14 @@ function parseReport(result: ProcessResult): StagedReport {
 }
 
 describe("agent instruction staged health", () => {
+	test("mirrors REGISTERED_OWNER_PATHS from the bash source exactly", () => {
+		const source = readFileSync(sourceScript, "utf8");
+		const block = source.match(/declare -a REGISTERED_OWNER_PATHS=\(\n(?<entries>[\s\S]*?)\n\)/u);
+		if (!block?.groups?.entries) throw new Error("REGISTERED_OWNER_PATHS block not found in agent-instructions.sh");
+		const parsed = [...block.groups.entries.matchAll(/"(?<path>[^"]+)"/gu)].map((entry) => entry.groups?.path);
+		expect(parsed).toEqual([...registeredOwnerPaths]);
+	});
+
 	test("skips an empty index and unrelated broad siblings while unconditional check still runs", () => {
 		withFixture((fixture) => {
 			rmSync(join(fixture.repository, registeredOwnerPaths[0]));

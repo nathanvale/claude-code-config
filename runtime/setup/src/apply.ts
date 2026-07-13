@@ -85,8 +85,11 @@ export async function applySetup(
 		}
 		return mutationResult(plan, applied, [], [], "sync.applied");
 	} finally {
-		if (visibilityLock?.status === "acquired") await visibilityLock.release();
-		await lock.release();
+		try {
+			if (visibilityLock?.status === "acquired") await visibilityLock.release();
+		} finally {
+			await lock.release();
+		}
 	}
 }
 

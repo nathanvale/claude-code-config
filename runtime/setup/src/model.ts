@@ -4,8 +4,22 @@ export const SETUP_RESULT_CONTRACT_ID = "setup.result" as const;
 /** Package-owned result contract for command discovery. */
 export const SETUP_COMMANDS_CONTRACT_ID = "setup.commands" as const;
 
+/** Shell-owned result contract emitted before the TypeScript CLI can start. */
+export const SETUP_BOOTSTRAP_CONTRACT_ID = "setup.bootstrap" as const;
+
 /** Machine schema version for Setup v1 results. */
 export const SETUP_SCHEMA_VERSION = "1" as const;
+
+/** Bounded bootstrap error stations and their process exit taxonomy. */
+export const SETUP_BOOTSTRAP_ERROR_STATIONS = {
+	"bootstrap.bun_consent_required": { exit_code: 2, kind: "input" },
+	"bootstrap.bun_declined": { exit_code: 1, kind: "operator" },
+	"bootstrap.bun_install_failed": { exit_code: 1, kind: "runtime" },
+	"bootstrap.dependencies_failed": { exit_code: 1, kind: "runtime" },
+} as const;
+
+/** Shell-owned error station ids emitted before Bun delegation. */
+export type SetupBootstrapErrorStation = keyof typeof SETUP_BOOTSTRAP_ERROR_STATIONS;
 
 /** Canonical CLI and workspace binary name. */
 export const SETUP_CLI_NAME = "setup" as const;

@@ -127,7 +127,7 @@ describe("setup owner cutover", () => {
 		}
 
 		const hook = readFileSync(join(repoRoot, "scripts/hooks/pre-commit"), "utf8");
-		expect(hook).toMatch(/bash "\$\{CHECK_SCRIPT\}" check --staged/u);
+		expect(hook).toMatch(/AGENT_INSTRUCTIONS_CHECK_STAGED=1 bash "\$\{CHECK_SCRIPT\}" check/u);
 		expect(hook).not.toContain("PROMPT_SYSTEM_PATHS");
 		expect(hook).not.toMatch(/git\s+diff\s+--cached/u);
 	});

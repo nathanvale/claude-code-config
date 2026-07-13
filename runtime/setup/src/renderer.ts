@@ -3,7 +3,10 @@ import type { SetupResult } from "./model.ts";
 /** Human rendering options kept separate from result semantics. */
 export interface SetupRenderOptions {
 	verbose: boolean;
+	color: boolean;
 }
+
+type ColorRenderOptions = Pick<SetupRenderOptions, "color">;
 
 /** Render the bounded status or check dashboard. */
 export function renderSetupResult(
@@ -11,9 +14,9 @@ export function renderSetupResult(
 	options: SetupRenderOptions,
 ): string {
 	const lines = [
-		`setup ${escapeHuman(result.command)}`,
+		colorize(`setup ${escapeHuman(result.command)}`, "36", options.color),
 		`scope: ${escapeHuman(result.scope)}`,
-		`state: ${escapeHuman(result.state)}`,
+		`state: ${colorize(escapeHuman(result.state), stateColor(result.state), options.color)}`,
 		`catalog: ${escapeHuman(result.catalog_root)}`,
 		`destinations: ${result.destination_roots.map(escapeHuman).join(", ")}`,
 		`counts: catalog=${result.counts.catalog} managed=${result.counts.managed} external=${result.counts.external} planned=${result.counts.planned} blockers=${result.counts.blockers}`,
@@ -39,8 +42,12 @@ export function renderSetupResult(
 }
 
 /** Render doctor evidence with ownership, impact, and repair guidance. */
-export function renderDoctor(result: SetupResult): string {
-	const lines = ["setup doctor", `scope: ${escapeHuman(result.scope)}`, `state: ${escapeHuman(result.state)}`];
+export function renderDoctor(result: SetupResult, options: ColorRenderOptions): string {
+	const lines = [
+		colorize("setup doctor", "36", options.color),
+		`scope: ${escapeHuman(result.scope)}`,
+		`state: ${colorize(escapeHuman(result.state), stateColor(result.state), options.color)}`,
+	];
 	for (const finding of result.findings) {
 		lines.push(`${escapeHuman(finding.id)}: ${escapeHuman(finding.summary)}`);
 		lines.push(`  owner: ${escapeHuman(finding.owner)}`);
@@ -53,8 +60,8 @@ export function renderDoctor(result: SetupResult): string {
 }
 
 /** Render catalog entries and occupancy decisions. */
-export function renderCatalog(result: SetupResult): string {
-	const lines = ["setup catalog", `root: ${escapeHuman(result.catalog_root)}`];
+export function renderCatalog(result: SetupResult, options: ColorRenderOptions): string {
+	const lines = [colorize("setup catalog", "36", options.color), `root: ${escapeHuman(result.catalog_root)}`];
 	for (const entry of result.catalog_entries ?? []) {
 		lines.push(`${escapeHuman(entry.id)}\t${escapeHuman(entry.state)}\t${entry.occupancy.map(escapeHuman).join(",") || "unoccupied"}`);
 	}
@@ -71,4 +78,15 @@ function escapeHuman(value: string): string {
 			: character;
 	}
 	return escaped;
+}
+
+function colorize(value: string, code: string, enabled: boolean): string {
+	return enabled ? `\u001b[${code}m${value}\u001b[0m` : value;
+}
+
+function stateColor(state: SetupResult["state"]): string {
+	if (["healthy", "applied", "removed", "noop"].includes(state)) return "32";
+	if (["blocked", "failed"].includes(state)) return "31";
+	if (state === "partial") return "33";
+	return "36";
 }

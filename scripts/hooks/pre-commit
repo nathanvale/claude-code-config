@@ -7,7 +7,7 @@ set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHECK_SCRIPT="${REPO_ROOT}/scripts/agent-instructions.sh"
-CHECK_LOG="${PROMPT_DRIFT_CHECK_LOG:-/tmp/prompt-drift-check.log}"
+CHECK_LOG="${PROMPT_DRIFT_CHECK_LOG:-$(git rev-parse --git-dir)/prompt-drift-check.log}"
 
 {
   AGENT_INSTRUCTIONS_CHECK_STAGED=1 bash "${CHECK_SCRIPT}" check > "${CHECK_LOG}" 2>&1 &

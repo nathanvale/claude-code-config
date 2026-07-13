@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,12 @@ import { describe, expect, test } from "bun:test";
 
 import { applySetup } from "../src/apply.ts";
 import { inspectSetup, type SetupInspectionInput } from "../src/inspection.ts";
-import { acquireOperationLock, acquireVisibilityLocks, inspectOperationLock } from "../src/operation-lock.ts";
+import {
+	acquireOperationLock,
+	acquireVisibilityLocks,
+	inspectOperationLock,
+	inspectStaleVisibilityLocks,
+} from "../src/operation-lock.ts";
 import { unlinkSetup } from "../src/unlink.ts";
 import { applySetupDomains } from "../src/setup-domains.ts";
 
@@ -40,6 +45,35 @@ describe("setup operation lock", () => {
 		await writeFile(join(lockPath, "owner.json"), JSON.stringify({ pid: 99999999, token: "old" }));
 		const stale = await inspectOperationLock({ scope: "user", targetAnchor: "/home", stateRoot });
 		expect(stale).toMatchObject({ status: "stale", path: lockPath });
+	});
+
+	test("enumerates only stale visibility locks without mutating evidence", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "setup-lock-visibility-inspect-"));
+		const stale = await acquireVisibilityLocks({ canonicalIds: ["alpha"], stateRoot, pid: 111 });
+		const busy = await acquireVisibilityLocks({ canonicalIds: ["beta"], stateRoot, pid: 222 });
+		expect(stale.status).toBe("acquired");
+		expect(busy.status).toBe("acquired");
+		const before = await readdir(stateRoot);
+
+		const inspected = await inspectStaleVisibilityLocks({
+			stateRoot,
+			isProcessAlive: (pid) => pid === 222,
+		});
+
+		expect(inspected).toEqual([
+			expect.objectContaining({ status: "stale", path: stale.path, owner: expect.objectContaining({ pid: 111 }) }),
+		]);
+		expect(await readdir(stateRoot)).toEqual(before);
+		if (busy.status === "acquired") await busy.release();
+		if (stale.status === "acquired") await stale.release();
+	});
+
+	test("does not create a missing state root while enumerating visibility locks", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-lock-visibility-missing-"));
+		const stateRoot = join(root, "missing-state");
+
+		expect(await inspectStaleVisibilityLocks({ stateRoot })).toEqual([]);
+		expect(await exists(stateRoot)).toBe(false);
 	});
 
 	test("uses a stable target-derived project lock", async () => {

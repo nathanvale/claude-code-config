@@ -62,6 +62,16 @@ describe("hook topology", () => {
 		expect((await readHookProvenance(await identityFor(fixture))).status).toBe("valid");
 	});
 
+	test("plans only supported hook names and ignores sibling files in the source directory", async () => {
+		const fixture = await hookFixture();
+		await writeFile(join(fixture.source, "pre-commit.test.ts"), "not a hook\n");
+		await writeFile(join(fixture.source, "README.md"), "docs\n");
+		const plan = await inspectHookTopology(fixture.source, fixture.destination, fixture.state);
+		expect(plan.operations.map((operation) => operation.identity.hook)).toEqual(["pre-commit"]);
+		expect(plan.findings).toEqual([]);
+		expect(plan.preserved).toEqual([]);
+	});
+
 	test("backfills equal current bytes without replacing the hook", async () => {
 		const fixture = await hookFixture();
 		const destination = join(fixture.destination, "pre-commit");

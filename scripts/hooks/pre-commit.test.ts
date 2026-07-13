@@ -83,11 +83,13 @@ describe("pre-commit instruction health adapter", () => {
 	test("keeps the shared hook compatible with a pre-staged-mode worktree script", () => {
 		withFixture((fixture) => {
 			writeFileSync(fixture.checkScript, `#!/bin/bash
+printf 'staged=%s\\n' "\${AGENT_INSTRUCTIONS_CHECK_STAGED:-}" >> "$HOOK_TEST_CALL_LOG"
 [[ "$#" -eq 1 && "$1" == "check" ]] || exit 2
 exit 0
 `);
 			chmodSync(fixture.checkScript, 0o755);
 			expect(runHook(fixture, 0).exitCode).toBe(0);
+			expect(readFileSync(fixture.callLog, "utf8")).toBe("staged=1\n");
 		});
 	});
 

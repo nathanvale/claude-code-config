@@ -9,8 +9,8 @@ import {
 	type HookMutationPhase,
 } from "./hook-topology.ts";
 import { checkInstructionHealth, type InstructionRunner } from "./instruction-health.ts";
-import type { SetupDomainResult, SetupFinding, SetupResult } from "./model.ts";
-import { acquireOperationLock, inspectOperationLock } from "./operation-lock.ts";
+import type { SetupActionId, SetupDomainResult, SetupFinding, SetupFindingId, SetupResult } from "./model.ts";
+import { acquireOperationLock, inspectOperationLock, inspectStaleVisibilityLocks } from "./operation-lock.ts";
 import { checkRunbookHealth } from "./runbook-health.ts";
 import { resolveSetupScope } from "./scope.ts";
 import { applyStartupTopology, inspectRemovableStartupLinks, inspectStartupTopology } from "./startup-topology.ts";
@@ -50,32 +50,14 @@ export async function checkSetupDomains(
 	options: CheckSetupDomainsOptions,
 ): Promise<SetupResult> {
 	const scope = await resolveSetupScope(input);
-	if (base.command === "doctor") {
-		const lock = await inspectOperationLock({
-			scope: input.scope,
-			targetAnchor: scope.target_anchor,
-			stateRoot: options.stateRoot,
-		});
-		if (lock.status === "stale") {
-			return {
-				...base,
-				findings: [...base.findings, {
-					id: "stale_operation_lock",
-					owner: "setup.operation-lock",
-					path: lock.path,
-					summary: "An unreclaimed stale setup mutation lock requires inspection.",
-					repair: "inspect_lock",
-				}],
-			};
-		}
-	}
-	if (input.scope === "project") return base;
+	const lockFindings = await inspectReadOnlyLockFindings(input, scope.target_anchor, options.stateRoot, base.command);
+	if (input.scope === "project") return mergeReadOnlyLockFindings(base, lockFindings);
 	const [startupPlan, hookInspection, instruction] = await Promise.all([
 		inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor),
 		inspectHookDomain(input.sourceRepoRoot, options.stateRoot, options.hookPath),
 		checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner),
 	]);
-	const findings: SetupFinding[] = [...startupPlan.findings, ...hookInspection.findings];
+	const findings: SetupFinding[] = [...lockFindings, ...startupPlan.findings, ...hookInspection.findings];
 	if (instruction.finding) findings.push(instruction.finding);
 	const runbook = checkRunbookHealth(join(input.sourceRepoRoot, "runbooks/issue-to-pr-v2"));
 	if (runbook.finding) findings.push(runbook.finding);
@@ -105,6 +87,62 @@ export async function checkSetupDomains(
 		child_output: `${instruction.stdout}${instruction.stderr}`,
 	};
 }
+
+async function inspectReadOnlyLockFindings(
+	input: SetupInspectionInput,
+	targetAnchor: string,
+	stateRoot: string,
+	command: SetupResult["command"],
+): Promise<readonly SetupFinding[]> {
+	if (command !== "doctor" && command !== "sync") return [];
+	const stalePaths = (await inspectStaleVisibilityLocks({ stateRoot })).map((lock) => lock.path);
+	if (command === "doctor") {
+		const lock = await inspectOperationLock({
+			scope: input.scope,
+			targetAnchor,
+			stateRoot,
+		});
+		if (lock.status === "stale") stalePaths.unshift(lock.path);
+	}
+	return [...new Map(stalePaths.map((path) => [path, staleLockFinding(path)])).values()];
+}
+
+function staleLockFinding(path: string): SetupFinding {
+	return {
+		id: "stale_operation_lock",
+		owner: "setup.operation-lock",
+		path,
+		summary: "An unreclaimed stale setup mutation lock requires inspection.",
+		repair: "inspect_lock",
+	};
+}
+
+function mergeReadOnlyLockFindings(base: SetupResult, findings: readonly SetupFinding[]): SetupResult {
+	if (findings.length === 0) return base;
+	const blocked = base.command === "sync";
+	return {
+		...base,
+		...(blocked ? {
+			state: "blocked" as const,
+			station: "sync.check_blocked",
+			next_action: "run_doctor" as const,
+		} : {}),
+		findings: [...base.findings, ...findings],
+		counts: { ...base.counts, blockers: base.counts.blockers + findings.length },
+	};
+}
+
+type SyncBlockedFindingId = Extract<
+	SetupFindingId,
+	"hook_ownership_unproven" | "hook_unhealthy" | "instruction_unhealthy" | "runbook_artifact_unhealthy"
+>;
+
+const SYNC_BLOCKED_ROUTES = {
+	hook_ownership_unproven: { station: "sync.blocked", next_action: "human_repair" },
+	hook_unhealthy: { station: "sync.hook_failure", next_action: "repair_hooks" },
+	instruction_unhealthy: { station: "sync.instruction_failure", next_action: "repair_instructions" },
+	runbook_artifact_unhealthy: { station: "sync.runbook_failure", next_action: "repair_runbook" },
+} as const satisfies Record<SyncBlockedFindingId, { readonly station: string; readonly next_action: SetupActionId }>;
 
 /** Remove proven startup and skill links under one user lock; copied hooks remain. */
 export async function unlinkSetupDomains(input: SetupInspectionInput, options: UnlinkSetupDomainsOptions): Promise<SetupResult> {
@@ -310,8 +348,9 @@ function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], fin
 	const applied = all.some((domain) => domain.applied.length > 0);
 	const incomplete = base.state === "blocked" || base.state === "partial" || base.counts.blockers > 0 || findings.length > 0 || all.some((domain) => domain.failed.length > 0 || domain.deferred.length > 0);
 	const partial = base.state === "partial" || (incomplete && applied);
+	const blockedRoute = syncBlockedRoute(allFindings);
 	const state = incomplete ? (partial ? "partial" : "blocked") : applied ? "applied" : "noop";
-	const station = incomplete ? (partial ? "sync.partial" : healthStation(allFindings)) : applied ? "sync.applied" : "sync.noop";
+	const station = incomplete ? (partial ? "sync.partial" : blockedRoute.station) : applied ? "sync.applied" : "sync.noop";
 	return {
 		...base,
 		state,
@@ -320,24 +359,18 @@ function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], fin
 		domains: all,
 		counts: { ...base.counts, planned: all.reduce((sum, domain) => sum + domain.planned.length, 0), blockers: base.counts.blockers + findings.length },
 		next_action: incomplete
-			? partial ? "inspect_results" : repairAction(allFindings)
+			? partial ? "inspect_results" : blockedRoute.next_action
 			: "setup_healthy",
 		child_output: childOutput,
 	};
 }
 
-function repairAction(findings: readonly SetupFinding[]) {
-	if (findings.some((finding) => finding.id === "hook_ownership_unproven")) return "human_repair" as const;
-	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "repair_hooks" as const;
-	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "repair_instructions" as const;
-	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "repair_runbook" as const;
-	return "run_doctor" as const;
-}
-
-function healthStation(findings: readonly SetupFinding[]): string {
-	if (findings.some((finding) => finding.id === "hook_ownership_unproven")) return "sync.blocked";
-	if (findings.some((finding) => finding.id === "hook_unhealthy")) return "sync.hook_failure";
-	if (findings.some((finding) => finding.id === "instruction_unhealthy")) return "sync.instruction_failure";
-	if (findings.some((finding) => finding.id === "runbook_artifact_unhealthy")) return "sync.runbook_failure";
-	return "sync.blocked";
+function syncBlockedRoute(findings: readonly SetupFinding[]): {
+	readonly station: string;
+	readonly next_action: SetupActionId;
+} {
+	for (const [id, route] of Object.entries(SYNC_BLOCKED_ROUTES)) {
+		if (findings.some((finding) => finding.id === id)) return route;
+	}
+	return { station: "sync.blocked", next_action: "human_repair" };
 }

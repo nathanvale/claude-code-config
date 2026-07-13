@@ -13,6 +13,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { setupBranchStationCatalog } from "../src/branch-station-catalog.ts";
+import {
+	SETUP_BOOTSTRAP_CONTRACT_ID,
+	SETUP_BOOTSTRAP_ERROR_STATIONS,
+	SETUP_SCHEMA_VERSION,
+	type SetupBootstrapErrorStation,
+} from "../src/model.ts";
+
 const repoRoot = resolve(import.meta.dir, "../../..");
 const rootSetup = join(repoRoot, "setup");
 const realBun = process.execPath;
@@ -34,6 +42,23 @@ afterEach(async () => {
 });
 
 describe("root setup bootstrap", () => {
+	test("registers the bounded shell contract outside the TypeScript Station Map", async () => {
+		const source = await readFile(rootSetup, "utf8");
+		expect(SETUP_BOOTSTRAP_CONTRACT_ID).toBe("setup.bootstrap");
+		expect(SETUP_BOOTSTRAP_ERROR_STATIONS).toEqual({
+			"bootstrap.bun_consent_required": { exit_code: 2, kind: "input" },
+			"bootstrap.bun_declined": { exit_code: 1, kind: "operator" },
+			"bootstrap.bun_install_failed": { exit_code: 1, kind: "runtime" },
+			"bootstrap.dependencies_failed": { exit_code: 1, kind: "runtime" },
+		});
+		expect(source).toContain(`"contract_id":"${SETUP_BOOTSTRAP_CONTRACT_ID}"`);
+		expect(source).toContain(`"schema_version":"${SETUP_SCHEMA_VERSION}"`);
+		for (const station of Object.keys(SETUP_BOOTSTRAP_ERROR_STATIONS)) {
+			expect(source).toContain(`"${station}"`);
+			expect(setupBranchStationCatalog.some((candidate) => candidate.id === station)).toBe(false);
+		}
+	});
+
 	test("uses an existing Bun, reconciles frozen dependencies, and reaches commands JSON", async () => {
 		const fixture = await makeFixture({ bunPresent: true, realDelegate: true });
 		const result = runSetup(fixture, ["commands", "--json"]);
@@ -49,11 +74,23 @@ describe("root setup bootstrap", () => {
 		]);
 	});
 
+	test("delegates an empty argv under nounset", async () => {
+		const fixture = await makeFixture({ bunPresent: true });
+		const result = runSetup(fixture, []);
+
+		expect(result.status, result.stderr).toBe(0);
+		expect(await readBunCall(fixture, 1)).toEqual(["install", "--frozen-lockfile"]);
+		expect(await readBunCall(fixture, 2)).toEqual([
+			"run",
+			join(repoRoot, "runtime/setup/src/cli.ts"),
+		]);
+	});
+
 	test("refuses a non-interactive Bun install without explicit consent", async () => {
 		const fixture = await makeFixture({ bunPresent: false });
 		const result = runSetup(fixture, ["commands", "--json"]);
 
-		expect(result.status).toBe(1);
+		expect(result.status).toBe(2);
 		expect(result.stderr).toContain("bootstrap.bun_consent_required");
 		expectBootstrapError(result.stdout, "bootstrap.bun_consent_required");
 		expect(await fileOrEmpty(fixture.curlLog)).toBe("");
@@ -334,18 +371,19 @@ async function fileOrEmpty(path: string): Promise<string> {
 	}
 }
 
-function expectBootstrapError(stdout: string, code: string): void {
+function expectBootstrapError(stdout: string, code: SetupBootstrapErrorStation): void {
+	const expected = SETUP_BOOTSTRAP_ERROR_STATIONS[code];
 	expect(stdout.trim().split("\n")).toHaveLength(1);
 	expect(JSON.parse(stdout)).toMatchObject({
 		status: "error",
 		run_id: "bootstrap",
 		data: {
-			contract_id: "setup.bootstrap",
-			schema_version: "1",
+			contract_id: SETUP_BOOTSTRAP_CONTRACT_ID,
+			schema_version: SETUP_SCHEMA_VERSION,
 			station: code,
 			next_action: "inspect_diagnostics",
 		},
-		error: { run_id: "bootstrap", code, exit_code: 1 },
+		error: { run_id: "bootstrap", code, exit_code: expected.exit_code },
 	});
 }
 

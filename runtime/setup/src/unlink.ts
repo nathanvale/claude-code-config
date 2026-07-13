@@ -36,8 +36,11 @@ export async function unlinkSetup(
 		}
 		return await unlinkWithInspection(input, inspection, false, options.beforeRemove);
 	} finally {
-		if (visibilityLock?.status === "acquired") await visibilityLock.release();
-		await lock.release();
+		try {
+			if (visibilityLock?.status === "acquired") await visibilityLock.release();
+		} finally {
+			await lock.release();
+		}
 	}
 }
 

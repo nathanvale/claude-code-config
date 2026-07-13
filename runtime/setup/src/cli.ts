@@ -38,6 +38,8 @@ export interface SetupCliRuntime {
 	homeDir: string;
 	now: () => number;
 	env: Readonly<Record<string, string | undefined>>;
+	/** Whether the human-output destination supports terminal styling. */
+	stdoutIsTTY: boolean;
 	inspect: (input: SetupInspectionInput) => Promise<SetupInspection>;
 	apply: (input: SetupInspectionInput) => Promise<SetupResult>;
 	unlink: (input: SetupInspectionInput, check: boolean) => Promise<SetupResult>;
@@ -79,6 +81,7 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
 		homeDir,
 		now: () => Date.now(),
 		env: process.env,
+		stdoutIsTTY: process.stdout.isTTY === true,
 		inspect: async (input) => {
 			if (input.scope !== "project") return inspectSetup(input);
 			return inspectSetup({
@@ -169,6 +172,13 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 
 async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRuntime): Promise<CommandExecution> {
 	const command = invocation.command;
+	const renderOptions = {
+		verbose: invocation.verbose,
+		color: runtime.stdoutIsTTY
+			&& !invocation.noColor
+			&& runtime.env.NO_COLOR === undefined
+			&& runtime.env.TERM !== "dumb",
+	};
 	if (command === "commands") {
 		return { result: await (runtime.commands?.() ?? projectSetupCommandDiscoveryTree()), exitCode: 0, human: "", contractCommand: "commands" };
 	}
@@ -180,14 +190,14 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 	};
 	if (command === "sync" && !invocation.check) {
 		const result = await runtime.apply(input);
-		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "sync" };
+		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, renderOptions), contractCommand: "sync" };
 	}
 	if (command === "unlink") {
 		const result = await runtime.unlink(input, invocation.check);
-		return { result, exitCode: result.state === "removed" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, { verbose: invocation.verbose }), contractCommand: "unlink" };
+		return { result, exitCode: result.state === "removed" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, renderOptions), contractCommand: "unlink" };
 	}
 	const inspection = await runtime.inspect(input);
-	if (command === "catalog") return catalogExecution(invocation, inspection);
+	if (command === "catalog") return catalogExecution(invocation, inspection, renderOptions);
 	let plan = planSetup(inspection, command);
 	if (runtime.checkDomains && (command === "status" || command === "doctor" || (command === "sync" && invocation.check))) {
 		plan = await runtime.checkDomains(input, plan);
@@ -202,17 +212,21 @@ async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRunti
 			state: diagnosis.station === "doctor.healthy" ? "healthy"
 				: diagnosis.station === "doctor.repairable" ? "repairable" : "blocked",
 		};
-		return { result, exitCode: diagnosis.station === "doctor.healthy" ? 0 : 1, human: renderDoctor(result), contractCommand: "doctor" };
+		return { result, exitCode: diagnosis.station === "doctor.healthy" ? 0 : 1, human: renderDoctor(result, renderOptions), contractCommand: "doctor" };
 	}
 	return {
 		result: plan,
 		exitCode: command === "sync" && plan.state !== "healthy" ? 1 : 0,
-		human: renderSetupResult(plan, { verbose: invocation.verbose }),
+		human: renderSetupResult(plan, renderOptions),
 		contractCommand: command,
 	};
 }
 
-function catalogExecution(invocation: ParsedSetupInvocation, inspection: SetupInspection): CommandExecution {
+function catalogExecution(
+	invocation: ParsedSetupInvocation,
+	inspection: SetupInspection,
+	renderOptions: { readonly color: boolean },
+): CommandExecution {
 	const plan = planSetup(inspection, "catalog");
 	const requested = invocation.positionals[0];
 	const matching = requested
@@ -242,7 +256,7 @@ function catalogExecution(invocation: ParsedSetupInvocation, inspection: SetupIn
 		next_action: missed ? "discover_external" : blocked ? "human_repair" : requested ? "use_source" : "inspect_catalog",
 		catalog_entries: missed ? [{ id: requested, canonical_id: canonicalSkillId(requested), state: "missing", occupancy: [] }] : entries,
 	};
-	return { result, exitCode: missed || blocked ? 1 : 0, human: renderCatalog(result), contractCommand: "catalog" };
+	return { result, exitCode: missed || blocked ? 1 : 0, human: renderCatalog(result, renderOptions), contractCommand: "catalog" };
 }
 
 function createResultData(execution: CommandExecution) {
@@ -303,6 +317,8 @@ function emitFailure(input: {
 		? `${command}.check_invalid_target`
 		: `${command}.${input.code}`;
 	const result = emptyResult(command, input.code, failureStation, input.invocation?.scope);
+	// Failed `commands` runs carry the generic setup.result contract, not setup.commands:
+	// the station catalog pins commands.invalid_usage to SETUP_RESULT_CONTRACT_ID.
 	const data = command === "commands"
 		? createCommandResultData<
 			SetupResult,

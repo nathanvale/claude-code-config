@@ -147,7 +147,7 @@ The installed pre-cutover hook already demonstrates this failure: its bytes diff
 ```mermaid
 flowchart TB
   Git["Git invokes installed pre-commit"] --> Hook["Thin pre-commit adapter"]
-  Hook --> Staged["Instruction health check --staged"]
+  Hook --> Staged["Instruction health check with staged marker"]
   Staged --> Index["NUL-safe Git index paths"]
   Index --> Relevant{"Exact health input matched?"}
   Relevant -->|No| Skip["Report not applicable, exit 0"]
@@ -283,7 +283,7 @@ stateDiagram-v2
 - **Requirements:** R1, R7-R8, R11-R18, R20; AE1, AE4-AE10.
 - **Dependencies:** U2, U3.
 - **Files:** `scripts/hooks/pre-commit`, `scripts/hooks/pre-commit.test.ts`, `runtime/setup/tests/setup-process-fixture.ts`, `runtime/setup/tests/setup.integration.test.ts`, `runtime/setup/tests/cutover.test.ts`.
-- **Approach:** Delegate once to `scripts/agent-instructions.sh check --staged`; retain Bash invocation, log capture, normal blocking behavior, the visible exit-137 warning, and direct retry guidance.
+- **Approach:** Delegate once with `AGENT_INSTRUCTIONS_CHECK_STAGED=1 scripts/agent-instructions.sh check`; retain the plain `check` argv for older linked worktrees, Bash invocation, log capture, normal blocking behavior, the visible exit-137 warning, and direct retry guidance.
 - **Approach:** Remove `PROMPT_SYSTEM_PATHS`, staged word splitting, and every relevance decision from the adapter.
 - **Approach:** Add production-boundary Setup coverage that starts from each pinned installed payload, previews without writing, applies reconciliation, and returns healthy on the next status.
 - **Patterns to follow:** Existing pre-commit child wait and log handling; `runtime/setup/tests/setup.integration.test.ts` for real command entrypoint evidence.

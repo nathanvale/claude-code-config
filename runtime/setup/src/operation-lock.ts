@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SetupScope } from "./model.ts";
@@ -18,7 +18,8 @@ export type OperationLockResult =
 /** Read-only lock state used by doctor without creating or reclaiming evidence. */
 export type OperationLockInspection =
 	| { readonly status: "missing"; readonly path: string }
-	| { readonly status: "busy" | "stale"; readonly path: string; readonly owner?: Partial<LockOwner> };
+	| { readonly status: "busy"; readonly path: string; readonly owner?: Partial<LockOwner> }
+	| { readonly status: "stale"; readonly path: string; readonly owner?: Partial<LockOwner> };
 
 /**
  * Inspect lock evidence without creating or reclaiming state.
@@ -41,15 +42,57 @@ export async function inspectOperationLock(input: {
 		? await canonicalPath(input.targetAnchor)
 		: resolve(input.targetAnchor);
 	const path = `${resolve(input.stateRoot)}/${lockName(input.scope, canonicalTarget)}`;
+	return inspectLockPath(path, input.isProcessAlive);
+}
+
+/**
+ * Enumerate stale canonical-id visibility locks without creating or reclaiming state.
+ *
+ * @param input - Existing state root and optional process probe
+ * @returns Deterministically ordered stale visibility-lock evidence
+ *
+ * @example
+ * ```typescript
+ * await inspectStaleVisibilityLocks({ stateRoot })
+ * ```
+ */
+export async function inspectStaleVisibilityLocks(input: {
+	readonly stateRoot: string;
+	readonly isProcessAlive?: (pid: number) => boolean;
+}): Promise<readonly Extract<OperationLockInspection, { readonly status: "stale" }>[]> {
+	const stateRoot = resolve(input.stateRoot);
+	let names: string[];
+	try {
+		names = await readdir(stateRoot);
+	} catch (error) {
+		if (hasErrorCode(error, "ENOENT")) return [];
+		throw error;
+	}
+	const inspections = await Promise.all(names
+		.filter((name) => /^visibility-[a-f0-9]{20}\.lock$/u.test(name))
+		.sort((left, right) => left.localeCompare(right))
+		.map((name) => inspectLockPath(`${stateRoot}/${name}`, input.isProcessAlive)));
+	return inspections.filter(
+		(inspection): inspection is Extract<OperationLockInspection, { readonly status: "stale" }> =>
+			inspection.status === "stale",
+	);
+}
+
+async function inspectLockPath(
+	path: string,
+	isProcessAlive?: (pid: number) => boolean,
+): Promise<OperationLockInspection> {
 	let owner: Partial<LockOwner> | undefined;
 	try {
 		owner = await readOwner(path);
-		await import("node:fs/promises").then(({ lstat }) => lstat(path));
+		await lstat(path);
 	} catch {
 		return { status: "missing", path };
 	}
-	const alive = typeof owner?.pid === "number" && (input.isProcessAlive ?? processAlive)(owner.pid);
-	return { status: alive ? "busy" : "stale", path, ...(owner ? { owner } : {}) };
+	const alive = typeof owner?.pid === "number" && (isProcessAlive ?? processAlive)(owner.pid);
+	return alive
+		? { status: "busy", path, ...(owner ? { owner } : {}) }
+		: { status: "stale", path, ...(owner ? { owner } : {}) };
 }
 
 /** Acquire one atomic mkdir lock. Existing stale evidence is diagnosed, never reclaimed. */
@@ -105,7 +148,15 @@ export async function acquireVisibilityLocks(input: {
 async function releaseLocks(
 	locks: readonly Extract<OperationLockResult, { status: "acquired" }>[],
 ): Promise<void> {
-	for (let index = locks.length - 1; index >= 0; index -= 1) await locks[index]?.release();
+	let firstFailure: unknown;
+	for (let index = locks.length - 1; index >= 0; index -= 1) {
+		try {
+			await locks[index]?.release();
+		} catch (error) {
+			firstFailure ??= error;
+		}
+	}
+	if (firstFailure !== undefined) throw firstFailure;
 }
 
 async function acquireNamedLock(input: {
@@ -139,7 +190,7 @@ async function acquireNamedLock(input: {
 		release: async () => {
 			const current = await readOwner(lockPath);
 			if (current?.token !== token) return;
-			await rm(lockPath, { recursive: true });
+			await rm(lockPath, { recursive: true, force: true });
 		},
 	};
 }

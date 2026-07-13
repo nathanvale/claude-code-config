@@ -1,12 +1,14 @@
-import { lstat, mkdtemp, mkdir, readlink, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
 import { STARTUP_LINKS } from "../src/startup-topology.ts";
+import { diagnoseFindings } from "../src/doctor.ts";
 import { hookProvenanceIdentity, readHookProvenance } from "../src/hook-provenance.ts";
 import { inspectSetup } from "../src/inspection.ts";
+import { acquireVisibilityLocks } from "../src/operation-lock.ts";
 import { planSetup } from "../src/planner.ts";
 import {
 	applySetupDomains,
@@ -92,6 +94,51 @@ describe("setup domain composition", () => {
 		}));
 		expect(probes).toBe(0);
 		expect(result.domains.map((domain) => domain.domain)).toEqual(["skill_projection"]);
+	});
+
+	test.each(["user", "project"] as const)("surfaces stale visibility locks in %s doctor and sync preview", async (scope) => {
+		const fixture = scope === "user" ? await userFixture() : await projectFixture();
+		const visibility = await acquireVisibilityLocks({ canonicalIds: ["alpha"], stateRoot: fixture.state, pid: 999_999_999 });
+		if (visibility.status !== "acquired") throw new Error("fixture visibility lock was not acquired");
+		const ownerPath = join(visibility.path, "owner.json");
+		const ownerBefore = await readFile(ownerPath, "utf8");
+		let userDomainProbes = 0;
+		const options = {
+			stateRoot: fixture.state,
+			hookPath: async () => {
+				userDomainProbes += 1;
+				if (scope === "user" && "hooks" in fixture) return fixture.hooks;
+				throw new Error("project lock inspection must not probe user hooks");
+			},
+			instructionRunner: async () => {
+				userDomainProbes += 1;
+				return { exitCode: 0, stdout: "", stderr: "" };
+			},
+		};
+
+		const sync = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "sync"),
+			options,
+		);
+		expect(sync).toMatchObject({ state: "blocked", station: "sync.check_blocked", next_action: "run_doctor" });
+		expect(sync.findings).toContainEqual(expect.objectContaining({
+			id: "stale_operation_lock",
+			path: visibility.path,
+			repair: "inspect_lock",
+		}));
+
+		const doctor = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "doctor"),
+			options,
+		);
+		expect(diagnoseFindings(doctor.findings)).toMatchObject({
+			station: "doctor.stale_operation_lock",
+			next_action: "inspect_lock",
+		});
+		expect(await readFile(ownerPath, "utf8")).toBe(ownerBefore);
+		expect(userDomainProbes).toBe(scope === "user" ? 4 : 0);
 	});
 
 	test("labels a fresh user topology clean slate with preview as the next action", async () => {

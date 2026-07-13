@@ -54,6 +54,9 @@ export interface HookTopologyPlan {
 	readonly preserved: readonly string[];
 }
 
+/** Hook names Setup owns; other files beside them are never planned as hooks. */
+export const SUPPORTED_HOOK_NAMES: ReadonlySet<string> = new Set(["pre-commit"]);
+
 /** Directory reader seam used to prove source inspection failures. */
 export type HookDirectoryReader = (path: string) => Promise<string[]>;
 
@@ -115,6 +118,7 @@ export async function inspectHookTopology(
 		return deepFreeze({ domain: "hooks", operations, findings, preserved });
 	}
 	for (const name of names.sort()) {
+		if (!SUPPORTED_HOOK_NAMES.has(name)) continue;
 		const source = join(sourceDir, name);
 		if (!(await isRegular(source))) continue;
 		const identity = await hookProvenanceIdentity({ stateRoot, hookDirectory: destinationDir, hookName: name });

@@ -48,7 +48,13 @@ export async function runInstructionCheck(
 	script: string,
 	runtime: InstructionCheckRuntime = {},
 ): Promise<ChildResult> {
-	const child = runtime.spawn?.(script) ?? Bun.spawn(["bash", script, "check"], { stdout: "pipe", stderr: "pipe" });
+	const child = runtime.spawn?.(script)
+		?? Bun.spawn(["bash", script, "check"], {
+			stdout: "pipe",
+			stderr: "pipe",
+			// Setup always intends the full check; ambient staged mode must not leak in.
+			env: { ...process.env, AGENT_INSTRUCTIONS_CHECK_STAGED: "" },
+		});
 	const deadline = (runtime.deadline ?? scheduleDeadline)(runtime.timeoutMs ?? INSTRUCTION_CHECK_TIMEOUT_MS);
 	const stdout = new Response(child.stdout).text();
 	const stderr = new Response(child.stderr).text();

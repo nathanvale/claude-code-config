@@ -70,12 +70,23 @@ describe("setup CLI read-only surface", () => {
 		expect(verbose.stderr.text).toContain("setup inspection complete");
 	});
 
-	test("never emits ANSI when color is disabled or the terminal is dumb", async () => {
-		for (const argv of [["status", "--no-color"], ["status"]]) {
+	test("wires TTY color through flag and environment controls", async () => {
+		const enabled = capture();
+		await main(["status"], {
+			...enabled,
+			runtime: runtime(inspection(), { env: { TERM: "xterm-256color" }, stdoutIsTTY: true }),
+		});
+		expect(enabled.stdout.text).toContain("\u001b[");
+
+		for (const scenario of [
+			{ argv: ["status", "--no-color"], env: { TERM: "xterm-256color" } },
+			{ argv: ["status"], env: { TERM: "xterm-256color", NO_COLOR: "1" } },
+			{ argv: ["status"], env: { TERM: "dumb" } },
+		] as const) {
 			const io = capture();
-			await main(argv, {
+			await main(scenario.argv, {
 				...io,
-				runtime: runtime(inspection(), { env: { NO_COLOR: "1", TERM: "dumb" } }),
+				runtime: runtime(inspection(), { env: scenario.env, stdoutIsTTY: true }),
 			});
 			expect(io.stdout.text).not.toContain("\u001b[");
 		}
@@ -363,13 +374,19 @@ function capture() {
 
 function runtime(
 	state: SetupInspection,
-	options: { env?: Record<string, string>; onInspect?: () => void; apply?: SetupCliRuntime["apply"] } = {},
+	options: {
+		env?: Record<string, string | undefined>;
+		stdoutIsTTY?: boolean;
+		onInspect?: () => void;
+		apply?: SetupCliRuntime["apply"];
+	} = {},
 ) {
 	return {
 		sourceRepoRoot: "/repo",
 		homeDir: "/home",
 		now: () => 100,
 		env: options.env ?? {},
+		stdoutIsTTY: options.stdoutIsTTY ?? false,
 		inspect: async () => {
 			options.onInspect?.();
 			return state;

@@ -27,10 +27,12 @@ for arg in "$@"; do
 done
 
 bootstrap_error() {
+	local exit_code="$3"
 	printf 'setup: %s: %s\n' "$1" "$2" >&2
 	if [[ "$json_requested" == true ]]; then
-		printf '{"status":"error","run_id":"bootstrap","data":{"contract_id":"setup.bootstrap","schema_version":"1","station":"%s","next_action":"inspect_diagnostics"},"error":{"run_id":"bootstrap","code":"%s","message":"Setup bootstrap failed before the TypeScript CLI started.","exit_code":1,"severity":"error","recoverability":"repair_state","retryable":false},"duration_ms":0}\n' "$1" "$1"
+		printf '{"status":"error","run_id":"bootstrap","data":{"contract_id":"setup.bootstrap","schema_version":"1","station":"%s","next_action":"inspect_diagnostics"},"error":{"run_id":"bootstrap","code":"%s","message":"Setup bootstrap failed before the TypeScript CLI started.","exit_code":%s,"severity":"error","recoverability":"repair_state","retryable":false},"duration_ms":0}\n' "$1" "$1" "$exit_code"
 	fi
+	return "$exit_code"
 }
 
 bounded_signal() {
@@ -117,8 +119,8 @@ if [[ -z "$bun_path" ]]; then
 		if [[ ! -t 0 ]]; then
 			bootstrap_error \
 				"bootstrap.bun_consent_required" \
-				"Bun is missing and installation needs consent. Re-run with --yes or install Bun from https://bun.sh/."
-			exit 1
+				"Bun is missing and installation needs consent. Re-run with --yes or install Bun from https://bun.sh/." \
+				2 || exit $?
 		fi
 
 		printf 'Bun is required but was not found. Install Bun now? [y/N] ' >&2
@@ -131,8 +133,8 @@ if [[ -z "$bun_path" ]]; then
 			*)
 				bootstrap_error \
 					"bootstrap.bun_declined" \
-					"Bun installation declined; no bootstrap changes were made."
-				exit 1
+					"Bun installation declined; no bootstrap changes were made." \
+					1 || exit $?
 				;;
 		esac
 	fi
@@ -140,8 +142,8 @@ if [[ -z "$bun_path" ]]; then
 	if ! curl -fsSL --connect-timeout 10 --max-time 120 https://bun.sh/install | bash 1>&2; then
 		bootstrap_error \
 			"bootstrap.bun_install_failed" \
-			"Bun installation failed. Inspect the installer diagnostics, then retry."
-		exit 1
+			"Bun installation failed. Inspect the installer diagnostics, then retry." \
+			1 || exit $?
 	fi
 
 	if command -v bun >/dev/null 2>&1; then
@@ -153,8 +155,8 @@ if [[ -z "$bun_path" ]]; then
 		else
 			bootstrap_error \
 				"bootstrap.bun_install_failed" \
-				"The installer completed without creating an executable Bun binary."
-			exit 1
+				"The installer completed without creating an executable Bun binary." \
+				1 || exit $?
 		fi
 	fi
 fi
@@ -162,8 +164,8 @@ fi
 if ! run_bounded "$dependency_timeout_seconds" reconcile_dependencies; then
 	bootstrap_error \
 		"bootstrap.dependencies_failed" \
-		"Frozen dependency reconciliation failed. Repair the lockfile, network, or toolchain, then retry."
-	exit 1
+		"Frozen dependency reconciliation failed. Repair the lockfile, network, or toolchain, then retry." \
+		1 || exit $?
 fi
 
-exec "$bun_path" run "$repo_root/runtime/setup/src/cli.ts" "${forwarded[@]}"
+exec "$bun_path" run "$repo_root/runtime/setup/src/cli.ts" ${forwarded[@]+"${forwarded[@]}"}
