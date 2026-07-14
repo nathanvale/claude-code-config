@@ -135,7 +135,6 @@ export const WARM_CHROME_CHECK_REASONS = {
 	invalid_cdp: [
 		"malformed_json_version",
 		"ws_only_no_http",
-		"endpoint_id_mismatch",
 		"cdp_contention",
 		"roundtrip_failed",
 	],
