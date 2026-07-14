@@ -1,15 +1,15 @@
 ---
 title: "Memory OS"
 type: agent-contract
-status: active
-updated: 2026-03-17
+status: archived
+updated: 2026-07-13
 ---
 
 # Memory OS
 
-This directory is the canonical user-scope contract for Nathan's Markdown-first memory system.
+This directory preserves the retired user-scope contract for Nathan's Markdown-first memory system. Archived reference only; current durable context lives in the repository root `context/` and is wired by `./setup sync`.
 
-It lives at `~/code/claude-code-config/memory` and is exposed at the stable runtime path `~/.config/context`.
+It lives at `context/archive/legacy-memory-framework/` and was exposed at the stable runtime path `~/.config/context`.
 
 It is shared by:
 - Claude Code

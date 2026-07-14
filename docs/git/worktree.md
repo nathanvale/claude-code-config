@@ -49,13 +49,13 @@ One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<b
 
 ## Repo-local skills
 
-Use `agent-skills` to project visible catalog skills into each worktree.
+Use Setup to project a worktree's own visible catalog skills into that worktree.
 
-- Human check: `agent-skills status`.
-- Agent/CI gate: `agent-skills sync --check --json`.
-- Repair: `agent-skills sync`.
-- Generated state: `.agents/skills/`, `.claude/skills/`, `.agents/agent-skills-snapshot.json`.
-- Source of truth: `skills/` plus `.agent-skills.yml` plus `skills-lock.json`.
+- Human check: `./setup status --scope project --repo <worktree>`.
+- Agent/CI gate: `./setup sync --check --scope project --repo <worktree> --json`.
+- Repair: `./setup sync --scope project --repo <worktree>`.
+- Generated state: `.agents/skills/` and `.claude/skills/`.
+- First-party source of truth: the selected worktree's `skills/` catalog.
 
 External skills (installed with `bunx skills add`) are hash-pinned copies, not
 projections. The lock is tracked; the copies under `.agents/skills/` are
@@ -64,8 +64,8 @@ gitignored, so a fresh worktree restores them from `skills-lock.json`:
 - Restore: `bunx skills experimental_install` (provider-experimental surface;
   it may rename — `bunx skills@1.5.14 experimental_install` is the pinned
   fallback when latest breaks).
-- `agent-skills status` reports installed externals and counts missing ones
-  with the restore hint; externals never block `sync`.
+- `./setup doctor --scope project --repo <worktree>` diagnoses external
+  occupancy without mutating it.
 
 ## Owner
 

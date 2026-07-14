@@ -11,9 +11,16 @@ source:
   - docs/adr/0016-ownership-ledger-grain-and-lock-boundary.md
   - runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md
 decision_metadata_format: fenced-yaml-per-decision
+amended_by: docs/plans/2026-07-13-001-feat-agent-setup-cli-plan.md
 ---
 
 # npx skills and agent-skills Division of Labor Decision Log
+
+> **Setup supersession note (2026-07-13):** The acquisition/projection split
+> remains accepted. `bunx skills` owns third-party package operations; Setup now
+> owns first-party live projection, collision preflight, and diagnosis. The
+> retired projector names, source paths, and commands below are historical
+> decision evidence, not executable routes.
 
 Use this log for accepted decisions about how the community `skills` CLI
 (`npx skills` / skills.sh) and `runtime/agent-skills` share `.agents/skills/`.

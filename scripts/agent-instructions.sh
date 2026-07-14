@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." >/dev/null && pwd)"
 COMMAND="check"
 FORMAT="plain"
+STAGED=false
+STAGED_DECISION="not_requested"
 CONFIG_FILE="$SCRIPT_DIR/agent-instructions.config"
 STARTUP_OWNER="$SCRIPT_DIR"
 
@@ -117,6 +119,10 @@ while [[ $# -gt 0 ]]; do
 		FORMAT="json"
 		shift
 		;;
+	--staged)
+		STAGED=true
+		shift
+		;;
 	-h | --help)
 		COMMAND="help"
 		shift
@@ -128,9 +134,36 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+if [[ "${AGENT_INSTRUCTIONS_CHECK_STAGED:-}" == "1" && "$COMMAND" == "check" ]]; then
+	STAGED=true
+fi
+
+if [[ "$STAGED" == true && "$COMMAND" == "status" ]]; then
+	echo "--staged is only valid with check" >&2
+	exit 2
+fi
+
 declare -a failures=()
 declare -a warnings=()
 declare -a passes=()
+declare -a matched_paths=()
+declare -a REGISTERED_OWNER_PATHS=(
+	"skills/productivity-connectors/SKILL.md"
+	"context/bun-runner.md"
+	"skills/skill-author/SKILL.md"
+	"skills/skill-author/CONTEXT.md"
+	"skills/skill-author/references/skill-design-decision-runbook.md"
+	"context/personal.md"
+	"context/comms-style.md"
+	"docs/git/conventions.md"
+	"docs/git/workflows.md"
+	"docs/git/worktree.md"
+	"docs/agents/issue-tracker.md"
+	"docs/agents/triage-labels.md"
+	"docs/agents/domain.md"
+	"skills/context-advisor/SKILL.md"
+	"skills/context-advisor/references/storage-routing.md"
+)
 
 add_pass() {
 	passes+=("$1")
@@ -217,25 +250,7 @@ check_no_leakage() {
 }
 
 check_owner_paths() {
-	local required=(
-			"skills/productivity-connectors/SKILL.md"
-			"context/bun-runner.md"
-			"skills/skill-author/SKILL.md"
-			"skills/skill-author/CONTEXT.md"
-			"skills/skill-author/references/skill-design-decision-runbook.md"
-		"context/personal.md"
-		"context/comms-style.md"
-		"docs/git/conventions.md"
-		"docs/git/workflows.md"
-		"docs/git/worktree.md"
-		"docs/agents/issue-tracker.md"
-		"docs/agents/triage-labels.md"
-		"docs/agents/domain.md"
-		"skills/context-advisor/SKILL.md"
-		"skills/context-advisor/references/storage-routing.md"
-	)
-
-	for path in "${required[@]}"; do
+	for path in "${REGISTERED_OWNER_PATHS[@]}"; do
 		if [[ -f "$SCRIPT_DIR/$path" ]]; then
 			add_pass "owner exists: $path"
 		else
@@ -244,16 +259,117 @@ check_owner_paths() {
 	done
 }
 
+is_staged_relevant_path() {
+	local path="$1"
+	case "$path" in
+	AGENTS.md | CLAUDE.md | agent-instructions.config | scripts/agent-instructions.sh | instruction-appendices/*)
+		return 0
+		;;
+	esac
+
+	local owner_path
+	for owner_path in "${REGISTERED_OWNER_PATHS[@]}"; do
+		if [[ "$path" == "$owner_path" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+inspect_staged_relevance() {
+	local staged_file
+	if ! staged_file="$(mktemp "${TMPDIR:-/tmp}/agent-instructions-staged.XXXXXX")"; then
+		STAGED_DECISION="inspection_failed"
+		add_fail "staged Git index inspection failed"
+		return 1
+	fi
+
+	if ! git -C "$SCRIPT_DIR" diff --cached --name-only -z --no-renames --diff-filter=ACDMRTUXB -- > "$staged_file"; then
+		rm -f "$staged_file"
+		STAGED_DECISION="inspection_failed"
+		add_fail "staged Git index inspection failed"
+		return 1
+	fi
+
+	local path
+	while IFS= read -r -d '' path; do
+		if is_staged_relevant_path "$path"; then
+			matched_paths+=("$path")
+		fi
+	done < "$staged_file"
+	rm -f "$staged_file"
+
+	if (( ${#matched_paths[*]} > 0 )); then
+		STAGED_DECISION="applicable"
+	else
+		STAGED_DECISION="not_applicable"
+	fi
+}
+
+check_staged_worktree_alignment() {
+	local index_present
+	local path
+	local status
+	local worktree_present
+	for path in ${matched_paths[@]+"${matched_paths[@]}"}; do
+		index_present=false
+		worktree_present=false
+		if git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+			index_present=true
+		fi
+		if [[ -e "$SCRIPT_DIR/$path" || -L "$SCRIPT_DIR/$path" ]]; then
+			worktree_present=true
+		fi
+		if [[ "$index_present" != "$worktree_present" ]]; then
+			add_fail "staged instruction input differs from working tree: $path"
+			continue
+		fi
+		if [[ "$index_present" == false ]]; then
+			continue
+		fi
+		if git -C "$SCRIPT_DIR" diff --quiet -- "$path"; then
+			continue
+		else
+			status=$?
+		fi
+		if [[ "$status" -eq 1 ]]; then
+			add_fail "staged instruction input differs from working tree: $path"
+		else
+			STAGED_DECISION="inspection_failed"
+			add_fail "staged Git index inspection failed"
+			return 1
+		fi
+	done
+}
+
 check_appendices() {
+	local LC_ALL=C
 	local dir="$SCRIPT_DIR/instruction-appendices"
 	if [[ ! -d "$dir" ]]; then
 		add_pass "instruction appendices absent"
 		return
 	fi
 
-	local found=false
-	while IFS= read -r file; do
-		found=true
+	local -a appendix_files=()
+	local file
+	while IFS= read -r -d '' file; do
+		appendix_files+=("$file")
+	done < <(find "$dir" -type f -name '*.md' -print0)
+
+	local index
+	local previous
+	local candidate
+	for (( index = 1; index < ${#appendix_files[*]}; index++ )); do
+		candidate="${appendix_files[$index]}"
+		previous=$((index - 1))
+		while (( previous >= 0 )) && [[ "${appendix_files[$previous]}" > "$candidate" ]]; do
+			appendix_files[$((previous + 1))]="${appendix_files[$previous]}"
+			previous=$((previous - 1))
+		done
+		appendix_files[$((previous + 1))]="$candidate"
+	done
+
+	for file in ${appendix_files[@]+"${appendix_files[@]}"}; do
 		local lines
 		lines="$(line_count "$file")"
 		if (( lines > 25 )); then
@@ -261,9 +377,9 @@ check_appendices() {
 		else
 			add_pass "appendix line budget: ${file#$SCRIPT_DIR/} $lines <= 25"
 		fi
-	done < <(find "$dir" -type f -name '*.md' | sort)
+	done
 
-	if [[ "$found" == false ]]; then
+	if (( ${#appendix_files[*]} == 0 )); then
 		add_pass "instruction appendices empty"
 	fi
 }
@@ -325,36 +441,6 @@ check_projection_drift() {
 	fi
 }
 
-# Fail when a deploy target holds a real directory whose name also exists as a
-# repo skill: a drifted duplicate of the canonical source. Codex-only dirs (no
-# repo twin) are ignored automatically, so the check is self-maintaining — no
-# allowlist to grow. Repair: back up the copy and symlink it, or run install.sh.
-check_skill_deploy_drift() {
-	local repo_skills="$STARTUP_OWNER/skills"
-	local drift_found=false
-	local target entry name
-	for target in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
-		[[ -d "$target" ]] || continue
-		# A whole-folder symlink (Claude's model) is the source itself — its
-		# children are repo skills, not per-skill drift. Only scan real
-		# directories that mix sources (Codex's model).
-		[[ -L "$target" ]] && continue
-		for entry in "$target"/*/; do
-			[[ -d "$entry" ]] || continue
-			entry="${entry%/}"
-			[[ -L "$entry" ]] && continue
-			name="$(basename "$entry")"
-			if [[ -d "$repo_skills/$name" ]]; then
-				drift_found=true
-				add_fail "Skill deploy drift: ${target/#$HOME/~}/$name is a real directory shadowing skills/$name; back it up and symlink, or run ./install.sh"
-			fi
-		done
-	done
-	if [[ "$drift_found" == false ]]; then
-		add_pass "no skill deploy drift in ~/.claude/skills or ~/.codex/skills"
-	fi
-}
-
 run_checks() {
 	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
@@ -367,7 +453,35 @@ run_checks() {
 	check_owner_paths
 	check_appendices
 	check_projection_drift
-	check_skill_deploy_drift
+}
+
+json_string() {
+	local value="$1"
+	local character
+	printf '"'
+	while [[ -n "$value" ]]; do
+		character="${value:0:1}"
+		value="${value:1}"
+		case "$character" in
+		'"') printf '\\"' ;;
+		'\') printf '\\\\' ;;
+		$'\b') printf '\\b' ;;
+		$'\f') printf '\\f' ;;
+		$'\n') printf '\\n' ;;
+		$'\r') printf '\\r' ;;
+		$'\t') printf '\\t' ;;
+		*)
+			local code
+			LC_CTYPE=C printf -v code '%d' "'$character"
+			if (( code < 32 )); then
+				printf '%s%04x' '\u' "$code"
+			else
+				printf '%s' "$character"
+			fi
+			;;
+		esac
+	done
+	printf '"'
 }
 
 json_array() {
@@ -381,9 +495,35 @@ json_array() {
 		else
 			printf ','
 		fi
-		printf '%s' "$item" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/'
+		json_string "$item"
 	done
 	printf ']'
+}
+
+print_staged_json() {
+	local applicable="null"
+	case "$STAGED_DECISION" in
+	applicable) applicable="true" ;;
+	not_applicable) applicable="false" ;;
+	esac
+
+	printf '"staged":{"requested":%s,"applicable":%s,"decision":' "$STAGED" "$applicable"
+	json_string "$STAGED_DECISION"
+	printf ','
+	json_array "matched_paths" ${matched_paths[@]+"${matched_paths[@]}"}
+	printf '}'
+}
+
+print_staged_plain() {
+	case "$STAGED_DECISION" in
+	applicable) echo "Staged instruction health: applicable" ;;
+	not_applicable) echo "Staged instruction health: not applicable" ;;
+	inspection_failed) echo "Staged instruction health: inspection failed" ;;
+	esac
+	local path
+	for path in ${matched_paths[@]+"${matched_paths[@]}"}; do
+		printf 'MATCH: %q\n' "$path"
+	done
 }
 
 print_report() {
@@ -396,6 +536,8 @@ print_report() {
 
 	if [[ "$FORMAT" == "json" ]]; then
 		printf '{"status":"%s",' "$status"
+		print_staged_json
+		printf ','
 		json_array "passes" ${passes[@]+"${passes[@]}"}
 		printf ','
 		json_array "warnings" ${warnings[@]+"${warnings[@]}"}
@@ -405,6 +547,9 @@ print_report() {
 		return
 	fi
 
+	if [[ "$STAGED" == true ]]; then
+		print_staged_plain
+	fi
 	echo "Agent instruction health: $status"
 	for item in ${failures[@]+"${failures[@]}"}; do
 		echo "FAIL: $item"
@@ -430,7 +575,7 @@ echo "startup: AGENTS.md"
 echo "claude: CLAUDE.md"
 echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
 	echo "checks: scripts/agent-instructions.sh"
-	echo "skills: skills/* plus discovery projections"
+	echo "skills: setup projections plus bunx skills acquisition"
 	echo "repo truth: docs/agents/"
 	echo "git docs: docs/git/"
 	echo "vocabulary: CONTEXT.md plus scoped CONTEXT.md files"
@@ -441,12 +586,16 @@ echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
 print_help() {
 	cat <<'HELP'
 Usage:
-  scripts/agent-instructions.sh check [--json]
+  scripts/agent-instructions.sh check [--staged] [--json]
   scripts/agent-instructions.sh status [--json]
 
 Commands:
-  check   Read-only health gate for startup budgets, owner paths, leakage, appendices, and projection drift.
+  check   Read-only health gate for startup budgets, owner paths, leakage, appendices, and startup delivery.
   status  Compact owner map plus check results.
+
+Options:
+  --staged  Run health only when exact staged instruction inputs are relevant. Valid with check only.
+  --json    Emit the report and staged decision evidence as JSON.
 
 Exit codes:
   0  success, including warnings
@@ -459,7 +608,14 @@ HELP
 
 case "$COMMAND" in
 check)
-	run_checks
+	if [[ "$STAGED" == true ]]; then
+		if inspect_staged_relevance && [[ "$STAGED_DECISION" == "applicable" ]]; then
+			check_staged_worktree_alignment || true
+			run_checks
+		fi
+	else
+		run_checks
+	fi
 	print_report
 	if (( ${#failures[*]} > 0 )); then
 		exit 1

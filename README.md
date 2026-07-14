@@ -1,6 +1,6 @@
 # Claude Code Config
 
-Nathan's user-scope Claude Code configuration: prompt system, context routing, rules, skills, agents, and install scripts.
+Nathan's user-scope Claude Code configuration: prompt system, context routing, rules, skills, agents, and Setup CLI.
 
 ## New Machine Setup
 
@@ -18,24 +18,51 @@ You also need [Homebrew](https://brew.sh) and [fnm](https://github.com/Schniz/fn
 ```sh
 git clone git@github.com:nathanvale/claude-code-config.git ~/code/claude-code-config
 cd ~/code/claude-code-config
-./install.sh
+./setup sync --check
 ```
 
-This symlinks active startup rules, skills, agents, commands, hooks, and `~/.config/context/`.
+Run `./setup sync --check` to preview user startup wiring and direct first-party
+skill links. Run `./setup sync` to apply the safe plan.
+
+The root `./setup` command works without preinstalled Bun or workspace
+dependencies. It asks before installing missing Bun, reconciles frozen
+dependencies, then delegates to the facade-backed CLI.
+
+For non-interactive bootstrap, pass `--yes` to consent to Bun installation:
+
+```sh
+./setup --yes
+```
+
+`--yes` grants Bun installation consent only.
 
 ### Verify
 
 ```sh
+./setup status
 scripts/agent-instructions.sh check
 ```
 
 ## Existing Machine
 
 ```sh
-./install.sh --status   # check symlink health
-./install.sh            # re-apply symlinks
-./install.sh --unlink   # remove symlinks
+./setup status          # bounded health and next action
+./setup doctor          # diagnose topology and ownership evidence
+./setup sync --check    # preview current evidence
+./setup sync            # apply safe first-party wiring
+./setup unlink --check  # preview managed removal
+./setup unlink          # remove proven Setup-owned links
 ```
+
+Setup reconciles copied hooks only when provenance or recognized migration
+evidence proves ownership. Missing or unproven evidence preserves the hook and
+routes repair to a human; inspect with `./setup status`, `./setup doctor`, or
+`./setup sync --check` before applying a safe plan with `./setup sync`.
+
+Use `./setup catalog <id>` before third-party acquisition. Use
+`bunx skills add <source> -s <skill>` for third-party acquisition. Use the
+`bunx skills` command family for other third-party lifecycle work; Setup never
+acts as a package manager.
 
 ## Structure
 

@@ -1,0 +1,29 @@
+{
+  "name": "@side-quest/setup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Facade-backed runtime setup and first-party skill projection CLI.",
+  "sideQuest": {
+    "sourceLinkedBin": true
+  },
+  "bin": {
+    "setup": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts"
+  },
+  "scripts": {
+    "setup": "bun run src/cli.ts",
+    "test": "bun test ./tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@side-quest/cli-command-facade": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  }
+}

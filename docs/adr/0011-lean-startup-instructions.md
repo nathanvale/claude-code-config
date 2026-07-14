@@ -5,6 +5,11 @@ date: 2026-06-02
 
 # Lean Startup Instructions
 
+> **Setup amendment (2026-07-13):** Root `setup` and `runtime/setup/` now own
+> startup topology, hook installation, instruction-health composition, and
+> direct first-party skill projection. `bunx skills` remains the third-party
+> acquisition owner. The lean-authoring decision remains accepted.
+
 ## Decision
 
 Root `AGENTS.md` is the canonical user-scope startup instruction source.
@@ -20,8 +25,16 @@ Prompt fragments, committed Codex generated output, and
 - appendix bloat checks
 - user-scope delivery drift
 
-`install.sh` remains a compatibility topology helper. It surfaces instruction
-health but does not generate prompt content.
+Setup owns runtime topology and surfaces instruction health without generating
+prompt content.
+
+The pre-commit adapter enforces instruction health at the commit boundary.
+Setup owns the topology boundary: hook installation, inspection, and safe
+reconciliation of copied hooks backed by provenance.
+
+Missing provenance alone does not transfer ownership to Setup. Equal-current
+or recognized migration evidence may rebuild it; every other existing copy is
+preserved and routed to human repair after state loss.
 
 Claude and Codex delivery should target root `AGENTS.md` directly. A managed
 copy is acceptable only as an install artifact checked against `AGENTS.md`.
@@ -41,7 +54,7 @@ Lean authoring keeps the model simple:
 
 - Startup source: `AGENTS.md`
 - Runtime health: `scripts/agent-instructions.sh`
-- Install topology: `install.sh`
+- Install topology: `setup` and `runtime/setup/`
 - Vocabulary: `CONTEXT.md`
 - Repo truth: `docs/agents/`
 - Git procedure: `docs/git/`
@@ -53,8 +66,9 @@ Lean authoring keeps the model simple:
 - Claude startup wrapper: `~/.claude/CLAUDE.md` symlinks to the configured owner `CLAUDE.md`.
 - Claude shared startup: `~/.claude/AGENTS.md` symlinks to the configured owner `AGENTS.md`.
 - Codex user startup: `~/.codex/AGENTS.md` symlinks to, or is a managed copy of, the configured owner `AGENTS.md`.
-- Skill deploy: `skills/` is the source; `~/.claude/skills` is a whole-folder symlink, `~/.codex/skills` is per-skill symlinks via `install.sh`. A real directory in a deploy target that shadows a repo skill is drift.
-- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, delivery drift, and skill deploy drift.
+- Skill projection: `skills/` is the first-party source; Setup creates direct per-skill links in `~/.claude/skills/` and `~/.agents/skills/`. A real entry or foreign symlink that shadows a source skill is preserved and diagnosed.
+- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, and startup delivery drift. Setup composes that evidence with topology health.
+- Hook topology: Setup reconciles copied hooks only from provenance-backed or recognized migration evidence; unproven content is preserved for human repair.
 
 ## Registered Owners
 
