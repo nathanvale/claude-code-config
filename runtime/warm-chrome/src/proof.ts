@@ -77,7 +77,7 @@ export type WarmChromeCdpRoundTrip = (
 ) => Promise<WarmChromeCdpResult>;
 
 /**
- * Parsed `DevToolsActivePort` file content (R6c endpoint-id cross-check).
+ * Parsed `DevToolsActivePort` hint content used by the repair lifecycle.
  */
 export type WarmChromeDevToolsActivePort = {
 	port: string;
@@ -85,9 +85,10 @@ export type WarmChromeDevToolsActivePort = {
 };
 
 /**
- * Proof-chain dependencies beyond the {@link WarmChromeRuntime} seam. The U4
- * seam carries no websocket or file-read primitive, so the proof chain owns
- * these two injectable probes; U6's launch re-entry reuses them unchanged.
+ * Browser-entry dependencies beyond the {@link WarmChromeRuntime} seam. The U4
+ * seam carries no websocket or file-read primitive, so the package owns these
+ * injectable probes; repair consumes the file hint while every proof consumes
+ * the websocket round-trip.
  */
 export type WarmChromeProofDeps = {
 	/** Live CDP round-trip over the verbatim browser websocket (R6). */
@@ -527,29 +528,6 @@ export async function runWarmChromeCheckProof(
 			"invalid_cdp",
 			"malformed_json_version",
 			"CDP websocket URL is not a browser-level DevTools target.",
-		);
-	}
-
-	// R6c: the browser-ws derives from one authoritative source; a
-	// DevToolsActivePort id disagreeing with the live /json/version id fails.
-		let activePort: WarmChromeDevToolsActivePort | null;
-		try {
-			activePort = await deps.readDevToolsActivePort(userDataDir);
-		} catch {
-			throw fail(
-				"invalid_cdp",
-				"endpoint_id_mismatch",
-				"DevToolsActivePort could not be inspected safely.",
-			);
-		}
-	if (
-		activePort !== null &&
-		(activePort.port !== input.port || activePort.wsPath !== ws.pathname)
-	) {
-		throw fail(
-			"invalid_cdp",
-			"endpoint_id_mismatch",
-			"DevToolsActivePort endpoint id disagrees with the live /json/version websocket id.",
 		);
 	}
 

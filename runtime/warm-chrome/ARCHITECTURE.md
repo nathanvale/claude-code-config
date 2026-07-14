@@ -100,9 +100,9 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   command parsing, and the websocket/listener redaction helpers.
 - `src/proof.ts`: the single check proof chain — loopback assertion, bounded
   attach probe, listener identity, default-profile foreignness (R6c),
-  payload validation, endpoint-id cross-check, CDP round-trips (headless and
-  isolated-context rejects), profile posture, final listener consistency,
-  and the suggested-explicit-port scan.
+  payload validation, CDP round-trips (headless and isolated-context rejects),
+  profile posture, final listener consistency, and the suggested-explicit-port
+  scan. `DevToolsActivePort` is non-authoritative hint material.
 - `src/launch.ts`: launch lifecycle — pre-spawn short-circuit, competing
   9222-instance guard, fail-closed classification, SingletonLock pre-bind
   refusal, bounded readiness poll, and the own-child race policy.
@@ -129,8 +129,7 @@ flowchart TD
   Listener -- foreign --> Foreign["port_occupied_foreign + suggested_explicit_port"]
   Listener --> DefaultProfile["R6c: /json/version on default profile is foreign"]
   DefaultProfile --> Payload["payload + websocket validation"]
-  Payload --> EndpointId["DevToolsActivePort endpoint-id cross-check"]
-  EndpointId --> Cdp["Browser.getVersion + context round-trips<br/>(headless / isolated rejects)"]
+  Payload --> Cdp["Browser.getVersion + context round-trips<br/>(headless / isolated rejects)"]
   Cdp --> Profile["profile posture: dedicated, persistent, 0700, no remap"]
   Profile --> Final["final listener consistency (pid re-check)"]
   Final --> Verified["ok envelope: the only endpoint authority (R8)"]

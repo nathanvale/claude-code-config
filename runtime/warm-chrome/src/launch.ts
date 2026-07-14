@@ -391,23 +391,13 @@ export function createLaunchCommandHandler(
 	};
 }
 
-// A mid-startup rival Chrome leaves a stale DevToolsActivePort until its own
-// startup settles, so the winner's post-spawn proof transiently reads
-// invalid_cdp/endpoint_id_mismatch (id disagreement) or invalid_cdp/
-// cdp_contention (multi-client contention) — the same class the check chain's
-// R7a re-probe treats as "not dead, retry". Inside the readiness budget these
-// are transient: keep polling rather than mint spawned_unverified, so the race
-// policy can run once the survivor's endpoint settles. (Observed on real
-// Chrome: both racers otherwise landed spawned_unverified/endpoint_id_mismatch
-// and needed a separate repair to converge.)
+// A mid-startup rival Chrome can transiently expose CDP contention or fail a
+// round-trip while its endpoint settles. Inside the readiness budget these are
+// retryable so the race policy can run once the survivor verifies.
 function isTransientStartupFailure(error: WarmChromeRuntimeError): boolean {
 	const reason = error.options.data?.reason;
 	if (error.code === "invalid_cdp") {
-		return (
-			reason === "endpoint_id_mismatch" ||
-			reason === "cdp_contention" ||
-			reason === "roundtrip_failed"
-		);
+		return reason === "cdp_contention" || reason === "roundtrip_failed";
 	}
 	if (error.code === "listener_mismatch") {
 		return reason === "pid_mismatch" || reason === "listener_missing";
