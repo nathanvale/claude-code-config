@@ -12,6 +12,11 @@ related:
 
 # Agent Capability Registry
 
+> **Setup cutover note (2026-07-13):** The deferred root-installer integration
+> below is retired. Setup owns first-party projection and collision diagnosis;
+> `bunx skills` owns third-party skill acquisition. The standalone registry
+> design remains draft historical context.
+
 ## Purpose
 
 The agent capability registry lets Nathan selectively track external skills and
@@ -134,8 +139,8 @@ repo.
 15. V1 source types are Git repositories and local/plugin directories.
 16. The registry starts inside `claude-code-config` under `capabilities/`.
 17. The first installer is an isolated command under `capabilities/scripts/`.
-18. `install.sh` integration is deferred until the standalone installer is
-   proven.
+18. Setup integration stays outside this draft until the standalone installer
+   is proven.
 19. This spec is the first durable artifact before implementation planning.
 20. Runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins
     are out of scope as v1 capabilities.
@@ -271,7 +276,8 @@ The first installer should be invoked directly:
 ./capabilities/scripts/install --target codex
 ```
 
-`install.sh` can call this later once the standalone installer is proven.
+Any future integration must compose through Setup's ownership checks rather
+than introduce another root installer.
 
 ## Aliases
 

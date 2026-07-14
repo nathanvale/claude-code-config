@@ -482,7 +482,7 @@ function fileExists(path: string): boolean {
 /**
  * Returns true iff `dirPath` exists, is a directory, and the subtree
  * rooted at it contains at least one regular file. Recursive so an
- * `install.sh` regression that ships `references/` as an empty folder
+ * Setup-topology regression that ships `references/` as an empty folder
  * surfaces as a missing root, not a present one.
  *
  * Bounded by a visited-realpath set so symlink loops are detected and

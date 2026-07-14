@@ -1,474 +1,360 @@
 #!/usr/bin/env bun
-// PROTOTYPE — throwaway UX proof for the setup CLI. Delete or absorb when done.
 
-import { existsSync, lstatSync, readlinkSync, realpathSync } from "fs";
-import { basename, resolve, join } from "path";
-import { homedir } from "os";
-import { randomUUID } from "crypto";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
-// ── Agent envelope (lightweight — mirrors facade shape without the dep) ─
+import {
+	type CliWriter,
+	CliUsageError,
+	createCliRepairStateRuntimeError,
+	createCliRuntimeErrorEnvelope,
+	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
+	createCommandResultData,
+	parseCliDiagnosticArgv,
+	renderCommandUsage,
+	writeJsonEnvelope,
+} from "@side-quest/cli-command-facade";
 
-function emitEnvelope(data: Record<string, unknown>, startMs: number): void {
-  const envelope = {
-    status: "ok",
-    run_id: randomUUID(),
-    data,
-    duration_ms: Math.round(performance.now() - startMs),
-  };
-  console.log(JSON.stringify(envelope, null, 2));
+import { canonicalSkillId } from "./catalog.ts";
+import { setupBranchStationCatalog } from "./branch-station-catalog.ts";
+import { applySetupDomains, checkSetupDomains, unlinkSetupDomains } from "./setup-domains.ts";
+import {
+	parseSetupInvocation,
+	projectSetupCommandDiscoveryTree,
+	setupContracts,
+	type ParsedSetupInvocation,
+} from "./command-contract.ts";
+import { diagnoseFindings } from "./doctor.ts";
+import { inspectSetup, type SetupInspection, type SetupInspectionInput } from "./inspection.ts";
+import { SETUP_COMMANDS, type SetupCommand, type SetupResult } from "./model.ts";
+import { planSetup } from "./planner.ts";
+import { renderCatalog, renderDoctor, renderSetupResult } from "./renderer.ts";
+import { InvalidTargetError, resolveProjectRepoRoot } from "./scope.ts";
+
+/** Runtime adapters keep command-surface tests deterministic and mutation-free. */
+export interface SetupCliRuntime {
+	sourceRepoRoot: string;
+	homeDir: string;
+	now: () => number;
+	env: Readonly<Record<string, string | undefined>>;
+	/** Whether the human-output destination supports terminal styling. */
+	stdoutIsTTY: boolean;
+	inspect: (input: SetupInspectionInput) => Promise<SetupInspection>;
+	apply: (input: SetupInspectionInput) => Promise<SetupResult>;
+	unlink: (input: SetupInspectionInput, check: boolean) => Promise<SetupResult>;
+	checkDomains?: (input: SetupInspectionInput, base: SetupResult) => Promise<SetupResult>;
+	/** Discovery adapter; tests use a failing implementation to prove wrapping. */
+	commands?: () => Promise<CommandsResult> | CommandsResult;
 }
 
-// ── Colors (respects NO_COLOR) ──────────────────────────────────────────
+/** Optional CLI entry-point dependencies used by tests and embedded callers. */
+export interface SetupCliOptions {
+	runtime?: Partial<SetupCliRuntime>;
+	stdout?: CliWriter;
+	stderr?: CliWriter;
+}
 
-const nc = !!process.env.NO_COLOR || process.env.TERM === "dumb";
-const c = {
-  reset: nc ? "" : "\x1b[0m",
-  bold: nc ? "" : "\x1b[1m",
-  dim: nc ? "" : "\x1b[2m",
-  green: nc ? "" : "\x1b[32m",
-  yellow: nc ? "" : "\x1b[33m",
-  red: nc ? "" : "\x1b[31m",
-  cyan: nc ? "" : "\x1b[36m",
-  gray: nc ? "" : "\x1b[90m",
-  white: nc ? "" : "\x1b[37m",
-  bgGreen: nc ? "" : "\x1b[42m",
-  bgYellow: nc ? "" : "\x1b[43m",
-  bgRed: nc ? "" : "\x1b[41m",
+type SetupResultCommand = Exclude<SetupCommand, "commands">;
+
+type CommandExecution = {
+	result: CommandsResult;
+	exitCode: 0;
+	human: "";
+	contractCommand: "commands";
+} | {
+	result: SetupResult;
+	exitCode: 0 | 1;
+	human: string;
+	contractCommand: SetupResultCommand;
 };
 
-// ── Topology ────────────────────────────────────────────────────────────
+type CommandsResult = ReturnType<typeof projectSetupCommandDiscoveryTree>;
 
-const HOME = homedir();
-const REPO = resolve(import.meta.dir, "../../..");
-
-interface LinkSpec {
-  link: string;
-  target: string;
-  label: string;
-  group: "claude" | "codex" | "config";
+/** Build the filesystem-backed, read-only CLI runtime. */
+export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): SetupCliRuntime {
+	const sourceRepoRoot = overrides.sourceRepoRoot ?? resolve(import.meta.dir, "../../..");
+	const homeDir = overrides.homeDir ?? homedir();
+	const stateRoot = join(homeDir, ".local/state/setup");
+	const runtime: SetupCliRuntime = {
+		sourceRepoRoot,
+		homeDir,
+		now: () => Date.now(),
+		env: process.env,
+		stdoutIsTTY: process.stdout.isTTY === true,
+		inspect: async (input) => {
+			if (input.scope !== "project") return inspectSetup(input);
+			return inspectSetup({
+				...input,
+				projectRepoRoot: resolveProjectRepoRoot(input.projectRepoRoot),
+			});
+		},
+		apply: async (input: SetupInspectionInput) => applySetupDomains(normalizeProjectInput(input), { stateRoot, inspect: runtime.inspect }),
+		unlink: async (input: SetupInspectionInput, check: boolean) => unlinkSetupDomains(normalizeProjectInput(input), { check, stateRoot, inspect: runtime.inspect }),
+		...overrides,
+	};
+	if (!overrides.inspect) runtime.checkDomains = async (input, base) => checkSetupDomains(normalizeProjectInput(input), base, { stateRoot });
+	return runtime;
 }
 
-const TOPOLOGY: LinkSpec[] = [
-  // Claude user scope
-  { link: `${HOME}/.claude/CLAUDE.md`, target: `${REPO}/CLAUDE.md`, label: "CLAUDE.md", group: "claude" },
-  { link: `${HOME}/.claude/AGENTS.md`, target: `${REPO}/AGENTS.md`, label: "AGENTS.md", group: "claude" },
-  { link: `${HOME}/.claude/context`, target: `${REPO}/context`, label: "context/", group: "claude" },
-  { link: `${HOME}/.claude/rules`, target: `${REPO}/rules`, label: "rules/", group: "claude" },
-  { link: `${HOME}/.claude/commands`, target: `${REPO}/commands`, label: "commands/", group: "claude" },
-  { link: `${HOME}/.claude/agents`, target: `${REPO}/agents`, label: "agents/", group: "claude" },
-  { link: `${HOME}/.claude/runbooks`, target: `${REPO}/runbooks`, label: "runbooks/", group: "claude" },
-  { link: `${HOME}/.claude/hooks`, target: `${REPO}/hooks`, label: "hooks/", group: "claude" },
-  { link: `${HOME}/.claude/hooks.json`, target: `${REPO}/hooks.json`, label: "hooks.json", group: "claude" },
-  { link: `${HOME}/.claude/settings.json`, target: `${REPO}/settings.json`, label: "settings.json", group: "claude" },
-  { link: `${HOME}/.claude/.mcp.json`, target: `${REPO}/.mcp.json`, label: ".mcp.json", group: "claude" },
-  // Codex user scope
-  { link: `${HOME}/.codex/AGENTS.md`, target: `${REPO}/AGENTS.md`, label: "AGENTS.md", group: "codex" },
-  // Config
-  { link: `${HOME}/.config/memory`, target: `${REPO}/memory`, label: "memory/", group: "config" },
-];
-
-// Skills excluded — managed by `npx skills`
-
-// ── Inspect ─────────────────────────────────────────────────────────────
-
-type LinkHealth = "ok" | "wrong" | "missing" | "conflict" | "broken";
-
-interface LinkStatus {
-  spec: LinkSpec;
-  health: LinkHealth;
-  actual?: string;
-  detail?: string;
+function normalizeProjectInput(input: SetupInspectionInput): SetupInspectionInput {
+	return input.scope === "project"
+		? { ...input, projectRepoRoot: resolveProjectRepoRoot(input.projectRepoRoot) }
+		: input;
 }
 
-function inspect(spec: LinkSpec): LinkStatus {
-  const { link, target } = spec;
+/** Run the Setup CLI and return its process exit code. */
+export async function main(argv: readonly string[], options: SetupCliOptions = {}): Promise<number> {
+	const stdout = options.stdout ?? process.stdout;
+	const stderr = options.stderr ?? process.stderr;
+	const runtime = createDefaultRuntime(options.runtime);
+	let invocation: ParsedSetupInvocation;
+	let diagnostics: ReturnType<typeof parseCliDiagnosticArgv>;
 
-  if (!existsSync(link) && !isSymlink(link)) {
-    return { spec, health: "missing" };
-  }
+	try {
+		if (argv.includes("--help") || argv.includes("-h")) {
+			// Only argv[0] can be a command; later bare tokens are flag values such as `--scope user`.
+			const candidate = argv[0] !== undefined && !argv[0].startsWith("-") ? argv[0] : undefined;
+			if (candidate !== undefined && !SETUP_COMMANDS.includes(candidate as SetupCommand)) {
+				throw new CliUsageError(`Unknown command: ${candidate}`, { exitCode: 2, showMessage: true });
+			}
+			const command = candidate as SetupCommand | undefined;
+			stdout.write(renderCommandUsage(setupContracts[command ?? "status"]));
+			return 0;
+		}
+		invocation = parseSetupInvocation(argv);
+		diagnostics = parseCliDiagnosticArgv(argv);
+	} catch (error) {
+		return emitFailure({ error, argv, stdout, stderr, runtime, command: commandFromArgv(argv), code: "invalid_usage", exitCode: 2 });
+	}
 
-  if (isSymlink(link)) {
-    const actual = readlinkSync(link);
-    const resolved = resolve(join(link, ".."), actual);
-
-    if (resolved === target || actual === target) {
-      if (!existsSync(target)) {
-        return { spec, health: "broken", actual, detail: "symlink exists but target is missing" };
-      }
-      return { spec, health: "ok", actual };
-    }
-
-    return { spec, health: "wrong", actual, detail: `points to ${shortPath(resolved)} instead of ${shortPath(target)}` };
-  }
-
-  return { spec, health: "conflict", detail: "real file/directory exists (not a symlink)" };
+	const startedAt = diagnostics.options.startedAtMs;
+	try {
+		const execution = await execute(invocation, runtime);
+		if (execution.contractCommand !== "commands" && execution.result.child_output) stderr.write(execution.result.child_output);
+		if (invocation.verbose) stderr.write("setup inspection complete\n");
+		if (invocation.json) {
+			const data = createResultData(execution);
+			const stationId = execution.contractCommand === "commands" ? undefined : execution.result.station;
+			const station = stationId
+				? setupBranchStationCatalog.find((candidate) => candidate.id === stationId)
+				: undefined;
+			const envelope = station?.expectedEnvelopeStatus === "error"
+				? createCliRuntimeErrorEnvelope({
+					run_id: diagnostics.options.runId,
+					process_exit_code: execution.exitCode,
+					error: createCliRepairStateRuntimeError({
+						run_id: diagnostics.options.runId,
+						code: station.expectedErrorCode ?? station.intent,
+						message: "Setup reached a repair-required terminal station.",
+						exit_code: execution.exitCode,
+					}),
+					data,
+				})
+				: createCliRuntimeSuccessEnvelope({ run_id: diagnostics.options.runId, data });
+			writeJsonEnvelope(stdout, envelope, {
+				runId: diagnostics.options.runId,
+				durationMs: Math.max(0, runtime.now() - startedAt),
+			});
+		} else {
+			stdout.write(execution.human);
+		}
+		return execution.exitCode;
+	} catch (error) {
+		return emitFailure({
+			error, argv, stdout, stderr, runtime, invocation,
+			runId: diagnostics.options.runId, startedAt,
+			code: error instanceof CliUsageError ? "invalid_usage"
+				: error instanceof InvalidTargetError ? "invalid_target" : "runtime_failure",
+			exitCode: error instanceof CliUsageError ? 2 : 1,
+		});
+	}
 }
 
-function isSymlink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
+async function execute(invocation: ParsedSetupInvocation, runtime: SetupCliRuntime): Promise<CommandExecution> {
+	const command = invocation.command;
+	const renderOptions = {
+		verbose: invocation.verbose,
+		color: runtime.stdoutIsTTY
+			&& !invocation.noColor
+			&& runtime.env.NO_COLOR === undefined
+			&& runtime.env.TERM !== "dumb",
+	};
+	if (command === "commands") {
+		return { result: await (runtime.commands?.() ?? projectSetupCommandDiscoveryTree()), exitCode: 0, human: "", contractCommand: "commands" };
+	}
+	const input: SetupInspectionInput = {
+		scope: invocation.scope,
+		sourceRepoRoot: runtime.sourceRepoRoot,
+		...(invocation.repo ? { projectRepoRoot: invocation.repo } : {}),
+		homeDir: runtime.homeDir,
+	};
+	if (command === "sync" && !invocation.check) {
+		const result = await runtime.apply(input);
+		return { result, exitCode: result.state === "applied" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, renderOptions), contractCommand: "sync" };
+	}
+	if (command === "unlink") {
+		const result = await runtime.unlink(input, invocation.check);
+		return { result, exitCode: result.state === "removed" || result.state === "noop" ? 0 : 1, human: renderSetupResult(result, renderOptions), contractCommand: "unlink" };
+	}
+	const inspection = await runtime.inspect(input);
+	if (command === "catalog") return catalogExecution(invocation, inspection, renderOptions);
+	let plan = planSetup(inspection, command);
+	if (runtime.checkDomains && (command === "status" || command === "doctor" || (command === "sync" && invocation.check))) {
+		plan = await runtime.checkDomains(input, plan);
+	}
+	if (command === "doctor") {
+		const diagnosis = diagnoseFindings(plan.findings);
+		const result: SetupResult = {
+			...plan,
+			findings: diagnosis.findings,
+			station: diagnosis.station,
+			next_action: diagnosis.next_action,
+			state: diagnosis.station === "doctor.healthy" ? "healthy"
+				: diagnosis.station === "doctor.repairable" ? "repairable" : "blocked",
+		};
+		return { result, exitCode: diagnosis.station === "doctor.healthy" ? 0 : 1, human: renderDoctor(result, renderOptions), contractCommand: "doctor" };
+	}
+	return {
+		result: plan,
+		exitCode: command === "sync" && plan.state !== "healthy" ? 1 : 0,
+		human: renderSetupResult(plan, renderOptions),
+		contractCommand: command,
+	};
 }
 
-function inspectAll(): LinkStatus[] {
-  return TOPOLOGY.map(inspect);
+function catalogExecution(
+	invocation: ParsedSetupInvocation,
+	inspection: SetupInspection,
+	renderOptions: { readonly color: boolean },
+): CommandExecution {
+	const plan = planSetup(inspection, "catalog");
+	const requested = invocation.positionals[0];
+	const matching = requested
+		? inspection.catalog.entries.filter((entry) => entry.canonical_id === canonicalSkillId(requested))
+		: inspection.catalog.entries;
+	const occupancyById = new Map<string, string[]>();
+	for (const owned of inspection.ownership.entries) {
+		const occupancy = occupancyById.get(owned.canonical_id) ?? [];
+		occupancy.push(`${owned.root_id}:${owned.ownership}`);
+		occupancyById.set(owned.canonical_id, occupancy);
+	}
+	for (const occupancy of occupancyById.values()) occupancy.sort();
+	const entries = matching.map((entry) => ({
+		id: entry.id,
+		canonical_id: entry.canonical_id,
+		state: entry.state,
+		path: entry.path,
+		occupancy: occupancyById.get(entry.canonical_id) ?? [],
+	}));
+	const missed = requested !== undefined && entries.length === 0;
+	const matched = requested !== undefined && matching.length === 1 && matching[0]?.state === "valid";
+	const blocked = requested !== undefined && !missed && !matched;
+	const result: SetupResult = {
+		...plan,
+		state: missed ? "failed" : blocked ? "blocked" : "healthy",
+		station: missed ? "catalog.not_found" : blocked ? "catalog.blocked" : requested ? "catalog.matched" : "catalog.listed",
+		next_action: missed ? "discover_external" : blocked ? "human_repair" : requested ? "use_source" : "inspect_catalog",
+		catalog_entries: missed ? [{ id: requested, canonical_id: canonicalSkillId(requested), state: "missing", occupancy: [] }] : entries,
+	};
+	return { result, exitCode: missed || blocked ? 1 : 0, human: renderCatalog(result, renderOptions), contractCommand: "catalog" };
 }
 
-// ── Formatting helpers ──────────────────────────────────────────────────
-
-function shortPath(p: string): string {
-  if (p.startsWith(HOME)) return "~" + p.slice(HOME.length);
-  if (p.startsWith(REPO)) return "$REPO" + p.slice(REPO.length);
-  return p;
+function createResultData(execution: CommandExecution) {
+	if (execution.contractCommand === "commands") {
+		return createCommandResultData<
+			CommandsResult,
+			typeof setupContracts.commands.resultContract
+		>(setupContracts.commands, execution.result);
+	}
+	return createSetupResultData(execution.contractCommand, execution.result);
 }
 
-function healthIcon(h: LinkHealth): string {
-  switch (h) {
-    case "ok": return `${c.green}✓${c.reset}`;
-    case "wrong": return `${c.yellow}⚠${c.reset}`;
-    case "missing": return `${c.red}✗${c.reset}`;
-    case "conflict": return `${c.red}◆${c.reset}`;
-    case "broken": return `${c.red}⚡${c.reset}`;
-  }
+function createSetupResultData(
+	command: SetupResultCommand,
+	result: SetupResult,
+) {
+	const { child_output: _childOutput, ...publicResult } = result;
+	return createCommandResultData<
+		SetupResult,
+		typeof setupContracts.status.resultContract
+	>(setupContracts[command], publicResult);
 }
 
-function healthLabel(h: LinkHealth): string {
-  switch (h) {
-    case "ok": return `${c.green}OK${c.reset}`;
-    case "wrong": return `${c.yellow}WRONG${c.reset}`;
-    case "missing": return `${c.red}MISSING${c.reset}`;
-    case "conflict": return `${c.red}CONFLICT${c.reset}`;
-    case "broken": return `${c.red}BROKEN${c.reset}`;
-  }
+function emitFailure(input: {
+	error: unknown;
+	argv: readonly string[];
+	stdout: CliWriter;
+	stderr: CliWriter;
+	runtime: SetupCliRuntime;
+	invocation?: ParsedSetupInvocation;
+	command?: SetupCommand;
+	runId?: string;
+	startedAt?: number;
+	code: "invalid_usage" | "invalid_target" | "runtime_failure";
+	exitCode: 1 | 2;
+}): number {
+	const json = input.invocation?.json ?? input.argv.includes("--json");
+	const runId = input.runId ?? parseCliDiagnosticArgv([]).options.runId;
+	const message = input.error instanceof Error ? input.error.message : String(input.error);
+	if (!json) {
+		const nextAction = input.code === "invalid_usage" || input.code === "invalid_target"
+			? "change_input"
+			: "inspect_diagnostics";
+		input.stderr.write(`${message}\nnext: ${nextAction}\n`);
+		return input.exitCode;
+	}
+	const command = input.invocation?.command ?? input.command ?? commandFromArgv(input.argv);
+	const publicMessage = input.code === "invalid_usage"
+		? "Setup command usage is invalid."
+		: input.code === "invalid_target"
+			? "The selected project target is invalid."
+			: message;
+	if (input.code === "runtime_failure") input.stderr.write(`${message}\n`);
+	const error = input.exitCode === 2
+		? createCliUsageRuntimeError({ run_id: runId, code: input.code, message: publicMessage })
+		: createCliRepairStateRuntimeError({ run_id: runId, code: input.code, message: publicMessage, exit_code: 1 });
+	const failureStation = input.code === "invalid_target" && input.invocation?.check
+		? `${command}.check_invalid_target`
+		: `${command}.${input.code}`;
+	const result = emptyResult(command, input.code, failureStation, input.invocation?.scope);
+	// Failed `commands` runs carry the generic setup.result contract, not setup.commands:
+	// the station catalog pins commands.invalid_usage to SETUP_RESULT_CONTRACT_ID.
+	const data = command === "commands"
+		? createCommandResultData<
+			SetupResult,
+			typeof setupContracts.status.resultContract
+		>(setupContracts.status, result)
+		: createSetupResultData(command, result);
+	const envelope = createCliRuntimeErrorEnvelope({ run_id: runId, process_exit_code: input.exitCode, error, data });
+	writeJsonEnvelope(input.stdout, envelope, {
+		runId,
+		durationMs: Math.max(0, input.runtime.now() - (input.startedAt ?? input.runtime.now())),
+	});
+	return input.exitCode;
 }
 
-function groupLabel(g: "claude" | "codex" | "config"): string {
-  switch (g) {
-    case "claude": return `${c.cyan}~/.claude${c.reset}`;
-    case "codex": return `${c.cyan}~/.codex${c.reset}`;
-    case "config": return `${c.cyan}~/.config${c.reset}`;
-  }
+function emptyResult(
+	command: SetupCommand,
+	code: string,
+	station = `${command}.${code}`,
+	scope: SetupResult["scope"] = "user",
+): SetupResult {
+	return {
+		command, scope, state: "failed",
+		findings: [], domains: [], operations: [], projection_targets: [],
+		counts: { catalog: 0, managed: 0, external: 0, planned: 0, blockers: 0 },
+		catalog_root: "unavailable", destination_roots: [],
+		station,
+		next_action: code === "invalid_usage" || code === "invalid_target" ? "change_input" : "inspect_diagnostics",
+	};
 }
 
-// ── Commands ────────────────────────────────────────────────────────────
-
-function cmdStatus(json: boolean, startMs: number) {
-  const results = inspectAll();
-  const ok = results.filter(r => r.health === "ok").length;
-  const problems = results.filter(r => r.health !== "ok");
-
-  if (json) {
-    emitEnvelope({
-      healthy: ok,
-      total: results.length,
-      problems: problems.map(p => ({
-        link: shortPath(p.spec.link),
-        target: shortPath(p.spec.target),
-        health: p.health,
-        detail: p.detail,
-        repair: repairCommand(p),
-      })),
-      next_safe_action: problems.length > 0 ? "setup sync" : null,
-      changed_state: null,
-    }, startMs);
-    process.exit(problems.length > 0 ? 1 : 0);
-    return;
-  }
-
-  // Human dashboard
-  console.log();
-  console.log(`${c.bold}  Claude Code Config${c.reset}  ${c.dim}${shortPath(REPO)}${c.reset}`);
-  console.log();
-
-  // Health bar
-  const barWidth = 20;
-  const filledWidth = Math.round((ok / results.length) * barWidth);
-  const barColor = ok === results.length ? c.bgGreen : problems.some(p => p.health === "conflict" || p.health === "broken") ? c.bgRed : c.bgYellow;
-  const bar = `${barColor}${" ".repeat(filledWidth)}${c.reset}${c.dim}${"░".repeat(barWidth - filledWidth)}${c.reset}`;
-  console.log(`  ${bar}  ${c.bold}${ok}${c.reset}${c.dim}/${results.length} healthy${c.reset}`);
-  console.log();
-
-  // Group display
-  const groups: Array<"claude" | "codex" | "config"> = ["claude", "codex", "config"];
-  for (const group of groups) {
-    const groupResults = results.filter(r => r.spec.group === group);
-    if (groupResults.length === 0) continue;
-
-    const allOk = groupResults.every(r => r.health === "ok");
-    if (allOk) {
-      console.log(`  ${groupLabel(group)}  ${c.green}${groupResults.length} links healthy${c.reset}`);
-    } else {
-      console.log(`  ${groupLabel(group)}`);
-      for (const r of groupResults) {
-        if (r.health === "ok") continue;
-        console.log(`    ${healthIcon(r.health)} ${r.spec.label}  ${c.dim}${r.health}${c.reset}`);
-      }
-    }
-  }
-
-  console.log();
-
-  // Next action
-  if (problems.length === 0) {
-    console.log(`  ${c.green}${c.bold}All good.${c.reset} ${c.dim}Nothing to do.${c.reset}`);
-  } else if (problems.every(p => p.health === "missing")) {
-    console.log(`  ${c.yellow}${c.bold}${problems.length} missing.${c.reset} Run ${c.cyan}setup sync${c.reset} to create them.`);
-  } else if (problems.some(p => p.health === "conflict")) {
-    console.log(`  ${c.red}${c.bold}Conflicts found.${c.reset} Run ${c.cyan}setup doctor${c.reset} to see what's blocking.`);
-  } else {
-    console.log(`  ${c.yellow}${c.bold}${problems.length} issue${problems.length > 1 ? "s" : ""}.${c.reset} Run ${c.cyan}setup doctor${c.reset} for details.`);
-  }
-  console.log();
-
-  process.exit(problems.length > 0 ? 1 : 0);
+function commandFromArgv(argv: readonly string[]): SetupCommand {
+	const candidate = argv[0] !== undefined && !argv[0].startsWith("-") ? argv[0] : undefined;
+	return candidate && SETUP_COMMANDS.includes(candidate as SetupCommand)
+		? candidate as SetupCommand
+		: "status";
 }
 
-function cmdDoctor(json: boolean, startMs: number) {
-  const results = inspectAll();
-  const problems = results.filter(r => r.health !== "ok");
-
-  if (json) {
-    emitEnvelope({
-      findings: problems.map(p => ({
-        link: shortPath(p.spec.link),
-        target: shortPath(p.spec.target),
-        health: p.health,
-        detail: p.detail,
-        why: whyItMatters(p),
-        repair: repairCommand(p),
-      })),
-      summary: problems.length === 0 ? "healthy" : `${problems.length} issue${problems.length > 1 ? "s" : ""} found`,
-      next_safe_action: problems.length > 0
-        ? problems.some(p => p.health === "conflict") ? "resolve conflicts manually, then run setup sync" : "setup sync"
-        : null,
-      changed_state: null,
-    }, startMs);
-    process.exit(problems.length > 0 ? 1 : 0);
-    return;
-  }
-
-  console.log();
-  console.log(`${c.bold}  Setup Doctor${c.reset}`);
-  console.log();
-
-  if (problems.length === 0) {
-    console.log(`  ${c.green}✓ No issues found.${c.reset} All ${results.length} links are healthy.`);
-    console.log();
-    process.exit(0);
-    return;
-  }
-
-  for (const p of problems) {
-    console.log(`  ${healthIcon(p.health)} ${c.bold}${shortPath(p.spec.link)}${c.reset}`);
-    console.log(`    ${c.dim}Expected:${c.reset} → ${shortPath(p.spec.target)}`);
-    if (p.detail) {
-      console.log(`    ${c.dim}Problem:${c.reset}  ${p.detail}`);
-    }
-    console.log(`    ${c.dim}Why:${c.reset}      ${whyItMatters(p)}`);
-    console.log(`    ${c.dim}Fix:${c.reset}      ${c.cyan}${repairCommand(p)}${c.reset}`);
-    console.log();
-  }
-
-  // Summary next action
-  const hasConflicts = problems.some(p => p.health === "conflict");
-  if (hasConflicts) {
-    console.log(`  ${c.yellow}${c.bold}Manual step needed:${c.reset} back up or remove the conflicting files above,`);
-    console.log(`  then run ${c.cyan}setup sync${c.reset} to create the correct links.`);
-  } else {
-    console.log(`  ${c.bold}Quick fix:${c.reset} run ${c.cyan}setup sync${c.reset} to fix all ${problems.length} issue${problems.length > 1 ? "s" : ""} at once.`);
-  }
-  console.log();
-
-  process.exit(1);
-}
-
-function cmdSyncCheck(json: boolean, startMs: number) {
-  const results = inspectAll();
-  const changes = results.filter(r => r.health !== "ok");
-
-  if (json) {
-    emitEnvelope({
-      sync_status: changes.length === 0 ? "clean" : "needs_sync",
-      changes: changes.map(ch => ({
-        action: ch.health === "missing" ? "create" : ch.health === "broken" ? "recreate" : ch.health === "wrong" ? "relink" : "blocked",
-        link: shortPath(ch.spec.link),
-        target: shortPath(ch.spec.target),
-        health: ch.health,
-        blocked: ch.health === "conflict",
-        detail: ch.detail,
-      })),
-      blocked: changes.some(ch => ch.health === "conflict"),
-      next_safe_action: changes.length === 0 ? null
-        : changes.some(ch => ch.health === "conflict") ? "resolve conflicts, then setup sync"
-        : "setup sync",
-      changed_state: null,
-    }, startMs);
-    process.exit(changes.length > 0 ? 1 : 0);
-    return;
-  }
-
-  console.log();
-  console.log(`${c.bold}  Sync Preview${c.reset}  ${c.dim}(dry run — no changes made)${c.reset}`);
-  console.log();
-
-  if (changes.length === 0) {
-    console.log(`  ${c.green}✓ Already in sync.${c.reset} Nothing to do.`);
-    console.log();
-    process.exit(0);
-    return;
-  }
-
-  const blocked = changes.filter(ch => ch.health === "conflict");
-  const actionable = changes.filter(ch => ch.health !== "conflict");
-
-  if (actionable.length > 0) {
-    console.log(`  ${c.bold}Would create/fix:${c.reset}`);
-    for (const ch of actionable) {
-      const action = ch.health === "missing" ? "create" : ch.health === "broken" ? "recreate" : "relink";
-      console.log(`    ${c.green}+${c.reset} ${shortPath(ch.spec.link)} → ${shortPath(ch.spec.target)}  ${c.dim}(${action})${c.reset}`);
-    }
-    console.log();
-  }
-
-  if (blocked.length > 0) {
-    console.log(`  ${c.red}${c.bold}Blocked:${c.reset}`);
-    for (const ch of blocked) {
-      console.log(`    ${c.red}◆${c.reset} ${shortPath(ch.spec.link)}  ${c.dim}${ch.detail}${c.reset}`);
-    }
-    console.log();
-    console.log(`  ${c.yellow}Remove the blocking files first, then re-run.${c.reset}`);
-  } else {
-    console.log(`  Run ${c.cyan}setup sync${c.reset} to apply these changes.`);
-  }
-
-  console.log();
-  process.exit(1);
-}
-
-function cmdHelp() {
-  console.log();
-  console.log(`${c.bold}  setup${c.reset} — manage your Claude Code Config install topology`);
-  console.log();
-  console.log(`  ${c.dim}This tool keeps your ~/.claude/ and ~/.codex/ symlinks pointed at`);
-  console.log(`  this repo. Think of it as "is my config wired up correctly?"${c.reset}`);
-  console.log();
-  console.log(`  ${c.bold}Commands${c.reset}`);
-  console.log();
-  console.log(`    ${c.cyan}setup${c.reset}              ${c.dim}Quick health dashboard — are my links OK?${c.reset}`);
-  console.log(`    ${c.cyan}setup doctor${c.reset}        ${c.dim}Diagnose problems with fix instructions${c.reset}`);
-  console.log(`    ${c.cyan}setup sync${c.reset}          ${c.dim}Create or fix all symlinks${c.reset}`);
-  console.log(`    ${c.cyan}setup sync --check${c.reset}  ${c.dim}Preview what sync would do (no changes)${c.reset}`);
-  console.log(`    ${c.cyan}setup unlink${c.reset}        ${c.dim}Remove all managed symlinks${c.reset}`);
-  console.log(`    ${c.cyan}setup help${c.reset}          ${c.dim}You're looking at it${c.reset}`);
-  console.log();
-  console.log(`  ${c.bold}Flags${c.reset}`);
-  console.log();
-  console.log(`    ${c.cyan}--json${c.reset}             ${c.dim}Structured output for scripts and agents${c.reset}`);
-  console.log(`    ${c.cyan}--verbose${c.reset}          ${c.dim}Show additional detail${c.reset}`);
-  console.log(`    ${c.cyan}--no-color${c.reset}         ${c.dim}Plain text (also: NO_COLOR=1)${c.reset}`);
-  console.log();
-  console.log(`  ${c.bold}What this manages${c.reset}`);
-  console.log();
-  console.log(`    ${c.dim}Claude:${c.reset}  CLAUDE.md, AGENTS.md, context/, rules/, commands/,`);
-  console.log(`             agents/, runbooks/, hooks/, hooks.json, settings.json, .mcp.json`);
-  console.log(`    ${c.dim}Codex:${c.reset}   AGENTS.md`);
-  console.log(`    ${c.dim}Config:${c.reset}  memory/`);
-  console.log();
-  console.log(`  ${c.bold}What this does NOT manage${c.reset}`);
-  console.log();
-  console.log(`    ${c.dim}Skills are managed by ${c.cyan}npx skills${c.reset}${c.dim} — this tool won't touch them.${c.reset}`);
-  console.log(`    ${c.dim}settings.local.json is machine-specific and stays gitignored.${c.reset}`);
-  console.log();
-  console.log(`  ${c.bold}Typical workflow${c.reset}`);
-  console.log();
-  console.log(`    ${c.dim}1.${c.reset} Clone this repo`);
-  console.log(`    ${c.dim}2.${c.reset} Run ${c.cyan}setup sync${c.reset}`);
-  console.log(`    ${c.dim}3.${c.reset} Run ${c.cyan}setup${c.reset} any time to check health`);
-  console.log(`    ${c.dim}4.${c.reset} Something broken? ${c.cyan}setup doctor${c.reset} tells you exactly what to do`);
-  console.log();
-}
-
-// ── Repair helpers ──────────────────────────────────────────────────────
-
-function repairCommand(s: LinkStatus): string {
-  switch (s.health) {
-    case "missing":
-      return `ln -s ${s.spec.target} ${s.spec.link}`;
-    case "wrong":
-    case "broken":
-      return `rm ${s.spec.link} && ln -s ${s.spec.target} ${s.spec.link}`;
-    case "conflict":
-      return `mv ${s.spec.link} ${s.spec.link}.bak && ln -s ${s.spec.target} ${s.spec.link}`;
-    default:
-      return "# no action needed";
-  }
-}
-
-function whyItMatters(s: LinkStatus): string {
-  const name = s.spec.label;
-  const group = s.spec.group;
-
-  if (group === "claude") {
-    if (name === "CLAUDE.md" || name === "AGENTS.md") return "Claude Code reads this at session start for instructions";
-    if (name === "context/") return "On-demand context docs loaded by @-references";
-    if (name === "rules/") return "Auto-applied rules that shape Claude's behavior";
-    if (name === "commands/") return "Slash commands available in Claude Code sessions";
-    if (name === "agents/") return "Agent definitions for subagent dispatch";
-    if (name === "runbooks/") return "Multi-step runbook workflows (e.g. issue-to-pr)";
-    if (name === "hooks/" || name === "hooks.json") return "Event hooks that run on tool calls and session events";
-    if (name === "settings.json") return "Permissions, model config, and feature flags";
-    if (name === ".mcp.json") return "MCP server configuration for external tools";
-  }
-  if (group === "codex") return "Codex reads this at startup for shared instructions";
-  if (group === "config") return "Persistent memory system across conversations";
-
-  return "Part of the install topology";
-}
-
-// ── Main ────────────────────────────────────────────────────────────────
-
-const args = process.argv.slice(2);
-const jsonFlag = args.includes("--json");
-const verboseFlag = args.includes("--verbose");
-const filteredArgs = args.filter(a => a !== "--json" && a !== "--no-color" && a !== "--verbose");
-const command = filteredArgs[0] ?? "";
-const startMs = performance.now();
-
-if (args.includes("--no-color")) {
-  for (const k of Object.keys(c)) {
-    (c as any)[k] = "";
-  }
-}
-
-switch (command) {
-  case "":
-    cmdStatus(jsonFlag, startMs);
-    break;
-  case "doctor":
-    cmdDoctor(jsonFlag, startMs);
-    break;
-  case "sync":
-    if (filteredArgs.includes("--check")) {
-      cmdSyncCheck(jsonFlag, startMs);
-    } else {
-      // sync write path — not implemented in prototype
-      console.log(`${c.yellow}sync write not implemented in prototype — use sync --check to preview${c.reset}`);
-      process.exit(2);
-    }
-    break;
-  case "unlink":
-    console.log(`${c.yellow}unlink not implemented in prototype${c.reset}`);
-    process.exit(2);
-    break;
-  case "help":
-  case "--help":
-  case "-h":
-    cmdHelp();
-    break;
-  default:
-    console.error(`${c.red}Unknown command: ${command}${c.reset}`);
-    console.error(`Run ${c.cyan}setup help${c.reset} for usage.`);
-    process.exit(2);
-}
+if (import.meta.main) process.exitCode = await main(process.argv.slice(2));

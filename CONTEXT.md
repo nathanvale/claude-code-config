@@ -47,6 +47,10 @@ _Avoid_: frontmatter name, provider id, filesystem path
 Generated agent-runtime skill location derived from a Skill Catalog. It is not an authored source.
 _Avoid_: target folder, provider root, copied skills
 
+**Setup CLI**:
+First-party owner for user runtime wiring and direct live skill projection from a selected Skill Catalog. Third-party acquisition remains with `bunx skills`.
+_Avoid_: installer script, skill package manager, copied-skill deployer, retired projector
+
 ### Cross-cutting governance
 **Tracker owner binding**:
 The owner-path-scoped association between a durable work owner and the external task tracker that runtime-backed task commands may read or mutate. Owners may be repo roots, workspace packages, skills, or other durable owner paths.

@@ -15,7 +15,7 @@ the linked artifact owns the prose.
 
 The v2 tree is installed via symlink at
 `~/.claude/runbooks/issue-to-pr-v2/`, which resolves through
-`~/.claude/runbooks → ${REPO}/runbooks` (see `install.sh`). Once a
+`~/.claude/runbooks → ${REPO}/runbooks` (managed by `./setup sync`). Once a
 ledger exists, `cli.ts state <ledger-path> --json` reports
 `installed_artifact_presence.all_present` so the orchestrator can fail
 closed on a partial install; the U6 contract for that envelope lives in

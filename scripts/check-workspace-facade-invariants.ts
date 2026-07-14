@@ -1041,6 +1041,7 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 	const packageJson = workspacePackage.packageJson;
 	const bins = packageBins(packageJson);
+	const localScripts = discoverLocalScripts(packageJson);
 
 	if (Object.keys(bins).length === 0) {
 		continue;
@@ -1049,6 +1050,20 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 	const binsByName = packageBins(packageJson);
 
 	for (const [binName, binTarget] of Object.entries(bins)) {
+		if (allowsSourceLinkedBin(packageJson)) {
+			const scriptTarget = localScripts[binName];
+			if (!scriptTarget) {
+				findings.push({
+					path: `${packagePath}/package.json`,
+					message: `Source-linked bin ${binName} must have a same-name direct package script.`,
+				});
+			} else if (normalizedBinTarget(scriptTarget) !== normalizedBinTarget(binTarget)) {
+				findings.push({
+					path: `${packagePath}/package.json`,
+					message: `Source-linked bin ${binName} and its package script must target the same source file.`,
+				});
+			}
+		}
 		if (binsByName[binName] !== binTarget) {
 			findings.push({
 				path: `${packagePath}/package.json`,
