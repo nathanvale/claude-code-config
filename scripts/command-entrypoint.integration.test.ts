@@ -49,6 +49,10 @@ import {
 	warmChromeContractEntries,
 	warmChromeContracts,
 } from "../runtime/warm-chrome/src/command-contract.ts";
+import {
+	browserConnectContractEntries,
+	browserConnectContracts,
+} from "../runtime/browser-connect/src/command-contract.ts";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -108,6 +112,7 @@ const packageRoots = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
 	agentSkills: join(repoRoot, "runtime/agent-skills"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome"),
+	browserConnect: join(repoRoot, "runtime/browser-connect"),
 } as const;
 
 /**
@@ -118,6 +123,7 @@ const sourceEntries = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
 	agentSkills: join(repoRoot, "runtime/agent-skills/src/cli.ts"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome/src/cli.ts"),
+	browserConnect: join(repoRoot, "runtime/browser-connect/src/cli.ts"),
 } as const;
 
 /**
@@ -128,6 +134,7 @@ const filterPackageNames = {
 	agentWorktree: "agent-worktree",
 	agentSkills: "agent-skills",
 	warmChrome: "@side-quest/warm-chrome",
+	browserConnect: "@side-quest/browser-connect",
 } as const;
 
 /**
@@ -421,6 +428,19 @@ function runWarmChromeSource(
 	);
 }
 
+function runBrowserConnectSource(
+	args: readonly string[],
+	label: string,
+): Promise<RunResult> {
+	return runCommand(
+		runners.source({
+			sourcePath: sourceEntries.browserConnect,
+			args,
+			label,
+		}),
+	);
+}
+
 function expectAgentWorktreeRefFound(
 	result: RunResult,
 	ref: { kind: string; id: string },
@@ -636,6 +656,9 @@ const discoveredAgentSkillsCommandIds = agentSkillsContractEntries
 const discoveredWarmChromeCommandIds = warmChromeContractEntries
 	.map(([command]) => command)
 	.sort();
+const discoveredBrowserConnectCommandIds = browserConnectContractEntries
+	.map(([command]) => command)
+	.sort();
 
 /**
  * Entrypoint scripts derived from the owning package metadata.
@@ -646,6 +669,9 @@ const wtPackageScripts = readPackageScripts(packageRoots.worktree);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
 const agentSkillsPackageScripts = readPackageScripts(packageRoots.agentSkills);
 const warmChromePackageScripts = readPackageScripts(packageRoots.warmChrome);
+const browserConnectPackageScripts = readPackageScripts(
+	packageRoots.browserConnect,
+);
 /**
  * First rendered usage line for a contract.
  *
@@ -693,6 +719,10 @@ const agentSkillsTopLevelUsageLine = firstUsageLine(agentSkillsContracts.status)
 // warm-chrome renders a package-owned top-level help header, not a contract
 // usage line; per-command help renders the contract usage.
 const warmChromeTopLevelUsageLine = "Usage: warm-chrome <command> [flags]";
+// browser-connect renders a package-owned top-level help header (cli.ts
+// renderHelp); per-command help renders the contract usage line.
+const browserConnectTopLevelUsageLine =
+	"Usage: browser-connect [command] [flags]";
 describe("command entrypoint integration: mechanical discovery", () => {
 	test("derives the exact WorkTree command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
@@ -731,11 +761,20 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("package scripts expose the worktree, agent-worktree, agent-skills, and warm-chrome entrypoint scripts", async () => {
+	test("derives the exact browser-connect command id set from exported contracts", async () => {
+		expect(discoveredBrowserConnectCommandIds).toEqual(
+			["check", "connect", "dashboard", "run"],
+		);
+	});
+
+	test("package scripts expose the worktree, agent-worktree, agent-skills, warm-chrome, and browser-connect entrypoint scripts", async () => {
 		expect(Object.keys(wtPackageScripts)).toContain("worktree");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
 		expect(Object.keys(agentSkillsPackageScripts)).toContain("agent-skills");
 		expect(Object.keys(warmChromePackageScripts)).toContain("warm-chrome");
+		expect(Object.keys(browserConnectPackageScripts)).toContain(
+			"browser-connect",
+		);
 	});
 });
 
@@ -838,6 +877,38 @@ describe("command entrypoint integration: help contracts", () => {
 				contracts: warmChromeContracts,
 				packageRoot: packageRoots.warmChrome,
 				script: "warm-chrome",
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"browser-connect top-level help renders the package-owned usage header",
+		async () => {
+			const result = await runCommand(
+				runners.packageCwd({
+					packageRoot: packageRoots.browserConnect,
+					script: "browser-connect",
+					args: ["--help"],
+					label: "browser-connect --help (package-cwd)",
+				}),
+			);
+			expect(result.exitCode, describeRun(result)).toBe(0);
+			expect(result.stdout, describeRun(result)).toContain(
+				browserConnectTopLevelUsageLine,
+			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"every discovered browser-connect command help renders its first contract usage line",
+		async () => {
+			await expectDiscoveredCommandHelp({
+				commandIds: discoveredBrowserConnectCommandIds,
+				contracts: browserConnectContracts,
+				packageRoot: packageRoots.browserConnect,
+				script: "browser-connect",
 			});
 		},
 		TEST_TIMEOUT_MS,
@@ -1327,6 +1398,115 @@ describe("command entrypoint integration: help contracts", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"browser-connect source entry supports --version and top-level help",
+		async () => {
+			const version = await runBrowserConnectSource(
+				["--version"],
+				"browser-connect source --version",
+			);
+			expect(version.exitCode, describeRun(version)).toBe(0);
+			expect(version.stdout, describeRun(version)).toContain(
+				"browser-connect 0.1.0",
+			);
+
+			const help = await runBrowserConnectSource(
+				["--help"],
+				"browser-connect source --help",
+			);
+			expect(help.exitCode, describeRun(help)).toBe(0);
+			expect(help.stdout, describeRun(help)).toContain(
+				browserConnectTopLevelUsageLine,
+			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"browser-connect source entry preserves the runtime JSON command matrix",
+		async () => {
+			// Hermetic probes only: every row resolves at the parser or the
+			// pre-environment gate, so the gate never depends on local Chrome state
+			// (the verified/foreign environment stations are proven package-locally
+			// and via the live smoke, not here).
+
+			// Bare invocation → the read-only dashboard projection (R15): ok
+			// envelope carrying the browser-connect result contract, no environment
+			// prove/launch.
+			const dashboard = await runBrowserConnectSource(
+				["--json", "--run-id", "root-integration"],
+				"browser-connect source dashboard --json",
+			);
+			const dashboardData = expectOkEnvelope(
+				dashboard,
+				"browser-connect.verified-handoff",
+			);
+			expect(dashboardData.outcome, describeRun(dashboard)).toBe("dashboard");
+
+			// Unknown command → usage rejection (exit 2, usage_invalid).
+			const invalid = await runBrowserConnectSource(
+				["definitely-not-a-command", "--json"],
+				"browser-connect source invalid command",
+			);
+			expect(invalid.exitCode, describeRun(invalid)).toBe(2);
+			const invalidEnvelope = parseEnvelope(invalid);
+			expect(invalidEnvelope.status, describeRun(invalid)).toBe("error");
+			expect(
+				(invalidEnvelope.error as Record<string, unknown> | undefined)?.code,
+				describeRun(invalid),
+			).toBe("usage_invalid");
+			expect(
+				envelopeData(invalidEnvelope, invalid).contract_id,
+				describeRun(invalid),
+			).toBe("browser-connect.verified-handoff");
+
+			// Unknown adapter → usage-class rejection BEFORE any environment work
+			// (R7): exit 2, adapter_unknown, list_registered_adapters affordance.
+			const adapterUnknown = await runBrowserConnectSource(
+				["connect", "no-such-adapter", "--json", "--run-id", "root-integration"],
+				"browser-connect source connect adapter-unknown",
+			);
+			expect(adapterUnknown.exitCode, describeRun(adapterUnknown)).toBe(2);
+			const adapterUnknownEnvelope = parseEnvelope(adapterUnknown);
+			expect(
+				(adapterUnknownEnvelope.error as Record<string, unknown> | undefined)
+					?.code,
+				describeRun(adapterUnknown),
+			).toBe("adapter_unknown");
+			expect(
+				(adapterUnknownEnvelope.continuation as Record<string, unknown> | undefined)
+					?.next_action_id,
+				describeRun(adapterUnknown),
+			).toBe("list_registered_adapters");
+
+			// run with no `--` separator → exit 2, missing_separator, emitted on
+			// STDERR (KTD5: stdout belongs to the wrapped command end-to-end).
+			const missingSeparator = await runBrowserConnectSource(
+				["run", "agent-browser", "--run-id", "root-integration"],
+				"browser-connect source run missing separator",
+			);
+			expect(missingSeparator.exitCode, describeRun(missingSeparator)).toBe(2);
+			expect(missingSeparator.stdout, describeRun(missingSeparator)).toBe("");
+			const runStderrLine = missingSeparator.stderr
+				.trim()
+				.split("\n")
+				.filter((line) => line.startsWith("{"))
+				.at(-1);
+			if (!runStderrLine) {
+				throw new Error(
+					`Expected a JSON envelope on stderr:\n${describeRun(missingSeparator)}`,
+				);
+			}
+			const runEnvelope = JSON.parse(runStderrLine) as Record<string, unknown>;
+			expect(runEnvelope.status, describeRun(missingSeparator)).toBe("error");
+			expect(
+				(runEnvelope.error as Record<string, unknown> | undefined)?.code,
+				describeRun(missingSeparator),
+			).toBe("missing_separator");
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
 
 describe("command entrypoint integration: runtime json", () => {
@@ -1369,6 +1549,15 @@ describe("command entrypoint integration: runtime json", () => {
 						label: "warm-chrome --version (package-cwd)",
 					}),
 					substring: "warm-chrome 0.1.0",
+				},
+				{
+					command: runners.packageCwd({
+						packageRoot: packageRoots.browserConnect,
+						script: "browser-connect",
+						args: ["--version"],
+						label: "browser-connect --version (package-cwd)",
+					}),
+					substring: "browser-connect 0.1.0",
 				},
 			];
 
@@ -1414,6 +1603,14 @@ describe("command entrypoint integration: runtime json", () => {
 						packageName: filterPackageNames.warmChrome,
 						script: "warm-chrome",
 						label: "warm-chrome --version (workspace-filter)",
+					}),
+					substring: "0.1.0",
+				},
+				{
+					command: runners.workspaceFilter({
+						packageName: filterPackageNames.browserConnect,
+						script: "browser-connect",
+						label: "browser-connect --version (workspace-filter)",
 					}),
 					substring: "0.1.0",
 				},

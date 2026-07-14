@@ -22,6 +22,7 @@
 		"@side-quest/warm-chrome": "workspace:*"
 	},
 	"devDependencies": {
+		"@side-quest/cli-test-fixtures": "workspace:*",
 		"@types/bun": "catalog:",
 		"typescript": "catalog:"
 	}
