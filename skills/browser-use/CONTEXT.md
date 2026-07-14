@@ -31,8 +31,8 @@ _Avoid_: facade research schema, hint metadata, docs-only recovery
 
 ### Browser entry and adapters
 **browser-use**:
-The browser-driving capability. It owns all browser entry — open, reuse, attach, repair, adapter policy, and capability-routed adapter selection — plus Warm Chrome, inspection, navigation, clicking, filling, and live browser control. It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge.
-_Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill
+The browser-driving capability. It owns browser operational policy — adapter policy, capability-routed adapter selection, inspection, navigation, clicking, filling, and live browser control — and delegates the proven *connection* (prove Agent Chrome, attach an adapter) to `browser-connect` (`runtime/browser-connect`). It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge, and it no longer owns browser entry outright — that connection guarantee is browser-connect's.
+_Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill, owns all browser entry
 
 **Warm Chrome**:
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
@@ -66,8 +66,8 @@ A scoped browser objective that `browser-use` can route while its assumptions re
 _Avoid_: browser task, action window, runbook step, whole request
 
 **Browser Adapter**:
-A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
-_Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
+Within `browser-use`, a consumer of a verified attachment: a mechanism `browser-use` operates against a proven browser once browser-connect has attached it — `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge, and they never find Chrome themselves. `puppeteer-core` is deterministic replay detail, not public adapter name. The canonical environment-agnostic definition (a tool that attaches to a proven browser environment via a declared route) is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
+_Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter
 
 **Browser Adapter Map**:
 A local `browser-use` reference for one Browser Adapter that maps Browser Adapter Proof or Router recovery vocabulary to next safe actions, adapter-specific inspection, and operator repair commands. Required sections are `Owners`, `Rules`, `Recovery Map`, and `Verify`; adapter-specific sections stay optional. It is model-readable operational guidance, not a runtime contract or local `docs_url` target.
@@ -78,7 +78,8 @@ Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser A
 _Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
 
 **Browser Entry Handoff**:
-A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure.
+A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure. It is the failure-direction mirror of browser-connect's success-direction **Verified Handoff Envelope** (a proven connection handed forward to a consumer): the Browser Entry Handoff hands an *unready* state back; the Verified Handoff Envelope hands a *proven* connection forward. Both names live; do not conflate them.
+_Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure
 _Avoid_: self-repair, direct browser launch, adapter fallback, operator stop
 
 ### Architecture patterns (pressure-earned)

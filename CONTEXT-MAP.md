@@ -6,6 +6,7 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 
 - [Root — Claude Code Config](./CONTEXT.md) — cross-cutting agent-config, startup, governance, and CLI-design vocabulary only.
 - [Browser Use](./skills/browser-use/CONTEXT.md) — Warm Chrome, Browser Adapters, the Router, durable browser knowledge, playback modes.
+- [Browser Connect](./runtime/browser-connect/CONTEXT.md) — environment × route × adapter connection model: Agent Chrome, Human Chrome, Browser Adapter (canonical), Verified Handoff Envelope, proof-gated attachment.
 - [One Password](./skills/one-password/CONTEXT.md) — safe `op` secret access: service-account paths, secret reference mappings, materialized adapters.
 - [Prompt System Workflow](./skills/prompt-system-workflow/CONTEXT.md) — startup-instruction authoring shape, topology helper, setup CLI, install artifacts.
 - [Issue to PR](./runbooks/issue-to-pr-v2/CONTEXT.md) — helper contract, ledger lifecycle, workflow-learning scan, scaffold pointers.
@@ -18,6 +19,7 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 
 ## Relationships
 
+- **Browser Use → Browser Connect**: browser-use owns browser *operational* policy and delegates the proven *connection* (prove Agent Chrome, attach an adapter) to browser-connect. The canonical **Browser Adapter** definition lives in Browser Connect; browser-use keeps a consumer view. **Verified Handoff Envelope** (Browser Connect, success-direction) and **Browser Entry Handoff** (Browser Use, failure-direction) are deliberate mirrors — both live, never conflated.
 - **Browser Use → One Password**: an Auth Pointer is browser-owned; `one-password` only resolves it at runtime, never owns it.
 - **Issue to PR → Root**: `Implementation slice` is a shared term kept at root; the runbook context reuses it without redefining.
 - **Skill Author → all skill contexts**: owns the reusable authoring vocabulary the others build on; domain-specific skills keep their own nearest `CONTEXT.md`.

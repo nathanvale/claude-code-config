@@ -43,7 +43,12 @@ _Avoid example_: "The adapter defaults to `:9222`, so no route is needed."
 The success-direction result: a proven connection handed to a consumer. It
 carries the verified endpoint evidence from the environment proof plus the
 attachment outcome — evidence a consumer can act on, not permission to guess.
-_Avoid_: log line, best-effort status, implicit success
+It is the success-direction mirror of browser-use's failure-direction
+**Browser Entry Handoff** (a request back to a browser owner when the
+environment is not ready): the envelope hands a *proven* connection forward,
+the Browser Entry Handoff hands an *unready* state back. Both names live; do
+not conflate them.
+_Avoid_: log line, best-effort status, implicit success, Browser Entry Handoff
 _Developer example_: "The consumer takes the endpoint from the Verified
 Handoff Envelope verbatim."
 _Avoid example_: "Exit 0 means connected; the consumer can derive the

@@ -18,13 +18,47 @@ Its interface will be:
 
 ## Status
 
-U1 scaffold. `src/cli.ts` is a stub `main` that exits 0. The dispatcher,
-command contract, and station catalog land in later units; the Module Map
-below grows with them.
+Slice one complete: explicit-CDP door to Agent Chrome. `check`, `connect`,
+bare-no-arg `dashboard`, and `run <adapter> -- <cmd>` are implemented and
+proven through the 19-station Branch Station catalog. Slices two (Human
+Chrome via UI-consent) and three (extension door) are deferred per the plan.
 
 ## Module Map
 
-- `src/cli.ts`: stub entrypoint; exports `main`, exits 0 when run.
+- `src/cli.ts`: facade-backed dispatcher; exit policy; `check`/`connect`/
+  dashboard wiring; the shared `runConnectGate`.
+- `src/command-contract.ts`: facade command contract for the four commands.
+- `src/branch-station-catalog.ts`: the authoritative 19-station catalog.
+- `src/model.ts`: envelope schema, failure classes, affordance catalog,
+  redaction chokepoint.
+- `src/environment.ts`: warm-chrome in-process environment gateway.
+- `src/compatibility.ts`: pure route × environment compatibility.
+- `src/dashboard.ts`: stateless read-only registry projection.
+- `src/run-exec.ts`: `--` split, endpoint injection, spawn-and-wait,
+  passthrough.
+- `src/adapters/`: registry plus the two Adapter Definitions
+  (`chrome-devtools-mcp`, `agent-browser`).
+
+## Safety Invariants (R11–R14)
+
+These are the product-absorbed browser-access invariants. R11–R12 and R14 are
+enforced in code (fail-closed exit-20 gateway, endpoints only from proof
+envelopes, redaction chokepoint). R13 has no process-cleanup surface in v1, so
+it holds vacuously in code and lives here as behavioral guidance — this
+package is the named successor for the corresponding `rules/browser-access.md`
+clause when that rule retires:
+
+- **R11 — Fail closed.** On any proof failure, stop with one next safe action.
+  Never fall back to a cold or headless browser, never launch Chrome for
+  Testing, never retry against a convention port.
+- **R12 — No convention endpoints.** Endpoints come only from proof envelopes;
+  `127.0.0.1:9222` is never assumed.
+- **R13 — Never mass-kill by port.** Reap stray adapters by process pattern
+  (`pkill -f '@playwright/mcp'`), not by assuming what holds a port. Never
+  terminate a listener `warm-chrome` did not verify.
+- **R14 — Agent Chrome is auth-bearing.** Cookies, secrets, auth-bearing URLs,
+  and profile contents stay out of envelopes, diagnostics, and logs —
+  including passed-through wrapper arguments.
 
 ## Maintainer Surfaces
 
