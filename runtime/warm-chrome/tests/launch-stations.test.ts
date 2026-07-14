@@ -169,6 +169,7 @@ type Fixture = {
 		writeTextFile: number;
 		chmod: number;
 		ensureProfileDir: number;
+		readDevToolsActivePort: number;
 	};
 	/** Virtual milliseconds consumed through runtime.now()/runtime.sleep. */
 	elapsedMs: () => number;
@@ -197,6 +198,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 		writeTextFile: 0,
 		chmod: 0,
 		ensureProfileDir: 0,
+		readDevToolsActivePort: 0,
 	};
 	const toScript = <T,>(value: Script<T>): readonly T[] =>
 		(Array.isArray(value) ? value : [value]) as readonly T[];
@@ -322,6 +324,7 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 			return entry;
 		},
 		readDevToolsActivePort: async () => {
+			calls.readDevToolsActivePort += 1;
 			const step =
 				activePortScript[
 					Math.min(activePortCursor, activePortScript.length - 1)
@@ -956,33 +959,6 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		expect(fixture.calls.killCalls).toBe(1);
 	});
 
-	// A mid-startup rival leaves a stale DevToolsActivePort (mismatched wsPath)
-	// until its own startup settles. The winner's first post-spawn proof reads
-	// invalid_cdp/endpoint_id_mismatch; the readiness loop must keep polling
-	// (transient contention, not a terminal failure) so the race can resolve
-	// once the file settles. Observed on real Chrome: without this, both racers
-	// landed spawned_unverified and needed a separate repair to converge.
-	test("transient stale DevToolsActivePort during startup: the poll recovers and lands launched", async () => {
-		const fixture = launchFixture({
-			// First read: a stale wsPath from the retired loser (mismatch). Second
-			// read onward: the file settled (absent), so the proof verifies.
-			activePort: [{ port: "9222", wsPath: "/devtools/browser/stale-token" }, null],
-		});
-		const argv = ["launch", "--run-id", "stale-recover"] as const;
-		const run = await runWarmChrome(argv, fixture);
-
-		expect(run.exitCode).toBe(0);
-		assertStationEnvelope(
-			stationById("launch.launched"),
-			toProcessResult("launch.launched", argv, run),
-		);
-		const parsed = parseEnvelope(run);
-		expect(parsed.data?.launch_performed).toBe(true);
-		// The loop re-entered the proof at least twice: once on the stale read,
-		// then again after it settled.
-		expect(fixture.calls.fetchJsonUrls.length).toBeGreaterThanOrEqual(2);
-	});
-
 	test("transient listener disappearance during startup keeps polling and recovers", async () => {
 		const fixture = launchFixture({
 			spawn: (input, controls) => {
@@ -1023,23 +999,25 @@ describe("warm-chrome launch race policy (U6 R10)", () => {
 		expect(fixture.calls.fetchJsonUrls.length).toBeGreaterThanOrEqual(2);
 	});
 
-	// If the mismatch never settles within the readiness budget, the launch
-	// still fails closed at spawned_unverified — carrying the last transient
-	// reason so the agent can see it was a contention timeout, not a clean pass.
-	test("persistent endpoint_id_mismatch past the budget lands spawned_unverified naming the transient reason", async () => {
+	// Chrome only writes DevToolsActivePort for an ephemeral port. A persistent
+	// file beside a fixed-port launch is stale hint material, not browser identity;
+	// the live HTTP, process, websocket, CDP, and profile proof remains authority.
+	test("persistent stale DevToolsActivePort does not reject a fixed-port launch", async () => {
 		const fixture = launchFixture({
 			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
 		});
-		const argv = ["launch", "--run-id", "stale-timeout"] as const;
+		const argv = ["launch", "--run-id", "stale-fixed-port"] as const;
 		const run = await runWarmChrome(argv, fixture);
 
-		const envelope = expectSpawnedUnverified(
-			run,
-			"readiness_timeout",
-			"persistent mismatch",
+		expect(run.exitCode).toBe(0);
+		assertStationEnvelope(
+			stationById("launch.launched"),
+			toProcessResult("launch.launched", argv, run),
 		);
-		expect(envelope.data?.last_check_reason).toBe("endpoint_id_mismatch");
-		expect(fixture.elapsedMs()).toBeGreaterThanOrEqual(
+		const envelope = parseEnvelope(run);
+		expect(envelope.data?.launch_performed).toBe(true);
+		expect(fixture.calls.readDevToolsActivePort).toBe(0);
+		expect(fixture.elapsedMs()).toBeLessThan(
 			WARM_CHROME_LAUNCH_READINESS_BUDGET_MS,
 		);
 	});

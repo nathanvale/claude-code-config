@@ -199,6 +199,15 @@ a foreign instance), `listener_uninspectable`; `invalid_cdp` ← `ws_only_no_htt
 Full provenance in the research capture and the implementation plan
 `docs/plans/2026-07-03-001-feat-warm-chrome-runtime-package-plan.md`.
 
+**Amendment 2026-07-14: fixed-port hint correction (#232).** Chrome writes
+`DevToolsActivePort` when an ephemeral port (`--remote-debugging-port=0`) needs
+bootstrap discovery; it does not refresh the file for Warm Chrome's fixed-port
+launch. A persisted endpoint id can therefore describe an older browser while
+the live listener, `/json/version`, browser websocket, CDP round-trips, and
+profile all verify. Retire `endpoint_id_mismatch` from the check reason union.
+Treat the file as ADR 0009 specifies: optional adapter hint material that
+`repair` may reconcile after live proof, never browser-entry identity.
+
 **Amendment 2026-07-03 (implementation closure): reason unions as landed in
 code.** The TDD port (U5–U7) finalized the seeded vocabulary with additions
 this log had not yet recorded: `endpoint_unreachable` ← `no_listener`;

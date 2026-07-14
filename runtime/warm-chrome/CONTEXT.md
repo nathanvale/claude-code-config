@@ -76,9 +76,10 @@ _Avoid example_: "Add a new station for every listener failure string."
 **Proof chain**:
 The single `check`-owned verification path in `src/proof.ts` every command
 shares: loopback assertion, bounded attach probe, listener identity by binary
-path, default-profile foreignness, payload/websocket validation, endpoint-id
-cross-check, CDP round-trips, profile posture, final listener consistency.
-`launch` and `repair` re-enter it rather than owning probes.
+path, default-profile foreignness, payload/websocket validation, CDP
+round-trips, profile posture, final listener consistency. `DevToolsActivePort`
+is adapter hint material, never browser identity. `launch` and `repair` re-enter
+the proof rather than duplicating it.
 _Avoid_: per-command duplicate checks, banner trust, argv trust
 _Developer example_: "Launch should call the proof chain after spawn instead
 of reimplementing listener identity checks."

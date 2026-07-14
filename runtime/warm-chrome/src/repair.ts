@@ -323,9 +323,9 @@ export function createRepairCommandHandler(
 			}
 		}
 
-		// 5. Re-prove. A failure here is a check-owned station re-emitted by
-		// reference — except stale DevToolsActivePort content, the one proof
-		// failure repair owns fixing (ported: preflight DevToolsActivePort write).
+		// 5. Re-prove from live runtime evidence. Any failure is a check-owned
+		// station re-emitted by reference; DevToolsActivePort is hint material and
+		// cannot veto browser identity.
 		const proofInput: WarmChromeCheckProofInput = {
 			command: invocation.displayCommand,
 			endpoint: invocation.endpoint,
@@ -338,102 +338,92 @@ export function createRepairCommandHandler(
 		try {
 			proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
 		} catch (error) {
-			if (!mutationsAllowed || !isStaleDevToolsActivePort(error)) {
-				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
-					throw withRepairMutationData(error, mutations);
-				}
-				throw error;
+			if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
+				throw withRepairMutationData(error, mutations);
 			}
-			const liveWsPath = await readLiveBrowserWsPath(
-				runtime,
-				invocation.endpoint,
+			throw error;
+		}
+
+		// 6. Reconcile stale adapter hint material only after the live proof passes.
+		// Fixed-port Chrome does not refresh DevToolsActivePort, so repair owns this
+		// optional hygiene without making the file browser-entry authority.
+		const liveWsPath = new URL(proof.webSocketDebuggerUrl).pathname;
+		const shouldRepairActivePort =
+			mutationsAllowed &&
+			profile !== null &&
+			(await devToolsActivePortNeedsRepair(
+				deps,
+				profile.realPath,
 				invocation.port,
-			);
-			if (liveWsPath === null) {
-				// The original stale-port verdict re-throws, but earlier mutations
-				// (chmod, dir creation) already landed and must stay on the envelope.
-				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
-					throw withRepairMutationData(error, mutations);
-				}
-				throw error;
-			}
+				liveWsPath,
+			));
+		if (shouldRepairActivePort && profile !== null) {
 			if (
-				profile === null ||
-				!(await devToolsActivePortWriteTargetStillMatches({
+				await devToolsActivePortWriteTargetStillMatches({
 					runtime,
 					port: invocation.port,
 					expectedProfile: profile,
 					context,
 					mutations,
-				}))
+				})
 			) {
-				// The original stale-port verdict re-throws, but earlier mutations
-				// (chmod, dir creation) already landed and must stay on the envelope.
-				if (error instanceof WarmChromeRuntimeError && mutations.length > 0) {
-					throw withRepairMutationData(error, mutations);
+				// Ownership gate for the write, mirroring the chmod path: that gate only
+				// fires when mode !== 700, so a profile already at 700 but owned by
+				// another user would otherwise reach this write.
+				if (profile.owner !== (await runtime.currentUser())) {
+					throw unrepairableError(
+						"profile_not_owned",
+						"DevToolsActivePort repair requires a profile owned by the current user.",
+						context,
+						{
+							profile_dir: profile.realPath,
+							...repairMutationData(mutations),
+						},
+					);
 				}
-				throw error;
-			}
-			// Ownership gate for the write, mirroring the chmod path: that gate only
-			// fires when mode !== 700, so a profile already at 700 but owned by
-			// another user would otherwise reach this write. Never rewrite proof
-			// state inside a profile we do not own.
-			if (profile.owner !== (await runtime.currentUser())) {
-				throw unrepairableError(
-					"profile_not_owned",
-					"DevToolsActivePort repair requires a profile owned by the current user.",
-					context,
-					{
-						profile_dir: profile.realPath,
-						...repairMutationData(mutations),
-					},
-				);
-			}
-			const activePortPath = join(profile.realPath, "DevToolsActivePort");
-			// Never-follow-symlink guard: chmod 0o700 does not remove an already
-			// planted symlink, and the seam's writeTextFile follows one — so the
-			// injected lstat probe refuses first. (lstat-then-write leaves a
-			// narrow TOCTOU window; closing it needs an O_NOFOLLOW/tmp-rename
-			// write primitive on the seam — deferred, seam is U4-owned.)
-			if ((await deps.lstatFileKind(activePortPath)) === "symlink") {
-				throw unrepairableError(
-					"devtools_active_port_symlink",
-					"A symlink is planted at DevToolsActivePort; repair refuses to follow it and did not write.",
-					context,
-					{
-						devtools_active_port_path: activePortPath,
-						...repairMutationData(mutations),
-					},
-				);
-			}
-			try {
-				await runtime.writeTextFile(
-					activePortPath,
-					`${invocation.port}\n${liveWsPath}\n`,
-				);
-			} catch {
-				throw unrepairableError(
-					"devtools_active_port_unwritable",
-					"DevToolsActivePort could not be rewritten.",
-					context,
-					{
-						devtools_active_port_path: activePortPath,
-						...repairMutationData(mutations),
-					},
-				);
-			}
-			mutations.push({ id: "devtools_active_port", path: activePortPath });
-			try {
-				proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
-			} catch (verifyError) {
-				if (verifyError instanceof WarmChromeRuntimeError) {
-					throw withRepairMutationData(verifyError, mutations);
+				const activePortPath = join(profile.realPath, "DevToolsActivePort");
+				// Never-follow-symlink guard: chmod 0o700 does not remove an already
+				// planted symlink, and the seam's writeTextFile follows one.
+				if ((await deps.lstatFileKind(activePortPath)) === "symlink") {
+					throw unrepairableError(
+						"devtools_active_port_symlink",
+						"A symlink is planted at DevToolsActivePort; repair refuses to follow it and did not write.",
+						context,
+						{
+							devtools_active_port_path: activePortPath,
+							...repairMutationData(mutations),
+						},
+					);
 				}
-				throw verifyError;
+				try {
+					await runtime.writeTextFile(
+						activePortPath,
+						`${invocation.port}\n${liveWsPath}\n`,
+					);
+				} catch {
+					throw unrepairableError(
+						"devtools_active_port_unwritable",
+						"DevToolsActivePort could not be rewritten.",
+						context,
+						{
+							devtools_active_port_path: activePortPath,
+							...repairMutationData(mutations),
+						},
+					);
+				}
+				mutations.push({ id: "devtools_active_port", path: activePortPath });
+				try {
+					proof = await runWarmChromeCheckProof(proofInput, runtime, deps);
+				} catch (verifyError) {
+					if (verifyError instanceof WarmChromeRuntimeError) {
+						throw withRepairMutationData(verifyError, mutations);
+					}
+					throw verifyError;
+				}
 			}
 		}
 
-		// 6. Repaired. The mutation pin enumerates every cross-tool-visible
+		// 7. Repaired. The mutation pin enumerates every cross-tool-visible
 		// change (chmod, dir creation, profile writes) with its exact path.
 		const actionIds = mutations.map((mutation) => mutation.id);
 		const action = warmChromeRuntimeAction("use_verified_endpoint");
@@ -541,12 +531,21 @@ async function sameProfileTarget(
 	}
 }
 
-function isStaleDevToolsActivePort(error: unknown): boolean {
-	return (
-		error instanceof WarmChromeRuntimeError &&
-		error.code === "invalid_cdp" &&
-		error.options.data?.reason === "endpoint_id_mismatch"
-	);
+async function devToolsActivePortNeedsRepair(
+	deps: WarmChromeRepairDeps,
+	profileDir: string,
+	port: string,
+	liveWsPath: string,
+): Promise<boolean> {
+	try {
+		const activePort = await deps.readDevToolsActivePort(profileDir);
+		return (
+			activePort !== null &&
+			(activePort.port !== port || activePort.wsPath !== liveWsPath)
+		);
+	} catch {
+		return true;
+	}
 }
 
 async function devToolsActivePortWriteTargetStillMatches(input: {
@@ -609,40 +608,4 @@ async function devToolsActivePortWriteTargetStillMatches(input: {
 		);
 	}
 	return true;
-}
-
-// Hygiene data source: the live /json/version answer, validated to the same
-// loopback + browser-path posture the proof chain enforces. Anything less than
-// a fully valid answer skips the write and re-throws the original verdict.
-async function readLiveBrowserWsPath(
-	runtime: WarmChromeRuntime,
-	endpoint: string,
-	port: string,
-): Promise<string | null> {
-	let value: unknown;
-	try {
-		value = await runtime.fetchJson(`${endpoint}/json/version`);
-	} catch {
-		return null;
-	}
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return null;
-	}
-	const wsUrl = (value as Record<string, unknown>).webSocketDebuggerUrl;
-	if (typeof wsUrl !== "string") return null;
-	let parsed: URL;
-	try {
-		parsed = new URL(wsUrl);
-	} catch {
-		return null;
-	}
-	if (
-		parsed.protocol !== "ws:" ||
-		parsed.hostname !== "127.0.0.1" ||
-		parsed.port !== port ||
-		!parsed.pathname.startsWith("/devtools/browser/")
-	) {
-		return null;
-	}
-	return parsed.pathname;
 }

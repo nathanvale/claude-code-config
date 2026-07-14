@@ -476,15 +476,6 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "ws_only_no_http",
 	},
 	{
-		label: "DevToolsActivePort endpoint id disagrees with /json/version",
-		fixture: () =>
-			warmChromeFixture({
-				activePort: { port: "9222", wsPath: "/devtools/browser/another-token" },
-			}),
-		code: "invalid_cdp",
-		reason: "endpoint_id_mismatch",
-	},
-	{
 		label: "Browser.getVersion round-trip fails",
 		fixture: () =>
 			warmChromeFixture({
@@ -761,8 +752,10 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		});
 	}
 
-	test("healthy warm Chrome verifies with the observed build, verbatim ws URL, and actual endpoint (R8/R17)", async () => {
-		const fixture = warmChromeFixture();
+	test("healthy fixed-port Chrome verifies from live evidence despite a stale DevToolsActivePort hint (R8/R17)", async () => {
+		const fixture = warmChromeFixture({
+			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
+		});
 		const run = await runWarmChrome(["check", "--run-id", "verified-run"], fixture);
 
 		expect(run.exitCode).toBe(0);
