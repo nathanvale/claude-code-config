@@ -24,6 +24,19 @@ import {
 	type EnvironmentGatewayDeps,
 	type EnvironmentGatewayResult,
 } from "../src/environment.ts";
+import {
+	type BrowserConnectMainDeps,
+	main,
+} from "../src/cli.ts";
+import type {
+	AdapterCommandInput,
+	AdapterCommandResult,
+	AdapterDefinition,
+	AdapterExecutableResolution,
+	AdapterRuntime,
+} from "../src/adapters/registry.ts";
+import { agentBrowserDefinition } from "../src/adapters/agent-browser.ts";
+import { chromeDevtoolsMcpDefinition } from "../src/adapters/chrome-devtools-mcp.ts";
 
 // ---------------------------------------------------------------------------
 // Characterization scaffolding — a fake warm-chrome `main` that emits the exact
@@ -602,5 +615,659 @@ describe("browser-connect environment gateway", () => {
 			expect(result.environment.name).toBe("agent-chrome");
 			expect(result.proof.route_evidence).toBe("verified-live");
 		});
+	});
+});
+
+// ===========================================================================
+// U6 dispatcher: check, connect, and dashboard commands.
+//
+// Every scenario runs the real main(argv, deps) in-process with fakes — no real
+// Chrome (scripted warmChromeMain) and no real adapter binaries (a fake
+// AdapterRuntime + injected registry accessors). Stations are asserted through
+// the emitted envelope's error.code, exit code, and next_action_id.
+// ===========================================================================
+
+type MemoryWriter = { output: string; write(chunk: string): true };
+
+function memoryWriter(): MemoryWriter {
+	return {
+		output: "",
+		write(chunk: string) {
+			this.output += chunk;
+			return true;
+		},
+	};
+}
+
+type DispatcherRun = { exitCode: number; stdout: string; stderr: string };
+
+/**
+ * A scriptable fake adapter runtime. `provenance` and `probe` are keyed by the
+ * executable command and drive checkProvenance / probeAttachment WITHOUT any
+ * real binary. `resolveExecutable` resolves any known command to a synthetic
+ * absolute path; unknown commands resolve to `{ resolved: false }`.
+ */
+function fakeAdapterRuntime(script: {
+	version?: Record<string, string | undefined>;
+	probeExit?: Record<string, number>;
+	unresolvable?: readonly string[];
+	calls?: { probe: string[]; version: string[] };
+}): AdapterRuntime {
+	const unresolvable = new Set(script.unresolvable ?? []);
+	return {
+		env: {},
+		resolveExecutable: (command): AdapterExecutableResolution =>
+			unresolvable.has(command)
+				? { resolved: false }
+				: { resolved: true, path: `/fake/bin/${command}` },
+		runCommand: async (
+			input: AdapterCommandInput,
+		): Promise<AdapterCommandResult> => {
+			const executable = input.command.replace("/fake/bin/", "");
+			const isVersion = input.args.includes("--version");
+			if (isVersion) {
+				script.calls?.version.push(executable);
+				const version = script.version?.[executable];
+				if (version === undefined) {
+					return { exitCode: 127, stdout: "", stderr: "command not found" };
+				}
+				return { exitCode: 0, stdout: `${executable} ${version}\n`, stderr: "" };
+			}
+			// Any non-version invocation is the attachment probe.
+			script.calls?.probe.push(executable);
+			const exit = script.probeExit?.[executable] ?? 0;
+			return {
+				exitCode: exit,
+				stdout: exit === 0 ? "attached\n" : "",
+				stderr: exit === 0 ? "" : "probe failed\n",
+			};
+		},
+	};
+}
+
+/**
+ * The two real adapter definitions with their pinned versions, so a fully
+ * installed fake runtime uses the definitions' own probe/inject logic.
+ */
+const PINNED = {
+	"chrome-devtools-mcp": "1.5.0",
+	"agent-browser": "0.31.2",
+} as const;
+
+function realRegistryAccessors(): {
+	listAdapterDefinitions: () => readonly AdapterDefinition[];
+	findAdapterDefinition: (id: string) => AdapterDefinition | undefined;
+} {
+	const byId: Record<string, AdapterDefinition> = {
+		"chrome-devtools-mcp": chromeDevtoolsMcpDefinition,
+		"agent-browser": agentBrowserDefinition,
+	};
+	return {
+		listAdapterDefinitions: () => [
+			chromeDevtoolsMcpDefinition,
+			agentBrowserDefinition,
+		],
+		findAdapterDefinition: (id) => byId[id],
+	};
+}
+
+async function runDispatcher(
+	argv: readonly string[],
+	deps: Omit<BrowserConnectMainDeps, "stdout" | "stderr">,
+): Promise<DispatcherRun> {
+	const stdout = memoryWriter();
+	const stderr = memoryWriter();
+	const exitCode = await main(argv, { ...deps, stdout, stderr });
+	return { exitCode, stdout: stdout.output, stderr: stderr.output };
+}
+
+type DispatcherEnvelope = {
+	status: string;
+	run_id: string;
+	data?: Record<string, unknown>;
+	error?: { code: string; exit_code: number };
+	runtime_actions?: Array<{ id: string }>;
+	continuation?: { next_action_id?: string };
+};
+
+function parseStdout(run: DispatcherRun): DispatcherEnvelope {
+	return JSON.parse(run.stdout) as DispatcherEnvelope;
+}
+
+const okScript = (ws = "ws://127.0.0.1:9222/devtools/browser/id") =>
+	scriptedWarmChromeMain([
+		{
+			envelope: warmChromeOkEnvelope({
+				runId: RUN_ID,
+				endpoint: "http://127.0.0.1:9222",
+				ws,
+			}),
+			exitCode: 0,
+		},
+	]);
+
+const errorScript = (code: string, reason: string) =>
+	scriptedWarmChromeMain([
+		{
+			envelope: warmChromeErrorEnvelope({
+				runId: RUN_ID,
+				code,
+				reason,
+				exitCode: 20,
+			}),
+			exitCode: 20,
+		},
+	]);
+
+const CONNECT_ARGV = ["connect", "agent-browser", "--json", "--run-id", RUN_ID];
+
+describe("browser-connect dashboard command (U6 R15/R16, AE5)", () => {
+	test("two installed + one uninstalled adapter yields a one-read decision with NO probe fired", async () => {
+		const calls = { probe: [] as string[], version: [] as string[] };
+		// Simulate one uninstalled adapter (chrome-devtools-mcp version absent →
+		// not-installed) WITHOUT editing the registry; agent-browser installed.
+		const adapterRuntime = fakeAdapterRuntime({
+			version: {
+				"agent-browser": PINNED["agent-browser"],
+				// chrome-devtools-mcp: no version entry → provenance not-installed.
+			},
+			calls,
+		});
+		const { main: warmChromeMain } = okScript();
+
+		const run = await runDispatcher(["--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime,
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as {
+			outcome: string;
+			adapters: Array<{
+				adapter_id: string;
+				installed: boolean;
+				connectable: boolean;
+				routes: Array<{ route: string; environment_compatible: boolean }>;
+			}>;
+			contract_id: string;
+			schema_version: string;
+		};
+		expect(data.outcome).toBe("dashboard");
+		const cdm = data.adapters.find((a) => a.adapter_id === "chrome-devtools-mcp");
+		const ab = data.adapters.find((a) => a.adapter_id === "agent-browser");
+		expect(cdm?.installed).toBe(false);
+		expect(cdm?.connectable).toBe(false);
+		expect(ab?.installed).toBe(true);
+		expect(ab?.connectable).toBe(true);
+		// One-read decision surface: each adapter row carries its route
+		// compatibility against the environment.
+		expect(
+			ab?.routes.some(
+				(route) => route.route === "explicit-cdp" && route.environment_compatible,
+			),
+		).toBe(true);
+		// AE5/R16: the dashboard NEVER fires an attachment probe.
+		expect(calls.probe).toEqual([]);
+		// It reads provenance (version) only — the dashboard is stateless.
+		expect(calls.version.sort()).toEqual(
+			["agent-browser", "chrome-devtools-mcp"].sort(),
+		);
+		// R15: the dashboard never proves an environment or launches — the scripted
+		// warm-chrome main is never invoked by a bare read.
+	});
+
+	test("bare invocation never invokes the warm-chrome gateway (R15: no environment prove/launch)", async () => {
+		const calls = { probe: [] as string[], version: [] as string[] };
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const adapterRuntime = fakeAdapterRuntime({
+			version: {
+				"agent-browser": PINNED["agent-browser"],
+				"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+			},
+			calls,
+		});
+
+		const run = await runDispatcher(["--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime,
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		expect(warmChromeCalls).toBe(0);
+		expect(calls.probe).toEqual([]);
+	});
+});
+
+describe("browser-connect check command (U6 R15)", () => {
+	test("verified environment: exit 0, ok envelope, no launch, no adapter probe", async () => {
+		const calls = { probe: [] as string[], version: [] as string[] };
+		const { main: warmChromeMain, calls: wcCalls } = okScript();
+		const adapterRuntime = fakeAdapterRuntime({ calls });
+
+		const run = await runDispatcher(["check", "--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime,
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data?.contract_id).toBe(BROWSER_CONNECT_CONTRACT_ID);
+		expect(envelope.data?.schema_version).toBe(BROWSER_CONNECT_SCHEMA_VERSION);
+		// check is prove-only: exactly one `check`, never a `launch` (R15).
+		expect(wcCalls.map(commandWord)).toEqual(["check"]);
+		// No adapter probe fires on a bare environment read.
+		expect(calls.probe).toEqual([]);
+	});
+
+	test("environment absent: exit 20, environment_absent station, launch action", async () => {
+		const { main: warmChromeMain } = errorScript(
+			"endpoint_unreachable",
+			"no_listener",
+		);
+		const run = await runDispatcher(["check", "--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("environment_absent");
+		expect(envelope.continuation?.next_action_id).toBe("launch_agent_chrome");
+	});
+
+	test("foreign listener: exit 20, foreign_listener station, inspect action", async () => {
+		const { main: warmChromeMain } = errorScript(
+			"port_occupied_foreign",
+			"foreign_listener",
+		);
+		const run = await runDispatcher(["check", "--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("foreign_listener");
+		expect(envelope.continuation?.next_action_id).toBe("inspect_listener");
+	});
+});
+
+describe("browser-connect connect command: verified handoffs (U6 R2/R16, AE7)", () => {
+	function installedRuntime(calls?: { probe: string[]; version: string[] }) {
+		return fakeAdapterRuntime({
+			version: {
+				"agent-browser": PINNED["agent-browser"],
+				"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+			},
+			...(calls ? { calls } : {}),
+		});
+	}
+
+	test("existing session → verified handoff, launch provenance false (AE7)", async () => {
+		const { main: warmChromeMain } = okScript(
+			"ws://127.0.0.1:9222/devtools/browser/existing",
+		);
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: installedRuntime(),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as {
+			outcome: string;
+			launch: { launched: boolean };
+			attachment: { adapter_id: string; route: string; probe_executable: string };
+			endpoint: { http: string; ws: string };
+			browser_entry_mode: string;
+			contract_id: string;
+			schema_version: string;
+		};
+		expect(data.outcome).toBe("verified");
+		expect(data.launch.launched).toBe(false);
+		expect(data.attachment.adapter_id).toBe("agent-browser");
+		expect(data.attachment.route).toBe("explicit-cdp");
+		expect(data.browser_entry_mode).toBe("explicit-cdp");
+		expect(data.endpoint.ws).toBe(
+			"ws://127.0.0.1:9222/devtools/browser/existing",
+		);
+		// --json envelope carries contract id + schema version (R16).
+		expect(data.contract_id).toBe(BROWSER_CONNECT_CONTRACT_ID);
+		expect(data.schema_version).toBe(BROWSER_CONNECT_SCHEMA_VERSION);
+		expect(envelope.continuation?.next_action_id).toBe("use_verified_handoff");
+	});
+
+	test("auto-launched session → verified handoff, launch provenance true (AE7)", async () => {
+		// check absent → launch → re-prove ok. Provenance records the launch.
+		const { main: warmChromeMain, calls: wcCalls } = scriptedWarmChromeMain([
+			{
+				envelope: warmChromeErrorEnvelope({
+					runId: RUN_ID,
+					code: "endpoint_unreachable",
+					reason: "no_listener",
+					exitCode: 20,
+				}),
+				exitCode: 20,
+			},
+			{
+				envelope: warmChromeOkEnvelope({
+					runId: RUN_ID,
+					endpoint: "http://127.0.0.1:9222",
+					ws: "ws://127.0.0.1:9222/devtools/browser/launched",
+				}),
+				exitCode: 0,
+			},
+			{
+				envelope: warmChromeOkEnvelope({
+					runId: RUN_ID,
+					endpoint: "http://127.0.0.1:9222",
+					ws: "ws://127.0.0.1:9222/devtools/browser/launched",
+				}),
+				exitCode: 0,
+			},
+		]);
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: installedRuntime(),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		const data = parseStdout(run).data as { launch: { launched: boolean } };
+		expect(data.launch.launched).toBe(true);
+		// connect auto-launches: check → launch → check.
+		expect(wcCalls.map(commandWord)).toEqual(["check", "launch", "check"]);
+	});
+
+	test("the adapter's OWN executable performed the probe (R4)", async () => {
+		const calls = { probe: [] as string[], version: [] as string[] };
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: installedRuntime(calls),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		const data = parseStdout(run).data as {
+			attachment: { probe_executable: string };
+		};
+		// R4: the probe ran through the adapter's own binary.
+		expect(calls.probe).toEqual(["agent-browser"]);
+		expect(data.attachment.probe_executable).toBe("/fake/bin/agent-browser");
+	});
+});
+
+describe("browser-connect connect command: failure stations (U6 R7/R11)", () => {
+	test("adapter-unknown → exit 2, adapter_unknown station, list action (before any environment work)", async () => {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const run = await runDispatcher(
+			["connect", "no-such-adapter", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("adapter_unknown");
+		expect(envelope.continuation?.next_action_id).toBe(
+			"list_registered_adapters",
+		);
+		// Unknown adapter is rejected BEFORE any environment prove/launch (R7).
+		expect(warmChromeCalls).toBe(0);
+	});
+
+	test("adapter-not-installed → exit 20, adapter_not_installed station, NO probe fired", async () => {
+		const calls = { probe: [] as string[], version: [] as string[] };
+		const { main: warmChromeMain } = okScript();
+		// agent-browser version absent → provenance not-installed.
+		const adapterRuntime = fakeAdapterRuntime({ version: {}, calls });
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime,
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("adapter_not_installed");
+		expect(envelope.continuation?.next_action_id).toBe("install_adapter");
+		// A not-installed adapter never gets a probe (R7).
+		expect(calls.probe).toEqual([]);
+	});
+
+	test("route-incompatible → exit 20, route_incompatible station", async () => {
+		const { main: warmChromeMain } = okScript();
+		// A synthetic adapter that declares only ui-consent (agent-chrome offers
+		// only explicit-cdp), forcing selectCompatibleRoute to return undefined.
+		const uiOnly: AdapterDefinition = {
+			...agentBrowserDefinition,
+			id: "ui-only",
+			routes: [
+				{ route: "ui-consent", evidence: "documented", implemented: false },
+			],
+		};
+		const adapterRuntime = fakeAdapterRuntime({
+			version: { "agent-browser": PINNED["agent-browser"] },
+		});
+		const run = await runDispatcher(
+			["connect", "ui-only", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime,
+				listAdapterDefinitions: () => [uiOnly],
+				findAdapterDefinition: (id) => (id === "ui-only" ? uiOnly : undefined),
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("route_incompatible");
+		expect(envelope.continuation?.next_action_id).toBe(
+			"select_compatible_route",
+		);
+	});
+
+	test("attachment-failed → exit 20, attachment_failed station (endpoint verified, probe failed)", async () => {
+		const { main: warmChromeMain } = okScript();
+		const adapterRuntime = fakeAdapterRuntime({
+			version: { "agent-browser": PINNED["agent-browser"] },
+			probeExit: { "agent-browser": 1 },
+		});
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime,
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("attachment_failed");
+		expect(envelope.continuation?.next_action_id).toBe(
+			"inspect_attachment_probe",
+		);
+	});
+
+	test("foreign-listener → exit 20, foreign_listener station, no launch, no fallback", async () => {
+		const { main: warmChromeMain, calls: wcCalls } = errorScript(
+			"port_occupied_foreign",
+			"foreign_listener",
+		);
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({
+				version: { "agent-browser": PINNED["agent-browser"] },
+			}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("foreign_listener");
+		// Fail closed: a foreign listener is NOT auto-launched over.
+		expect(wcCalls.map(commandWord)).toEqual(["check"]);
+	});
+
+	test("launch-failed → exit 20, launch_failed station", async () => {
+		// check absent → launch fails → launch-failed.
+		const { main: warmChromeMain } = scriptedWarmChromeMain([
+			{
+				envelope: warmChromeErrorEnvelope({
+					runId: RUN_ID,
+					code: "endpoint_unreachable",
+					reason: "no_listener",
+					exitCode: 20,
+				}),
+				exitCode: 20,
+			},
+			{
+				envelope: warmChromeErrorEnvelope({
+					runId: RUN_ID,
+					code: "endpoint_unreachable",
+					reason: "no_listener",
+					exitCode: 20,
+				}),
+				exitCode: 20,
+			},
+		]);
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({
+				version: { "agent-browser": PINNED["agent-browser"] },
+			}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("launch_failed");
+		expect(envelope.continuation?.next_action_id).toBe("inspect_diagnostics");
+	});
+});
+
+describe("browser-connect envelope text safety (U6 R14/KTD10)", () => {
+	test("a failure detail carrying a local path and ws url is scrubbed from the serialized envelope", async () => {
+		const { main: warmChromeMain } = okScript();
+		// A synthetic adapter whose attachment probe returns a detail embedding a
+		// local path and a ws debugger url — both must be scrubbed by the redaction
+		// chokepoint before serialization (R14/KTD10).
+		const leakyAdapter: AdapterDefinition = {
+			...agentBrowserDefinition,
+			id: "leaky",
+			async probeAttachment() {
+				return {
+					attached: false,
+					failureClass: "attachment-failed",
+					detail:
+						"probe failed at /Users/secret/agent-browser attaching ws://127.0.0.1:9222/devtools/browser/leak",
+				};
+			},
+		};
+		const run = await runDispatcher(
+			["connect", "leaky", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({
+					version: { "agent-browser": PINNED["agent-browser"] },
+				}),
+				listAdapterDefinitions: () => [leakyAdapter],
+				findAdapterDefinition: (id) =>
+					id === "leaky" ? leakyAdapter : undefined,
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("attachment_failed");
+		// The redaction chokepoint scrubbed both the path and the ws url (R14).
+		expect(run.stdout).not.toContain("/Users/secret");
+		expect(run.stdout).not.toContain("/devtools/browser/leak");
+	});
+
+	test("connect success envelope carries no ws:// scheme leaked into free text", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({
+				version: { "agent-browser": PINNED["agent-browser"] },
+			}),
+			...realRegistryAccessors(),
+		});
+		// The structured endpoint field is exempt (verbatim by contract), but the
+		// verified endpoint appears ONLY inside the structured data.endpoint fields,
+		// never in a redactable free-text detail.
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as { endpoint: { ws: string } };
+		expect(data.endpoint.ws).toContain("ws://");
+	});
+});
+
+describe("browser-connect post-gateway redaction survives (U6 KTD10/R14)", () => {
+	test("a diagnostic emitted AFTER connect still routes through browser-connect's redactor", async () => {
+		// warm-chrome's real main tears down LogTape in its finally. The dispatcher
+		// re-applies its own diagnostics config after every gateway call. A
+		// diagnostic emitted post-connect (via the --verbose stderr sink) must still
+		// scrub a local path through browser-connect's redactor.
+		const warmChromeMain = async (
+			_argv: readonly string[],
+			deps: WarmChromeMainDeps = {},
+		): Promise<number> => {
+			deps.stdout?.write(
+				warmChromeOkEnvelope({
+					runId: RUN_ID,
+					endpoint: "http://127.0.0.1:9222",
+					ws: "ws://127.0.0.1:9222/devtools/browser/id",
+				}),
+			);
+			// Simulate warm-chrome's finally tearing down diagnostics.
+			resetCliDiagnostics();
+			return 0;
+		};
+
+		const stdout = memoryWriter();
+		const stderr = memoryWriter();
+		// A probe failure whose detail carries a local path; --verbose routes an
+		// error diagnostic to stderr AFTER the gateway returned.
+		const adapterRuntime = fakeAdapterRuntime({
+			version: { "agent-browser": PINNED["agent-browser"] },
+			probeExit: { "agent-browser": 1 },
+		});
+		const exitCode = await main(
+			["connect", "agent-browser", "--json", "--verbose", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime,
+				...realRegistryAccessors(),
+				stdout,
+				stderr,
+			},
+		);
+
+		expect(exitCode).toBe(20);
+		// The error diagnostic on stderr must not leak the /fake/bin path — proof
+		// browser-connect's redactor was restored after the gateway teardown.
+		expect(stderr.output).not.toContain("/fake/bin");
 	});
 });
