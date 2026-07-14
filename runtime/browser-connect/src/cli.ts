@@ -53,6 +53,7 @@ import {
 	projectBrowserConnectDashboard,
 } from "./dashboard.ts";
 import {
+	AGENT_CHROME_IDENTITY,
 	proveAgentChromeEnvironment,
 	type EnvironmentGatewayResult,
 } from "./environment.ts";
@@ -98,12 +99,7 @@ const CONNECTION_ENTRY_EXIT_CODE = 20;
 
 type OutputMode = "json" | "plain";
 
-/**
- * The Agent Chrome environment identity slice one names (R10).
- */
-const AGENT_CHROME_IDENTITY: BrowserConnectEnvironmentIdentity = {
-	name: "agent-chrome",
-};
+// AGENT_CHROME_IDENTITY (R10) is owned + exported by environment.ts; imported above.
 
 // ---------------------------------------------------------------------------
 // Station homing: every failure class maps to a canonical station error code
@@ -666,35 +662,57 @@ async function dispatchRun(
 		durationMs: durationMs(),
 	});
 
-	// Inject the verified endpoint into the wrapped command, then spawn-and-wait.
-	const spawnResult = await runWrappedCommand(
-		parsed.tail,
-		gate.injection,
-		deps.runBaseEnv,
-		deps.runSpawner,
-	);
+	// Exec phase (KTD5/AE6): the handoff envelope is now on stderr, so ANY throw
+	// from here on must NOT reach main's outer catch — that catch routes through
+	// emitFailure, which in json mode writes a `runtime-error-unexpected` envelope
+	// onto STDOUT (contaminating the wrapped command's byte-exact stdout channel,
+	// the exact hazard KTD5 exists to prevent) and exits 1 (which AE6 says can
+	// never happen post-gate). Route any post-handoff throw to STDERR via the run
+	// emitter with exit 1 (browser-connect's own unexpected-runtime code — an
+	// internal error, distinct from passthrough — but on stderr, never stdout), and
+	// never emit a second handoff / touch stdout.
+	try {
+		// Inject the verified endpoint into the wrapped command, then spawn-and-wait.
+		const spawnResult = await runWrappedCommand(
+			parsed.tail,
+			gate.injection,
+			deps.runBaseEnv,
+			deps.runSpawner,
+		);
 
-	if (spawnResult.outcome === "spawn-failed") {
-		// KTD4: the wrapped binary was missing. The envelope is already on stderr;
-		// emit a SECOND stderr JSON diagnostic line (wrapped-command-not-found +
-		// its affordance id) so browser-connect's 127 is distinguishable from a
-		// wrapped tool's OWN 127 (which passes through with NO diagnostic line).
-		return emitRunStderrFailure(deps, {
+		if (spawnResult.outcome === "spawn-failed") {
+			// KTD4: the wrapped binary was missing. The envelope is already on stderr;
+			// emit a SECOND stderr JSON diagnostic line (wrapped-command-not-found +
+			// its affordance id) so browser-connect's 127 is distinguishable from a
+			// wrapped tool's OWN 127 (which passes through with NO diagnostic line).
+			return emitRunStderrFailure(deps, {
+				outputMode: parsed.outputMode,
+				runId: ctx.runId,
+				durationMs: durationMs(),
+				failureClass: "wrapped-command-not-found",
+				launch: gate.launch,
+				// The spawn-failure detail passes the redactor; the wrapped argv is not
+				// included in it (only the executable name at most, redacted if a path).
+				...(spawnResult.detail ? { message: spawnResult.detail } : {}),
+			});
+		}
+
+		// Passthrough: the wrapped tool's exit code (or 128+signal) is returned
+		// unchanged, with NO connect-failure envelope (R17/AE6). stdout was the
+		// wrapped tool's alone.
+		return spawnResult.exitCode;
+	} catch (_error) {
+		// A post-handoff throw during exec (e.g. the spawner rejected for a reason
+		// other than the caught spawn-failed case). Route it to STDERR — never
+		// stdout (KTD5) — as a runtime-error-unexpected envelope, exit 1. The raw
+		// error text never reaches the envelope (R14 leak surface).
+		return emitRunUnexpectedStderrFailure(deps, {
 			outputMode: parsed.outputMode,
 			runId: ctx.runId,
 			durationMs: durationMs(),
-			failureClass: "wrapped-command-not-found",
 			launch: gate.launch,
-			// The spawn-failure detail passes the redactor; the wrapped argv is not
-			// included in it (only the executable name at most, redacted if a path).
-			...(spawnResult.detail ? { message: spawnResult.detail } : {}),
 		});
 	}
-
-	// Passthrough: the wrapped tool's exit code (or 128+signal) is returned
-	// unchanged, with NO connect-failure envelope (R17/AE6). stdout was the
-	// wrapped tool's alone.
-	return spawnResult.exitCode;
 }
 
 function dashboardDeps(deps: ResolvedDeps): DashboardDeps {
@@ -1127,6 +1145,95 @@ function emitRunStderrFailure(
 			input.failureClass === "run-missing-separator"
 				? "input"
 				: "browser_entry_handoff",
+	});
+
+	writeRunEnvelopeLine(
+		deps,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: exitCode,
+			error: structured,
+			data,
+			runtime_actions: runtimeActions,
+			continuation,
+		}) as unknown as Record<string, unknown>,
+		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return exitCode;
+}
+
+/**
+ * Emit a `runtime-error-unexpected` failure envelope to STDERR (KTD5/AE6) for a
+ * post-handoff throw during run's exec phase. Distinct from
+ * {@link emitRunStderrFailure} (whose three run failure classes are all
+ * pre-exec/spawn-attribution): this is browser-connect's OWN unexpected-runtime
+ * code (exit 1, fatal), and it MUST land on STDERR — never stdout — because the
+ * verified handoff envelope was already written to stderr and stdout belongs to
+ * the wrapped command byte-exact. No raw error text reaches the envelope (R14).
+ */
+function emitRunUnexpectedStderrFailure(
+	deps: ResolvedDeps,
+	input: {
+		outputMode: OutputMode;
+		runId: string;
+		durationMs: number;
+		launch?: BrowserConnectLaunchProvenance;
+	},
+): number {
+	const failureClass: BrowserConnectFailureClass = "runtime-error-unexpected";
+	const actionId: BrowserConnectFailureActionId =
+		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[failureClass];
+	const exitCode = FAILURE_CLASS_EXIT_CODE[failureClass];
+	const branchId = FAILURE_CLASS_BRANCH_ID[failureClass];
+	const safeMessage = "browser-connect hit an unexpected runtime failure.";
+
+	const data = createBrowserConnectEnvelopeData({
+		outcome: "failed",
+		failure_class: failureClass,
+		next_action_id: actionId,
+		environment: AGENT_CHROME_IDENTITY,
+		launch: input.launch ?? { launched: false },
+		detail: safeMessage,
+	});
+
+	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
+		code: branchId,
+		exit_code: exitCode,
+	});
+
+	const action = failureActionById.get(actionId);
+	const runtimeActions: RuntimeActionGuidance[] = action
+		? [
+				{
+					id: action.id,
+					summary: action.summary,
+					side_effects: [
+						...action.sideEffects,
+					] as RuntimeActionGuidance["side_effects"],
+				},
+			]
+		: [];
+	const continuation: RuntimeContinuationGuidance = {
+		next_action_id: actionId,
+	};
+
+	if (input.outputMode === "plain") {
+		deps.stderr.write(
+			`${branchId}: ${safeMessage} action=${actionId} (run_id=${input.runId})\n`,
+		);
+		return exitCode;
+	}
+
+	const structured: StructuredRuntimeError = createCliRuntimeError({
+		run_id: input.runId,
+		code: branchId,
+		message: safeMessage,
+		exit_code: exitCode,
+		severity: "fatal",
+		recoverability: "none",
+		retryable: false,
+		hint: { summary: action?.summary ?? safeMessage },
+		failure_domain: "browser_entry_handoff",
 	});
 
 	writeRunEnvelopeLine(

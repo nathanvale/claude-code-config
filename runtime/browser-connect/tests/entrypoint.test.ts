@@ -448,6 +448,55 @@ describe("browser-connect environment gateway", () => {
 			expect(result.launch.launched).toBe(false);
 		});
 
+		test("launch ok but re-prove fails: orphan is attributable (launched true)", async () => {
+			// AE7: warm-chrome's `launch` returned an OK/verified envelope — a Chrome
+			// WAS spawned and warm-chrome owns that spawn. The subsequent re-prove
+			// `check` then fails (Chrome died, or a race). The failure result MUST
+			// carry launched:true so the orphaned Chrome is attributable to
+			// browser-connect; a false reading would strand it unattributable.
+			const { main } = scriptedWarmChromeMain([
+				{
+					// first check: absent
+					envelope: warmChromeErrorEnvelope({
+						runId: RUN_ID,
+						code: "endpoint_unreachable",
+						reason: "no_listener",
+						exitCode: 20,
+					}),
+					exitCode: 20,
+				},
+				{
+					// launch: OK — a Chrome was verified-spawned; warm-chrome owns it
+					envelope: warmChromeOkEnvelope({
+						runId: RUN_ID,
+						endpoint: "http://127.0.0.1:9222",
+						ws: "ws://127.0.0.1:9222/devtools/browser/launched-id",
+					}),
+					exitCode: 0,
+				},
+				{
+					// re-prove check: exit-20 (the spawned Chrome died / raced away)
+					envelope: warmChromeErrorEnvelope({
+						runId: RUN_ID,
+						code: "endpoint_unreachable",
+						reason: "no_listener",
+						exitCode: 20,
+					}),
+					exitCode: 20,
+				},
+			]);
+
+			const result = await proveAgentChromeEnvironment(
+				baseDeps(main, { autoLaunch: true }),
+			);
+
+			expect(result.outcome).toBe("failed");
+			if (result.outcome !== "failed") throw new Error("unreachable");
+			expect(result.failure_class).toBe("launch-failed");
+			// The launch invocation itself returned ok → we own whatever it spawned.
+			expect(result.launch.launched).toBe(true);
+		});
+
 		test("no auto-launch: an absent environment fails closed without launching", async () => {
 			const { main, calls } = scriptedWarmChromeMain([
 				{
@@ -627,6 +676,48 @@ describe("browser-connect environment gateway", () => {
 			expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("1");
 			expect(result.environment.name).toBe("agent-chrome");
 			expect(result.proof.route_evidence).toBe("verified-live");
+		});
+	});
+
+	describe("envelope-parse robustness (R11/KTD4 exit-20 invariant)", () => {
+		test("empty capture from warm-chrome degrades to an exit-20-family failure, never a throw", async () => {
+			// R11/KTD4: any warm-chrome browser-entry outcome must stay in the
+			// exit-20 family. A parse failure (here: an empty capture) must NOT
+			// propagate as a thrown exception (which main maps to exit-1
+			// runtime-error-unexpected). It must resolve to a typed exit-20-family
+			// `outcome: "failed"`. Currently unreachable (browser-connect always
+			// calls warm-chrome with fixed --json argv), but robust to upstream drift.
+			const main = async (
+				_argv: readonly string[],
+				deps: WarmChromeMainDeps = {},
+			): Promise<number> => {
+				deps.stdout?.write(""); // no envelope on the capture writer
+				return 0;
+			};
+
+			const result = await proveAgentChromeEnvironment(baseDeps(main));
+
+			expect(result.outcome).toBe("failed");
+			if (result.outcome !== "failed") throw new Error("unreachable");
+			// The declared exit-20 default catch class — the honest "something
+			// unexpected on the entry path" default (foreign-listener).
+			expect(result.failure_class).toBe("foreign-listener");
+		});
+
+		test("non-JSON capture from warm-chrome degrades to an exit-20-family failure, never a throw", async () => {
+			const main = async (
+				_argv: readonly string[],
+				deps: WarmChromeMainDeps = {},
+			): Promise<number> => {
+				deps.stdout?.write("not json");
+				return 0;
+			};
+
+			const result = await proveAgentChromeEnvironment(baseDeps(main));
+
+			expect(result.outcome).toBe("failed");
+			if (result.outcome !== "failed") throw new Error("unreachable");
+			expect(result.failure_class).toBe("foreign-listener");
 		});
 	});
 });
@@ -1588,6 +1679,46 @@ describe("browser-connect run: the two 127s are distinguishable (U7 KTD4)", () =
 		expect(envelopes.some((e) => e.error?.code === "wrapped_not_found")).toBe(
 			false,
 		);
+	});
+});
+
+describe("browser-connect run: a post-handoff throw routes to STDERR, never STDOUT (U7 KTD5/AE6)", () => {
+	test("the spawner rejecting AFTER the handoff → runtime_error on STDERR, exit 1, stdout byte-empty, single handoff on stderr", async () => {
+		const { main: warmChromeMain } = okScript();
+		// A spawner that REJECTS (throws) rather than returning a typed
+		// spawn-failed result — e.g. an unexpected internal failure after the gate.
+		// Without dispatchRun's own catch this would fall to main's outer catch,
+		// which in json mode writes a runtime-error-unexpected envelope onto STDOUT
+		// (contaminating the wrapped command's byte-exact stdout, the KTD5 hazard)
+		// and exits 1 (which AE6 forbids post-gate). It MUST land on stderr instead.
+		const throwingSpawner: RunSpawner = async () => {
+			throw new Error("unexpected spawner rejection with /Users/secret/leak");
+		};
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "suite"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: throwingSpawner,
+			},
+		);
+
+		// browser-connect's own unexpected-runtime code (exit 1), NOT a passthrough.
+		expect(run.exitCode).toBe(1);
+		// STDOUT stays byte-exact for the wrapped command — nothing was written.
+		expect(run.stdout).toBe("");
+		// TWO JSON lines on stderr: the verified handoff (ok), THEN the
+		// runtime_error envelope — both on stderr, never stdout.
+		const envelopes = stderrJsonLines(run);
+		expect(envelopes).toHaveLength(2);
+		expect(envelopes[0]?.status).toBe("ok");
+		expect(envelopes[1]?.status).toBe("error");
+		expect(envelopes[1]?.error?.code).toBe("runtime_error");
+		expect(envelopes[1]?.error?.exit_code).toBe(1);
+		// The raw error text (and its embedded path) never reaches the envelope.
+		expect(run.stderr).not.toContain("/Users/secret/leak");
+		expect(run.stderr).not.toContain("unexpected spawner rejection");
 	});
 });
 

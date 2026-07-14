@@ -16,14 +16,23 @@ Archive: `TASKS.archive.md`.
 
 ## Current Priority
 
-U1 package scaffold is closed: the package exists at
-`runtime/browser-connect`, source-linked bin `browser-connect`, workspace
-deps on `@side-quest/warm-chrome` and `@side-quest/cli-command-facade`, and
-it passes every workspace gate. Later units add the envelope model, command
-contract, environment gateway, adapter registry, and dispatcher.
+Slice one is complete (U1–U9): the package proves Agent Chrome via
+`@side-quest/warm-chrome` in-process, injects the verified endpoint, and
+execs a Browser Adapter. `check`, `connect`, bare-no-arg `dashboard`, and
+`run <adapter> -- <cmd>` are implemented and proven through the 19-station
+Branch Station catalog (7 real process spawns, 12 skipped-with-rationale
+needing a real Agent Chrome). Closed unit detail is in `TASKS.archive.md`.
+
+Next work is slice two — Human Chrome via the UI-consent door
+(chrome-devtools-mcp `--autoConnect`, Chrome 144+ consent flow), which
+freshly verifies the territory ADR 0006 recorded as a dead end. See the plan
+Scope Boundaries and `docs/decisions/2026-07-14-001-browser-connect-architecture-decision-log.md`.
+
+Open follow-up: retire `rules/browser-access.md` via the prompt-system
+workflow (issue #230) — the coexistence window's closing trigger.
 
 Next safe action:
 
 ```bash
-bun run check:workspace-facade
+bun --filter @side-quest/browser-connect typecheck
 ```

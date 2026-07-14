@@ -1,4 +1,4 @@
-import type { BrowserConnectVerifiedEndpoint } from "../../src/model.ts";
+import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
 	type AdapterCommandResult,
 	type AdapterDefinition,
@@ -6,7 +6,11 @@ import {
 	type AdapterProbeResult,
 	type AdapterProvenanceResult,
 	type AdapterRuntime,
+	errorMessage,
+	extractVersion,
 	isMissingAdapterCommandResult,
+	PROBE_TIMEOUT_MS,
+	VERSION_READ_TIMEOUT_MS,
 } from "./registry.ts";
 
 /**
@@ -28,9 +32,6 @@ export const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "1.5.0" as const;
  * `--browser-url <http form>` (the mcporter argv pattern).
  */
 export const CHROME_DEVTOOLS_MCP_BROWSER_URL_FLAG = "--browser-url" as const;
-
-const VERSION_READ_TIMEOUT_MS = 8000;
-const PROBE_TIMEOUT_MS = 8000;
 
 /**
  * Adapter Definition for Chrome DevTools MCP (KTD8 — MCP adapter riding the
@@ -161,17 +162,3 @@ export const chromeDevtoolsMcpDefinition = {
 		};
 	},
 } as const satisfies AdapterDefinition;
-
-/**
- * Extract a semantic version from adapter `--version` output. Reads the first
- * `x.y.z` token from stdout, falling back to stderr; returns `undefined` when
- * no version token is present.
- */
-function extractVersion(stdout: string, stderr: string): string | undefined {
-	const match = `${stdout}\n${stderr}`.match(/\b(\d+\.\d+\.\d+)\b/);
-	return match?.[1];
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error ?? "unknown");
-}

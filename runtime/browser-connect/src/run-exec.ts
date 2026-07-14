@@ -165,26 +165,22 @@ export async function runWrappedCommand(
 export async function spawnRunWrappedCommand(
 	input: InjectedInvocation,
 ): Promise<RunSpawnResult> {
-	let proc: ReturnType<typeof Bun.spawn>;
-	try {
-		proc = Bun.spawn([input.command, ...input.args], {
-			// Full stdio inheritance: the wrapped command owns all three streams.
-			// The envelope was already written to this process's stderr before spawn.
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-			env: input.env,
-		});
-	} catch (error) {
-		return {
-			outcome: "spawn-failed",
-			detail: error instanceof Error ? error.message : String(error ?? ""),
-		};
-	}
-
-	// Forward interactive termination signals to the child so a launcher-form
-	// shutdown terminates the wrapped process — no orphan (R17 passthrough).
+	// Signal-forwarding race window (R17/U7): register the SIGINT/SIGTERM handlers
+	// BEFORE Bun.spawn. A termination signal delivered to browser-connect between
+	// spawn and handler-registration would otherwise run the default handler
+	// (browser-connect dies) WITHOUT forwarding, orphaning the child — the exact
+	// scenario a programmatic `kill <pid> SIGTERM` hits (interactive Ctrl-C masks
+	// it via process-group delivery). The guard below handles a signal that lands
+	// before `proc` exists: buffer the intent so the child is killed the moment it
+	// comes up; if it never came up (spawn threw / no child), exit cleanly.
+	let proc: ReturnType<typeof Bun.spawn> | undefined;
+	let pendingSignal: NodeJS.Signals | undefined;
 	const forward = (signal: NodeJS.Signals) => {
+		if (proc === undefined) {
+			// The child is not up yet. Buffer the intent to kill it once it exists.
+			pendingSignal = signal;
+			return;
+		}
 		try {
 			proc.kill(signal);
 		} catch {
@@ -197,9 +193,42 @@ export async function spawnRunWrappedCommand(
 	process.on("SIGTERM", onSigterm);
 
 	try {
+		try {
+			proc = Bun.spawn([input.command, ...input.args], {
+				// Full stdio inheritance: the wrapped command owns all three streams.
+				// The envelope was already written to this process's stderr before spawn.
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+				env: input.env,
+			});
+		} catch (error) {
+			// Spawn failed → no child exists. A signal that arrived in the window
+			// buffered a pending intent; there is nothing to kill, so drop it and
+			// report the spawn failure (the finally removes the handlers).
+			return {
+				outcome: "spawn-failed",
+				detail: error instanceof Error ? error.message : String(error ?? ""),
+			};
+		}
+
+		// If a signal landed before the child was up, forward it now so we never
+		// orphan the just-spawned child.
+		if (pendingSignal !== undefined) {
+			forward(pendingSignal);
+		}
+
 		const exitCode = await proc.exited;
-		// Bun surfaces signal-death via proc.signalCode; map it to 128 + signal as
-		// part of the passthrough contract (R17). Otherwise pass the code through.
+		// Signal-death → 128 + signal (passthrough contract, R17). Bun's
+		// `await proc.exited` ALREADY returns the correct 128+signal (143 for
+		// SIGTERM, 138 for SIGUSR1, …), so PREFER it whenever it is already in the
+		// 128+ band — the manual signalNumber() table covers only ~5 signals and
+		// would mis-attribute uncommon ones, overriding an already-correct code.
+		// Fall back to the manual mapping only when Bun did not surface a usable
+		// 128+ code but DID flag signal-death via proc.signalCode.
+		if (exitCode > 128) {
+			return { outcome: "exited", exitCode };
+		}
 		const signalCode = proc.signalCode;
 		if (signalCode) {
 			return {

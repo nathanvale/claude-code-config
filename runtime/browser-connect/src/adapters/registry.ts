@@ -302,3 +302,28 @@ export function isMissingAdapterCommandResult(
 		/(command not found|not found|ENOENT|No such file or directory)/i.test(text)
 	);
 }
+
+/** Bounded read for an adapter's `--version` probe. Shared by both adapters. */
+export const VERSION_READ_TIMEOUT_MS = 8000;
+
+/** Bounded read for an adapter's read-only attachment probe. Shared by both adapters. */
+export const PROBE_TIMEOUT_MS = 8000;
+
+/**
+ * Extract a semantic version from adapter `--version` output. Reads the first
+ * `x.y.z` token from stdout, falling back to stderr; returns `undefined` when
+ * no version token is present. Shared so both adapters parse versions
+ * identically.
+ */
+export function extractVersion(
+	stdout: string,
+	stderr: string,
+): string | undefined {
+	const match = `${stdout}\n${stderr}`.match(/\b(\d+\.\d+\.\d+)\b/);
+	return match?.[1];
+}
+
+/** Normalize an unknown thrown value to a message string. Shared by both adapters. */
+export function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error ?? "unknown");
+}

@@ -26,7 +26,7 @@ import type {
  * The single environment browser-connect v1 proves (R10): Agent Chrome, the
  * warm-chrome convention profile. Never silently substituted.
  */
-const AGENT_CHROME_IDENTITY: BrowserConnectEnvironmentIdentity = {
+export const AGENT_CHROME_IDENTITY: BrowserConnectEnvironmentIdentity = {
 	name: "agent-chrome",
 };
 
@@ -188,6 +188,32 @@ type ParsedWarmChromeEnvelope = WarmChromeOkEnvelope | WarmChromeErrorEnvelope;
 export async function proveAgentChromeEnvironment(
 	deps: EnvironmentGatewayDeps,
 ): Promise<EnvironmentGatewayResult> {
+	try {
+		return await proveAgentChromeEnvironmentInner(deps);
+	} catch (error) {
+		// P3: keep the exit-20 invariant (R11/KTD4) robust to upstream warm-chrome
+		// drift. `parseWarmChromeEnvelope` throws on an empty/non-JSON/unexpected
+		// capture; that throw would otherwise escape this try/finally, reach main's
+		// catch, and degrade to exit-1 `runtime-error-unexpected` — breaking the
+		// invariant that any warm-chrome browser-entry outcome stays exit-20-family.
+		// NOT currently reachable (browser-connect always calls warm-chrome with
+		// fixed `--json` argv, which always emits an envelope), but mapping it here
+		// makes the guarantee robust regardless of what warm-chrome emits. A
+		// non-parse error (a genuine browser-connect bug) is rethrown unchanged.
+		if (!(error instanceof WarmChromeEnvelopeParseError)) throw error;
+		return {
+			outcome: "failed",
+			environment: AGENT_CHROME_IDENTITY,
+			failure_class: WARM_CHROME_EXIT_20_DEFAULT_FAILURE_CLASS,
+			launch: { launched: false },
+			detail: error.message,
+		};
+	}
+}
+
+async function proveAgentChromeEnvironmentInner(
+	deps: EnvironmentGatewayDeps,
+): Promise<EnvironmentGatewayResult> {
 	const first = await runWarmChrome(deps, ["check", "--json"]);
 
 	if (first.outcome === "ok") {
@@ -224,12 +250,27 @@ export async function proveAgentChromeEnvironment(
 		return verifiedResult(reProve.envelope, { launched: true });
 	}
 
-	// Launch spawned but the re-prove never verified: no handoff (R11).
+	// Decision (P2/AE7): KEEP the re-prove, fix provenance attribution.
+	//
+	// warm-chrome's `launch` already re-proves internally via its bounded
+	// readiness poll (runtime/warm-chrome src/launch.ts), so its ok envelope is
+	// authoritative and dropping this second `check` would be sound. We do NOT
+	// drop it here only because that would change the check-count contract the
+	// out-of-scope connect-command tests assert (`check → launch → check`); the
+	// attribution fix below is sufficient and blast-radius-free.
+	//
+	// We reach this branch ONLY because `launch.outcome !== "error"` — i.e.
+	// warm-chrome's launch invocation returned a verified/ok outcome, which means
+	// a Chrome WAS spawned. The re-prove then failed (the spawned Chrome died, or
+	// a race). Cleanup responsibility is always attributable (AE7): because the
+	// launch invocation itself succeeded, we OWN whatever it started regardless of
+	// what the re-prove says, so provenance is launched:true. A launch that itself
+	// failed keeps launched:false in the branch above.
 	return {
 		outcome: "failed",
 		environment: AGENT_CHROME_IDENTITY,
 		failure_class: "launch-failed",
-		launch: { launched: false },
+		launch: { launched: true },
 	};
 }
 
@@ -281,6 +322,15 @@ async function runWarmChrome(
 	return { outcome: "error", exitCode, envelope };
 }
 
+/**
+ * A warm-chrome capture that could not be parsed into a `{ status }` envelope
+ * (empty, non-JSON, or an unexpected status). Distinct type so
+ * {@link proveAgentChromeEnvironment} can catch ONLY parse failures and map them
+ * into the exit-20 family (P3/R11), while a genuine browser-connect bug still
+ * propagates.
+ */
+class WarmChromeEnvelopeParseError extends Error {}
+
 function parseWarmChromeEnvelope(output: string): ParsedWarmChromeEnvelope {
 	// warm-chrome writes exactly one envelope to the capture writer via the
 	// facade's `writeJson`, which pretty-prints (`JSON.stringify(value, null, 2)`)
@@ -288,11 +338,22 @@ function parseWarmChromeEnvelope(output: string): ParsedWarmChromeEnvelope {
 	// document — reading only the last line would parse a bare `}` and throw.
 	const document = output.trim();
 	if (!document) {
-		throw new Error("warm-chrome emitted no JSON envelope on the capture writer.");
+		throw new WarmChromeEnvelopeParseError(
+			"warm-chrome emitted no JSON envelope on the capture writer.",
+		);
 	}
-	const parsed = JSON.parse(document) as ParsedWarmChromeEnvelope;
+	let parsed: ParsedWarmChromeEnvelope;
+	try {
+		parsed = JSON.parse(document) as ParsedWarmChromeEnvelope;
+	} catch (error) {
+		throw new WarmChromeEnvelopeParseError(
+			`warm-chrome capture was not valid JSON: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+	}
 	if (parsed.status !== "ok" && parsed.status !== "error") {
-		throw new Error(
+		throw new WarmChromeEnvelopeParseError(
 			`warm-chrome envelope carried an unexpected status: ${String(
 				(parsed as { status?: unknown }).status,
 			)}`,

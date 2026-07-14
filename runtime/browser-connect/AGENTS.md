@@ -35,9 +35,10 @@ Use `bun --filter @side-quest/browser-connect ...` for package maintenance.
 
 ## Status
 
-U1 scaffold: package exists, passes workspace gates, `src/cli.ts` is a stub.
-The dispatcher, contracts, and stations land in later units; this file grows
-change recipes and source owners with them.
+Slice one complete: `check`, `connect`, `dashboard`, and `run` are
+implemented and proven through the 19-station Branch Station catalog. Module
+ownership is in `ARCHITECTURE.md`; closed unit detail is in
+`TASKS.archive.md`. Slice two (Human Chrome / UI-consent) is the next work.
 
 ## Verification
 

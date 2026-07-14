@@ -2,7 +2,7 @@ import {
 	BROWSER_CONNECT_ROUTES,
 	type BrowserConnectEnvironmentName,
 	type BrowserConnectRouteId,
-} from "../src/model.ts";
+} from "./model.ts";
 
 /**
  * Route capabilities the Agent Chrome environment offers (R9). Slice one:

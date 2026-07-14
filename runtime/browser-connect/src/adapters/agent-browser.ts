@@ -1,4 +1,4 @@
-import type { BrowserConnectVerifiedEndpoint } from "../../src/model.ts";
+import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
 	type AdapterCommandResult,
 	type AdapterDefinition,
@@ -6,7 +6,11 @@ import {
 	type AdapterProbeResult,
 	type AdapterProvenanceResult,
 	type AdapterRuntime,
+	errorMessage,
+	extractVersion,
 	isMissingAdapterCommandResult,
+	PROBE_TIMEOUT_MS,
+	VERSION_READ_TIMEOUT_MS,
 } from "./registry.ts";
 
 /**
@@ -31,9 +35,6 @@ export const AGENT_BROWSER_CDP_FLAG = "--cdp" as const;
  * endpoint from `AGENT_BROWSER_CDP`.
  */
 export const AGENT_BROWSER_CDP_ENV_VAR = "AGENT_BROWSER_CDP" as const;
-
-const VERSION_READ_TIMEOUT_MS = 8000;
-const PROBE_TIMEOUT_MS = 8000;
 
 /**
  * Adapter Definition for agent-browser (KTD9 — a plain binary invocation, a
@@ -160,15 +161,3 @@ export const agentBrowserDefinition = {
 		};
 	},
 } as const satisfies AdapterDefinition;
-
-/**
- * Extract a semantic version from adapter `--version` output.
- */
-function extractVersion(stdout: string, stderr: string): string | undefined {
-	const match = `${stdout}\n${stderr}`.match(/\b(\d+\.\d+\.\d+)\b/);
-	return match?.[1];
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error ?? "unknown");
-}
