@@ -56,23 +56,29 @@ function warmChromeOkEnvelope(input: {
 	endpoint: string;
 	ws: string;
 }): string {
-	return `${JSON.stringify({
-		status: "ok",
-		run_id: input.runId,
-		data: {
-			contract_id: "warm-chrome.browser-entry",
-			schema_version: "1",
-			ok: true,
-			action: "browser_ready",
-			command: "check",
-			endpoint: input.endpoint,
-			port: "9222",
-			browser: "Chrome/150.0.0.0",
-			web_socket_debugger_url: input.ws,
-			browser_pid: 4242,
-			profile_dir: "/redacted/profile",
+	// Pretty-printed (`null, 2`) to mirror the facade's real `writeJson` output —
+	// a compact single-line fake would hide multi-line envelope-parse defects.
+	return `${JSON.stringify(
+		{
+			status: "ok",
+			run_id: input.runId,
+			data: {
+				contract_id: "warm-chrome.browser-entry",
+				schema_version: "1",
+				ok: true,
+				action: "browser_ready",
+				command: "check",
+				endpoint: input.endpoint,
+				port: "9222",
+				browser: "Chrome/150.0.0.0",
+				web_socket_debugger_url: input.ws,
+				browser_pid: 4242,
+				profile_dir: "/redacted/profile",
+			},
 		},
-	})}\n`;
+		null,
+		2,
+	)}\n`;
 }
 
 /**
@@ -86,25 +92,32 @@ function warmChromeErrorEnvelope(input: {
 	reason: string;
 	exitCode: number;
 }): string {
-	return `${JSON.stringify({
-		status: "error",
-		run_id: input.runId,
-		process_exit_code: input.exitCode,
-		error: {
-			code: input.code,
-			message: `warm-chrome check rejected: ${input.code}`,
-			exit_code: input.exitCode,
-			severity: "error",
-			failure_domain: "browser_entry_handoff",
+	// Pretty-printed (`null, 2`) to mirror the facade's real `writeJson` output.
+	return `${JSON.stringify(
+		{
+			status: "error",
+			run_id: input.runId,
+			process_exit_code: input.exitCode,
+			error: {
+				code: input.code,
+				message: `warm-chrome check rejected: ${input.code}`,
+				exit_code: input.exitCode,
+				severity: "error",
+				failure_domain: "browser_entry_handoff",
+			},
+			data: {
+				contract_id: "warm-chrome.browser-entry",
+				schema_version: "1",
+				reason: input.reason,
+			},
+			runtime_actions: [
+				{ id: "launch_warm_chrome", summary: "…", side_effects: ["browser"] },
+			],
+			continuation: { next_action_id: "launch_warm_chrome" },
 		},
-		data: {
-			contract_id: "warm-chrome.browser-entry",
-			schema_version: "1",
-			reason: input.reason,
-		},
-		runtime_actions: [{ id: "launch_warm_chrome", summary: "…", side_effects: ["browser"] }],
-		continuation: { next_action_id: "launch_warm_chrome" },
-	})}\n`;
+		null,
+		2,
+	)}\n`;
 }
 
 /**

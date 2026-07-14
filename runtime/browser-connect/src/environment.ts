@@ -282,11 +282,15 @@ async function runWarmChrome(
 }
 
 function parseWarmChromeEnvelope(output: string): ParsedWarmChromeEnvelope {
-	const line = output.trim().split("\n").filter(Boolean).at(-1);
-	if (!line) {
+	// warm-chrome writes exactly one envelope to the capture writer via the
+	// facade's `writeJson`, which pretty-prints (`JSON.stringify(value, null, 2)`)
+	// across multiple lines. Parse the whole trimmed capture as one JSON
+	// document — reading only the last line would parse a bare `}` and throw.
+	const document = output.trim();
+	if (!document) {
 		throw new Error("warm-chrome emitted no JSON envelope on the capture writer.");
 	}
-	const parsed = JSON.parse(line) as ParsedWarmChromeEnvelope;
+	const parsed = JSON.parse(document) as ParsedWarmChromeEnvelope;
 	if (parsed.status !== "ok" && parsed.status !== "error") {
 		throw new Error(
 			`warm-chrome envelope carried an unexpected status: ${String(
