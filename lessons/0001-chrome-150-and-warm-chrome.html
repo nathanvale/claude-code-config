@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chrome 150 and Warm Chrome</title>
+  <style>
+    :root { color-scheme:light; --ink:#142033; --muted:#5b6677; --paper:#f7f9fe; --card:#fff; --line:#dce2ee; --blue:#3157d5; --green:#16745a; --amber:#9a5a00; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.58 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:980px; margin:0 auto; padding:54px 28px 80px; }
+    h1 { font-size:clamp(2.2rem,6vw,4.4rem); line-height:.98; letter-spacing:-.055em; margin:0; max-width:820px; }
+    h2 { font-size:1.45rem; letter-spacing:-.025em; margin:44px 0 16px; }
+    p { max-width:760px; }
+    .lede { color:var(--muted); font-size:1.18rem; margin:22px 0 36px; }
+    .formula { background:#142033; color:white; border-radius:18px; padding:24px 28px; font-size:1.18rem; letter-spacing:.01em; }
+    .formula b { color:#a9c2ff; }
+    .flow { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; align-items:center; margin:24px 0; }
+    .node { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; min-height:112px; }
+    .node strong { display:block; color:var(--blue); margin-bottom:7px; }
+    .arrow { display:none; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; }
+    .card h3 { margin:0 0 8px; font-size:1.05rem; }
+    .card p { color:var(--muted); margin:0; }
+    .good { border-top:4px solid var(--green); }
+    .special { border-top:4px solid var(--amber); }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); }
+    th,td { text-align:left; vertical-align:top; padding:14px 16px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:.82rem; text-transform:uppercase; letter-spacing:.06em; }
+    code { background:#edf1fb; border-radius:5px; padding:.1em .35em; }
+    .rule { border-left:5px solid var(--blue); background:#edf2ff; padding:18px 22px; margin:28px 0; }
+    details { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+    summary { cursor:pointer; font-weight:700; }
+    a { color:var(--blue); }
+    footer { color:var(--muted); border-top:1px solid var(--line); margin-top:46px; padding-top:22px; }
+    @media (max-width:760px) { .flow,.grid { grid-template-columns:1fr; } .node { min-height:auto; } table { font-size:.92rem; } }
+    @media print { main { max-width:none; padding:18mm; } .card,.node,table { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Chrome 150 is the browser. Warm Chrome is the contract.</h1>
+  <p class="lede">The advantage is not one magical feature. Four layers combine to make one browser session useful to automation tools.</p>
+
+  <div class="formula"><b>Chrome</b> runs the session → <b>CDP</b> exposes control → <b>Warm Chrome</b> proves identity → <b>Adapters</b> perform work.</div>
+
+  <h2>The four layers</h2>
+  <div class="flow">
+    <div class="node"><strong>1 · Chrome 150</strong>Pages, cookies, profiles, network stack, DevTools.</div>
+    <div class="node"><strong>2 · CDP</strong>Commands and events for DOM, network, console, performance, targets.</div>
+    <div class="node"><strong>3 · Warm Chrome</strong>Checks that the listener is the intended real Chrome session.</div>
+    <div class="node"><strong>4 · Adapter</strong>agent-browser, Playwright, or Chrome DevTools MCP.</div>
+  </div>
+
+  <h2>What Chrome 150 gives you</h2>
+  <div class="grid">
+    <section class="card good"><h3>Modern CDP capability</h3><p>Tools can inspect and control DOM, network, console, debugger, performance, and browser targets through one protocol.</p></section>
+    <section class="card good"><h3>Multiple CDP clients</h3><p>Chrome supports simultaneous protocol clients. Tools can share a browser, though target ownership and contention still need coordination.</p></section>
+    <section class="card good"><h3>Safer debug profiles</h3><p>Since Chrome 136, remote-debugging switches require a non-default data directory. This blocks a common cookie-theft path.</p></section>
+    <section class="card special"><h3>Consent-based auto-connect</h3><p>Since Chrome 144, Chrome DevTools MCP can request access to an active Chrome session after UI enablement and operator approval.</p></section>
+  </div>
+
+  <p class="rule"><strong>Version clarification:</strong> Chrome 150 includes these earlier changes. The relevant milestones are Chrome 136 security hardening and Chrome 144 UI auto-connect, not a unique “Chrome 150 protocol.”</p>
+
+  <h2>What Warm Chrome adds</h2>
+  <table>
+    <thead><tr><th>Problem</th><th>Warm Chrome advantage</th></tr></thead>
+    <tbody>
+      <tr><td>A process happens to own port 9222.</td><td>Prove it is real Google Chrome, not another server or Chrome for Testing.</td></tr>
+      <tr><td>A tool silently starts a cold browser.</td><td>Fail closed; preserve the intended authenticated session.</td></tr>
+      <tr><td>A profile disappears after a run.</td><td>Use a persistent dedicated profile with reusable login state.</td></tr>
+      <tr><td>Adapters guess different endpoints.</td><td>Emit one verified browser-entry authority for downstream tools.</td></tr>
+      <tr><td>Diagnostics leak browser state.</td><td>Expose bounded identity evidence and redact sensitive details.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Two valid connection lanes</h2>
+  <div class="grid">
+    <section class="card good">
+      <h3>Generic shared CDP</h3>
+      <p>Real Chrome + dedicated persistent profile + <code>--remote-debugging-port</code>. Best candidate when several independent tools need the same browser.</p>
+    </section>
+    <section class="card special">
+      <h3>Chrome UI auto-connect</h3>
+      <p>Current Chrome profile + explicit UI enablement + per-connection consent. Convenient for Chrome DevTools MCP, but not a universal endpoint for every adapter.</p>
+    </section>
+  </div>
+
+  <h2>The decision rule</h2>
+  <p><strong>Need many different tools?</strong> Prefer generic shared CDP through a dedicated Warm Chrome profile.</p>
+  <p><strong>Need the current human Chrome session?</strong> Use UI auto-connect only with an adapter that explicitly supports that flow.</p>
+  <p><strong>Need Firefox?</strong> Run Firefox separately. It does not attach to Chrome.</p>
+
+  <details>
+    <summary>Retrieval check: what does Warm Chrome contribute that Chrome alone does not?</summary>
+    <p>Identity and safety proof for the intended persistent browser session.</p>
+  </details>
+
+  <h2>Primary reading</h2>
+  <p>Start with Chrome's explanation of <a href="https://developer.chrome.com/blog/remote-debugging-port">remote-debugging security changes</a>, then its <a href="https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session">UI auto-connect flow</a>. Use the <a href="https://chromedevtools.github.io/devtools-protocol/">CDP reference</a> when you want protocol detail.</p>
+
+  <footer>Ask your agent about any unclear distinction. Quick reference: <a href="../reference/browser-connection-glossary.html">Browser connection glossary</a>.</footer>
+</main>
+</body>
+</html>
