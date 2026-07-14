@@ -11,8 +11,12 @@
 //     after the wrapped executable, env merged over the base env. Pure.
 //   - runWrappedCommand: spawn-and-wait with full stdio inheritance including
 //     stdin, SIGINT/SIGTERM forwarded to the child, signal-death mapped to
-//     128+signal, and the child's exit code passed through unchanged (R17). Bun
-//     exposes no exec(2) process replacement, so this is spawn-and-wait.
+//     128+signal, and the child's exit code passed through unchanged (R17).
+//     Spawn-and-wait (not exec(2) process replacement) is the deliberate choice
+//     for portability + signal handling: Bun's `process.execve()` is POSIX-only,
+//     experimental, and unavailable on Windows and worker threads, whereas
+//     spawn-and-wait gives the SIGINT/SIGTERM forwarding + no-orphan guarantees
+//     we need cross-platform.
 //
 // The wrapped command runs with the caller's authority, uninspected (R18): its
 // argv is NEVER echoed into an envelope or diagnostic (R14/KTD10). Only run-exec's
@@ -154,9 +158,12 @@ export async function runWrappedCommand(
  * Production spawner (KTD5/R17): spawn-and-wait with full stdio inheritance
  * INCLUDING stdin, so the wrapped command owns stdout/stdin/stderr end-to-end
  * (the envelope is already on stderr before this runs). SIGINT/SIGTERM are
- * forwarded to the child; signal-death maps to `128 + signal`. Bun exposes no
- * exec(2) process replacement, so this is spawn-and-wait, not process
- * replacement.
+ * forwarded to the child; signal-death maps to `128 + signal`. Spawn-and-wait
+ * (rather than `process.execve()` process replacement) is chosen for portability
+ * + signal handling: `process.execve()` is POSIX-only, experimental, and
+ * unavailable on Windows and worker threads, so it cannot deliver the
+ * cross-platform SIGINT/SIGTERM forwarding + no-orphan guarantees this path
+ * needs.
  *
  * A spawn failure (missing / non-executable binary) resolves to `spawn-failed`
  * rather than throwing, so the caller can author the KTD4 spawn-failure

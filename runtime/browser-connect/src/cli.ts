@@ -655,23 +655,26 @@ async function dispatchRun(
 		});
 	}
 
-	// Gate SUCCESS → write the verified handoff envelope to STDERR BEFORE exec
-	// (KTD5). stdout is untouched so the wrapped command owns it end-to-end.
-	writeRunHandoffEnvelopeToStderr(deps, parsed.outputMode, gate, {
-		runId: ctx.runId,
-		durationMs: durationMs(),
-	});
-
-	// Exec phase (KTD5/AE6): the handoff envelope is now on stderr, so ANY throw
-	// from here on must NOT reach main's outer catch — that catch routes through
+	// Gate SUCCESS → post-gate phase (KTD5/AE6). Once the gate has verified, ANY
+	// throw from here on — including a synchronous failure in the handoff-envelope
+	// WRITE itself — must NOT reach main's outer catch. That catch routes through
 	// emitFailure, which in json mode writes a `runtime-error-unexpected` envelope
 	// onto STDOUT (contaminating the wrapped command's byte-exact stdout channel,
 	// the exact hazard KTD5 exists to prevent) and exits 1 (which AE6 says can
-	// never happen post-gate). Route any post-handoff throw to STDERR via the run
-	// emitter with exit 1 (browser-connect's own unexpected-runtime code — an
-	// internal error, distinct from passthrough — but on stderr, never stdout), and
-	// never emit a second handoff / touch stdout.
+	// never happen post-gate). So the try starts at the handoff write and wraps the
+	// exec path: any post-gate throw routes to STDERR via the run emitter with exit
+	// 1 (browser-connect's own unexpected-runtime code — an internal error, distinct
+	// from passthrough — but on stderr, never stdout).
 	try {
+		// Write the verified handoff envelope to STDERR BEFORE exec (KTD5). stdout is
+		// untouched so the wrapped command owns it end-to-end. Inside the try so a
+		// throw here routes to emitRunUnexpectedStderrFailure, not main's stdout
+		// emitter.
+		writeRunHandoffEnvelopeToStderr(deps, parsed.outputMode, gate, {
+			runId: ctx.runId,
+			durationMs: durationMs(),
+		});
+
 		// Inject the verified endpoint into the wrapped command, then spawn-and-wait.
 		const spawnResult = await runWrappedCommand(
 			parsed.tail,
@@ -868,37 +871,51 @@ function writeDashboardSuccess(
 // Failure envelopes. Every failure routes through the affordance catalog: one
 // action id per failure class (R2). The station error code (branch id) is
 // stamped so the emitted envelope matches the Branch Station Catalog.
+//
+// The three emitters (emitFailure on stdout, emitRunStderrFailure and
+// emitRunUnexpectedStderrFailure on stderr) all share the same action-id /
+// exit-code / branch-id / envelope-data / runtime-actions / continuation
+// construction. That shared shape is safety-relevant (redaction, exit codes,
+// action ids) so it lives in ONE builder — buildFailureEnvelopeParts — and each
+// emitter reduces to: derive its failure-class-specific `safeMessage`, call the
+// builder, then pick the writer (stdout vs stderr) + line format (writeJson-
+// Envelope vs writeRunEnvelopeLine) + the class-specific severity/failure_domain.
 // ---------------------------------------------------------------------------
 
 /**
- * Emit the structured failure envelope for a failure class + command context.
- *
- * Builds the failure payload ONLY via U2's createBrowserConnectEnvelopeData
- * (which enforces the one-authorized-action-per-class rule and redacts free
- * text), then wraps it in the facade runtime-error envelope with the station
- * branch-id error code and the exit code from the KTD4 policy.
+ * The shared, per-failure-class parts every failure emitter needs: the resolved
+ * affordance action id + record, exit code, station branch id, the U2 envelope
+ * data payload, and the runtime-actions + continuation guidance. Emitters supply
+ * the already-derived `safeMessage` (its redaction/sanitization differs by
+ * caller) and choose the stream + line format + severity/failure_domain.
  */
-function emitFailure(
-	deps: ResolvedDeps,
-	input: {
-		outputMode: OutputMode;
-		runId: string;
-		durationMs: number;
-		failureClass: BrowserConnectFailureClass;
-		command: BrowserConnectCommand;
-		message?: string;
-		launch?: BrowserConnectLaunchProvenance;
-	},
-): number {
+type FailureEnvelopeParts = {
+	actionId: BrowserConnectFailureActionId;
+	exitCode: number;
+	branchId: string;
+	action: (typeof browserConnectFailureActions)[number] | undefined;
+	data: BrowserConnectEnvelopeData;
+	runtimeActions: RuntimeActionGuidance[];
+	continuation: RuntimeContinuationGuidance;
+};
+
+/**
+ * Build the failure-class-specific envelope parts shared by all three emitters,
+ * and emit the shared LogTape branch diagnostic. Behavior-preserving extraction:
+ * the action id / exit code / branch id / U2 envelope data / runtime actions /
+ * continuation are identical to what each emitter previously built inline. The
+ * caller derives `safeMessage` (redaction differs per caller) and owns the
+ * stream, line format, severity, and failure_domain.
+ */
+function buildFailureEnvelopeParts(input: {
+	failureClass: BrowserConnectFailureClass;
+	safeMessage: string;
+	launch?: BrowserConnectLaunchProvenance;
+}): FailureEnvelopeParts {
 	const actionId: BrowserConnectFailureActionId =
 		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[input.failureClass];
 	const exitCode = FAILURE_CLASS_EXIT_CODE[input.failureClass];
 	const branchId = FAILURE_CLASS_BRANCH_ID[input.failureClass];
-	const safeMessage = input.message
-		? input.failureClass === "usage-invalid"
-			? sanitizeBrowserConnectUsageMessage(input.message)
-			: redactBrowserConnectText(input.message)
-		: defaultMessageFor(input.failureClass);
 
 	const data = createBrowserConnectEnvelopeData({
 		outcome: "failed",
@@ -906,7 +923,7 @@ function emitFailure(
 		next_action_id: actionId,
 		environment: AGENT_CHROME_IDENTITY,
 		launch: input.launch ?? { launched: false },
-		detail: safeMessage,
+		detail: input.safeMessage,
 	});
 
 	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
@@ -929,6 +946,50 @@ function emitFailure(
 	const continuation: RuntimeContinuationGuidance = {
 		next_action_id: actionId,
 	};
+
+	return {
+		actionId,
+		exitCode,
+		branchId,
+		action,
+		data,
+		runtimeActions,
+		continuation,
+	};
+}
+
+/**
+ * Emit the structured failure envelope for a failure class + command context.
+ *
+ * Builds the failure payload ONLY via U2's createBrowserConnectEnvelopeData
+ * (which enforces the one-authorized-action-per-class rule and redacts free
+ * text), then wraps it in the facade runtime-error envelope with the station
+ * branch-id error code and the exit code from the KTD4 policy.
+ */
+function emitFailure(
+	deps: ResolvedDeps,
+	input: {
+		outputMode: OutputMode;
+		runId: string;
+		durationMs: number;
+		failureClass: BrowserConnectFailureClass;
+		command: BrowserConnectCommand;
+		message?: string;
+		launch?: BrowserConnectLaunchProvenance;
+	},
+): number {
+	const safeMessage = input.message
+		? input.failureClass === "usage-invalid"
+			? sanitizeBrowserConnectUsageMessage(input.message)
+			: redactBrowserConnectText(input.message)
+		: defaultMessageFor(input.failureClass);
+
+	const parts = buildFailureEnvelopeParts({
+		failureClass: input.failureClass,
+		safeMessage,
+		...(input.launch ? { launch: input.launch } : {}),
+	});
+	const { actionId, exitCode, branchId, action, data } = parts;
 
 	if (input.outputMode === "plain") {
 		deps.stderr.write(
@@ -961,8 +1022,8 @@ function emitFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: runtimeActions,
-			continuation,
+			runtime_actions: parts.runtimeActions,
+			continuation: parts.continuation,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1087,43 +1148,16 @@ function emitRunStderrFailure(
 		launch?: BrowserConnectLaunchProvenance;
 	},
 ): number {
-	const actionId: BrowserConnectFailureActionId =
-		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[input.failureClass];
-	const exitCode = FAILURE_CLASS_EXIT_CODE[input.failureClass];
-	const branchId = FAILURE_CLASS_BRANCH_ID[input.failureClass];
 	const safeMessage = input.message
 		? redactBrowserConnectText(input.message)
 		: defaultMessageFor(input.failureClass);
 
-	const data = createBrowserConnectEnvelopeData({
-		outcome: "failed",
-		failure_class: input.failureClass,
-		next_action_id: actionId,
-		environment: AGENT_CHROME_IDENTITY,
-		launch: input.launch ?? { launched: false },
-		detail: safeMessage,
+	const parts = buildFailureEnvelopeParts({
+		failureClass: input.failureClass,
+		safeMessage,
+		...(input.launch ? { launch: input.launch } : {}),
 	});
-
-	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
-		code: branchId,
-		exit_code: exitCode,
-	});
-
-	const action = failureActionById.get(actionId);
-	const runtimeActions: RuntimeActionGuidance[] = action
-		? [
-				{
-					id: action.id,
-					summary: action.summary,
-					side_effects: [
-						...action.sideEffects,
-					] as RuntimeActionGuidance["side_effects"],
-				},
-			]
-		: [];
-	const continuation: RuntimeContinuationGuidance = {
-		next_action_id: actionId,
-	};
+	const { actionId, exitCode, branchId, action, data } = parts;
 
 	if (input.outputMode === "plain") {
 		deps.stderr.write(
@@ -1154,8 +1188,8 @@ function emitRunStderrFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: runtimeActions,
-			continuation,
+			runtime_actions: parts.runtimeActions,
+			continuation: parts.continuation,
 		}) as unknown as Record<string, unknown>,
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1181,41 +1215,14 @@ function emitRunUnexpectedStderrFailure(
 	},
 ): number {
 	const failureClass: BrowserConnectFailureClass = "runtime-error-unexpected";
-	const actionId: BrowserConnectFailureActionId =
-		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[failureClass];
-	const exitCode = FAILURE_CLASS_EXIT_CODE[failureClass];
-	const branchId = FAILURE_CLASS_BRANCH_ID[failureClass];
 	const safeMessage = "browser-connect hit an unexpected runtime failure.";
 
-	const data = createBrowserConnectEnvelopeData({
-		outcome: "failed",
-		failure_class: failureClass,
-		next_action_id: actionId,
-		environment: AGENT_CHROME_IDENTITY,
-		launch: input.launch ?? { launched: false },
-		detail: safeMessage,
+	const parts = buildFailureEnvelopeParts({
+		failureClass,
+		safeMessage,
+		...(input.launch ? { launch: input.launch } : {}),
 	});
-
-	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
-		code: branchId,
-		exit_code: exitCode,
-	});
-
-	const action = failureActionById.get(actionId);
-	const runtimeActions: RuntimeActionGuidance[] = action
-		? [
-				{
-					id: action.id,
-					summary: action.summary,
-					side_effects: [
-						...action.sideEffects,
-					] as RuntimeActionGuidance["side_effects"],
-				},
-			]
-		: [];
-	const continuation: RuntimeContinuationGuidance = {
-		next_action_id: actionId,
-	};
+	const { actionId, exitCode, branchId, action, data } = parts;
 
 	if (input.outputMode === "plain") {
 		deps.stderr.write(
@@ -1243,8 +1250,8 @@ function emitRunUnexpectedStderrFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: runtimeActions,
-			continuation,
+			runtime_actions: parts.runtimeActions,
+			continuation: parts.continuation,
 		}) as unknown as Record<string, unknown>,
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1365,23 +1372,29 @@ function parseArgv(
  * never saw the `--` or scanned the tail. When `runTail` is undefined, no `--`
  * was present → the run-missing-separator station (exit 2), unless the head asked
  * for help (kept discoverable).
+ *
+ * An EMPTY tail (`run <adapter> --` with nothing after the `--`) is a purely
+ * syntactic input error, not a runtime failure: there is no wrapped command to
+ * run. It maps to the SAME run-missing-separator station (exit 2, STDERR) as a
+ * missing `--`, and — critically — is rejected HERE in the parse phase, BEFORE
+ * the connect gate runs any environment proof or auto-launch. Otherwise the gate
+ * would do real environment work only for `applyInjection` to reject the empty
+ * tail as an unexpected runtime error (exit 1) downstream.
  */
 function parseRunArgv(
 	runHead: readonly string[],
 	runTail?: readonly string[],
 ): ParsedInvocation {
-	if (runTail === undefined) {
-		// No `--` in the raw argv. A help request on the run head is command help,
-		// not a usage failure.
-		if (runHead.includes("--help") || runHead.includes("-h")) {
-			return { kind: "help", command: "run" };
-		}
-		return { kind: "run-missing-separator" };
-	}
-
-	// A --help on the head (before `--`) is command help.
+	// A --help on the head (before `--`) is command help — keep it discoverable
+	// regardless of whether a separator/tail is present.
 	if (runHead.includes("--help") || runHead.includes("-h")) {
 		return { kind: "help", command: "run" };
+	}
+
+	// No `--` at all, OR a `--` with an EMPTY tail: both are the run-missing-
+	// separator station (exit 2), rejected in the parse phase before any gate.
+	if (runTail === undefined || runTail.length === 0) {
+		return { kind: "run-missing-separator" };
 	}
 
 	const adapterId = firstPositional(runHead);

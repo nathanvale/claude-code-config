@@ -1472,6 +1472,46 @@ describe("browser-connect run: -- separator parsing (U7 R17)", () => {
 		expect(warmChromeCalls).toBe(0);
 	});
 
+	test("empty tail (-- present, nothing after) → exit 2, missing_separator on STDERR, gate NEVER invoked (no environment proof)", async () => {
+		// `run <adapter> --` is a purely SYNTACTIC input error: a `--` is present but
+		// there is no wrapped command. It must be rejected PRE-GATE with the same
+		// missing_separator station (exit 2, STDERR) as a missing `--` — never running
+		// the connect gate (no environment proof, no possible auto-launch) and never
+		// surfacing as a runtime error via applyInjection downstream.
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		let spawnerCalls = 0;
+		const trackingSpawner: RunSpawner = async () => {
+			spawnerCalls += 1;
+			return { outcome: "exited", exitCode: 0 };
+		};
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: trackingSpawner,
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		// The failure is on STDERR; stdout stays empty (run never execs).
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("missing_separator");
+		expect(envelope.error?.exit_code).toBe(2);
+		expect(envelope.continuation?.next_action_id).toBe("add_run_separator");
+		// PRE-GATE: no environment proof / auto-launch, and the wrapped command never
+		// started.
+		expect(warmChromeCalls).toBe(0);
+		expect(spawnerCalls).toBe(0);
+	});
+
 	test("a wrapped command containing --help/--version is not treated as browser-connect help (tail not scanned)", async () => {
 		const calls = { calls: [] as InjectedInvocation[] };
 		const { main: warmChromeMain } = okScript();
@@ -1719,6 +1759,68 @@ describe("browser-connect run: a post-handoff throw routes to STDERR, never STDO
 		// The raw error text (and its embedded path) never reaches the envelope.
 		expect(run.stderr).not.toContain("/Users/secret/leak");
 		expect(run.stderr).not.toContain("unexpected spawner rejection");
+	});
+
+	test("a throw during the handoff WRITE itself routes to STDERR runtime_error, never STDOUT (exit 1)", async () => {
+		// The handoff-envelope write lives INSIDE dispatchRun's post-gate try. A
+		// synchronous failure there (e.g. the stderr writer throwing mid-handoff) must
+		// route to emitRunUnexpectedStderrFailure on STDERR — NOT fall through to
+		// main's outer catch, which would write a runtime-error envelope onto STDOUT
+		// (contaminating the wrapped command's byte-exact channel, the KTD5 hazard).
+		const { main: warmChromeMain } = okScript();
+		const stdout = memoryWriter();
+		// A stderr writer that throws when the verified handoff envelope is written
+		// (identified by its ok status), then records every later write (the
+		// runtime_error envelope + any diagnostics).
+		let threw = false;
+		const stderr: MemoryWriter = {
+			output: "",
+			write(chunk: string) {
+				if (!threw && chunk.includes('"status":"ok"')) {
+					threw = true;
+					throw new Error("stderr handoff write failed with /Users/secret/leak");
+				}
+				this.output += chunk;
+				return true;
+			},
+		};
+		let spawnerCalls = 0;
+		const spawner: RunSpawner = async () => {
+			spawnerCalls += 1;
+			return { outcome: "exited", exitCode: 0 };
+		};
+
+		const exitCode = await main(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "suite"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: spawner,
+				stdout,
+				stderr,
+			},
+		);
+
+		// browser-connect's own unexpected-runtime code (exit 1), routed to stderr.
+		expect(exitCode).toBe(1);
+		// STDOUT stays byte-exact — nothing was written there.
+		expect(stdout.output).toBe("");
+		// The handoff write threw before exec, so the wrapped command never started.
+		expect(spawnerCalls).toBe(0);
+		// The runtime_error envelope landed on STDERR (the recorded second write).
+		const errorLine = stderr.output
+			.trim()
+			.split("\n")
+			.filter((l) => l.startsWith("{"))
+			.at(-1);
+		if (!errorLine) throw new Error("no JSON envelope on stderr");
+		const envelope = JSON.parse(errorLine) as DispatcherEnvelope;
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("runtime_error");
+		expect(envelope.error?.exit_code).toBe(1);
+		// The raw error text (and its embedded path) never reaches any envelope.
+		expect(stderr.output).not.toContain("/Users/secret/leak");
 	});
 });
 

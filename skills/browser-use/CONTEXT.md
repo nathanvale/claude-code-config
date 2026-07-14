@@ -79,8 +79,7 @@ _Avoid_: bunx requirement, npx requirement, prose runner fallback, public packag
 
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure. It is the failure-direction mirror of browser-connect's success-direction **Verified Handoff Envelope** (a proven connection handed forward to a consumer): the Browser Entry Handoff hands an *unready* state back; the Verified Handoff Envelope hands a *proven* connection forward. Both names live; do not conflate them.
-_Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure
-_Avoid_: self-repair, direct browser launch, adapter fallback, operator stop
+_Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure, self-repair, direct browser launch, adapter fallback, operator stop
 
 ### Architecture patterns (pressure-earned)
 
