@@ -1271,3 +1271,369 @@ describe("browser-connect post-gateway redaction survives (U6 KTD10/R14)", () =>
 		expect(stderr.output).not.toContain("/fake/bin");
 	});
 });
+
+// ===========================================================================
+// U7 run wrapper: prove, emit the Verified Handoff Envelope on STDERR pre-exec,
+// inject the verified endpoint into the wrapped command, exec (spawn-and-wait),
+// passthrough. Every scenario runs the real main(argv, deps) in-process with an
+// injected fake spawner — NO real process is ever spawned.
+//
+// Contract anchors: R1 (one command connects), R14/AE8 (auth-bearing passthrough
+// args never echoed), R17/AE6 (envelope on stderr before exec; passthrough exit
+// unchanged; connect failure reserved to pre-exec), KTD4 (exit codes; the two
+// 127s distinguishable by diagnostic-line presence), KTD5 (stderr channel).
+// ===========================================================================
+
+import type {
+	InjectedInvocation,
+	RunSpawnResult,
+	RunSpawner,
+} from "../src/run-exec.ts";
+
+/**
+ * A scriptable fake spawner. Records the invocation it received (so tests assert
+ * the injected argv/env WITHOUT spawning a real process) and returns a scripted
+ * result: a passthrough exit code or a spawn failure.
+ */
+function fakeSpawner(
+	result: RunSpawnResult,
+	sink?: { calls: InjectedInvocation[] },
+): RunSpawner {
+	return async (input: InjectedInvocation): Promise<RunSpawnResult> => {
+		sink?.calls.push(input);
+		return result;
+	};
+}
+
+/**
+ * Parse the LAST JSON line on stderr as the run envelope (the verified handoff,
+ * or a failure envelope). run writes its envelope to stderr, one JSON line.
+ */
+function parseStderrEnvelope(run: DispatcherRun): DispatcherEnvelope {
+	// Envelopes are single compact JSON lines (KTD5); diagnostics may also be on
+	// stderr as plain-text lines. Take the LAST JSON line.
+	const line = run.stderr
+		.trim()
+		.split("\n")
+		.filter((l) => l.startsWith("{"))
+		.at(-1);
+	if (!line) throw new Error("no JSON line on stderr");
+	return JSON.parse(line) as DispatcherEnvelope;
+}
+
+/** All JSON lines on stderr, in order (envelope, then any diagnostic line). */
+function stderrJsonLines(run: DispatcherRun): DispatcherEnvelope[] {
+	return run.stderr
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.filter((line) => line.startsWith("{"))
+		.map((line) => JSON.parse(line) as DispatcherEnvelope);
+}
+
+function installedRunRuntime() {
+	return fakeAdapterRuntime({
+		version: {
+			"agent-browser": PINNED["agent-browser"],
+			"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+		},
+	});
+}
+
+describe("browser-connect run: -- separator parsing (U7 R17)", () => {
+	test("missing -- → exit 2, missing_separator station on STDERR, add_run_separator action", async () => {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		// The failure is on STDERR (stdout belongs to the wrapped command); stdout
+		// stays empty for a run that never execs.
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("missing_separator");
+		expect(envelope.continuation?.next_action_id).toBe("add_run_separator");
+		// A missing separator is a pure parse failure — no environment work.
+		expect(warmChromeCalls).toBe(0);
+	});
+
+	test("a wrapped command containing --help/--version is not treated as browser-connect help (tail not scanned)", async () => {
+		const calls = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"--help",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, calls),
+			},
+		);
+
+		// NOT help output — the wrapped command ran (spawner invoked), exit 0.
+		expect(run.exitCode).toBe(0);
+		expect(calls.calls).toHaveLength(1);
+		// The tail's --help reached the wrapped command verbatim.
+		expect(calls.calls[0]?.args).toContain("--help");
+	});
+});
+
+describe("browser-connect run: verified handoff + injection (U7 R1, AE1)", () => {
+	test("connect succeeds → envelope on STDERR → wrapped command runs with the injected endpoint (AE1)", async () => {
+		const calls = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain } = okScript(
+			"ws://127.0.0.1:9222/devtools/browser/run-verified",
+		);
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"snapshot",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, calls),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		// KTD5: the verified handoff envelope is on STDERR, not stdout.
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as {
+			outcome: string;
+			attachment: { adapter_id: string; route: string };
+			endpoint: { ws: string; http: string };
+		};
+		expect(data.outcome).toBe("verified");
+		expect(data.attachment.adapter_id).toBe("agent-browser");
+		expect(envelope.continuation?.next_action_id).toBe("use_verified_handoff");
+
+		// R1: the wrapped command ran with the injected endpoint. agent-browser
+		// injects `--cdp <ws>` prepended after the wrapped executable.
+		expect(calls.calls).toHaveLength(1);
+		const invocation = calls.calls[0];
+		if (!invocation) throw new Error("unreachable");
+		expect(invocation.command).toBe("agent-browser");
+		expect(invocation.args).toEqual([
+			"--cdp",
+			"ws://127.0.0.1:9222/devtools/browser/run-verified",
+			"snapshot",
+		]);
+	});
+
+	test("stdout is byte-identical to the wrapped tool's stdout (envelope stays on stderr)", async () => {
+		// The fake spawner never writes to stdout; the run wrapper must not write
+		// the envelope to stdout either, so stdout stays empty (byte-identical to a
+		// wrapped tool that produced no stdout).
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "agent-browser", "snapshot"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		// stdout carries NONE of the envelope — it belongs to the wrapped command.
+		expect(run.stdout).toBe("");
+		expect(run.stderr).toContain('"status":"ok"');
+	});
+});
+
+describe("browser-connect run: exit passthrough vs pre-exec failure (U7 R17, AE6)", () => {
+	test("AE6 arm (a): connection succeeds, wrapped tool exits 1 → passthrough exit 1, NO connect-failure envelope", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "suite", "--fail"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 1 }),
+			},
+		);
+
+		// Passthrough: the wrapped tool's own exit 1.
+		expect(run.exitCode).toBe(1);
+		// The verified handoff envelope (ok) is on stderr; there is NO
+		// connect-failure envelope — the connection succeeded.
+		const envelopes = stderrJsonLines(run);
+		expect(envelopes).toHaveLength(1);
+		expect(envelopes[0]?.status).toBe("ok");
+		expect(envelopes[0]?.error).toBeUndefined();
+	});
+
+	test("AE6 arm (b): foreign listener → exit 20 pre-exec, wrapped command never starts", async () => {
+		const calls = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain } = errorScript(
+			"port_occupied_foreign",
+			"foreign_listener",
+		);
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "suite"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, calls),
+			},
+		);
+
+		// Pre-exec exit 20 (connect-family failure reserved to pre-exec).
+		expect(run.exitCode).toBe(20);
+		// The wrapped command NEVER started.
+		expect(calls.calls).toEqual([]);
+		// stdout untouched; the failure envelope is on stderr.
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("preexec_connect_failed");
+		expect(envelope.error?.exit_code).toBe(20);
+		expect(envelope.continuation?.next_action_id).toBe("resolve_connect_failure");
+	});
+});
+
+describe("browser-connect run: the two 127s are distinguishable (U7 KTD4)", () => {
+	test("wrapped binary MISSING → exit 127 with the handoff envelope already on stderr PLUS a spawn-failure diagnostic line", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "no-such-binary"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({
+					outcome: "spawn-failed",
+					detail: "spawn no-such-binary ENOENT",
+				}),
+			},
+		);
+
+		expect(run.exitCode).toBe(127);
+		const envelopes = stderrJsonLines(run);
+		// TWO JSON lines: the verified handoff envelope, THEN the spawn-failure
+		// diagnostic envelope — so browser-connect's 127 is mechanically
+		// distinguishable from a wrapped tool's own 127.
+		expect(envelopes).toHaveLength(2);
+		expect(envelopes[0]?.status).toBe("ok");
+		expect(envelopes[1]?.status).toBe("error");
+		expect(envelopes[1]?.error?.code).toBe("wrapped_not_found");
+		expect(envelopes[1]?.error?.exit_code).toBe(127);
+		expect(envelopes[1]?.continuation?.next_action_id).toBe(
+			"fix_wrapped_command",
+		);
+	});
+
+	test("wrapped tool SELF-EXITS 127 → passthrough exit 127 with the handoff envelope only, NO spawn-failure diagnostic line", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "tool", "--exit-127"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				// The tool ran and chose exit 127 itself (not a spawn failure).
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 127 }),
+			},
+		);
+
+		expect(run.exitCode).toBe(127);
+		const envelopes = stderrJsonLines(run);
+		// ONLY the verified handoff envelope; NO spawn-failure diagnostic line.
+		// The presence of a diagnostic line is the attribution mechanism (KTD4).
+		expect(envelopes).toHaveLength(1);
+		expect(envelopes[0]?.status).toBe("ok");
+		expect(envelopes.some((e) => e.error?.code === "wrapped_not_found")).toBe(
+			false,
+		);
+	});
+});
+
+describe("browser-connect run: auth-bearing passthrough args never echoed (U7 R14, AE8)", () => {
+	test("an auth-bearing URL arg in the wrapped command appears in NEITHER the envelope NOR any diagnostic", async () => {
+		const SECRET_URL =
+			"https://user:s3cr3t-token@internal.example.com/timesheet?session=abc123";
+		const calls = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--run-id",
+				RUN_ID,
+				"--verbose",
+				"--",
+				"agent-browser",
+				"open",
+				SECRET_URL,
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, calls),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		// The wrapped command DID receive the auth-bearing arg (uninspected, R18).
+		expect(calls.calls[0]?.args).toContain(SECRET_URL);
+		// But NOTHING browser-connect emitted (envelope + all diagnostics on
+		// stderr, and nothing on stdout) echoes it (R14/AE8).
+		expect(run.stdout).not.toContain("s3cr3t-token");
+		expect(run.stdout).not.toContain("session=abc123");
+		expect(run.stderr).not.toContain("s3cr3t-token");
+		expect(run.stderr).not.toContain("session=abc123");
+		expect(run.stderr).not.toContain(SECRET_URL);
+	});
+});
+
+describe("browser-connect run: signal-death passthrough (U7 R17)", () => {
+	test("a wrapped process killed by signal maps to exit 128+signal (passthrough contract)", async () => {
+		const { main: warmChromeMain } = okScript();
+		// The spawner already maps signal-death to 128+signal; a SIGTERM (15) death
+		// surfaces as 143.
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", RUN_ID, "--", "long-running"],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 143 }),
+			},
+		);
+
+		expect(run.exitCode).toBe(143);
+		// The verified handoff was still emitted before exec.
+		expect(parseStderrEnvelope(run).status).toBe("ok");
+	});
+});

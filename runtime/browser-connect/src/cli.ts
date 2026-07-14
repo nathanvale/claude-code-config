@@ -65,6 +65,12 @@ import {
 } from "./adapters/registry.ts";
 import { selectCompatibleRoute } from "./compatibility.ts";
 import {
+	type RunSpawner,
+	runWrappedCommand,
+	spawnRunWrappedCommand,
+	splitRunArgv,
+} from "./run-exec.ts";
+import {
 	BROWSER_CONNECT_CLI_NAME,
 	BROWSER_CONNECT_CONTRACT_ID,
 	type BrowserConnectAuthorizedAttachment,
@@ -181,6 +187,17 @@ export type BrowserConnectMainDeps = {
 	listAdapterDefinitions?: () => readonly AdapterDefinition[];
 	/** Registry lookup accessor; defaults to the real registry. */
 	findAdapterDefinition?: (id: string) => AdapterDefinition | undefined;
+	/**
+	 * Wrapped-command spawner for `run` (U7). Tests inject a fake child so no
+	 * real process is spawned; production defaults to the stdio-inheriting,
+	 * signal-forwarding spawner.
+	 */
+	runSpawner?: RunSpawner;
+	/**
+	 * Base environment the wrapped command inherits before adapter injection is
+	 * merged over it (`run`). Defaults to `process.env`.
+	 */
+	runBaseEnv?: Record<string, string | undefined>;
 	/** Monotonic clock for envelope duration (tests can pin it). */
 	now?: () => number;
 };
@@ -196,6 +213,8 @@ type ResolvedDeps = {
 	adapterRuntime: AdapterRuntime;
 	listAdapterDefinitions: () => readonly AdapterDefinition[];
 	findAdapterDefinition: (id: string) => AdapterDefinition | undefined;
+	runSpawner: RunSpawner;
+	runBaseEnv: Record<string, string | undefined>;
 	now: () => number;
 };
 
@@ -204,7 +223,14 @@ type ParsedInvocation =
 	| { kind: "version" }
 	| { kind: "dashboard"; outputMode: OutputMode }
 	| { kind: "check"; outputMode: OutputMode }
-	| { kind: "connect"; adapterId: string; outputMode: OutputMode };
+	| { kind: "connect"; adapterId: string; outputMode: OutputMode }
+	| {
+			kind: "run";
+			adapterId: string;
+			tail: readonly string[];
+			outputMode: OutputMode;
+	  }
+	| { kind: "run-missing-separator" };
 
 const quietDiagnosticWriter: CliWriter = { write: () => true };
 
@@ -250,12 +276,30 @@ export async function main(
 			deps.listAdapterDefinitions ?? defaultListAdapterDefinitions,
 		findAdapterDefinition:
 			deps.findAdapterDefinition ?? defaultFindAdapterDefinition,
+		runSpawner: deps.runSpawner ?? spawnRunWrappedCommand,
+		runBaseEnv: deps.runBaseEnv ?? process.env,
 		now: deps.now ?? (() => Date.now()),
 	};
 
+	// CRITICAL parser-ordering hazard (R17): parseCliDiagnosticArgv treats `--`
+	// as an end-of-options marker — it STRIPS the separator and would scan the
+	// tail. For `run`, the tail after `--` is the wrapped command verbatim and
+	// must never be parsed as browser-connect argv. So split the RAW argv at the
+	// first `--` up front and feed ONLY the head (with the `run` word) to the
+	// diagnostic parser; the tail passes through this closure untouched.
+	let runTail: readonly string[] | undefined;
+	let argvForDiagnostics = argv;
+	if (argv[0] === "run") {
+		const split = splitRunArgv(argv.slice(1));
+		if (split.kind === "split") {
+			runTail = split.tail;
+			argvForDiagnostics = ["run", ...split.head];
+		}
+	}
+
 	let diagnosticArgv: ParsedCliDiagnosticArgv;
 	try {
-		diagnosticArgv = parseCliDiagnosticArgv(argv);
+		diagnosticArgv = parseCliDiagnosticArgv(argvForDiagnostics);
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(argv);
 		const outputMode = inferOutputMode(argv);
@@ -286,7 +330,7 @@ export async function main(
 			const runId = diagnosticArgv.options.runId;
 			const startedAtMs = diagnosticArgv.options.startedAtMs;
 			try {
-				const parsed = parseArgv(diagnosticArgv.argv);
+				const parsed = parseArgv(diagnosticArgv.argv, runTail);
 				if (parsed.kind === "help") {
 					resolved.stdout.write(renderHelp(parsed.command));
 					return 0;
@@ -294,6 +338,26 @@ export async function main(
 				if (parsed.kind === "version") {
 					resolved.stdout.write(`${BROWSER_CONNECT_CLI_NAME} ${VERSION}\n`);
 					return 0;
+				}
+				if (parsed.kind === "run-missing-separator") {
+					// R17/KTD5: run's own usage failure. It emits to STDERR (stdout
+					// belongs to the wrapped command end-to-end), exit 2, exec never
+					// starts.
+					return emitRunStderrFailure(resolved, {
+						outputMode,
+						runId,
+						durationMs: resolved.now() - startedAtMs,
+						failureClass: "run-missing-separator",
+						message:
+							"run requires a -- separator between its options and the wrapped command.",
+					});
+				}
+				if (parsed.kind === "run") {
+					return await dispatchRun(parsed, resolved, {
+						runId,
+						startedAtMs,
+						reconfigureDiagnostics,
+					});
 				}
 				return await dispatch(parsed, resolved, {
 					runId,
@@ -547,6 +611,90 @@ export async function runConnectGate(
 			...(injection.env ? { env: injection.env } : {}),
 		},
 	};
+}
+
+// ---------------------------------------------------------------------------
+// run dispatch (R1/R14/R17/R18; KTD4/KTD5). Reuse the connect gate, emit the
+// verified handoff envelope on STDERR before exec (stdout belongs to the wrapped
+// command end-to-end), inject the endpoint into the wrapped command's argv/env,
+// then spawn-and-wait with exit passthrough. On gate failure: emit the pre-exec
+// failure envelope on STDERR (exit 20 family), exec never starts. On spawn
+// failure (wrapped binary missing): exit 127 AFTER the envelope, plus a SECOND
+// stderr diagnostic line so browser-connect's 127 is distinguishable from a
+// wrapped tool's own 127. Passthrough args are NEVER echoed into any envelope or
+// diagnostic (R14/KTD10) — only the verified attachment + endpoint are named.
+// ---------------------------------------------------------------------------
+
+async function dispatchRun(
+	parsed: Extract<ParsedInvocation, { kind: "run" }>,
+	deps: ResolvedDeps,
+	ctx: {
+		runId: string;
+		startedAtMs: number;
+		reconfigureDiagnostics: () => void;
+	},
+): Promise<number> {
+	const durationMs = () => deps.now() - ctx.startedAtMs;
+	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "info", "command-start", {
+		command: "run",
+		phase: "start",
+		adapter: parsed.adapterId,
+		// R14/KTD10: the wrapped command's args are NEVER logged here.
+	});
+
+	const gate = await runConnectGate(parsed.adapterId, deps, ctx);
+
+	// Gate FAILURE → pre-exec connect failure on STDERR (exit 20 family); exec
+	// never starts. Every connect-family failure homes on the single run pre-exec
+	// station (run.preexec_connect_failed), so exit 20 is reserved to pre-exec and
+	// stays mechanically distinguishable from any wrapped-tool exit (R17/AE6).
+	if (gate.outcome === "failed") {
+		return emitRunStderrFailure(deps, {
+			outputMode: parsed.outputMode,
+			runId: ctx.runId,
+			durationMs: durationMs(),
+			failureClass: "preexec-connect-failed",
+			launch: gate.launch,
+			...(gate.detail ? { message: gate.detail } : {}),
+		});
+	}
+
+	// Gate SUCCESS → write the verified handoff envelope to STDERR BEFORE exec
+	// (KTD5). stdout is untouched so the wrapped command owns it end-to-end.
+	writeRunHandoffEnvelopeToStderr(deps, parsed.outputMode, gate, {
+		runId: ctx.runId,
+		durationMs: durationMs(),
+	});
+
+	// Inject the verified endpoint into the wrapped command, then spawn-and-wait.
+	const spawnResult = await runWrappedCommand(
+		parsed.tail,
+		gate.injection,
+		deps.runBaseEnv,
+		deps.runSpawner,
+	);
+
+	if (spawnResult.outcome === "spawn-failed") {
+		// KTD4: the wrapped binary was missing. The envelope is already on stderr;
+		// emit a SECOND stderr JSON diagnostic line (wrapped-command-not-found +
+		// its affordance id) so browser-connect's 127 is distinguishable from a
+		// wrapped tool's OWN 127 (which passes through with NO diagnostic line).
+		return emitRunStderrFailure(deps, {
+			outputMode: parsed.outputMode,
+			runId: ctx.runId,
+			durationMs: durationMs(),
+			failureClass: "wrapped-command-not-found",
+			launch: gate.launch,
+			// The spawn-failure detail passes the redactor; the wrapped argv is not
+			// included in it (only the executable name at most, redacted if a path).
+			...(spawnResult.detail ? { message: spawnResult.detail } : {}),
+		});
+	}
+
+	// Passthrough: the wrapped tool's exit code (or 128+signal) is returned
+	// unchanged, with NO connect-failure envelope (R17/AE6). stdout was the
+	// wrapped tool's alone.
+	return spawnResult.exitCode;
 }
 
 function dashboardDeps(deps: ResolvedDeps): DashboardDeps {
@@ -811,6 +959,191 @@ function defaultMessageFor(failureClass: BrowserConnectFailureClass): string {
 	return action?.summary ?? `browser-connect failure: ${failureClass}`;
 }
 
+// ---------------------------------------------------------------------------
+// run stderr emitters (KTD5). The verified handoff and every run failure go to
+// STDERR — stdout belongs to the wrapped command end-to-end. These mirror the
+// stdout emitters above but target deps.stderr and stamp the run-command station
+// branch ids.
+//
+// Envelope channel discipline (KTD5): each run envelope is written as ONE
+// compact JSON LINE, not the facade's pretty multi-line form. stderr is a shared
+// channel — browser-connect diagnostics and (during exec) the wrapped command's
+// own stderr also land here — so the envelope must be a single, independently
+// recoverable line. writeRunEnvelopeLine injects the facade-owned run_id +
+// duration_ms exactly as writeJsonEnvelope would, then serializes on one line.
+// ---------------------------------------------------------------------------
+
+/**
+ * Write one facade envelope to STDERR as a single compact JSON line (KTD5).
+ * Injects the facade-owned top-level `run_id` and `duration_ms` (matching
+ * writeJsonEnvelope's contract) so the line is a complete, standalone envelope
+ * recoverable from a shared stderr stream.
+ */
+function writeRunEnvelopeLine(
+	deps: ResolvedDeps,
+	envelope: Record<string, unknown>,
+	run: { runId: string; durationMs: number },
+): void {
+	deps.stderr.write(
+		`${JSON.stringify({
+			...envelope,
+			run_id: run.runId,
+			duration_ms: run.durationMs,
+		})}\n`,
+	);
+}
+
+/**
+ * Write the verified handoff envelope to STDERR before exec (KTD5/R17). Built
+ * ONLY via U2's createBrowserConnectEnvelopeData; the wrapped command's args
+ * never enter it (R14/KTD10) — it names the authorized attachment + endpoint.
+ */
+function writeRunHandoffEnvelopeToStderr(
+	deps: ResolvedDeps,
+	outputMode: OutputMode,
+	gate: ConnectGateVerified,
+	run: { runId: string; durationMs: number },
+): void {
+	const data: BrowserConnectEnvelopeData = createBrowserConnectEnvelopeData({
+		outcome: "verified",
+		environment: gate.environment,
+		browser_entry_mode: gate.attachment.route,
+		attachment: gate.attachment,
+		endpoint: gate.endpoint,
+		launch: gate.launch,
+		proof: gate.proof,
+	});
+	const action = successActionById.get("use_verified_handoff");
+	const runtimeActions: RuntimeActionGuidance[] = action
+		? [
+				{
+					id: action.id,
+					summary: action.summary,
+					side_effects: [
+						...action.sideEffects,
+					] as RuntimeActionGuidance["side_effects"],
+				},
+			]
+		: [];
+	const continuation: RuntimeContinuationGuidance = {
+		next_action_id: "use_verified_handoff",
+	};
+	if (outputMode === "plain") {
+		deps.stderr.write(
+			`verified adapter=${gate.attachment.adapter_id} route=${gate.attachment.route} launched=${gate.launch.launched} run_id=${run.runId} duration_ms=${run.durationMs}\n`,
+		);
+		return;
+	}
+	writeRunEnvelopeLine(
+		deps,
+		createCliRuntimeSuccessEnvelope({
+			run_id: run.runId,
+			data,
+			runtime_actions: runtimeActions,
+			continuation,
+		}) as unknown as Record<string, unknown>,
+		run,
+	);
+}
+
+/**
+ * Emit a run failure envelope to STDERR (KTD5). Handles the three run failure
+ * classes: run-missing-separator (exit 2), preexec-connect-failed (exit 20,
+ * exec never started), and wrapped-command-not-found (exit 127, the SECOND
+ * diagnostic line after the handoff envelope). All free text passes the
+ * redaction chokepoint; the wrapped command's args are never included (R14).
+ */
+function emitRunStderrFailure(
+	deps: ResolvedDeps,
+	input: {
+		outputMode: OutputMode;
+		runId: string;
+		durationMs: number;
+		failureClass: Extract<
+			BrowserConnectFailureClass,
+			| "run-missing-separator"
+			| "preexec-connect-failed"
+			| "wrapped-command-not-found"
+		>;
+		message?: string;
+		launch?: BrowserConnectLaunchProvenance;
+	},
+): number {
+	const actionId: BrowserConnectFailureActionId =
+		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[input.failureClass];
+	const exitCode = FAILURE_CLASS_EXIT_CODE[input.failureClass];
+	const branchId = FAILURE_CLASS_BRANCH_ID[input.failureClass];
+	const safeMessage = input.message
+		? redactBrowserConnectText(input.message)
+		: defaultMessageFor(input.failureClass);
+
+	const data = createBrowserConnectEnvelopeData({
+		outcome: "failed",
+		failure_class: input.failureClass,
+		next_action_id: actionId,
+		environment: AGENT_CHROME_IDENTITY,
+		launch: input.launch ?? { launched: false },
+		detail: safeMessage,
+	});
+
+	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
+		code: branchId,
+		exit_code: exitCode,
+	});
+
+	const action = failureActionById.get(actionId);
+	const runtimeActions: RuntimeActionGuidance[] = action
+		? [
+				{
+					id: action.id,
+					summary: action.summary,
+					side_effects: [
+						...action.sideEffects,
+					] as RuntimeActionGuidance["side_effects"],
+				},
+			]
+		: [];
+	const continuation: RuntimeContinuationGuidance = {
+		next_action_id: actionId,
+	};
+
+	if (input.outputMode === "plain") {
+		deps.stderr.write(
+			`${branchId}: ${safeMessage} action=${actionId} (run_id=${input.runId})\n`,
+		);
+		return exitCode;
+	}
+
+	const structured: StructuredRuntimeError = createCliRuntimeError({
+		run_id: input.runId,
+		code: branchId,
+		message: safeMessage,
+		exit_code: exitCode,
+		severity: "error",
+		recoverability: "none",
+		retryable: false,
+		hint: { summary: action?.summary ?? safeMessage },
+		failure_domain:
+			input.failureClass === "run-missing-separator"
+				? "input"
+				: "browser_entry_handoff",
+	});
+
+	writeRunEnvelopeLine(
+		deps,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: exitCode,
+			error: structured,
+			data,
+			runtime_actions: runtimeActions,
+			continuation,
+		}) as unknown as Record<string, unknown>,
+		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return exitCode;
+}
+
 /**
  * Map a caught error to a failure envelope. A facade usage error becomes the
  * usage-invalid station (exit 2); anything else is the runtime-error-unexpected
@@ -854,7 +1187,19 @@ function emitCaughtError(
 // here with a not-yet-implemented usage error until U7 lands its parser.
 // ---------------------------------------------------------------------------
 
-function parseArgv(argv: readonly string[]): ParsedInvocation {
+function parseArgv(
+	argv: readonly string[],
+	runTail?: readonly string[],
+): ParsedInvocation {
+	// `run` is handled FIRST, before the whole-argv --help/--version scan below.
+	// The tail after `--` was already split from the RAW argv in main (before the
+	// diagnostic pre-parser could strip `--` or scan the tail); it arrives here as
+	// `runTail`. `argv` here is the diagnostic-stripped HEAD only. Only the HEAD is
+	// parsed as browser-connect argv; the tail is the wrapped command verbatim.
+	if (argv[0] === "run") {
+		return parseRunArgv(argv.slice(1), runTail);
+	}
+
 	if (argv.includes("--help") || argv.includes("-h")) {
 		return { kind: "help", ...helpCommand(findCommandArg(argv)) };
 	}
@@ -898,10 +1243,51 @@ function parseArgv(argv: readonly string[]): ParsedInvocation {
 		assertNoUnknownFlags(rest);
 		return { kind: "connect", adapterId, outputMode: inferOutputMode(rest) };
 	}
-	// first === "run": owned by U7.
-	throw usageError(
-		"run is not implemented in this build; use connect for the machine surface",
-	);
+	// first === "run" is handled at the top of parseArgv (before the global
+	// --help/--version scan). Any other command is unreachable here.
+	throw usageError(`unknown command: ${first}`);
+}
+
+/**
+ * Parse a `run` invocation's HEAD (everything after the `run` command word, with
+ * the `--` and tail already split off in main).
+ *
+ * `runHead` is the diagnostic-stripped head (adapter id + `--json`; the global
+ * diagnostic flags were already consumed by the pre-parser). `runTail` is the
+ * verbatim wrapped command, pre-split from the RAW argv so the diagnostic parser
+ * never saw the `--` or scanned the tail. When `runTail` is undefined, no `--`
+ * was present → the run-missing-separator station (exit 2), unless the head asked
+ * for help (kept discoverable).
+ */
+function parseRunArgv(
+	runHead: readonly string[],
+	runTail?: readonly string[],
+): ParsedInvocation {
+	if (runTail === undefined) {
+		// No `--` in the raw argv. A help request on the run head is command help,
+		// not a usage failure.
+		if (runHead.includes("--help") || runHead.includes("-h")) {
+			return { kind: "help", command: "run" };
+		}
+		return { kind: "run-missing-separator" };
+	}
+
+	// A --help on the head (before `--`) is command help.
+	if (runHead.includes("--help") || runHead.includes("-h")) {
+		return { kind: "help", command: "run" };
+	}
+
+	const adapterId = firstPositional(runHead);
+	if (adapterId === undefined) {
+		throw usageError("run requires an adapter id before the -- separator");
+	}
+	assertNoUnknownFlags(runHead);
+	return {
+		kind: "run",
+		adapterId,
+		tail: runTail,
+		outputMode: inferOutputMode(runHead),
+	};
 }
 
 function firstPositional(argv: readonly string[]): string | undefined {
