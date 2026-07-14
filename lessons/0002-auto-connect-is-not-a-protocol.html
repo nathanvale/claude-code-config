@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auto-connect is not a protocol</title>
+  <style>
+    :root { color-scheme:light; --ink:#152033; --muted:#5c687a; --paper:#f7f9fe; --card:#fff; --line:#dce2ed; --blue:#3157d5; --green:#17705a; --amber:#9a5a00; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.58 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:940px; margin:0 auto; padding:54px 28px 80px; }
+    h1 { font-size:clamp(2.25rem,6vw,4.5rem); line-height:.98; letter-spacing:-.055em; margin:0; max-width:780px; }
+    h2 { margin:42px 0 16px; font-size:1.42rem; letter-spacing:-.025em; }
+    .lede { color:var(--muted); font-size:1.18rem; max-width:760px; }
+    .formula { background:#152033; color:#fff; border-radius:18px; padding:24px 28px; margin:28px 0; font-size:1.15rem; }
+    .formula strong { color:#afc4ff; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:21px; }
+    .card h3 { margin:0 0 8px; font-size:1rem; color:var(--blue); }
+    .card p { margin:0; color:var(--muted); }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); }
+    th,td { padding:14px 16px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); text-transform:uppercase; letter-spacing:.06em; font-size:.8rem; }
+    .callout { border-left:5px solid var(--amber); background:#fff5e5; padding:18px 22px; margin:26px 0; }
+    .pick { border-left:5px solid var(--green); background:#eaf8f2; padding:18px 22px; margin:26px 0; }
+    code { background:#edf1fb; border-radius:5px; padding:.1em .35em; }
+    details { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+    summary { cursor:pointer; font-weight:750; }
+    a { color:var(--blue); }
+    footer { color:var(--muted); border-top:1px solid var(--line); margin-top:44px; padding-top:20px; }
+    @media (max-width:760px) { .grid { grid-template-columns:1fr; } table { font-size:.9rem; } }
+    @media print { main { max-width:none; padding:18mm; } .card,table { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Auto-connect finds CDP. It does not replace CDP.</h1>
+  <p class="lede">The name describes how a client discovers and negotiates access to Chrome. Once attached, the client still controls Chrome through the DevTools protocol.</p>
+
+  <div class="formula"><strong>Auto-connect</strong> = find + request access → <strong>CDP</strong> = inspect + control</div>
+
+  <h2>Three tools, three implementations</h2>
+  <div class="grid">
+    <section class="card"><h3>Chrome DevTools MCP</h3><p><code>--autoConnect</code> requests access to active Chrome. Chrome may ask the operator to allow the connection.</p></section>
+    <section class="card"><h3>Playwright CLI</h3><p><code>attach --cdp=chrome</code> resolves the Chrome channel. Its docs require Chrome's remote-debugging UI setting.</p></section>
+    <section class="card"><h3>agent-browser</h3><p><code>--auto-connect</code> checks profile state, common ports, HTTP discovery, then a direct-WebSocket fallback.</p></section>
+  </div>
+
+  <p class="callout"><strong>Consequence:</strong> one Warm Chrome verdict cannot assume every adapter performed the same handshake. Proof must name the browser-entry mode and the adapter attachment it authorizes.</p>
+
+  <h2>Why auto-connect is attractive</h2>
+  <table>
+    <thead><tr><th>Advantage</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>Existing session</td><td>Reuse current tabs, cookies, extensions, SSO, and MFA state.</td></tr>
+      <tr><td>No fixed port ceremony</td><td>The adapter discovers the running browser instead of requiring a manually supplied endpoint.</td></tr>
+      <tr><td>Chrome security model</td><td>The default profile is reached through explicit remote-debugging enablement rather than ignored debug-port flags.</td></tr>
+      <tr><td>Human handoff</td><td>Move from manual investigation to agent assistance without recreating the browser state.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Why it cannot be the unconditional default</h2>
+  <table>
+    <thead><tr><th>Constraint</th><th>Consequence</th></tr></thead>
+    <tbody>
+      <tr><td>Adapter-specific discovery</td><td>Documentation and regressions differ per client.</td></tr>
+      <tr><td>Operator consent</td><td>Unattended and background runs may stop at a prompt.</td></tr>
+      <tr><td>Profile selection</td><td>The chosen active/default profile may expose more browser state than intended.</td></tr>
+      <tr><td>Multiple agents</td><td>CDP permits multiple clients, but clients can still select, navigate, or mutate the same targets.</td></tr>
+      <tr><td>No stable endpoint contract</td><td>Warm Chrome cannot invent a WebSocket authority when Chrome does not expose one through legacy discovery.</td></tr>
+    </tbody>
+  </table>
+
+  <p class="pick"><strong>Preferred policy:</strong> prefer auto-connect when the request means “use my current Chrome” and an operator can consent. Prefer explicit generic CDP for unattended, reproducible, or tightly isolated work.</p>
+
+  <details>
+    <summary>Retrieval check: is auto-connect a replacement for CDP?</summary>
+    <p>No. It is the attachment path that leads a supported client to a CDP session.</p>
+  </details>
+
+  <h2>Primary reading</h2>
+  <p>Compare the official attachment maps for <a href="https://playwright.dev/agent-cli/commands/attach">Playwright CLI</a>, <a href="https://agent-browser.dev/cdp-mode">agent-browser</a>, and <a href="https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session">Chrome DevTools MCP</a>.</p>
+
+  <footer>Ask your agent about any unclear distinction. Previous lesson: <a href="0001-chrome-150-and-warm-chrome.html">Chrome 150 and Warm Chrome</a>. Quick reference: <a href="../reference/browser-connection-glossary.html">browser connection glossary</a>.</footer>
+</main>
+</body>
+</html>

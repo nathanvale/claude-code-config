@@ -10,6 +10,7 @@ Use for browser entry, inspection, navigation, target discovery, and page action
 
 ## Owner
 
+- Browser entry / connection (prove + attach an adapter to Agent Chrome): `runtime/browser-connect` (`@side-quest/browser-connect`). browser-use keeps operational policy and delegates the proven connection; see `CONTEXT-MAP.md` (Browser Use → browser-connect).
 - Repo-local front doors: `skills/browser-use/package.json#scripts`.
 - Installed front doors: `skills/browser-use/package.json#bin`.
 - Warm Chrome proof, repair, launch: `preflight-warm-chrome`.

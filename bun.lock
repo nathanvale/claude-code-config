@@ -32,6 +32,22 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/browser-connect": {
+      "name": "@side-quest/browser-connect",
+      "version": "0.1.0",
+      "bin": {
+        "browser-connect": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+        "@side-quest/warm-chrome": "workspace:*",
+      },
+      "devDependencies": {
+        "@side-quest/cli-test-fixtures": "workspace:*",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/cli-command-facade": {
       "name": "@side-quest/cli-command-facade",
       "version": "0.1.0",
@@ -230,6 +246,8 @@
     "@puppeteer/browsers": ["@puppeteer/browsers@3.0.4", "", { "dependencies": { "modern-tar": "^0.7.6", "yargs": "^17.7.2" }, "peerDependencies": { "proxy-agent": ">=8.0.1" }, "optionalPeers": ["proxy-agent"], "bin": { "browsers": "lib/main-cli.js" } }, "sha512-HGM8iAmGTf+Y7t0373szVbTmt3d7vPkYL/1bpOkOFO0YUYLgSeuYBCzESklogNPvOBnZ/MRD5f07OkpqH1trtA=="],
 
     "@puppeteer/replay": ["@puppeteer/replay@4.0.2", "", { "peerDependencies": { "lighthouse": ">=13.0.0", "puppeteer": ">=25.0.0" }, "optionalPeers": ["lighthouse", "puppeteer"], "bin": { "replay-extension-test": "lib/extension-test.js", "replay": "lib/cli.js" } }, "sha512-EeE0THQFSTsI2RGxWI07PURCutx9JBM8QbwlFjdykfDu0MMiBrdSmXX9eXZf5Wvo9DmtvGAimWTCZnty44NYqQ=="],
+
+    "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:runtime/browser-connect"],
 
     "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:runtime/cli-command-facade"],
 

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Connection Glossary</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#5d687b; --line:#d9deea; --paper:#fbfcff; --accent:#3157d5; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:820px; margin:0 auto; padding:48px 28px 72px; }
+    h1 { font-size:2rem; letter-spacing:-.03em; margin:0 0 8px; }
+    .lede { color:var(--muted); margin:0 0 34px; }
+    dl { display:grid; grid-template-columns:150px 1fr; gap:0 24px; margin:0; }
+    dt, dd { border-top:1px solid var(--line); padding:18px 0; margin:0; }
+    dt { color:var(--accent); font-weight:750; }
+    code { background:#eef1fa; border-radius:5px; padding:.12em .35em; }
+    footer { color:var(--muted); border-top:1px solid var(--line); margin-top:36px; padding-top:18px; font-size:.9rem; }
+    @media (max-width:600px) { dl { grid-template-columns:1fr; } dt { padding-bottom:2px; } dd { border-top:0; padding-top:0; } }
+    @media print { main { max-width:none; padding:20mm; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Browser connection glossary</h1>
+  <p class="lede">One sentence per layer. Read top to bottom.</p>
+  <dl>
+    <dt>Chrome 150</dt>
+    <dd>The browser process: pages, cookies, profiles, DevTools, and current Chrome security behavior.</dd>
+    <dt>CDP</dt>
+    <dd>The JSON command/event protocol tools use to inspect and control Chrome.</dd>
+    <dt>CDP endpoint</dt>
+    <dd>A loopback HTTP/WebSocket address exposed by Chrome when launched with a remote-debugging port.</dd>
+    <dt>Warm Chrome</dt>
+    <dd>A real, persistent Chrome session plus proof that a tool is attaching to the intended binary, profile, and endpoint.</dd>
+    <dt>Adapter</dt>
+    <dd>A client translating its own commands into browser operations, such as agent-browser, Playwright, or Chrome DevTools MCP.</dd>
+    <dt>Auto-connect</dt>
+    <dd>An adapter-specific discovery or permission handshake that finds a running Chrome without requiring the caller to supply a stable CDP endpoint.</dd>
+    <dt>UI auto-connect</dt>
+    <dd>Chrome 144+ consent flow used by supported clients to reach the active Chrome session without legacy HTTP discovery.</dd>
+    <dt>Channel discovery</dt>
+    <dd>An adapter looks in Chrome's known profile location for the active DevTools connection instead of receiving a port from the caller.</dd>
+    <dt>Explicit CDP</dt>
+    <dd>The caller supplies an HTTP or WebSocket endpoint; this is the most widely supported adapter contract.</dd>
+    <dt>Extension attachment</dt>
+    <dd>An installed Chrome extension attaches to selected tabs through <code>chrome.debugger</code>, a restricted CDP transport that needs no public port.</dd>
+    <dt>WebDriver</dt>
+    <dd>A browser automation standard commonly used by Selenium; ChromeDriver usually creates or manages the browser session.</dd>
+    <dt>WebDriver BiDi</dt>
+    <dd>A bidirectional cross-browser automation protocol; it is not the CDP endpoint shared by Chrome-specific adapters.</dd>
+    <dt>Target</dt>
+    <dd>A debuggable Chrome object such as a tab, iframe, worker, or browser; target ownership prevents multi-agent collisions.</dd>
+    <dt>In-app Browser</dt>
+    <dd>A Codex-owned browser-control surface; useful inside Codex, but not a generic endpoint other tools can consume.</dd>
+    <dt>Firefox</dt>
+    <dd>A separate browser lineage with its own automation connection; it does not attach to Chrome.</dd>
+  </dl>
+  <footer>Rule of thumb: Chrome is the browser, CDP is the language, Warm Chrome is the verified session, and adapters are the speakers.</footer>
+</main>
+</body>
+</html>

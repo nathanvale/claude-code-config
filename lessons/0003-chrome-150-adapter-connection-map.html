@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chrome 150 adapter connection map</title>
+  <style>
+    :root { color-scheme:light; --ink:#172033; --muted:#5d687b; --paper:#f8faff; --card:#fff; --line:#dbe1ec; --blue:#3157d5; --green:#17705a; --purple:#7551b8; --amber:#9a5a00; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:1060px; margin:0 auto; padding:52px 28px 80px; }
+    h1 { max-width:850px; margin:0; font-size:clamp(2.3rem,6vw,4.7rem); line-height:.98; letter-spacing:-.055em; }
+    h2 { margin:42px 0 16px; font-size:1.45rem; letter-spacing:-.025em; }
+    .lede { max-width:800px; color:var(--muted); font-size:1.18rem; }
+    .flow { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:12px; align-items:center; margin:30px 0; }
+    .node { min-height:100%; padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--card); }
+    .node strong { display:block; margin-bottom:5px; color:var(--blue); }
+    .arrow { color:var(--muted); font-size:1.5rem; }
+    .lanes { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .lane { padding:21px; border:1px solid var(--line); border-top:5px solid var(--blue); border-radius:16px; background:var(--card); }
+    .lane:nth-child(2) { border-top-color:var(--purple); }
+    .lane:nth-child(3) { border-top-color:var(--green); }
+    .lane h3 { margin:0 0 8px; font-size:1.05rem; }
+    .lane p { margin:0; color:var(--muted); }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); }
+    th,td { padding:13px 15px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); text-transform:uppercase; letter-spacing:.06em; font-size:.76rem; }
+    td:first-child { font-weight:750; }
+    code { padding:.1em .35em; border-radius:5px; background:#edf1fb; }
+    .yes { color:var(--green); font-weight:750; }
+    .partial { color:var(--amber); font-weight:750; }
+    .policy { margin:28px 0; padding:19px 22px; border-left:5px solid var(--green); background:#eaf8f2; }
+    .warning { margin:28px 0; padding:19px 22px; border-left:5px solid var(--amber); background:#fff5e5; }
+    details { padding:16px 18px; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+    summary { cursor:pointer; font-weight:750; }
+    a { color:var(--blue); }
+    footer { margin-top:44px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); }
+    @media (max-width:800px) { .flow { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); text-align:center; } .lanes { grid-template-columns:1fr; } table { font-size:.88rem; } }
+    @media print { main { max-width:none; padding:16mm; } .lane,table { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Many adapters can use Chrome 150. They do not all enter the same way.</h1>
+  <p class="lede">Chrome is the browser. CDP is the control language. Each adapter chooses a discovery, endpoint, or extension door before it can speak CDP.</p>
+
+  <div class="flow">
+    <div class="node"><strong>Adapter</strong>Playwright, Puppeteer, Browser Use, Selenium, MCP</div>
+    <div class="arrow">→</div>
+    <div class="node"><strong>Entry door</strong>UI discovery, explicit endpoint, or extension</div>
+    <div class="arrow">→</div>
+    <div class="node"><strong>Chrome 150</strong>Targets, tabs, profile state, and CDP sessions</div>
+  </div>
+
+  <h2>The three doors</h2>
+  <div class="lanes">
+    <section class="lane"><h3>1. UI / channel discovery</h3><p>Reuse the running Chrome profile. Chrome may request consent. No stable port required.</p></section>
+    <section class="lane"><h3>2. Explicit CDP endpoint</h3><p>Connect to an HTTP or WebSocket address. Widest adapter support. Best for reproducible automation.</p></section>
+    <section class="lane"><h3>3. Browser extension</h3><p>Attach to selected existing tabs through an installed extension. No public loopback endpoint.</p></section>
+  </div>
+
+  <h2>Adapter map</h2>
+  <table>
+    <thead><tr><th>Adapter</th><th>How it connects</th><th>Chrome 150 UI path?</th><th>Best fit</th></tr></thead>
+    <tbody>
+      <tr><td>Chrome DevTools MCP</td><td><code>--autoConnect</code>, <code>--browserUrl</code>, or browser WebSocket</td><td class="yes">Yes, documented</td><td>DevTools inspection, traces, network, performance</td></tr>
+      <tr><td>Playwright CLI</td><td><code>attach --cdp=chrome</code>, CDP URL, Playwright server, or extension</td><td class="yes">Yes, documented</td><td>Agent-friendly interactive automation</td></tr>
+      <tr><td>agent-browser</td><td><code>--auto-connect</code> or <code>--cdp</code> port/URL/WebSocket</td><td class="yes">Yes, documented</td><td>Fast CLI plus persistent daemon</td></tr>
+      <tr><td>Browser Use CLI</td><td><code>--connect</code> or <code>--cdp-url</code></td><td class="partial">Discovery exists; prove locally</td><td>Python browser agents and MCP mode</td></tr>
+      <tr><td>Puppeteer</td><td><code>connect({channel})</code>, <code>browserURL</code>, or <code>browserWSEndpoint</code></td><td class="partial">Channel mode experimental</td><td>JavaScript automation and direct CDP sessions</td></tr>
+      <tr><td>Playwright library</td><td><code>chromium.connectOverCDP(httpOrWs)</code></td><td>No discovery contract</td><td>Code-level automation against a known endpoint</td></tr>
+      <tr><td>Playwright MCP</td><td><code>--cdp-endpoint</code> or <code>--extension</code></td><td>Extension, not Chrome UI discovery</td><td>MCP clients needing Playwright semantics</td></tr>
+      <tr><td>chrome-remote-interface</td><td>Host, port, and target; defaults to <code>localhost:9222</code></td><td>No</td><td>Raw one-to-one CDP access</td></tr>
+      <tr><td>Selenium / ChromeDriver</td><td>WebDriver session or existing <code>debuggerAddress</code></td><td>No automatic UI discovery</td><td>WebDriver suites and compatibility workflows</td></tr>
+      <tr><td>Chrome extensions</td><td><code>chrome.debugger.attach(tabId)</code></td><td>Separate extension permission lane</td><td>Selected-tab control inside the real profile</td></tr>
+    </tbody>
+  </table>
+
+  <p class="policy"><strong>Warm Chrome implication:</strong> keep two first-class runtime lanes: <em>current Chrome</em> for UI-aware adapters, and <em>generic CDP</em> for every endpoint-aware adapter. Treat extension attachment as a third, adapter-owned lane.</p>
+
+  <p class="warning"><strong>Multi-agent boundary:</strong> multiple clients may attach, but shared transport does not allocate tabs. Give each agent its own target or browser context; otherwise navigation and focus changes can collide.</p>
+
+  <details>
+    <summary>Retrieval check: which door has the widest compatibility?</summary>
+    <p>An explicit CDP endpoint. UI discovery gives the best current-session experience, but only adapters implementing that discovery handshake can use it.</p>
+  </details>
+
+  <h2>Primary reading</h2>
+  <p>Compare <a href="https://playwright.dev/agent-cli/commands/attach">Playwright CLI</a>, <a href="https://pptr.dev/api/puppeteer.connectoptions">Puppeteer</a>, <a href="https://github.com/microsoft/playwright-mcp">Playwright MCP</a>, <a href="https://github.com/browser-use/browser-use/blob/main/browser_use/skill_cli/README.md">Browser Use</a>, and the <a href="https://developer.chrome.com/docs/extensions/reference/api/debugger">Chrome extension debugger API</a>.</p>
+
+  <footer>Previous lesson: <a href="0002-auto-connect-is-not-a-protocol.html">Auto-connect is not a protocol</a>. Quick reference: <a href="../reference/browser-connection-glossary.html">browser connection glossary</a>.</footer>
+</main>
+</body>
+</html>
