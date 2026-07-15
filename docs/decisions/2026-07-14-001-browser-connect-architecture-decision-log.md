@@ -155,3 +155,155 @@ Next:
 V2 Ideas:
 
 - When adapter fallback lands, record whether it consumes ADR 0012's router engine or a fresh ranking mechanism.
+
+## Decision 3: staged repair paths from typed context (repair-paths slice)
+
+```yaml
+id: browser-connect-architecture-003
+status: accepted
+decided_at: "2026-07-15"
+decision: every error station ships one staged, typed, versioned repair path back to a verified connection
+owner: browser-connect
+source:
+  - docs/plans/2026-07-14-002-feat-browser-connect-repair-paths-plan.md
+  - runtime/browser-connect/REPAIR.md
+```
+
+Decision:
+
+- **Staged recovery, two postures.** An automatic stage emits ordered
+  `runtime_actions` and exactly one `continuation.next_action_id`. An operator
+  stage emits `requires_operator: true`, operator-only `choices`, no
+  `next_action_id`, and at least one constraint — the facade rejects an
+  operator stage without a constraint floor, so every gate names what the
+  caller must not do (`no_adapter_fallback`, `no_process_destruction`,
+  `no_mutation_from_diagnostics`, ...).
+- **Typed repair context is the only action input.** Policy
+  (`src/repair-path.ts`) branches on typed failure context — cause, port
+  evidence, adapter provenance, hop — never on prose `detail`. The branch
+  diagnostic re-emits the typed evidence (requested port, hop, cause,
+  preserved suggestion) so the caller consumes fields, not sentences.
+- **Versioned public docs URLs.** Every projected action and choice carries a
+  `REPAIR.md#v1-<action_id>` anchor. Headings are append-only versioned
+  fragments and must exist on main before the emitting binary releases.
+- **Bounded repair-chain hop (0|1).** `use_suggested_port` is the sole
+  cross-invocation automatic continuation, emitted only from a failed
+  `connect` or `run` at hop 0 with a verified-free suggested port. The failed
+  invocation never consumes the suggestion (`no_internal_port_switch`); the
+  caller starts exactly one fresh copy with `--port <suggested>
+  --repair-chain-hop 1`; a hop-1 failure emits an operator stage
+  (`no_cross_invocation_retry`) and never another hop. `check` preserves
+  suggestions as typed diagnostics only and never emits the action.
+- **Explicit-port ownership end to end.** `--port` reaches warm-chrome check,
+  launch, and recheck unchanged and is never derived from the 9222
+  convention. browser-connect never adopts a port other than the one
+  requested inside an invocation — when warm-chrome's competing-instance
+  guard hands back the convention browser instead of launching the requested
+  port, the invocation fails closed to operator diagnostics rather than
+  silently switching.
+- **`repair-adapter --check|--execute` is the package executor.** Preview is
+  read-only, reports the exact currently-eligible action, and grants no
+  authority; execute is the sole package-mutation path, re-reads the same
+  trusted state, validates registry-relative or exact canonical-origin lock
+  entries before any network, and runs the registry-owned isolated installer
+  with lifecycle scripts disabled. Only explicit allowlisted
+  observed-version-to-pin transitions automate.
+- **Closed non-mutating legacy compatibility selector.** Schema-1
+  `data.next_action_id` mirrors automatic outer actions; operator stages
+  degrade only to a cause-appropriate non-mutating compatibility stop. A
+  mutating class default never survives across an operator gate.
+- **Terminal listener boundary.** `inspect_listener` is terminal:
+  browser-connect ingests no process-ownership evidence as authority and
+  projects no port-freeing action. Recovery from an occupied port returns
+  only through fresh warm-chrome proof on another explicit port; listener
+  remediation stays external and operator-owned.
+
+Implementation truths:
+
+- Station IDs use the hyphenated command segment — `repair-adapter.preview`,
+  `repair-adapter.installed`, `repair-adapter.upgraded`,
+  `repair-adapter.operator_stop` — because the facade derives station
+  prefixes from command names verbatim.
+- `agent-browser` package repair is operator-owned: its recipe requires
+  lifecycle scripts, so preview reports posture `none` with
+  `lifecycle_scripts_required` and execute stops before any network.
+- `chrome-devtools-mcp` is the automatically eligible adapter: complete
+  recipe, canonical lock origins, full dependency integrity, lifecycle
+  scripts disabled.
+
+Rationale:
+
+- A failure without a complete repair path is a dead end, and the 2026-07-14
+  live smoke showed dead ends are what agents actually hit. Making the repair
+  path a shipping gate (stable ID + typed context + one continuation posture
+  + public versioned anchor) turns recovery into contract, not prose.
+- The hop bound keeps autonomy honest: one suggestion, one marked fresh
+  invocation, then a human. Nothing self-heals its way onto a port or into a
+  package the caller never named.
+
+Consequences:
+
+- `REPAIR.md` becomes a public release artifact with append-only `v1-*`
+  headings; editing a shipped heading in place is a contract break.
+- Package mutation has exactly one door (`repair-adapter --execute`); no
+  connect or run failure installs anything as a side effect.
+- Legacy schema-1 consumers keep a safe `next_action_id` under every posture.
+
+### Smoke evidence (2026-07-15, U6)
+
+Live arms against real machine state, explicit high ports only. Machine
+state: a verified Agent Chrome already held the 9222 convention
+(pre-existing, PID 98143, monash_qa profile), so warm-chrome's
+competing-instance guard (R10a) refused every explicit-port launch — the
+launch, reuse, and verified-recovery legs are fixture-cited below; the
+posture and boundary arms all ran live.
+
+- `check --port 9377` (free) → `environment-absent`, exit 20,
+  `launch_agent_chrome` continuation + docs anchor, constraints present; no
+  suggested-port action from check.
+- `connect chrome-devtools-mcp --port 9384` → warm-chrome returned the
+  convention browser; browser-connect refused the port swap →
+  `launch-failed`, operator stage, sole choice `inspect_diagnostics`
+  (explicit-port ownership held against real drift).
+- `dashboard` → read-only evidence: `chrome-devtools-mcp` absent,
+  `agent-browser` installed and connectable, routes as modeled.
+- `repair-adapter chrome-devtools-mcp --check` → `install_state: absent`,
+  posture automatic, eligible `install_adapter` at pin 1.5.0, all four trust
+  gates true, `no_pin_policy_change`; zero mutation.
+- `repair-adapter agent-browser --check` → `installed_at_pin` 0.31.2, posture
+  `none`, stop `lifecycle_scripts_required`; zero mutation.
+- Owned dummy listener on 9391, `connect agent-browser --port 9391` →
+  `foreign-listener`, automatic `use_suggested_port`, typed evidence
+  `cause: occupied_listener`, `suggested_port: 9223`; listener untouched.
+- Hop: `connect agent-browser --port 9223 --repair-chain-hop 1` → hop-1
+  failure emitted an operator stage with `no_cross_invocation_retry`
+  forbidding `use_suggested_port`; no second hop (bounded chain held live).
+- `check --port 9391` (same occupied state) → operator `inspect_listener`,
+  no suggested-port action, `no_process_destruction` present (diagnostic
+  check boundary and terminal listener boundary held live).
+- `run agent-browser --port 9405 true` (missing `--`) →
+  `run-missing-separator`, exit 2, automatic `add_run_separator`, no wrapped
+  argv projected; corrected rerun surfaced `preexec-connect-failed`
+  projecting the underlying operator recovery path (F4).
+- Every observed failure envelope carried a facade-valid posture and
+  `REPAIR.md#v1-*` docs URL; no automatic package work ran during smoke.
+- Fixture-cited recovery legs (hermetic, process-boundary,
+  `tests/entrypoint.test.ts` unless noted): verified reuse `launched: false`
+  (`tests/environment.test.ts` R5/F1); auto-launch provenance true (AE7);
+  occupied-with-suggestion → one hop-1 invocation verifies and attaches;
+  absent adapter → `repair-adapter --execute` installs → original connect
+  proves attachment through the published bin; allowlisted mismatch →
+  execute upgrades → connect proves attachment; `agent-browser` execute →
+  operator stop before any network (R29); run passthrough byte-exact
+  (`tests/run-exec.test.ts`).
+
+Next:
+
+- Rerun the launch, reuse, and hop-recovery arms live on a machine state
+  without a standing convention Agent Chrome, and attach the envelopes here.
+
+V2 Ideas:
+
+- A typed multi-instance environment identity would let explicit-port launch
+  coexist with a standing convention browser instead of failing closed —
+  only if the one-Agent-Chrome note in Decision 1 is ever revisited.
