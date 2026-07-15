@@ -12,6 +12,7 @@
 // finally, usage errors through the facade, and continuation guidance built from
 // the U2 affordance catalog.
 
+import { existsSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import {
 	type CliDiagnosticRedactor,
@@ -79,6 +80,7 @@ import {
 } from "./adapters/registry.ts";
 import {
 	BROWSER_CONNECT_INSPECT_DIAGNOSTICS_CHOICE,
+	type BrowserConnectOperatorRepairStage,
 	type BrowserConnectRepairStage,
 	browserConnectContinuationConstraints,
 	selectBrowserConnectLegacyNextAction,
@@ -106,6 +108,7 @@ import {
 	type BrowserConnectRepairChainHop,
 	type BrowserConnectRepairContext,
 	type BrowserConnectRouteId,
+	type BrowserConnectSuggestedPortEvidence,
 	type BrowserConnectVerifiedEndpoint,
 	BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS,
 	BROWSER_CONNECT_SAFE_VERSION_PATTERN,
@@ -366,9 +369,27 @@ export async function main(
 		diagnosticArgv = parseCliDiagnosticArgv(argvForDiagnostics);
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(argv);
-		const outputMode = inferOutputMode(argv);
+		// Output mode comes from the PRE-SPLIT HEAD only: for `run`, the tail
+		// after `--` is the wrapped command verbatim and a hostile `--plain`
+		// there must never flip this failure's output mode (R17/R26).
+		const outputMode = inferOutputMode(argvForDiagnostics);
 		configureDiagnostics(diagnosticArgv, resolved.stderr);
+		const message =
+			error instanceof Error ? error.message : "invalid diagnostic flags";
 		try {
+			// A `run` head keeps stdout for the wrapped command even when the
+			// invocation dies in the diagnostic pre-parse: the usage envelope
+			// goes to STDERR with the honest run command context (KTD5).
+			if (argv[0] === "run") {
+				return emitRunStderrFailure(resolved, {
+					outputMode,
+					runId: diagnosticArgv.options.runId,
+					durationMs: resolved.now() - diagnosticArgv.options.startedAtMs,
+					failureClass: "usage-invalid",
+					message,
+					repairContext: USAGE_INVALID_REPAIR_CONTEXT,
+				});
+			}
 			return emitFailure(resolved, {
 				outputMode,
 				runId: diagnosticArgv.options.runId,
@@ -376,8 +397,7 @@ export async function main(
 					resolved.now() - diagnosticArgv.options.startedAtMs,
 				failureClass: "usage-invalid",
 				command: "check",
-				message:
-					error instanceof Error ? error.message : "invalid diagnostic flags",
+				message,
 				repairContext: USAGE_INVALID_REPAIR_CONTEXT,
 			});
 		} finally {
@@ -455,6 +475,9 @@ export async function main(
 					outputMode,
 					runId,
 					durationMs: resolved.now() - startedAtMs,
+					// The raw invocation head: a `run` usage rejection must keep
+					// stdout untouched for the wrapped command (KTD5).
+					invokedRun: argv[0] === "run",
 				});
 			}
 		});
@@ -1057,9 +1080,28 @@ function primaryRepairStopCause(repair: RepairAssessment): string {
 	return repair.assessment.stop_causes[0] ?? "automatic_repair_unavailable";
 }
 
+/**
+ * Stop causes the isolated-repair executor itself returns (fail-closed stops,
+ * R28/R34). `manifest_missing` is shared with the assessment vocabulary
+ * ({@link AdapterInstallStopCause}); the rest are execution-boundary causes.
+ * Named (not `string`) so a new stop site must extend this union explicitly.
+ */
+type RepairExecutionStopCause =
+	| Extract<AdapterInstallStopCause, "manifest_missing">
+	| "package_manager_unavailable"
+	| "install_root_unavailable"
+	| "registry_unreachable"
+	| "registry_redirect"
+	| "installer_timeout"
+	| "installer_failed"
+	| "expected_bin_missing"
+	| "lock_rewritten"
+	| "publish_conflict"
+	| "provenance_mismatch";
+
 type RepairExecutionResult =
 	| { outcome: "executed" }
-	| { outcome: "stopped"; stopCause: AdapterInstallStopCause | string; detail: string };
+	| { outcome: "stopped"; stopCause: RepairExecutionStopCause; detail: string };
 
 /**
  * The isolated installer boundary (R28/R34; KTD16/KTD17). Preconditions: the
@@ -1241,6 +1283,14 @@ async function executeIsolatedAdapterRepair(
 		});
 		const publishedVersion = extractVersion(provenance.stdout, provenance.stderr);
 		if (provenance.exitCode !== 0 || publishedVersion !== repair.definition.pinnedVersion) {
+			// The publish already happened, but the tree failed its own proof.
+			// Remove the unproven tree (best effort) so a later --execute is not
+			// wedged on publish_conflict by an artifact this run refused to trust.
+			try {
+				await engine.removeDir(finalDir);
+			} catch {
+				// Best effort; the fail-closed stop below is authoritative either way.
+			}
 			return {
 				outcome: "stopped",
 				stopCause: "provenance_mismatch",
@@ -1266,7 +1316,7 @@ async function executeIsolatedAdapterRepair(
  * attempt exhausts the single execute budget (R19) and hands off to read-only
  * diagnostics under the package constraints.
  */
-function repairExecutionStopStage(): BrowserConnectRepairStage {
+function repairExecutionStopStage(): BrowserConnectOperatorRepairStage {
 	return {
 		posture: "operator",
 		continuation: {
@@ -1391,7 +1441,8 @@ function emitRepairOperatorStop(
 		runId: string;
 		durationMs: number;
 		repair: RepairAssessment;
-		stage: BrowserConnectRepairStage;
+		/** Always an operator stage: this emitter never projects an automatic arm. */
+		stage: BrowserConnectOperatorRepairStage;
 		stopCause: string;
 		message: string;
 	},
@@ -1446,16 +1497,7 @@ function emitRepairOperatorStop(
 		failure_domain: "browser_entry_handoff",
 	});
 
-	const continuation: RuntimeContinuationGuidance =
-		input.stage.posture === "operator"
-			? input.stage.continuation
-			: {
-					requires_operator: true,
-					constraints: [
-						browserConnectContinuationConstraints.no_pin_policy_change,
-						browserConnectContinuationConstraints.no_mutation_from_diagnostics,
-					],
-				};
+	const continuation: RuntimeContinuationGuidance = input.stage.continuation;
 
 	writeJsonEnvelope(
 		deps.stdout,
@@ -1829,18 +1871,34 @@ export function buildFailureEnvelopeParts(input: {
 	const exitCode = FAILURE_CLASS_EXIT_CODE[input.failureClass];
 	const branchId = FAILURE_CLASS_BRANCH_ID[input.failureClass];
 
+	// Usable hop-0 suggested-port evidence is projected INTO the envelope data
+	// (R6): the value a `use_suggested_port` continuation needs must be machine-
+	// readable, never scraped from a stderr diagnostic. A hop-1 failure never
+	// re-advertises a port (the one-hop budget is spent, R23), and an
+	// unverified suggestion is preserved as diagnostics only.
+	const suggestedEvidence = suggestedPortEvidenceOf(input.repairContext);
+	const projectedSuggestedPort =
+		suggestedEvidence !== undefined &&
+		suggestedEvidence.verified_free === true &&
+		(input.repairChainHop ?? 0) === 0
+			? suggestedEvidence
+			: undefined;
+
 	const data = createBrowserConnectEnvelopeData({
 		outcome: "failed",
 		failure_class: input.failureClass,
 		next_action_id: actionId,
 		environment: AGENT_CHROME_IDENTITY,
 		launch: input.launch ?? { launched: false },
+		...(projectedSuggestedPort === undefined
+			? {}
+			: { suggested_explicit_port: projectedSuggestedPort }),
 		detail: input.safeMessage,
 	});
 
 	// The branch diagnostic names the typed evidence so the runtime provably
 	// received the parsed port, hop, cause, and preserved suggestion unchanged.
-	const suggestedPort = suggestedPortOf(input.repairContext);
+	const suggestedPort = suggestedEvidence?.port;
 	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
 		code: branchId,
 		exit_code: exitCode,
@@ -1873,18 +1931,18 @@ export function buildFailureEnvelopeParts(input: {
 }
 
 /**
- * The preserved suggested explicit port inside a typed repair context, if any
+ * The preserved suggested-port evidence inside a typed repair context, if any
  * (R6). A pre-exec run failure inherits its underlying context's suggestion.
  */
-function suggestedPortOf(
+function suggestedPortEvidenceOf(
 	context: BrowserConnectRepairContext | undefined,
-): number | undefined {
+): BrowserConnectSuggestedPortEvidence | undefined {
 	if (context === undefined) return undefined;
 	if (context.failure_class === "foreign-listener") {
-		return context.suggested_explicit_port?.port;
+		return context.suggested_explicit_port;
 	}
 	if (context.failure_class === "preexec-connect-failed") {
-		return suggestedPortOf(context.underlying);
+		return suggestedPortEvidenceOf(context.underlying);
 	}
 	return undefined;
 }
@@ -2070,11 +2128,12 @@ function writeRunHandoffEnvelopeToStderr(
 }
 
 /**
- * Emit a run failure envelope to STDERR (KTD5). Handles the three run failure
- * classes: run-missing-separator (exit 2), preexec-connect-failed (exit 20,
- * exec never started), and wrapped-command-not-found (exit 127, the SECOND
- * diagnostic line after the handoff envelope). All free text passes the
- * redaction chokepoint; the wrapped command's args are never included (R14).
+ * Emit a run failure envelope to STDERR (KTD5). Handles the four run failure
+ * classes: usage-invalid (exit 2, a run head rejected before dispatch),
+ * run-missing-separator (exit 2), preexec-connect-failed (exit 20, exec never
+ * started), and wrapped-command-not-found (exit 127, the SECOND diagnostic
+ * line after the handoff envelope). All free text passes the redaction
+ * chokepoint; the wrapped command's args are never included (R14).
  */
 function emitRunStderrFailure(
 	deps: ResolvedDeps,
@@ -2084,6 +2143,7 @@ function emitRunStderrFailure(
 		durationMs: number;
 		failureClass: Extract<
 			BrowserConnectFailureClass,
+			| "usage-invalid"
 			| "run-missing-separator"
 			| "preexec-connect-failed"
 			| "wrapped-command-not-found"
@@ -2096,7 +2156,9 @@ function emitRunStderrFailure(
 	},
 ): number {
 	const safeMessage = input.message
-		? redactBrowserConnectText(input.message)
+		? input.failureClass === "usage-invalid"
+			? sanitizeBrowserConnectUsageMessage(input.message)
+			: redactBrowserConnectText(input.message)
 		: defaultMessageFor(input.failureClass);
 
 	const parts = buildFailureEnvelopeParts({
@@ -2131,6 +2193,7 @@ function emitRunStderrFailure(
 		retryable: false,
 		hint: { summary: action?.summary ?? safeMessage },
 		failure_domain:
+			input.failureClass === "usage-invalid" ||
 			input.failureClass === "run-missing-separator"
 				? "input"
 				: "browser_entry_handoff",
@@ -2244,6 +2307,11 @@ const UNEXPECTED_RUNTIME_REPAIR_CONTEXT: BrowserConnectRepairContext = {
  * usage-invalid station (exit 2); anything else is the runtime-error-unexpected
  * station (exit 1) with a fixed message — a raw error's text never reaches the
  * envelope (R14 leak surface).
+ *
+ * A `run` invocation's usage rejection routes through the run STDERR path
+ * (KTD5): stdout belongs to the wrapped command end-to-end, so the envelope
+ * is one stderr JSON line, exit 2, with the honest `run` command context —
+ * never the stdout emitter's hardcoded `check`.
  */
 function emitCaughtError(
 	deps: ResolvedDeps,
@@ -2252,18 +2320,30 @@ function emitCaughtError(
 		outputMode: OutputMode;
 		runId: string;
 		durationMs: number;
+		invokedRun: boolean;
 	},
 ): number {
 	if (input.error instanceof CliUsageError) {
+		const message = input.error.options.showMessage
+			? input.error.message
+			: "help requested";
+		if (input.invokedRun) {
+			return emitRunStderrFailure(deps, {
+				outputMode: input.outputMode,
+				runId: input.runId,
+				durationMs: input.durationMs,
+				failureClass: "usage-invalid",
+				message,
+				repairContext: USAGE_INVALID_REPAIR_CONTEXT,
+			});
+		}
 		return emitFailure(deps, {
 			outputMode: input.outputMode,
 			runId: input.runId,
 			durationMs: input.durationMs,
 			failureClass: "usage-invalid",
 			command: "check",
-			message: input.error.options.showMessage
-				? input.error.message
-				: "help requested",
+			message,
 			repairContext: USAGE_INVALID_REPAIR_CONTEXT,
 		});
 	}
@@ -2676,20 +2756,55 @@ function createDefaultAdapterInstallEngine(): AdapterInstallEngine {
 }
 
 /**
- * Default production dependencies: the real warm-chrome `main`, the real
- * adapter runtime (PATH resolution + no-shell spawn), and the real registry.
+ * Resolve a registered adapter executable from the published versioned install
+ * trees (R28) after a PATH miss: `repair-adapter --execute` publishes under
+ * `defaultAdapterInstallRoot()` as `<root>/<id>/<pin>/node_modules/.bin/<bin>`.
+ * Only a registered definition whose declared executable matches the command
+ * can resolve here — never arbitrary caller input — and the root derivation is
+ * read fresh per call (env/HOME), matching the executor's publish scope.
  */
-async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
-	const { main: warmChromeMain } = await import("@side-quest/warm-chrome/cli");
-	const adapterRuntime: AdapterRuntime = {
+function resolvePublishedAdapterExecutable(command: string): string | undefined {
+	const installRoot = defaultAdapterInstallRoot();
+	if (installRoot.length === 0) return undefined;
+	for (const definition of defaultListAdapterDefinitions()) {
+		if (definition.executable !== command) continue;
+		const candidate = `${installRoot}/${definition.id}/${definition.pinnedVersion}/node_modules/.bin/${definition.installPolicy.expectedBin}`;
+		if (existsSync(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+/**
+ * Production adapter runtime: PATH resolution first (`Bun.which` keeps
+ * precedence), then the published install-tree fallback, then an honest miss.
+ * Without the fallback, the tree `repair-adapter --execute` publishes would be
+ * unreachable in production (the repair chain could never close). Exported so
+ * the repair-chain closure proof drives this REAL resolver against a published
+ * tree instead of a hand-wired test resolver.
+ */
+export function createProductionAdapterRuntime(): AdapterRuntime {
+	return {
 		env: process.env,
 		resolveExecutable: (command) => {
 			const path = Bun.which(command);
-			return path ? { resolved: true, path } : { resolved: false };
+			if (path) return { resolved: true, path };
+			const published = resolvePublishedAdapterExecutable(command);
+			return published === undefined
+				? { resolved: false }
+				: { resolved: true, path: published };
 		},
 		runCommand: spawnAdapterCommand,
 	};
-	return { warmChromeMain, adapterRuntime };
+}
+
+/**
+ * Default production dependencies: the real warm-chrome `main`, the real
+ * adapter runtime (PATH + published-tree resolution, no-shell spawn), and the
+ * real registry.
+ */
+async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
+	const { main: warmChromeMain } = await import("@side-quest/warm-chrome/cli");
+	return { warmChromeMain, adapterRuntime: createProductionAdapterRuntime() };
 }
 
 if (import.meta.main) {

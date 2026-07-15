@@ -338,6 +338,14 @@ export async function spawnAdapterCommand(
 					: { ...process.env, ...stripUndefined(input.env) }
 				: undefined,
 			stdin: "ignore",
+			// Own process group (POSIX `setsid` via Bun >= 1.3 `detached`): the
+			// timeout kill below can then reap the ENTIRE group — an installer's
+			// own children included — so no straggler outlives the SIGKILL and
+			// keeps writing into staging during cleanup. Completion still awaits
+			// only the direct child; the trade-off is that a detached child no
+			// longer receives the parent terminal's signals (e.g. Ctrl-C), which
+			// bounded timeouts already cover.
+			detached: true,
 		});
 	} catch {
 		return {
@@ -354,10 +362,18 @@ export async function spawnAdapterCommand(
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	const timeoutResult = new Promise<AdapterCommandResult>((resolve) => {
 		timeout = setTimeout(() => {
+			// The child is its own process-group leader (`detached` above), so
+			// signal the GROUP (negative pid): the installer's own children die
+			// with it instead of surviving a direct-child-only SIGKILL. Fall back
+			// to the direct child if the group signal fails (already exited).
 			try {
-				proc.kill("SIGKILL");
+				process.kill(-proc.pid, "SIGKILL");
 			} catch {
-				// Best effort. Timeout result still preserves bounded CLI behavior.
+				try {
+					proc.kill("SIGKILL");
+				} catch {
+					// Best effort. Timeout result still preserves bounded CLI behavior.
+				}
 			}
 			resolve({ exitCode: 1, stdout: "", stderr: "", timedOut: true });
 		}, input.timeoutMs);

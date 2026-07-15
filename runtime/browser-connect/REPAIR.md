@@ -51,9 +51,12 @@ the matching procedures.
 - Side effects: `check`.
 - Same-input retry: safe; one automatic attempt, then operator.
 - Success evidence: the fresh invocation parses and reaches its next gate.
-- Stop and handoff: no replacement, or multiple valid replacements, hands off
+- Stop and handoff: usage-invalid with no deterministic correction hands off
   to an operator stage with `provide_corrected_input`
-  (`no_synthesized_caller_input`).
+  (`no_synthesized_caller_input`). Adapter-unknown with no single trusted
+  replacement hands off to an operator stage offering
+  `choose_registered_adapter:<adapter_id>` choices per trusted candidate
+  (`no_synthesized_caller_input`); documented under `v1-select_compatible_route`.
 - Follow-up proof: the rerun's own parse and command gates.
 
 ### Procedure
@@ -585,8 +588,9 @@ browser-connect connect <adapter_id> --port <suggested_port> --repair-chain-hop 
 browser-connect run <adapter_id> --port <suggested_port> --repair-chain-hop 1 -- <your original wrapped command>
 ```
 
-`<suggested_port>` is the typed `suggested_explicit_port.port` evidence
-field, never a port parsed from prose detail.
+`<suggested_port>` is read from `data.suggested_explicit_port.port` in the
+JSON envelope (`suggested_explicit_port.verified_free` must be `true`); never
+a port parsed from stderr or prose detail.
 
 ### Examples
 

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { dirname, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { BrowserConnectVerifiedEndpoint } from "../src/model.ts";
 import { browserConnectRepairDocsUrl } from "../src/repair-path.ts";
@@ -845,5 +846,48 @@ describe("structured adapter evidence (U5 R11)", () => {
 		if (!refusedResult.attached) {
 			expect(refusedResult.cause).toBe("probe_failed");
 		}
+	});
+});
+
+// ===========================================================================
+// Integrity sources stay git-tracked (KTD17 regression guard). A global
+// ignore rule (e.g. `package-lock.json` in a root .gitignore) once silently
+// dropped the adapter lockfiles from the repo — the source-controlled full
+// dependency-integrity reference vanished while every read-side test kept
+// passing against local files. This guard makes that regression fail CI
+// loudly: every registered definition's manifest AND lockfile must appear in
+// `git ls-files` (the index), not merely on disk.
+// ===========================================================================
+
+describe("adapter-install integrity sources are git-tracked (KTD17)", () => {
+	test("every registered definition's manifest and lockfile appears in git ls-files", () => {
+		const definitions = listAdapterDefinitions();
+		expect(definitions.length).toBeGreaterThan(0);
+		const sourcePaths = definitions.flatMap((definition) => [
+			definition.installPolicy.integritySource.manifestPath,
+			definition.installPolicy.integritySource.lockfilePath,
+		]);
+
+		const anchor = sourcePaths[0];
+		if (anchor === undefined) throw new Error("no integrity source paths");
+		const rootProc = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], {
+			cwd: dirname(anchor),
+		});
+		expect(rootProc.exitCode).toBe(0);
+		const repoRoot = rootProc.stdout.toString().trim();
+
+		const relativePaths = sourcePaths.map((path) => relative(repoRoot, path));
+		const lsProc = Bun.spawnSync(
+			["git", "ls-files", "--", ...relativePaths],
+			{ cwd: repoRoot },
+		);
+		expect(lsProc.exitCode).toBe(0);
+		const tracked = new Set(
+			lsProc.stdout.toString().split("\n").filter(Boolean),
+		);
+
+		// Set difference so a failure NAMES the untracked file(s).
+		const untracked = relativePaths.filter((path) => !tracked.has(path));
+		expect(untracked).toEqual([]);
 	});
 });

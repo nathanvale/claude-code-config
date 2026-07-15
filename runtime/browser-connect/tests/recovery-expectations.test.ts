@@ -1709,6 +1709,75 @@ describe("projection serialization proofs (U4 R3/R14/R26)", () => {
 		}
 	});
 
+	test("suggested-port evidence serializes as typed envelope data: hop-0 carried, hop-1 and unusable omitted (R6/R23/KTD20)", () => {
+		const findRow = (
+			predicate: (row: ProjectionMatrixRow) => boolean,
+		): ProjectionMatrixRow => {
+			const row = PROJECTION_MATRIX.find(predicate);
+			if (!row) throw new Error("expected matrix row not found");
+			return row;
+		};
+		const evidenceOf = (
+			parsed: Record<string, unknown>,
+		): { port: number; verified_free: boolean } | undefined =>
+			(parsed.data as Record<string, unknown>).suggested_explicit_port as
+				| { port: number; verified_free: boolean }
+				| undefined;
+
+		// The automatic occupied+suggestion arm: a headless driver can build the
+		// hop-1 rerun from data alone — the port never lives only in a stderr
+		// diagnostic.
+		const automatic = serializedEnvelope(
+			findRow(
+				(row) =>
+					row.cause === "occupied_listener" &&
+					row.invocation.command === "connect" &&
+					row.invocation.repair_chain_hop === 0,
+			),
+		);
+		expect(automatic.parts.continuation.next_action_id).toBe(
+			"use_suggested_port",
+		);
+		expect(evidenceOf(automatic.parsed)).toEqual({
+			port: 9333,
+			verified_free: true,
+		});
+
+		// check preserves the evidence WITHOUT an automatic continuation
+		// (R6/KTD20): diagnostic posture, evidence intact.
+		const check = serializedEnvelope(
+			findRow(
+				(row) =>
+					row.cause === "occupied_listener" &&
+					row.invocation.command === "check",
+			),
+		);
+		expect(evidenceOf(check.parsed)).toEqual({ port: 9333, verified_free: true });
+		const checkContinuation = check.parsed.continuation as Record<string, unknown>;
+		expect(checkContinuation.next_action_id).toBeUndefined();
+		expect(checkContinuation.requires_operator).toBe(true);
+
+		// Hop 1 never re-advertises a port (the one-hop budget is spent, R23).
+		const hopOne = serializedEnvelope(
+			findRow(
+				(row) =>
+					row.cause === "occupied_listener" &&
+					row.invocation.repair_chain_hop === 1,
+			),
+		);
+		expect(evidenceOf(hopOne.parsed)).toBeUndefined();
+
+		// Absent and unverified (stale) suggestions are omitted.
+		const absent = serializedEnvelope(
+			findRow((row) => row.cause === "foreign_listener"),
+		);
+		expect(evidenceOf(absent.parsed)).toBeUndefined();
+		const stale = serializedEnvelope(
+			findRow((row) => row.cause === "unverified_listener"),
+		);
+		expect(evidenceOf(stale.parsed)).toBeUndefined();
+	});
+
 	test("run repair privacy: no wrapped argv, basename, or marker field serializes (R26/AE14)", () => {
 		const privacyRows = PROJECTION_MATRIX.filter(
 			(row) =>

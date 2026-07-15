@@ -26,6 +26,7 @@ import {
 } from "../src/environment.ts";
 import {
 	type BrowserConnectMainDeps,
+	createProductionAdapterRuntime,
 	main,
 } from "../src/cli.ts";
 import type {
@@ -1300,6 +1301,8 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("foreign_listener");
+		// No suggestion from warm-chrome → no suggested-port evidence field.
+		expect(envelope.data?.suggested_explicit_port).toBeUndefined();
 		// Fail closed: a foreign listener is NOT auto-launched over.
 		expect(wcCalls.map(commandWord)).toEqual(["check"]);
 	});
@@ -1653,6 +1656,82 @@ describe("browser-connect run: -- separator parsing (U7 R17)", () => {
 		expect(calls.calls).toHaveLength(1);
 		// The tail's --help reached the wrapped command verbatim.
 		expect(calls.calls[0]?.args).toContain("--help");
+	});
+});
+
+describe("browser-connect run: usage rejections stay off stdout (U7 KTD5)", () => {
+	test("missing adapter id before -- (hostile wrapped tail) → stderr envelope, exit 2, stdout byte-empty", async () => {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		let spawnerCalls = 0;
+		const trackingSpawner: RunSpawner = async () => {
+			spawnerCalls += 1;
+			return { outcome: "exited", exitCode: 0 };
+		};
+		// No adapter id in the head; the tail carries a hostile --plain that
+		// must never flip the failure's output mode (the tail is the wrapped
+		// command verbatim, never browser-connect argv).
+		const run = await runDispatcher(
+			["run", "--run-id", RUN_ID, "--", "tool", "--plain"],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+				runSpawner: trackingSpawner,
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		// stdout belongs to the wrapped command end-to-end — byte-empty here.
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("usage_invalid");
+		expect(envelope.error?.exit_code).toBe(2);
+		// A parse-phase rejection: no environment work, no exec.
+		expect(warmChromeCalls).toBe(0);
+		expect(spawnerCalls).toBe(0);
+	});
+
+	test("invalid diagnostic flag on a run head (hostile tail) → stderr envelope, exit 2, stdout byte-empty", async () => {
+		// `--run-id` missing its value dies in the diagnostic pre-parse; the
+		// output mode must come from the pre-split HEAD, never the tail's
+		// hostile --plain (the envelope stays a JSON line on stderr).
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", "--", "tool", "--plain"],
+			{
+				warmChromeMain: async () => {
+					throw new Error("no environment work for a diagnostic parse failure");
+				},
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("usage_invalid");
+	});
+
+	test("a non-run usage error keeps today's stdout channel", async () => {
+		const run = await runDispatcher(
+			["connect", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain: async () => 0,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("usage_invalid");
 	});
 });
 
@@ -2179,6 +2258,22 @@ describe("browser-connect gateway option rejection (U3 R15: consistent across co
 		return { run, warmChromeCalls };
 	}
 
+	/**
+	 * The usage envelope's channel is command-honest (KTD5): run keeps stdout
+	 * byte-empty for the wrapped command and rejects on STDERR; every other
+	 * command rejects on stdout.
+	 */
+	function parseUsageEnvelope(
+		argv: readonly string[],
+		run: DispatcherRun,
+	): DispatcherEnvelope {
+		if (argv[0] === "run") {
+			expect(run.stdout).toBe("");
+			return parseStderrEnvelope(run);
+		}
+		return parseStdout(run);
+	}
+
 	test("an out-of-range port is exit 2 usage_invalid on every command, before any gateway work", async () => {
 		for (const argv of [
 			["check", "--port", "70000", "--json"],
@@ -2187,7 +2282,7 @@ describe("browser-connect gateway option rejection (U3 R15: consistent across co
 		]) {
 			const { run, warmChromeCalls } = await rejectionRun(argv);
 			expect(run.exitCode).toBe(2);
-			const envelope = parseStdout(run);
+			const envelope = parseUsageEnvelope(argv, run);
 			expect(envelope.error?.code).toBe("usage_invalid");
 			// U4 projection: corrected input stays caller-owned (operator stage);
 			// legacy data keeps the change_input stop (R30).
@@ -2209,7 +2304,7 @@ describe("browser-connect gateway option rejection (U3 R15: consistent across co
 		]) {
 			const { run, warmChromeCalls } = await rejectionRun(argv);
 			expect(run.exitCode).toBe(2);
-			expect(parseStdout(run).error?.code).toBe("usage_invalid");
+			expect(parseUsageEnvelope(argv, run).error?.code).toBe("usage_invalid");
 			expect(warmChromeCalls).toBe(0);
 		}
 	});
@@ -2259,6 +2354,13 @@ describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () =
 		expectNoSuggestedPortAffordance(envelope);
 		// Legacy stop stays the non-mutating listener inspection (R30-compatible).
 		expect(envelope.data?.next_action_id).toBe("inspect_listener");
+		// The suggestion IS preserved as typed envelope evidence (R6): a later
+		// hop-0 connect/run driver may consume it, even though check itself
+		// never projects a suggested-port continuation (KTD20).
+		expect(envelope.data?.suggested_explicit_port).toEqual({
+			port: 9333,
+			verified_free: true,
+		});
 		// The failed invocation never consumed the suggestion itself: one check,
 		// no rerun against 9333 (no_internal_port_switch).
 		expect(calls).toHaveLength(1);
@@ -2289,7 +2391,11 @@ describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () =
 		);
 
 		expect(run.exitCode).toBe(20);
-		expectNoSuggestedPortAffordance(parseStdout(run));
+		const envelope = parseStdout(run);
+		expectNoSuggestedPortAffordance(envelope);
+		// Hop 1 never re-advertises a port in the envelope either: the one-hop
+		// budget is spent (R23), so the fresh suggestion stays diagnostics-only.
+		expect(envelope.data?.suggested_explicit_port).toBeUndefined();
 		// Exactly one gateway check on the explicit port; the fresh suggestion
 		// (9444) is never consumed by this invocation.
 		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
@@ -2338,8 +2444,52 @@ describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () =
 		const envelope = parseStderrEnvelope(run);
 		expect(envelope.error?.code).toBe("preexec_connect_failed");
 		expectNoSuggestedPortAffordance(envelope);
+		// Spent hop budget: no suggested-port evidence re-advertised (R23).
+		expect(envelope.data?.suggested_explicit_port).toBeUndefined();
 		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
 		expect(calls.flat()).not.toContain("9444");
+		expect(spawnerCalls).toBe(0);
+	});
+
+	test("hop 0: a run pre-exec occupied failure carries the suggested-port evidence on its stderr envelope (R6)", async () => {
+		let spawnerCalls = 0;
+		const trackingSpawner: RunSpawner = async () => {
+			spawnerCalls += 1;
+			return { outcome: "exited", exitCode: 0 };
+		};
+		const { main: warmChromeMain } = scriptedWarmChromeMain([
+			occupiedStep(9333),
+		]);
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"snapshot",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: trackingSpawner,
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.error?.code).toBe("preexec_connect_failed");
+		// The automatic use_suggested_port continuation AND the typed evidence
+		// it needs travel together at the process boundary: a headless driver
+		// builds the hop-1 rerun from data alone.
+		expect(envelope.continuation?.next_action_id).toBe("use_suggested_port");
+		expect(envelope.data?.suggested_explicit_port).toEqual({
+			port: 9333,
+			verified_free: true,
+		});
 		expect(spawnerCalls).toBe(0);
 	});
 
@@ -2408,10 +2558,10 @@ describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () =
 // network, no real global package mutation, no real npm.
 // ===========================================================================
 
-import { chmod, mkdir as fsMkdir, mkdtemp as fsMkdtemp, readFile as fsReadFile, rename as fsRename, rm as fsRm, writeFile as fsWriteFile } from "node:fs/promises";
+import { chmod, mkdir as fsMkdir, mkdtemp as fsMkdtemp, readdir as fsReaddir, readFile as fsReadFile, rename as fsRename, rm as fsRm, writeFile as fsWriteFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach } from "bun:test";
 import type {
 	AdapterInstallEngine,
@@ -2583,9 +2733,11 @@ async function runRepairScenario(options: {
 	pm?: { reportVersion?: string; exitCode?: number; createBin?: boolean };
 	pmCandidates?: readonly string[];
 	definitions?: readonly AdapterDefinition[];
+	/** Override the install root (retry fixtures share one across executes). */
+	installRoot?: string;
 }): Promise<RepairScenario> {
 	const root = await makeRepairRoot();
-	const installRoot = join(root, "install-root");
+	const installRoot = options.installRoot ?? join(root, "install-root");
 	const recordPath = join(root, "pm-record.json");
 	const pmPath = await writeFakePackageManager(root, {
 		recordPath,
@@ -3191,6 +3343,33 @@ describe("browser-connect repair-adapter --execute: fail-closed stops (U5 R29/R3
 		expect(data.stop_cause).toBe("provenance_mismatch");
 	});
 
+	test("provenance mismatch removes the unproven published tree; a retry is never wedged on publish_conflict", async () => {
+		const first = await runRepairScenario({
+			mode: "--execute",
+			pm: { reportVersion: "9.9.9" },
+		});
+		const firstData = expectOperatorStop(first.run);
+		expect(firstData.stop_cause).toBe("provenance_mismatch");
+		// The tree published, failed its own proof, and was removed (best
+		// effort): an artifact this run refused to trust must not persist.
+		expect(
+			existsSync(
+				join(first.installRoot, "chrome-devtools-mcp", PINNED["chrome-devtools-mcp"]),
+			),
+		).toBe(false);
+
+		// A second --execute against the SAME install root proceeds past its
+		// publish to its OWN provenance step — provenance_mismatch again, never
+		// a publish_conflict wedge on the first run's leftover.
+		const second = await runRepairScenario({
+			mode: "--execute",
+			pm: { reportVersion: "9.9.9" },
+			installRoot: first.installRoot,
+		});
+		const secondData = expectOperatorStop(second.run);
+		expect(secondData.stop_cause).toBe("provenance_mismatch");
+	});
+
 	test("execute on an operator-posture version state → stop, no mutation (R22)", async () => {
 		const scenario = await runRepairScenario({
 			mode: "--execute",
@@ -3201,7 +3380,103 @@ describe("browser-connect repair-adapter --execute: fail-closed stops (U5 R29/R3
 		expect(scenario.recorder.spawnInputs).toEqual([]);
 		expect(existsSync(scenario.installRoot)).toBe(false);
 	});
+
+	test("installer timeout → the whole installer process group is reaped, staging cleanup succeeds, sole stop installer_timeout", async () => {
+		const root = await makeRepairRoot();
+		const installRoot = join(root, "install-root");
+		const childPidPath = join(root, "installer-child-pid");
+		// A hanging fake package manager that mirrors npm's shape: it spawns its
+		// OWN worker child, records that child's pid, then blocks far past the
+		// clamped timeout (stdin is closed, so no prompt can ever answer).
+		const pmPath = join(root, "hanging-pm");
+		await fsWriteFile(
+			pmPath,
+			[
+				"#!/usr/bin/env bun",
+				'const child = Bun.spawn(["sleep", "600"]);',
+				`await Bun.write(${JSON.stringify(childPidPath)}, String(child.pid));`,
+				"await Bun.sleep(600_000);",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		await chmod(pmPath, 0o755);
+		const { engine } = recordingInstallEngine({
+			env: { PATH: process.env.PATH, HOME: root, TMPDIR: tmpdir() },
+		});
+		// Clamp the executor's install timeout down to test scale while keeping
+		// the REAL spawnAdapterCommand timeout-kill path at a real process
+		// boundary.
+		const clampedEngine: AdapterInstallEngine = {
+			...engine,
+			runCommand: (input) =>
+				engine.runCommand({
+					...input,
+					timeoutMs: Math.min(input.timeoutMs, 2_000),
+				}),
+		};
+		const definitions = [
+			withInstallPolicy(chromeDevtoolsMcpDefinition, {
+				packageManager: { approvedAbsoluteCandidates: [pmPath] },
+			}),
+			agentBrowserDefinition,
+		];
+		const run = await runDispatcher(
+			[
+				"repair-adapter",
+				"chrome-devtools-mcp",
+				"--execute",
+				"--json",
+				"--run-id",
+				REPAIR_RUN_ID,
+			],
+			{
+				warmChromeMain: neverWarmChrome,
+				adapterRuntime: fakeAdapterRuntime({ version: {} }),
+				...repairRegistryAccessors(definitions),
+				adapterInstallEngine: clampedEngine,
+				adapterInstallRoot: installRoot,
+			},
+		);
+
+		// The sole surfaced stop is the timeout — no publish_conflict, no
+		// cleanup-derived secondary stop.
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("operator_stop");
+		const data = envelope.data as Record<string, unknown>;
+		expect(data.stop_cause).toBe("installer_timeout");
+		// Staging cleanup succeeded despite the killed installer: no leftover
+		// staging tree, nothing published.
+		const leftovers = (await fsReaddir(installRoot)).filter((entry) =>
+			entry.startsWith(".staging-"),
+		);
+		expect(leftovers).toEqual([]);
+		expect(existsSync(publishedBinPath(installRoot))).toBe(false);
+		// The installer's OWN child was reaped with it (process-GROUP kill): a
+		// direct-child-only SIGKILL would leave this straggler alive, free to
+		// write into staging during cleanup.
+		const childPid = Number(await fsReadFile(childPidPath, "utf8"));
+		expect(Number.isInteger(childPid) && childPid > 1).toBe(true);
+		await expectProcessGone(childPid);
+	}, 20_000);
 });
+
+/** Poll until a pid no longer exists (ESRCH), bounded — group-kill proof. */
+async function expectProcessGone(pid: number): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	for (;;) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return; // The process no longer exists.
+		}
+		if (Date.now() > deadline) {
+			throw new Error(`process ${pid} is still alive after the group kill`);
+		}
+		await Bun.sleep(50);
+	}
+}
 
 // ===========================================================================
 // U5 connect gate: typed adapter evidence (R11/R23/AE12/AE16). The gate feeds
@@ -3597,6 +3872,12 @@ describe("repair-chain closure: use_suggested_port (U4 R27/AE3/AE15)", () => {
 			"use_suggested_port",
 		);
 		expect(failingEnvelope.data?.next_action_id).toBe("use_suggested_port");
+		// The rerun's port is machine-readable envelope evidence (R6) — the
+		// recipe below consumes THIS value, not a scraped stderr diagnostic.
+		expect(failingEnvelope.data?.suggested_explicit_port).toEqual({
+			port: 9333,
+			verified_free: true,
+		});
 
 		// Caller-rerun recipe: ONE fresh invocation with the suggested explicit
 		// port at repair-chain hop 1. Named follow-up proof: the fresh
@@ -3724,6 +4005,57 @@ describe("repair-chain closure: install_adapter (U4 R27/AE15/AE22)", () => {
 				...realRegistryAccessors(),
 			},
 		);
+		expect(rerun.exitCode).toBe(0);
+		const data = parseStdout(rerun).data as {
+			outcome: string;
+			attachment: { adapter_id: string; probe_executable: string };
+		};
+		expect(data.outcome).toBe("verified");
+		expect(data.attachment.adapter_id).toBe("chrome-devtools-mcp");
+		expect(data.attachment.probe_executable).toBe(publishedBin);
+	}, 30_000);
+
+	test("production resolver closure: the follow-up connect resolves the published tree through the REAL production resolver (no hand-wired resolver)", async () => {
+		// 1. Publish via the hermetic engine into an install root shaped EXACTLY
+		// like production's derivation: $HOME/.side-quest/browser-connect/adapters.
+		const home = await makeRepairRoot();
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			installRoot: join(home, ".side-quest", "browser-connect", "adapters"),
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const publishedBin = publishedBinPath(scenario.installRoot);
+		expect(existsSync(publishedBin)).toBe(true);
+
+		// 2. Follow-up connect with the PRODUCTION adapter runtime. The resolver's
+		// install-root derivation reads env HOME fresh per call — the same seam
+		// production reads — so point HOME at the published tree's home. PATH is
+		// controlled (bun's own dir for shebangs plus system dirs, no global npm
+		// bins) so Bun.which provably MISSES and PATH precedence is not in play.
+		const savedHome = process.env.HOME;
+		const savedPath = process.env.PATH;
+		process.env.HOME = home;
+		process.env.PATH = `${dirname(process.execPath)}:/usr/bin:/bin`;
+		let rerun: DispatcherRun;
+		try {
+			rerun = await runDispatcher(
+				["connect", "chrome-devtools-mcp", "--json", "--run-id", CLOSURE_RUN_ID],
+				{
+					warmChromeMain: okScript().main,
+					adapterRuntime: createProductionAdapterRuntime(),
+					...realRegistryAccessors(),
+				},
+			);
+		} finally {
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+		}
+
+		// 3. Named follow-up proof: provenance AND the attachment probe ran the
+		// PUBLISHED bin the production resolver found — the repair chain closes
+		// with zero hand-wired resolution.
 		expect(rerun.exitCode).toBe(0);
 		const data = parseStdout(rerun).data as {
 			outcome: string;

@@ -700,6 +700,12 @@ export type BrowserConnectHandoffPayload = {
  * Failure payload (R2): failure class plus exactly one next safe action.
  * `detail` is optional free text and always passes the redaction chokepoint
  * before serialization (R14).
+ *
+ * `suggested_explicit_port` is additive schema-1 evidence (R6): the typed
+ * warm-chrome suggestion, projected only when a hop-0 driver could use it to
+ * build the one `use_suggested_port` rerun — a headless driver must never
+ * have to scrape the port from a stderr diagnostic. Numbers and a boolean
+ * only, so text safety is unaffected.
  */
 export type BrowserConnectFailurePayload = {
 	outcome: "failed";
@@ -707,6 +713,7 @@ export type BrowserConnectFailurePayload = {
 	next_action_id: BrowserConnectFailureActionId;
 	environment: BrowserConnectEnvironmentIdentity;
 	launch: BrowserConnectLaunchProvenance;
+	suggested_explicit_port?: BrowserConnectSuggestedPortEvidence;
 	detail?: string;
 };
 

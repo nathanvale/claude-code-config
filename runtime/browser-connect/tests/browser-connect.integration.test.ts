@@ -524,11 +524,69 @@ async function runRepairAdapterPreview(
 		["repair-adapter", "chrome-devtools-mcp", "--check", "--json", "--run-id", RUN_ID],
 		{ label: station.id },
 	);
-	const envelope = assertStationEnvelope(station, result);
+	const envelope = assertStationEnvelope(station, result) as RecoveryEnvelope;
+	const data = envelope.data as Record<string, unknown> | undefined;
+	expect(data?.outcome, describeCliProcessRun(result)).toBe("repair_preview");
+
+	// Process-boundary field assertions (R11): adapter_id and install_state
+	// survive JSON serialization verbatim.
+	expect(data?.adapter_id, describeCliProcessRun(result)).toBe("chrome-devtools-mcp");
+
+	const legalInstallStates = ["absent", "version_mismatch", "installed_at_pin"] as const;
+	type RepairInstallState = (typeof legalInstallStates)[number];
+	const installState = data?.install_state as RepairInstallState | undefined;
 	expect(
-		(envelope.data as Record<string, unknown> | undefined)?.outcome,
+		legalInstallStates,
 		describeCliProcessRun(result),
-	).toBe("repair_preview");
+	).toContain(installState);
+
+	// posture/continuation must be mutually consistent across all machine states.
+	// The preview is read-only so we branch on observed install_state.
+	if (installState === "installed_at_pin") {
+		// No repair needed: posture is "none", no continuation projected.
+		expect(data?.posture, describeCliProcessRun(result)).toBe("none");
+		expect(envelope.continuation, describeCliProcessRun(result)).toBeUndefined();
+	} else if (installState === "absent") {
+		// Automatic install arm: when automatic_install evidence is complete,
+		// posture is "automatic" and continuation carries next_action_id.
+		const posture = data?.posture as string | undefined;
+		if (posture === "automatic") {
+			expect(
+				envelope.continuation?.next_action_id,
+				describeCliProcessRun(result),
+			).toBe("install_adapter");
+			expect(envelope.continuation?.requires_operator, describeCliProcessRun(result)).toBeUndefined();
+		} else {
+			// Operator arm (incomplete evidence): requires_operator, no next_action_id.
+			expect(posture, describeCliProcessRun(result)).toBe("operator");
+			expect(
+				envelope.continuation?.requires_operator,
+				describeCliProcessRun(result),
+			).toBe(true);
+			expect(envelope.continuation?.next_action_id, describeCliProcessRun(result)).toBeUndefined();
+		}
+	} else {
+		// version_mismatch: either automatic (allowlisted upgrade) or operator.
+		const posture = data?.posture as string | undefined;
+		expect(
+			["automatic", "operator"],
+			describeCliProcessRun(result),
+		).toContain(posture);
+		if (posture === "automatic") {
+			expect(
+				envelope.continuation?.next_action_id,
+				describeCliProcessRun(result),
+			).toBeDefined();
+			expect(envelope.continuation?.requires_operator, describeCliProcessRun(result)).toBeUndefined();
+		} else {
+			expect(
+				envelope.continuation?.requires_operator,
+				describeCliProcessRun(result),
+			).toBe(true);
+			expect(envelope.continuation?.next_action_id, describeCliProcessRun(result)).toBeUndefined();
+		}
+	}
+
 	return buildStationEvidence(station, result, envelope);
 }
 
