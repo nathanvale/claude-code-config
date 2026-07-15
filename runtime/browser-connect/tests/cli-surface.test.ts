@@ -8,6 +8,7 @@ import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/tes
 
 import {
 	BROWSER_CONNECT_CLI_NAME,
+	BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
 	BROWSER_CONNECT_CONTRACT_ID,
 	BROWSER_CONNECT_FAILURE_ACTION_IDS,
 	BROWSER_CONNECT_SCHEMA_VERSION,
@@ -263,5 +264,37 @@ describe("browser-connect discovery projection (U3 R2)", () => {
 				{ path: CONTRACT_PATH },
 			),
 		).toEqual([]);
+	});
+
+	test("discovery marks compatibility-only action ids on every command (R20)", () => {
+		const tree = projectBrowserConnectCommandDiscoveryTree();
+		for (const command of BROWSER_CONNECT_COMMANDS) {
+			expect(tree.commands[command]?.compatibility_only_action_ids).toEqual([
+				...BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
+			]);
+		}
+		// The marking never removes the ids from the discoverable affordances.
+		for (const actionId of BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS) {
+			expect(
+				tree.commands.connect?.action_affordances?.failure?.map(
+					(action) => action.id,
+				),
+			).toContain(actionId);
+		}
+	});
+
+	test("the additive repair action ids are discoverable affordances (R2/R20)", () => {
+		const tree = projectBrowserConnectCommandDiscoveryTree();
+		const failureIds = tree.commands.connect?.action_affordances?.failure?.map(
+			(action) => action.id,
+		);
+		for (const actionId of [
+			"use_suggested_port",
+			"upgrade_adapter_to_pin",
+			"adjust_adapter_pin",
+			"review_adapter_definition",
+		]) {
+			expect(failureIds).toContain(actionId);
+		}
 	});
 });

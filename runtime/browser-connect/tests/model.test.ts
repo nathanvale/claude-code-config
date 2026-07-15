@@ -5,15 +5,21 @@ import {
 } from "@side-quest/cli-command-facade/testing";
 
 import {
+	BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES,
 	BROWSER_CONNECT_CLI_NAME,
+	BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
 	BROWSER_CONNECT_CONTRACT_ID,
 	BROWSER_CONNECT_ENVIRONMENT_NAMES,
+	BROWSER_CONNECT_ENVIRONMENT_REPAIR_CAUSES,
 	BROWSER_CONNECT_FAILURE_ACTION_IDS,
 	BROWSER_CONNECT_FAILURE_CLASSES,
 	BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS,
+	BROWSER_CONNECT_REPAIR_CAUSES,
+	BROWSER_CONNECT_REPAIR_CHAIN_HOPS,
 	BROWSER_CONNECT_RESULT_CONTRACT,
 	BROWSER_CONNECT_ROUTE_EVIDENCE_STATUSES,
 	BROWSER_CONNECT_ROUTES,
+	BROWSER_CONNECT_RUN_REPAIR_CAUSES,
 	BROWSER_CONNECT_SCHEMA_VERSION,
 	BROWSER_CONNECT_SUCCESS_ACTION_IDS,
 	browserConnectFailureActions,
@@ -26,6 +32,7 @@ import {
 	type BrowserConnectFailureClass,
 	type BrowserConnectFailurePayload,
 	type BrowserConnectHandoffPayload,
+	type BrowserConnectRepairContext,
 } from "../src/model.ts";
 
 function fixture(label: string): string {
@@ -125,6 +132,73 @@ describe("browser-connect model vocabulary", () => {
 			"wrapped-command-not-found",
 			"runtime-error-unexpected",
 		]);
+	});
+});
+
+describe("browser-connect typed repair context vocabulary (U1)", () => {
+	// Compile-time exhaustiveness (R4): the repair context union covers exactly
+	// the failure-class union — a class without a context variant, or a context
+	// variant naming a foreign class, fails this assignment.
+	type RepairContextClass = BrowserConnectRepairContext["failure_class"];
+	const _repairContextCoversEveryFailureClass: [RepairContextClass] extends [
+		BrowserConnectFailureClass,
+	]
+		? [BrowserConnectFailureClass] extends [RepairContextClass]
+			? true
+			: never
+		: never = true;
+	void _repairContextCoversEveryFailureClass;
+
+	test("the additive repair action ids extend the stable schema-1 vocabulary", () => {
+		expect(BROWSER_CONNECT_FAILURE_ACTION_IDS.slice(0, 11)).toEqual([
+			"change_input",
+			"add_run_separator",
+			"launch_agent_chrome",
+			"inspect_listener",
+			"inspect_diagnostics",
+			"list_registered_adapters",
+			"install_adapter",
+			"select_compatible_route",
+			"inspect_attachment_probe",
+			"resolve_connect_failure",
+			"fix_wrapped_command",
+		]);
+		expect(BROWSER_CONNECT_FAILURE_ACTION_IDS.slice(11)).toEqual([
+			"use_suggested_port",
+			"upgrade_adapter_to_pin",
+			"adjust_adapter_pin",
+			"review_adapter_definition",
+		]);
+	});
+
+	test("compatibility-only ids stay a discoverable subset of the action vocabulary", () => {
+		expect(BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS).toEqual([
+			"list_registered_adapters",
+			"select_compatible_route",
+			"resolve_connect_failure",
+		]);
+		for (const actionId of BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS) {
+			expect(BROWSER_CONNECT_FAILURE_ACTION_IDS).toContain(actionId);
+		}
+	});
+
+	test("the repair chain is bounded to hops 0 and 1 (R23)", () => {
+		expect(BROWSER_CONNECT_REPAIR_CHAIN_HOPS).toEqual([0, 1]);
+	});
+
+	test("repair causes are unique and cover the three failure domains", () => {
+		expect(new Set(BROWSER_CONNECT_REPAIR_CAUSES).size).toBe(
+			BROWSER_CONNECT_REPAIR_CAUSES.length,
+		);
+		for (const cause of [
+			...BROWSER_CONNECT_ENVIRONMENT_REPAIR_CAUSES,
+			...BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES,
+			...BROWSER_CONNECT_RUN_REPAIR_CAUSES,
+			"usage_invalid",
+			"unexpected_runtime_error",
+		]) {
+			expect(BROWSER_CONNECT_REPAIR_CAUSES).toContain(cause);
+		}
 	});
 });
 

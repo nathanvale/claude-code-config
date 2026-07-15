@@ -6,6 +6,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_CONNECT_CLI_NAME,
+	BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
 	BROWSER_CONNECT_CONTRACT_ID,
 	type BrowserConnectFailureActionId,
 	BROWSER_CONNECT_SCHEMA_VERSION,
@@ -276,22 +277,28 @@ export const BROWSER_CONNECT_PREVIEW_NOTES = {
 	run: "Preview with browser-connect check; run execs the wrapped command with the caller's authority and it cannot be previewed.",
 } as const satisfies Partial<Record<BrowserConnectCommand, string>>;
 
-type BrowserConnectPreviewNoteAugment = {
+type BrowserConnectDiscoveryAugment = {
 	/** Agent-visible preview boundary note for mutating commands. */
 	preview_note?: string;
 	/** Facade-owned global diagnostics accepted before command parsing. */
 	global_diagnostic_flags: typeof BROWSER_CONNECT_GLOBAL_DIAGNOSTIC_FLAGS;
+	/**
+	 * Compatibility-only action ids (R20): discoverable for released schema-1
+	 * consumers, never an outer `continuation.next_action_id`.
+	 */
+	compatibility_only_action_ids: typeof BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS;
 };
 
 /**
  * Command Discovery Tree projection for the browser-connect CLI (R2/R15).
  *
  * Covers all four commands, exit code 20 with its meaning, capability roles,
- * runtime actions, the result contract id, and the preview-boundary notes.
+ * runtime actions, the result contract id, the preview-boundary notes, and
+ * the compatibility-only action marking (R20).
  */
 export function projectBrowserConnectCommandDiscoveryTree() {
 	return projectCommandDiscoveryTree(browserConnectContractEntries, {
-		augment: (command): BrowserConnectPreviewNoteAugment => {
+		augment: (command): BrowserConnectDiscoveryAugment => {
 			const note =
 				command in BROWSER_CONNECT_PREVIEW_NOTES
 					? BROWSER_CONNECT_PREVIEW_NOTES[
@@ -300,6 +307,8 @@ export function projectBrowserConnectCommandDiscoveryTree() {
 					: undefined;
 			return {
 				global_diagnostic_flags: BROWSER_CONNECT_GLOBAL_DIAGNOSTIC_FLAGS,
+				compatibility_only_action_ids:
+					BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
 				...(note === undefined ? {} : { preview_note: note }),
 			};
 		},
