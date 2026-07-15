@@ -40,3 +40,10 @@ module ownership, see [ARCHITECTURE.md](./ARCHITECTURE.md).
   wrapped command's exit code through unchanged.
 - Emits facade-backed JSON envelopes for agents (machine surface): `connect
   <adapter> --json` on stdout, `run`'s envelope on stderr pre-exec.
+
+## Recovery
+
+Failure envelopes carry one complete Repair Path: a stable action id, typed
+repair context, one automatic or operator continuation, and a versioned
+public anchor into [REPAIR.md](./REPAIR.md). REPAIR.md is the action manual
+and the only home for repair commands; envelope summaries stay prose-safe.

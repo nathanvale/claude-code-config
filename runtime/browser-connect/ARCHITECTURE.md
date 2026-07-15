@@ -74,5 +74,10 @@ clause when that rule retires:
 - `README.md`: human front door and target command posture.
 - `CONTEXT.md`: package language for Agent Chrome, Human Chrome, Browser
   Adapter, and Verified Handoff Envelope.
+- `REPAIR.md`: repair-docs owner. One append-only versioned heading
+  (`v1-<action-id>`) per catalogue repair action; the only home for repair
+  commands. `src/repair-path.ts` emits its public `#v1-<action-id>`
+  fragments; a heading must exist on main before releasing a binary that
+  emits it.
 - `TASKS.md`: active project-manager dashboard.
 - `TASKS.archive.md`: closed task detail and long review rationale.
