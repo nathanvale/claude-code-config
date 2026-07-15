@@ -536,7 +536,7 @@ async function runRepairAdapterPreview(
 	type RepairInstallState = (typeof legalInstallStates)[number];
 	const installState = data?.install_state as RepairInstallState | undefined;
 	expect(
-		legalInstallStates,
+		legalInstallStates as readonly (RepairInstallState | undefined)[],
 		describeCliProcessRun(result),
 	).toContain(installState);
 
@@ -569,7 +569,7 @@ async function runRepairAdapterPreview(
 		// version_mismatch: either automatic (allowlisted upgrade) or operator.
 		const posture = data?.posture as string | undefined;
 		expect(
-			["automatic", "operator"],
+			["automatic", "operator"] as readonly (string | undefined)[],
 			describeCliProcessRun(result),
 		).toContain(posture);
 		if (posture === "automatic") {
