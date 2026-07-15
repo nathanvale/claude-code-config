@@ -51,6 +51,20 @@
     <dd>A bidirectional cross-browser automation protocol; it is not the CDP endpoint shared by Chrome-specific adapters.</dd>
     <dt>Target</dt>
     <dd>A debuggable Chrome object such as a tab, iframe, worker, or browser; target ownership prevents multi-agent collisions.</dd>
+    <dt>Failure class</dt>
+    <dd>A stable category describing what failed, such as environment absence, adapter installation, route compatibility, or run input.</dd>
+    <dt>Typed repair context</dt>
+    <dd>Structured failure facts used by recovery policy, rather than values extracted from human-readable error detail.</dd>
+    <dt>Repair policy</dt>
+    <dd>A pure package-owned decision function that maps typed failure evidence to one automatic continuation or an operator handoff.</dd>
+    <dt>Runtime action</dt>
+    <dd>A stable action ID with summary, side effects, recoverability, and repair documentation.</dd>
+    <dt>Continuation</dt>
+    <dd>The envelope field naming either one automatic next action or an operator-required stage, never both.</dd>
+    <dt>Branch station</dt>
+    <dd>One named CLI outcome whose exit code, envelope status, error, mutation, and recovery expectations can be tested.</dd>
+    <dt>Fail closed</dt>
+    <dd>Stop and require safe repair or operator input when identity or recovery evidence is missing; never guess an endpoint.</dd>
     <dt>In-app Browser</dt>
     <dd>A Codex-owned browser-control surface; useful inside Codex, but not a generic endpoint other tools can consume.</dd>
     <dt>Firefox</dt>
