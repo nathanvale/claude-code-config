@@ -11,6 +11,7 @@ import {
 } from "./adapters/registry.ts";
 import type { BrowserConnectCommand } from "./command-contract.ts";
 import {
+	BROWSER_CONNECT_SAFE_VERSION_PATTERN as SAFE_VERSION_PATTERN,
 	type BrowserConnectFailureActionId,
 	type BrowserConnectFailureClass,
 	type BrowserConnectIsolatedInstallEvidence,
@@ -624,6 +625,14 @@ const OPERATOR_CHOICES = {
 	},
 } as const satisfies Record<string, RuntimeRecoveryChoice>;
 
+/**
+ * Catalogue-owned inspect_diagnostics choice for emitters that project an
+ * operator stop outside the pure selector (id, effects, recoverability, and
+ * docs URL stay single-sourced; callers may override the summary prose).
+ */
+export const BROWSER_CONNECT_INSPECT_DIAGNOSTICS_CHOICE =
+	OPERATOR_CHOICES.inspect_diagnostics;
+
 function isTrustedAdapterId(value: string): value is BrowserConnectAdapterId {
 	return (BROWSER_CONNECT_ADAPTER_IDS as readonly string[]).includes(value);
 }
@@ -720,8 +729,6 @@ function isCompleteInstallEvidence(
 	);
 }
 
-/** Safe observed/pinned version shape (R11): plain x.y.z only. */
-const SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
  * Normalized wrapped-executable basename (R26): a bare program name with no

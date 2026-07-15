@@ -12,6 +12,7 @@
 // finally, usage errors through the facade, and continuation guidance built from
 // the U2 affordance catalog.
 
+import * as fsPromises from "node:fs/promises";
 import {
 	type CliDiagnosticRedactor,
 	type CliDiagnosticSerializableRecord,
@@ -77,9 +78,9 @@ import {
 	VERSION_READ_TIMEOUT_MS,
 } from "./adapters/registry.ts";
 import {
+	BROWSER_CONNECT_INSPECT_DIAGNOSTICS_CHOICE,
 	type BrowserConnectRepairStage,
 	browserConnectContinuationConstraints,
-	browserConnectRepairDocsUrl,
 	selectBrowserConnectLegacyNextAction,
 	selectBrowserConnectRepairPath,
 } from "./repair-path.ts";
@@ -107,6 +108,7 @@ import {
 	type BrowserConnectRouteId,
 	type BrowserConnectVerifiedEndpoint,
 	BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS,
+	BROWSER_CONNECT_SAFE_VERSION_PATTERN,
 	BROWSER_CONNECT_SCHEMA_VERSION,
 	browserConnectFailureActions,
 	browserConnectSuccessActions,
@@ -675,10 +677,13 @@ export async function runConnectGate(
 			outcome: "failed",
 			failure_class: provenance.failureClass,
 			launch,
-			repair_context: await buildAdapterNotInstalledContext(
+			repair_context: buildAdapterNotInstalledContext(
 				definition,
 				provenance,
-				deps.adapterInstallEngine,
+				await assessAdapterInstallPolicy(
+					definition,
+					deps.adapterInstallEngine,
+				),
 			),
 			detail: provenance.detail,
 		};
@@ -782,8 +787,6 @@ const REPAIR_ADAPTER_INSTALL_TIMEOUT_MS = 180_000;
 /** Adapter install state projected into repair envelopes (safe fields only). */
 type RepairInstallState = "absent" | "version_mismatch" | "installed_at_pin";
 
-/** Safe observed/pinned version shape for projection (R11): plain x.y.z. */
-const REPAIR_SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
  * The full trusted-state read both modes share: structured provenance, the
@@ -804,12 +807,11 @@ type RepairAssessment = {
  * provenance plus the definition-owned install assessment. Shared by the
  * connect gate and repair-adapter so policy always sees the same evidence.
  */
-async function buildAdapterNotInstalledContext(
+function buildAdapterNotInstalledContext(
 	definition: AdapterDefinition,
 	provenance: Extract<AdapterProvenanceResult, { installed: false }>,
-	engine: AdapterInstallEngine,
-): Promise<BrowserConnectAdapterRepairContext> {
-	const assessment = await assessAdapterInstallPolicy(definition, engine);
+	assessment: AdapterInstallAssessment,
+): BrowserConnectAdapterRepairContext {
 	if (provenance.cause === "version_mismatch") {
 		return {
 			failure_class: "adapter-not-installed",
@@ -918,10 +920,10 @@ async function assessRepairAdapter(
 			assessment,
 		};
 	}
-	const context = await buildAdapterNotInstalledContext(
+	const context = buildAdapterNotInstalledContext(
 		definition,
 		provenance,
-		deps.adapterInstallEngine,
+		assessment,
 	);
 	const stage = selectBrowserConnectRepairPath(
 		{ command: "repair-adapter", repair_chain_hop: 0 },
@@ -946,7 +948,7 @@ function repairProvenanceFields(repair: RepairAssessment): Record<string, unknow
 		adapter_id: repair.definition.id,
 		install_state: repair.installState,
 		...(repair.observedVersion !== undefined &&
-		REPAIR_SAFE_VERSION_PATTERN.test(repair.observedVersion)
+		BROWSER_CONNECT_SAFE_VERSION_PATTERN.test(repair.observedVersion)
 			? { observed_version: repair.observedVersion }
 			: {}),
 		pinned_version: repair.definition.pinnedVersion,
@@ -1275,13 +1277,9 @@ function repairExecutionStopStage(): BrowserConnectRepairStage {
 			],
 			choices: [
 				{
-					id: "inspect_diagnostics",
-					label: "Inspect diagnostics",
+					...BROWSER_CONNECT_INSPECT_DIAGNOSTICS_CHOICE,
 					summary:
 						"Rerun the repair preview with diagnostics to obtain the typed stop cause; execution stopped fail-closed.",
-					recoverability: "repair_state",
-					side_effects: ["read", "check"],
-					docs_url: browserConnectRepairDocsUrl("inspect_diagnostics"),
 				},
 			],
 		},
@@ -2181,10 +2179,7 @@ function emitRunUnexpectedStderrFailure(
 		failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
-		repairContext: {
-			failure_class: "runtime-error-unexpected",
-			cause: "unexpected_runtime_error",
-		},
+		repairContext: UNEXPECTED_RUNTIME_REPAIR_CONTEXT,
 	});
 	const { actionId, exitCode, branchId, action, data } = parts;
 
@@ -2646,37 +2641,26 @@ function createDefaultAdapterInstallEngine(): AdapterInstallEngine {
 	return {
 		env: process.env,
 		fileExists: async (path) => {
-			const fs = await import("node:fs/promises");
 			try {
-				await fs.access(path);
+				await fsPromises.access(path);
 				return true;
 			} catch {
 				return false;
 			}
 		},
-		readTextFile: async (path) => {
-			const fs = await import("node:fs/promises");
-			return fs.readFile(path, "utf8");
-		},
+		readTextFile: async (path) => fsPromises.readFile(path, "utf8"),
 		writeTextFile: async (path, contents) => {
-			const fs = await import("node:fs/promises");
-			await fs.writeFile(path, contents, "utf8");
+			await fsPromises.writeFile(path, contents, "utf8");
 		},
 		makeDir: async (path) => {
-			const fs = await import("node:fs/promises");
-			await fs.mkdir(path, { recursive: true });
+			await fsPromises.mkdir(path, { recursive: true });
 		},
-		makeTempDir: async (prefix) => {
-			const fs = await import("node:fs/promises");
-			return fs.mkdtemp(prefix);
-		},
+		makeTempDir: async (prefix) => fsPromises.mkdtemp(prefix),
 		removeDir: async (path) => {
-			const fs = await import("node:fs/promises");
-			await fs.rm(path, { recursive: true, force: true });
+			await fsPromises.rm(path, { recursive: true, force: true });
 		},
 		publishDir: async (fromPath, toPath) => {
-			const fs = await import("node:fs/promises");
-			await fs.rename(fromPath, toPath);
+			await fsPromises.rename(fromPath, toPath);
 		},
 		probeOrigin: async (url) => {
 			const response = await fetch(url, {

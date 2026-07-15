@@ -1,10 +1,11 @@
-import type {
-	BrowserConnectAuthorizedAttachment,
-	BrowserConnectFailureClass,
-	BrowserConnectIsolatedInstallEvidence,
-	BrowserConnectRouteEvidenceStatus,
-	BrowserConnectRouteId,
-	BrowserConnectVerifiedEndpoint,
+import {
+	BROWSER_CONNECT_SAFE_VERSION_PATTERN,
+	type BrowserConnectAuthorizedAttachment,
+	type BrowserConnectFailureClass,
+	type BrowserConnectIsolatedInstallEvidence,
+	type BrowserConnectRouteEvidenceStatus,
+	type BrowserConnectRouteId,
+	type BrowserConnectVerifiedEndpoint,
 } from "../../src/model.ts";
 
 // ---------------------------------------------------------------------------
@@ -731,7 +732,7 @@ export function manualAdapterInstallInputsComplete(
 	const policy = definition.installPolicy;
 	return (
 		policy.packageName.length > 0 &&
-		/^\d+\.\d+\.\d+$/.test(definition.pinnedVersion) &&
+		BROWSER_CONNECT_SAFE_VERSION_PATTERN.test(definition.pinnedVersion) &&
 		policy.installScope === "user" &&
 		policy.operatorChoice.packageOwner.length > 0 &&
 		/^https:\/\//.test(policy.operatorChoice.docsUrl)

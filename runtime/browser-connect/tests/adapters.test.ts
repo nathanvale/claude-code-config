@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
 import type { BrowserConnectVerifiedEndpoint } from "../src/model.ts";
+import { browserConnectRepairDocsUrl } from "../src/repair-path.ts";
 import {
 	AGENT_BROWSER_CDP_FLAG,
 	AGENT_BROWSER_EXECUTABLE,
@@ -385,10 +386,13 @@ describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
 				`adapter-install/${definition.id}/package-lock.json`,
 			);
 			expect(policy.expectedBin).toBe(definition.executable);
-			// Maintainer-authored operator-choice metadata (KTD18).
+			// Maintainer-authored operator-choice metadata (KTD18). The docs URL
+			// literal must track the policy-owned generator: adapter modules cannot
+			// import repair-path.ts (registry <-> adapter evaluation cycle), so this
+			// cross-check is the drift guard.
 			expect(policy.operatorChoice.packageOwner.length).toBeGreaterThan(0);
 			expect(policy.operatorChoice.docsUrl).toBe(
-				"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+				browserConnectRepairDocsUrl("install_adapter"),
 			);
 			expect(manualAdapterInstallInputsComplete(definition)).toBe(true);
 		}

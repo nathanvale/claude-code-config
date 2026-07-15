@@ -24,6 +24,9 @@ export const BROWSER_CONNECT_CONTRACT_ID =
  */
 export const BROWSER_CONNECT_SCHEMA_VERSION = "1" as const;
 
+/** Safe observed/pinned version shape for projection (R11): plain x.y.z only. */
+export const BROWSER_CONNECT_SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
 /**
  * Canonical CLI name (bin entry and discovery surface).
  *
