@@ -93,7 +93,6 @@ import {
 import {
 	BROWSER_CONNECT_CLI_NAME,
 	BROWSER_CONNECT_CONTRACT_ID,
-	type BrowserConnectAdapterRepairCause,
 	type BrowserConnectAdapterRepairContext,
 	type BrowserConnectAuthorizedAttachment,
 	type BrowserConnectEnvironmentIdentity,
@@ -277,7 +276,13 @@ type ParsedInvocation =
 			port?: number;
 			repairChainHop: BrowserConnectRepairChainHop;
 	  }
-	| { kind: "run-missing-separator" }
+	| {
+			kind: "run-missing-separator";
+			/** Distinct typed causes on the one station (R12/AE6). */
+			cause: "separator_missing" | "wrapped_command_missing";
+			/** Parser-memory marker only; the wrapped words never leave the parser (R26). */
+			wrappedCommandPresent: boolean;
+	  }
 	| {
 			kind: "repair-adapter";
 			adapterId: string;
@@ -371,6 +376,7 @@ export async function main(
 				command: "check",
 				message:
 					error instanceof Error ? error.message : "invalid diagnostic flags",
+				repairContext: USAGE_INVALID_REPAIR_CONTEXT,
 			});
 		} finally {
 			resetCliDiagnostics();
@@ -399,14 +405,28 @@ export async function main(
 				if (parsed.kind === "run-missing-separator") {
 					// R17/KTD5: run's own usage failure. It emits to STDERR (stdout
 					// belongs to the wrapped command end-to-end), exit 2, exec never
-					// starts.
+					// starts. The typed cause distinguishes a missing `--` from an
+					// empty tail on the one station (R12/AE6).
 					return emitRunStderrFailure(resolved, {
 						outputMode,
 						runId,
 						durationMs: resolved.now() - startedAtMs,
 						failureClass: "run-missing-separator",
 						message:
-							"run requires a -- separator between its options and the wrapped command.",
+							parsed.cause === "wrapped_command_missing"
+								? "run received a -- separator with no wrapped command after it."
+								: "run requires a -- separator between its options and the wrapped command.",
+						repairContext:
+							parsed.cause === "wrapped_command_missing"
+								? {
+										failure_class: "run-missing-separator",
+										cause: "wrapped_command_missing",
+									}
+								: {
+										failure_class: "run-missing-separator",
+										cause: "separator_missing",
+										wrapped_command_present: parsed.wrappedCommandPresent,
+									},
 					});
 				}
 				if (parsed.kind === "repair-adapter") {
@@ -531,7 +551,7 @@ async function dispatch(
 		failureClass: gate.failure_class,
 		command: "connect",
 		...(gate.detail ? { message: gate.detail } : {}),
-		...(gate.repair_context ? { repairContext: gate.repair_context } : {}),
+		repairContext: gate.repair_context,
 		repairChainHop: parsed.repairChainHop,
 		...(parsed.port === undefined ? {} : { requestedPort: parsed.port }),
 	});
@@ -571,7 +591,7 @@ export type ConnectGateFailed = {
 	outcome: "failed";
 	failure_class: BrowserConnectFailureClass;
 	launch: BrowserConnectLaunchProvenance;
-	repair_context?:
+	repair_context:
 		| BrowserConnectEnvironmentRepairContext
 		| BrowserConnectAdapterRepairContext;
 	detail?: string;
@@ -614,13 +634,7 @@ export async function runConnectGate(
 			outcome: "failed",
 			failure_class: "adapter-unknown",
 			launch: { launched: false },
-			repair_context: {
-				failure_class: "adapter-unknown",
-				cause: "unregistered_adapter",
-				candidate_adapter_ids: deps
-					.listAdapterDefinitions()
-					.map((candidate) => candidate.id),
-			},
+			repair_context: unregisteredAdapterContext(adapterId, deps),
 			detail: `adapter ${adapterId} is not in the registry`,
 		};
 	}
@@ -825,6 +839,38 @@ async function buildAdapterNotInstalledContext(
 }
 
 /**
+ * Typed adapter-unknown context (R24). Candidates are the trusted registered
+ * ids; a deterministic replacement exists only when exactly one registered id
+ * matches the caller's input case-insensitively (the matrix's "one
+ * deterministic registered correction" arm) — the replacement is always a
+ * trusted registry id, never caller prose.
+ */
+function unregisteredAdapterContext(
+	adapterId: string,
+	deps: Pick<ResolvedDeps, "listAdapterDefinitions">,
+): Extract<
+	BrowserConnectAdapterRepairContext,
+	{ cause: "unregistered_adapter" }
+> {
+	const candidates = deps
+		.listAdapterDefinitions()
+		.map((candidate) => candidate.id);
+	const lowered = adapterId.toLowerCase();
+	const replacements = candidates.filter(
+		(candidate) => candidate.toLowerCase() === lowered,
+	);
+	const replacement = replacements.length === 1 ? replacements[0] : undefined;
+	return {
+		failure_class: "adapter-unknown",
+		cause: "unregistered_adapter",
+		candidate_adapter_ids: candidates,
+		...(replacement === undefined
+			? {}
+			: { deterministic_replacement_adapter_id: replacement }),
+	};
+}
+
+/**
  * Trusted registered candidates whose IMPLEMENTED routes include one the
  * environment offers (AE16/AE20) — the only ids a cross-adapter handoff
  * choice may name.
@@ -930,13 +976,7 @@ async function dispatchRepairAdapter(
 			failureClass: "adapter-unknown",
 			command: "repair-adapter",
 			message: `adapter ${parsed.adapterId} is not in the registry`,
-			repairContext: {
-				failure_class: "adapter-unknown",
-				cause: "unregistered_adapter",
-				candidate_adapter_ids: deps
-					.listAdapterDefinitions()
-					.map((candidate) => candidate.id),
-			},
+			repairContext: unregisteredAdapterContext(parsed.adapterId, deps),
 		});
 	}
 
@@ -1479,16 +1519,12 @@ async function dispatchRun(
 			launch: gate.launch,
 			...(gate.detail ? { message: gate.detail } : {}),
 			// R12: the pre-exec station retains the underlying typed failure so
-			// repair-path selection can inherit its exact posture.
-			...(gate.repair_context
-				? {
-						repairContext: {
-							failure_class: "preexec-connect-failed",
-							cause: "preexec_connect_failure",
-							underlying: gate.repair_context,
-						},
-					}
-				: {}),
+			// repair-path selection inherits its exact posture (AE10).
+			repairContext: {
+				failure_class: "preexec-connect-failed",
+				cause: "preexec_connect_failure",
+				underlying: gate.repair_context,
+			},
 			repairChainHop: parsed.repairChainHop,
 			...(parsed.port === undefined ? {} : { requestedPort: parsed.port }),
 		});
@@ -1527,15 +1563,29 @@ async function dispatchRun(
 			// emit a SECOND stderr JSON diagnostic line (wrapped-command-not-found +
 			// its affordance id) so browser-connect's 127 is distinguishable from a
 			// wrapped tool's OWN 127 (which passes through with NO diagnostic line).
+			// The typed context carries at most a NORMALIZED basename (R26) — policy
+			// re-validates it and fails closed on unsafe identity; no argv, no env
+			// values, no full path ever enters the context. The spawner's raw
+			// detail is DROPPED (R26): a quoted full executable path inside it can
+			// survive the free-text redactor, so a fixed package-owned message is
+			// the only prose that serializes.
+			const wrappedBasename = parsed.tail[0]?.split("/").at(-1);
 			return emitRunStderrFailure(deps, {
 				outputMode: parsed.outputMode,
 				runId: ctx.runId,
 				durationMs: durationMs(),
 				failureClass: "wrapped-command-not-found",
 				launch: gate.launch,
-				// The spawn-failure detail passes the redactor; the wrapped argv is not
-				// included in it (only the executable name at most, redacted if a path).
-				...(spawnResult.detail ? { message: spawnResult.detail } : {}),
+				message:
+					"the wrapped command's executable could not be started (missing or not executable).",
+				repairContext: {
+					failure_class: "wrapped-command-not-found",
+					cause: "wrapped_executable_absent",
+					deterministic_correction: false,
+					...(wrappedBasename === undefined || wrappedBasename.length === 0
+						? {}
+						: { executable_basename: wrappedBasename }),
+				},
 			});
 		}
 
@@ -1722,47 +1772,62 @@ function writeDashboardSuccess(
 // ---------------------------------------------------------------------------
 
 /**
- * The shared, per-failure-class parts every failure emitter needs: the resolved
- * affordance action id + record, exit code, station branch id, the U2 envelope
- * data payload, and the runtime-actions + continuation guidance. Emitters supply
- * the already-derived `safeMessage` (its redaction/sanitization differs by
+ * The shared, per-failure parts every failure emitter needs: the policy stage,
+ * the legacy schema-1 action id + record, exit code, station branch id, the U2
+ * envelope data payload, and the runtime-actions + continuation guidance.
+ * Emitters supply the already-derived `safeMessage` (its redaction differs by
  * caller) and choose the stream + line format + severity/failure_domain.
  */
-type FailureEnvelopeParts = {
+export type FailureEnvelopeParts = {
+	/** The U1 recovery stage the policy selected for this failure. */
+	stage: BrowserConnectRepairStage;
+	/** Legacy schema-1 `data.next_action_id` value (R16/R30). */
 	actionId: BrowserConnectFailureActionId;
 	exitCode: number;
 	branchId: string;
 	action: (typeof browserConnectFailureActions)[number] | undefined;
 	data: BrowserConnectEnvelopeData;
+	/** Ordered automatic actions; EMPTY for operator stages (emit nothing). */
 	runtimeActions: RuntimeActionGuidance[];
 	continuation: RuntimeContinuationGuidance;
 };
 
 /**
- * Build the failure-class-specific envelope parts shared by all three emitters,
- * and emit the shared LogTape branch diagnostic. Behavior-preserving extraction:
- * the action id / exit code / branch id / U2 envelope data / runtime actions /
- * continuation are identical to what each emitter previously built inline. The
- * caller derives `safeMessage` (redaction differs per caller) and owns the
- * stream, line format, severity, and failure_domain.
+ * The single projection chokepoint (U4/R1/R3): every failure emitter — the
+ * check/connect stdout envelope, the run stderr envelopes, and repair-adapter's
+ * usage rejection — flows through here. It selects the U1 recovery stage from
+ * the full typed invocation (command + bounded hop + typed repair context) and
+ * projects it verbatim:
+ *
+ * - automatic stage → ordered `runtime_actions` plus exactly one
+ *   `continuation.next_action_id` (with all applicable constraints);
+ * - operator stage → `continuation.requires_operator: true`, package choices,
+ *   at least one constraint summary, and NO next action.
+ *
+ * Legacy `data.next_action_id` comes from the U1 compatibility selector: the
+ * exact automatic mirror, or a closed non-mutating stop (R16/R30). Drivers
+ * follow the outer continuation; policy is never inferred from prose (R3).
  */
-function buildFailureEnvelopeParts(input: {
+export function buildFailureEnvelopeParts(input: {
+	command: BrowserConnectCommand;
 	failureClass: BrowserConnectFailureClass;
 	safeMessage: string;
 	launch?: BrowserConnectLaunchProvenance;
-	/**
-	 * U3 typed failure evidence (R6/R15/R23): the gateway's typed repair
-	 * context plus the invocation's parsed hop and requested port, preserved on
-	 * the shared failure input so repair-path selection (U4) reads them here.
-	 * Projected today onto the branch diagnostic only — the envelope shape is
-	 * unchanged until U4 wires policy projection.
-	 */
-	repairContext?: BrowserConnectRepairContext;
+	repairContext: BrowserConnectRepairContext;
 	repairChainHop?: BrowserConnectRepairChainHop;
 	requestedPort?: number;
 }): FailureEnvelopeParts {
-	const actionId: BrowserConnectFailureActionId =
-		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[input.failureClass];
+	const stage = selectBrowserConnectRepairPath(
+		{
+			command: input.command,
+			repair_chain_hop: input.repairChainHop ?? 0,
+		},
+		input.repairContext,
+	);
+	const actionId = selectBrowserConnectLegacyNextAction({
+		context: input.repairContext,
+		stage,
+	});
 	const exitCode = FAILURE_CLASS_EXIT_CODE[input.failureClass];
 	const branchId = FAILURE_CLASS_BRANCH_ID[input.failureClass];
 
@@ -1781,35 +1846,24 @@ function buildFailureEnvelopeParts(input: {
 	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
 		code: branchId,
 		exit_code: exitCode,
+		posture: stage.posture,
 		...(input.repairChainHop === undefined
 			? {}
 			: { repair_chain_hop: input.repairChainHop }),
 		...(input.requestedPort === undefined
 			? {}
 			: { requested_port: input.requestedPort }),
-		...(input.repairContext === undefined
-			? {}
-			: { cause: input.repairContext.cause }),
+		cause: input.repairContext.cause,
 		...(suggestedPort === undefined ? {} : { suggested_port: suggestedPort }),
 	});
 
 	const action = failureActionById.get(actionId);
-	const runtimeActions: RuntimeActionGuidance[] = action
-		? [
-				{
-					id: action.id,
-					summary: action.summary,
-					side_effects: [
-						...action.sideEffects,
-					] as RuntimeActionGuidance["side_effects"],
-				},
-			]
-		: [];
-	const continuation: RuntimeContinuationGuidance = {
-		next_action_id: actionId,
-	};
+	const runtimeActions: RuntimeActionGuidance[] =
+		stage.posture === "automatic" ? [...stage.runtime_actions] : [];
+	const continuation: RuntimeContinuationGuidance = stage.continuation;
 
 	return {
+		stage,
 		actionId,
 		exitCode,
 		branchId,
@@ -1855,7 +1909,7 @@ function emitFailure(
 		command: BrowserConnectCommand;
 		message?: string;
 		launch?: BrowserConnectLaunchProvenance;
-		repairContext?: BrowserConnectRepairContext;
+		repairContext: BrowserConnectRepairContext;
 		repairChainHop?: BrowserConnectRepairChainHop;
 		requestedPort?: number;
 	},
@@ -1867,10 +1921,11 @@ function emitFailure(
 		: defaultMessageFor(input.failureClass);
 
 	const parts = buildFailureEnvelopeParts({
+		command: input.command,
 		failureClass: input.failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
-		...(input.repairContext ? { repairContext: input.repairContext } : {}),
+		repairContext: input.repairContext,
 		...(input.repairChainHop === undefined
 			? {}
 			: { repairChainHop: input.repairChainHop }),
@@ -1911,7 +1966,9 @@ function emitFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: parts.runtimeActions,
+			...(parts.runtimeActions.length > 0
+				? { runtime_actions: parts.runtimeActions }
+				: {}),
 			continuation: parts.continuation,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
@@ -2035,7 +2092,7 @@ function emitRunStderrFailure(
 		>;
 		message?: string;
 		launch?: BrowserConnectLaunchProvenance;
-		repairContext?: BrowserConnectRepairContext;
+		repairContext: BrowserConnectRepairContext;
 		repairChainHop?: BrowserConnectRepairChainHop;
 		requestedPort?: number;
 	},
@@ -2045,10 +2102,11 @@ function emitRunStderrFailure(
 		: defaultMessageFor(input.failureClass);
 
 	const parts = buildFailureEnvelopeParts({
+		command: "run",
 		failureClass: input.failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
-		...(input.repairContext ? { repairContext: input.repairContext } : {}),
+		repairContext: input.repairContext,
 		...(input.repairChainHop === undefined
 			? {}
 			: { repairChainHop: input.repairChainHop }),
@@ -2087,7 +2145,9 @@ function emitRunStderrFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: parts.runtimeActions,
+			...(parts.runtimeActions.length > 0
+				? { runtime_actions: parts.runtimeActions }
+				: {}),
 			continuation: parts.continuation,
 		}) as unknown as Record<string, unknown>,
 		{ runId: input.runId, durationMs: input.durationMs },
@@ -2117,9 +2177,14 @@ function emitRunUnexpectedStderrFailure(
 	const safeMessage = "browser-connect hit an unexpected runtime failure.";
 
 	const parts = buildFailureEnvelopeParts({
+		command: "run",
 		failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
+		repairContext: {
+			failure_class: "runtime-error-unexpected",
+			cause: "unexpected_runtime_error",
+		},
 	});
 	const { actionId, exitCode, branchId, action, data } = parts;
 
@@ -2149,13 +2214,35 @@ function emitRunUnexpectedStderrFailure(
 			process_exit_code: exitCode,
 			error: structured,
 			data,
-			runtime_actions: parts.runtimeActions,
+			...(parts.runtimeActions.length > 0
+				? { runtime_actions: parts.runtimeActions }
+				: {}),
 			continuation: parts.continuation,
 		}) as unknown as Record<string, unknown>,
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
 	return exitCode;
 }
+
+/**
+ * Typed context for a parse-phase usage failure (R9): no deterministic
+ * correction exists for a rejected argv, so policy selects the operator
+ * input-correction stage and the legacy stop stays `change_input`.
+ */
+const USAGE_INVALID_REPAIR_CONTEXT: BrowserConnectRepairContext = {
+	failure_class: "usage-invalid",
+	cause: "usage_invalid",
+	deterministic_correction: false,
+};
+
+/**
+ * Typed context for an unexpected runtime failure (R9): fail closed to the
+ * operator diagnostics stage.
+ */
+const UNEXPECTED_RUNTIME_REPAIR_CONTEXT: BrowserConnectRepairContext = {
+	failure_class: "runtime-error-unexpected",
+	cause: "unexpected_runtime_error",
+};
 
 /**
  * Map a caught error to a failure envelope. A facade usage error becomes the
@@ -2182,6 +2269,7 @@ function emitCaughtError(
 			message: input.error.options.showMessage
 				? input.error.message
 				: "help requested",
+			repairContext: USAGE_INVALID_REPAIR_CONTEXT,
 		});
 	}
 	return emitFailure(deps, {
@@ -2191,6 +2279,7 @@ function emitCaughtError(
 		failureClass: "runtime-error-unexpected",
 		command: "check",
 		message: "browser-connect hit an unexpected runtime failure.",
+		repairContext: UNEXPECTED_RUNTIME_REPAIR_CONTEXT,
 	});
 }
 
@@ -2321,8 +2410,23 @@ function parseRunArgv(
 
 	// No `--` at all, OR a `--` with an EMPTY tail: both are the run-missing-
 	// separator station (exit 2), rejected in the parse phase before any gate.
-	if (runTail === undefined || runTail.length === 0) {
-		return { kind: "run-missing-separator" };
+	// The two arms carry DISTINCT typed causes (R12/AE6): an empty tail proves
+	// the wrapped command is missing; a missing `--` may still hold a non-empty
+	// wrapped command in parser memory (extra positionals beyond the adapter
+	// id), preserved only as a boolean marker — never echoed (R26).
+	if (runTail === undefined) {
+		return {
+			kind: "run-missing-separator",
+			cause: "separator_missing",
+			wrappedCommandPresent: headHoldsWrappedCommand(runHead),
+		};
+	}
+	if (runTail.length === 0) {
+		return {
+			kind: "run-missing-separator",
+			cause: "wrapped_command_missing",
+			wrappedCommandPresent: false,
+		};
 	}
 
 	// Gateway options live in the HEAD only (R15); the tail is the wrapped
@@ -2410,6 +2514,24 @@ function parseRepairAdapterArgv(argv: readonly string[]): ParsedInvocation {
 		mode: check ? "check" : "execute",
 		outputMode: inferOutputMode(argv),
 	};
+}
+
+/**
+ * Parser-memory proof that a `run` head with no `--` still holds a non-empty
+ * wrapped command: any positional beyond the adapter id (R12/AE6). Gateway
+ * option values are consumed first so `--port 9333` can never count as a
+ * wrapped word; a head that cannot be parsed proves nothing and the marker
+ * stays false (fail closed, R9). Only the BOOLEAN leaves this function (R26).
+ */
+function headHoldsWrappedCommand(runHead: readonly string[]): boolean {
+	let rest: readonly string[];
+	try {
+		rest = extractBrowserConnectGatewayOptions(runHead).rest;
+	} catch {
+		return false;
+	}
+	const positionals = rest.filter((arg) => !arg.startsWith("-"));
+	return positionals.length > 1;
 }
 
 function firstPositional(argv: readonly string[]): string | undefined {

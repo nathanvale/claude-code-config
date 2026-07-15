@@ -752,7 +752,7 @@ describe("command entrypoint integration: mechanical discovery", () => {
 
 	test("derives the exact browser-connect command id set from exported contracts", async () => {
 		expect(discoveredBrowserConnectCommandIds).toEqual(
-			["check", "connect", "dashboard", "run"],
+			["check", "connect", "dashboard", "repair-adapter", "run"],
 		);
 	});
 
@@ -1366,7 +1366,10 @@ describe("command entrypoint integration: help contracts", () => {
 			).toBe("browser-connect.verified-handoff");
 
 			// Unknown adapter → usage-class rejection BEFORE any environment work
-			// (R7): exit 2, adapter_unknown, list_registered_adapters affordance.
+			// (R7): exit 2, adapter_unknown. U4 recovery projection: an operator
+			// stage offering the trusted registered adapters, with the legacy
+			// schema-1 data value narrowed to the non-mutating discovery stop
+			// (R16/R30) — root-level drift detection for the projection semantics.
 			const adapterUnknown = await runBrowserConnectSource(
 				["connect", "no-such-adapter", "--json", "--run-id", "root-integration"],
 				"browser-connect source connect adapter-unknown",
@@ -1378,11 +1381,59 @@ describe("command entrypoint integration: help contracts", () => {
 					?.code,
 				describeRun(adapterUnknown),
 			).toBe("adapter_unknown");
+			const adapterUnknownContinuation = adapterUnknownEnvelope.continuation as
+				| {
+						next_action_id?: string;
+						requires_operator?: boolean;
+						constraints?: Array<{ id?: string }>;
+						choices?: Array<{ id?: string }>;
+				  }
+				| undefined;
 			expect(
-				(adapterUnknownEnvelope.continuation as Record<string, unknown> | undefined)
-					?.next_action_id,
+				adapterUnknownContinuation?.requires_operator,
+				describeRun(adapterUnknown),
+			).toBe(true);
+			expect(
+				adapterUnknownContinuation?.next_action_id,
+				describeRun(adapterUnknown),
+			).toBeUndefined();
+			expect(
+				adapterUnknownContinuation?.choices?.map((choice) => choice.id),
+				describeRun(adapterUnknown),
+			).toEqual([
+				"choose_registered_adapter:chrome-devtools-mcp",
+				"choose_registered_adapter:agent-browser",
+			]);
+			expect(
+				(adapterUnknownContinuation?.constraints ?? []).length,
+				describeRun(adapterUnknown),
+			).toBeGreaterThan(0);
+			expect(
+				envelopeData(adapterUnknownEnvelope, adapterUnknown).next_action_id,
 				describeRun(adapterUnknown),
 			).toBe("list_registered_adapters");
+
+			// repair-adapter modes are mutually exclusive (R33): both modes reject
+			// at the parser with zero engine work — the root-level runtime probe of
+			// the U5 command surface (Command Surface Alignment Proof).
+			const bothModes = await runBrowserConnectSource(
+				[
+					"repair-adapter",
+					"chrome-devtools-mcp",
+					"--check",
+					"--execute",
+					"--json",
+					"--run-id",
+					"root-integration",
+				],
+				"browser-connect source repair-adapter both modes",
+			);
+			expect(bothModes.exitCode, describeRun(bothModes)).toBe(2);
+			const bothModesEnvelope = parseEnvelope(bothModes);
+			expect(
+				(bothModesEnvelope.error as Record<string, unknown> | undefined)?.code,
+				describeRun(bothModes),
+			).toBe("usage_invalid");
 
 			// run with no `--` separator → exit 2, missing_separator, emitted on
 			// STDERR (KTD5: stdout belongs to the wrapped command end-to-end).

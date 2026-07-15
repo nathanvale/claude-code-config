@@ -209,6 +209,69 @@ export const BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS = {
 >;
 
 /**
+ * Legal schema-1 `data.next_action_id` values per failure class (R16/R30).
+ *
+ * The class default from {@link BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS}
+ * stays supported for released consumers; the additional values are the
+ * policy-selected automatic mirrors plus the closed non-mutating compatibility
+ * stops (`repair-path.ts` owns that selection). `inspect_diagnostics` is legal
+ * everywhere as the R30 fail-safe fallback. Envelope construction rejects any
+ * value outside this record.
+ */
+export const BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS = {
+	"usage-invalid": ["change_input", "inspect_diagnostics"],
+	"run-missing-separator": [
+		"add_run_separator",
+		"change_input",
+		"inspect_diagnostics",
+	],
+	"environment-absent": ["launch_agent_chrome", "inspect_diagnostics"],
+	"foreign-listener": [
+		"use_suggested_port",
+		"inspect_listener",
+		"inspect_diagnostics",
+	],
+	"launch-failed": ["inspect_diagnostics"],
+	"adapter-unknown": [
+		"change_input",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"adapter-not-installed": [
+		"install_adapter",
+		"upgrade_adapter_to_pin",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"route-incompatible": [
+		"select_compatible_route",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"attachment-failed": ["inspect_attachment_probe", "inspect_diagnostics"],
+	"preexec-connect-failed": [
+		"resolve_connect_failure",
+		"launch_agent_chrome",
+		"use_suggested_port",
+		"inspect_listener",
+		"change_input",
+		"list_registered_adapters",
+		"install_adapter",
+		"upgrade_adapter_to_pin",
+		"inspect_diagnostics",
+	],
+	"wrapped-command-not-found": [
+		"fix_wrapped_command",
+		"change_input",
+		"inspect_diagnostics",
+	],
+	"runtime-error-unexpected": ["inspect_diagnostics"],
+} as const satisfies Record<
+	BrowserConnectFailureClass,
+	readonly BrowserConnectFailureActionId[]
+>;
+
+/**
  * Failure runtime actions (facade rule): prose summary + structured action,
  * no command strings. Agents resolve ids against discovery, never copy shell.
  */
@@ -685,11 +748,11 @@ export function createBrowserConnectEnvelopeData(
 function redactFailure(
 	payload: BrowserConnectFailurePayload,
 ): BrowserConnectFailurePayload {
-	const authorized =
-		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[payload.failure_class];
-	if (payload.next_action_id !== authorized) {
+	const authorized: readonly BrowserConnectFailureActionId[] =
+		BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS[payload.failure_class];
+	if (!authorized.includes(payload.next_action_id)) {
 		throw new Error(
-			`next_action_id ${payload.next_action_id} is not the authorized affordance for ${payload.failure_class}; expected ${authorized}.`,
+			`next_action_id ${payload.next_action_id} is not an authorized affordance for ${payload.failure_class}; expected one of ${authorized.join(", ")}.`,
 		);
 	}
 	if (payload.detail === undefined) return payload;

@@ -834,9 +834,19 @@ type DispatcherEnvelope = {
 	run_id: string;
 	data?: Record<string, unknown>;
 	error?: { code: string; exit_code: number };
-	runtime_actions?: Array<{ id: string }>;
-	continuation?: { next_action_id?: string };
+	runtime_actions?: Array<{ id: string; docs_url?: string }>;
+	continuation?: {
+		next_action_id?: string;
+		requires_operator?: boolean;
+		constraints?: Array<{ id: string }>;
+		choices?: Array<{ id: string; docs_url?: string }>;
+	};
 };
+
+/** Choice ids on an error envelope's operator continuation, in order. */
+function continuationChoiceIds(envelope: DispatcherEnvelope): string[] {
+	return (envelope.continuation?.choices ?? []).map((choice) => choice.id);
+}
 
 function parseStdout(run: DispatcherRun): DispatcherEnvelope {
 	return JSON.parse(run.stdout) as DispatcherEnvelope;
@@ -995,7 +1005,7 @@ describe("browser-connect check command (U6 R15)", () => {
 		expect(envelope.continuation?.next_action_id).toBe("launch_agent_chrome");
 	});
 
-	test("foreign listener: exit 20, foreign_listener station, inspect action", async () => {
+	test("foreign listener: exit 20, foreign_listener station, terminal operator inspection", async () => {
 		const { main: warmChromeMain } = errorScript(
 			"port_occupied_foreign",
 			"foreign_listener",
@@ -1009,7 +1019,12 @@ describe("browser-connect check command (U6 R15)", () => {
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("foreign_listener");
-		expect(envelope.continuation?.next_action_id).toBe("inspect_listener");
+		// U4 projection: an unrepairable listener is a terminal operator handoff
+		// (R32); the legacy schema-1 data value stays inspect_listener (R30).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.next_action_id).toBeUndefined();
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_listener"]);
+		expect(envelope.data?.next_action_id).toBe("inspect_listener");
 	});
 });
 
@@ -1140,9 +1155,15 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(2);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("adapter_unknown");
-		expect(envelope.continuation?.next_action_id).toBe(
-			"list_registered_adapters",
-		);
+		// U4 projection: no deterministic correction → operator handoff among the
+		// trusted registered adapters (R24); legacy data keeps the non-mutating
+		// discovery stop (R30/AE19).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual([
+			"choose_registered_adapter:chrome-devtools-mcp",
+			"choose_registered_adapter:agent-browser",
+		]);
+		expect(envelope.data?.next_action_id).toBe("list_registered_adapters");
 		// Unknown adapter is rejected BEFORE any environment prove/launch (R7).
 		expect(warmChromeCalls).toBe(0);
 	});
@@ -1161,9 +1182,41 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("adapter_not_installed");
-		expect(envelope.continuation?.next_action_id).toBe("install_adapter");
+		// U4 projection: agent-browser requires lifecycle scripts, so automatic
+		// install is unavailable (R29/AE18) — the operator owns the continuation
+		// through the trusted manual-install choice, and legacy data degrades to
+		// the non-mutating discovery stop (R30/AE19).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual([
+			"install_registered_adapter_manually:agent-browser",
+		]);
+		expect(envelope.data?.next_action_id).toBe("list_registered_adapters");
 		// A not-installed adapter never gets a probe (R7).
 		expect(calls.probe).toEqual([]);
+	});
+
+	test("adapter-not-installed with a complete isolated recipe → automatic install_adapter (R19)", async () => {
+		const { main: warmChromeMain } = okScript();
+		// chrome-devtools-mcp version absent → provenance not-installed; its
+		// committed adapter-install recipe is complete, so the automatic package
+		// action leads and legacy data mirrors it (R16/R30).
+		const run = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({ version: {} }),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("adapter_not_installed");
+		expect(envelope.continuation?.next_action_id).toBe("install_adapter");
+		expect(envelope.runtime_actions?.map((action) => action.id)).toEqual([
+			"install_adapter",
+		]);
+		expect(envelope.data?.next_action_id).toBe("install_adapter");
 	});
 
 	test("route-incompatible → exit 20, route_incompatible station", async () => {
@@ -1193,9 +1246,17 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("route_incompatible");
-		expect(envelope.continuation?.next_action_id).toBe(
-			"select_compatible_route",
-		);
+		// U4 projection: route incompatibility is an operator handoff (KTD21);
+		// with no trusted implemented candidate in this injected registry there
+		// are no choices, only the no-fallback constraint. Legacy data narrows to
+		// the non-mutating discovery stop, and select_compatible_route stays
+		// compatibility-only (R20).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.choices).toBeUndefined();
+		expect(
+			(envelope.continuation?.constraints ?? []).map((c) => c.id),
+		).toContain("no_adapter_fallback");
+		expect(envelope.data?.next_action_id).toBe("list_registered_adapters");
 	});
 
 	test("attachment-failed → exit 20, attachment_failed station (endpoint verified, probe failed)", async () => {
@@ -1213,9 +1274,14 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("attachment_failed");
-		expect(envelope.continuation?.next_action_id).toBe(
+		// U4 projection: attachment diagnosis is operator-owned; the richer outer
+		// choice is inspect_attachment_probe while legacy data degrades to the
+		// non-mutating inspect_diagnostics stop (R30).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual([
 			"inspect_attachment_probe",
-		);
+		]);
+		expect(envelope.data?.next_action_id).toBe("inspect_diagnostics");
 	});
 
 	test("foreign-listener → exit 20, foreign_listener station, no launch, no fallback", async () => {
@@ -1271,7 +1337,11 @@ describe("browser-connect connect command: failure stations (U6 R7/R11)", () => 
 		expect(run.exitCode).toBe(20);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("launch_failed");
-		expect(envelope.continuation?.next_action_id).toBe("inspect_diagnostics");
+		// U4 projection: a failed launch is operator diagnosis, never a relaunch
+		// loop; legacy data keeps the non-mutating diagnostics stop (R30).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_diagnostics"]);
+		expect(envelope.data?.next_action_id).toBe("inspect_diagnostics");
 	});
 });
 
@@ -1288,6 +1358,7 @@ describe("browser-connect envelope text safety (U6 R14/KTD10)", () => {
 				return {
 					attached: false,
 					failureClass: "attachment-failed",
+					cause: "probe_failed",
 					detail:
 						"probe failed at /Users/secret/agent-browser attaching ws://127.0.0.1:9222/devtools/browser/leak",
 				};
@@ -1471,8 +1542,44 @@ describe("browser-connect run: -- separator parsing (U7 R17)", () => {
 		const envelope = parseStderrEnvelope(run);
 		expect(envelope.status).toBe("error");
 		expect(envelope.error?.code).toBe("missing_separator");
-		expect(envelope.continuation?.next_action_id).toBe("add_run_separator");
+		// U4 projection: with NO wrapped words in parser memory the caller must
+		// supply the wrapped command (operator stage); legacy data narrows to the
+		// non-mutating change_input stop (R30). The automatic add_run_separator
+		// arm requires a non-empty wrapped command in parser memory (AE6).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["provide_wrapped_command"]);
+		expect(envelope.data?.next_action_id).toBe("change_input");
 		// A missing separator is a pure parse failure — no environment work.
+		expect(warmChromeCalls).toBe(0);
+	});
+
+	test("missing -- with wrapped words in parser memory → automatic add_run_separator, words never echoed (AE6/R26)", async () => {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const run = await runDispatcher(
+			["run", "agent-browser", "wrapped-tool", "wrapped-secret-arg", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(2);
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.error?.code).toBe("missing_separator");
+		expect(envelope.continuation?.next_action_id).toBe("add_run_separator");
+		expect(envelope.runtime_actions?.map((action) => action.id)).toEqual([
+			"add_run_separator",
+		]);
+		expect(envelope.data?.next_action_id).toBe("add_run_separator");
+		// R26: the wrapped words live only in parser memory — never serialized.
+		expect(run.stderr).not.toContain("wrapped-tool");
+		expect(run.stderr).not.toContain("wrapped-secret-arg");
 		expect(warmChromeCalls).toBe(0);
 	});
 
@@ -1509,7 +1616,11 @@ describe("browser-connect run: -- separator parsing (U7 R17)", () => {
 		expect(envelope.status).toBe("error");
 		expect(envelope.error?.code).toBe("missing_separator");
 		expect(envelope.error?.exit_code).toBe(2);
-		expect(envelope.continuation?.next_action_id).toBe("add_run_separator");
+		// U4 projection: the empty tail is the DISTINCT wrapped_command_missing
+		// cause on the same station (AE6) — always an operator stage.
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["provide_wrapped_command"]);
+		expect(envelope.data?.next_action_id).toBe("change_input");
 		// PRE-GATE: no environment proof / auto-launch, and the wrapped command never
 		// started.
 		expect(warmChromeCalls).toBe(0);
@@ -1666,7 +1777,13 @@ describe("browser-connect run: exit passthrough vs pre-exec failure (U7 R17, AE6
 		expect(envelope.status).toBe("error");
 		expect(envelope.error?.code).toBe("preexec_connect_failed");
 		expect(envelope.error?.exit_code).toBe(20);
-		expect(envelope.continuation?.next_action_id).toBe("resolve_connect_failure");
+		// U4 projection (AE10): the pre-exec failure inherits the exact underlying
+		// posture — here the terminal listener inspection — and
+		// resolve_connect_failure is never the primary continuation (R20).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.next_action_id).toBeUndefined();
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_listener"]);
+		expect(envelope.data?.next_action_id).toBe("inspect_listener");
 	});
 });
 
@@ -1696,9 +1813,16 @@ describe("browser-connect run: the two 127s are distinguishable (U7 KTD4)", () =
 		expect(envelopes[1]?.status).toBe("error");
 		expect(envelopes[1]?.error?.code).toBe("wrapped_not_found");
 		expect(envelopes[1]?.error?.exit_code).toBe(127);
-		expect(envelopes[1]?.continuation?.next_action_id).toBe(
+		// U4 projection: no deterministic correction exists for a missing wrapped
+		// binary, so the fix stays a caller-owned operator choice; legacy data
+		// narrows to the non-mutating change_input stop (R30).
+		expect(envelopes[1]?.continuation?.requires_operator).toBe(true);
+		const wrappedEnvelope = envelopes[1];
+		if (!wrappedEnvelope) throw new Error("unreachable");
+		expect(continuationChoiceIds(wrappedEnvelope)).toEqual([
 			"fix_wrapped_command",
-		);
+		]);
+		expect(wrappedEnvelope.data?.next_action_id).toBe("change_input");
 	});
 
 	test("wrapped tool SELF-EXITS 127 → passthrough exit 127 with the handoff envelope only, NO spawn-failure diagnostic line", async () => {
@@ -2065,7 +2189,13 @@ describe("browser-connect gateway option rejection (U3 R15: consistent across co
 			expect(run.exitCode).toBe(2);
 			const envelope = parseStdout(run);
 			expect(envelope.error?.code).toBe("usage_invalid");
-			expect(envelope.continuation?.next_action_id).toBe("change_input");
+			// U4 projection: corrected input stays caller-owned (operator stage);
+			// legacy data keeps the change_input stop (R30).
+			expect(envelope.continuation?.requires_operator).toBe(true);
+			expect(continuationChoiceIds(envelope)).toEqual([
+				"provide_corrected_input",
+			]);
+			expect(envelope.data?.next_action_id).toBe("change_input");
 			expect(warmChromeCalls).toBe(0);
 		}
 	});
@@ -2397,6 +2527,7 @@ async function writeFakePackageManager(
 			`const banner = ${JSON.stringify(banner)};`,
 			// The generated script escapes the banner itself at ITS runtime, so no
 			// quoting bug can enter the generated bin source.
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is generated-script source, evaluated by the wrapper at its own runtime
 			'await Bun.write(binPath, ["#!/usr/bin/env bun", `console.log(${JSON.stringify(banner)});`, ""].join("\\n"));',
 			"await chmod(binPath, 0o755);",
 		);
@@ -2626,7 +2757,14 @@ describe("browser-connect repair-adapter: parser boundaries (U5 R33/KTD22)", () 
 		expect(run.exitCode).toBe(2);
 		const envelope = parseStdout(run);
 		expect(envelope.error?.code).toBe("adapter_unknown");
-		expect(envelope.continuation?.next_action_id).toBe("list_registered_adapters");
+		// U4 projection: operator handoff among trusted registered adapters; the
+		// legacy data value stays the non-mutating discovery stop (R30/AE19).
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual([
+			"choose_registered_adapter:chrome-devtools-mcp",
+			"choose_registered_adapter:agent-browser",
+		]);
+		expect(envelope.data?.next_action_id).toBe("list_registered_adapters");
 		expect(recorder.probeCalls).toEqual([]);
 		expect(recorder.spawnInputs).toEqual([]);
 	});
@@ -3219,5 +3357,503 @@ describe("browser-connect connect gate: typed adapter evidence (U5 R11/R23)", ()
 		expect(run.exitCode).toBe(20);
 		expect(parseStdout(run).error?.code).toBe("route_incompatible");
 		expect(run.stderr).toContain('"cause":"route_unsupported"');
+	});
+});
+
+// ===========================================================================
+// U4 hermetic repair-chain closures (R27/AE15). One success-path fixture per
+// automatic action: induce its supported selecting failure, execute its
+// declared owner or caller-rerun recipe, and reach its named successful
+// follow-up proof — plus separate fixtures for declared stops asserting the
+// named operator posture. install/upgrade safety stops are already covered
+// exhaustively by the U5 fail-closed suite above (lock origins, redirect,
+// package-manager, installer, bin, provenance, lifecycle, pin decisions).
+// ===========================================================================
+
+import { spawnRunWrappedCommand } from "../src/run-exec.ts";
+import { spawnAdapterCommand as realSpawnAdapterCommand } from "../src/adapters/registry.ts";
+
+const CLOSURE_RUN_ID = "u4-closure";
+
+async function writeClosureExecutable(
+	root: string,
+	name: string,
+	script: string,
+): Promise<string> {
+	const path = join(root, name);
+	await fsWriteFile(path, script, "utf8");
+	await chmod(path, 0o755);
+	return path;
+}
+
+describe("repair-chain closure: change_input (U4 R27/AE15)", () => {
+	test("selecting failure with a deterministic registered correction → corrected rerun reaches its gate", async () => {
+		// Selecting failure: exactly one case-insensitive registered correction
+		// makes change_input automatic (matrix arm).
+		const failing = await runDispatcher(
+			["connect", "AGENT-BROWSER", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: async () => {
+					throw new Error("no environment work before the usage gate");
+				},
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(2);
+		const failingEnvelope = parseStdout(failing);
+		expect(failingEnvelope.continuation?.next_action_id).toBe("change_input");
+		expect(failingEnvelope.data?.next_action_id).toBe("change_input");
+
+		// Caller-rerun recipe: a fresh invocation with the corrected trusted id.
+		// Named follow-up proof: it parses and reaches (and passes) its gate.
+		const rerun = await runDispatcher(
+			["connect", "agent-browser", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: fakeAdapterRuntime({
+					version: {
+						"agent-browser": PINNED["agent-browser"],
+						"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+					},
+				}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		expect((parseStdout(rerun).data as { outcome: string }).outcome).toBe(
+			"verified",
+		);
+	});
+
+	test("declared stop: no deterministic replacement → operator handoff, never a synthesized correction", async () => {
+		const run = await runDispatcher(
+			["connect", "no-such-adapter", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: async () => 0,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStdout(run);
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.next_action_id).toBeUndefined();
+		expect(
+			(envelope.continuation?.constraints ?? []).map((c) => c.id),
+		).toContain("no_synthesized_caller_input");
+	});
+});
+
+describe("repair-chain closure: add_run_separator (U4 R27/AE15)", () => {
+	test("selecting failure with parser-memory command → rerun with -- reaches exec passthrough", async () => {
+		const root = await makeRepairRoot();
+		const tool = await writeClosureExecutable(
+			root,
+			"wrapped-ok",
+			"#!/bin/sh\nexit 0\n",
+		);
+
+		// Selecting failure: `--` missing, wrapped command held only in parser
+		// memory → automatic add_run_separator; the words never serialize (R26).
+		const failing = await runDispatcher(
+			["run", "agent-browser", tool, "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: async () => {
+					throw new Error("no environment work for a parse failure");
+				},
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(2);
+		const failingEnvelope = parseStderrEnvelope(failing);
+		expect(failingEnvelope.continuation?.next_action_id).toBe(
+			"add_run_separator",
+		);
+		expect(failing.stderr).not.toContain(root);
+
+		// Caller-rerun recipe: the same invocation with the `--` boundary. The
+		// wrapped command is a REAL executable driven by the REAL spawner —
+		// named follow-up proof: the rerun passes the pre-exec gate and the
+		// wrapped tool's exit passes through.
+		const rerun = await runDispatcher(
+			["run", "agent-browser", "--run-id", CLOSURE_RUN_ID, "--", tool],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: spawnRunWrappedCommand,
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		expect(parseStderrEnvelope(rerun).status).toBe("ok");
+	});
+
+	test("declared stop: empty or unknown wrapped command → operator input stage", async () => {
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", CLOSURE_RUN_ID, "--"],
+			{
+				warmChromeMain: async () => 0,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["provide_wrapped_command"]);
+	});
+});
+
+describe("repair-chain closure: launch_agent_chrome (U4 R27/AE15)", () => {
+	test("selecting failure (check absent) → gateway owner launches and the recheck verifies the same explicit port", async () => {
+		// Selecting failure: check reports the environment absent with the
+		// explicit port proven free → automatic launch_agent_chrome.
+		const failing = await runDispatcher(
+			["check", "--port", "9250", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: scriptedWarmChromeMain([absentStep]).main,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(20);
+		const failingEnvelope = parseStdout(failing);
+		expect(failingEnvelope.continuation?.next_action_id).toBe(
+			"launch_agent_chrome",
+		);
+
+		// Owner execution: the gateway drives launch inside connect. Named
+		// follow-up proof: the recheck verifies Agent Chrome on the SAME
+		// explicit port and the handoff records launched provenance.
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			absentStep,
+			okStepAt("9250"),
+			okStepAt("9250"),
+		]);
+		const rerun = await runDispatcher(
+			[
+				"connect",
+				"agent-browser",
+				"--port",
+				"9250",
+				"--json",
+				"--run-id",
+				CLOSURE_RUN_ID,
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		const data = parseStdout(rerun).data as { launch: { launched: boolean } };
+		expect(data.launch.launched).toBe(true);
+		expect(calls.map(commandWord)).toEqual(["check", "launch", "check"]);
+		expect(calls.map(warmChromePortArg)).toEqual(["9250", "9250", "9250"]);
+	});
+
+	test("declared stop: exhausted launch attempt → launch_failed operator posture", async () => {
+		const run = await runDispatcher(
+			["connect", "agent-browser", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: scriptedWarmChromeMain([absentStep, absentStep]).main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("launch_failed");
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_diagnostics"]);
+	});
+});
+
+describe("repair-chain closure: use_suggested_port (U4 R27/AE3/AE15)", () => {
+	test("selecting failure (occupied with verified suggestion) → one fresh hop-1 invocation verifies and attaches", async () => {
+		// Selecting failure at hop 0: the suggestion is preserved and selected.
+		const failing = await runDispatcher(
+			[
+				"connect",
+				"agent-browser",
+				"--port",
+				"9222",
+				"--json",
+				"--run-id",
+				CLOSURE_RUN_ID,
+			],
+			{
+				warmChromeMain: scriptedWarmChromeMain([occupiedStep(9333)]).main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(20);
+		const failingEnvelope = parseStdout(failing);
+		expect(failingEnvelope.continuation?.next_action_id).toBe(
+			"use_suggested_port",
+		);
+		expect(failingEnvelope.data?.next_action_id).toBe("use_suggested_port");
+
+		// Caller-rerun recipe: ONE fresh invocation with the suggested explicit
+		// port at repair-chain hop 1. Named follow-up proof: the fresh
+		// invocation verifies Agent Chrome and proves adapter attachment.
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			okStepAt("9333"),
+		]);
+		const rerun = await runDispatcher(
+			[
+				"connect",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--repair-chain-hop",
+				"1",
+				"--json",
+				"--run-id",
+				CLOSURE_RUN_ID,
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		const data = parseStdout(rerun).data as {
+			outcome: string;
+			attachment: { adapter_id: string };
+			endpoint: { ws: string };
+		};
+		expect(data.outcome).toBe("verified");
+		expect(data.attachment.adapter_id).toBe("agent-browser");
+		expect(data.endpoint.ws).toContain("9333");
+		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
+	});
+
+	test("declared stop: a hop-1 failure emits an operator stage and never another suggested-port action", async () => {
+		const run = await runDispatcher(
+			[
+				"connect",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--repair-chain-hop",
+				"1",
+				"--json",
+				"--run-id",
+				CLOSURE_RUN_ID,
+			],
+			{
+				warmChromeMain: scriptedWarmChromeMain([occupiedStep(9444)]).main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.next_action_id).toBeUndefined();
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_listener"]);
+		expect(
+			(envelope.runtime_actions ?? []).map((action) => action.id),
+		).not.toContain("use_suggested_port");
+	});
+
+	test("declared stop: the check surface preserves the suggestion but emits an operator diagnostic posture", async () => {
+		const run = await runDispatcher(
+			["check", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: scriptedWarmChromeMain([occupiedStep(9333)]).main,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(envelope.continuation?.next_action_id).toBeUndefined();
+	});
+});
+
+describe("repair-chain closure: install_adapter (U4 R27/AE15/AE22)", () => {
+	test("selecting failure (absent adapter) → repair-adapter --execute installs → the original connect proves attachment through the published bin", async () => {
+		// 1. Selecting failure: connect finds the adapter absent with a complete
+		// isolated recipe → automatic install_adapter.
+		const failing = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: fakeAdapterRuntime({ version: {} }),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(20);
+		expect(parseStdout(failing).continuation?.next_action_id).toBe(
+			"install_adapter",
+		);
+
+		// 2. Owner execution: the SOLE package-mutation path, with the fake
+		// package manager spawned at a real process boundary (U5 engine).
+		const scenario = await runRepairScenario({ mode: "--execute" });
+		expect(scenario.run.exitCode).toBe(0);
+		const executed = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(executed.performed).toBe("install_adapter");
+		const publishedBin = publishedBinPath(scenario.installRoot);
+		expect(existsSync(publishedBin)).toBe(true);
+
+		// 3. Named follow-up proof: the original connect proves attachment — the
+		// provenance read AND the attachment probe run the PUBLISHED artifact
+		// through real process spawns.
+		const publishedRuntime: AdapterRuntime = {
+			env: {},
+			resolveExecutable: (command) =>
+				command === "chrome-devtools-mcp"
+					? { resolved: true, path: publishedBin }
+					: { resolved: false },
+			runCommand: realSpawnAdapterCommand,
+		};
+		const rerun = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: publishedRuntime,
+				...realRegistryAccessors(),
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		const data = parseStdout(rerun).data as {
+			outcome: string;
+			attachment: { adapter_id: string; probe_executable: string };
+		};
+		expect(data.outcome).toBe("verified");
+		expect(data.attachment.adapter_id).toBe("chrome-devtools-mcp");
+		expect(data.attachment.probe_executable).toBe(publishedBin);
+	}, 30_000);
+});
+
+describe("repair-chain closure: upgrade_adapter_to_pin (U4 R27/AE5/AE15)", () => {
+	test("selecting failure (allowlisted mismatch) → repair-adapter --execute upgrades → the original connect proves attachment", async () => {
+		// 1. Selecting failure: an exact allowlisted observed-to-pin transition
+		// selects the automatic upgrade (AE5).
+		const failing = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: fakeAdapterRuntime({
+					version: { "chrome-devtools-mcp": "1.4.0" },
+				}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(failing.exitCode).toBe(20);
+		expect(parseStdout(failing).continuation?.next_action_id).toBe(
+			"upgrade_adapter_to_pin",
+		);
+
+		// 2. Owner execution through repair-adapter --execute.
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			observedVersion: "1.4.0",
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const executed = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(executed.performed).toBe("upgrade_adapter_to_pin");
+		const publishedBin = publishedBinPath(scenario.installRoot);
+		expect(existsSync(publishedBin)).toBe(true);
+
+		// 3. Named follow-up proof: attachment through the published bin.
+		const publishedRuntime: AdapterRuntime = {
+			env: {},
+			resolveExecutable: (command) =>
+				command === "chrome-devtools-mcp"
+					? { resolved: true, path: publishedBin }
+					: { resolved: false },
+			runCommand: realSpawnAdapterCommand,
+		};
+		const rerun = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", CLOSURE_RUN_ID],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: publishedRuntime,
+				...realRegistryAccessors(),
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		expect(
+			(parseStdout(rerun).data as { outcome: string }).outcome,
+		).toBe("verified");
+	}, 30_000);
+});
+
+describe("repair-chain closure: fix_wrapped_command (U4 R27/AE15)", () => {
+	test("selecting failure (real missing wrapped binary) → corrected rerun starts and its exit passes through", async () => {
+		const root = await makeRepairRoot();
+		const missing = join(root, "missing-tool");
+		const good = await writeClosureExecutable(
+			root,
+			"good-tool",
+			"#!/bin/sh\nexit 0\n",
+		);
+
+		// Selecting failure: the REAL spawner reports spawn-failed for a
+		// genuinely missing binary → wrapped_not_found with the fix choice.
+		const failing = await runDispatcher(
+			["run", "agent-browser", "--run-id", CLOSURE_RUN_ID, "--", missing],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: spawnRunWrappedCommand,
+			},
+		);
+		expect(failing.exitCode).toBe(127);
+		const envelopes = stderrJsonLines(failing);
+		expect(envelopes[1]?.error?.code).toBe("wrapped_not_found");
+		const wrappedEnvelope = envelopes[1];
+		if (!wrappedEnvelope) throw new Error("unreachable");
+		expect(continuationChoiceIds(wrappedEnvelope)).toEqual([
+			"fix_wrapped_command",
+		]);
+		// The missing binary's path never serializes (R26).
+		expect(failing.stderr).not.toContain(root);
+
+		// Caller-rerun recipe: a fresh run with the corrected wrapped command.
+		// Named follow-up proof: the wrapped command starts and its exit passes
+		// through unchanged.
+		const rerun = await runDispatcher(
+			["run", "agent-browser", "--run-id", CLOSURE_RUN_ID, "--", good],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: spawnRunWrappedCommand,
+			},
+		);
+		expect(rerun.exitCode).toBe(0);
+		expect(parseStderrEnvelope(rerun).status).toBe("ok");
+	});
+
+	test("declared stop: an unsafe wrapped-executable identity degrades to diagnostics (R26)", async () => {
+		const run = await runDispatcher(
+			["run", "agent-browser", "--run-id", CLOSURE_RUN_ID, "--", "bad~~name!!"],
+			{
+				warmChromeMain: okScript().main,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: async () => ({
+					outcome: "spawn-failed",
+					detail: "spawn failed",
+				}),
+			},
+		);
+		expect(run.exitCode).toBe(127);
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect(continuationChoiceIds(envelope)).toEqual(["inspect_diagnostics"]);
+		expect(run.stderr).not.toContain("bad~~name!!");
 	});
 });
