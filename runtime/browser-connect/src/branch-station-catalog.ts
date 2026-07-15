@@ -25,7 +25,9 @@ const WRAPPED_NOT_FOUND_EXIT = Number(
 
 /**
  * Package-owned Branch Station Catalog for the browser-connect CLI (R2/R7/R11/
- * R15/R17). All nineteen slice-one stations from the Planning Contract, keyed
+ * R15/R17). All nineteen slice-one stations from the Planning Contract plus
+ * the four U5 repair-adapter stations (preview, installed, upgraded, and the
+ * fourteenth error station `repair-adapter.operator_stop` — R1), keyed
  * `<command>.<branch>` so the facade station-id pattern and command-prefix
  * cross-check both hold.
  *
@@ -319,6 +321,62 @@ export const browserConnectBranchStationCatalog = [
 		expectedActionId:
 			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["runtime-error-unexpected"],
 		mutationExpectation: "read_only",
+	},
+	// repair-adapter-preview (U5 R33): --check, or --execute finding the adapter
+	// already at the exact pin — a read-only eligibility report either way.
+	{
+		id: "repair-adapter.preview",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--check previews the exact currently-eligible repair action, or --execute finds the adapter already at the exact pin; zero network, zero mutation",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "read_only",
+	},
+	// repair-adapter-installed (U5 R28/R33)
+	{
+		id: "repair-adapter.installed",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--execute installed the absent adapter through the isolated installer and proved fresh exact-pin provenance",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "publishes_versioned_install_tree",
+	},
+	// repair-adapter-upgraded (U5 R21/R22/R33)
+	{
+		id: "repair-adapter.upgraded",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--execute ran an exact allowlisted observed-to-pin upgrade through the isolated installer and proved fresh exact-pin provenance",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "publishes_versioned_install_tree",
+	},
+	// repair-adapter-operator-stop (U5 R29/R34; the 14th error station, R1).
+	// No expectedActionId: the legacy data field degrades per-cause to a
+	// non-mutating compatibility stop (R30), so no single action id is pinned.
+	{
+		id: "repair-adapter.operator_stop",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "proof_failure",
+		trigger:
+			"a package safety gate stopped automatic repair fail-closed (lifecycle scripts, lock origin, integrity, drift, redirect, installer, bin, or provenance); an operator owns the continuation",
+		expectedExitCode: CONNECT_ENTRY_EXIT,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		expectedErrorCode: "operator_stop",
+		mutationExpectation: "fails_closed_without_publish",
 	},
 ] as const satisfies readonly BranchStation[];
 

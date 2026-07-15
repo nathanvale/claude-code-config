@@ -2268,3 +2268,956 @@ describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () =
 		expect(spawns.calls).toHaveLength(1);
 	});
 });
+
+// ===========================================================================
+// U5 repair-adapter command: preview, isolated execute, and fail-closed stops
+// (R19/R28/R29/R33/R34; KTD9/KTD16/KTD17/KTD22). Every scenario runs the real
+// main(argv, deps) in-process. The isolated installer boundary is proven at a
+// REAL process boundary with a fake package-manager executable (a script that
+// records argv/cwd/env and fabricates the staged install tree) — no real
+// network, no real global package mutation, no real npm.
+// ===========================================================================
+
+import { chmod, mkdir as fsMkdir, mkdtemp as fsMkdtemp, readFile as fsReadFile, rename as fsRename, rm as fsRm, writeFile as fsWriteFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach } from "bun:test";
+import type {
+	AdapterInstallEngine,
+	AdapterPackagePolicy,
+} from "../src/adapters/registry.ts";
+import { spawnAdapterCommand } from "../src/adapters/registry.ts";
+
+const REPAIR_RUN_ID = "u5-repair";
+const CANONICAL_NPM_REGISTRY = "https://registry.npmjs.org";
+
+const repairTempRoots: string[] = [];
+
+afterEach(async () => {
+	while (repairTempRoots.length > 0) {
+		const root = repairTempRoots.pop();
+		if (!root) continue;
+		await fsRm(root, { recursive: true, force: true });
+	}
+});
+
+async function makeRepairRoot(): Promise<string> {
+	const root = await fsMkdtemp(join(tmpdir(), "browser-connect-u5-"));
+	repairTempRoots.push(root);
+	return root;
+}
+
+/** warm-chrome must never run for repair-adapter (no environment work). */
+const neverWarmChrome = async (): Promise<number> => {
+	throw new Error("warm-chrome must not run for repair-adapter");
+};
+
+type EngineRecorder = {
+	probeCalls: string[];
+	spawnInputs: Array<AdapterCommandInput & { cwd?: string }>;
+};
+
+/**
+ * Real-filesystem install engine with recording seams: real temp dirs, real
+ * file reads (with per-path overrides for hostile lock fixtures), a recorded
+ * redirect-refusing origin probe fake, and REAL no-shell spawns (the fake
+ * package manager is an actual executable script — the process boundary).
+ */
+function recordingInstallEngine(options: {
+	env?: Record<string, string | undefined>;
+	files?: Record<string, string | null>;
+	probeStatus?: number;
+}): { engine: AdapterInstallEngine; recorder: EngineRecorder } {
+	const recorder: EngineRecorder = { probeCalls: [], spawnInputs: [] };
+	const overrides = options.files ?? {};
+	const engine: AdapterInstallEngine = {
+		env: options.env ?? {},
+		fileExists: async (path) => {
+			if (path in overrides) return overrides[path] !== null;
+			return existsSync(path);
+		},
+		readTextFile: async (path) => {
+			if (path in overrides) {
+				const contents = overrides[path];
+				if (contents === null) throw new Error(`ENOENT: ${path}`);
+				return contents;
+			}
+			return fsReadFile(path, "utf8");
+		},
+		writeTextFile: (path, contents) => fsWriteFile(path, contents, "utf8"),
+		makeDir: async (path) => {
+			await fsMkdir(path, { recursive: true });
+		},
+		makeTempDir: (prefix) => fsMkdtemp(prefix),
+		removeDir: (path) => fsRm(path, { recursive: true, force: true }),
+		publishDir: (fromPath, toPath) => fsRename(fromPath, toPath),
+		probeOrigin: async (url) => {
+			recorder.probeCalls.push(url);
+			return { status: options.probeStatus ?? 200 };
+		},
+		runCommand: async (input) => {
+			recorder.spawnInputs.push(input);
+			return spawnAdapterCommand(input);
+		},
+	};
+	return { engine, recorder };
+}
+
+/**
+ * Write a fake package-manager executable: records argv/cwd/env as JSON and
+ * fabricates the staged install tree exactly like a lifecycle-script-free
+ * `npm ci` would (node_modules/.bin/<bin> reporting the given version).
+ */
+async function writeFakePackageManager(
+	root: string,
+	options: {
+		recordPath: string;
+		bin?: string;
+		reportVersion?: string;
+		exitCode?: number;
+		createBin?: boolean;
+	},
+): Promise<string> {
+	const pmPath = join(root, "fake-pm");
+	const lines = [
+		"#!/usr/bin/env bun",
+		'import { chmod, mkdir } from "node:fs/promises";',
+		`await Bun.write(${JSON.stringify(options.recordPath)}, JSON.stringify({`,
+		"\targv: process.argv.slice(2),",
+		"\tcwd: process.cwd(),",
+		"\tenv: process.env,",
+		"}));",
+	];
+	if (options.createBin !== false && options.bin) {
+		const banner = `${options.bin} ${options.reportVersion ?? "0.0.0"}`;
+		lines.push(
+			'await mkdir("node_modules/.bin", { recursive: true });',
+			`const binPath = ${JSON.stringify(`node_modules/.bin/${options.bin}`)};`,
+			`const banner = ${JSON.stringify(banner)};`,
+			// The generated script escapes the banner itself at ITS runtime, so no
+			// quoting bug can enter the generated bin source.
+			'await Bun.write(binPath, ["#!/usr/bin/env bun", `console.log(${JSON.stringify(banner)});`, ""].join("\\n"));',
+			"await chmod(binPath, 0o755);",
+		);
+	}
+	lines.push(`process.exit(${options.exitCode ?? 0});`);
+	await fsWriteFile(pmPath, `${lines.join("\n")}\n`, "utf8");
+	await chmod(pmPath, 0o755);
+	return pmPath;
+}
+
+/** Clone a real definition with an installPolicy override (registry stays trusted). */
+function withInstallPolicy(
+	base: AdapterDefinition,
+	policy: Partial<AdapterPackagePolicy>,
+): AdapterDefinition {
+	return {
+		...base,
+		installPolicy: { ...base.installPolicy, ...policy },
+	};
+}
+
+function repairRegistryAccessors(definitions: readonly AdapterDefinition[]): {
+	listAdapterDefinitions: () => readonly AdapterDefinition[];
+	findAdapterDefinition: (id: string) => AdapterDefinition | undefined;
+} {
+	return {
+		listAdapterDefinitions: () => definitions,
+		findAdapterDefinition: (id) => definitions.find((d) => d.id === id),
+	};
+}
+
+type RepairScenario = {
+	run: DispatcherRun;
+	recorder: EngineRecorder;
+	root: string;
+	installRoot: string;
+	recordPath: string;
+	pmPath: string;
+};
+
+/**
+ * Drive `repair-adapter chrome-devtools-mcp` end to end with the recording
+ * engine and the fake package manager. `observedVersion` shapes the PATH-side
+ * provenance read; hostile env vars are seeded by default so isolation is
+ * proven on every execute.
+ */
+async function runRepairScenario(options: {
+	mode: "--check" | "--execute";
+	adapterId?: string;
+	observedVersion?: string;
+	files?: Record<string, string | null>;
+	probeStatus?: number;
+	pm?: { reportVersion?: string; exitCode?: number; createBin?: boolean };
+	pmCandidates?: readonly string[];
+	definitions?: readonly AdapterDefinition[];
+}): Promise<RepairScenario> {
+	const root = await makeRepairRoot();
+	const installRoot = join(root, "install-root");
+	const recordPath = join(root, "pm-record.json");
+	const pmPath = await writeFakePackageManager(root, {
+		recordPath,
+		bin: "chrome-devtools-mcp",
+		reportVersion: options.pm?.reportVersion ?? PINNED["chrome-devtools-mcp"],
+		...(options.pm?.exitCode === undefined ? {} : { exitCode: options.pm.exitCode }),
+		...(options.pm?.createBin === undefined ? {} : { createBin: options.pm.createBin }),
+	});
+	const { engine, recorder } = recordingInstallEngine({
+		env: {
+			PATH: process.env.PATH,
+			HOME: root,
+			TMPDIR: tmpdir(),
+			// Hostile inherited configuration (AE17): none of these may reach the
+			// isolated installer child.
+			NPM_CONFIG_REGISTRY: "https://evil.example.com",
+			npm_config_registry: "https://evil.example.com",
+			npm_config_userconfig: "/attacker/.npmrc",
+			NPM_TOKEN: "hostile-npm-token",
+			NODE_AUTH_TOKEN: "hostile-auth-token",
+			HTTPS_PROXY: "http://attacker.example:8080",
+		},
+		...(options.files === undefined ? {} : { files: options.files }),
+		...(options.probeStatus === undefined ? {} : { probeStatus: options.probeStatus }),
+	});
+	const definitions =
+		options.definitions ??
+		[
+			withInstallPolicy(chromeDevtoolsMcpDefinition, {
+				packageManager: {
+					approvedAbsoluteCandidates: options.pmCandidates
+						? [...options.pmCandidates]
+						: [join(root, "missing-first-candidate"), pmPath],
+				},
+			}),
+			agentBrowserDefinition,
+		];
+	const adapterRuntime = fakeAdapterRuntime({
+		version: {
+			...(options.observedVersion === undefined
+				? {}
+				: { "chrome-devtools-mcp": options.observedVersion }),
+		},
+	});
+	const run = await runDispatcher(
+		[
+			"repair-adapter",
+			options.adapterId ?? "chrome-devtools-mcp",
+			options.mode,
+			"--json",
+			"--run-id",
+			REPAIR_RUN_ID,
+		],
+		{
+			warmChromeMain: neverWarmChrome,
+			adapterRuntime,
+			...repairRegistryAccessors(definitions),
+			adapterInstallEngine: engine,
+			adapterInstallRoot: installRoot,
+		},
+	);
+	return { run, recorder, root, installRoot, recordPath, pmPath };
+}
+
+function publishedBinPath(installRoot: string): string {
+	return join(
+		installRoot,
+		"chrome-devtools-mcp",
+		PINNED["chrome-devtools-mcp"],
+		"node_modules",
+		".bin",
+		"chrome-devtools-mcp",
+	);
+}
+
+type PmRecord = {
+	argv: string[];
+	cwd: string;
+	env: Record<string, string | undefined>;
+};
+
+async function readPmRecord(recordPath: string): Promise<PmRecord> {
+	return JSON.parse(await fsReadFile(recordPath, "utf8")) as PmRecord;
+}
+
+describe("browser-connect repair-adapter: parser boundaries (U5 R33/KTD22)", () => {
+	async function usageRun(argv: readonly string[]): Promise<{
+		run: DispatcherRun;
+		recorder: EngineRecorder;
+	}> {
+		const root = await makeRepairRoot();
+		const { engine, recorder } = recordingInstallEngine({});
+		const run = await runDispatcher([...argv, "--json", "--run-id", REPAIR_RUN_ID], {
+			warmChromeMain: neverWarmChrome,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+			adapterInstallEngine: engine,
+			adapterInstallRoot: join(root, "install-root"),
+		});
+		return { run, recorder };
+	}
+
+	test("missing mode → exit 2 usage_invalid; zero engine activity", async () => {
+		const { run, recorder } = await usageRun(["repair-adapter", "chrome-devtools-mcp"]);
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("usage_invalid");
+		expect(run.stdout).toContain("--check");
+		expect(run.stdout).toContain("--execute");
+		expect(recorder.probeCalls).toEqual([]);
+		expect(recorder.spawnInputs).toEqual([]);
+	});
+
+	test("both modes → exit 2 usage_invalid", async () => {
+		const { run } = await usageRun([
+			"repair-adapter",
+			"chrome-devtools-mcp",
+			"--check",
+			"--execute",
+		]);
+		expect(run.exitCode).toBe(2);
+		expect(parseStdout(run).error?.code).toBe("usage_invalid");
+	});
+
+	test("duplicate modes → exit 2 (both spellings)", async () => {
+		const checkTwice = await usageRun([
+			"repair-adapter",
+			"chrome-devtools-mcp",
+			"--check",
+			"--check",
+		]);
+		expect(checkTwice.run.exitCode).toBe(2);
+		expect(checkTwice.run.stdout).toContain("duplicate option");
+		const executeTwice = await usageRun([
+			"repair-adapter",
+			"chrome-devtools-mcp",
+			"--execute",
+			"--execute",
+		]);
+		expect(executeTwice.run.exitCode).toBe(2);
+		expect(executeTwice.run.stdout).toContain("duplicate option");
+	});
+
+	test("missing adapter id → exit 2", async () => {
+		const { run } = await usageRun(["repair-adapter", "--check"]);
+		expect(run.exitCode).toBe(2);
+		expect(parseStdout(run).error?.code).toBe("usage_invalid");
+	});
+
+	test("a second positional (override-shaped operand) → exit 2 with fixed non-echoing text", async () => {
+		const { run } = await usageRun([
+			"repair-adapter",
+			"chrome-devtools-mcp",
+			"9.9.9",
+			"--check",
+		]);
+		expect(run.exitCode).toBe(2);
+		expect(run.stdout).toContain("exactly one adapter operand");
+		// The override-shaped value itself is never echoed (R24).
+		expect(run.stdout).not.toContain("9.9.9");
+	});
+
+	test("unknown adapter → exit 2 adapter_unknown; registry re-read is authoritative", async () => {
+		const { run, recorder } = await usageRun([
+			"repair-adapter",
+			"playwright-mcp",
+			"--check",
+		]);
+		expect(run.exitCode).toBe(2);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("adapter_unknown");
+		expect(envelope.continuation?.next_action_id).toBe("list_registered_adapters");
+		expect(recorder.probeCalls).toEqual([]);
+		expect(recorder.spawnInputs).toEqual([]);
+	});
+
+	const OVERRIDE_FLAGS = [
+		"--registry=https://evil.example.com",
+		"--package=some-other-package",
+		"--pin=9.9.9",
+		"--lockfile=/tmp/hostile-lock.json",
+		"--recipe=custom",
+		"--path=/tmp/hostile",
+		"--scope=global",
+		"--package-manager=/tmp/fake-npm",
+		"--argv=--unsafe-perm",
+		"--version",
+	] as const;
+
+	for (const override of OVERRIDE_FLAGS) {
+		test(`package-policy override ${override.split("=")[0]} → exit 2 before any engine work (R33)`, async () => {
+			const { run, recorder } = await usageRun([
+				"repair-adapter",
+				"chrome-devtools-mcp",
+				"--execute",
+				override,
+			]);
+			expect(run.exitCode).toBe(2);
+			expect(parseStdout(run).error?.code).toBe("usage_invalid");
+			// The rejected override is never echoed into the envelope (R24).
+			expect(run.stdout).not.toContain(override.split("=")[0] ?? override);
+			expect(recorder.probeCalls).toEqual([]);
+			expect(recorder.spawnInputs).toEqual([]);
+		});
+	}
+});
+
+describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22)", () => {
+	test("absent adapter with complete isolated evidence → automatic install_adapter, zero network, zero mutation", async () => {
+		const scenario = await runRepairScenario({ mode: "--check" });
+		expect(scenario.run.exitCode).toBe(0);
+		const envelope = parseStdout(scenario.run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as Record<string, unknown>;
+		expect(data.outcome).toBe("repair_preview");
+		expect(data.adapter_id).toBe("chrome-devtools-mcp");
+		expect(data.install_state).toBe("absent");
+		expect(data.posture).toBe("automatic");
+		expect(data.eligible_action_id).toBe("install_adapter");
+		expect(data.automatic_install).toEqual({
+			recipe_complete: true,
+			lock_origins_canonical: true,
+			dependency_integrity_complete: true,
+			lifecycle_scripts_disabled: true,
+		});
+		expect(envelope.continuation?.next_action_id).toBe("install_adapter");
+		// Zero network, zero mutation: preview never probes the registry, never
+		// spawns the installer, never records, never publishes (AE22).
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+		expect(existsSync(scenario.recordPath)).toBe(false);
+		expect(existsSync(scenario.installRoot)).toBe(false);
+	});
+
+	test("agent-browser absent → operator manual-install choice (lifecycle scripts, R29/AE18)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			adapterId: "agent-browser",
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const envelope = parseStdout(scenario.run);
+		const data = envelope.data as Record<string, unknown>;
+		expect(data.posture).toBe("operator");
+		expect(data.operator_choice_ids).toEqual([
+			"install_registered_adapter_manually:agent-browser",
+		]);
+		expect(data.stop_causes).toContain("lifecycle_scripts_required");
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		// choices are error-envelope-only; the ok preview carries ids in data.
+		expect(envelope.continuation?.choices).toBeUndefined();
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+	});
+
+	test("installed at exact pin → posture none, nothing eligible", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			observedVersion: PINNED["chrome-devtools-mcp"],
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.install_state).toBe("installed_at_pin");
+		expect(data.posture).toBe("none");
+		expect(data.eligible_action_id).toBeUndefined();
+		expect(parseStdout(scenario.run).continuation).toBeUndefined();
+	});
+
+	test("exact allowlisted transition → automatic upgrade_adapter_to_pin (R21/AE11)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			observedVersion: "1.4.0",
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.install_state).toBe("version_mismatch");
+		expect(data.observed_version).toBe("1.4.0");
+		expect(data.posture).toBe("automatic");
+		expect(data.eligible_action_id).toBe("upgrade_adapter_to_pin");
+	});
+
+	test("downgrade-shaped observed version → operator adjust_adapter_pin (R22)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			observedVersion: "1.6.0",
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.posture).toBe("operator");
+		expect(data.operator_choice_ids).toEqual(["adjust_adapter_pin"]);
+	});
+
+	test("disallowed transition → operator adjust_adapter_pin, never semver inference (R21)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			observedVersion: "1.3.0",
+		});
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.posture).toBe("operator");
+		expect(data.operator_choice_ids).toEqual(["adjust_adapter_pin"]);
+	});
+
+	test("unreadable observed version → operator; no unsafe version projected (R11)", async () => {
+		const root = await makeRepairRoot();
+		const { engine } = recordingInstallEngine({});
+		const adapterRuntime: AdapterRuntime = {
+			env: {},
+			resolveExecutable: () => ({ resolved: true, path: "/fake/bin/chrome-devtools-mcp" }),
+			runCommand: async () => ({ exitCode: 0, stdout: "no version token", stderr: "" }),
+		};
+		const run = await runDispatcher(
+			["repair-adapter", "chrome-devtools-mcp", "--check", "--json", "--run-id", REPAIR_RUN_ID],
+			{
+				warmChromeMain: neverWarmChrome,
+				adapterRuntime,
+				...realRegistryAccessors(),
+				adapterInstallEngine: engine,
+				adapterInstallRoot: join(root, "install-root"),
+			},
+		);
+		expect(run.exitCode).toBe(0);
+		const data = parseStdout(run).data as Record<string, unknown>;
+		expect(data.posture).toBe("operator");
+		expect(data.observed_version).toBeUndefined();
+	});
+
+	test("safe provenance projection: no filesystem path reaches the preview envelope (R11)", async () => {
+		const scenario = await runRepairScenario({ mode: "--check" });
+		expect(scenario.run.stdout).not.toContain(scenario.root);
+		expect(scenario.run.stdout).not.toContain("/fake/bin");
+		expect(scenario.run.stdout).not.toContain("node_modules/");
+	});
+});
+
+describe("browser-connect repair-adapter --execute: isolated installer (U5 R28/AE17/AE22)", () => {
+	test("install success: isolated spawn, verified bin, atomic publish, fresh exact-pin provenance", async () => {
+		const scenario = await runRepairScenario({ mode: "--execute" });
+		expect(scenario.run.exitCode).toBe(0);
+		const envelope = parseStdout(scenario.run);
+		expect(envelope.status).toBe("ok");
+		const data = envelope.data as Record<string, unknown>;
+		expect(data.outcome).toBe("repair_executed");
+		expect(data.performed).toBe("install_adapter");
+		expect(data.install_state).toBe("installed_at_pin");
+		expect(data.observed_version).toBe(PINNED["chrome-devtools-mcp"]);
+		expect(data.pinned_version).toBe(PINNED["chrome-devtools-mcp"]);
+
+		// One egress-gate probe against the canonical origin only (R34).
+		expect(scenario.recorder.probeCalls).toEqual([
+			`${CANONICAL_NPM_REGISTRY}/chrome-devtools-mcp`,
+		]);
+
+		// The installer ran the approved absolute fake package manager (never a
+		// PATH lookup even though env.PATH is populated).
+		const record = await readPmRecord(scenario.recordPath);
+		const installerSpawn = scenario.recorder.spawnInputs[0];
+		expect(installerSpawn?.command).toBe(scenario.pmPath);
+
+		// No-shell argv: registry-owned recipe plus the pinned canonical registry.
+		expect(record.argv.slice(0, 2)).toEqual(["ci", "--ignore-scripts"]);
+		expect(record.argv).toContain(`--registry=${CANONICAL_NPM_REGISTRY}`);
+
+		// Neutral working directory: the staging dir under the install root, not
+		// the caller's cwd (AE17 hostile-cwd defense). The child reports a
+		// symlink-resolved cwd on macOS (/var -> /private/var), so normalize.
+		const normalize = (path: string) => path.replace(/^\/private\//, "/");
+		expect(
+			normalize(record.cwd).startsWith(normalize(scenario.installRoot)),
+		).toBe(true);
+		expect(record.cwd).toContain(".staging-chrome-devtools-mcp-");
+		expect(record.cwd).not.toBe(process.cwd());
+
+		// Environment allowlist: no inherited registry, auth, or proxy values;
+		// isolated config and cache pinned into staging (R28).
+		expect(record.env.NPM_TOKEN).toBeUndefined();
+		expect(record.env.NODE_AUTH_TOKEN).toBeUndefined();
+		expect(record.env.HTTPS_PROXY).toBeUndefined();
+		expect(record.env.NPM_CONFIG_REGISTRY).toBeUndefined();
+		expect(record.env.npm_config_registry).toBe(CANONICAL_NPM_REGISTRY);
+		expect(record.env.npm_config_userconfig?.startsWith(scenario.installRoot)).toBe(true);
+		expect(record.env.npm_config_ignore_scripts).toBe("true");
+
+		// Atomic publish of the versioned install tree, then fresh provenance from
+		// the published bin itself (R33).
+		expect(existsSync(publishedBinPath(scenario.installRoot))).toBe(true);
+		const provenanceRead = scenario.recorder.spawnInputs.at(-1);
+		expect(provenanceRead?.command).toBe(publishedBinPath(scenario.installRoot));
+		expect(provenanceRead?.args).toEqual(["--version"]);
+	});
+
+	test("upgrade success: allowlisted transition executes and reaches fresh pin provenance (AE22)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			observedVersion: "1.4.0",
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.performed).toBe("upgrade_adapter_to_pin");
+		expect(data.observed_version).toBe(PINNED["chrome-devtools-mcp"]);
+		expect(existsSync(publishedBinPath(scenario.installRoot))).toBe(true);
+	});
+
+	test("already at exact pin: execute performs nothing and mutates nothing", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			observedVersion: PINNED["chrome-devtools-mcp"],
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		const data = parseStdout(scenario.run).data as Record<string, unknown>;
+		expect(data.outcome).toBe("repair_executed");
+		expect(data.performed).toBe("none");
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+		expect(existsSync(scenario.installRoot)).toBe(false);
+	});
+});
+
+describe("browser-connect repair-adapter --execute: fail-closed stops (U5 R29/R34/AE23)", () => {
+	function expectOperatorStop(run: DispatcherRun): Record<string, unknown> {
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("operator_stop");
+		expect(envelope.continuation?.requires_operator).toBe(true);
+		expect((envelope.continuation?.constraints ?? []).length).toBeGreaterThan(0);
+		expect((envelope.continuation?.choices ?? []).length).toBeGreaterThan(0);
+		const data = envelope.data as Record<string, unknown>;
+		expect(data.outcome).toBe("repair_stopped");
+		// Legacy compatibility stays non-mutating (R30/AE19): never a package
+		// mutation action in the legacy data field.
+		expect(data.next_action_id).not.toBe("install_adapter");
+		expect(data.next_action_id).not.toBe("upgrade_adapter_to_pin");
+		return data;
+	}
+
+	test("agent-browser execute → operator stop before any network (lifecycle scripts, R29)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			adapterId: "agent-browser",
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_causes).toContain("lifecycle_scripts_required");
+		expect(data.next_action_id).toBe("list_registered_adapters");
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+		expect(existsSync(scenario.installRoot)).toBe(false);
+	});
+
+	const chromePolicy = chromeDevtoolsMcpDefinition.installPolicy;
+	const lockPath = () => chromePolicy.integritySource.lockfilePath;
+	const hostileLock = (entry: Record<string, unknown>): string =>
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: {
+				"": {
+					name: "fixture",
+					dependencies: { [chromePolicy.packageName]: PINNED["chrome-devtools-mcp"] },
+				},
+				[`node_modules/${chromePolicy.packageName}`]: entry,
+			},
+		});
+
+	const hostileLockRows: ReadonlyArray<{ label: string; entry: Record<string, unknown> }> = [
+		{
+			label: "off-registry https origin",
+			entry: {
+				version: PINNED["chrome-devtools-mcp"],
+				resolved: "https://mirror.evil.example/pkg.tgz",
+				integrity: "sha512-fixture",
+			},
+		},
+		{
+			label: "git source",
+			entry: {
+				version: PINNED["chrome-devtools-mcp"],
+				resolved: "git+https://github.com/x/pkg.git#abc",
+				integrity: "sha512-fixture",
+			},
+		},
+		{
+			label: "file source",
+			entry: { version: PINNED["chrome-devtools-mcp"], resolved: "file:../pkg", integrity: "sha512-fixture" },
+		},
+		{
+			label: "workspace source",
+			entry: { version: PINNED["chrome-devtools-mcp"], resolved: "workspace:*", integrity: "sha512-fixture" },
+		},
+		{
+			label: "insecure http origin",
+			entry: {
+				version: PINNED["chrome-devtools-mcp"],
+				resolved: "http://registry.npmjs.org/pkg.tgz",
+				integrity: "sha512-fixture",
+			},
+		},
+		{
+			label: "unparseable resolved url",
+			entry: { version: PINNED["chrome-devtools-mcp"], resolved: "::::", integrity: "sha512-fixture" },
+		},
+	];
+
+	for (const row of hostileLockRows) {
+		test(`${row.label} → stop with zero network and zero mutation (R34/AE23)`, async () => {
+			const scenario = await runRepairScenario({
+				mode: "--execute",
+				files: { [lockPath()]: hostileLock(row.entry) },
+			});
+			const data = expectOperatorStop(scenario.run);
+			expect(data.stop_causes).toContain("lock_origin_violation");
+			expect(scenario.recorder.probeCalls).toEqual([]);
+			expect(scenario.recorder.spawnInputs).toEqual([]);
+			expect(existsSync(scenario.installRoot)).toBe(false);
+		});
+	}
+
+	test("missing transitive integrity → stop before network (R29/AE18)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			files: {
+				[lockPath()]: hostileLock({
+					version: PINNED["chrome-devtools-mcp"],
+					resolved: `https://registry.npmjs.org/${chromePolicy.packageName}/-/x.tgz`,
+				}),
+			},
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_causes).toContain("integrity_incomplete");
+		expect(scenario.recorder.probeCalls).toEqual([]);
+	});
+
+	test("lock drift against the manifest pin → stop before network (R29)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			files: {
+				[lockPath()]: hostileLock({
+					version: "1.4.9",
+					resolved: `https://registry.npmjs.org/${chromePolicy.packageName}/-/x-1.4.9.tgz`,
+					integrity: "sha512-fixture",
+				}),
+			},
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_causes).toContain("lock_drift");
+		expect(scenario.recorder.probeCalls).toEqual([]);
+	});
+
+	test("canonical-origin redirect → no redirected request, no spawn, no mutation (AE23)", async () => {
+		const scenario = await runRepairScenario({ mode: "--execute", probeStatus: 301 });
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_cause).toBe("registry_redirect");
+		// Exactly one gate probe; the redirect target is never followed.
+		expect(scenario.recorder.probeCalls).toEqual([
+			`${CANONICAL_NPM_REGISTRY}/chrome-devtools-mcp`,
+		]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+		expect(existsSync(publishedBinPath(scenario.installRoot))).toBe(false);
+	});
+
+	test("no approved package-manager candidate exists → stop before network (R28)", async () => {
+		const root = await makeRepairRoot();
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			pmCandidates: [join(root, "missing-a"), join(root, "missing-b")],
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_cause).toBe("package_manager_unavailable");
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+	});
+
+	test("installer failure (prompt/privilege boundary simulation) → stop, nothing published (R22)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			pm: { exitCode: 1 },
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_cause).toBe("installer_failed");
+		expect(existsSync(publishedBinPath(scenario.installRoot))).toBe(false);
+	});
+
+	test("expected bin missing after install → stop, nothing published", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			pm: { createBin: false },
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_cause).toBe("expected_bin_missing");
+		expect(existsSync(publishedBinPath(scenario.installRoot))).toBe(false);
+	});
+
+	test("fresh provenance mismatch after publish → honest operator stop (R33)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			pm: { reportVersion: "9.9.9" },
+		});
+		const data = expectOperatorStop(scenario.run);
+		expect(data.stop_cause).toBe("provenance_mismatch");
+	});
+
+	test("execute on an operator-posture version state → stop, no mutation (R22)", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--execute",
+			observedVersion: "1.6.0",
+		});
+		expectOperatorStop(scenario.run);
+		expect(scenario.recorder.probeCalls).toEqual([]);
+		expect(scenario.recorder.spawnInputs).toEqual([]);
+		expect(existsSync(scenario.installRoot)).toBe(false);
+	});
+});
+
+// ===========================================================================
+// U5 connect gate: typed adapter evidence (R11/R23/AE12/AE16). The gate feeds
+// structured causes to repair-path selection and performs at most ONE bounded
+// read-only re-probe for an explicitly transient attachment cause.
+// ===========================================================================
+
+describe("browser-connect connect gate: typed adapter evidence (U5 R11/R23)", () => {
+	function sequencedProbeRuntime(sequence: readonly AdapterCommandResult[]): {
+		runtime: AdapterRuntime;
+		probeCount: () => number;
+	} {
+		let probes = 0;
+		const runtime: AdapterRuntime = {
+			env: {},
+			resolveExecutable: (command) => ({ resolved: true, path: `/fake/bin/${command}` }),
+			runCommand: async (input) => {
+				if (input.args.includes("--version")) {
+					return {
+						exitCode: 0,
+						stdout: `agent-browser ${PINNED["agent-browser"]}\n`,
+						stderr: "",
+					};
+				}
+				const result = sequence[Math.min(probes, sequence.length - 1)];
+				probes += 1;
+				return result ?? { exitCode: 0, stdout: "attached", stderr: "" };
+			},
+		};
+		return { runtime, probeCount: () => probes };
+	}
+
+	test("transient probe failure then success → verified after exactly one re-probe (AE12)", async () => {
+		const { runtime, probeCount } = sequencedProbeRuntime([
+			{ exitCode: 1, stdout: "", stderr: "", timedOut: true },
+			{ exitCode: 0, stdout: "attached", stderr: "" },
+		]);
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: runtime,
+			...realRegistryAccessors(),
+		});
+		expect(run.exitCode).toBe(0);
+		expect(parseStdout(run).status).toBe("ok");
+		expect(probeCount()).toBe(2);
+	});
+
+	test("transient failure twice → attachment_failed with the spent re-probe budget typed (R23)", async () => {
+		const { runtime, probeCount } = sequencedProbeRuntime([
+			{ exitCode: 1, stdout: "", stderr: "", timedOut: true },
+			{ exitCode: 1, stdout: "", stderr: "", timedOut: true },
+		]);
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: runtime,
+			...realRegistryAccessors(),
+		});
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("attachment_failed");
+		expect(probeCount()).toBe(2);
+		expect(run.stderr).toContain('"cause":"transient_probe_failure"');
+	});
+
+	test("non-transient probe failure → no re-probe, probe_failed cause (R23)", async () => {
+		const { runtime, probeCount } = sequencedProbeRuntime([
+			{ exitCode: 3, stdout: "", stderr: "connection refused" },
+		]);
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: runtime,
+			...realRegistryAccessors(),
+		});
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("attachment_failed");
+		expect(probeCount()).toBe(1);
+		expect(run.stderr).toContain('"cause":"probe_failed"');
+	});
+
+	test("adapter absent → executable_absent typed cause reaches the failure evidence", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({ unresolvable: ["agent-browser"] }),
+			...realRegistryAccessors(),
+		});
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("adapter_not_installed");
+		expect(run.stderr).toContain('"cause":"executable_absent"');
+	});
+
+	test("adapter version mismatch → version_mismatch typed cause reaches the failure evidence", async () => {
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({ version: { "agent-browser": "0.26.0" } }),
+			...realRegistryAccessors(),
+		});
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("adapter_not_installed");
+		expect(run.stderr).toContain('"cause":"version_mismatch"');
+	});
+
+	test("unknown adapter → unregistered_adapter typed cause reaches the failure evidence", async () => {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const run = await runDispatcher(
+			["connect", "no-such-adapter", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		expect(run.exitCode).toBe(2);
+		expect(warmChromeCalls).toBe(0);
+		expect(run.stderr).toContain('"cause":"unregistered_adapter"');
+	});
+
+	test("route incompatibility → route_unsupported cause with trusted candidates only (AE16/AE20)", async () => {
+		// A registered-id definition whose only implemented route the environment
+		// does not offer; the two real definitions stay listed as candidates.
+		const uiOnly: AdapterDefinition = {
+			...chromeDevtoolsMcpDefinition,
+			id: "chrome-devtools-mcp",
+			routes: [{ route: "ui-consent", evidence: "documented", implemented: true }],
+		};
+		const { main: warmChromeMain } = okScript();
+		const run = await runDispatcher(
+			["connect", "chrome-devtools-mcp", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({
+					version: {
+						"agent-browser": PINNED["agent-browser"],
+						"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+					},
+				}),
+				listAdapterDefinitions: () => [uiOnly, agentBrowserDefinition],
+				findAdapterDefinition: (id) =>
+					id === "chrome-devtools-mcp"
+						? uiOnly
+						: id === "agent-browser"
+							? agentBrowserDefinition
+							: undefined,
+			},
+		);
+		expect(run.exitCode).toBe(20);
+		expect(parseStdout(run).error?.code).toBe("route_incompatible");
+		expect(run.stderr).toContain('"cause":"route_unsupported"');
+	});
+});

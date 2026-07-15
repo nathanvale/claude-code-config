@@ -23,15 +23,18 @@ import {
  *
  * `dashboard` is the bare, no-arg read-only projection (R15); the dispatcher
  * (U6) routes a bare invocation to it. `check`/`connect`/`run` are the explicit
- * subcommands. Owned here rather than in model.ts because U2's model surface
- * carries envelope vocabulary, not command identity; the CLI surface is the
- * contract owner (facade lane).
+ * subcommands. `repair-adapter` (U5, R33) is the additive facade-backed
+ * adapter package repair surface: `--check` previews, `--execute` is the sole
+ * package-mutation mode. Owned here rather than in model.ts because U2's model
+ * surface carries envelope vocabulary, not command identity; the CLI surface is
+ * the contract owner (facade lane).
  */
 export const BROWSER_CONNECT_COMMANDS = [
 	"dashboard",
 	"check",
 	"connect",
 	"run",
+	"repair-adapter",
 ] as const;
 
 /**
@@ -48,9 +51,10 @@ export type BrowserConnectAudience = "agent" | "operator";
 /**
  * browser-connect mutation class. `browser` marks the connect/run lifecycle that
  * may launch Agent Chrome or exec a wrapped command; `check` marks the
- * read-only dashboard and environment read.
+ * read-only dashboard and environment read; `package` marks repair-adapter's
+ * isolated package mutation (R33: the sole package-mutation surface).
  */
-export type BrowserConnectMutation = "check" | "browser";
+export type BrowserConnectMutation = "check" | "browser" | "package";
 
 /**
  * Facade contract type for the public browser-connect CLI.
@@ -130,6 +134,19 @@ export const browserConnectReadExitCodes = {
 	"20": browserConnectExitCodes["20"],
 } as const satisfies BrowserConnectCommandContract["exitCodes"];
 
+/**
+ * repair-adapter exit semantics (U5 R33): baseline plus the package-owned
+ * fail-closed repair stop at 20 (the exit-20 fail-closed family, repair
+ * flavor: a safety gate stopped automatic package work; an operator owns the
+ * continuation).
+ */
+export const browserConnectRepairAdapterExitCodes = {
+	"0": "Preview reported, or execute proved fresh exact-pin provenance.",
+	"1": "Unexpected runtime failure.",
+	"2": "Invalid usage.",
+	"20": "Adapter package repair stopped fail-closed before completing; an operator is required.",
+} as const satisfies BrowserConnectCommandContract["exitCodes"];
+
 const jsonFlag = {
 	"--json": { type: "boolean", description: "Emit the JSON envelope." },
 } as const satisfies BrowserConnectCommandContract["flags"];
@@ -178,6 +195,26 @@ const connectFlags = {
 const runFlags = {
 	...jsonFlag,
 	...gatewayOptionFlags,
+} as const satisfies BrowserConnectCommandContract["flags"];
+
+/**
+ * repair-adapter flags (U5 R33/KTD22): exactly the two mutually exclusive
+ * modes plus --json. No package, version, registry, lockfile, path, or recipe
+ * override is declared, so every such flag is mechanically rejected as an
+ * unknown option.
+ */
+const repairAdapterFlags = {
+	...jsonFlag,
+	"--check": {
+		type: "boolean",
+		description:
+			"Read-only eligibility preview: re-reads trusted registry and provenance state and reports the exact currently-eligible action. Zero network, zero mutation. Mutually exclusive with --execute.",
+	},
+	"--execute": {
+		type: "boolean",
+		description:
+			"Sole package-mutation mode: re-reads the same trusted state, validates every lock-entry origin before any network, and runs the registry-owned isolated installer. Mutually exclusive with --check.",
+	},
 } as const satisfies BrowserConnectCommandContract["flags"];
 
 const actionAffordances = {
@@ -286,13 +323,36 @@ export const browserConnectContracts = defineCommandFacadeContract(
 			flags: runFlags,
 			exitCodes: browserConnectRunExitCodes,
 		},
+		"repair-adapter": {
+			script: BROWSER_CONNECT_CLI_NAME,
+			summary:
+				"Preview or execute the registry-owned adapter package repair: --check is the read-only eligibility preview; --execute is the sole package-mutation path through the isolated installer.",
+			usage: [
+				"browser-connect repair-adapter <adapter> --check [--json]",
+				"browser-connect repair-adapter <adapter> --execute [--json]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "package",
+			// --execute reaches the canonical registry and publishes a user-owned
+			// versioned install tree; --check is the declared check execution mode
+			// (Write Preview Capability satisfied by a real mode, not an exemption).
+			sideEffects: ["check", "network", "write"],
+			executionModes: ["check", "normal"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			resultContract,
+			actionAffordances,
+			flags: repairAdapterFlags,
+			exitCodes: browserConnectRepairAdapterExitCodes,
+		},
 	} as const satisfies Record<
 		BrowserConnectCommand,
 		BrowserConnectCommandContract
 	>,
 	{
 		path: "runtime/browser-connect/src/command-contract.ts",
-		writeImplyingMutations: new Set(["browser"]),
+		writeImplyingMutations: new Set(["browser", "package"]),
 	},
 );
 
@@ -314,6 +374,8 @@ export const BROWSER_CONNECT_PREVIEW_NOTES = {
 	connect:
 		"Preview with browser-connect check; connect may launch Agent Chrome and check never does.",
 	run: "Preview with browser-connect check; run execs the wrapped command with the caller's authority and it cannot be previewed.",
+	"repair-adapter":
+		"Preview with --check (read-only, zero network, zero mutation); only --execute mutates, and it re-reads trusted state itself — the preview grants no authority.",
 } as const satisfies Partial<Record<BrowserConnectCommand, string>>;
 
 type BrowserConnectDiscoveryAugment = {

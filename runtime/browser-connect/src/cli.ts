@@ -60,11 +60,29 @@ import {
 } from "./environment.ts";
 import {
 	type AdapterDefinition,
+	type AdapterInstallAssessment,
+	type AdapterInstallEngine,
+	type AdapterInstallStopCause,
+	type AdapterProvenanceResult,
 	type AdapterRuntime,
+	assessAdapterInstallPolicy,
+	buildIsolatedInstallerEnvironment,
+	extractVersion,
 	findAdapterDefinition as defaultFindAdapterDefinition,
+	isAllowlistedAdapterUpgrade,
 	listAdapterDefinitions as defaultListAdapterDefinitions,
+	manualAdapterInstallInputsComplete,
+	resolveApprovedPackageManagerExecutable,
 	spawnAdapterCommand,
+	VERSION_READ_TIMEOUT_MS,
 } from "./adapters/registry.ts";
+import {
+	type BrowserConnectRepairStage,
+	browserConnectContinuationConstraints,
+	browserConnectRepairDocsUrl,
+	selectBrowserConnectLegacyNextAction,
+	selectBrowserConnectRepairPath,
+} from "./repair-path.ts";
 import { selectCompatibleRoute } from "./compatibility.ts";
 import {
 	type RunSpawner,
@@ -75,6 +93,7 @@ import {
 import {
 	BROWSER_CONNECT_CLI_NAME,
 	BROWSER_CONNECT_CONTRACT_ID,
+	type BrowserConnectAdapterRepairCause,
 	type BrowserConnectAdapterRepairContext,
 	type BrowserConnectAuthorizedAttachment,
 	type BrowserConnectEnvironmentIdentity,
@@ -199,6 +218,18 @@ export type BrowserConnectMainDeps = {
 	 * merged over it (`run`). Defaults to `process.env`.
 	 */
 	runBaseEnv?: Record<string, string | undefined>;
+	/**
+	 * Isolated-install effect seam for `repair-adapter` (U5/KTD16). Tests
+	 * inject a recording engine with a fake package-manager executable;
+	 * production wires real fs, a redirect-refusing origin probe, and the
+	 * no-shell spawner.
+	 */
+	adapterInstallEngine?: AdapterInstallEngine;
+	/**
+	 * User-owned root the versioned install trees publish under (R28 install
+	 * scope). Defaults to `$HOME/.side-quest/browser-connect/adapters`.
+	 */
+	adapterInstallRoot?: string;
 	/** Monotonic clock for envelope duration (tests can pin it). */
 	now?: () => number;
 };
@@ -216,6 +247,8 @@ type ResolvedDeps = {
 	findAdapterDefinition: (id: string) => AdapterDefinition | undefined;
 	runSpawner: RunSpawner;
 	runBaseEnv: Record<string, string | undefined>;
+	adapterInstallEngine: AdapterInstallEngine;
+	adapterInstallRoot: string;
 	now: () => number;
 };
 
@@ -244,7 +277,13 @@ type ParsedInvocation =
 			port?: number;
 			repairChainHop: BrowserConnectRepairChainHop;
 	  }
-	| { kind: "run-missing-separator" };
+	| { kind: "run-missing-separator" }
+	| {
+			kind: "repair-adapter";
+			adapterId: string;
+			mode: "check" | "execute";
+			outputMode: OutputMode;
+	  };
 
 const quietDiagnosticWriter: CliWriter = { write: () => true };
 
@@ -292,6 +331,10 @@ export async function main(
 			deps.findAdapterDefinition ?? defaultFindAdapterDefinition,
 		runSpawner: deps.runSpawner ?? spawnRunWrappedCommand,
 		runBaseEnv: deps.runBaseEnv ?? process.env,
+		adapterInstallEngine:
+			deps.adapterInstallEngine ?? createDefaultAdapterInstallEngine(),
+		adapterInstallRoot:
+			deps.adapterInstallRoot ?? defaultAdapterInstallRoot(),
 		now: deps.now ?? (() => Date.now()),
 	};
 
@@ -364,6 +407,12 @@ export async function main(
 						failureClass: "run-missing-separator",
 						message:
 							"run requires a -- separator between its options and the wrapped command.",
+					});
+				}
+				if (parsed.kind === "repair-adapter") {
+					return await dispatchRepairAdapter(parsed, resolved, {
+						runId,
+						startedAtMs,
 					});
 				}
 				if (parsed.kind === "run") {
@@ -557,13 +606,21 @@ export async function runConnectGate(
 	ctx: { runId: string; reconfigureDiagnostics: () => void },
 	options: { explicitPort?: number } = {},
 ): Promise<ConnectGateResult> {
-	// Unknown adapter → usage-class rejection, never a probe (R7).
+	// Unknown adapter → usage-class rejection, never a probe (R7). The typed
+	// context carries the trusted registered candidates only (R24).
 	const definition = deps.findAdapterDefinition(adapterId);
 	if (!definition) {
 		return {
 			outcome: "failed",
 			failure_class: "adapter-unknown",
 			launch: { launched: false },
+			repair_context: {
+				failure_class: "adapter-unknown",
+				cause: "unregistered_adapter",
+				candidate_adapter_ids: deps
+					.listAdapterDefinitions()
+					.map((candidate) => candidate.id),
+			},
 			detail: `adapter ${adapterId} is not in the registry`,
 		};
 	}
@@ -594,19 +651,28 @@ export async function runConnectGate(
 
 	const launch = environment.launch;
 
-	// Adapter installed + version-matched? (never a probe on a mismatch, R7)
+	// Adapter installed + version-matched? (never a probe on a mismatch, R7).
+	// The rejection carries typed provenance evidence plus the definition-owned
+	// isolated-install assessment (file reads only), so repair-path policy can
+	// select install vs. allowlisted upgrade vs. operator without prose (R11).
 	const provenance = await definition.checkProvenance(deps.adapterRuntime);
 	if (!provenance.installed) {
 		return {
 			outcome: "failed",
 			failure_class: provenance.failureClass,
 			launch,
+			repair_context: await buildAdapterNotInstalledContext(
+				definition,
+				provenance,
+				deps.adapterInstallEngine,
+			),
 			detail: provenance.detail,
 		};
 	}
 
 	// Route compatibility: does the environment share a route the adapter
-	// declares? (pure check, R7)
+	// declares? (pure check, R7). The typed context names only trusted
+	// registered candidates with an IMPLEMENTED compatible route (AE20).
 	const route = selectCompatibleRoute(
 		environment.environment.name,
 		definition.routes.map((capability) => capability.route),
@@ -616,22 +682,50 @@ export async function runConnectGate(
 			outcome: "failed",
 			failure_class: "route-incompatible",
 			launch,
+			repair_context: {
+				failure_class: "route-incompatible",
+				cause: "route_unsupported",
+				candidate_adapter_ids: compatibleRegisteredCandidates(
+					deps,
+					environment.environment.name,
+					definition.id,
+				),
+			},
 			detail: `no route shared by ${environment.environment.name} and ${definition.id}`,
 		};
 	}
 
 	// The adapter runs its OWN attachment probe (R4). browser-connect never
-	// probes on the adapter's behalf.
-	const probe = await definition.probeAttachment(
+	// probes on the adapter's behalf. One bounded in-invocation read-only
+	// re-probe is permitted ONLY for an explicitly transient cause (R23/KTD12);
+	// a non-transient failure is never retried.
+	let probe = await definition.probeAttachment(
 		deps.adapterRuntime,
 		environment.endpoint,
 		route,
 	);
+	let reProbeAttempted = false;
+	if (!probe.attached && probe.cause === "transient_probe_failure") {
+		reProbeAttempted = true;
+		probe = await definition.probeAttachment(
+			deps.adapterRuntime,
+			environment.endpoint,
+			route,
+		);
+	}
 	if (!probe.attached) {
 		return {
 			outcome: "failed",
 			failure_class: probe.failureClass,
 			launch,
+			repair_context:
+				probe.cause === "transient_probe_failure"
+					? {
+							failure_class: "attachment-failed",
+							cause: "transient_probe_failure",
+							re_probe_attempted: reProbeAttempted,
+						}
+					: { failure_class: "attachment-failed", cause: "probe_failed" },
 			detail: probe.detail,
 		};
 	}
@@ -650,6 +744,693 @@ export async function runConnectGate(
 			...(injection.env ? { env: injection.env } : {}),
 		},
 	};
+}
+
+// ---------------------------------------------------------------------------
+// U5 repair-adapter (R19/R28/R29/R33/R34; KTD9/KTD13/KTD16/KTD17/KTD22).
+//
+// `--check` re-reads trusted registry + provenance state and reports the
+// exact currently-eligible action: zero network, zero mutation. `--execute`
+// re-reads the SAME trusted state (a preview grants no authority), validates
+// every lock-entry origin BEFORE any network, resolves the approved absolute
+// package manager, gates egress on a redirect-refusing canonical-origin
+// probe, copies the source manifest+lock into a neutral staging root, runs
+// the registry-owned isolated installer (allowlisted env, no shell, no
+// prompt), verifies the expected bin, atomically publishes the versioned
+// install tree, and proves fresh exact-pin provenance from the published bin
+// itself. Every safety-gate failure stops fail-closed into the
+// repair-adapter.operator_stop station.
+// ---------------------------------------------------------------------------
+
+const REPAIR_ADAPTER_STOP_ERROR_CODE = "operator_stop";
+const REPAIR_ADAPTER_INSTALL_TIMEOUT_MS = 180_000;
+
+/** Adapter install state projected into repair envelopes (safe fields only). */
+type RepairInstallState = "absent" | "version_mismatch" | "installed_at_pin";
+
+/** Safe observed/pinned version shape for projection (R11): plain x.y.z. */
+const REPAIR_SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+/**
+ * The full trusted-state read both modes share: structured provenance, the
+ * definition-owned install assessment, the typed repair context (when a
+ * repair is needed), and the U1 policy stage selected from it.
+ */
+type RepairAssessment = {
+	definition: AdapterDefinition;
+	installState: RepairInstallState;
+	observedVersion?: string;
+	assessment: AdapterInstallAssessment;
+	context?: BrowserConnectAdapterRepairContext;
+	stage?: BrowserConnectRepairStage;
+};
+
+/**
+ * Build the typed adapter-not-installed repair context (R11) from structured
+ * provenance plus the definition-owned install assessment. Shared by the
+ * connect gate and repair-adapter so policy always sees the same evidence.
+ */
+async function buildAdapterNotInstalledContext(
+	definition: AdapterDefinition,
+	provenance: Extract<AdapterProvenanceResult, { installed: false }>,
+	engine: AdapterInstallEngine,
+): Promise<BrowserConnectAdapterRepairContext> {
+	const assessment = await assessAdapterInstallPolicy(definition, engine);
+	if (provenance.cause === "version_mismatch") {
+		return {
+			failure_class: "adapter-not-installed",
+			cause: "version_mismatch",
+			adapter_id: definition.id,
+			// An unreadable version is projected as the safe literal "unknown";
+			// it can never match a transition allowlist entry (R22).
+			observed_version: provenance.observedVersion ?? "unknown",
+			pinned_version: definition.pinnedVersion,
+			transition_allowlisted:
+				provenance.observedVersion !== undefined &&
+				isAllowlistedAdapterUpgrade(
+					definition.installPolicy,
+					provenance.observedVersion,
+					definition.pinnedVersion,
+				),
+			automatic_install: assessment.evidence,
+		};
+	}
+	return {
+		failure_class: "adapter-not-installed",
+		cause: "executable_absent",
+		adapter_id: definition.id,
+		manual_install_inputs_complete: manualAdapterInstallInputsComplete(definition),
+		automatic_install: assessment.evidence,
+	};
+}
+
+/**
+ * Trusted registered candidates whose IMPLEMENTED routes include one the
+ * environment offers (AE16/AE20) — the only ids a cross-adapter handoff
+ * choice may name.
+ */
+function compatibleRegisteredCandidates(
+	deps: Pick<ResolvedDeps, "listAdapterDefinitions">,
+	environmentName: BrowserConnectEnvironmentIdentity["name"],
+	excludeAdapterId?: string,
+): string[] {
+	return deps
+		.listAdapterDefinitions()
+		.filter((candidate) => candidate.id !== excludeAdapterId)
+		.filter(
+			(candidate) =>
+				selectCompatibleRoute(
+					environmentName,
+					candidate.routes
+						.filter((capability) => capability.implemented)
+						.map((capability) => capability.route),
+				) !== undefined,
+		)
+		.map((candidate) => candidate.id);
+}
+
+/**
+ * Re-read the trusted state for one adapter (both modes run this fresh):
+ * structured provenance through the adapter runtime, the definition-owned
+ * install assessment through the engine (file reads only), and the U1 policy
+ * stage. Zero network, zero mutation.
+ */
+async function assessRepairAdapter(
+	definition: AdapterDefinition,
+	deps: ResolvedDeps,
+): Promise<RepairAssessment> {
+	const assessment = await assessAdapterInstallPolicy(
+		definition,
+		deps.adapterInstallEngine,
+	);
+	const provenance = await definition.checkProvenance(deps.adapterRuntime);
+	if (provenance.installed) {
+		return {
+			definition,
+			installState: "installed_at_pin",
+			observedVersion: provenance.version,
+			assessment,
+		};
+	}
+	const context = await buildAdapterNotInstalledContext(
+		definition,
+		provenance,
+		deps.adapterInstallEngine,
+	);
+	const stage = selectBrowserConnectRepairPath(
+		{ command: "repair-adapter", repair_chain_hop: 0 },
+		context,
+	);
+	return {
+		definition,
+		installState:
+			provenance.cause === "version_mismatch" ? "version_mismatch" : "absent",
+		...(provenance.observedVersion === undefined
+			? {}
+			: { observedVersion: provenance.observedVersion }),
+		assessment,
+		context,
+		stage,
+	};
+}
+
+/** Safe projected fields shared by every repair envelope (no paths, R11). */
+function repairProvenanceFields(repair: RepairAssessment): Record<string, unknown> {
+	return {
+		adapter_id: repair.definition.id,
+		install_state: repair.installState,
+		...(repair.observedVersion !== undefined &&
+		REPAIR_SAFE_VERSION_PATTERN.test(repair.observedVersion)
+			? { observed_version: repair.observedVersion }
+			: {}),
+		pinned_version: repair.definition.pinnedVersion,
+	};
+}
+
+async function dispatchRepairAdapter(
+	parsed: Extract<ParsedInvocation, { kind: "repair-adapter" }>,
+	deps: ResolvedDeps,
+	ctx: { runId: string; startedAtMs: number },
+): Promise<number> {
+	const durationMs = () => deps.now() - ctx.startedAtMs;
+	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "info", "command-start", {
+		command: "repair-adapter",
+		phase: "start",
+		adapter: parsed.adapterId,
+		mode: parsed.mode,
+	});
+
+	// Unknown adapter → usage-class rejection before any assessment (R33).
+	const definition = deps.findAdapterDefinition(parsed.adapterId);
+	if (!definition) {
+		return emitFailure(deps, {
+			outputMode: parsed.outputMode,
+			runId: ctx.runId,
+			durationMs: durationMs(),
+			failureClass: "adapter-unknown",
+			command: "repair-adapter",
+			message: `adapter ${parsed.adapterId} is not in the registry`,
+			repairContext: {
+				failure_class: "adapter-unknown",
+				cause: "unregistered_adapter",
+				candidate_adapter_ids: deps
+					.listAdapterDefinitions()
+					.map((candidate) => candidate.id),
+			},
+		});
+	}
+
+	// Both modes re-read the same trusted state; the preview grants no
+	// authority (KTD9/R33).
+	const repair = await assessRepairAdapter(definition, deps);
+
+	if (parsed.mode === "check") {
+		writeRepairPreview(deps, parsed.outputMode, repair, {
+			runId: ctx.runId,
+			durationMs: durationMs(),
+		});
+		return 0;
+	}
+
+	// --execute with nothing eligible:
+	// - already at the exact pin: read-only success, zero mutation;
+	// - operator posture: fail-closed stop (exit 20) with the policy stage.
+	if (repair.stage === undefined) {
+		writeRepairExecuted(deps, parsed.outputMode, repair, "none", {
+			runId: ctx.runId,
+			durationMs: durationMs(),
+		});
+		return 0;
+	}
+	if (repair.stage.posture !== "automatic") {
+		return emitRepairOperatorStop(deps, {
+			outputMode: parsed.outputMode,
+			runId: ctx.runId,
+			durationMs: durationMs(),
+			repair,
+			stage: repair.stage,
+			stopCause: primaryRepairStopCause(repair),
+			message:
+				"automatic package repair is not eligible for this adapter state; an operator owns the continuation.",
+		});
+	}
+
+	const performed =
+		repair.stage.continuation.next_action_id === "upgrade_adapter_to_pin"
+			? "upgrade_adapter_to_pin"
+			: "install_adapter";
+	const execution = await executeIsolatedAdapterRepair(repair, deps);
+	if (execution.outcome === "stopped") {
+		return emitRepairOperatorStop(deps, {
+			outputMode: parsed.outputMode,
+			runId: ctx.runId,
+			durationMs: durationMs(),
+			repair,
+			stage: repairExecutionStopStage(),
+			stopCause: execution.stopCause,
+			message: execution.detail,
+		});
+	}
+	writeRepairExecuted(
+		deps,
+		parsed.outputMode,
+		{
+			...repair,
+			installState: "installed_at_pin",
+			observedVersion: repair.definition.pinnedVersion,
+		},
+		performed,
+		{ runId: ctx.runId, durationMs: durationMs() },
+	);
+	return 0;
+}
+
+/** The primary (first) stop cause behind an operator posture. */
+function primaryRepairStopCause(repair: RepairAssessment): string {
+	if (repair.context?.cause === "version_mismatch") {
+		if (repair.context.transition_allowlisted !== true) {
+			return "transition_not_allowlisted";
+		}
+	}
+	return repair.assessment.stop_causes[0] ?? "automatic_repair_unavailable";
+}
+
+type RepairExecutionResult =
+	| { outcome: "executed" }
+	| { outcome: "stopped"; stopCause: AdapterInstallStopCause | string; detail: string };
+
+/**
+ * The isolated installer boundary (R28/R34; KTD16/KTD17). Preconditions: the
+ * fresh assessment selected an automatic package action, so recipe, canonical
+ * origins, full integrity, and lifecycle-free eligibility already validated
+ * with zero network. Order: approved-executable resolution (local) → egress
+ * gate probe (the ONLY pre-install network touch; redirects are refused, not
+ * followed) → neutral staging copy → isolated no-shell spawn → expected-bin
+ * and lock-rewrite verification → atomic versioned publish → fresh exact-pin
+ * provenance from the published bin.
+ */
+async function executeIsolatedAdapterRepair(
+	repair: RepairAssessment,
+	deps: ResolvedDeps,
+): Promise<RepairExecutionResult> {
+	const engine = deps.adapterInstallEngine;
+	const policy = repair.definition.installPolicy;
+	const { manifestText, lockText } = repair.assessment;
+	if (manifestText === undefined || lockText === undefined) {
+		return {
+			outcome: "stopped",
+			stopCause: "manifest_missing",
+			detail: "install source texts were not readable at execution time.",
+		};
+	}
+
+	// Approved absolute package-manager resolution (R28): local, before any
+	// network; PATH is never consulted.
+	const packageManagerPath = await resolveApprovedPackageManagerExecutable(
+		policy,
+		engine,
+	);
+	if (packageManagerPath === undefined) {
+		return {
+			outcome: "stopped",
+			stopCause: "package_manager_unavailable",
+			detail:
+				"no approved absolute package-manager executable exists on this machine.",
+		};
+	}
+	if (deps.adapterInstallRoot.length === 0) {
+		return {
+			outcome: "stopped",
+			stopCause: "install_root_unavailable",
+			detail: "no user-owned install root is available.",
+		};
+	}
+
+	// Egress gate (R34/AE23): one canonical-origin probe with redirects
+	// REFUSED — a 3xx stops here with no redirected request and no mutation.
+	const packumentUrl = `${policy.canonicalRegistry.replace(/\/+$/, "")}/${policy.packageName}`;
+	let probeStatus: number;
+	try {
+		probeStatus = (await engine.probeOrigin(packumentUrl)).status;
+	} catch {
+		return {
+			outcome: "stopped",
+			stopCause: "registry_unreachable",
+			detail: "the canonical registry origin probe failed before install.",
+		};
+	}
+	if (probeStatus >= 300 && probeStatus < 400) {
+		return {
+			outcome: "stopped",
+			stopCause: "registry_redirect",
+			detail:
+				"the canonical registry answered with a redirect; the egress gate never follows redirects.",
+		};
+	}
+	if (probeStatus < 200 || probeStatus >= 300) {
+		return {
+			outcome: "stopped",
+			stopCause: "registry_unreachable",
+			detail: "the canonical registry origin probe was not successful.",
+		};
+	}
+
+	// Neutral staging root under the user-owned install root (same volume, so
+	// the publish rename stays atomic). Source manifest + lock are COPIED in;
+	// the caller's cwd and config never participate (AE17).
+	let stagingDir: string;
+	try {
+		await engine.makeDir(deps.adapterInstallRoot);
+		stagingDir = await engine.makeTempDir(
+			`${deps.adapterInstallRoot}/.staging-${repair.definition.id}-`,
+		);
+	} catch {
+		return {
+			outcome: "stopped",
+			stopCause: "install_root_unavailable",
+			detail: "the user-owned install root could not be prepared.",
+		};
+	}
+	try {
+		await engine.writeTextFile(`${stagingDir}/package.json`, manifestText);
+		await engine.writeTextFile(`${stagingDir}/package-lock.json`, lockText);
+		const userConfigPath = `${stagingDir}/.npmrc`;
+		const globalConfigPath = `${stagingDir}/.npmrc-global`;
+		await engine.writeTextFile(userConfigPath, "");
+		await engine.writeTextFile(globalConfigPath, "");
+
+		const childEnv = buildIsolatedInstallerEnvironment({
+			baseEnv: engine.env,
+			canonicalRegistry: policy.canonicalRegistry,
+			stagingDir,
+			userConfigPath,
+			globalConfigPath,
+			cachePath: `${stagingDir}/.npm-cache`,
+		});
+
+		// Isolated no-shell spawn (KTD16): approved absolute executable, the
+		// definition-owned argv plus the pinned registry, neutral cwd, exact
+		// allowlisted env, stdin ignored (no prompt), bounded timeout.
+		const install = await engine.runCommand({
+			command: packageManagerPath,
+			args: [...policy.installArgv, `--registry=${policy.canonicalRegistry}`],
+			cwd: stagingDir,
+			env: childEnv,
+			exactEnv: true,
+			timeoutMs: REPAIR_ADAPTER_INSTALL_TIMEOUT_MS,
+		});
+		if (install.timedOut) {
+			return {
+				outcome: "stopped",
+				stopCause: "installer_timeout",
+				detail:
+					"the isolated installer timed out (a prompt cannot be answered; stdin is closed).",
+			};
+		}
+		if (install.exitCode !== 0) {
+			return {
+				outcome: "stopped",
+				stopCause: "installer_failed",
+				detail: `the isolated installer exited ${install.exitCode} without publishing.`,
+			};
+		}
+
+		// Verify the expected bin and that the source lock was not rewritten.
+		const stagedBin = `${stagingDir}/node_modules/.bin/${policy.expectedBin}`;
+		if (!(await engine.fileExists(stagedBin))) {
+			return {
+				outcome: "stopped",
+				stopCause: "expected_bin_missing",
+				detail: "the staged install tree does not contain the expected bin.",
+			};
+		}
+		const stagedLock = await engine.readTextFile(`${stagingDir}/package-lock.json`);
+		if (stagedLock !== lockText) {
+			return {
+				outcome: "stopped",
+				stopCause: "lock_rewritten",
+				detail:
+					"the installer rewrote the lockfile; the source-controlled dependency graph is authoritative.",
+			};
+		}
+
+		// Atomic publish of the versioned install tree (R28 user scope).
+		const finalDir = `${deps.adapterInstallRoot}/${repair.definition.id}/${repair.definition.pinnedVersion}`;
+		try {
+			await engine.makeDir(`${deps.adapterInstallRoot}/${repair.definition.id}`);
+			await engine.publishDir(stagingDir, finalDir);
+		} catch {
+			return {
+				outcome: "stopped",
+				stopCause: "publish_conflict",
+				detail:
+					"the versioned install tree could not be published atomically (a tree may already exist).",
+			};
+		}
+
+		// Fresh exact-pin provenance from the published bin itself (R33).
+		const provenance = await engine.runCommand({
+			command: `${finalDir}/node_modules/.bin/${policy.expectedBin}`,
+			args: ["--version"],
+			cwd: finalDir,
+			env: childEnv,
+			exactEnv: true,
+			timeoutMs: VERSION_READ_TIMEOUT_MS,
+		});
+		const publishedVersion = extractVersion(provenance.stdout, provenance.stderr);
+		if (provenance.exitCode !== 0 || publishedVersion !== repair.definition.pinnedVersion) {
+			return {
+				outcome: "stopped",
+				stopCause: "provenance_mismatch",
+				detail:
+					"the published install tree did not prove the exact pinned version; do not treat it as authoritative.",
+			};
+		}
+		return { outcome: "executed" };
+	} finally {
+		// Best-effort staging cleanup; a successful publish already renamed the
+		// staging dir away, so this only removes leftovers from stop paths.
+		try {
+			await engine.removeDir(stagingDir);
+		} catch {
+			// Leftover staging is diagnosable but never blocks the outcome.
+		}
+	}
+}
+
+/**
+ * Executor-owned operator stop stage for a mid-execution failure. The fresh
+ * pre-execution assessment stays authoritative for eligibility; a failed
+ * attempt exhausts the single execute budget (R19) and hands off to read-only
+ * diagnostics under the package constraints.
+ */
+function repairExecutionStopStage(): BrowserConnectRepairStage {
+	return {
+		posture: "operator",
+		continuation: {
+			requires_operator: true,
+			constraints: [
+				browserConnectContinuationConstraints.no_pin_policy_change,
+				browserConnectContinuationConstraints.no_mutation_from_diagnostics,
+			],
+			choices: [
+				{
+					id: "inspect_diagnostics",
+					label: "Inspect diagnostics",
+					summary:
+						"Rerun the repair preview with diagnostics to obtain the typed stop cause; execution stopped fail-closed.",
+					recoverability: "repair_state",
+					side_effects: ["read", "check"],
+					docs_url: browserConnectRepairDocsUrl("inspect_diagnostics"),
+				},
+			],
+		},
+	};
+}
+
+function writeRepairPreview(
+	deps: ResolvedDeps,
+	outputMode: OutputMode,
+	repair: RepairAssessment,
+	run: { runId: string; durationMs: number },
+): void {
+	const stage = repair.stage;
+	const posture =
+		stage === undefined ? "none" : stage.posture === "automatic" ? "automatic" : "operator";
+	const data = {
+		outcome: "repair_preview" as const,
+		...repairProvenanceFields(repair),
+		posture,
+		...(stage?.posture === "automatic"
+			? { eligible_action_id: stage.continuation.next_action_id }
+			: {}),
+		...(stage?.posture === "operator"
+			? {
+					operator_choice_ids: (stage.continuation.choices ?? []).map(
+						(choice) => choice.id,
+					),
+				}
+			: {}),
+		...(repair.context !== undefined
+			? { automatic_install: repair.assessment.evidence }
+			: {}),
+		...(repair.assessment.stop_causes.length > 0
+			? { stop_causes: [...repair.assessment.stop_causes] }
+			: {}),
+		contract_id: BROWSER_CONNECT_CONTRACT_ID,
+		schema_version: BROWSER_CONNECT_SCHEMA_VERSION,
+	};
+	if (outputMode === "plain") {
+		deps.stdout.write(
+			`repair_preview adapter=${repair.definition.id} state=${repair.installState} posture=${posture} run_id=${run.runId} duration_ms=${run.durationMs}\n`,
+		);
+		return;
+	}
+	// Facade rule: choices are error-envelope-only, so an operator-posture
+	// preview projects requires_operator + constraints and carries the choice
+	// ids in data only.
+	writeJsonEnvelope(
+		deps.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: run.runId,
+			data,
+			...(stage?.posture === "automatic"
+				? {
+						runtime_actions: [...stage.runtime_actions],
+						continuation: stage.continuation,
+					}
+				: {}),
+			...(stage?.posture === "operator"
+				? {
+						continuation: {
+							requires_operator: true,
+							constraints: stage.continuation.constraints,
+						},
+					}
+				: {}),
+		}),
+		run,
+	);
+}
+
+function writeRepairExecuted(
+	deps: ResolvedDeps,
+	outputMode: OutputMode,
+	repair: RepairAssessment,
+	performed: "install_adapter" | "upgrade_adapter_to_pin" | "none",
+	run: { runId: string; durationMs: number },
+): void {
+	const data = {
+		outcome: "repair_executed" as const,
+		...repairProvenanceFields(repair),
+		performed,
+		contract_id: BROWSER_CONNECT_CONTRACT_ID,
+		schema_version: BROWSER_CONNECT_SCHEMA_VERSION,
+	};
+	if (outputMode === "plain") {
+		deps.stdout.write(
+			`repair_executed adapter=${repair.definition.id} performed=${performed} version=${repair.definition.pinnedVersion} run_id=${run.runId} duration_ms=${run.durationMs}\n`,
+		);
+		return;
+	}
+	writeJsonEnvelope(
+		deps.stdout,
+		createCliRuntimeSuccessEnvelope({ run_id: run.runId, data }),
+		run,
+	);
+}
+
+/**
+ * Emit the repair-adapter.operator_stop envelope (exit 20, error code
+ * `operator_stop`): a facade-valid operator stage with constraints and
+ * package-owned choices, plus the R30-consistent non-mutating legacy
+ * `data.next_action_id` (never install_adapter or upgrade_adapter_to_pin).
+ */
+function emitRepairOperatorStop(
+	deps: ResolvedDeps,
+	input: {
+		outputMode: OutputMode;
+		runId: string;
+		durationMs: number;
+		repair: RepairAssessment;
+		stage: BrowserConnectRepairStage;
+		stopCause: string;
+		message: string;
+	},
+): number {
+	const exitCode = CONNECTION_ENTRY_EXIT_CODE;
+	const safeMessage = redactBrowserConnectText(input.message);
+	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", REPAIR_ADAPTER_STOP_ERROR_CODE, {
+		code: REPAIR_ADAPTER_STOP_ERROR_CODE,
+		exit_code: exitCode,
+		adapter: input.repair.definition.id,
+		stop_cause: input.stopCause,
+	});
+
+	const legacyNextAction =
+		input.repair.context !== undefined
+			? selectBrowserConnectLegacyNextAction({
+					context: input.repair.context,
+					stage: input.stage,
+				})
+			: ("inspect_diagnostics" as const);
+	const data = {
+		outcome: "repair_stopped" as const,
+		...repairProvenanceFields(input.repair),
+		stop_cause: input.stopCause,
+		...(input.repair.assessment.stop_causes.length > 0
+			? { stop_causes: [...input.repair.assessment.stop_causes] }
+			: {}),
+		next_action_id: legacyNextAction,
+		contract_id: BROWSER_CONNECT_CONTRACT_ID,
+		schema_version: BROWSER_CONNECT_SCHEMA_VERSION,
+	};
+
+	if (input.outputMode === "plain") {
+		deps.stderr.write(
+			`${REPAIR_ADAPTER_STOP_ERROR_CODE}: ${safeMessage} stop_cause=${input.stopCause} (run_id=${input.runId})\n`,
+		);
+		return exitCode;
+	}
+
+	const structured: StructuredRuntimeError = createCliRuntimeError({
+		run_id: input.runId,
+		code: REPAIR_ADAPTER_STOP_ERROR_CODE,
+		message: safeMessage,
+		exit_code: exitCode,
+		severity: "error",
+		recoverability: "repair_state",
+		retryable: false,
+		hint: {
+			summary:
+				"A package safety gate stopped automatic adapter repair; an operator owns the continuation.",
+		},
+		failure_domain: "browser_entry_handoff",
+	});
+
+	const continuation: RuntimeContinuationGuidance =
+		input.stage.posture === "operator"
+			? input.stage.continuation
+			: {
+					requires_operator: true,
+					constraints: [
+						browserConnectContinuationConstraints.no_pin_policy_change,
+						browserConnectContinuationConstraints.no_mutation_from_diagnostics,
+					],
+				};
+
+	writeJsonEnvelope(
+		deps.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: exitCode,
+			error: structured,
+			data,
+			continuation,
+		}),
+		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return exitCode;
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +2213,14 @@ function parseArgv(
 		return parseRunArgv(argv.slice(1), runTail);
 	}
 
+	// `repair-adapter` is also handled before the global --help/--version scan:
+	// every non-mode flag — INCLUDING `--version` — is a rejected package-policy
+	// override on this surface (R33). `--help` stays discoverable inside its own
+	// parser.
+	if (argv[0] === "repair-adapter") {
+		return parseRepairAdapterArgv(argv.slice(1));
+	}
+
 	if (argv.includes("--help") || argv.includes("-h")) {
 		return { kind: "help", ...helpCommand(findCommandArg(argv)) };
 	}
@@ -1557,6 +2346,72 @@ function parseRunArgv(
 	};
 }
 
+/**
+ * Parse a `repair-adapter` invocation (U5 R33/KTD22).
+ *
+ * Exactly one positional adapter id and exactly one of the mutually exclusive
+ * `--check`/`--execute` modes. Every undeclared flag — including `--version`,
+ * `--registry`, `--package`, `--pin`, `--lockfile`, `--path`, and `--recipe`
+ * shapes — is rejected as an unknown option BEFORE any engine work: the
+ * command accepts no package-policy override. A second positional operand is
+ * rejected the same way (an override-shaped operand, e.g. a version).
+ */
+function parseRepairAdapterArgv(argv: readonly string[]): ParsedInvocation {
+	if (argv.includes("--help") || argv.includes("-h")) {
+		return { kind: "help", command: "repair-adapter" };
+	}
+	let check = false;
+	let execute = false;
+	const positionals: string[] = [];
+	for (const arg of argv) {
+		if (arg === "--check") {
+			if (check) throw usageError("duplicate option: --check");
+			check = true;
+			continue;
+		}
+		if (arg === "--execute") {
+			if (execute) throw usageError("duplicate option: --execute");
+			execute = true;
+			continue;
+		}
+		if (arg === "--json" || arg === "--plain") continue;
+		if (arg.startsWith("-")) {
+			if (isGlobalDiagnosticFlag(arg)) continue;
+			// Fixed package-owned text (R24/R33): the rejected flag is never
+			// echoed, so no caller-authored value reaches the usage envelope.
+			throw usageError(
+				"repair-adapter accepts no package-policy override or unknown option; only --check, --execute, and --json are accepted",
+			);
+		}
+		positionals.push(arg);
+	}
+	const adapterId = positionals[0];
+	if (adapterId === undefined) {
+		throw usageError("repair-adapter requires an adapter id");
+	}
+	if (positionals.length > 1) {
+		// A second operand is an override-shaped input (e.g. a version); fixed
+		// text, never echoed (R24/R33).
+		throw usageError(
+			"repair-adapter accepts exactly one adapter operand and no extra arguments",
+		);
+	}
+	if (check && execute) {
+		throw usageError(
+			"repair-adapter accepts exactly one of --check or --execute, not both",
+		);
+	}
+	if (!check && !execute) {
+		throw usageError("repair-adapter requires exactly one of --check or --execute");
+	}
+	return {
+		kind: "repair-adapter",
+		adapterId,
+		mode: check ? "check" : "execute",
+		outputMode: inferOutputMode(argv),
+	};
+}
+
 function firstPositional(argv: readonly string[]): string | undefined {
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -1629,7 +2484,7 @@ function configureDiagnostics(
 function renderHelp(command?: BrowserConnectCommand): string {
 	if (command) return renderCommandUsage(browserConnectContracts[command]);
 	const commandLines = browserConnectContractEntries.map(
-		([name, contract]) => `  ${name.padEnd(10)} ${contract.summary}`,
+		([name, contract]) => `  ${name.padEnd(15)} ${contract.summary}`,
 	);
 	return [
 		`Usage: ${BROWSER_CONNECT_CLI_NAME} [command] [flags]`,
@@ -1647,6 +2502,71 @@ function renderHelp(command?: BrowserConnectCommand): string {
 		"  --version       Print version.",
 		"",
 	].join("\n");
+}
+
+/**
+ * Default user-owned install root (R28 install scope): under $HOME only. An
+ * empty result fails closed inside the executor (install_root_unavailable).
+ */
+function defaultAdapterInstallRoot(): string {
+	const home = process.env.HOME;
+	if (!home) return "";
+	return `${home}/.side-quest/browser-connect/adapters`;
+}
+
+/**
+ * Default production install engine (KTD16): real fs, `fs.mkdtemp` staging,
+ * atomic `fs.rename` publish, a redirect-REFUSING fetch probe (`redirect:
+ * "manual"` — a 3xx is reported, never followed), and the package no-shell
+ * spawner. Tests never use this; they inject a recording engine.
+ */
+function createDefaultAdapterInstallEngine(): AdapterInstallEngine {
+	return {
+		env: process.env,
+		fileExists: async (path) => {
+			const fs = await import("node:fs/promises");
+			try {
+				await fs.access(path);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		readTextFile: async (path) => {
+			const fs = await import("node:fs/promises");
+			return fs.readFile(path, "utf8");
+		},
+		writeTextFile: async (path, contents) => {
+			const fs = await import("node:fs/promises");
+			await fs.writeFile(path, contents, "utf8");
+		},
+		makeDir: async (path) => {
+			const fs = await import("node:fs/promises");
+			await fs.mkdir(path, { recursive: true });
+		},
+		makeTempDir: async (prefix) => {
+			const fs = await import("node:fs/promises");
+			return fs.mkdtemp(prefix);
+		},
+		removeDir: async (path) => {
+			const fs = await import("node:fs/promises");
+			await fs.rm(path, { recursive: true, force: true });
+		},
+		publishDir: async (fromPath, toPath) => {
+			const fs = await import("node:fs/promises");
+			await fs.rename(fromPath, toPath);
+		},
+		probeOrigin: async (url) => {
+			const response = await fetch(url, {
+				redirect: "manual",
+				signal: AbortSignal.timeout(10_000),
+			});
+			// Drain nothing: status only. A 3xx is REPORTED so the executor stops;
+			// the Location target is never requested (AE23).
+			return { status: response.status };
+		},
+		runCommand: spawnAdapterCommand,
+	};
 }
 
 /**

@@ -320,6 +320,15 @@ const VERIFIED_ENV_RATIONALE =
 const RUNTIME_ERROR_RATIONALE =
 	"No deterministic non-usage runtime throw exists at the process boundary; the exit-1 runtime-error path is driven by a caught non-CliUsageError, proven in-process by U6/U7 caught-error unit tests with an injected throwing dep.";
 
+// repair-adapter --execute stations require package mutation through the
+// isolated installer; hermetic tests forbid real network and real package
+// mutation, and the production engine has no process-boundary injection seam.
+// Proven in-process by U5 entrypoint tests with an injected install engine,
+// a fake package-manager executable spawned at a real process boundary, and
+// fixture lockfiles.
+const PACKAGE_MUTATION_RATIONALE =
+	"Requires package mutation through the isolated installer against the real canonical package registry; hermetic tests forbid real network and real package mutation. Proven in-process by U5 entrypoint tests with an injected install engine, a fake package-manager executable spawned at a real process boundary, and fixture lockfiles.";
+
 function skip(rationale: string) {
 	return (
 		station: BranchStation,
@@ -359,7 +368,32 @@ const stationScenarios: Record<BrowserConnectStationId, StationScenario> = {
 
 	// -- Skipped: no deterministic boundary trigger --
 	"check.runtime_error": { run: skip(RUNTIME_ERROR_RATIONALE) },
+
+	// -- U5 repair-adapter stations --
+	// The preview is fully reachable at the process boundary: it re-reads the
+	// committed adapter-install source manifests and the machine's provenance,
+	// reports eligibility, and performs zero network and zero mutation — every
+	// machine state yields exit 0 with an ok envelope.
+	"repair-adapter.preview": { run: runRepairAdapterPreview },
+	"repair-adapter.installed": { run: skip(PACKAGE_MUTATION_RATIONALE) },
+	"repair-adapter.upgraded": { run: skip(PACKAGE_MUTATION_RATIONALE) },
+	"repair-adapter.operator_stop": { run: skip(PACKAGE_MUTATION_RATIONALE) },
 };
+
+async function runRepairAdapterPreview(
+	station: BranchStation,
+): Promise<BranchStationEvidence> {
+	const result = await runBrowserConnect(
+		["repair-adapter", "chrome-devtools-mcp", "--check", "--json", "--run-id", RUN_ID],
+		{ label: station.id },
+	);
+	const envelope = assertStationEnvelope(station, result);
+	expect(
+		(envelope.data as Record<string, unknown> | undefined)?.outcome,
+		describeCliProcessRun(result),
+	).toBe("repair_preview");
+	return buildStationEvidence(station, result, envelope);
+}
 
 // The bare dashboard is a stateless read-only projection (R15): it reads static
 // registry + provenance and NEVER proves an environment, launches, or probes.

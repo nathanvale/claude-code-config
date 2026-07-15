@@ -25,6 +25,7 @@ import {
 	browserConnectContractFailureActions,
 	browserConnectContractSuccessActions,
 	browserConnectReadExitCodes,
+	browserConnectRepairAdapterExitCodes,
 	browserConnectRunExitCodes,
 	extractBrowserConnectGatewayOptions,
 	projectBrowserConnectCommandDiscoveryTree,
@@ -36,7 +37,7 @@ const READ_COMMANDS = ["dashboard", "check"] as const;
 const GLOBAL_DIAGNOSTIC_FLAGS = BROWSER_CONNECT_GLOBAL_DIAGNOSTIC_FLAGS;
 
 describe("browser-connect command contract (U3 R2/R7/R15/R17)", () => {
-	test("declares exactly the four public commands on the browser-connect script", () => {
+	test("declares exactly the five public commands on the browser-connect script", () => {
 		expect(Object.keys(browserConnectContracts).sort()).toEqual(
 			[...BROWSER_CONNECT_COMMANDS].sort(),
 		);
@@ -44,6 +45,7 @@ describe("browser-connect command contract (U3 R2/R7/R15/R17)", () => {
 			"check",
 			"connect",
 			"dashboard",
+			"repair-adapter",
 			"run",
 		]);
 		for (const command of BROWSER_CONNECT_COMMANDS) {
@@ -56,13 +58,14 @@ describe("browser-connect command contract (U3 R2/R7/R15/R17)", () => {
 		]);
 	});
 
-	test("dashboard is the operator read-only surface; check/connect/run are agent surfaces", () => {
+	test("dashboard is the operator read-only surface; the rest are agent surfaces", () => {
 		expect(browserConnectContracts.dashboard.audience).toBe("operator");
 		expect(browserConnectContracts.dashboard.mutation).toBe("check");
 		expect(browserConnectContracts.dashboard.sideEffects).toEqual(["read"]);
 		expect(browserConnectContracts.check.audience).toBe("agent");
 		expect(browserConnectContracts.connect.audience).toBe("agent");
 		expect(browserConnectContracts.run.audience).toBe("agent");
+		expect(browserConnectContracts["repair-adapter"].audience).toBe("agent");
 		for (const command of BROWSER_CONNECT_COMMANDS) {
 			expect(browserConnectContracts[command].json).toBe(true);
 		}
@@ -99,7 +102,7 @@ describe("browser-connect command contract (U3 R2/R7/R15/R17)", () => {
 		expect(
 			findCommandFacadeMetadataDrift(browserConnectContracts, {
 				path: CONTRACT_PATH,
-				writeImplyingMutations: new Set(["browser"]),
+				writeImplyingMutations: new Set(["browser", "package"]),
 			}),
 		).toEqual([]);
 	});
@@ -129,6 +132,21 @@ describe("browser-connect help flag surface (U3)", () => {
 			check: ["--chrome", "--endpoint"],
 			connect: ["--chrome", "--endpoint"],
 			run: ["--chrome", "--endpoint"],
+			// repair-adapter accepts NO gateway options and NO package-policy
+			// override flags (R33): only --check/--execute/--json are declared.
+			"repair-adapter": [
+				"--chrome",
+				"--endpoint",
+				"--port",
+				"--repair-chain-hop",
+				"--package",
+				"--pin",
+				"--registry",
+				"--lockfile",
+				"--recipe",
+				"--path",
+				"--scope",
+			],
 		};
 		for (const command of BROWSER_CONNECT_COMMANDS) {
 			const contract = browserConnectContracts[command];
@@ -242,17 +260,26 @@ describe("browser-connect write preview honesty (U3 R15)", () => {
 });
 
 describe("browser-connect discovery projection (U3 R2)", () => {
-	test("exposes all four commands, exit 20 with its meaning, and the result contract id", () => {
+	test("exposes all five commands, exit 20 with its meaning, and the result contract id", () => {
 		const tree = projectBrowserConnectCommandDiscoveryTree();
 		expect(Object.keys(tree.commands).sort()).toEqual([
 			"check",
 			"connect",
 			"dashboard",
+			"repair-adapter",
 			"run",
 		]);
 		for (const command of BROWSER_CONNECT_COMMANDS) {
 			const entry = tree.commands[command];
-			expect(entry?.exit_codes["20"]).toBe(browserConnectReadExitCodes["20"]);
+			// repair-adapter owns its own exit-20 meaning (fail-closed repair stop);
+			// every other command shares the connection-entry meaning.
+			if (command === "repair-adapter") {
+				expect(entry?.exit_codes["20"]).toBe(
+					browserConnectRepairAdapterExitCodes["20"],
+				);
+			} else {
+				expect(entry?.exit_codes["20"]).toBe(browserConnectReadExitCodes["20"]);
+			}
 			expect(entry?.result_contract).toEqual({
 				id: BROWSER_CONNECT_CONTRACT_ID,
 				kind: "Browser Adapter verified handoff.",
@@ -507,5 +534,76 @@ describe("browser-connect gateway option parsing (U3 R15: validate once, one own
 				"--repair-chain-hop=1",
 			]),
 		).toThrow("duplicate option: --repair-chain-hop");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// U5 repair-adapter command surface (R33/KTD22): discovery metadata, rendered
+// help, and the parser expose the same mutually exclusive --check/--execute
+// modes; no package-policy override is declared anywhere.
+// ---------------------------------------------------------------------------
+
+describe("browser-connect repair-adapter contract surface (U5 R33/KTD22)", () => {
+	const contract = browserConnectContracts["repair-adapter"];
+
+	test("declares the package mutation class with an agent audience and a check preview mode", () => {
+		expect(contract.mutation).toBe("package");
+		expect(contract.audience).toBe("agent");
+		// --check is a first-class preview execution mode (KTD9/KTD22): the
+		// write-preview capability is a real mode, not an exemption.
+		expect(contract.executionModes).toEqual(["check", "normal"]);
+		expect(contract.previewExemption).toBeUndefined();
+		expect(contract.sideEffects).toEqual(["check", "network", "write"]);
+		expect(contract.interactivity).toBe("none");
+	});
+
+	test("declares exactly the mutually exclusive modes plus --json; nothing else", () => {
+		expect(Object.keys(contract.flags).sort()).toEqual([
+			"--check",
+			"--execute",
+			"--json",
+		]);
+		const check = contract.flags["--check"];
+		const execute = contract.flags["--execute"];
+		expect(check?.type).toBe("boolean");
+		expect(execute?.type).toBe("boolean");
+		expect(check?.description).toContain("--execute");
+		expect(execute?.description).toContain("--check");
+		expect(check?.description?.toLowerCase()).toContain("read-only");
+		expect(execute?.description?.toLowerCase()).toContain("mutation");
+	});
+
+	test("usage names the adapter operand and both modes", () => {
+		const usage = contract.usage.join("\n");
+		expect(usage).toContain("<adapter>");
+		expect(usage).toContain("--check");
+		expect(usage).toContain("--execute");
+	});
+
+	test("rendered help exposes both modes with their meaning", () => {
+		const help = renderCommandUsage(contract);
+		expect(help).toContain("--check");
+		expect(help).toContain("--execute");
+		expect(help).toContain("--json");
+	});
+
+	test("exit codes: baseline plus the fail-closed repair stop at 20", () => {
+		expect(Object.keys(contract.exitCodes).sort((a, b) => Number(a) - Number(b))).toEqual([
+			"0",
+			"1",
+			"2",
+			"20",
+		]);
+		expect(browserConnectRepairAdapterExitCodes["20"].toLowerCase()).toContain(
+			"operator",
+		);
+	});
+
+	test("discovery projects the repair-adapter preview note", () => {
+		const tree = projectBrowserConnectCommandDiscoveryTree();
+		expect(tree.commands["repair-adapter"]?.preview_note).toBe(
+			BROWSER_CONNECT_PREVIEW_NOTES["repair-adapter"],
+		);
+		expect(tree.commands["repair-adapter"]?.preview_note).toContain("--check");
 	});
 });

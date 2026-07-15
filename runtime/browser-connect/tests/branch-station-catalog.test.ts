@@ -26,8 +26,10 @@ import {
 	BROWSER_CONNECT_WRAPPED_NOT_FOUND_EXIT_CODE,
 } from "../src/command-contract.ts";
 
-// The 19 authoritative slice-one stations from the Planning Contract table,
-// keyed <command>.<branch> to satisfy the facade station-id pattern.
+// The 19 authoritative slice-one stations from the Planning Contract table
+// plus the four U5 repair-adapter stations (preview, installed, upgraded, and
+// the 14th error station operator_stop — R1), keyed <command>.<branch> to
+// satisfy the facade station-id pattern.
 const AUTHORITATIVE_STATION_IDS = [
 	"dashboard.ok",
 	"check.usage_invalid",
@@ -48,6 +50,10 @@ const AUTHORITATIVE_STATION_IDS = [
 	"run.passthrough_success",
 	"run.passthrough_failure",
 	"check.runtime_error",
+	"repair-adapter.preview",
+	"repair-adapter.installed",
+	"repair-adapter.upgraded",
+	"repair-adapter.operator_stop",
 ] as const;
 
 const CONNECT_ENTRY_EXIT = Number(BROWSER_CONNECT_CONNECTION_ENTRY_EXIT_CODE);
@@ -61,7 +67,7 @@ const catalogStations: readonly BranchStation[] =
 	browserConnectBranchStationCatalog;
 
 describe("browser-connect branch station catalog (U3 R2/R7/R11/R15/R17)", () => {
-	test("catalog transcribes exactly the 19 authoritative stations", () => {
+	test("catalog transcribes exactly the 23 authoritative stations", () => {
 		expect(
 			browserConnectBranchStationCatalog.map((station) => station.id),
 		).toEqual([...AUTHORITATIVE_STATION_IDS]);
@@ -84,7 +90,7 @@ describe("browser-connect branch station catalog (U3 R2/R7/R11/R15/R17)", () => 
 
 	test("station-map finding ids sorted-equal catalog ids before any evidence", () => {
 		const stationMap = projectBrowserConnectStationMap();
-		expect(stationMap.stations).toHaveLength(19);
+		expect(stationMap.stations).toHaveLength(23);
 		expect(stationMap.findings.map((finding) => finding.station_id).sort()).toEqual(
 			[...AUTHORITATIVE_STATION_IDS].sort(),
 		);
@@ -105,6 +111,7 @@ describe("browser-connect branch station catalog (U3 R2/R7/R11/R15/R17)", () => 
 			"check",
 			"connect",
 			"dashboard",
+			"repair-adapter",
 			"run",
 		]);
 		// Discovery has a command entry for every catalog-referenced command.
@@ -131,6 +138,7 @@ describe("browser-connect station exit and failure-class mapping (U3 KTD4)", () 
 				"connect.launch_failed",
 				"connect.route_incompatible",
 				"run.preexec_connect_failed",
+				"repair-adapter.operator_stop",
 			].sort(),
 		);
 	});
@@ -242,6 +250,10 @@ describe("browser-connect scenario-map exhaustiveness (U3 KTD6)", () => {
 			"run.passthrough_success": "wrapped exited 0",
 			"run.passthrough_failure": "wrapped nonzero",
 			"check.runtime_error": "unexpected exception",
+			"repair-adapter.preview": "read-only eligibility report",
+			"repair-adapter.installed": "isolated install to pin",
+			"repair-adapter.upgraded": "allowlisted upgrade to pin",
+			"repair-adapter.operator_stop": "fail-closed package stop",
 		};
 		expect(Object.keys(scenarioLabels).sort()).toEqual(
 			[...BROWSER_CONNECT_STATION_IDS].sort(),
