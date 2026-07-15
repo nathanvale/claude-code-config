@@ -46,6 +46,7 @@ import {
 	BROWSER_CONNECT_GLOBAL_DIAGNOSTIC_FLAGS,
 	browserConnectContractEntries,
 	browserConnectContracts,
+	extractBrowserConnectGatewayOptions,
 } from "./command-contract.ts";
 import {
 	type BrowserConnectDashboard,
@@ -74,13 +75,17 @@ import {
 import {
 	BROWSER_CONNECT_CLI_NAME,
 	BROWSER_CONNECT_CONTRACT_ID,
+	type BrowserConnectAdapterRepairContext,
 	type BrowserConnectAuthorizedAttachment,
 	type BrowserConnectEnvironmentIdentity,
+	type BrowserConnectEnvironmentRepairContext,
 	type BrowserConnectEnvelopeData,
 	type BrowserConnectFailureActionId,
 	type BrowserConnectFailureClass,
 	type BrowserConnectLaunchProvenance,
 	type BrowserConnectProofEvidence,
+	type BrowserConnectRepairChainHop,
+	type BrowserConnectRepairContext,
 	type BrowserConnectRouteId,
 	type BrowserConnectVerifiedEndpoint,
 	BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS,
@@ -218,13 +223,26 @@ type ParsedInvocation =
 	| { kind: "help"; command?: BrowserConnectCommand }
 	| { kind: "version" }
 	| { kind: "dashboard"; outputMode: OutputMode }
-	| { kind: "check"; outputMode: OutputMode }
-	| { kind: "connect"; adapterId: string; outputMode: OutputMode }
+	| {
+			kind: "check";
+			outputMode: OutputMode;
+			port?: number;
+			repairChainHop: BrowserConnectRepairChainHop;
+	  }
+	| {
+			kind: "connect";
+			adapterId: string;
+			outputMode: OutputMode;
+			port?: number;
+			repairChainHop: BrowserConnectRepairChainHop;
+	  }
 	| {
 			kind: "run";
 			adapterId: string;
 			tail: readonly string[];
 			outputMode: OutputMode;
+			port?: number;
+			repairChainHop: BrowserConnectRepairChainHop;
 	  }
 	| { kind: "run-missing-separator" };
 
@@ -413,6 +431,7 @@ async function dispatch(
 			reconfigureDiagnostics: ctx.reconfigureDiagnostics,
 			runId: ctx.runId,
 			autoLaunch: false,
+			...(parsed.port === undefined ? {} : { explicitPort: parsed.port }),
 			...(deps.warmChromeRuntime
 				? { warmChromeRuntime: deps.warmChromeRuntime }
 				: {}),
@@ -424,6 +443,9 @@ async function dispatch(
 			});
 			return 0;
 		}
+		// KTD20: check preserves any suggestion inside the typed context as
+		// diagnostic evidence only — it never becomes a suggested-port
+		// continuation on this surface.
 		return emitFailure(deps, {
 			outputMode: parsed.outputMode,
 			runId: ctx.runId,
@@ -431,6 +453,9 @@ async function dispatch(
 			failureClass: result.failure_class,
 			command: "check",
 			...(result.detail ? { message: result.detail } : {}),
+			repairContext: result.repair_context,
+			repairChainHop: parsed.repairChainHop,
+			...(parsed.port === undefined ? {} : { requestedPort: parsed.port }),
 		});
 	}
 
@@ -440,7 +465,9 @@ async function dispatch(
 		phase: "start",
 		adapter: parsed.adapterId,
 	});
-	const gate = await runConnectGate(parsed.adapterId, deps, ctx);
+	const gate = await runConnectGate(parsed.adapterId, deps, ctx, {
+		...(parsed.port === undefined ? {} : { explicitPort: parsed.port }),
+	});
 	if (gate.outcome === "verified") {
 		writeConnectSuccess(deps, parsed.outputMode, gate, {
 			runId: ctx.runId,
@@ -455,6 +482,9 @@ async function dispatch(
 		failureClass: gate.failure_class,
 		command: "connect",
 		...(gate.detail ? { message: gate.detail } : {}),
+		...(gate.repair_context ? { repairContext: gate.repair_context } : {}),
+		repairChainHop: parsed.repairChainHop,
+		...(parsed.port === undefined ? {} : { requestedPort: parsed.port }),
 	});
 }
 
@@ -484,11 +514,17 @@ export type ConnectGateVerified = {
 /**
  * A failed connect result: the failure class plus launch provenance so far.
  * `detail` is free text that passes the redaction chokepoint on the way out.
+ * `repair_context` preserves the gateway's typed environment evidence — reason,
+ * suggested port, port-free proof — for repair-path selection (R6); adapter
+ * stages gain their typed contexts in a later unit.
  */
 export type ConnectGateFailed = {
 	outcome: "failed";
 	failure_class: BrowserConnectFailureClass;
 	launch: BrowserConnectLaunchProvenance;
+	repair_context?:
+		| BrowserConnectEnvironmentRepairContext
+		| BrowserConnectAdapterRepairContext;
 	detail?: string;
 };
 
@@ -511,12 +547,15 @@ export type ConnectGateResult = ConnectGateVerified | ConnectGateFailed;
  * @param adapterId - Adapter id from caller input
  * @param deps - Resolved dependency bundle
  * @param ctx - Run id and diagnostics re-config hook
+ * @param options - Validated gateway options: the explicit port forwarded
+ *   unchanged to the environment gateway (R15/KTD7)
  * @returns A verified handoff or a typed failure
  */
 export async function runConnectGate(
 	adapterId: string,
 	deps: ResolvedDeps,
 	ctx: { runId: string; reconfigureDiagnostics: () => void },
+	options: { explicitPort?: number } = {},
 ): Promise<ConnectGateResult> {
 	// Unknown adapter → usage-class rejection, never a probe (R7).
 	const definition = deps.findAdapterDefinition(adapterId);
@@ -536,6 +575,9 @@ export async function runConnectGate(
 			reconfigureDiagnostics: ctx.reconfigureDiagnostics,
 			runId: ctx.runId,
 			autoLaunch: true,
+			...(options.explicitPort === undefined
+				? {}
+				: { explicitPort: options.explicitPort }),
 			...(deps.warmChromeRuntime
 				? { warmChromeRuntime: deps.warmChromeRuntime }
 				: {}),
@@ -545,6 +587,7 @@ export async function runConnectGate(
 			outcome: "failed",
 			failure_class: environment.failure_class,
 			launch: environment.launch,
+			repair_context: environment.repair_context,
 			...(environment.detail ? { detail: environment.detail } : {}),
 		};
 	}
@@ -638,7 +681,9 @@ async function dispatchRun(
 		// R14/KTD10: the wrapped command's args are NEVER logged here.
 	});
 
-	const gate = await runConnectGate(parsed.adapterId, deps, ctx);
+	const gate = await runConnectGate(parsed.adapterId, deps, ctx, {
+		...(parsed.port === undefined ? {} : { explicitPort: parsed.port }),
+	});
 
 	// Gate FAILURE → pre-exec connect failure on STDERR (exit 20 family); exec
 	// never starts. Every connect-family failure homes on the single run pre-exec
@@ -652,6 +697,19 @@ async function dispatchRun(
 			failureClass: "preexec-connect-failed",
 			launch: gate.launch,
 			...(gate.detail ? { message: gate.detail } : {}),
+			// R12: the pre-exec station retains the underlying typed failure so
+			// repair-path selection can inherit its exact posture.
+			...(gate.repair_context
+				? {
+						repairContext: {
+							failure_class: "preexec-connect-failed",
+							cause: "preexec_connect_failure",
+							underlying: gate.repair_context,
+						},
+					}
+				: {}),
+			repairChainHop: parsed.repairChainHop,
+			...(parsed.port === undefined ? {} : { requestedPort: parsed.port }),
 		});
 	}
 
@@ -911,6 +969,16 @@ function buildFailureEnvelopeParts(input: {
 	failureClass: BrowserConnectFailureClass;
 	safeMessage: string;
 	launch?: BrowserConnectLaunchProvenance;
+	/**
+	 * U3 typed failure evidence (R6/R15/R23): the gateway's typed repair
+	 * context plus the invocation's parsed hop and requested port, preserved on
+	 * the shared failure input so repair-path selection (U4) reads them here.
+	 * Projected today onto the branch diagnostic only — the envelope shape is
+	 * unchanged until U4 wires policy projection.
+	 */
+	repairContext?: BrowserConnectRepairContext;
+	repairChainHop?: BrowserConnectRepairChainHop;
+	requestedPort?: number;
 }): FailureEnvelopeParts {
 	const actionId: BrowserConnectFailureActionId =
 		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[input.failureClass];
@@ -926,9 +994,22 @@ function buildFailureEnvelopeParts(input: {
 		detail: input.safeMessage,
 	});
 
+	// The branch diagnostic names the typed evidence so the runtime provably
+	// received the parsed port, hop, cause, and preserved suggestion unchanged.
+	const suggestedPort = suggestedPortOf(input.repairContext);
 	emitCliDiagnostic(BROWSER_CONNECT_CLI_NAME, "error", branchId, {
 		code: branchId,
 		exit_code: exitCode,
+		...(input.repairChainHop === undefined
+			? {}
+			: { repair_chain_hop: input.repairChainHop }),
+		...(input.requestedPort === undefined
+			? {}
+			: { requested_port: input.requestedPort }),
+		...(input.repairContext === undefined
+			? {}
+			: { cause: input.repairContext.cause }),
+		...(suggestedPort === undefined ? {} : { suggested_port: suggestedPort }),
 	});
 
 	const action = failureActionById.get(actionId);
@@ -959,6 +1040,23 @@ function buildFailureEnvelopeParts(input: {
 }
 
 /**
+ * The preserved suggested explicit port inside a typed repair context, if any
+ * (R6). A pre-exec run failure inherits its underlying context's suggestion.
+ */
+function suggestedPortOf(
+	context: BrowserConnectRepairContext | undefined,
+): number | undefined {
+	if (context === undefined) return undefined;
+	if (context.failure_class === "foreign-listener") {
+		return context.suggested_explicit_port?.port;
+	}
+	if (context.failure_class === "preexec-connect-failed") {
+		return suggestedPortOf(context.underlying);
+	}
+	return undefined;
+}
+
+/**
  * Emit the structured failure envelope for a failure class + command context.
  *
  * Builds the failure payload ONLY via U2's createBrowserConnectEnvelopeData
@@ -976,6 +1074,9 @@ function emitFailure(
 		command: BrowserConnectCommand;
 		message?: string;
 		launch?: BrowserConnectLaunchProvenance;
+		repairContext?: BrowserConnectRepairContext;
+		repairChainHop?: BrowserConnectRepairChainHop;
+		requestedPort?: number;
 	},
 ): number {
 	const safeMessage = input.message
@@ -988,6 +1089,13 @@ function emitFailure(
 		failureClass: input.failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
+		...(input.repairContext ? { repairContext: input.repairContext } : {}),
+		...(input.repairChainHop === undefined
+			? {}
+			: { repairChainHop: input.repairChainHop }),
+		...(input.requestedPort === undefined
+			? {}
+			: { requestedPort: input.requestedPort }),
 	});
 	const { actionId, exitCode, branchId, action, data } = parts;
 
@@ -1146,6 +1254,9 @@ function emitRunStderrFailure(
 		>;
 		message?: string;
 		launch?: BrowserConnectLaunchProvenance;
+		repairContext?: BrowserConnectRepairContext;
+		repairChainHop?: BrowserConnectRepairChainHop;
+		requestedPort?: number;
 	},
 ): number {
 	const safeMessage = input.message
@@ -1156,6 +1267,13 @@ function emitRunStderrFailure(
 		failureClass: input.failureClass,
 		safeMessage,
 		...(input.launch ? { launch: input.launch } : {}),
+		...(input.repairContext ? { repairContext: input.repairContext } : {}),
+		...(input.repairChainHop === undefined
+			? {}
+			: { repairChainHop: input.repairChainHop }),
+		...(input.requestedPort === undefined
+			? {}
+			: { requestedPort: input.requestedPort }),
 	});
 	const { actionId, exitCode, branchId, action, data } = parts;
 
@@ -1346,16 +1464,37 @@ function parseArgv(
 		return { kind: "dashboard", outputMode: inferOutputMode(rest) };
 	}
 	if (first === "check") {
-		assertNoUnknownFlags(rest);
-		return { kind: "check", outputMode: inferOutputMode(rest) };
+		// R15/KTD7: the contract owner validates --port/--repair-chain-hop ONCE;
+		// only the extracted rest is parsed as command-local argv.
+		const gateway = extractBrowserConnectGatewayOptions(rest);
+		assertNoUnknownFlags(gateway.rest);
+		return {
+			kind: "check",
+			outputMode: inferOutputMode(gateway.rest),
+			...(gateway.options.port === undefined
+				? {}
+				: { port: gateway.options.port }),
+			repairChainHop: gateway.options.repairChainHop,
+		};
 	}
 	if (first === "connect") {
-		const adapterId = firstPositional(rest);
+		// Extract gateway options BEFORE the positional scan so an option value
+		// (e.g. `--port 9333`) can never be mistaken for the adapter id.
+		const gateway = extractBrowserConnectGatewayOptions(rest);
+		const adapterId = firstPositional(gateway.rest);
 		if (adapterId === undefined) {
 			throw usageError("connect requires an adapter id");
 		}
-		assertNoUnknownFlags(rest);
-		return { kind: "connect", adapterId, outputMode: inferOutputMode(rest) };
+		assertNoUnknownFlags(gateway.rest);
+		return {
+			kind: "connect",
+			adapterId,
+			outputMode: inferOutputMode(gateway.rest),
+			...(gateway.options.port === undefined
+				? {}
+				: { port: gateway.options.port }),
+			repairChainHop: gateway.options.repairChainHop,
+		};
 	}
 	// first === "run" is handled at the top of parseArgv (before the global
 	// --help/--version scan). Any other command is unreachable here.
@@ -1397,16 +1536,24 @@ function parseRunArgv(
 		return { kind: "run-missing-separator" };
 	}
 
-	const adapterId = firstPositional(runHead);
+	// Gateway options live in the HEAD only (R15); the tail is the wrapped
+	// command verbatim and is never scanned. Extract before the positional scan
+	// so an option value can never be mistaken for the adapter id.
+	const gateway = extractBrowserConnectGatewayOptions(runHead);
+	const adapterId = firstPositional(gateway.rest);
 	if (adapterId === undefined) {
 		throw usageError("run requires an adapter id before the -- separator");
 	}
-	assertNoUnknownFlags(runHead);
+	assertNoUnknownFlags(gateway.rest);
 	return {
 		kind: "run",
 		adapterId,
 		tail: runTail,
-		outputMode: inferOutputMode(runHead),
+		outputMode: inferOutputMode(gateway.rest),
+		...(gateway.options.port === undefined
+			? {}
+			: { port: gateway.options.port }),
+		repairChainHop: gateway.options.repairChainHop,
 	};
 }
 

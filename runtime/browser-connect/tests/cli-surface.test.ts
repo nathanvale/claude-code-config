@@ -18,12 +18,15 @@ import {
 	BROWSER_CONNECT_COMMANDS,
 	BROWSER_CONNECT_GLOBAL_DIAGNOSTIC_FLAGS,
 	BROWSER_CONNECT_PREVIEW_NOTES,
+	BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES,
+	type BrowserConnectCommand,
 	browserConnectContractEntries,
 	browserConnectContracts,
 	browserConnectContractFailureActions,
 	browserConnectContractSuccessActions,
 	browserConnectReadExitCodes,
 	browserConnectRunExitCodes,
+	extractBrowserConnectGatewayOptions,
 	projectBrowserConnectCommandDiscoveryTree,
 } from "../src/command-contract.ts";
 
@@ -118,15 +121,22 @@ describe("browser-connect command contract (U3 R2/R7/R15/R17)", () => {
 
 describe("browser-connect help flag surface (U3)", () => {
 	test("every advertised flag renders in help; no command-foreign flag leaks", () => {
+		// The gateway options belong to check/connect/run only (R15); the
+		// dashboard is a pure registry read and must not leak them. --chrome and
+		// --endpoint stay foreign everywhere (warm-chrome-owned inputs).
+		const absentFlagProbes: Record<BrowserConnectCommand, readonly string[]> = {
+			dashboard: ["--chrome", "--endpoint", "--port", "--repair-chain-hop"],
+			check: ["--chrome", "--endpoint"],
+			connect: ["--chrome", "--endpoint"],
+			run: ["--chrome", "--endpoint"],
+		};
 		for (const command of BROWSER_CONNECT_COMMANDS) {
 			const contract = browserConnectContracts[command];
 			assertCommandHelpFlagSurface({
 				command,
 				contract,
 				help: renderCommandUsage(contract),
-				// No command in slice one owns a private flag beyond --json, so a
-				// foreign-flag probe uses a flag no command declares.
-				absentFlags: ["--chrome", "--port", "--endpoint"],
+				absentFlags: absentFlagProbes[command],
 			});
 		}
 	});
@@ -296,5 +306,206 @@ describe("browser-connect discovery projection (U3 R2)", () => {
 		]) {
 			expect(failureIds).toContain(actionId);
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// U3 explicit-port option surface (R15/KTD7): one contract owner supplies the
+// flag declarations, discovery metadata, rendered help, and validation for
+// --port and --repair-chain-hop on check, connect, and run.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_OPTION_COMMANDS = ["check", "connect", "run"] as const;
+
+describe("browser-connect explicit-port option contract (U3 R15/KTD7)", () => {
+	test("check, connect, and run declare --port and --repair-chain-hop; dashboard declares neither", () => {
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const flags = browserConnectContracts[command].flags;
+			expect(Object.keys(flags)).toContain("--port");
+			expect(Object.keys(flags)).toContain("--repair-chain-hop");
+		}
+		expect(Object.keys(browserConnectContracts.dashboard.flags)).not.toContain(
+			"--port",
+		);
+		expect(
+			Object.keys(browserConnectContracts.dashboard.flags),
+		).not.toContain("--repair-chain-hop");
+	});
+
+	test("--port names its validation range; --repair-chain-hop declares the closed 0|1 value set", () => {
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const flags = browserConnectContracts[command].flags;
+			const port = flags["--port"];
+			expect(port?.type).toBe("string");
+			expect(port?.description).toContain("1");
+			expect(port?.description).toContain("65535");
+			const hop = flags["--repair-chain-hop"];
+			expect(hop?.type).toBe("enum");
+			if (hop?.type !== "enum") throw new Error("unreachable");
+			expect(hop.values).toEqual([...BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES]);
+			expect(hop.description).toContain("0");
+		}
+		expect(BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES).toEqual(["0", "1"]);
+	});
+
+	test("the three commands share ONE option meaning: identical descriptors, no per-command drift", () => {
+		const reference = browserConnectContracts.check.flags as Record<
+			string,
+			unknown
+		>;
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const flags = browserConnectContracts[command].flags as Record<
+				string,
+				unknown
+			>;
+			expect(flags["--port"]).toEqual(reference["--port"]);
+			expect(flags["--repair-chain-hop"]).toEqual(reference["--repair-chain-hop"]);
+		}
+	});
+
+	test("usage lines expose both options on all three commands", () => {
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const usage = browserConnectContracts[command].usage.join("\n");
+			expect(usage).toContain("--port <port>");
+			expect(usage).toContain("--repair-chain-hop <0|1>");
+		}
+	});
+
+	test("rendered help exposes both options with their meaning", () => {
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const help = renderCommandUsage(browserConnectContracts[command]);
+			expect(help).toContain("--port");
+			expect(help).toContain("65535");
+			expect(help).toContain("--repair-chain-hop");
+		}
+		expect(renderCommandUsage(browserConnectContracts.dashboard)).not.toContain(
+			"--port",
+		);
+	});
+
+	test("discovery metadata exposes both options and their validation (R15)", () => {
+		const tree = projectBrowserConnectCommandDiscoveryTree();
+		for (const command of GATEWAY_OPTION_COMMANDS) {
+			const flags = tree.commands[command]?.flags as Record<
+				string,
+				{ type: string; description?: string; values?: readonly string[] }
+			>;
+			expect(flags["--port"]?.type).toBe("string");
+			expect(flags["--port"]?.description).toContain("65535");
+			expect(flags["--repair-chain-hop"]?.type).toBe("enum");
+			expect(flags["--repair-chain-hop"]?.values).toEqual([
+				...BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES,
+			]);
+		}
+		const dashboardFlags = tree.commands.dashboard?.flags as Record<
+			string,
+			unknown
+		>;
+		expect(dashboardFlags["--port"]).toBeUndefined();
+		expect(dashboardFlags["--repair-chain-hop"]).toBeUndefined();
+	});
+});
+
+describe("browser-connect gateway option parsing (U3 R15: validate once, one owner)", () => {
+	test("accepts a valid port and defaults the hop to 0", () => {
+		const { options, rest } = extractBrowserConnectGatewayOptions([
+			"--port",
+			"9333",
+			"--json",
+		]);
+		expect(options.port).toBe(9333);
+		expect(options.repairChainHop).toBe(0);
+		expect(rest).toEqual(["--json"]);
+	});
+
+	test("accepts inline = forms and preserves surrounding argv order", () => {
+		const { options, rest } = extractBrowserConnectGatewayOptions([
+			"agent-browser",
+			"--port=9333",
+			"--repair-chain-hop=1",
+			"--json",
+		]);
+		expect(options.port).toBe(9333);
+		expect(options.repairChainHop).toBe(1);
+		expect(rest).toEqual(["agent-browser", "--json"]);
+	});
+
+	test("accepts exactly the declared hop values and the port bounds", () => {
+		for (const hop of BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES) {
+			const { options } = extractBrowserConnectGatewayOptions([
+				"--repair-chain-hop",
+				hop,
+			]);
+			expect(String(options.repairChainHop)).toBe(hop);
+		}
+		expect(extractBrowserConnectGatewayOptions(["--port", "1"]).options.port).toBe(1);
+		expect(
+			extractBrowserConnectGatewayOptions(["--port", "65535"]).options.port,
+		).toBe(65535);
+	});
+
+	test("no options: port stays absent, hop defaults to 0, argv passes through", () => {
+		const { options, rest } = extractBrowserConnectGatewayOptions([
+			"agent-browser",
+			"--json",
+		]);
+		expect(options.port).toBeUndefined();
+		expect(options.repairChainHop).toBe(0);
+		expect(rest).toEqual(["agent-browser", "--json"]);
+	});
+
+	test("rejects invalid ports with one consistent message per cause", () => {
+		expect(() => extractBrowserConnectGatewayOptions(["--port", "abc"])).toThrow(
+			"--port must be numeric",
+		);
+		expect(() => extractBrowserConnectGatewayOptions(["--port", "1.5"])).toThrow(
+			"--port must be numeric",
+		);
+		expect(() => extractBrowserConnectGatewayOptions(["--port", "-1"])).toThrow(
+			"--port must be numeric",
+		);
+		expect(() => extractBrowserConnectGatewayOptions(["--port", "0"])).toThrow(
+			"--port must be between 1 and 65535",
+		);
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--port", "65536"]),
+		).toThrow("--port must be between 1 and 65535");
+		expect(() => extractBrowserConnectGatewayOptions(["--port="])).toThrow(
+			"--port requires a value",
+		);
+		expect(() => extractBrowserConnectGatewayOptions(["--port"])).toThrow(
+			"--port requires a value",
+		);
+	});
+
+	test("rejects invalid hop values against the declared value set", () => {
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--repair-chain-hop", "2"]),
+		).toThrow("--repair-chain-hop must be 0 or 1");
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--repair-chain-hop", "01"]),
+		).toThrow("--repair-chain-hop must be 0 or 1");
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--repair-chain-hop", "one"]),
+		).toThrow("--repair-chain-hop must be 0 or 1");
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--repair-chain-hop"]),
+		).toThrow("--repair-chain-hop requires a value");
+	});
+
+	test("rejects duplicate options across both spellings (validate once)", () => {
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--port", "1", "--port", "2"]),
+		).toThrow("duplicate option: --port");
+		expect(() =>
+			extractBrowserConnectGatewayOptions(["--port=1", "--port", "2"]),
+		).toThrow("duplicate option: --port");
+		expect(() =>
+			extractBrowserConnectGatewayOptions([
+				"--repair-chain-hop",
+				"0",
+				"--repair-chain-hop=1",
+			]),
+		).toThrow("duplicate option: --repair-chain-hop");
 	});
 });

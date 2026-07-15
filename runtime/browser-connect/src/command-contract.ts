@@ -3,12 +3,15 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 	projectCommandDiscoveryTree,
+	usageError,
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_CONNECT_CLI_NAME,
 	BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS,
 	BROWSER_CONNECT_CONTRACT_ID,
+	BROWSER_CONNECT_REPAIR_CHAIN_HOPS,
 	type BrowserConnectFailureActionId,
+	type BrowserConnectRepairChainHop,
 	BROWSER_CONNECT_SCHEMA_VERSION,
 	type BrowserConnectSuccessActionId,
 	browserConnectFailureActions,
@@ -131,20 +134,50 @@ const jsonFlag = {
 	"--json": { type: "boolean", description: "Emit the JSON envelope." },
 } as const satisfies BrowserConnectCommandContract["flags"];
 
+/**
+ * Accepted `--repair-chain-hop` values, derived from the model hop union so
+ * the CLI value set cannot drift from `BROWSER_CONNECT_REPAIR_CHAIN_HOPS`
+ * (R15/R23). Also the enum-flag `values` metadata in discovery and help.
+ */
+export const BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES: readonly string[] =
+	BROWSER_CONNECT_REPAIR_CHAIN_HOPS.map(String);
+
+/**
+ * Gateway option descriptors shared verbatim by `check`, `connect`, and `run`
+ * (R15/KTD7): ONE contract owner supplies the discovery metadata, rendered
+ * help, and validation meaning; the dashboard declares neither option.
+ */
+const gatewayOptionFlags = {
+	"--port": {
+		type: "string",
+		description:
+			"Explicit CDP port, an integer from 1 to 65535. Forwarded unchanged through check, launch, and recheck; never derived from the 9222 convention.",
+	},
+	"--repair-chain-hop": {
+		type: "enum",
+		values: BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES,
+		description:
+			"Bounded repair-chain hop; defaults to 0. Only a use_suggested_port repair starts one fresh invocation at 1; a hop-1 failure stops without another hop.",
+	},
+} as const satisfies BrowserConnectCommandContract["flags"];
+
 const dashboardFlags = {
 	...jsonFlag,
 } as const satisfies BrowserConnectCommandContract["flags"];
 
 const checkFlags = {
 	...jsonFlag,
+	...gatewayOptionFlags,
 } as const satisfies BrowserConnectCommandContract["flags"];
 
 const connectFlags = {
 	...jsonFlag,
+	...gatewayOptionFlags,
 } as const satisfies BrowserConnectCommandContract["flags"];
 
 const runFlags = {
 	...jsonFlag,
+	...gatewayOptionFlags,
 } as const satisfies BrowserConnectCommandContract["flags"];
 
 const actionAffordances = {
@@ -186,7 +219,9 @@ export const browserConnectContracts = defineCommandFacadeContract(
 			script: BROWSER_CONNECT_CLI_NAME,
 			summary:
 				"Read the Agent Chrome environment and report verification without changing local state.",
-			usage: ["browser-connect check [--json]"],
+			usage: [
+				"browser-connect check [--port <port>] [--repair-chain-hop <0|1>] [--json]",
+			],
 			json: true,
 			audience: "agent",
 			mutation: "check",
@@ -204,7 +239,9 @@ export const browserConnectContracts = defineCommandFacadeContract(
 			script: BROWSER_CONNECT_CLI_NAME,
 			summary:
 				"Prove or launch Agent Chrome, run the adapter gate sequence, and emit the verified handoff envelope.",
-			usage: ["browser-connect connect <adapter> [--json]"],
+			usage: [
+				"browser-connect connect <adapter> [--port <port>] [--repair-chain-hop <0|1>] [--json]",
+			],
 			json: true,
 			audience: "agent",
 			mutation: "browser",
@@ -228,7 +265,9 @@ export const browserConnectContracts = defineCommandFacadeContract(
 			script: BROWSER_CONNECT_CLI_NAME,
 			summary:
 				"Prove or launch, emit the envelope on stderr, inject the endpoint, then exec the wrapped command with exit passthrough.",
-			usage: ["browser-connect run <adapter> [--json] -- <command> [args...]"],
+			usage: [
+				"browser-connect run <adapter> [--port <port>] [--repair-chain-hop <0|1>] [--json] -- <command> [args...]",
+			],
 			json: true,
 			audience: "agent",
 			mutation: "browser",
@@ -313,6 +352,119 @@ export function projectBrowserConnectCommandDiscoveryTree() {
 			};
 		},
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Gateway option parsing (R15/KTD7). The contract owner validates --port and
+// --repair-chain-hop ONCE for check, connect, and run; the CLI parser and the
+// environment gateway consume the validated values unchanged. Rejections use
+// one message per cause so the three commands cannot drift.
+// ---------------------------------------------------------------------------
+
+/**
+ * Validated gateway invocation options shared by check, connect, and run.
+ */
+export type BrowserConnectGatewayOptions = {
+	/** Validated explicit CDP port; absent keeps warm-chrome's default port. */
+	port?: number;
+	/** Bounded repair-chain hop (R23); `0` unless a suggested-port rerun set `1`. */
+	repairChainHop: BrowserConnectRepairChainHop;
+};
+
+const GATEWAY_OPTION_FLAG_NAMES = ["--port", "--repair-chain-hop"] as const;
+
+type GatewayOptionFlagName = (typeof GATEWAY_OPTION_FLAG_NAMES)[number];
+
+/**
+ * Extract and validate `--port` and `--repair-chain-hop` from a command argv
+ * head (R15). Accepts space-separated and `=` forms; rejects invalid values,
+ * missing values, and duplicates with `usageError` (exit 2). Every other
+ * argument passes through in order, so command-local parsing (positional
+ * adapter ids, `--json`) operates on `rest`.
+ *
+ * @param argv - Command argv after the command word (run: the pre-`--` head)
+ * @returns Validated options plus the untouched remaining argv
+ * @throws CliUsageError on an invalid, empty, or duplicate option value
+ */
+export function extractBrowserConnectGatewayOptions(argv: readonly string[]): {
+	options: BrowserConnectGatewayOptions;
+	rest: string[];
+} {
+	let port: number | undefined;
+	let repairChainHop: BrowserConnectRepairChainHop | undefined;
+	const rest: string[] = [];
+
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (arg === undefined) continue;
+		const option = splitGatewayOption(arg);
+		if (option === undefined) {
+			rest.push(arg);
+			continue;
+		}
+		let value = option.value;
+		if (value === undefined) {
+			value = argv[index + 1];
+			if (value === undefined) {
+				throw usageError(`${option.flag} requires a value`);
+			}
+			index += 1;
+		}
+		if (value === "") {
+			throw usageError(`${option.flag} requires a value`);
+		}
+		if (option.flag === "--port") {
+			if (port !== undefined) throw usageError("duplicate option: --port");
+			port = parseExplicitPortValue(value);
+			continue;
+		}
+		if (repairChainHop !== undefined) {
+			throw usageError("duplicate option: --repair-chain-hop");
+		}
+		repairChainHop = parseRepairChainHopValue(value);
+	}
+
+	return {
+		options: {
+			...(port === undefined ? {} : { port }),
+			repairChainHop: repairChainHop ?? 0,
+		},
+		rest,
+	};
+}
+
+function splitGatewayOption(
+	arg: string,
+): { flag: GatewayOptionFlagName; value?: string } | undefined {
+	for (const flag of GATEWAY_OPTION_FLAG_NAMES) {
+		if (arg === flag) return { flag };
+		if (arg.startsWith(`${flag}=`)) {
+			return { flag, value: arg.slice(flag.length + 1) };
+		}
+	}
+	return undefined;
+}
+
+// Mirrors warm-chrome's assertPort semantics so the same value is valid on
+// both sides of the gateway (KTD7: the gateway forwards it unchanged).
+function parseExplicitPortValue(value: string): number {
+	if (!/^[0-9]+$/.test(value)) {
+		throw usageError("--port must be numeric");
+	}
+	const numeric = Number(value);
+	if (numeric < 1 || numeric > 65535) {
+		throw usageError("--port must be between 1 and 65535");
+	}
+	return numeric;
+}
+
+function parseRepairChainHopValue(value: string): BrowserConnectRepairChainHop {
+	if (!BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES.includes(value)) {
+		throw usageError(
+			`--repair-chain-hop must be ${BROWSER_CONNECT_REPAIR_CHAIN_HOP_VALUES.join(" or ")}`,
+		);
+	}
+	return Number(value) as BrowserConnectRepairChainHop;
 }
 
 // Re-export the action affordance shape for tests that assert action id

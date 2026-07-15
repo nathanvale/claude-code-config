@@ -91,6 +91,7 @@ function warmChromeErrorEnvelope(input: {
 	code: string;
 	reason: string;
 	exitCode: number;
+	suggestedExplicitPort?: number;
 }): string {
 	// Pretty-printed (`null, 2`) to mirror the facade's real `writeJson` output.
 	return `${JSON.stringify(
@@ -109,6 +110,9 @@ function warmChromeErrorEnvelope(input: {
 				contract_id: "warm-chrome.browser-entry",
 				schema_version: "1",
 				reason: input.reason,
+				...(input.suggestedExplicitPort === undefined
+					? {}
+					: { suggested_explicit_port: input.suggestedExplicitPort }),
 			},
 			runtime_actions: [
 				{ id: "launch_warm_chrome", summary: "…", side_effects: ["browser"] },
@@ -1881,5 +1885,386 @@ describe("browser-connect run: signal-death passthrough (U7 R17)", () => {
 		expect(run.exitCode).toBe(143);
 		// The verified handoff was still emitted before exec.
 		expect(parseStderrEnvelope(run).status).toBe("ok");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// U3: explicit-port command surface and gateway preservation (R15/R23, KTD7/
+// KTD12/KTD20). The parser owns validation once; the runtime receives the
+// parsed port and hop unchanged; the failed invocation never consumes its own
+// suggestion; hop 1 never surfaces another suggested-port continuation.
+// ---------------------------------------------------------------------------
+
+const okStepAt = (port: string) => ({
+	envelope: warmChromeOkEnvelope({
+		runId: RUN_ID,
+		endpoint: `http://127.0.0.1:${port}`,
+		ws: `ws://127.0.0.1:${port}/devtools/browser/explicit`,
+	}),
+	exitCode: 0,
+});
+
+const absentStep = {
+	envelope: warmChromeErrorEnvelope({
+		runId: RUN_ID,
+		code: "endpoint_unreachable",
+		reason: "no_listener",
+		exitCode: 20,
+	}),
+	exitCode: 20,
+};
+
+const occupiedStep = (suggestedExplicitPort?: number) => ({
+	envelope: warmChromeErrorEnvelope({
+		runId: RUN_ID,
+		code: "port_occupied_foreign",
+		reason: "foreign_listener",
+		exitCode: 20,
+		...(suggestedExplicitPort === undefined ? {} : { suggestedExplicitPort }),
+	}),
+	exitCode: 20,
+});
+
+/** The `--port <value>` pair a captured warm-chrome argv carried, if any. */
+function warmChromePortArg(argv: readonly string[]): string | undefined {
+	const index = argv.indexOf("--port");
+	return index === -1 ? undefined : argv[index + 1];
+}
+
+describe("browser-connect explicit-port forwarding end-to-end (U3 R15/KTD7)", () => {
+	test("check --port forwards the parsed port to warm-chrome and reports the verbatim endpoint", async () => {
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			okStepAt("9333"),
+		]);
+		const run = await runDispatcher(
+			["check", "--port", "9333", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
+		const data = parseStdout(run).data as { endpoint: { ws: string } };
+		expect(data.endpoint.ws).toBe("ws://127.0.0.1:9333/devtools/browser/explicit");
+	});
+
+	test("connect --port carries the SAME port through check, launch, and recheck (R15)", async () => {
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			absentStep,
+			okStepAt("9333"),
+			okStepAt("9333"),
+		]);
+		const run = await runDispatcher(
+			["connect", "agent-browser", "--port", "9333", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain,
+				adapterRuntime: fakeAdapterRuntime({
+					version: {
+						"agent-browser": PINNED["agent-browser"],
+						"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+					},
+				}),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(calls.map(commandWord)).toEqual(["check", "launch", "check"]);
+		expect(calls.map(warmChromePortArg)).toEqual(["9333", "9333", "9333"]);
+		const data = parseStdout(run).data as {
+			launch: { launched: boolean };
+			endpoint: { ws: string };
+		};
+		expect(data.launch.launched).toBe(true);
+		expect(data.endpoint.ws).toBe("ws://127.0.0.1:9333/devtools/browser/explicit");
+	});
+
+	test("run --port: the adapter handoff and injection use the endpoint verified on that port", async () => {
+		const spawns = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			okStepAt("9333"),
+		]);
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"snapshot",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRunRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, spawns),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
+		// The wrapped command received the endpoint verified on the explicit port.
+		expect(spawns.calls[0]?.args).toEqual([
+			"--cdp",
+			"ws://127.0.0.1:9333/devtools/browser/explicit",
+			"snapshot",
+		]);
+	});
+
+	test("default-port compatibility: without --port no warm-chrome invocation carries one", async () => {
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			okStepAt("9222"),
+		]);
+		const run = await runDispatcher(CONNECT_ARGV, {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({
+				version: {
+					"agent-browser": PINNED["agent-browser"],
+					"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+				},
+			}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(0);
+		expect(calls.flat()).not.toContain("--port");
+	});
+});
+
+describe("browser-connect gateway option rejection (U3 R15: consistent across commands)", () => {
+	async function rejectionRun(argv: readonly string[]): Promise<{
+		run: DispatcherRun;
+		warmChromeCalls: number;
+	}> {
+		let warmChromeCalls = 0;
+		const warmChromeMain = async () => {
+			warmChromeCalls += 1;
+			return 0;
+		};
+		const run = await runDispatcher([...argv, "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+		});
+		return { run, warmChromeCalls };
+	}
+
+	test("an out-of-range port is exit 2 usage_invalid on every command, before any gateway work", async () => {
+		for (const argv of [
+			["check", "--port", "70000", "--json"],
+			["connect", "agent-browser", "--port", "70000", "--json"],
+			["run", "agent-browser", "--port", "70000", "--", "tool"],
+		]) {
+			const { run, warmChromeCalls } = await rejectionRun(argv);
+			expect(run.exitCode).toBe(2);
+			const envelope = parseStdout(run);
+			expect(envelope.error?.code).toBe("usage_invalid");
+			expect(envelope.continuation?.next_action_id).toBe("change_input");
+			expect(warmChromeCalls).toBe(0);
+		}
+	});
+
+	test("duplicate --port and invalid or duplicate hops reject identically (validate once)", async () => {
+		for (const argv of [
+			["check", "--port", "1", "--port", "2", "--json"],
+			["connect", "agent-browser", "--repair-chain-hop", "2", "--json"],
+			["check", "--repair-chain-hop", "0", "--repair-chain-hop", "1", "--json"],
+			["run", "agent-browser", "--repair-chain-hop=2", "--", "tool"],
+		]) {
+			const { run, warmChromeCalls } = await rejectionRun(argv);
+			expect(run.exitCode).toBe(2);
+			expect(parseStdout(run).error?.code).toBe("usage_invalid");
+			expect(warmChromeCalls).toBe(0);
+		}
+	});
+
+	test("the dashboard owns neither option: --port stays an unknown option (R15)", async () => {
+		const { run, warmChromeCalls } = await rejectionRun([
+			"dashboard",
+			"--port",
+			"9333",
+			"--json",
+		]);
+		expect(run.exitCode).toBe(2);
+		expect(parseStdout(run).error?.code).toBe("usage_invalid");
+		expect(warmChromeCalls).toBe(0);
+	});
+});
+
+describe("browser-connect repair-chain hop semantics (U3 R23/KTD12/KTD20)", () => {
+	const installedRuntime = () =>
+		fakeAdapterRuntime({
+			version: {
+				"agent-browser": PINNED["agent-browser"],
+				"chrome-devtools-mcp": PINNED["chrome-devtools-mcp"],
+			},
+		});
+
+	function expectNoSuggestedPortAffordance(envelope: DispatcherEnvelope): void {
+		expect(envelope.continuation?.next_action_id).not.toBe("use_suggested_port");
+		expect(
+			envelope.runtime_actions?.map((action) => action.id) ?? [],
+		).not.toContain("use_suggested_port");
+	}
+
+	test("check preserves a suggestion as diagnostics only: never a suggested-port continuation (KTD20)", async () => {
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			occupiedStep(9333),
+		]);
+		const run = await runDispatcher(["check", "--json", "--run-id", RUN_ID], {
+			warmChromeMain,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+		});
+
+		expect(run.exitCode).toBe(20);
+		const envelope = parseStdout(run);
+		expect(envelope.error?.code).toBe("foreign_listener");
+		expectNoSuggestedPortAffordance(envelope);
+		// Legacy stop stays the non-mutating listener inspection (R30-compatible).
+		expect(envelope.data?.next_action_id).toBe("inspect_listener");
+		// The failed invocation never consumed the suggestion itself: one check,
+		// no rerun against 9333 (no_internal_port_switch).
+		expect(calls).toHaveLength(1);
+		expect(calls.flat()).not.toContain("9333");
+	});
+
+	test("hop 1: a failed connect cannot surface another suggested-port continuation (R23)", async () => {
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			occupiedStep(9444),
+		]);
+		const run = await runDispatcher(
+			[
+				"connect",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--repair-chain-hop",
+				"1",
+				"--json",
+				"--run-id",
+				RUN_ID,
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRuntime(),
+				...realRegistryAccessors(),
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		expectNoSuggestedPortAffordance(parseStdout(run));
+		// Exactly one gateway check on the explicit port; the fresh suggestion
+		// (9444) is never consumed by this invocation.
+		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
+		expect(calls.flat()).not.toContain("9444");
+		// The runtime received the parsed hop and port unchanged: the branch
+		// diagnostic record names them as typed failure evidence.
+		expect(run.stderr).toContain('"repair_chain_hop":1');
+		expect(run.stderr).toContain('"requested_port":9333');
+		expect(run.stderr).toContain('"cause":"occupied_listener"');
+		expect(run.stderr).toContain('"suggested_port":9444');
+	});
+
+	test("hop 1: a failed run pre-exec gate cannot surface another suggested-port continuation (R23)", async () => {
+		let spawnerCalls = 0;
+		const trackingSpawner: RunSpawner = async () => {
+			spawnerCalls += 1;
+			return { outcome: "exited", exitCode: 0 };
+		};
+		const { main: warmChromeMain, calls } = scriptedWarmChromeMain([
+			occupiedStep(9444),
+		]);
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--repair-chain-hop",
+				"1",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"snapshot",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: trackingSpawner,
+			},
+		);
+
+		expect(run.exitCode).toBe(20);
+		expect(run.stdout).toBe("");
+		const envelope = parseStderrEnvelope(run);
+		expect(envelope.error?.code).toBe("preexec_connect_failed");
+		expectNoSuggestedPortAffordance(envelope);
+		expect(calls.map(warmChromePortArg)).toEqual(["9333"]);
+		expect(calls.flat()).not.toContain("9444");
+		expect(spawnerCalls).toBe(0);
+	});
+
+	test("an explicit --repair-chain-hop 0 behaves exactly like the omitted default", async () => {
+		const explicit = await runDispatcher(
+			["check", "--repair-chain-hop", "0", "--json", "--run-id", RUN_ID],
+			{
+				warmChromeMain: scriptedWarmChromeMain([occupiedStep(9333)]).main,
+				adapterRuntime: fakeAdapterRuntime({}),
+				...realRegistryAccessors(),
+			},
+		);
+		const omitted = await runDispatcher(["check", "--json", "--run-id", RUN_ID], {
+			warmChromeMain: scriptedWarmChromeMain([occupiedStep(9333)]).main,
+			adapterRuntime: fakeAdapterRuntime({}),
+			...realRegistryAccessors(),
+		});
+
+		expect(explicit.exitCode).toBe(omitted.exitCode);
+		const explicitEnvelope = parseStdout(explicit);
+		const omittedEnvelope = parseStdout(omitted);
+		expect(explicitEnvelope.error?.code).toBe(omittedEnvelope.error?.code);
+		expect(explicitEnvelope.data).toEqual(omittedEnvelope.data ?? {});
+		expect(explicitEnvelope.continuation).toEqual(
+			omittedEnvelope.continuation ?? {},
+		);
+	});
+
+	test("a verified hop-1 rerun completes normally on all mutating surfaces", async () => {
+		const spawns = { calls: [] as InjectedInvocation[] };
+		const { main: warmChromeMain } = scriptedWarmChromeMain([okStepAt("9333")]);
+		const run = await runDispatcher(
+			[
+				"run",
+				"agent-browser",
+				"--port",
+				"9333",
+				"--repair-chain-hop",
+				"1",
+				"--run-id",
+				RUN_ID,
+				"--",
+				"agent-browser",
+				"snapshot",
+			],
+			{
+				warmChromeMain,
+				adapterRuntime: installedRuntime(),
+				...realRegistryAccessors(),
+				runSpawner: fakeSpawner({ outcome: "exited", exitCode: 0 }, spawns),
+			},
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(parseStderrEnvelope(run).status).toBe("ok");
+		expect(spawns.calls).toHaveLength(1);
 	});
 });
