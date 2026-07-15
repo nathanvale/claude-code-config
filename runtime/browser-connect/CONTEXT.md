@@ -53,3 +53,18 @@ _Developer example_: "The consumer takes the endpoint from the Verified
 Handoff Envelope verbatim."
 _Avoid example_: "Exit 0 means connected; the consumer can derive the
 endpoint from convention."
+
+**Repair Path**:
+The complete recovery contract an error station ships with: one stable
+action ID, the typed repair context that selects it, one continuation
+posture (automatic `next_action_id` or operator choices with constraints),
+and one public versioned `REPAIR.md#v1-<action_id>` anchor. All four parts
+or the station cannot ship; a failure missing any of them is a dead end,
+not a product surface.
+_Avoid_: prose hint, dead-end inspect affordance, error message with a bare
+URL
+_Developer example_: "The foreign-listener station's repair path is
+`use_suggested_port`: typed port evidence in, one hop-1 rerun out, anchored
+at `v1-use_suggested_port`."
+_Avoid example_: "Return `inspect_diagnostics` with a helpful message; the
+caller can work out the port from the text."

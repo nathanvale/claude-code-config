@@ -1,8 +1,10 @@
+import { fileURLToPath } from "node:url";
 import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
 	type AdapterCommandResult,
 	type AdapterDefinition,
 	type AdapterInjection,
+	type AdapterPackagePolicy,
 	type AdapterProbeResult,
 	type AdapterProvenanceResult,
 	type AdapterRuntime,
@@ -34,6 +36,49 @@ export const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "1.5.0" as const;
 export const CHROME_DEVTOOLS_MCP_BROWSER_URL_FLAG = "--browser-url" as const;
 
 /**
+ * Maintainer-authored installer policy for Chrome DevTools MCP (KTD13).
+ *
+ * chrome-devtools-mcp 1.5.0 declares NO install-time lifecycle scripts (its
+ * genuine lock entry carries no `hasInstallScript`), so it installs correctly
+ * with `--ignore-scripts` and is automatically eligible (R29). Its adapter
+ * repair installs the adapter executable ONLY — never an adapter-owned
+ * browser installer, never Chrome for Testing.
+ */
+const CHROME_DEVTOOLS_MCP_INSTALL_POLICY: AdapterPackagePolicy = {
+	packageName: "chrome-devtools-mcp",
+	packageManager: {
+		approvedAbsoluteCandidates: [
+			"/opt/homebrew/bin/npm",
+			"/usr/local/bin/npm",
+			"/usr/bin/npm",
+		],
+	},
+	canonicalRegistry: "https://registry.npmjs.org",
+	allowedLockOrigins: ["https://registry.npmjs.org"],
+	installScope: "user",
+	installArgv: ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+	integritySource: {
+		manifestPath: fileURLToPath(
+			new URL("../../adapter-install/chrome-devtools-mcp/package.json", import.meta.url),
+		),
+		lockfilePath: fileURLToPath(
+			new URL(
+				"../../adapter-install/chrome-devtools-mcp/package-lock.json",
+				import.meta.url,
+			),
+		),
+	},
+	lifecycleScriptsRequired: false,
+	expectedBin: CHROME_DEVTOOLS_MCP_EXECUTABLE,
+	safeUpgradeTransitions: [{ from: "1.4.0", to: CHROME_DEVTOOLS_MCP_PINNED_VERSION }],
+	operatorChoice: {
+		packageOwner: "chrome-devtools-mcp npm package maintainers",
+		docsUrl:
+			"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+	},
+};
+
+/**
  * Adapter Definition for Chrome DevTools MCP (KTD8 — MCP adapter riding the
  * no-shell argv transport). Implemented FIRST; it proved the definition
  * interface before agent-browser validated the seam.
@@ -53,6 +98,7 @@ export const chromeDevtoolsMcpDefinition = {
 		{ route: "explicit-cdp", evidence: "verified-live", implemented: true },
 		{ route: "ui-consent", evidence: "documented", implemented: false },
 	],
+	installPolicy: CHROME_DEVTOOLS_MCP_INSTALL_POLICY,
 
 	async checkProvenance(runtime: AdapterRuntime): Promise<AdapterProvenanceResult> {
 		const resolution = await runtime.resolveExecutable(
@@ -62,6 +108,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				installed: false,
 				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} could not be resolved to an absolute path (no PATH/latest fallback).`,
 			};
 		}
@@ -77,6 +124,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				installed: false,
 				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} could not be started to read its version.`,
 			};
 		}
@@ -84,6 +132,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				installed: false,
 				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} version read failed (binary missing or unresponsive).`,
 			};
 		}
@@ -93,6 +142,8 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				installed: false,
 				failureClass: "adapter-not-installed",
+				cause: "version_mismatch",
+				...(version === undefined ? {} : { observedVersion: version }),
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} version ${version ?? "unreadable"} does not match pinned ${CHROME_DEVTOOLS_MCP_PINNED_VERSION}.`,
 			};
 		}
@@ -117,6 +168,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
+				cause: "probe_failed",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} could not be resolved for the attachment probe.`,
 			};
 		}
@@ -134,6 +186,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
+				cause: "transient_probe_failure",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} attachment probe did not start: ${errorMessage(error)}.`,
 			};
 		}
@@ -141,6 +194,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
+				cause: "transient_probe_failure",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} attachment probe timed out.`,
 			};
 		}
@@ -148,6 +202,7 @@ export const chromeDevtoolsMcpDefinition = {
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
+				cause: "probe_failed",
 				detail: `${CHROME_DEVTOOLS_MCP_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
 			};
 		}

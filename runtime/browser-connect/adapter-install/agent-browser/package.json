@@ -1,0 +1,8 @@
+{
+	"name": "browser-connect-adapter-install-agent-browser",
+	"private": true,
+	"description": "Source-controlled install manifest for the agent-browser Adapter Definition. The adjacent package-lock.json is generated from this manifest with lifecycle scripts disabled and carries the full dependency-graph integrity the isolated installer requires (R29/R34).",
+	"dependencies": {
+		"agent-browser": "0.31.2"
+	}
+}

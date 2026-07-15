@@ -16,9 +16,12 @@ import type { WarmChromeMainDeps } from "@side-quest/warm-chrome/cli";
 
 import type {
 	BrowserConnectEnvironmentIdentity,
+	BrowserConnectEnvironmentRepairCause,
+	BrowserConnectEnvironmentRepairContext,
 	BrowserConnectFailureClass,
 	BrowserConnectLaunchProvenance,
 	BrowserConnectProofEvidence,
+	BrowserConnectSuggestedPortEvidence,
 	BrowserConnectVerifiedEndpoint,
 } from "./model.ts";
 
@@ -84,6 +87,38 @@ export const WARM_CHROME_REASON_TO_FAILURE_CLASS = {
 } as const satisfies Record<WarmChromeCheckErrorCode, BrowserConnectFailureClass>;
 
 /**
+ * Exhaustive mapping from warm-chrome's check error codes onto U1's typed
+ * environment repair causes (R6/R10). Compile-time exhaustive like the class
+ * record above, and consistent with it: `endpoint_unreachable` is the ONLY
+ * code in the `environment-absent` class and the only `no_listener` cause;
+ * every other code stays a listener cause in the `foreign-listener` class.
+ */
+export const WARM_CHROME_REASON_TO_ENVIRONMENT_CAUSE = {
+	// No CDP listener on the requested port — the port is provably free.
+	endpoint_unreachable: "no_listener",
+	// Something occupies the port; identity is not Agent Chrome.
+	port_occupied_foreign: "occupied_listener",
+	// A browser answered but it carries a foreign identity.
+	wrong_browser: "foreign_listener",
+	non_loopback: "foreign_listener",
+	unsafe_profile: "foreign_listener",
+	// Something answered but could not be verified as an Agent Chrome CDP end.
+	invalid_cdp: "unverified_listener",
+	listener_mismatch: "unverified_listener",
+} as const satisfies Record<
+	WarmChromeCheckErrorCode,
+	BrowserConnectEnvironmentRepairCause
+>;
+
+/**
+ * The exit-20-family default cause (R9): an unknown or unparseable warm-chrome
+ * outcome pairs with {@link WARM_CHROME_EXIT_20_DEFAULT_FAILURE_CLASS} as an
+ * unverified listener — fail closed, never a launch-earning absence.
+ */
+export const WARM_CHROME_EXIT_20_DEFAULT_ENVIRONMENT_CAUSE =
+	"unverified_listener" satisfies BrowserConnectEnvironmentRepairCause;
+
+/**
  * Injectable dependencies for the environment gateway. Tests replace
  * `warmChromeMain` with a scripted fake and observe `reconfigureDiagnostics`
  * without ever probing a real Chrome.
@@ -112,6 +147,12 @@ export type EnvironmentGatewayDeps = {
 	 * re-prove via `check`. Off by default so the gateway is a pure read.
 	 */
 	autoLaunch?: boolean;
+	/**
+	 * Explicit CDP port already validated by the command contract (R15/KTD7).
+	 * The gateway forwards the SAME value to warm-chrome check, launch, and
+	 * recheck — never re-derived, never switched mid-invocation.
+	 */
+	explicitPort?: number;
 	/** Optional warm-chrome runtime override forwarded to `main` (tests only). */
 	warmChromeRuntime?: WarmChromeRuntime;
 };
@@ -137,6 +178,13 @@ export type EnvironmentGatewayFailed = {
 	environment: BrowserConnectEnvironmentIdentity;
 	failure_class: BrowserConnectFailureClass;
 	launch: BrowserConnectLaunchProvenance;
+	/**
+	 * Typed repair context (R6/R10): preserves the warm-chrome reason as a
+	 * typed cause and any `suggested_explicit_port` as typed evidence. The
+	 * suggestion is NEVER consumed in this invocation (no_internal_port_switch);
+	 * repair-path policy decides what it earns.
+	 */
+	repair_context: BrowserConnectEnvironmentRepairContext;
 	/** Free text; callers redact before serialization (R14). */
 	detail?: string;
 };
@@ -166,7 +214,7 @@ type WarmChromeErrorEnvelope = {
 		exit_code: number;
 		message?: string;
 	};
-	data?: { reason?: string };
+	data?: { reason?: string; suggested_explicit_port?: number };
 };
 
 type ParsedWarmChromeEnvelope = WarmChromeOkEnvelope | WarmChromeErrorEnvelope;
@@ -206,6 +254,12 @@ export async function proveAgentChromeEnvironment(
 			environment: AGENT_CHROME_IDENTITY,
 			failure_class: WARM_CHROME_EXIT_20_DEFAULT_FAILURE_CLASS,
 			launch: { launched: false },
+			// R9: an unverifiable capture fails closed with the default typed
+			// cause — never a launch-earning absence.
+			repair_context: {
+				failure_class: "foreign-listener",
+				cause: WARM_CHROME_EXIT_20_DEFAULT_ENVIRONMENT_CAUSE,
+			},
 			detail: error.message,
 		};
 	}
@@ -214,7 +268,14 @@ export async function proveAgentChromeEnvironment(
 async function proveAgentChromeEnvironmentInner(
 	deps: EnvironmentGatewayDeps,
 ): Promise<EnvironmentGatewayResult> {
-	const first = await runWarmChrome(deps, ["check", "--json"]);
+	// R15/KTD7: ONE validated explicit port for the whole invocation — the same
+	// argument pair reaches check, launch, and recheck, or none of them.
+	const portArgs =
+		deps.explicitPort === undefined
+			? []
+			: ["--port", String(deps.explicitPort)];
+
+	const first = await runWarmChrome(deps, ["check", "--json", ...portArgs]);
 
 	if (first.outcome === "ok") {
 		return verifiedResult(first.envelope, { launched: false });
@@ -229,11 +290,12 @@ async function proveAgentChromeEnvironmentInner(
 			environment: AGENT_CHROME_IDENTITY,
 			failure_class: firstClass,
 			launch: { launched: false },
+			repair_context: environmentRepairContextFor(first, firstClass),
 		};
 	}
 
 	// Launch path (R3): drive `launch`, then re-prove via `check`.
-	const launch = await runWarmChrome(deps, ["launch", "--json"]);
+	const launch = await runWarmChrome(deps, ["launch", "--json", ...portArgs]);
 	if (launch.outcome === "error") {
 		// A launch that itself failed never yields a handoff — provenance stays
 		// false because no verified session was produced (R11).
@@ -242,10 +304,11 @@ async function proveAgentChromeEnvironmentInner(
 			environment: AGENT_CHROME_IDENTITY,
 			failure_class: "launch-failed",
 			launch: { launched: false },
+			repair_context: { failure_class: "launch-failed", cause: "launch_failed" },
 		};
 	}
 
-	const reProve = await runWarmChrome(deps, ["check", "--json"]);
+	const reProve = await runWarmChrome(deps, ["check", "--json", ...portArgs]);
 	if (reProve.outcome === "ok") {
 		return verifiedResult(reProve.envelope, { launched: true });
 	}
@@ -266,11 +329,16 @@ async function proveAgentChromeEnvironmentInner(
 	// launch invocation itself succeeded, we OWN whatever it started regardless of
 	// what the re-prove says, so provenance is launched:true. A launch that itself
 	// failed keeps launched:false in the branch above.
+	//
+	// R23/KTD12: the re-prove above is the invocation's ONE bounded recheck.
+	// Ending here — with no further warm-chrome call and no fresh-invocation
+	// continuation — keeps the retry budget in-invocation.
 	return {
 		outcome: "failed",
 		environment: AGENT_CHROME_IDENTITY,
 		failure_class: "launch-failed",
 		launch: { launched: true },
+		repair_context: { failure_class: "launch-failed", cause: "launch_failed" },
 	};
 }
 
@@ -385,6 +453,66 @@ function classifyExit20(
 
 function isKnownCheckErrorCode(code: string): code is WarmChromeCheckErrorCode {
 	return Object.hasOwn(WARM_CHROME_REASON_TO_FAILURE_CLASS, code);
+}
+
+/**
+ * Build the typed environment repair context for an errored first check
+ * (R6/R10): the warm-chrome reason is preserved as a typed cause and a
+ * `suggested_explicit_port` becomes typed evidence — captured, never consumed.
+ */
+function environmentRepairContextFor(
+	run: Extract<WarmChromeRun, { outcome: "error" }>,
+	failureClass: BrowserConnectFailureClass,
+): BrowserConnectEnvironmentRepairContext {
+	if (failureClass === "environment-absent") {
+		// endpoint_unreachable: nothing answered on the requested port, so the
+		// explicit port is provably free for a launch (R7).
+		return {
+			failure_class: "environment-absent",
+			cause: "no_listener",
+			explicit_port_free: true,
+		};
+	}
+	const code = run.envelope.error.code;
+	const cause = isKnownCheckErrorCode(code)
+		? WARM_CHROME_REASON_TO_ENVIRONMENT_CAUSE[code]
+		: WARM_CHROME_EXIT_20_DEFAULT_ENVIRONMENT_CAUSE;
+	const suggestion = suggestedPortEvidence(
+		run.envelope.data?.suggested_explicit_port,
+	);
+	return {
+		failure_class: "foreign-listener",
+		// Defensive only: the class and cause records pair `no_listener` with
+		// `environment-absent` exclusively (tested exhaustively), so a listener
+		// class can never see `no_listener`; fail closed to unverified if it did.
+		cause:
+			cause === "no_listener"
+				? WARM_CHROME_EXIT_20_DEFAULT_ENVIRONMENT_CAUSE
+				: cause,
+		...(suggestion === undefined
+			? {}
+			: { suggested_explicit_port: suggestion }),
+	};
+}
+
+/**
+ * Map warm-chrome's `data.suggested_explicit_port` onto typed evidence (R6).
+ * warm-chrome only emits a suggestion it proved free during the occupied-port
+ * probe, so a well-formed value carries `verified_free: true`; anything
+ * malformed is dropped rather than trusted.
+ */
+function suggestedPortEvidence(
+	value: unknown,
+): BrowserConnectSuggestedPortEvidence | undefined {
+	if (
+		typeof value !== "number" ||
+		!Number.isInteger(value) ||
+		value < 1 ||
+		value > 65535
+	) {
+		return undefined;
+	}
+	return { port: value, verified_free: true };
 }
 
 function verifiedResult(

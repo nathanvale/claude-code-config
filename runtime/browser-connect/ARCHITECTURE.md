@@ -30,7 +30,15 @@ Chrome via UI-consent) and three (extension door) are deferred per the plan.
 - `src/command-contract.ts`: facade command contract for the four commands.
 - `src/branch-station-catalog.ts`: the authoritative 19-station catalog.
 - `src/model.ts`: envelope schema, failure classes, affordance catalog,
-  redaction chokepoint.
+  typed repair context (environment/adapter/run causes, bounded repair-chain
+  hop), redaction chokepoint.
+- `src/repair-path.ts`: pure exhaustive recovery policy — selects one
+  automatic or operator repair stage per typed failure context, owns the
+  Repair Action Contract catalogue, operator choice and constraint
+  catalogues, versioned `REPAIR.md#v1-<action-id>` docs URLs, and the closed
+  legacy `data.next_action_id` compatibility selector. Unknown or ambiguous
+  context fails closed to an operator stage; gateways own bounded transient
+  retries before projection.
 - `src/environment.ts`: warm-chrome in-process environment gateway.
 - `src/compatibility.ts`: pure route × environment compatibility.
 - `src/dashboard.ts`: stateless read-only registry projection.
@@ -66,5 +74,10 @@ clause when that rule retires:
 - `README.md`: human front door and target command posture.
 - `CONTEXT.md`: package language for Agent Chrome, Human Chrome, Browser
   Adapter, and Verified Handoff Envelope.
+- `REPAIR.md`: repair-docs owner. One append-only versioned heading
+  (`v1-<action-id>`) per catalogue repair action; the only home for repair
+  commands. `src/repair-path.ts` emits its public `#v1-<action-id>`
+  fragments; a heading must exist on main before releasing a binary that
+  emits it.
 - `TASKS.md`: active project-manager dashboard.
 - `TASKS.archive.md`: closed task detail and long review rationale.

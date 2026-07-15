@@ -25,7 +25,9 @@ const WRAPPED_NOT_FOUND_EXIT = Number(
 
 /**
  * Package-owned Branch Station Catalog for the browser-connect CLI (R2/R7/R11/
- * R15/R17). All nineteen slice-one stations from the Planning Contract, keyed
+ * R15/R17). All nineteen slice-one stations from the Planning Contract plus
+ * the four U5 repair-adapter stations (preview, installed, upgraded, and the
+ * fourteenth error station `repair-adapter.operator_stop` — R1), keyed
  * `<command>.<branch>` so the facade station-id pattern and command-prefix
  * cross-check both hold.
  *
@@ -172,7 +174,10 @@ export const browserConnectBranchStationCatalog = [
 			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["launch-failed"],
 		mutationExpectation: "launches_browser_state",
 	},
-	// connect-foreign-listener
+	// connect-foreign-listener (U4 R30). No expectedActionId: the legacy data
+	// field is context-dependent — the automatic use_suggested_port mirror when
+	// warm-chrome proved a free suggestion at hop 0, otherwise the non-mutating
+	// inspect_listener stop. The recovery-expectation map owns the per-arm truth.
 	{
 		id: "connect.foreign_listener",
 		command: "connect",
@@ -183,8 +188,6 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "foreign_listener",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["foreign-listener"],
 		mutationExpectation: "fails_closed_without_launch",
 	},
 	// connect-adapter-unknown
@@ -202,7 +205,10 @@ export const browserConnectBranchStationCatalog = [
 			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["adapter-unknown"],
 		mutationExpectation: "no_runtime_state_read",
 	},
-	// connect-adapter-not-installed
+	// connect-adapter-not-installed (U4 R30). No expectedActionId: the legacy
+	// data field is context-dependent — install_adapter or upgrade_adapter_to_pin
+	// mirrors when the isolated recipe automates, otherwise the non-mutating
+	// list_registered_adapters stop. The recovery-expectation map owns the arms.
 	{
 		id: "connect.adapter_not_installed",
 		command: "connect",
@@ -214,11 +220,11 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "adapter_not_installed",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["adapter-not-installed"],
 		mutationExpectation: "fails_closed_without_probe",
 	},
-	// connect-route-incompatible
+	// connect-route-incompatible (U4 R30): route handoffs are operator-owned, so
+	// the legacy data value is the non-mutating discovery stop;
+	// select_compatible_route stays compatibility-only vocabulary (R20).
 	{
 		id: "connect.route_incompatible",
 		command: "connect",
@@ -229,11 +235,12 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "route_incompatible",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["route-incompatible"],
+		expectedActionId: "list_registered_adapters",
 		mutationExpectation: "fails_closed_without_probe",
 	},
-	// connect-attachment-failed
+	// connect-attachment-failed (U4 R30): attachment diagnosis is operator-owned;
+	// the legacy data value is the non-mutating inspect_diagnostics stop while
+	// the richer outer choice stays inspect_attachment_probe.
 	{
 		id: "connect.attachment_failed",
 		command: "connect",
@@ -244,11 +251,12 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "attachment_failed",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["attachment-failed"],
+		expectedActionId: "inspect_diagnostics",
 		mutationExpectation: "read_only_after_verified_endpoint",
 	},
-	// run-preexec-connect-failed
+	// run-preexec-connect-failed (U4 R30/AE10). No expectedActionId: the station
+	// inherits the exact underlying typed posture, so the legacy data value is
+	// the underlying mirror or stop — never resolve_connect_failure (R20).
 	{
 		id: "run.preexec_connect_failed",
 		command: "run",
@@ -259,11 +267,11 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "preexec_connect_failed",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["preexec-connect-failed"],
 		mutationExpectation: "exec_never_starts",
 	},
-	// run-wrapped-not-found
+	// run-wrapped-not-found (U4 R30). No expectedActionId: the legacy data field
+	// degrades per-cause (change_input, or inspect_diagnostics for an unsafe
+	// wrapped-executable identity); the recovery-expectation map owns the arms.
 	{
 		id: "run.wrapped_not_found",
 		command: "run",
@@ -275,8 +283,6 @@ export const browserConnectBranchStationCatalog = [
 		expectedEnvelopeStatus: "error",
 		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
 		expectedErrorCode: "wrapped_not_found",
-		expectedActionId:
-			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["wrapped-command-not-found"],
 		mutationExpectation: "envelope_emitted_before_spawn",
 	},
 	// run-passthrough-success
@@ -319,6 +325,62 @@ export const browserConnectBranchStationCatalog = [
 		expectedActionId:
 			BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS["runtime-error-unexpected"],
 		mutationExpectation: "read_only",
+	},
+	// repair-adapter-preview (U5 R33): --check, or --execute finding the adapter
+	// already at the exact pin — a read-only eligibility report either way.
+	{
+		id: "repair-adapter.preview",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--check previews the exact currently-eligible repair action, or --execute finds the adapter already at the exact pin; zero network, zero mutation",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "read_only",
+	},
+	// repair-adapter-installed (U5 R28/R33)
+	{
+		id: "repair-adapter.installed",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--execute installed the absent adapter through the isolated installer and proved fresh exact-pin provenance",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "publishes_versioned_install_tree",
+	},
+	// repair-adapter-upgraded (U5 R21/R22/R33)
+	{
+		id: "repair-adapter.upgraded",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "success",
+		trigger:
+			"--execute ran an exact allowlisted observed-to-pin upgrade through the isolated installer and proved fresh exact-pin provenance",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		mutationExpectation: "publishes_versioned_install_tree",
+	},
+	// repair-adapter-operator-stop (U5 R29/R34; the 14th error station, R1).
+	// No expectedActionId: the legacy data field degrades per-cause to a
+	// non-mutating compatibility stop (R30), so no single action id is pinned.
+	{
+		id: "repair-adapter.operator_stop",
+		command: "repair-adapter",
+		classification: "required",
+		intent: "proof_failure",
+		trigger:
+			"a package safety gate stopped automatic repair fail-closed (lifecycle scripts, lock origin, integrity, drift, redirect, installer, bin, or provenance); an operator owns the continuation",
+		expectedExitCode: CONNECT_ENTRY_EXIT,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: BROWSER_CONNECT_CONTRACT_ID,
+		expectedErrorCode: "operator_stop",
+		mutationExpectation: "fails_closed_without_publish",
 	},
 ] as const satisfies readonly BranchStation[];
 

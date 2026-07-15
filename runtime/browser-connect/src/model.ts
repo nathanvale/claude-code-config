@@ -24,6 +24,9 @@ export const BROWSER_CONNECT_CONTRACT_ID =
  */
 export const BROWSER_CONNECT_SCHEMA_VERSION = "1" as const;
 
+/** Safe observed/pinned version shape for projection (R11): plain x.y.z only. */
+export const BROWSER_CONNECT_SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
 /**
  * Canonical CLI name (bin entry and discovery surface).
  *
@@ -118,7 +121,9 @@ export type BrowserConnectFailureClass =
 /**
  * Stable failure runtime-action ids — the `next_action_id` vocabulary failure
  * envelopes emit (R2). Ids follow warm-chrome's runtime-action spelling
- * (snake_case) for cross-package continuation continuity.
+ * (snake_case) for cross-package continuation continuity. The first eleven ids
+ * are the released schema-1 vocabulary and stay stable (R16); the additive
+ * repair-path ids follow them.
  */
 export const BROWSER_CONNECT_FAILURE_ACTION_IDS = [
 	"change_input",
@@ -132,6 +137,10 @@ export const BROWSER_CONNECT_FAILURE_ACTION_IDS = [
 	"inspect_attachment_probe",
 	"resolve_connect_failure",
 	"fix_wrapped_command",
+	"use_suggested_port",
+	"upgrade_adapter_to_pin",
+	"adjust_adapter_pin",
+	"review_adapter_definition",
 ] as const;
 
 /**
@@ -139,6 +148,24 @@ export const BROWSER_CONNECT_FAILURE_ACTION_IDS = [
  */
 export type BrowserConnectFailureActionId =
 	(typeof BROWSER_CONNECT_FAILURE_ACTION_IDS)[number];
+
+/**
+ * Compatibility-only action ids (R20/KTD21): discoverable vocabulary for
+ * released schema-1 consumers, but never an outer `continuation.next_action_id`
+ * selected by the recovery policy. `repair-path.ts` owns that exclusion; tests
+ * enforce it across the full cause matrix.
+ */
+export const BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS = [
+	"list_registered_adapters",
+	"select_compatible_route",
+	"resolve_connect_failure",
+] as const satisfies readonly BrowserConnectFailureActionId[];
+
+/**
+ * Compatibility-only action id union.
+ */
+export type BrowserConnectCompatibilityOnlyActionId =
+	(typeof BROWSER_CONNECT_COMPATIBILITY_ONLY_ACTION_IDS)[number];
 
 /**
  * Stable success runtime-action ids.
@@ -182,6 +209,69 @@ export const BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS = {
 } as const satisfies Record<
 	BrowserConnectFailureClass,
 	BrowserConnectFailureActionId
+>;
+
+/**
+ * Legal schema-1 `data.next_action_id` values per failure class (R16/R30).
+ *
+ * The class default from {@link BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS}
+ * stays supported for released consumers; the additional values are the
+ * policy-selected automatic mirrors plus the closed non-mutating compatibility
+ * stops (`repair-path.ts` owns that selection). `inspect_diagnostics` is legal
+ * everywhere as the R30 fail-safe fallback. Envelope construction rejects any
+ * value outside this record.
+ */
+const BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS = {
+	"usage-invalid": ["change_input", "inspect_diagnostics"],
+	"run-missing-separator": [
+		"add_run_separator",
+		"change_input",
+		"inspect_diagnostics",
+	],
+	"environment-absent": ["launch_agent_chrome", "inspect_diagnostics"],
+	"foreign-listener": [
+		"use_suggested_port",
+		"inspect_listener",
+		"inspect_diagnostics",
+	],
+	"launch-failed": ["inspect_diagnostics"],
+	"adapter-unknown": [
+		"change_input",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"adapter-not-installed": [
+		"install_adapter",
+		"upgrade_adapter_to_pin",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"route-incompatible": [
+		"select_compatible_route",
+		"list_registered_adapters",
+		"inspect_diagnostics",
+	],
+	"attachment-failed": ["inspect_attachment_probe", "inspect_diagnostics"],
+	"preexec-connect-failed": [
+		"resolve_connect_failure",
+		"launch_agent_chrome",
+		"use_suggested_port",
+		"inspect_listener",
+		"change_input",
+		"list_registered_adapters",
+		"install_adapter",
+		"upgrade_adapter_to_pin",
+		"inspect_diagnostics",
+	],
+	"wrapped-command-not-found": [
+		"fix_wrapped_command",
+		"change_input",
+		"inspect_diagnostics",
+	],
+	"runtime-error-unexpected": ["inspect_diagnostics"],
+} as const satisfies Record<
+	BrowserConnectFailureClass,
+	readonly BrowserConnectFailureActionId[]
 >;
 
 /**
@@ -250,6 +340,30 @@ export const browserConnectFailureActions = [
 			"Correct or install the wrapped command; the connection envelope was already emitted.",
 		sideEffects: ["check"],
 	},
+	{
+		id: "use_suggested_port",
+		summary:
+			"Start one fresh copy of the failed connect or run with the suggested explicit port at repair-chain hop one.",
+		sideEffects: ["browser", "write"],
+	},
+	{
+		id: "upgrade_adapter_to_pin",
+		summary:
+			"Upgrade the installed adapter to its exact pinned version through the adapter repair executor.",
+		sideEffects: ["network", "write"],
+	},
+	{
+		id: "adjust_adapter_pin",
+		summary:
+			"Review and change the Adapter Definition pin through normal source review.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "review_adapter_definition",
+		summary:
+			"Review the named Adapter Definition metadata through normal source review.",
+		sideEffects: ["write"],
+	},
 ] as const satisfies readonly (CommandFacadeActionAffordance & {
 	id: BrowserConnectFailureActionId;
 })[];
@@ -267,6 +381,254 @@ export const browserConnectSuccessActions = [
 ] as const satisfies readonly (CommandFacadeActionAffordance & {
 	id: BrowserConnectSuccessActionId;
 })[];
+
+// ---------------------------------------------------------------------------
+// Typed repair context (KTD2/KTD11). Gateways classify failures into these
+// records; `repair-path.ts` selects recovery from them. Policy never branches
+// on prose `detail`. Run repair context is structurally incapable of carrying
+// wrapped argv, arguments, environment values, or full executable paths (R26):
+// separator repair carries only a non-empty-command boolean marker and
+// missing-executable repair carries at most a normalized basename.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounded repair-chain hop (R15/R23). Hop `0` is every ordinary invocation;
+ * hop `1` marks the single fresh invocation a `use_suggested_port` recipe may
+ * start. There is no hop `2`: a hop-1 failure fails closed to an operator.
+ */
+export const BROWSER_CONNECT_REPAIR_CHAIN_HOPS = [0, 1] as const;
+
+/**
+ * Repair-chain hop union.
+ */
+export type BrowserConnectRepairChainHop =
+	(typeof BROWSER_CONNECT_REPAIR_CHAIN_HOPS)[number];
+
+/**
+ * Typed environment repair causes (R6/R10): absent, occupied, foreign,
+ * unverified, launch-failed, and transient proof states.
+ */
+export const BROWSER_CONNECT_ENVIRONMENT_REPAIR_CAUSES = [
+	"no_listener",
+	"occupied_listener",
+	"foreign_listener",
+	"unverified_listener",
+	"launch_failed",
+	"transient_proof_failure",
+] as const;
+
+/**
+ * Environment repair cause union.
+ */
+export type BrowserConnectEnvironmentRepairCause =
+	(typeof BROWSER_CONNECT_ENVIRONMENT_REPAIR_CAUSES)[number];
+
+/**
+ * Typed adapter repair causes (R11): registry, provenance, route, and probe
+ * states.
+ */
+export const BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES = [
+	"unregistered_adapter",
+	"executable_absent",
+	"version_mismatch",
+	"route_unsupported",
+	"transient_probe_failure",
+	"probe_failed",
+] as const;
+
+/**
+ * Adapter repair cause union.
+ */
+export type BrowserConnectAdapterRepairCause =
+	(typeof BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES)[number];
+
+/**
+ * Typed run repair causes (R12): missing-input, separator, wrapped-command,
+ * and underlying pre-exec states.
+ */
+export const BROWSER_CONNECT_RUN_REPAIR_CAUSES = [
+	"separator_missing",
+	"wrapped_command_missing",
+	"wrapped_executable_absent",
+	"preexec_connect_failure",
+] as const;
+
+/**
+ * Run repair cause union.
+ */
+export type BrowserConnectRunRepairCause =
+	(typeof BROWSER_CONNECT_RUN_REPAIR_CAUSES)[number];
+
+/**
+ * Every typed repair cause the recovery policy selects from (R4/R18).
+ */
+export const BROWSER_CONNECT_REPAIR_CAUSES = [
+	"usage_invalid",
+	...BROWSER_CONNECT_RUN_REPAIR_CAUSES,
+	...BROWSER_CONNECT_ENVIRONMENT_REPAIR_CAUSES,
+	...BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES,
+	"unexpected_runtime_error",
+] as const;
+
+/**
+ * Repair cause union across all failure domains.
+ */
+export type BrowserConnectRepairCause =
+	(typeof BROWSER_CONNECT_REPAIR_CAUSES)[number];
+
+/**
+ * Warm-chrome suggested-port evidence (R6). `verified_free` is warm-chrome's
+ * fresh proof that the suggested port was free when suggested; a stale or
+ * unverified suggestion never selects `use_suggested_port`.
+ */
+export type BrowserConnectSuggestedPortEvidence = {
+	port: number;
+	verified_free: boolean;
+};
+
+/**
+ * Registry-owned isolated-install safety evidence (R28/R29/KTD13). All four
+ * gates must hold before policy may select automatic `install_adapter` or
+ * `upgrade_adapter_to_pin`; any failed gate degrades to an operator choice.
+ */
+export type BrowserConnectIsolatedInstallEvidence = {
+	recipe_complete: boolean;
+	lock_origins_canonical: boolean;
+	dependency_integrity_complete: boolean;
+	lifecycle_scripts_disabled: boolean;
+};
+
+/**
+ * Typed environment repair context (R6/R10). Listener causes carry at most
+ * the suggested-port evidence — never a PID, ownership claim, process token,
+ * or continuation receipt (R32): listener inspection is a terminal operator
+ * handoff with no ownership-ingestion seam.
+ */
+export type BrowserConnectEnvironmentRepairContext =
+	| {
+			failure_class: "environment-absent";
+			cause: "no_listener";
+			/** Warm-chrome proof that the requested explicit port is free. */
+			explicit_port_free: boolean;
+	  }
+	| {
+			failure_class: "environment-absent";
+			cause: "transient_proof_failure";
+			/** True when the gateway already spent its one bounded recheck (R23). */
+			recheck_attempted: boolean;
+	  }
+	| {
+			failure_class: "foreign-listener";
+			cause: "occupied_listener" | "foreign_listener" | "unverified_listener";
+			suggested_explicit_port?: BrowserConnectSuggestedPortEvidence;
+	  }
+	| {
+			failure_class: "launch-failed";
+			cause: "launch_failed";
+	  };
+
+/**
+ * Typed adapter repair context (R11). Adapter identity fields are trusted
+ * Adapter Definition ids; policy re-validates them against the registry and
+ * fails closed on unknown ids (R24).
+ */
+export type BrowserConnectAdapterRepairContext =
+	| {
+			failure_class: "adapter-unknown";
+			cause: "unregistered_adapter";
+			/** Trusted registered candidates for an operator handoff choice. */
+			candidate_adapter_ids: readonly string[];
+			/** Present only when exactly one registered correction is deterministic. */
+			deterministic_replacement_adapter_id?: string;
+	  }
+	| {
+			failure_class: "adapter-not-installed";
+			cause: "executable_absent";
+			adapter_id: string;
+			/** Trusted manual-install inputs (identity, pin, install location, owner, docs) are complete. */
+			manual_install_inputs_complete: boolean;
+			automatic_install?: BrowserConnectIsolatedInstallEvidence;
+	  }
+	| {
+			failure_class: "adapter-not-installed";
+			cause: "version_mismatch";
+			adapter_id: string;
+			observed_version: string;
+			pinned_version: string;
+			/** The registry explicitly allowlists this exact observed-to-pin transition (R21/R22). */
+			transition_allowlisted: boolean;
+			automatic_install?: BrowserConnectIsolatedInstallEvidence;
+	  }
+	| {
+			failure_class: "route-incompatible";
+			cause: "route_unsupported";
+			/** Trusted registered candidates with an implemented compatible route. */
+			candidate_adapter_ids: readonly string[];
+	  }
+	| {
+			failure_class: "attachment-failed";
+			cause: "transient_probe_failure";
+			/** True when the gateway already spent its one bounded re-probe (R23). */
+			re_probe_attempted: boolean;
+	  }
+	| {
+			failure_class: "attachment-failed";
+			cause: "probe_failed";
+	  };
+
+/**
+ * Typed run repair context (R12/R26). No wrapped argv, arguments, environment
+ * values, or full executable paths — the separator variant carries only the
+ * non-empty-command boolean marker, and the missing-executable variant carries
+ * at most a normalized basename that policy re-validates before use.
+ */
+export type BrowserConnectRunRepairContext =
+	| {
+			failure_class: "run-missing-separator";
+			cause: "separator_missing";
+			/** Parser-memory marker: a non-empty wrapped command exists (never echoed). */
+			wrapped_command_present: boolean;
+	  }
+	| {
+			failure_class: "run-missing-separator";
+			cause: "wrapped_command_missing";
+	  }
+	| {
+			failure_class: "wrapped-command-not-found";
+			cause: "wrapped_executable_absent";
+			deterministic_correction: boolean;
+			/** Normalized basename only; policy fails closed on unsafe values (R26). */
+			executable_basename?: string;
+	  }
+	| {
+			failure_class: "preexec-connect-failed";
+			cause: "preexec_connect_failure";
+			/** The underlying typed failure; policy inherits its exact posture. */
+			underlying:
+				| BrowserConnectEnvironmentRepairContext
+				| BrowserConnectAdapterRepairContext;
+	  };
+
+/**
+ * Full typed repair context union (R4): one variant family per failure class,
+ * exhaustive over all 12 classes. `repair-path.ts` switches over
+ * `failure_class` with never-exhaustiveness, so an unhandled class is a type
+ * error, and unknown runtime values fail closed to an operator stage (R9).
+ */
+export type BrowserConnectRepairContext =
+	| {
+			failure_class: "usage-invalid";
+			cause: "usage_invalid";
+			/** A single accepted-usage correction is known deterministically. */
+			deterministic_correction: boolean;
+	  }
+	| BrowserConnectRunRepairContext
+	| BrowserConnectEnvironmentRepairContext
+	| BrowserConnectAdapterRepairContext
+	| {
+			failure_class: "runtime-error-unexpected";
+			cause: "unexpected_runtime_error";
+	  };
 
 /**
  * Environment identity (R2): whose browser this is. v1 names exactly one
@@ -338,6 +700,12 @@ export type BrowserConnectHandoffPayload = {
  * Failure payload (R2): failure class plus exactly one next safe action.
  * `detail` is optional free text and always passes the redaction chokepoint
  * before serialization (R14).
+ *
+ * `suggested_explicit_port` is additive schema-1 evidence (R6): the typed
+ * warm-chrome suggestion, projected only when a hop-0 driver could use it to
+ * build the one `use_suggested_port` rerun — a headless driver must never
+ * have to scrape the port from a stderr diagnostic. Numbers and a boolean
+ * only, so text safety is unaffected.
  */
 export type BrowserConnectFailurePayload = {
 	outcome: "failed";
@@ -345,6 +713,7 @@ export type BrowserConnectFailurePayload = {
 	next_action_id: BrowserConnectFailureActionId;
 	environment: BrowserConnectEnvironmentIdentity;
 	launch: BrowserConnectLaunchProvenance;
+	suggested_explicit_port?: BrowserConnectSuggestedPortEvidence;
 	detail?: string;
 };
 
@@ -389,11 +758,11 @@ export function createBrowserConnectEnvelopeData(
 function redactFailure(
 	payload: BrowserConnectFailurePayload,
 ): BrowserConnectFailurePayload {
-	const authorized =
-		BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[payload.failure_class];
-	if (payload.next_action_id !== authorized) {
+	const authorized: readonly BrowserConnectFailureActionId[] =
+		BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS[payload.failure_class];
+	if (!authorized.includes(payload.next_action_id)) {
 		throw new Error(
-			`next_action_id ${payload.next_action_id} is not the authorized affordance for ${payload.failure_class}; expected ${authorized}.`,
+			`next_action_id ${payload.next_action_id} is not an authorized affordance for ${payload.failure_class}; expected one of ${authorized.join(", ")}.`,
 		);
 	}
 	if (payload.detail === undefined) return payload;
