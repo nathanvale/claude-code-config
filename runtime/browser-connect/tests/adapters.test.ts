@@ -29,6 +29,7 @@ import {
 	listAdapterDefinitions,
 	manualAdapterInstallInputsComplete,
 	resolveApprovedPackageManagerExecutable,
+	spawnAdapterCommand,
 	validateAdapterLockPackages,
 } from "../src/adapters/registry.ts";
 
@@ -759,6 +760,9 @@ describe("buildIsolatedInstallerEnvironment (U5 R28/AE17)", () => {
 
 	test("pins registry, isolated config files, cache, and non-interactive posture", () => {
 		const env = buildIsolatedInstallerEnvironment(input);
+		// npm temp writes are rebased under the neutral staging root, never the
+		// inherited system TMPDIR (R28).
+		expect(env.TMPDIR).toBe(staging);
 		expect(env.npm_config_registry).toBe(CANONICAL_REGISTRY);
 		expect(env.npm_config_userconfig).toBe(`${staging}/.npmrc`);
 		expect(env.npm_config_globalconfig).toBe(`${staging}/.npmrc-global`);
@@ -768,6 +772,19 @@ describe("buildIsolatedInstallerEnvironment (U5 R28/AE17)", () => {
 		// The child still gets the pass-through basics it needs to run node.
 		expect(env.PATH).toBe("/usr/bin:/bin");
 		expect(env.HOME).toBe("/Users/someone");
+	});
+
+	test("spawnAdapterCommand fails closed when exactEnv has no env (R28)", async () => {
+		// exactEnv with an absent env would otherwise fall through to full
+		// process.env inheritance — the leak the flag exists to prevent.
+		await expect(
+			spawnAdapterCommand({
+				command: "/usr/bin/true",
+				args: [],
+				exactEnv: true,
+				timeoutMs: 1_000,
+			}),
+		).rejects.toThrow("exactEnv requires an explicit env allowlist");
 	});
 });
 

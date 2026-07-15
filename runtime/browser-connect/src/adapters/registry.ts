@@ -322,6 +322,13 @@ export function findAdapterDefinition(
 export async function spawnAdapterCommand(
 	input: AdapterCommandInput,
 ): Promise<AdapterCommandResult> {
+	if (input.exactEnv === true && input.env === undefined) {
+		// Fail closed (R28): exactEnv with no env would fall through to full
+		// process.env inheritance — the exact leak the flag exists to prevent.
+		throw new Error(
+			"spawnAdapterCommand: exactEnv requires an explicit env allowlist",
+		);
+	}
 	let proc: ReturnType<typeof Bun.spawn>;
 	try {
 		proc = Bun.spawn([input.command, ...input.args], {
@@ -799,7 +806,6 @@ export async function resolveApprovedPackageManagerExecutable(
 const ADAPTER_INSTALL_ENV_ALLOWLIST = [
 	"PATH",
 	"HOME",
-	"TMPDIR",
 	"LANG",
 	"LC_ALL",
 	"USER",
@@ -828,6 +834,9 @@ export function buildIsolatedInstallerEnvironment(input: {
 		const value = input.baseEnv[key];
 		if (value !== undefined) env[key] = value;
 	}
+	// npm's own temp/extraction writes stay inside the neutral staging root
+	// (R28) instead of the inherited system TMPDIR.
+	env.TMPDIR = input.stagingDir;
 	env.npm_config_registry = input.canonicalRegistry;
 	env.npm_config_userconfig = input.userConfigPath;
 	env.npm_config_globalconfig = input.globalConfigPath;

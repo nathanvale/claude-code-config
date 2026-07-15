@@ -2347,6 +2347,16 @@ function emitCaughtError(
 			repairContext: USAGE_INVALID_REPAIR_CONTEXT,
 		});
 	}
+	// A pre-gate run failure must keep stdout untouched for the wrapped
+	// command (KTD5): the unexpected-runtime arm branches on the invocation
+	// head exactly like the usage arm above.
+	if (input.invokedRun) {
+		return emitRunUnexpectedStderrFailure(deps, {
+			outputMode: input.outputMode,
+			runId: input.runId,
+			durationMs: input.durationMs,
+		});
+	}
 	return emitFailure(deps, {
 		outputMode: input.outputMode,
 		runId: input.runId,
@@ -2559,7 +2569,7 @@ function parseRepairAdapterArgv(argv: readonly string[]): ParsedInvocation {
 			// Fixed package-owned text (R24/R33): the rejected flag is never
 			// echoed, so no caller-authored value reaches the usage envelope.
 			throw usageError(
-				"repair-adapter accepts no package-policy override or unknown option; only --check, --execute, and --json are accepted",
+				"repair-adapter accepts no package-policy override or unknown option; only --check, --execute, --json, and --plain are accepted",
 			);
 		}
 		positionals.push(arg);

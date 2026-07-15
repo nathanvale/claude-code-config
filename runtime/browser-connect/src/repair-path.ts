@@ -1014,7 +1014,12 @@ function selectAdapterNotInstalled(
 	switch (context.cause) {
 		case "executable_absent": {
 			if (!isTrustedAdapterId(context.adapter_id)) {
-				return unknownRepairContextStage();
+				// Fail closed, but keep the adapter-provenance floor (R25): the
+				// generic unknown-context stage would drop no_pin_policy_change.
+				return operatorStage(
+					[OPERATOR_CHOICES.inspect_diagnostics],
+					["no_mutation_from_diagnostics", "no_pin_policy_change"],
+				);
 			}
 			if (isCompleteInstallEvidence(context.automatic_install)) {
 				return automaticStage("install_adapter", ["no_pin_policy_change"]);
@@ -1032,7 +1037,10 @@ function selectAdapterNotInstalled(
 		}
 		case "version_mismatch": {
 			if (!isTrustedAdapterId(context.adapter_id)) {
-				return unknownRepairContextStage();
+				return operatorStage(
+					[OPERATOR_CHOICES.inspect_diagnostics],
+					["no_mutation_from_diagnostics", "no_pin_policy_change"],
+				);
 			}
 			if (context.transition_allowlisted !== true) {
 				return operatorStage(

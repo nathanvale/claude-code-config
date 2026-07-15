@@ -590,7 +590,26 @@ const MATRIX_ROWS: readonly MatrixRow[] = [
 		expected: {
 			posture: "operator",
 			choice_ids: ["inspect_diagnostics"],
-			constraint_ids: ["no_mutation_from_diagnostics"],
+			constraint_ids: ["no_mutation_from_diagnostics", "no_pin_policy_change"],
+		},
+		legacy: "list_registered_adapters",
+	},
+	{
+		name: "version mismatch for an untrusted adapter id fails closed with the provenance floor",
+		invocation: CONNECT_0,
+		context: {
+			failure_class: "adapter-not-installed",
+			cause: "version_mismatch",
+			adapter_id: "not-in-registry",
+			observed_version: "1.0.0",
+			pinned_version: "1.5.0",
+			transition_allowlisted: true,
+			automatic_install: COMPLETE_INSTALL_EVIDENCE,
+		},
+		expected: {
+			posture: "operator",
+			choice_ids: ["inspect_diagnostics"],
+			constraint_ids: ["no_mutation_from_diagnostics", "no_pin_policy_change"],
 		},
 		legacy: "list_registered_adapters",
 	},
