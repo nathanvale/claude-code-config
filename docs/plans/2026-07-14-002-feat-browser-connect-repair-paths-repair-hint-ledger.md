@@ -47,7 +47,7 @@ Illustrative projection. Exact envelope construction remains facade-owned.
 runtime_action:
   id: use_suggested_port
   summary: Start a fresh invocation with the suggested explicit port.
-  side_effects: [check, network]
+  side_effects: [check, network, browser, write]
   docs_url: https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-use_suggested_port
 
 continuation:
@@ -189,7 +189,7 @@ Example: absent adapter plus incomplete automatic recipe emits operator choices 
 - **Never project:** a shell command string, latest-version fallback, package identity from error prose.
 - **Owner:** facade-backed `repair-adapter <adapter_id>`; `--check` previews without mutation and `--execute` is the sole package-mutation mode.
 - **Side effects:** `network`, `write`.
-- **Success signal:** fresh provenance resolves the executable at the exact pin.
+- **Success signal:** fresh provenance resolves the executable at the exact pin, then the caller's original `connect` or `run` proves adapter attachment; an attachment failure surfaces through its own typed failure path and is never reported as repair success.
 - **Stop:** automatic posture stops before network or mutation on missing recipe, prompt, auth, privilege escalation, package conflict, non-registry or alternate-origin dependency source, or post-install version mismatch. A canonical-origin redirect is never followed and publishes no mutation. Manual-install choice is absent when package identity, pin, scope, owner, or docs is missing; agents never execute it.
 - **Constraints:** `no_pin_policy_change`.
 - **Special boundary:** install the adapter executable only; never run an adapter browser installer or download Chrome for Testing.
@@ -206,8 +206,8 @@ Example: absent adapter plus incomplete automatic recipe emits operator choices 
 - **Required context:** none for compatibility discovery; operator choices carry trusted candidate adapter IDs and implemented route IDs separately.
 - **Never project:** unregistered caller suggestions or undocumented routes.
 - **Owner:** released compatibility procedure. Current compatibility selection exhausts every declared same-adapter route before failure; an operator owns any different registered adapter selection.
-- **Side effects:** inherited only by released consumers; revised policy does not execute this action.
-- **Success signal:** not applicable to revised policy.
+- **Side effects:** `read` — concrete discovery metadata only; revised policy never emits or executes this action.
+- **Success signal:** none; compatibility-only entries are excluded from Repair Action Contract validation, and tests forbid this ID as outer or legacy `next_action_id`.
 - **Stop:** new policy attempts to select this action automatically or as a legacy fallback.
 - **Constraints:** `no_adapter_fallback` remains active after an attachment proof failure.
 - **Docs:** `REPAIR.md#v1-select_compatible_route`.
@@ -239,8 +239,8 @@ Example: absent adapter plus incomplete automatic recipe emits operator choices 
 - **Emitted from:** previously released legacy envelopes and discovery only; revised policy never selects it in outer or compatibility continuation data.
 - **Required context:** underlying typed pre-exec failure for new consumers.
 - **Owner:** underlying environment or adapter Repair Path.
-- **Side effects:** inherited from the underlying action.
-- **Success signal:** inherited from the underlying action.
+- **Side effects:** `check` — concrete discovery metadata only; released envelopes defer to the underlying repair path.
+- **Success signal:** none; compatibility-only entries are excluded from Repair Action Contract validation, and tests forbid this ID as outer or legacy `next_action_id`.
 - **Stop:** new policy must never hide the underlying action behind this ID.
 - **Constraints:** inherit all underlying constraints.
 - **Docs:** `REPAIR.md#v1-resolve_connect_failure`.
@@ -273,7 +273,7 @@ Example: absent adapter plus incomplete automatic recipe emits operator choices 
 - **Required context:** original command ID, requested port, suggested explicit port, original adapter ID when applicable, wrapped-command-presence marker for run.
 - **Never project:** wrapped argv or a synthesized endpoint.
 - **Owner:** caller starts one fresh copy of the original connect or run with hop `1`.
-- **Side effects:** mirror the original connect or run; may include browser and write effects.
+- **Side effects:** exact command records; both fresh `connect` and `run` declare `check`, `network`, `browser`, `write` because the rerun may launch Agent Chrome and exec.
 - **Success signal:** fresh invocation verifies and uses the suggested port.
 - **Stop:** command is check, hop is already `1`, or suggestion is absent, stale, occupied, or consumed inside the failed invocation.
 - **Constraints:** `no_internal_port_switch`, `no_unverified_listener_connection`, `no_process_destruction`.
@@ -291,7 +291,7 @@ Example: absent adapter plus incomplete automatic recipe emits operator choices 
 - **Never project:** inferred semantic-version compatibility or package identity from prose.
 - **Owner:** facade-backed `repair-adapter <adapter_id>`; `--check` previews without mutation and `--execute` is the sole package-mutation mode.
 - **Side effects:** `network`, `write`.
-- **Success signal:** fresh provenance resolves the exact pinned version.
+- **Success signal:** fresh provenance resolves the exact pinned version, then the caller's original `connect` or `run` proves adapter attachment; an attachment failure surfaces through its own typed failure path and is never reported as repair success.
 - **Stop:** downgrade, unknown version, absent allowlist entry, prompt, auth, privilege escalation, package conflict, or non-registry or alternate-origin dependency source stops before network or mutation. A canonical-origin redirect is never followed and publishes no mutation.
 - **Constraints:** `no_pin_policy_change`.
 - **Docs:** `REPAIR.md#v1-upgrade_adapter_to_pin`.
