@@ -221,7 +221,7 @@ export const BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS = {
  * everywhere as the R30 fail-safe fallback. Envelope construction rejects any
  * value outside this record.
  */
-export const BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS = {
+const BROWSER_CONNECT_LEGACY_NEXT_ACTIONS_BY_FAILURE_CLASS = {
 	"usage-invalid": ["change_input", "inspect_diagnostics"],
 	"run-missing-separator": [
 		"add_run_separator",

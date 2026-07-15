@@ -44,7 +44,7 @@ export const CHROME_DEVTOOLS_MCP_BROWSER_URL_FLAG = "--browser-url" as const;
  * repair installs the adapter executable ONLY — never an adapter-owned
  * browser installer, never Chrome for Testing.
  */
-export const CHROME_DEVTOOLS_MCP_INSTALL_POLICY: AdapterPackagePolicy = {
+const CHROME_DEVTOOLS_MCP_INSTALL_POLICY: AdapterPackagePolicy = {
 	packageName: "chrome-devtools-mcp",
 	packageManager: {
 		approvedAbsoluteCandidates: [

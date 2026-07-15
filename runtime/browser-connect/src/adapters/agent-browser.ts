@@ -43,7 +43,7 @@ export const AGENT_BROWSER_PINNED_VERSION = "0.31.2" as const;
  * truth; automatic upgrade additionally requires the full isolated-install
  * evidence, which the lifecycle gate withholds.
  */
-export const AGENT_BROWSER_INSTALL_POLICY: AdapterPackagePolicy = {
+const AGENT_BROWSER_INSTALL_POLICY: AdapterPackagePolicy = {
 	packageName: "agent-browser",
 	packageManager: {
 		approvedAbsoluteCandidates: [

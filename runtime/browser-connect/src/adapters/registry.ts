@@ -780,7 +780,7 @@ export async function resolveApprovedPackageManagerExecutable(
  * Everything else — registry config, auth tokens, proxies, npm_config_* —
  * is dropped by construction (allowlist, not blocklist).
  */
-export const ADAPTER_INSTALL_ENV_ALLOWLIST = [
+const ADAPTER_INSTALL_ENV_ALLOWLIST = [
 	"PATH",
 	"HOME",
 	"TMPDIR",
