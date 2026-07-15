@@ -17,6 +17,7 @@ import {
 	type AdapterCommandInput,
 	type AdapterCommandResult,
 	type AdapterExecutableResolution,
+	type AdapterLockViolationKind,
 	type AdapterPackagePolicy,
 	type AdapterRuntime,
 	assessAdapterInstallPolicy,
@@ -459,7 +460,7 @@ describe("validateAdapterLockPackages (U5 R34)", () => {
 	const violationRows: ReadonlyArray<{
 		label: string;
 		entry: Record<string, unknown>;
-		kind: string;
+		kind: AdapterLockViolationKind;
 	}> = [
 		{
 			label: "git source",

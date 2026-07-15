@@ -197,7 +197,9 @@ describe("browser-connect typed repair context vocabulary (U1)", () => {
 			"usage_invalid",
 			"unexpected_runtime_error",
 		]) {
-			expect(BROWSER_CONNECT_REPAIR_CAUSES).toContain(cause);
+			expect(BROWSER_CONNECT_REPAIR_CAUSES as readonly string[]).toContain(
+				cause,
+			);
 		}
 	});
 });

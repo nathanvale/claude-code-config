@@ -963,8 +963,8 @@ describe("repair-path matrix selection (R4/R18)", () => {
 		for (const cause of BROWSER_CONNECT_REPAIR_CAUSES) {
 			expect(covered.has(cause)).toBe(true);
 		}
-		expect(BROWSER_CONNECT_REPAIR_CAUSES.length).toBe(
-			new Set(BROWSER_CONNECT_REPAIR_CAUSES).size,
+		expect(new Set(BROWSER_CONNECT_REPAIR_CAUSES).size).toBe(
+			BROWSER_CONNECT_REPAIR_CAUSES.length,
 		);
 	});
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type CommandFacadeFlag,
 	findCommandDiscoveryTreeDrift,
 	findCommandFacadeMetadataDrift,
 	renderCommandUsage,
@@ -361,7 +362,8 @@ describe("browser-connect explicit-port option contract (U3 R15/KTD7)", () => {
 
 	test("--port names its validation range; --repair-chain-hop declares the closed 0|1 value set", () => {
 		for (const command of GATEWAY_OPTION_COMMANDS) {
-			const flags = browserConnectContracts[command].flags;
+			const flags: Readonly<Record<string, CommandFacadeFlag | undefined>> =
+				browserConnectContracts[command].flags;
 			const port = flags["--port"];
 			expect(port?.type).toBe("string");
 			expect(port?.description).toContain("1");
@@ -563,8 +565,10 @@ describe("browser-connect repair-adapter contract surface (U5 R33/KTD22)", () =>
 			"--execute",
 			"--json",
 		]);
-		const check = contract.flags["--check"];
-		const execute = contract.flags["--execute"];
+		const flags: Readonly<Record<string, CommandFacadeFlag | undefined>> =
+			contract.flags;
+		const check = flags["--check"];
+		const execute = flags["--execute"];
 		expect(check?.type).toBe("boolean");
 		expect(execute?.type).toBe("boolean");
 		expect(check?.description).toContain("--execute");
