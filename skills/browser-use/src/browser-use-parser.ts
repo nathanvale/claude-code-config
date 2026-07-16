@@ -42,10 +42,11 @@ import {
 
 const VERSION = "0.1.0";
 // One-line pointer the help surface uses to send agents back to the
-// route-bound prerequisites without copying route evidence schemas (R17, U3
-// scenario 8). browser-use never re-declares the route envelope shape.
+// connection prerequisite without copying the envelope schema. browser-use
+// never re-declares the Verified Handoff Envelope shape; browser-connect owns
+// it.
 const ROUTE_PREREQUISITE_POINTER =
-	"Prerequisite: get route evidence from `browser-adapter-router prepare` then `browser-adapter-router route` (--route).";
+	"Prerequisite: mint a Verified Handoff Envelope with `browser-connect connect <adapter> --json` (or `browser-connect run`), then pass it via --handoff.";
 
 export type ParsedBrowserUseCommand =
 	| { kind: "help"; family?: BrowserUseFamily; command?: BrowserUseCommand }
@@ -69,15 +70,6 @@ export type ParsedBrowserUseCommand =
 export function parseBrowserUseArgv(
 	argv: readonly string[],
 ): ParsedBrowserUseCommand {
-	if (argv.includes("--version")) {
-		return {
-			kind: "version",
-			outputMode: argv.includes("--json") ? "json" : "plain",
-		};
-	}
-
-	const helpRequested = argv.includes("-h") || argv.includes("--help");
-
 	// Resolve family/subcommand POSITIONALLY from the leading non-flag tokens.
 	// The public form is `browser-use <family> <subcommand> [flags]`. Scanning
 	// the whole argv by value (argv.find) would misread a flag VALUE equal to a
@@ -91,6 +83,45 @@ export function parseBrowserUseArgv(
 	}
 	const familyToken = positionals[0];
 	const family = isFamily(familyToken) ? familyToken : undefined;
+	const subcommandCandidate = positionals[1];
+	const resolvedCommand =
+		family &&
+		subcommandCandidate &&
+		subcommandsFor(family).includes(subcommandCandidate)
+			? toCommand(family, subcommandCandidate)
+			: undefined;
+
+	// Detect --help/--version from STANDALONE option tokens only, mirroring
+	// collectFlagValues' value-pairing: a token consumed as a declared
+	// value-bearing flag's value (e.g. `--title-contains --version`) must not
+	// short-circuit the command. With no resolvable command there are no
+	// declared flags, so every option token is standalone (root/family help and
+	// bare --version keep their behavior).
+	const declaredFlags: Readonly<Record<string, FlagSpec>> = resolvedCommand
+		? (browserUseContracts[resolvedCommand].flags ?? {})
+		: {};
+	const standalone = new Set<string>();
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("-")) continue;
+		const hasInline = arg.includes("=");
+		const name = hasInline ? arg.slice(0, arg.indexOf("=")) : arg;
+		const spec = declaredFlags[name];
+		if (spec && spec.type !== "boolean" && !hasInline) {
+			index += 1;
+			continue;
+		}
+		standalone.add(name);
+	}
+
+	if (standalone.has("--version")) {
+		return {
+			kind: "version",
+			outputMode: standalone.has("--json") ? "json" : "plain",
+		};
+	}
+
+	const helpRequested = standalone.has("-h") || standalone.has("--help");
 
 	if (!family) {
 		if (helpRequested) return { kind: "help" };
@@ -126,14 +157,18 @@ export function parseBrowserUseArgv(
 	const flags = browserUseContracts[command].flags ?? {};
 	rejectUnknownFlags(rest, flags);
 	const flagValues = collectFlagValues(rest, flags);
-	const dryRun = rest.includes("--dry-run");
+	// Derive from parsed flags, not token scans: a value-bearing flag can
+	// legitimately consume a token that looks like "--dry-run" or "--json"
+	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread
+	// that value as the flag being set.
+	const dryRun = flagValues["--dry-run"] !== undefined;
 
 	return {
 		kind: "command",
 		command,
 		family,
 		subcommand,
-		outputMode: outputModeFor(command, rest),
+		outputMode: outputModeFor(command, flagValues),
 		dryRun,
 		flagValues,
 	};
@@ -219,10 +254,10 @@ function rejectUnknownFlags(
 // from flipping output mode.
 function outputModeFor(
 	command: BrowserUseCommand,
-	rest: readonly string[],
+	flagValues: Readonly<Record<string, string>>,
 ): OutputMode {
-	if (rest.includes("--plain")) return "plain";
-	if (rest.includes("--json")) return "json";
+	if (flagValues["--plain"] !== undefined) return "plain";
+	if (flagValues["--json"] !== undefined) return "json";
 	return command === "targets-status" ? "plain" : "json";
 }
 
@@ -294,7 +329,15 @@ export function renderHelp(
 	command?: BrowserUseCommand,
 ): string {
 	if (command) {
-		return `${renderCommandUsage(browserUseContracts[command])}\n${ROUTE_PREREQUISITE_POINTER}\n`;
+		// Contract-driven: only commands that actually accept --handoff carry the
+		// mint-an-envelope prerequisite (targets status reads selected state only).
+		const commandFlags: Readonly<Record<string, FlagSpec>> =
+			browserUseContracts[command].flags ?? {};
+		const prerequisite =
+			commandFlags["--handoff"] !== undefined
+				? `\n${ROUTE_PREREQUISITE_POINTER}`
+				: "";
+		return `${renderCommandUsage(browserUseContracts[command])}${prerequisite}\n`;
 	}
 	if (family) return renderFamilyHelp(family);
 	return renderRootHelp();

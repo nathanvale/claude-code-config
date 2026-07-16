@@ -177,17 +177,18 @@ export type RouteBinding = {
 };
 
 // ---------------------------------------------------------------------------
-// Browser Target Discovery (U5). `browser-use targets list` discovers Browser
-// Target Candidates through a proven adapter in two modes (R18, R19, R20):
-//   - route-bound: full route success + fresh Adapter Proof -> operation-ready
-//     candidates that can feed `targets select` and `operate`.
-//   - recovery:    requested adapter + fresh Adapter Proof -> evidence-gathering
-//     candidates that can feed `prepare --target-discovery` only.
-// The tuple below extends the route/proof binding (U2 R8) with the target slice;
-// it is owned by `targets list`, not route success, so route stays pure (KTD2).
+// Browser Target Discovery (U5, evidence re-based in migration U1).
+// `browser-use targets list` discovers Browser Target Candidates in two modes:
+//   - handoff-bound: a browser-connect Verified Handoff Envelope ->
+//     operation-ready candidates that can feed `targets select` and `operate`.
+//   - recovery: requested adapter + optional handoff evidence (verified, a
+//     connect failure state, or explicit no-evidence entry) ->
+//     evidence-gathering candidates only.
+// The binding tuple derives from envelope fields (KTD1): browser-use computes
+// its own handoff evidence id; browser-connect's envelope schema is untouched.
 // ---------------------------------------------------------------------------
 
-export type TargetDiscoveryMode = "recovery" | "route-bound";
+export type TargetDiscoveryMode = "recovery" | "handoff-bound";
 
 // Display-safe candidate facts (R32, KTD6, KTD7). The candidate ordinal is the
 // only public target handle (scoped to one target envelope, R21); `origin` and
@@ -209,34 +210,40 @@ export type BrowserTargetCandidate = {
 	title?: string;
 };
 
-// Target/proof binding the discovery envelope carries. Recovery mode omits the
-// route slice (no route_success_id / route_evidence_hash) because recovery
-// candidates are never operation-authorized (R20, R25).
+// Handoff-derived binding the discovery envelope carries. Recovery mode may
+// omit the identity slice (no verified endpoint / evidence id) because
+// recovery candidates are never operation-authorized (R20, R25) and a connect
+// failure state or no-evidence entry carries no verified identity.
 export type TargetDiscoveryBinding = {
 	run_id: string;
-	warm_chrome_run_id: string;
-	adapter_proof_id: string;
 	selected_adapter_id: BrowserAdapterId;
-	verified_endpoint_identity: string;
 	// Target envelope id scopes candidate ordinals (R21). Content hash over the
-	// run-scoped binding facts (run id, mode, adapter, proof id, route hash); no
-	// clock or randomness. In route-bound mode the run id comes from the route
-	// binding, so re-running against the same route yields the same envelope id.
-	// In recovery mode the run id is the per-invocation run id, so the envelope id
-	// scopes ordinals within one listing rather than across invocations.
+	// run-scoped binding facts (run id, mode, adapter, handoff evidence id); no
+	// clock or randomness. In handoff-bound mode the run id comes from the
+	// envelope, so re-running against the same handoff yields the same envelope
+	// id. In recovery mode the run id is the per-invocation run id, so the
+	// envelope id scopes ordinals within one listing.
 	target_envelope_id: string;
-	// Route slice present only in route-bound mode (R18). Binds candidates to the
-	// route success that authorized them so `operate` can fail closed on stale or
-	// cross-run target evidence (R9).
-	route_evidence_hash?: string;
+	// Identity slice, present when discovery ran from a verified handoff:
+	// host:port of the verified endpoint, and browser-use's content hash over
+	// the envelope's binding-relevant fields (KTD1). Required for an
+	// operation-ready listing; `targets select` and `operate` fail closed on
+	// mismatched or cross-run evidence through these.
+	verified_endpoint_identity?: string;
+	handoff_evidence_id?: string;
 };
 
 export type TargetDiscoveryEnvelope = {
+	// Self-describing result identity (BROWSER_USE_TARGETS_CONTRACT_ID + schema
+	// version): `targets select` positively identifies its input by these, so a
+	// hand-written or foreign envelope cannot pass.
+	contract: string;
+	schema_version: string;
 	mode: TargetDiscoveryMode;
-	// R20: recovery candidates are evidence-gathering only; route-bound candidates
-	// are operation-ready. These flags are the gate `targets select`/`operate`
-	// (U6/U7) read to reject recovery candidates (R25).
-	route_bound: boolean;
+	// R20: recovery candidates are evidence-gathering only; handoff-bound
+	// candidates are operation-ready. These flags are the gate `targets select`
+	// and `operate` read to reject recovery candidates (R25).
+	handoff_bound: boolean;
 	operation_ready: boolean;
 	requested_adapter: BrowserAdapterId;
 	binding: TargetDiscoveryBinding;

@@ -9,18 +9,21 @@ import {
 	resolveOperationTarget,
 	runScopedKey,
 } from "./browser-use-selection";
+import { handoffEvidenceIdOf } from "./browser-use-core";
 import {
-	adapterProofEnvelope,
 	enoent,
 	makeRuntime,
 	parseJson,
 	parsedWrite,
-	routeSuccessEnvelope,
 	TARGETS_CONTRACT,
 } from "./browser-use-test-helpers";
+import {
+	REAL_VERIFIED_HANDOFF_ENVELOPE,
+	verifiedHandoffEnvelope,
+} from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
-// U6 Browser Target Selection
+// U6 Browser Target Selection (envelope-era contract from migration U1)
 // =========================================================================
 
 type EnvelopeCandidate = {
@@ -31,38 +34,78 @@ type EnvelopeCandidate = {
 	title?: string;
 };
 
-// A route-bound `targets list` success envelope (the CLI success envelope U5
-// emits), as `targets select` receives it on stdin. route_bound/operation_ready
-// default true; override to forge a recovery envelope for AE5.
+// The handoff evidence id browser-use derives from the REAL verified handoff
+// capture. Computed through the production hash, not hardcoded, so the
+// agree-path cross-check tests bind to the same identity discovery would.
+const FIXTURE_ENVELOPE = JSON.parse(REAL_VERIFIED_HANDOFF_ENVELOPE);
+const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
+	runId: FIXTURE_ENVELOPE.run_id,
+	attachmentAdapterId: FIXTURE_ENVELOPE.data.attachment.adapter_id,
+	route: FIXTURE_ENVELOPE.data.attachment.route,
+	endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http,
+	endpointWs: FIXTURE_ENVELOPE.data.endpoint.ws,
+	proofContractId: FIXTURE_ENVELOPE.data.proof.environment_contract_id,
+	proofSchemaVersion: FIXTURE_ENVELOPE.data.proof.environment_schema_version,
+});
+const FIXTURE_RUN_ID = FIXTURE_ENVELOPE.run_id as string;
+
+describe("handoff evidence id — golden fixed vector", () => {
+	test("handoffEvidenceIdOf reproduces the pinned golden id for a literal input", () => {
+		// FIXTURE_EVIDENCE_ID above is computed with the implementation under
+		// test, so a field-order or field-omission regression in
+		// handoffEvidenceIdOf would change production and fixtures together
+		// without failing any test. This literal pins the algorithm itself:
+		// if it fails, the identity derivation changed and every persisted
+		// binding/state hash breaks — that is a contract rev, not a fixture
+		// refresh. Never regenerate this value to make the test pass.
+		expect(
+			handoffEvidenceIdOf({
+				runId: "golden-run",
+				attachmentAdapterId: "chrome-devtools",
+				route: "cdp",
+				endpointHttp: "http://127.0.0.1:53412",
+				endpointWs: "ws://127.0.0.1:53412/devtools/browser/golden",
+				proofContractId: "warm-chrome.environment",
+				proofSchemaVersion: "1",
+			}),
+		).toBe("ef208426bf7c7dc5f8722f732d8c0976");
+	});
+});
+
+// A handoff-bound `targets list` success envelope (the CLI success envelope U5
+// emits), as `targets select` receives it on stdin. handoff_bound and
+// operation_ready default true; override to forge a recovery envelope for AE5.
+// The binding defaults to the identity discovery derives from the REAL
+// verified handoff capture, so --handoff cross-check agree-paths hold.
 function targetsListEnvelope(input: {
 	candidates?: EnvelopeCandidate[];
-	route_bound?: boolean;
+	handoff_bound?: boolean;
 	operation_ready?: boolean;
 	binding?: Record<string, unknown>;
 	requested_adapter?: string;
+	schema_version?: string;
 } = {}): string {
 	const candidates = input.candidates ?? [
 		{ candidate_ordinal: 1, candidate_id: "cid-1", origin: "https://example.com", path_shape: "/app", title: "App" },
 	];
 	return JSON.stringify({
 		status: "ok",
-		run_id: "route-run",
+		run_id: FIXTURE_RUN_ID,
 		data: {
-			mode: "route-bound",
-			route_bound: input.route_bound ?? true,
+			contract: TARGETS_CONTRACT,
+			schema_version: input.schema_version ?? "2",
+			mode: "handoff-bound",
+			handoff_bound: input.handoff_bound ?? true,
 			operation_ready: input.operation_ready ?? true,
 			requested_adapter: input.requested_adapter ?? "chrome-devtools",
-			contract: TARGETS_CONTRACT,
 			candidate_count: candidates.length,
 			candidates,
 			binding: {
-				run_id: "route-run",
-				warm_chrome_run_id: "warm-1",
-				adapter_proof_id: "proof-abc",
+				run_id: FIXTURE_RUN_ID,
 				selected_adapter_id: "chrome-devtools",
-				verified_endpoint_identity: "127.0.0.1:9222",
+				verified_endpoint_identity: "127.0.0.1:53412",
+				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 				target_envelope_id: "env-xyz",
-				route_evidence_hash: "hash-xyz",
 				...input.binding,
 			},
 		},
@@ -107,7 +150,7 @@ function selectionRuntime(input: {
 describe("U6 target selection — envelope acceptance", () => {
 	test("rejects a recovery-mode envelope (AE5)", async () => {
 		const { runtime, writes } = selectionRuntime({
-			stdin: targetsListEnvelope({ route_bound: false, operation_ready: false }),
+			stdin: targetsListEnvelope({ handoff_bound: false, operation_ready: false }),
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
@@ -120,9 +163,9 @@ describe("U6 target selection — envelope acceptance", () => {
 		expect(writes).toHaveLength(0);
 	});
 
-	test("rejects an operation_ready=false route-bound envelope", async () => {
+	test("rejects an operation_ready=false handoff-bound envelope", async () => {
 		const { runtime } = selectionRuntime({
-			stdin: targetsListEnvelope({ route_bound: true, operation_ready: false }),
+			stdin: targetsListEnvelope({ handoff_bound: true, operation_ready: false }),
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
@@ -138,6 +181,20 @@ describe("U6 target selection — envelope acceptance", () => {
 		const forged = JSON.parse(targetsListEnvelope());
 		delete forged.data.contract;
 		const { runtime } = selectionRuntime({ stdin: JSON.stringify(forged) });
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_selection_envelope_invalid",
+		});
+	});
+
+	test("rejects a v1 (Router-era) envelope schema version", async () => {
+		const { runtime } = selectionRuntime({
+			stdin: targetsListEnvelope({ schema_version: "1" }),
+		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
 			runtime,
@@ -201,9 +258,9 @@ describe("U6 target selection — envelope acceptance", () => {
 		});
 	});
 
-	test("rejects a route-bound envelope missing the route slice", async () => {
+	test("rejects a handoff-bound envelope missing the identity slice", async () => {
 		const { runtime } = selectionRuntime({
-			stdin: targetsListEnvelope({ binding: { route_evidence_hash: "" } }),
+			stdin: targetsListEnvelope({ binding: { handoff_evidence_id: "" } }),
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
@@ -420,7 +477,7 @@ describe("U6 target selection — Browser Target Hints", () => {
 		expect(json.error).toMatchObject({ code: "target_selection_hint_no_match" });
 		expect((json.error as Record<string, string>).message).toContain("--show-url");
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"rerun_route_bound_target_discovery",
+			"rerun_handoff_bound_target_discovery",
 		);
 		expect(writes).toHaveLength(0);
 	});
@@ -462,7 +519,7 @@ describe("U6 target selection — Browser Target Hints", () => {
 		expect(json.error).toMatchObject({ code: "target_selection_hint_no_match" });
 		expect((json.error as Record<string, string>).message).toContain("--show-url");
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"rerun_route_bound_target_discovery",
+			"rerun_handoff_bound_target_discovery",
 		);
 		expect(writes).toHaveLength(0);
 	});
@@ -506,10 +563,10 @@ describe("U6 target selection — state write", () => {
 	test("derives a deterministic state path from BROWSER_USE_TARGET_STATE_DIR and the canonical run id", async () => {
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope(),
-			// The asserted run id matches the envelope's route run (correct end-to-end
-			// use); the env-derived path keys on the canonical run id so status/operate
-			// resolve the same file.
-			env: { BROWSER_USE_TARGET_STATE_DIR: "/tmp/states", BROWSER_USE_RUN_ID: "route-run" },
+			// The asserted run id matches the envelope's run (correct end-to-end
+			// use); the env-derived path keys on the canonical run id so
+			// status/operate resolve the same file.
+			env: { BROWSER_USE_TARGET_STATE_DIR: "/tmp/states", BROWSER_USE_RUN_ID: FIXTURE_RUN_ID },
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--json"],
@@ -517,12 +574,12 @@ describe("U6 target selection — state write", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(writes[0].path).toBe(
-			`/tmp/states/browser-use-target-state-${runScopedKey("route-run")}.json`,
+			`/tmp/states/browser-use-target-state-${runScopedKey(FIXTURE_RUN_ID)}.json`,
 		);
 	});
 
 	test("env-derived state paths hash explicit run ids before building filenames", async () => {
-		const runId = "route.run_77-abc";
+		const runId = "handoff.run_77-abc";
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope({
 				binding: { run_id: runId },
@@ -548,7 +605,7 @@ describe("U6 target selection — state write", () => {
 			stdin: targetsListEnvelope(),
 			env: { BROWSER_USE_TARGET_STATE_DIR: "/tmp/states", BROWSER_USE_RUN_ID: "run-77" },
 		});
-		// Envelope's binding.run_id is "route-run", asserted run is "run-77".
+		// Envelope's binding.run_id is the fixture run, asserted run is "run-77".
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--json"],
 			runtime,
@@ -584,7 +641,7 @@ describe("U6 target selection — state write", () => {
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope(),
 		});
-		// Envelope route run is "route-run"; assert a different run via the FLAG.
+		// Envelope run is the fixture run; assert a different run via the FLAG.
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--run-id", "other-run", "--json"],
 			runtime,
@@ -624,9 +681,6 @@ describe("U6 target selection — state write", () => {
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json", "--", "--run-id"],
 			runtime,
 		);
-		// The trailing post-`--` token is an unknown positional, so the parser
-		// rejects with a usage error (exit 2) — scoped to parser behavior, not
-		// merely "some non-cross-run failure".
 		expect(result.exitCode).toBe(2);
 		const json = parseJson(result.stdout);
 		expect((json.error as Record<string, string> | undefined)?.code).not.toBe(
@@ -635,7 +689,7 @@ describe("U6 target selection — state write", () => {
 		expect(writes).toHaveLength(0);
 	});
 
-	test("written state carries run id, route/proof binding, target envelope id, expiry, candidate id, and redacted display facts", async () => {
+	test("written state carries run id, handoff binding, target envelope id, expiry, candidate id, and redacted display facts", async () => {
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope(),
 			now: () => 1_000,
@@ -647,12 +701,11 @@ describe("U6 target selection — state write", () => {
 		const state = parsedWrite(writes[0]);
 		expect(state).toMatchObject({
 			contract: TARGETS_CONTRACT,
-			run_id: "route-run",
+			schema_version: "2",
+			run_id: FIXTURE_RUN_ID,
 			selected_adapter_id: "chrome-devtools",
-			warm_chrome_run_id: "warm-1",
-			adapter_proof_id: "proof-abc",
-			verified_endpoint_identity: "127.0.0.1:9222",
-			route_evidence_hash: "hash-xyz",
+			verified_endpoint_identity: "127.0.0.1:53412",
+			handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 			target_envelope_id: "env-xyz",
 			target_candidate_id: "cid-1",
 			selected_candidate_ordinal: 1,
@@ -753,44 +806,19 @@ describe("U6 target selection — state write", () => {
 		);
 	});
 
-	test("a supplied --adapter-proof that disagrees with the envelope binding fails closed", async () => {
-		const { runtime } = selectionRuntime({
-			stdin: targetsListEnvelope(),
-			files: { "/p.json": adapterProofEnvelope({ adapter_proof_id: "proof-other" }) },
-		});
-		const result = await runForTest(
-			["targets", "select", "--candidate", "1", "--adapter-proof", "/p.json", "--state", "/state.json", "--json"],
-			runtime,
-		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "target_selection_envelope_invalid",
-		});
-	});
-
-	test("a supplied --adapter-proof that agrees with the envelope binding is accepted", async () => {
+	test("a supplied --handoff that disagrees with the envelope binding fails closed", async () => {
+		// The cross-check handoff derives a different evidence id (mutated run id
+		// changes the hash), so it cannot vouch for this envelope.
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope(),
-			files: { "/p.json": adapterProofEnvelope() },
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.run_id = "some-other-run";
+				}),
+			},
 		});
 		const result = await runForTest(
-			["targets", "select", "--candidate", "1", "--adapter-proof", "/p.json", "--state", "/state.json", "--json"],
-			runtime,
-		);
-		expect(result.exitCode).toBe(0);
-		expect(writes).toHaveLength(1);
-	});
-
-	test("a supplied --route agreeing on adapter/proof/hash/run but NOT warm-chrome run is rejected", async () => {
-		// The default targetsListEnvelope binding uses warm_chrome_run_id "warm-1".
-		// This route agrees on every field the old cross-check compared, but differs
-		// on warm_chrome_run_id — which must now fail closed (full-binding compare).
-		const { runtime, writes } = selectionRuntime({
-			stdin: targetsListEnvelope(),
-			files: { "/route.json": routeSuccessEnvelope({ warm_chrome_run_id: "warm-OTHER" }) },
-		});
-		const result = await runForTest(
-			["targets", "select", "--candidate", "1", "--route", "/route.json", "--state", "/state.json", "--json"],
+			["targets", "select", "--candidate", "1", "--handoff", "/h.json", "--state", "/state.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -800,17 +828,39 @@ describe("U6 target selection — state write", () => {
 		expect(writes).toHaveLength(0);
 	});
 
-	test("a supplied --route matching the full envelope binding is accepted", async () => {
+	test("a supplied --handoff that agrees with the envelope binding is accepted", async () => {
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope(),
-			files: { "/route.json": routeSuccessEnvelope() },
+			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },
 		});
 		const result = await runForTest(
-			["targets", "select", "--candidate", "1", "--route", "/route.json", "--state", "/state.json", "--json"],
+			["targets", "select", "--candidate", "1", "--handoff", "/h.json", "--state", "/state.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
 		expect(writes).toHaveLength(1);
+	});
+
+	test("a supplied --handoff that is a failure envelope cannot vouch for the selection", async () => {
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope(),
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.outcome = "failed";
+					envelope.data.failure_class = "environment-absent";
+					envelope.data.next_action_id = "launch_agent_chrome";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--handoff", "/h.json", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_selection_envelope_invalid",
+		});
+		expect(writes).toHaveLength(0);
 	});
 
 	test("never writes adapter page ids, query strings, or fragments into state", async () => {
@@ -832,13 +882,11 @@ describe("U6 target status — projection and distinct failures", () => {
 	function stateFile(overrides: Record<string, unknown> = {}): string {
 		return JSON.stringify({
 			contract: TARGETS_CONTRACT,
-			schema_version: "1",
-			run_id: "route-run",
+			schema_version: "2",
+			run_id: FIXTURE_RUN_ID,
 			selected_adapter_id: "chrome-devtools",
-			warm_chrome_run_id: "warm-1",
-			adapter_proof_id: "proof-abc",
-			verified_endpoint_identity: "127.0.0.1:9222",
-			route_evidence_hash: "hash-xyz",
+			verified_endpoint_identity: "127.0.0.1:53412",
+			handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 			target_envelope_id: "env-xyz",
 			target_candidate_id: "cid-1",
 			selected_candidate_ordinal: 1,
@@ -861,7 +909,7 @@ describe("U6 target status — projection and distinct failures", () => {
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, any>;
 		expect(data.selected_target).toMatchObject({
-			run_id: "route-run",
+			run_id: FIXTURE_RUN_ID,
 			candidate_ordinal: 1,
 			target_envelope_id: "env-xyz",
 		});
@@ -880,7 +928,7 @@ describe("U6 target status — projection and distinct failures", () => {
 		);
 		expect(status.exitCode).toBe(0);
 		expect(status.stdout).toContain("browser_target_state");
-		expect(status.stdout).toContain("run_id=route-run");
+		expect(status.stdout).toContain(`run_id=${FIXTURE_RUN_ID}`);
 	});
 
 	test("missing state fails with target_state_missing", async () => {
@@ -1035,6 +1083,30 @@ describe("U6 target status — projection and distinct failures", () => {
 		});
 	});
 
+	test("a v1 (Router-era) state file fails with target_state_mismatch", async () => {
+		// State written before the migration carries schema_version "1" and the
+		// proof/route tuple; it must be re-selected, never half-read.
+		const { runtime } = selectionRuntime({
+			files: {
+				"/state.json": stateFile({
+					schema_version: "1",
+					warm_chrome_run_id: "warm-1",
+					adapter_proof_id: "proof-abc",
+					route_evidence_hash: "hash-xyz",
+				}),
+			},
+			now: () => 2_000,
+		});
+		const result = await runForTest(
+			["targets", "status", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+	});
+
 	test("a status path-missing failure is labeled command=targets-status, not targets-select (finding #6)", async () => {
 		const { runtime } = selectionRuntime({ files: {} });
 		// No --state, no state dir: resolveStatePath fails with a target_selection_*
@@ -1049,7 +1121,7 @@ describe("U6 target status — projection and distinct failures", () => {
 	test("status round-trips select's env-derived path under a coherent run id (finding #1)", async () => {
 		const env = {
 			BROWSER_USE_TARGET_STATE_DIR: "/tmp/states",
-			BROWSER_USE_RUN_ID: "route-run",
+			BROWSER_USE_RUN_ID: FIXTURE_RUN_ID,
 		};
 		const { runtime } = selectionRuntime({ stdin: targetsListEnvelope(), env });
 		const select = await runForTest(
@@ -1063,7 +1135,7 @@ describe("U6 target status — projection and distinct failures", () => {
 		expect(status.exitCode).toBe(0);
 		expect(
 			(parseJson(status.stdout).data as Record<string, any>).selected_target.run_id,
-		).toBe("route-run");
+		).toBe(FIXTURE_RUN_ID);
 	});
 });
 
@@ -1077,7 +1149,7 @@ describe("U6 operation-time target resolution (resolveOperationTarget)", () => {
 		return {
 			hints: {},
 			candidates: CANDIDATES,
-			routeBoundFreshBinding: true,
+			handoffBoundFreshBinding: true,
 			...overrides,
 		};
 	}
@@ -1132,23 +1204,23 @@ describe("U6 operation-time target resolution (resolveOperationTarget)", () => {
 		}
 	});
 
-	test("exactly-one-candidate fallback runs only with route-bound fresh binding", async () => {
+	test("exactly-one-candidate fallback runs only with handoff-bound fresh binding", async () => {
 		const single = [CANDIDATES[0]];
 		const fresh = resolveOperationTarget(
-			input({ candidates: single, routeBoundFreshBinding: true }),
+			input({ candidates: single, handoffBoundFreshBinding: true }),
 		);
 		expect(fresh).toMatchObject({ kind: "resolved", source: "single_candidate" });
 
-		// Not fresh / not route-bound: no fallback, even with a single candidate.
+		// Not fresh / not handoff-bound: no fallback, even with a single candidate.
 		const stale = resolveOperationTarget(
-			input({ candidates: single, routeBoundFreshBinding: false }),
+			input({ candidates: single, handoffBoundFreshBinding: false }),
 		);
 		expect(stale.kind).toBe("no_target");
 	});
 
 	test("no hints, no selected state, many candidates is ambiguous", async () => {
 		const resolution = resolveOperationTarget(
-			input({ routeBoundFreshBinding: true }),
+			input({ handoffBoundFreshBinding: true }),
 		);
 		expect(resolution.kind).toBe("ambiguous");
 	});

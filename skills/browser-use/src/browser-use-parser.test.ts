@@ -18,14 +18,17 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("operate");
 	});
 
-	// Scenario 8: root help points back to the route-bound prerequisites.
-	test("--help points back to browser-adapter-router prepare and route", async () => {
+	// Scenario 8: root help points back to the connection prerequisite.
+	test("--help points back to browser-connect connect", async () => {
 		const result = await runForTest(["--help"], makeRuntime());
-		expect(result.stdout).toContain("browser-adapter-router prepare");
-		expect(result.stdout).toContain("browser-adapter-router route");
-		// Does not copy the route evidence schema, only a pointer.
-		expect(result.stdout).not.toContain("preconditions");
-		expect(result.stdout).not.toContain("adapter_proof_id");
+		expect(result.stdout).toContain("browser-connect connect");
+		expect(result.stdout).toContain("--handoff");
+		// Does not copy the envelope schema, only a pointer.
+		expect(result.stdout).not.toContain("browser_entry_mode");
+		expect(result.stdout).not.toContain("probe_executable");
+		// R4: no dangling references to the deleted Router chain.
+		expect(result.stdout).not.toContain("browser-adapter-router");
+		expect(result.stdout).not.toContain("preflight-browser-adapter");
 	});
 
 	// Scenario 2: version JSON parses with name and version.
@@ -52,7 +55,7 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("list");
 		expect(result.stdout).toContain("select");
 		expect(result.stdout).toContain("status");
-		expect(result.stdout).toContain("browser-adapter-router");
+		expect(result.stdout).toContain("browser-connect");
 	});
 
 	// Scenario 4: operate family help renders snapshot, screenshot, emulate.
@@ -62,10 +65,10 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("snapshot");
 		expect(result.stdout).toContain("screenshot");
 		expect(result.stdout).toContain("emulate");
-		expect(result.stdout).toContain("browser-adapter-router");
+		expect(result.stdout).toContain("browser-connect");
 	});
 
-	test("subcommand help advertises every declared flag and the route pointer", async () => {
+	test("subcommand help advertises every declared flag and the handoff pointer", async () => {
 		const cases: Array<[string[], BrowserUseCommand]> = [
 			[["targets", "list", "--help"], "targets-list"],
 			[["targets", "select", "--help"], "targets-select"],
@@ -82,7 +85,14 @@ describe("U3 help and version", () => {
 				contract: browserUseContracts[command],
 				help: result.stdout,
 			});
-			expect(result.stdout).toContain("browser-adapter-router");
+			// The mint-an-envelope prerequisite is contract-driven: rendered only
+			// for commands that accept --handoff (targets status reads selected
+			// state and carries no connection prerequisite).
+			if (command === "targets-status") {
+				expect(result.stdout).not.toContain("Prerequisite:");
+			} else {
+				expect(result.stdout).toContain("browser-connect");
+			}
 		}
 	});
 });
@@ -127,13 +137,68 @@ describe("U3 parser", () => {
 		}
 	});
 
+	// Ported from the deleted browser-adapter-router safety suite ("usage errors
+	// redact filesystem-looking values"): the surviving front door sanitizes
+	// usage-error prose (sanitizeUsageValue at the throw site, redactUnsafeText
+	// in emitCliError), so a filesystem-looking value smuggled into an
+	// undeclared flag token never appears in CLI output.
+	test("usage errors never echo filesystem-looking flag values", async () => {
+		const result = await runForTest(
+			["targets", "list", "--state=/tmp/router-secret.json", "--json"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(2);
+		expect(result.stdout).not.toContain("/tmp/router-secret.json");
+		expect(result.stderr).not.toContain("/tmp/router-secret.json");
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "usage_error",
+		});
+	});
+
 	test("declared flags are accepted without a usage error", async () => {
 		const result = await runForTest(
-			["targets", "list", "--mode", "route-bound", "--show-url", "--dry-run", "--json"],
+			["targets", "list", "--mode", "handoff-bound", "--show-url", "--dry-run", "--json"],
 			makeRuntime(),
 		);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
 		expect(result.exitCode).toBe(0);
+	});
+
+	// Regression: --help/--version detect from STANDALONE tokens only. A token
+	// shaped like them consumed as a value-bearing flag's value must not
+	// short-circuit the command into help/version output.
+	test("a flag value shaped like --version does not short-circuit to version", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--version", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		const json = parseJson(result.stdout);
+		expect(json.data).toMatchObject({ command: "targets-select" });
+	});
+
+	test("a flag value shaped like --help does not short-circuit to help", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--help", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		expect(result.stdout).not.toContain("Usage");
+		expect(parseJson(result.stdout).data).toMatchObject({
+			command: "targets-select",
+		});
+	});
+
+	// Regression: mode flags derive from parsed flag values, never token scans.
+	// A value-bearing flag that consumes a "--dry-run"/"--json"-shaped token must
+	// not flip dry-run mode (a live command would silently return a mock envelope).
+	test("a flag value shaped like --dry-run does not enable dry-run mode", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		// Not a dry-run: without live state/handoff evidence the real command
+		// fails instead of emitting the dry-run mock success envelope.
+		expect(result.exitCode).not.toBe(0);
+		expect(`${result.stdout}\n${result.stderr}`).not.toContain('"mode": "dry_run"');
 	});
 
 	// Regression: family/subcommand resolve POSITIONALLY, so a flag value equal
@@ -241,7 +306,7 @@ describe("U3 dry-run envelopes", () => {
 		expect(json.error).toMatchObject({ code: "browser_use_mock_failure" });
 	});
 
-	test("without dry-run operate requires live route evidence", async () => {
+	test("without dry-run operate requires live handoff evidence", async () => {
 		const result = await runForTest(
 			["operate", "snapshot", "--json"],
 			makeRuntime(),
@@ -249,6 +314,6 @@ describe("U3 dry-run envelopes", () => {
 		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
 		expect(json.status).toBe("error");
-		expect(json.error).toMatchObject({ code: "browser_operation_route_invalid" });
+		expect(json.error).toMatchObject({ code: "browser_operation_handoff_invalid" });
 	});
 });

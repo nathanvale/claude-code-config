@@ -1,16 +1,19 @@
-import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
 } from "./command-contract";
 import { type BrowserUseRuntime, runForTest } from "./browser-use";
+import {
+	candidateIdOf,
+	handoffEvidenceIdOf,
+	targetEnvelopeIdOf,
+} from "./browser-use-core";
 import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
 import {
-	adapterProofEnvelope,
 	commandJsonArgs,
 	commandVector,
 	enoent,
@@ -18,49 +21,53 @@ import {
 	makeRuntime,
 	okCommand,
 	parseJson,
-	routeSuccessEnvelope,
 	TARGETS_CONTRACT,
 } from "./browser-use-test-helpers";
+import {
+	REAL_VERIFIED_HANDOFF_ENVELOPE,
+	connectFailureEnvelope,
+	verifiedHandoffEnvelope,
+} from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
-// U7 Browser Operation Front Door
+// U7 Browser Operation Front Door (envelope-era contract from migration U1)
 // =========================================================================
 
-function operationTargetEnvelopeId(input: {
-	runId?: string;
-	adapter?: string;
-	adapterProofId?: string;
-	routeEvidenceHash?: string;
-} = {}): string {
-	const canonical = JSON.stringify([
-		input.runId ?? "route-run",
-		"route-bound",
-		input.adapter ?? "chrome-devtools",
-		input.adapterProofId ?? "proof-abc",
-		input.routeEvidenceHash ?? "hash-xyz",
-	]);
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
-}
+const FIXTURE_ENVELOPE = JSON.parse(REAL_VERIFIED_HANDOFF_ENVELOPE);
+const FIXTURE_RUN_ID = FIXTURE_ENVELOPE.run_id as string;
+const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
+	runId: FIXTURE_ENVELOPE.run_id,
+	attachmentAdapterId: FIXTURE_ENVELOPE.data.attachment.adapter_id,
+	route: FIXTURE_ENVELOPE.data.attachment.route,
+	endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http,
+	endpointWs: FIXTURE_ENVELOPE.data.endpoint.ws,
+	proofContractId: FIXTURE_ENVELOPE.data.proof.environment_contract_id,
+	proofSchemaVersion: FIXTURE_ENVELOPE.data.proof.environment_schema_version,
+});
+
+// The target envelope id operate derives for the fixture handoff, computed
+// through the production hash helpers so state fixtures bind to the same
+// identity the pipeline resolves.
+const FIXTURE_TARGET_ENVELOPE_ID = targetEnvelopeIdOf({
+	runId: FIXTURE_RUN_ID,
+	mode: "handoff-bound",
+	adapter: "chrome-devtools",
+	handoffEvidenceId: FIXTURE_EVIDENCE_ID,
+});
 
 function operationCandidateId(pageId = "1"): string {
-	const canonical = JSON.stringify([
-		operationTargetEnvelopeId(),
-		["adapter_page_id", pageId],
-	]);
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 24);
+	return candidateIdOf(FIXTURE_TARGET_ENVELOPE_ID, ["adapter_page_id", pageId]);
 }
 
 function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 	return JSON.stringify({
 		contract: TARGETS_CONTRACT,
-		schema_version: "1",
-		run_id: "route-run",
+		schema_version: "2",
+		run_id: FIXTURE_RUN_ID,
 		selected_adapter_id: "chrome-devtools",
-		warm_chrome_run_id: "warm-1",
-		adapter_proof_id: "proof-abc",
-		verified_endpoint_identity: "127.0.0.1:9222",
-		route_evidence_hash: "hash-xyz",
-		target_envelope_id: operationTargetEnvelopeId(),
+		verified_endpoint_identity: "127.0.0.1:53412",
+		handoff_evidence_id: FIXTURE_EVIDENCE_ID,
+		target_envelope_id: FIXTURE_TARGET_ENVELOPE_ID,
 		target_candidate_id: operationCandidateId(),
 		selected_candidate_ordinal: 1,
 		emitted_at_ms: 1_000,
@@ -84,8 +91,7 @@ function operationRuntime(input: {
 	const calls: McporterCommandInput[] = [];
 	const ensuredDirectories: string[] = [];
 	const files: Record<string, string> = {
-		"/route.json": routeSuccessEnvelope(),
-		"/proof.json": adapterProofEnvelope(),
+		"/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE,
 		...(input.files ?? {}),
 	};
 	const pages = input.pages ?? [
@@ -119,33 +125,153 @@ function operationRuntime(input: {
 }
 
 describe("U7 operation gates", () => {
-	test("route success plus mismatched Adapter Proof fails before transport (AE4)", async () => {
+	test("operate requires --handoff before any transport", async () => {
+		const { runtime, calls } = operationRuntime();
+		const result = await runForTest(["operate", "snapshot", "--json"], runtime);
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "browser_operation_handoff_invalid" });
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"supply_verified_handoff",
+		);
+		expect(calls).toHaveLength(0);
+	});
+
+	test("a real connect failure envelope never authorizes an operation (AE4)", async () => {
 		const { runtime, calls } = operationRuntime({
-			files: {
-				"/proof.json": adapterProofEnvelope({ adapter_proof_id: "proof-other" }),
-			},
+			files: { "/h.json": connectFailureEnvelope() },
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
 		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "browser_operation_adapter_proof_mismatch",
+			code: "browser_operation_handoff_invalid",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("a drift-rejected envelope schema version fails before transport (KTD1)", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.schema_version = "99";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_handoff_invalid",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("a caller --run-id disagreeing with the envelope run id fails before transport (R3)", async () => {
+		const { runtime, calls } = operationRuntime();
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--run-id", "other-run", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_run_mismatch",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("an adapter without operation capability is refused before transport (R5)", async () => {
+		// agent-browser maps to a browser-use adapter with an EMPTY authorized
+		// capability set (no operation transport yet): every operation class is
+		// refused through the surviving router engine.
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_capability_unauthorized",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	// Ported from the deleted browser-adapter-router suite ("emulate authorizes
+	// only when viewport_emulation is routed" / "operation capability mapping
+	// fails closed when capability not routed"): the operation-class ->
+	// capability mapping is still enforced through the surviving engine's
+	// authorizesOperationClass, now fed by the handoff adapter's pinned
+	// operation capability set (BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES).
+	test("emulate is refused before transport when the adapter does not authorize viewport_emulation", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"emulate",
+				"--width",
+				"390",
+				"--height",
+				"844",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_capability_unauthorized",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("screenshot is refused before transport when the adapter does not authorize screenshot_media", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"screenshot",
+				"--out",
+				"shot.png",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_capability_unauthorized",
 		});
 		expect(calls).toHaveLength(0);
 	});
 
 	test("screenshot requires --out before transport", async () => {
-		const { runtime, calls } = operationRuntime({
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["screenshot_media"],
-				}),
-			},
-		});
+		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(
-			["operate", "screenshot", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "screenshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(2);
@@ -156,25 +282,9 @@ describe("U7 operation gates", () => {
 	});
 
 	test("screenshot rejects unsafe artifact paths before transport", async () => {
-		const { runtime, calls } = operationRuntime({
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["screenshot_media"],
-				}),
-			},
-		});
+		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(
-			[
-				"operate",
-				"screenshot",
-				"--out",
-				"../shot.png",
-				"--route",
-				"/route.json",
-				"--adapter-proof",
-				"/proof.json",
-				"--json",
-			],
+			["operate", "screenshot", "--out", "../shot.png", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(2);
@@ -186,25 +296,9 @@ describe("U7 operation gates", () => {
 
 	test("screenshot rejects absolute and normalized traversal artifact paths", async () => {
 		for (const out of ["/tmp/shot.png", "safe/../../shot.png"]) {
-			const { runtime, calls } = operationRuntime({
-				files: {
-					"/route.json": routeSuccessEnvelope({
-						authorized_capabilities: ["screenshot_media"],
-					}),
-				},
-			});
+			const { runtime, calls } = operationRuntime();
 			const result = await runForTest(
-				[
-					"operate",
-					"screenshot",
-					"--out",
-					out,
-					"--route",
-					"/route.json",
-					"--adapter-proof",
-					"/proof.json",
-					"--json",
-				],
+				["operate", "screenshot", "--out", out, "--handoff", "/h.json", "--json"],
 				runtime,
 			);
 			expect(result.exitCode).toBe(2);
@@ -218,24 +312,9 @@ describe("U7 operation gates", () => {
 	test("screenshot rejects relative artifact root env before transport", async () => {
 		const { runtime, calls } = operationRuntime({
 			env: { BROWSER_USE_ARTIFACT_ROOT: "relative-root" },
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["screenshot_media"],
-				}),
-			},
 		});
 		const result = await runForTest(
-			[
-				"operate",
-				"screenshot",
-				"--out",
-				"shot.png",
-				"--route",
-				"/route.json",
-				"--adapter-proof",
-				"/proof.json",
-				"--json",
-			],
+			["operate", "screenshot", "--out", "shot.png", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(2);
@@ -246,73 +325,14 @@ describe("U7 operation gates", () => {
 	});
 
 	test("emulate rejects malformed viewport input before transport", async () => {
-		const { runtime, calls } = operationRuntime({
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["viewport_emulation"],
-				}),
-			},
-		});
+		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(
-			[
-				"operate",
-				"emulate",
-				"--width",
-				"390",
-				"--height",
-				"0",
-				"--route",
-				"/route.json",
-				"--adapter-proof",
-				"/proof.json",
-				"--json",
-			],
+			["operate", "emulate", "--width", "390", "--height", "0", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(2);
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "browser_operation_viewport_invalid",
-		});
-		expect(calls).toHaveLength(0);
-	});
-
-	test("emulate requires viewport emulation capability before transport", async () => {
-		const { runtime, calls } = operationRuntime();
-		const result = await runForTest(
-			["operate", "emulate", "--width", "390", "--height", "844", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
-			runtime,
-		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "browser_operation_capability_unauthorized",
-		});
-		expect(calls).toHaveLength(0);
-	});
-
-	test("expired route evidence fails before adapter transport", async () => {
-		const { runtime, calls } = operationRuntime({
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					expires_at: "1970-01-01T00:00:01.000Z",
-				}),
-			},
-			now: () => 2_000,
-		});
-		const result = await runForTest(
-			[
-				"operate",
-				"snapshot",
-				"--route",
-				"/route.json",
-				"--adapter-proof",
-				"/proof.json",
-				"--json",
-			],
-			runtime,
-		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "browser_operation_route_invalid",
 		});
 		expect(calls).toHaveLength(0);
 	});
@@ -325,7 +345,7 @@ describe("U7 operation gates", () => {
 			],
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -341,17 +361,7 @@ describe("U7 operation gates", () => {
 	test("target hint no-match emits refine-target recovery without selecting a page", async () => {
 		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(
-			[
-				"operate",
-				"snapshot",
-				"--title-contains",
-				"Missing",
-				"--route",
-				"/route.json",
-				"--adapter-proof",
-				"/proof.json",
-				"--json",
-			],
+			["operate", "snapshot", "--title-contains", "Missing", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -371,7 +381,7 @@ describe("U7 operation gates", () => {
 			},
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--state", "/state.json", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -388,7 +398,7 @@ describe("U7 operation gates", () => {
 			pages: [{ id: "2", url: "https://example.com/app", title: "App" }],
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--state", "/state.json", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -398,6 +408,44 @@ describe("U7 operation gates", () => {
 		expect(calls).toHaveLength(1);
 		expect(commandVector(calls[0])).toContain("chrome-devtools.list_pages");
 	});
+
+	test("a v1 (Router-era) selected state fails with target_state_mismatch, never operates", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/state.json": selectedStateFile({
+					schema_version: "1",
+					warm_chrome_run_id: "warm-1",
+					adapter_proof_id: "proof-abc",
+					route_evidence_hash: "hash-xyz",
+				}),
+			},
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+		expect(calls.filter((call) => commandVector(call).join(" ").includes("select_page"))).toHaveLength(0);
+	});
+
+	test("selected state bound to a different handoff fails with target_state_mismatch", async () => {
+		const { runtime } = operationRuntime({
+			files: {
+				"/state.json": selectedStateFile({ handoff_evidence_id: "other-evidence" }),
+			},
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+	});
 });
 
 describe("U7 operation success and transport", () => {
@@ -406,7 +454,7 @@ describe("U7 operation success and transport", () => {
 			files: { "/state.json": selectedStateFile() },
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--state", "/state.json", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -420,6 +468,10 @@ describe("U7 operation success and transport", () => {
 			operation: "snapshot",
 			adapter: "chrome-devtools",
 			target_source: "selected_state",
+			binding: {
+				run_id: FIXTURE_RUN_ID,
+				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
+			},
 		});
 		expect((json.data as Record<string, any>).snapshot.text).toContain("Root");
 		expect(commandVector(calls[1])).toContain("chrome-devtools.select_page");
@@ -436,7 +488,7 @@ describe("U7 operation success and transport", () => {
 			pages: [{ id: "0", url: "https://example.com/app", title: "App" }],
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--state", "/state.json", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--state", "/state.json", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -448,7 +500,7 @@ describe("U7 operation success and transport", () => {
 			files: { "/state.json": selectedStateFile() },
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--verbose", "--state", "/state.json", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--verbose", "--state", "/state.json", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -458,17 +510,12 @@ describe("U7 operation success and transport", () => {
 	test("screenshot writes an artifact path and keeps screenshot bytes out of JSON (AE9)", async () => {
 		const { runtime, calls, ensuredDirectories } = operationRuntime({
 			env: { BROWSER_USE_ARTIFACT_ROOT: "/tmp/browser-use-artifacts-test" },
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["screenshot_media"],
-				}),
-			},
 			operationResult: okCommand(
 				JSON.stringify({ content: [{ type: "image", data: "BASE64SECRET" }] }),
 			),
 		});
 		const result = await runForTest(
-			["operate", "screenshot", "--out", "shot.png", "--full-page", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "screenshot", "--out", "shot.png", "--full-page", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -494,15 +541,9 @@ describe("U7 operation success and transport", () => {
 	});
 
 	test("emulate emits normalized viewport facts without exposing adapter method names (AE12)", async () => {
-		const { runtime } = operationRuntime({
-			files: {
-				"/route.json": routeSuccessEnvelope({
-					authorized_capabilities: ["viewport_emulation"],
-				}),
-			},
-		});
+		const { runtime } = operationRuntime();
 		const result = await runForTest(
-			["operate", "emulate", "--width", "390", "--height", "844", "--dpr", "3", "--mobile", "--touch", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "emulate", "--width", "390", "--height", "844", "--dpr", "3", "--mobile", "--touch", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -528,7 +569,7 @@ describe("U7 operation success and transport", () => {
 			operationResult: { exitCode: 1, stdout: "", stderr: "", timedOut: true },
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -546,11 +587,22 @@ describe("U7 operation success and transport", () => {
 			env: { BROWSER_USE_MCPORTER_COMMAND_JSON: '["bunx","mcporter"]' },
 		});
 		const result = await runForTest(
-			["operate", "snapshot", "--route", "/route.json", "--adapter-proof", "/proof.json", "--json"],
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
 		expect(commandVector(calls[0]).slice(0, 2)).toEqual(["bunx", "mcporter"]);
 		expect(commandVector(calls[2]).slice(0, 2)).toEqual(["bunx", "mcporter"]);
+	});
+
+	test("the envelope's websocket debugger URL never appears in operation output", async () => {
+		const { runtime } = operationRuntime();
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).not.toContain("ws://");
+		expect(result.stdout).not.toContain("devtools/browser");
 	});
 });

@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Browser Target Discovery (plan U5).
+// Browser Target Discovery (plan U5, evidence re-based in migration U1).
 //
-// Owns the targets-list workflow: read adapter-proof + route facts through the
-// runtime, project raw pages into display-safe candidates, and emit the
+// Owns the targets-list workflow: read the browser-connect Verified Handoff
+// Envelope through the runtime, derive browser-use's binding identity from its
+// fields (KTD1), project raw pages into display-safe candidates, and emit the
 // discovery success/failure envelopes. Imports down into core (substrate),
 // runtime (I/O port), and transport (mcporter). The driver calls runTargetsList
-// from here; selection and operations read discovery's evidence builders.
+// from here; selection and operations read discovery's envelope parser.
 // ---------------------------------------------------------------------------
 
 import {
@@ -17,17 +18,19 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
-	BROWSER_ADAPTER_PROOF_ADAPTERS,
-	BROWSER_ADAPTER_PROOF_CONTRACT_ID,
-	BROWSER_ADAPTER_ROUTER_CAPABILITIES,
-	BROWSER_ADAPTER_ROUTER_CONTRACT_ID,
+	BROWSER_USE_TRANSPORT_ADAPTERS,
+	BROWSER_CONNECT_ATTACHMENT_ADAPTERS,
+	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
+	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
+	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
+	BROWSER_USE_TARGETS_CONTRACT_ID,
+	BROWSER_USE_TARGETS_SCHEMA_VERSION,
 	browserUseTargetDiscoveryFailureActions,
 	browserUseTargetDiscoverySuccessActions,
 } from "./command-contract";
 import type {
 	AdapterCapability,
 	BrowserAdapterId,
-	RouteBinding,
 	TargetDiscoveryBinding,
 	TargetDiscoveryEnvelope,
 	TargetDiscoveryMode,
@@ -40,7 +43,7 @@ import {
 	TARGET_DISCOVERY_EXIT_CODE,
 	USAGE_EXIT_CODE,
 	actionFor,
-	isBrowserAdapterId,
+	handoffEvidenceIdOf,
 	isJsonObject,
 	parseUrlSafe,
 	redactUnsafeText,
@@ -57,26 +60,25 @@ import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
-// Browser Target Discovery (plan U5).
-//
-// `browser-use targets list` discovers Browser Target Candidates through a
-// proven adapter in two modes:
-//   - recovery (R19, R20): requested adapter + fresh Adapter Proof. Candidates
-//     are evidence-gathering only; they feed `prepare --target-discovery`, never
-//     `targets select` or `operate` (R25). route_bound/operation_ready = false.
-//   - route-bound (R18, R20): full route success + fresh Adapter Proof for the
-//     selected adapter. Candidates are operation-ready and carry the route slice.
+// `browser-use targets list` discovers Browser Target Candidates in two modes:
+//   - recovery (R2, R20): requested adapter + optional handoff evidence
+//     (verified envelope, a connect failure state, or explicit no-evidence
+//     entry). Candidates are evidence-gathering only; they never feed `targets
+//     select` or `operate` (R25). handoff_bound/operation_ready = false.
+//   - handoff-bound (R1, R20): a verified handoff envelope for the attached
+//     adapter. Candidates are operation-ready and carry the identity slice.
 //
 // Privacy is a release gate (R32, KTD7): query strings, fragments, auth-bearing
 // path segments, adapter page ids, CDP target ids, and WebSocket debugger URLs
-// never reach JSON, logs, or diagnostics. Public candidate facts are the ordinal,
-// a derived candidate id, a redacted origin, an optional redacted path shape
-// (--show-url only), and a length-bounded title. Display facts stay separate from
-// the raw adapter list, which is consumed and discarded inside this module.
+// never reach JSON, logs, or diagnostics. The envelope's verified ws endpoint
+// participates in the evidence hash but is never re-emitted. Public candidate
+// facts are the ordinal, a derived candidate id, a redacted origin, an optional
+// redacted path shape (--show-url only), and a length-bounded title.
 //
-// Each failure outcome (invalid proof, mismatched proof, invalid route, empty
-// candidate set, transport timeout/dependency/override) maps to its own code and
-// continuation action — never silently to success or the wrong recovery.
+// Each failure outcome (invalid/failed/drift-rejected envelope, adapter
+// mismatch, run mismatch, empty candidate set, transport timeout/dependency/
+// override) maps to its own code and continuation action — never silently to
+// success or the wrong recovery.
 // ---------------------------------------------------------------------------
 
 const TARGET_DISCOVERY_DEPENDENCY_EXIT_CODE = 1;
@@ -97,24 +99,22 @@ const targetDiscoveryActionById = new Map(
 // the recoverability literal is owned here once.
 export type TargetDiscoveryFailure = Failure<TargetDiscoveryActionId>;
 
-// Raw adapter proof facts parsed from --adapter-proof. Consumed for binding and
-// adapter-match checks; never re-emitted verbatim.
-export type AdapterProofFacts = {
+// Binding facts derived from a verified handoff envelope (KTD1). Consumed by
+// discovery, selection cross-checks, and operations; envelope fields that are
+// not binding-relevant are never re-emitted.
+export type HandoffFacts = {
+	// browser-use adapter id (mcporter server name) the attachment maps to.
 	adapter: BrowserAdapterId;
-	warmChromeRunId: string;
-	adapterProofId: string;
-	verifiedEndpointIdentity: string;
-};
-
-// Route success facts parsed from --route in route-bound mode.
-export type RouteFacts = {
+	// browser-connect attachment adapter id, verbatim (e.g. chrome-devtools-mcp).
+	attachmentAdapterId: string;
+	// Outer envelope run id (facade-owned, caller-suppliable via --run-id).
 	runId: string;
-	selectedAdapter: BrowserAdapterId;
-	warmChromeRunId: string;
-	adapterProofId: string;
+	// host:port of the verified endpoint, derived from endpoint.http.
 	verifiedEndpointIdentity: string;
-	routeEvidenceHash: string;
-	binding: RouteBinding;
+	// browser-use's content hash over the envelope's binding-relevant fields.
+	handoffEvidenceId: string;
+	// Operation capabilities browser-use authorizes for the mapped adapter.
+	authorizedCapabilities: readonly AdapterCapability[];
 };
 
 export async function runTargetsList(input: {
@@ -123,178 +123,128 @@ export async function runTargetsList(input: {
 	stdout: CliWriter;
 	stderr: CliWriter;
 	runId: string;
+	runIdExplicit: boolean;
 	durationMs: () => number;
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	const flags = parsed.flagValues;
-	const modeRaw = flags["--mode"];
-	if (modeRaw !== "recovery" && modeRaw !== "route-bound") {
-		return emitTargetDiscoveryFailure({
-			failure: usageDiscoveryFailure(
-				"targets list requires --mode recovery or --mode route-bound.",
-			),
+	// One run id threads the chain (R3): once the handoff envelope's run id is
+	// inherited below, every emitted envelope — failures after that point and
+	// the success — carries it, so the top-level run_id always agrees with
+	// binding.run_id.
+	let runId = input.runId;
+	const fail = (failure: TargetDiscoveryFailure) =>
+		emitTargetDiscoveryFailure({
+			failure,
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
-			runId: input.runId,
+			runId,
 			durationMs: input.durationMs(),
 		});
+
+	const modeRaw = flags["--mode"];
+	if (modeRaw !== "recovery" && modeRaw !== "handoff-bound") {
+		return fail(
+			usageDiscoveryFailure(
+				"targets list requires --mode recovery or --mode handoff-bound.",
+			),
+		);
 	}
 	const mode: TargetDiscoveryMode = modeRaw;
 
-	const adapterProofPath = flags["--adapter-proof"];
-	if (!adapterProofPath) {
-		return emitTargetDiscoveryFailure({
-			failure: {
-				code: "target_discovery_adapter_proof_invalid",
-				message: "targets list requires --adapter-proof.",
-				actionId: "supply_adapter_proof",
+	// Resolve the requested adapter and the handoff-derived binding facts per
+	// mode, then fail closed on any adapter or run mismatch (R9-era rigor).
+	let requestedAdapter: BrowserAdapterId;
+	let handoff: HandoffFacts | undefined;
+	if (mode === "handoff-bound") {
+		const handoffPath = flags["--handoff"];
+		if (!handoffPath) {
+			return fail(
+				handoffInvalidFailure(
+					"handoff-bound targets list requires --handoff <path>",
+				),
+			);
+		}
+		const parse = await readHandoffFacts(runtime, handoffPath);
+		if (!parse.ok) return fail(parse.failure);
+		if (parse.kind === "failed") {
+			return fail(
+				handoffInvalidFailure(
+					"the supplied envelope is a browser-connect failure envelope; it authorizes no attachment",
+				),
+			);
+		}
+		handoff = parse.facts;
+		// A supplied --adapter (a recovery-mode flag) that contradicts the
+		// envelope's attached adapter is a caller mistake. The envelope is
+		// authoritative, but silently discarding the contradiction would mask the
+		// error; fail closed.
+		const pinnedAdapter = flags["--adapter"];
+		if (pinnedAdapter && pinnedAdapter !== handoff.adapter) {
+			return fail(
+				usageDiscoveryFailure(
+					`--adapter ${pinnedAdapter} contradicts the handoff envelope's attached adapter ${handoff.adapter}; omit --adapter in handoff-bound mode.`,
+				),
+			);
+		}
+		// One run id threads the chain (R3): an explicitly asserted run id must be
+		// the envelope's run id; with no explicit run id the envelope's run id is
+		// inherited and correlates the run end to end.
+		if (input.runIdExplicit && input.runId !== handoff.runId) {
+			return fail({
+				code: "target_discovery_run_mismatch",
+				message:
+					"The asserted --run-id does not match the handoff envelope's run id.",
+				actionId: "supply_verified_handoff",
 				exitCode: TARGET_DISCOVERY_EXIT_CODE,
 				recoverability: "change_input",
-			},
-			outputMode: parsed.outputMode,
-			stdout: input.stdout,
-			stderr: input.stderr,
-			runId: input.runId,
-			durationMs: input.durationMs(),
-		});
-	}
-
-	const proofParse = await readAdapterProofFacts(runtime, adapterProofPath);
-	if (!proofParse.ok) {
-		return emitTargetDiscoveryFailure({
-			failure: proofParse.failure,
-			outputMode: parsed.outputMode,
-			stdout: input.stdout,
-			stderr: input.stderr,
-			runId: input.runId,
-			durationMs: input.durationMs(),
-		});
-	}
-	const proof = proofParse.facts;
-
-	// Resolve the requested adapter and the run-scoped binding facts per mode,
-	// then fail closed on any adapter / proof-id / endpoint mismatch (R9).
-	let requestedAdapter: BrowserAdapterId;
-	let routeEvidenceHash: string | undefined;
-	let runId = input.runId;
-	if (mode === "recovery") {
+			});
+		}
+		requestedAdapter = handoff.adapter;
+		runId = handoff.runId;
+	} else {
 		const adapter = flags["--adapter"];
-		if (!isBrowserAdapterId(adapter)) {
-			return emitTargetDiscoveryFailure({
-				failure: usageDiscoveryFailure(
+		if (!isKnownAdapterId(adapter)) {
+			return fail(
+				usageDiscoveryFailure(
 					"recovery-mode targets list requires --adapter <id>.",
 				),
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
-		}
-		if (proof.adapter !== adapter) {
-			return emitTargetDiscoveryFailure({
-				failure: proofMismatchFailure(
-					`The supplied Adapter Proof is for ${proof.adapter}, not the requested ${adapter}.`,
-				),
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
+			);
 		}
 		requestedAdapter = adapter;
-	} else {
-		const routePath = flags["--route"];
-		if (!routePath) {
-			return emitTargetDiscoveryFailure({
-				failure: {
-					code: "target_discovery_route_invalid",
-					message: "route-bound targets list requires --route <path>.",
-					actionId: "rerun_route_bound_target_discovery",
-					exitCode: TARGET_DISCOVERY_EXIT_CODE,
-					recoverability: "change_input",
-				},
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
+		// Recovery evidence is optional (R2): a verified envelope binds identity
+		// facts; a connect failure envelope is accepted as evidence of attempted
+		// entry; no --handoff at all is an explicit no-evidence entry.
+		const handoffPath = flags["--handoff"];
+		if (handoffPath) {
+			const parse = await readHandoffFacts(runtime, handoffPath);
+			if (!parse.ok) return fail(parse.failure);
+			if (parse.kind === "verified") {
+				if (parse.facts.adapter !== adapter) {
+					return fail({
+						code: "target_discovery_handoff_mismatch",
+						message: `The supplied handoff envelope attaches ${parse.facts.adapter}, not the requested ${adapter}.`,
+						actionId: "refresh_verified_handoff",
+						exitCode: TARGET_DISCOVERY_EXIT_CODE,
+						recoverability: "change_input",
+					});
+				}
+				handoff = parse.facts;
+			}
 		}
-		const routeParse = await readRouteFacts(runtime, routePath);
-		if (!routeParse.ok) {
-			return emitTargetDiscoveryFailure({
-				failure: routeParse.failure,
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
-		}
-		const route = routeParse.facts;
-		// A supplied --adapter (a recovery-mode flag) that contradicts the route's
-		// selected adapter is a caller mistake. The route is authoritative, but
-		// silently discarding the contradiction would mask the error; fail closed.
-		const pinnedAdapter = flags["--adapter"];
-		if (pinnedAdapter && pinnedAdapter !== route.selectedAdapter) {
-			return emitTargetDiscoveryFailure({
-				failure: usageDiscoveryFailure(
-					`--adapter ${pinnedAdapter} contradicts the route's selected adapter ${route.selectedAdapter}; omit --adapter in route-bound mode.`,
-				),
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
-		}
-		// Route/proof binding must agree (R9): the proof must be for the route's
-		// selected adapter and carry the same proof id and verified endpoint.
-		if (
-			proof.adapter !== route.selectedAdapter ||
-			proof.adapterProofId !== route.adapterProofId ||
-			proof.verifiedEndpointIdentity !== route.verifiedEndpointIdentity ||
-			proof.warmChromeRunId !== route.warmChromeRunId
-		) {
-			return emitTargetDiscoveryFailure({
-				failure: proofMismatchFailure(
-					"The supplied Adapter Proof does not match the route's selected adapter binding.",
-				),
-				outputMode: parsed.outputMode,
-				stdout: input.stdout,
-				stderr: input.stderr,
-				runId: input.runId,
-				durationMs: input.durationMs(),
-			});
-		}
-		requestedAdapter = route.selectedAdapter;
-		routeEvidenceHash = route.routeEvidenceHash;
-		runId = route.runId;
 	}
 
-	// Discover live Browser Targets through the proven adapter.
+	// Discover live Browser Targets through the adapter.
 	const discovery = await discoverPages(runtime, requestedAdapter);
-	if (!discovery.ok) {
-		return emitTargetDiscoveryFailure({
-			failure: discovery.failure,
-			outputMode: parsed.outputMode,
-			stdout: input.stdout,
-			stderr: input.stderr,
-			runId: input.runId,
-			durationMs: input.durationMs(),
-		});
-	}
+	if (!discovery.ok) return fail(discovery.failure);
 
 	const showUrl = flags["--show-url"] !== undefined;
 	const targetEnvelopeId = targetEnvelopeIdOf({
 		runId,
 		mode,
 		adapter: requestedAdapter,
-		adapterProofId: proof.adapterProofId,
-		routeEvidenceHash,
+		handoffEvidenceId: handoff?.handoffEvidenceId,
 	});
 	// Keep only navigable http(s) Browser Targets. Non-navigable surfaces (ws://
 	// debugger, devtools://, chrome://) are not public targets; dropping them
@@ -308,37 +258,34 @@ export async function runTargetsList(input: {
 	);
 
 	if (candidates.length === 0) {
-		return emitTargetDiscoveryFailure({
-			failure: {
-				code: "target_discovery_no_candidates",
-				message:
-					"No Browser Target Candidates were discovered through the proven adapter.",
-				actionId: "open_browser_target",
-				exitCode: TARGET_DISCOVERY_EXIT_CODE,
-				recoverability: "retry",
-			},
-			outputMode: parsed.outputMode,
-			stdout: input.stdout,
-			stderr: input.stderr,
-			runId: input.runId,
-			durationMs: input.durationMs(),
+		return fail({
+			code: "target_discovery_no_candidates",
+			message:
+				"No Browser Target Candidates were discovered through the attached adapter.",
+			actionId: "open_browser_target",
+			exitCode: TARGET_DISCOVERY_EXIT_CODE,
+			recoverability: "retry",
 		});
 	}
 
 	const binding: TargetDiscoveryBinding = {
 		run_id: runId,
-		warm_chrome_run_id: proof.warmChromeRunId,
-		adapter_proof_id: proof.adapterProofId,
 		selected_adapter_id: requestedAdapter,
-		verified_endpoint_identity: proof.verifiedEndpointIdentity,
 		target_envelope_id: targetEnvelopeId,
-		...(routeEvidenceHash ? { route_evidence_hash: routeEvidenceHash } : {}),
+		...(handoff
+			? {
+					verified_endpoint_identity: handoff.verifiedEndpointIdentity,
+					handoff_evidence_id: handoff.handoffEvidenceId,
+				}
+			: {}),
 	};
 
 	const envelope: TargetDiscoveryEnvelope = {
+		contract: BROWSER_USE_TARGETS_CONTRACT_ID,
+		schema_version: BROWSER_USE_TARGETS_SCHEMA_VERSION,
 		mode,
-		route_bound: mode === "route-bound",
-		operation_ready: mode === "route-bound",
+		handoff_bound: mode === "handoff-bound",
+		operation_ready: mode === "handoff-bound",
 		requested_adapter: requestedAdapter,
 		binding,
 		candidate_count: candidates.length,
@@ -349,195 +296,163 @@ export async function runTargetsList(input: {
 		envelope,
 		outputMode: parsed.outputMode,
 		stdout: input.stdout,
-		runId: input.runId,
+		runId,
 		durationMs: input.durationMs(),
 	});
 }
 
-// --- Evidence parsers (read-then-assemble; mirror prepare's proof parser) ----
+// --- Verified Handoff Envelope parser (KTD1) --------------------------------
 
-type AdapterProofParse =
-	| { ok: true; facts: AdapterProofFacts }
+export type HandoffParse =
+	// A verified handoff: binding facts derived from envelope fields.
+	| { ok: true; kind: "verified"; facts: HandoffFacts }
+	// A structurally valid browser-connect FAILURE envelope (connect failed
+	// closed). Acceptable recovery-mode evidence; never authorizes attachment.
+	| { ok: true; kind: "failed" }
 	| { ok: false; failure: TargetDiscoveryFailure };
 
-export async function readAdapterProofFacts(
+// Parse a browser-connect Verified Handoff Envelope. One parser for every
+// surviving surface: validates the pinned contract id and schema version (the
+// KTD1 drift tripwire), discriminates verified/failed outcomes, and derives
+// browser-use's binding identity from the envelope's attachment and endpoint
+// fields. Never trusts unmapped adapters and never re-emits endpoint forms.
+export async function readHandoffFacts(
 	runtime: BrowserUseRuntime,
 	path: string,
-): Promise<AdapterProofParse> {
+): Promise<HandoffParse> {
 	let raw: string;
 	try {
 		raw = await runtime.readTextFile(path);
 	} catch {
 		return {
 			ok: false,
-			failure: {
-				code: "target_discovery_adapter_proof_invalid",
-				message: "The --adapter-proof file could not be read.",
-				actionId: "supply_adapter_proof",
-				exitCode: TARGET_DISCOVERY_EXIT_CODE,
-				recoverability: "change_input",
-			},
+			failure: handoffInvalidFailure("the --handoff file could not be read"),
 		};
 	}
-	const value = safeJsonObject(raw);
-	const data = value && isJsonObject(value.data) ? value.data : undefined;
-	const invalid = (detail: string): AdapterProofParse => ({
+	const invalid = (detail: string): HandoffParse => ({
 		ok: false,
-		failure: {
-			code: "target_discovery_adapter_proof_invalid",
-			message: `The supplied Adapter Proof is not a valid success proof: ${detail}.`,
-			actionId: "supply_adapter_proof",
-			exitCode: TARGET_DISCOVERY_EXIT_CODE,
-			recoverability: "change_input",
-		},
+		failure: handoffInvalidFailure(
+			`the supplied envelope is not a browser-connect verified handoff: ${detail}`,
+		),
 	});
-	if (!value || value.status !== "ok") return invalid("status is not ok");
-	if (!data || data.ok !== true) return invalid("data is not a success proof");
-	if (data.contract !== BROWSER_ADAPTER_PROOF_CONTRACT_ID) {
-		return invalid("contract id does not match");
+	const value = safeJsonObject(raw);
+	if (!value) return invalid("not a JSON object");
+	const data = isJsonObject(value.data) ? value.data : undefined;
+	if (!data) return invalid("data is missing");
+	// Positive contract identity plus the pinned schema version (KTD1). A
+	// missing contract is rejected, not waved through, so a hand-written or
+	// foreign file cannot pass; a future browser-connect schema rev fails closed
+	// here instead of being half-parsed.
+	if (data.contract_id !== BROWSER_CONNECT_HANDOFF_CONTRACT_ID) {
+		return invalid("contract id missing or does not match");
 	}
-	const adapter = data.adapter;
-	if (!isBrowserAdapterId(adapter)) return invalid("adapter id missing");
-	const warmChromeRunId = stringField(data.warm_chrome_run_id);
-	if (!warmChromeRunId) return invalid("warm Chrome run id missing");
-	const adapterProofId = stringField(data.adapter_proof_id);
-	if (!adapterProofId) return invalid("adapter proof id missing");
-	const verifiedEndpointIdentity = stringField(data.verified_endpoint_identity);
-	if (!verifiedEndpointIdentity) {
-		return invalid("verified endpoint identity missing");
+	if (data.schema_version !== BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION) {
+		return invalid(
+			`schema version ${String(data.schema_version)} is not the pinned version ${BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION}`,
+		);
 	}
+	if (data.outcome === "failed") return { ok: true, kind: "failed" };
+	if (data.outcome !== "verified") return invalid("outcome is not verified");
+	// Outcome/status consistency: a "verified" payload inside a non-ok envelope
+	// is a contradiction (hand-assembled or tampered), never authorization.
+	if (value.status !== "ok") {
+		return invalid("outcome is verified but envelope status is not ok");
+	}
+	const attachment = isJsonObject(data.attachment) ? data.attachment : undefined;
+	if (!attachment) return invalid("attachment is missing");
+	const attachmentAdapterId = stringField(attachment.adapter_id);
+	if (!attachmentAdapterId) return invalid("attachment adapter id missing");
+	const adapter = mappedAdapterId(attachmentAdapterId);
+	if (!adapter) {
+		return invalid(
+			`attachment adapter ${attachmentAdapterId} is not a registered browser-use adapter`,
+		);
+	}
+	const route = stringField(attachment.route);
+	if (!route) return invalid("attachment route missing");
+	const endpoint = isJsonObject(data.endpoint) ? data.endpoint : undefined;
+	const endpointHttp = endpoint ? stringField(endpoint.http) : undefined;
+	const endpointWs = endpoint ? stringField(endpoint.ws) : undefined;
+	if (!endpointHttp || !endpointWs) return invalid("endpoint forms missing");
+	// Endpoint forms must be real HTTP(S)/WS(S) URLs with hosts. Anything else
+	// (file:, data:, a bare string) must never reach kind:"verified" and
+	// authorize operations.
+	const endpointUrl = safeUrl(endpointHttp);
+	if (
+		!endpointUrl ||
+		(endpointUrl.protocol !== "http:" && endpointUrl.protocol !== "https:") ||
+		endpointUrl.host === ""
+	) {
+		return invalid("endpoint http form is not an http(s) URL with a host");
+	}
+	const endpointWsUrl = safeUrl(endpointWs);
+	if (
+		!endpointWsUrl ||
+		(endpointWsUrl.protocol !== "ws:" && endpointWsUrl.protocol !== "wss:") ||
+		endpointWsUrl.host === ""
+	) {
+		return invalid("endpoint ws form is not a ws(s) URL with a host");
+	}
+	const proof = isJsonObject(data.proof) ? data.proof : undefined;
+	const proofContractId = proof
+		? stringField(proof.environment_contract_id)
+		: undefined;
+	const proofSchemaVersion = proof
+		? stringField(proof.environment_schema_version)
+		: undefined;
+	if (!proofContractId || !proofSchemaVersion) {
+		return invalid("proof evidence missing");
+	}
+	const runId = stringField(value.run_id);
+	if (!runId) return invalid("run id missing");
 	return {
 		ok: true,
+		kind: "verified",
 		facts: {
 			adapter,
-			warmChromeRunId,
-			adapterProofId,
-			verifiedEndpointIdentity,
-		},
-	};
-}
-
-type RouteParse =
-	| { ok: true; facts: RouteFacts }
-	| { ok: false; failure: TargetDiscoveryFailure };
-
-export async function readRouteFacts(
-	runtime: BrowserUseRuntime,
-	path: string,
-): Promise<RouteParse> {
-	let raw: string;
-	try {
-		raw = await runtime.readTextFile(path);
-	} catch {
-		return {
-			ok: false,
-			failure: routeInvalidFailure("the --route file could not be read"),
-		};
-	}
-	const value = safeJsonObject(raw);
-	const data = value && isJsonObject(value.data) ? value.data : undefined;
-	if (!value || value.status !== "ok") {
-		return { ok: false, failure: routeInvalidFailure("route status is not ok") };
-	}
-	if (!data || data.outcome !== "selected") {
-		return {
-			ok: false,
-			failure: routeInvalidFailure("route is not a success envelope"),
-		};
-	}
-	// Require the Router contract id. A route success that is about to authorize
-	// discovery must positively identify as Router output; a missing contract is
-	// rejected, not waved through, so a hand-written or partial file cannot pass.
-	if (data.contract !== BROWSER_ADAPTER_ROUTER_CONTRACT_ID) {
-		return {
-			ok: false,
-			failure: routeInvalidFailure("route contract id missing or does not match"),
-		};
-	}
-	const selectedAdapter = data.selected_adapter;
-	if (!isBrowserAdapterId(selectedAdapter)) {
-		return {
-			ok: false,
-			failure: routeInvalidFailure("route selected adapter missing"),
-		};
-	}
-	// Operation-capable routes carry the binding tuple (U2 R8). Target discovery
-	// is operation-facing, so a route-bound list requires it: a route without a
-	// binding never authorized a Browser Operation and cannot bind candidates.
-	const binding = isJsonObject(data.binding) ? data.binding : undefined;
-	if (!binding) {
-		return {
-			ok: false,
-			failure: routeInvalidFailure(
-				"route success carries no operation binding; re-route with fresh proof",
-			),
-		};
-	}
-	// The binding's selected adapter must agree with the route's top-level
-	// selected_adapter. A file where they disagree is internally inconsistent and
-	// must not authorize discovery against either adapter (fail closed, R9).
-	const bindingAdapter = stringField(binding.selected_adapter_id);
-	if (bindingAdapter !== selectedAdapter) {
-		return {
-			ok: false,
-			failure: routeInvalidFailure(
-				"route binding selected_adapter_id does not match route selected_adapter",
-			),
-		};
-	}
-	const runId = stringField(binding.run_id) ?? stringField(value.run_id);
-	const warmChromeRunId = stringField(binding.warm_chrome_run_id);
-	const adapterProofId = stringField(binding.adapter_proof_id);
-	const verifiedEndpointIdentity = stringField(
-		binding.verified_endpoint_identity,
-	);
-	const routeEvidenceHash = stringField(binding.route_evidence_hash);
-	const authorizedCapabilities = parseAdapterCapabilities(
-		binding.authorized_capabilities,
-	);
-	const emittedAt = stringField(binding.emitted_at);
-	const expiresAt = stringField(binding.expires_at);
-	if (
-		!runId ||
-		!warmChromeRunId ||
-		!adapterProofId ||
-		!verifiedEndpointIdentity ||
-		!routeEvidenceHash ||
-		!authorizedCapabilities ||
-		!emittedAt ||
-		!expiresAt
-	) {
-		return {
-			ok: false,
-			failure: routeInvalidFailure("route binding fields incomplete"),
-		};
-	}
-	const routeBinding: RouteBinding = {
-		run_id: runId,
-		selected_adapter_id: selectedAdapter,
-		warm_chrome_run_id: warmChromeRunId,
-		adapter_proof_id: adapterProofId,
-		verified_endpoint_identity: verifiedEndpointIdentity,
-		route_evidence_hash: routeEvidenceHash,
-		authorized_capabilities: authorizedCapabilities,
-		emitted_at: emittedAt,
-		expires_at: expiresAt,
-	};
-	return {
-		ok: true,
-		facts: {
+			attachmentAdapterId,
 			runId,
-			selectedAdapter,
-			warmChromeRunId,
-			adapterProofId,
-			verifiedEndpointIdentity,
-			routeEvidenceHash,
-			binding: routeBinding,
+			verifiedEndpointIdentity: endpointUrl.host,
+			handoffEvidenceId: handoffEvidenceIdOf({
+				runId,
+				attachmentAdapterId,
+				route,
+				endpointHttp,
+				endpointWs,
+				proofContractId,
+				proofSchemaVersion,
+			}),
+			authorizedCapabilities: BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES[adapter],
 		},
 	};
 }
 
-// --- Live target listing through the proven adapter ------------------------
+function mappedAdapterId(
+	attachmentAdapterId: string,
+): BrowserAdapterId | undefined {
+	const map: Record<string, BrowserAdapterId> = BROWSER_CONNECT_ATTACHMENT_ADAPTERS;
+	return map[attachmentAdapterId];
+}
+
+function isKnownAdapterId(value: unknown): value is BrowserAdapterId {
+	return (
+		typeof value === "string" &&
+		value in BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES
+	);
+}
+
+// The envelope's endpoint.http comes verbatim from the environment proof; a
+// URL parse here is identity derivation, not navigation, so it does not go
+// through parseUrlSafe's http(s)-page filter.
+function safeUrl(value: string): URL | undefined {
+	try {
+		return new URL(value);
+	} catch {
+		return undefined;
+	}
+}
+
+// --- Live target listing through the attached adapter -----------------------
 
 type DiscoverResult =
 	| { ok: true; pages: RawPage[] }
@@ -547,11 +462,12 @@ export async function discoverPages(
 	runtime: BrowserUseRuntime,
 	adapter: BrowserAdapterId,
 ): Promise<DiscoverResult> {
-	// MVP implements the page-listing transport for chrome-devtools only. A route
-	// or recovery request can name another registry adapter (agent-browser,
-	// playwright-cdp); fail closed rather than silently listing chrome-devtools
-	// pages against the wrong adapter, until those transports land (V2).
-	if (!(BROWSER_ADAPTER_PROOF_ADAPTERS as readonly string[]).includes(adapter)) {
+	// The page-listing transport is implemented for chrome-devtools only. A
+	// handoff or recovery request can name another registry adapter
+	// (agent-browser, playwright-cdp); fail closed rather than silently listing
+	// chrome-devtools pages against the wrong adapter, until those transports
+	// land (V2).
+	if (!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(adapter)) {
 		return {
 			ok: false,
 			failure: {
@@ -656,7 +572,7 @@ function parsePagesText(text: string): RawPage[] {
 
 function usageDiscoveryFailure(message: string): TargetDiscoveryFailure {
 	return {
-		code: "target_discovery_route_invalid",
+		code: "target_discovery_input_invalid",
 		message,
 		actionId: "change_target_discovery_input",
 		exitCode: USAGE_EXIT_CODE,
@@ -664,29 +580,19 @@ function usageDiscoveryFailure(message: string): TargetDiscoveryFailure {
 	};
 }
 
-function proofMismatchFailure(message: string): TargetDiscoveryFailure {
+function handoffInvalidFailure(detail: string): TargetDiscoveryFailure {
 	return {
-		code: "target_discovery_adapter_proof_mismatch",
-		message,
-		actionId: "refresh_adapter_proof",
-		exitCode: TARGET_DISCOVERY_EXIT_CODE,
-		recoverability: "change_input",
-	};
-}
-
-function routeInvalidFailure(detail: string): TargetDiscoveryFailure {
-	return {
-		code: "target_discovery_route_invalid",
-		message: `The supplied route success envelope is invalid: ${detail}.`,
-		actionId: "rerun_route_bound_target_discovery",
+		code: "target_discovery_handoff_invalid",
+		message: `The supplied Verified Handoff Envelope cannot authorize discovery: ${detail}.`,
+		actionId: "supply_verified_handoff",
 		exitCode: TARGET_DISCOVERY_EXIT_CODE,
 		recoverability: "change_input",
 	};
 }
 
 // Map a shared-transport failure onto the target discovery taxonomy. A missing
-// dependency routes to dependency recovery, never adapter fallback or Warm Chrome
-// repair (mirrors Adapter Proof / U4).
+// dependency routes to dependency recovery, never adapter fallback or browser
+// re-entry repair.
 function transportDiscoveryFailure(
 	failure: BrowserOperationTransportFailure,
 ): TargetDiscoveryFailure {
@@ -736,15 +642,15 @@ function emitTargetDiscoverySuccess(input: {
 	durationMs: number;
 }): number {
 	const successActionId: TargetDiscoveryActionId =
-		input.envelope.mode === "route-bound"
+		input.envelope.mode === "handoff-bound"
 			? "select_browser_target"
-			: "prepare_with_target_discovery";
+			: "connect_verified_browser";
 	if (input.outputMode === "plain") {
 		input.stdout.write(
 			[
 				"browser_targets_listed",
 				`mode=${input.envelope.mode}`,
-				`route_bound=${input.envelope.route_bound}`,
+				`handoff_bound=${input.envelope.handoff_bound}`,
 				`operation_ready=${input.envelope.operation_ready}`,
 				`adapter=${input.envelope.requested_adapter}`,
 				`candidates=${input.envelope.candidate_count}`,
@@ -811,21 +717,4 @@ function emitTargetDiscoveryFailure(input: {
 // by each per-surface wrapper below; this helper stays untyped on id.
 function targetDiscoveryAction(id: TargetDiscoveryActionId): RuntimeActionGuidance {
 	return actionFor(targetDiscoveryActionById, id, "target discovery");
-}
-
-function parseAdapterCapabilities(
-	value: unknown,
-): AdapterCapability[] | undefined {
-	if (!Array.isArray(value)) return undefined;
-	const capabilities: AdapterCapability[] = [];
-	for (const entry of value) {
-		if (
-			typeof entry !== "string" ||
-			!(BROWSER_ADAPTER_ROUTER_CAPABILITIES as readonly string[]).includes(entry)
-		) {
-			return undefined;
-		}
-		capabilities.push(entry as AdapterCapability);
-	}
-	return capabilities;
 }

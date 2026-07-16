@@ -6,82 +6,48 @@ role: tool-workflow
 
 # Browser Use
 
-Use for browser entry, inspection, navigation, target discovery, and page actions through Warm Chrome.
+Use for browser target discovery, selection, and page operations against a
+proven browser connection. Connection is delegated: `runtime/browser-connect`
+proves Agent Chrome and attaches the adapter; browser-use owns operational
+policy after the handoff — adapter choice, targets, operate, auth boundary,
+safety.
 
 ## Owner
 
-- Browser entry / connection (prove + attach an adapter to Agent Chrome): `runtime/browser-connect` (`@side-quest/browser-connect`). browser-use keeps operational policy and delegates the proven connection; see `CONTEXT-MAP.md` (Browser Use → browser-connect).
-- Repo-local front doors: `skills/browser-use/package.json#scripts`.
-- Installed front doors: `skills/browser-use/package.json#bin`.
-- Warm Chrome proof, repair, launch: `preflight-warm-chrome`.
-- Browser Adapter Proof: `preflight-browser-adapter`.
-- Browser Adapter Router CLI: `skills/browser-use/src/browser-adapter-router.ts`.
-- Browser Adapter Router model: `skills/browser-use/src/browser-adapter-router-model.ts`.
-- Browser Adapter Router engine: `skills/browser-use/src/browser-adapter-router-engine.ts`.
-- Browser Adapter Router discovery: `skills/browser-use/src/browser-adapter-router-discovery.ts`.
-- Browser Adapter Router validation and recovery: `skills/browser-use/src/browser-adapter-router-validation.ts`, `skills/browser-use/src/browser-adapter-router-recovery.ts`.
-- Browser Adapter Router tests: `skills/browser-use/src/browser-adapter-router.test.ts`.
-- Browser Use targets and operations: `browser-use` (route-bound; run Router `prepare` then `route` first).
-- Browser Adapter Map validation: `browser-adapter-map`.
-- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/src/command-contract.ts`.
+- Browser connection (prove + attach; Verified Handoff Envelope; repair paths): `runtime/browser-connect` (`@side-quest/browser-connect`). Commands, flags, exit codes: `runtime/browser-connect/src/command-contract.ts`; repair procedures: `runtime/browser-connect/REPAIR.md`; see `CONTEXT-MAP.md` (Browser Use → browser-connect).
+- Targets and operations: CLI contracts, flags, modes, env vars, result vocab, diagnostic codes: `skills/browser-use/src/command-contract.ts`.
+- Repo-local front doors: `skills/browser-use/package.json#scripts`. Installed front doors: `skills/browser-use/package.json#bin`.
 - Warm Chrome invariant and auth boundary: `skills/browser-use/references/warm-chrome.md`.
-- Chrome DevTools adapter map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 - Coding Task Tracker workflow: `skills/browser-use/references/coding-task-tracker.md`.
 
 ## Invocation Forms
 
-- Repo-local workflow: run `bun run <command>` from `skills/browser-use`; this executes `src`.
+- browser-use repo-local: run `bun run <command>` from `skills/browser-use`; this executes `src`.
+- browser-connect repo-local: run `bun run runtime/browser-connect/src/cli.ts <args>`; installed environments call the `browser-connect` bin.
 - Repo-root verification: run `bun run check:workspace-facade`; this rebuilds `dist` before invariant checks.
-- Package verification: run `bun --filter browser-use-scripts <script>` from the repo root.
-- Installed usage: call bare command names from `package.json#bin`.
 - Command contracts name command identity only; omit `bun run`, `src`, `dist`, and repo paths.
 
 ## Workflow
 
-Name the browser outcome before choosing tools:
+Name the browser outcome, then connect once and operate:
 
 - For browser-use project work, read `skills/browser-use/references/coding-task-tracker.md` before choosing or updating a tracker task.
-- Use repo-local commands while working from this repo.
-- Choose one run id before proof work; reuse it for Warm Chrome, Adapter Proof, Router, target state, and page actions.
-- Map the user request to a Router bundle or required capabilities.
-- Set route policy from the request: auto, prefer, or force.
-- Treat auth/session and target-origin checks as route preconditions when the task needs them.
-- Use current command help for exact flags, file inputs, output modes, and recovery meanings.
-
-Prove Warm Chrome, then route through the Router continuation chain:
-
-1. `preflight-warm-chrome check` → Warm Chrome proof artifact.
-2. `browser-adapter-router report` → Adapter capability report artifact.
-3. `browser-adapter-router prepare` (supply proof + report + task preconditions) → route-evidence envelope.
-4. `browser-adapter-router route` (supply envelope) → route artifact. Follow `use_selected_browser_adapter`.
-5. If Router asks for attachment proof: `preflight-browser-adapter check --adapter <id>` → Adapter Proof artifact, then rerun `prepare` + `route` with fresh proof.
-6. `browser-adapter-router status` against a prepared envelope for human route projection.
-
-Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints` — skip adapter fallback and cold-browser fallback when forbidden.
+- Choose one run id. Pass it as `--run-id` on the browser-connect command, and export `BROWSER_USE_RUN_ID=<run-id>` plus `BROWSER_USE_TARGET_STATE_DIR=<dir>` for the browser-use commands (or pass `--state <path>` explicitly on select/status/operate). The envelope carries the run id into each command's binding; the state path needs the explicit run id or `--state` — select fails closed with `target_selection_state_path_missing` otherwise.
+- Wrapped-tool outcome: `browser-connect run <adapter> -- <cmd>` proves the connection, injects the verified endpoint, and execs the command (envelope on stderr pre-exec; exit passthrough).
+- browser-use outcome: `browser-connect connect <adapter> --json` mints the Verified Handoff Envelope on stdout; save it.
+- Discover: `browser-use targets list --mode handoff-bound --handoff <envelope> --json`; save the success envelope. Handoff-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates.
+- Select: pipe the handoff-bound list envelope into `browser-use targets select`; choose a candidate or hint; it writes run-scoped target state.
+- Operate: `browser-use operate <snapshot|screenshot|emulate>` against the selected target.
+- Adapter choice is browser-use operational policy; attachment-adapter mapping and per-adapter operation capabilities: `skills/browser-use/src/command-contract.ts`.
+- Treat auth/session and target-origin checks as operation preconditions when the task needs them; resolve login secrets through the domain's Auth Pointer at runtime, never inline secret values.
+- Use current command help for exact flags, file inputs, output modes, and recovery meanings. Follow each command's `continuation.next_action_id`; obey `continuation.constraints` — skip adapter fallback and cold-browser fallback when forbidden.
 
 Continuation precedence: a hard preflight failure governs; only then does a `continuation.next_action_id` apply. A login/MFA wall hit after preflight passes is an app step in the warm profile, not a preflight failure — keep driving the page.
 
-After route success, list and select Browser Target Candidates through the proven adapter:
-
-- Run `browser-use targets list` in route-bound mode with the route artifact and Adapter Proof artifact.
-- Save stdout as the route-bound target-list artifact.
-- Run `browser-use targets select`; pipe or pass the target-list artifact, choose a candidate or hint, and write run-scoped target state.
-- Route-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates for target discovery.
-- Follow `continuation.next_action_id` to the next command.
-- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/src/command-contract.ts`.
-
-## Verification
-
-- Run `bun --filter browser-use-scripts build` after package bin or distribution edits.
-- Run `bun --filter browser-use-scripts pack:dry-run` before publishing or reviewing package payload changes.
-- Run `bun --filter browser-use-scripts test` after router, adapter-map, preflight, or browser-use script changes.
-- Run `bun --filter browser-use-scripts typecheck` after TypeScript edits.
-- Run `cd skills/browser-use`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
-
 ## Page Actions
 
-- Use `browser-use operate` after route success and adapter proof.
-- Let `browser-use operate` enforce route binding, target state, and operation capability checks.
+- Use `browser-use operate` after a verified handoff and target selection.
+- Let `browser-use operate` enforce handoff binding, target state, and operation capability checks.
 - Use `browser-use operate --help` and current snapshot output for action syntax.
 - Let the selected adapter own its dependencies and transport.
 - Re-snapshot before element-ref actions.
@@ -92,12 +58,25 @@ After route success, list and select Browser Target Candidates through the prove
 
 - Keep Warm Chrome on a real Google Chrome binary, a dedicated persistent profile, and loopback CDP.
 - Do not use Chrome for Testing, throwaway profiles, everyday default profiles, isolated Playwright launch, Puppeteer launch, AppleScript, `osascript`, macOS `open`, or cold-browser fallback as substitutes.
+- No convention endpoints: never hardcode `http://127.0.0.1:9222`; use the verified endpoint from the browser-connect envelope verbatim.
+- Never mass-kill by port; listener remediation is operator-owned (`runtime/browser-connect/REPAIR.md#v1-inspect_listener`).
 - Do not print tokens, passwords, cookies, auth-bearing URLs, raw network secrets, or sensitive input values.
 - Report secret checks by shape only: present/absent, length, status code, account/org name.
 
+## Verification
+
+- Run `bun --filter browser-use-scripts test` after browser-use script changes.
+- Run `bun --filter browser-use-scripts typecheck` after TypeScript edits.
+- Run `bun --filter browser-use-scripts build` after package bin or distribution edits.
+- Run `bun --filter browser-use-scripts pack:dry-run` before publishing or reviewing package payload changes.
+
 ## Next Safe Action
 
-- Blocked on Warm Chrome: run `preflight-warm-chrome check --json`; follow `continuation.next_action_id` (`repair` or `launch` only when approved).
-- Blocked on routing: run `browser-adapter-router report --adapter <id> --json`; if capability gaps, research then re-prove; if binding mismatch, rerun `preflight-browser-adapter check`.
-- Blocked on targets: run `browser-use targets list --mode recovery --adapter <id> --adapter-proof <path> --json`; follow `continuation.next_action_id`.
-- Unknown failure: read the JSON envelope `error.code` against the diagnostic codes in `skills/browser-use/src/command-contract.ts`; each code names its own recovery action.
+- Connection failed (exit `20`, fail closed): the failure envelope carries exactly one Repair Path with an anchor into `runtime/browser-connect/REPAIR.md` — follow that anchor. Never fall back to a cold or headless browser; never retry the convention port.
+- Agent Chrome stopped: rerun `browser-connect connect <adapter> --json`; the prove-or-launch gate owns the launch (`runtime/browser-connect/REPAIR.md#v1-launch_agent_chrome`).
+- Foreign listener on the port: a verified-free suggested port allows exactly one fresh rerun (`runtime/browser-connect/REPAIR.md#v1-use_suggested_port`); otherwise operator inspection (`runtime/browser-connect/REPAIR.md#v1-inspect_listener`).
+- Adapter not installed: `browser-connect repair-adapter <adapter> --check --json` to preview, `--execute` to repair (`runtime/browser-connect/REPAIR.md#v1-install_adapter`).
+- Attachment probe failed: reproduce with `browser-connect connect <adapter> --json --verbose --run-id <run_id>` (`runtime/browser-connect/REPAIR.md#v1-inspect_attachment_probe`).
+- Untyped or unknown connection failure: `browser-connect check --json --verbose --run-id <run_id>` (`runtime/browser-connect/REPAIR.md#v1-inspect_diagnostics`).
+- Blocked on targets or handoff evidence (invalid, stale, run-id mismatch): mint a fresh envelope with `browser-connect connect <adapter> --json`, then re-run `browser-use targets list --mode handoff-bound --handoff <path> --json`; for evidence-gathering discovery use `--mode recovery --adapter <id> --handoff <path>` (envelope is optional in recovery mode but include it when freshly minted; `chrome-devtools` is the implemented discovery/operation transport; the full adapter enum lives in `skills/browser-use/src/command-contract.ts`).
+- Unknown browser-use failure: read the JSON envelope `error.code` against the diagnostic codes in `skills/browser-use/src/command-contract.ts`; each code names its own recovery action.

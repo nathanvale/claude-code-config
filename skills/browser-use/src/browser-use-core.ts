@@ -226,25 +226,52 @@ function candidateIdentityOf(page: RawPage, ordinal: number): unknown[] {
 
 // --- Deterministic ids -----------------------------------------------------
 
+// Handoff evidence id (KTD1): browser-use's content hash over the Verified
+// Handoff Envelope's binding-relevant fields. The envelope is minted by the
+// one process that performed both the environment proof and the adapter
+// attachment probe, so hashing its fields binds discovery, selection, and
+// operations to that single verified attachment — the envelope-era analogue
+// of the Router-era proof-id/route-hash tuple. The websocket endpoint form
+// participates in the hash but is never re-emitted (R32).
+export function handoffEvidenceIdOf(input: {
+	runId: string;
+	attachmentAdapterId: string;
+	route: string;
+	endpointHttp: string;
+	endpointWs: string;
+	proofContractId: string;
+	proofSchemaVersion: string;
+}): string {
+	const canonical = JSON.stringify([
+		input.runId,
+		input.attachmentAdapterId,
+		input.route,
+		input.endpointHttp,
+		input.endpointWs,
+		input.proofContractId,
+		input.proofSchemaVersion,
+	]);
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
 // Target envelope id scopes candidate ordinals (R21). Content hash over the
-// run-scoped binding facts; no clock or randomness. adapter_proof_id already
-// folds in warm_chrome_run_id and verified_endpoint_identity (it is itself a
-// hash of them), so they are covered transitively. In route-bound mode runId is
-// the route's run id, so the same route reproduces the same envelope id; in
-// recovery mode runId is per-invocation, scoping ordinals within one listing.
+// run-scoped binding facts; no clock or randomness. handoff_evidence_id
+// already folds in the endpoint identity and attachment fields (it is itself a
+// hash of them), so they are covered transitively. In handoff-bound mode runId
+// is the envelope's run id, so the same handoff reproduces the same envelope
+// id; in recovery mode runId is per-invocation, scoping ordinals within one
+// listing.
 export function targetEnvelopeIdOf(input: {
 	runId: string;
 	mode: TargetDiscoveryMode;
 	adapter: BrowserAdapterId;
-	adapterProofId: string;
-	routeEvidenceHash: string | undefined;
+	handoffEvidenceId: string | undefined;
 }): string {
 	const canonical = JSON.stringify([
 		input.runId,
 		input.mode,
 		input.adapter,
-		input.adapterProofId,
-		input.routeEvidenceHash ?? null,
+		input.handoffEvidenceId ?? null,
 	]);
 	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }

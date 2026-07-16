@@ -85,75 +85,9 @@ export function contractFlags(command: BrowserUseCommand): string[] {
 	return Object.keys(browserUseContracts[command].flags ?? {}).sort();
 }
 
-const ADAPTER_PROOF_CONTRACT = "browser-use.browser-adapter-proof";
-// Exported: U5 discovery blocks reference it directly to build inline route
-// envelopes, not only through routeSuccessEnvelope.
-export const ROUTER_CONTRACT = "browser-use.browser-adapter-router";
 // Cross-region: U6 selection envelopes/state and the U7 operation state fixture
 // both stamp this contract id, so it lives here rather than in either file.
 export const TARGETS_CONTRACT = "browser-use.browser-targets";
-
-// A valid Browser Adapter Proof success envelope (schema v2), as written to a
-// --adapter-proof file. Mirrors preflight-browser-adapter's emitted shape.
-export function adapterProofEnvelope(
-	overrides: Record<string, unknown> = {},
-): string {
-	return JSON.stringify({
-		status: "ok",
-		run_id: "proof-run",
-		data: {
-			ok: true,
-			action: "adapter_ready",
-			contract: ADAPTER_PROOF_CONTRACT,
-			schema_version: "2",
-			command: "check",
-			adapter: "chrome-devtools",
-			endpoint: "http://127.0.0.1:9222",
-			port: "9222",
-			warm_chrome_run_id: "warm-1",
-			adapter_proof_id: "proof-abc",
-			verified_endpoint_identity: "127.0.0.1:9222",
-			page_count: 0,
-			...overrides,
-		},
-	});
-}
-
-// A valid Router route success envelope with the operation binding tuple (U2),
-// as written to a --route file.
-export function routeSuccessEnvelope(
-	bindingOverrides: Record<string, unknown> = {},
-): string {
-	return JSON.stringify({
-		status: "ok",
-		run_id: "route-run",
-		data: {
-			outcome: "selected",
-			contract: ROUTER_CONTRACT,
-			evaluation_date: "2026-06-04",
-			mode: "auto",
-			requested_adapter: null,
-			selected_adapter: "chrome-devtools",
-			required_capabilities: ["snapshot_refs"],
-			route_confidence: 90,
-			ranking: [],
-			candidate_decisions: [],
-			provenance_summary: [],
-			binding: {
-				run_id: "route-run",
-				selected_adapter_id: "chrome-devtools",
-				warm_chrome_run_id: "warm-1",
-				adapter_proof_id: "proof-abc",
-				verified_endpoint_identity: "127.0.0.1:9222",
-				route_evidence_hash: "hash-xyz",
-				authorized_capabilities: ["snapshot_refs"],
-				emitted_at: "2026-06-04T00:00:00.000Z",
-				expires_at: "2026-06-05T00:00:00.000Z",
-				...bindingOverrides,
-			},
-		},
-	});
-}
 
 export function enoent(path: string): Error & { code: string } {
 	const error = new Error(`ENOENT: no such file or directory, open '${path}'`);
