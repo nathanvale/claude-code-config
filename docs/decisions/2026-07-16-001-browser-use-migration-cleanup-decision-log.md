@@ -143,8 +143,9 @@ gap; recording it as deliberate prevents it resurfacing as a "bug".
 
 Consequences:
 
-A stale envelope is caught by the attachment failing at operate time
-(fail-closed), not by a freshness check.
+No freshness check exists: a stale envelope whose endpoint still answers
+remains attachable. Rejection occurs only when attachment fails at operate
+time (fail-closed) or the selected-state TTL expires.
 
 Next:
 

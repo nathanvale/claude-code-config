@@ -44,7 +44,7 @@ name | source pointer | trigger. Decision context:
 - Adapter fallback | ADR 0012 / KTD3 (retained R9 engine cluster) | registry reaches 3+ adapters, or first wrong-adapter incident.
 - Per-agent target allocation | browser-use decision log | first concurrent-agent collision.
 - 1Password-backed login | issue #145 cluster | first auth-blocked runbook.
-- Operation floor | browser-domain-memory cluster (#136–#141) | multiple adapters connect reliably.
+- Operation floor | browser-domain-memory cluster (#136–#141) | two or more adapters each hold a green `browser-connect connect <adapter> --json` proof on the same host (evidence: `skills/browser-use/TEST_MATRIX.md` rows).
 
 Roadmap footnotes (review-surfaced hardening ideas, not pitches): operate-time
 endpoint re-verification; `playwright-cdp` recovery dead-end enum entry;
