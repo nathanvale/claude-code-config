@@ -34,7 +34,7 @@ import type {
 	TargetDiscoveryBinding,
 	TargetDiscoveryEnvelope,
 	TargetDiscoveryMode,
-} from "./browser-adapter-router-model";
+} from "./discovery-model";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
