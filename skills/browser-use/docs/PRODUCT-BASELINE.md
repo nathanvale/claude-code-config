@@ -1,5 +1,12 @@
 # browser-use — Product Baseline
 
+> **Historical (2026-07-16):** this snapshot predates the browser-use →
+> browser-connect migration. The Warm Chrome proof / Adapter Proof / Adapter
+> Router chain it describes was deleted (PRs #237/#239); session entry is now
+> the Verified Handoff Envelope from `browser-connect connect --json`. Current
+> truth: `skills/browser-use/SKILL.md` and `runtime/browser-connect/`.
+> Decision log: `docs/decisions/2026-07-16-001-browser-use-migration-cleanup-decision-log.md`.
+
 Reverse-engineered snapshot dated 2026-06-10. Descriptive, not prescriptive: records what the code and docs say today, not what the product should become.
 
 **What this is.** `browser-use` is agent-driven browser automation through a real "Warm Chrome" instance, with evidence-first adapter routing, target discovery/selection, and page operations. A task flows through four CLI subsystems — Warm Chrome proof, Adapter Proof, Adapter Router, then the `browser-use` operate front door — each gating the next on freshly proven evidence before any browser action runs. The shipped operator surface is snapshot (DOM), screenshot (pixels), and viewport emulation, scoped to a single selected page and bound to a verified loopback Chrome DevTools Protocol (CDP) endpoint.
