@@ -53,8 +53,8 @@ These are the product-absorbed browser-access invariants. R11–R12 and R14 are
 enforced in code (fail-closed exit-20 gateway, endpoints only from proof
 envelopes, redaction chokepoint). R13 has no process-cleanup surface in v1, so
 it holds vacuously in code and lives here as behavioral guidance — this
-package is the named successor for the corresponding `rules/browser-access.md`
-clause when that rule retires:
+package is the named successor for the corresponding clause of the retired
+`rules/browser-access.md` (rule removed 2026-07-16, migration cleanup U5):
 
 - **R11 — Fail closed.** On any proof failure, stop with one next safe action.
   Never fall back to a cold or headless browser, never launch Chrome for

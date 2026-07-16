@@ -44,12 +44,11 @@ Use the direct runner above for agent-operational examples.
   `tests/repair-stations.test.ts`, and redaction tests when diagnostics move.
 - **Change redaction** -> `src/runtime.ts`, `src/cli.ts`,
   `tests/redaction.test.ts`, and station tests for the emitting branch.
-- **Change how browser-use consumes this package** (the switchover is closed) ->
-  `skills/browser-use/src/preflight-warm-chrome.ts` (thin delegator to `main()`),
-  `skills/browser-use/src/browser-adapter-router-prepare.ts` (gates on
-  `data.contract_id`), and `skills/browser-use/src/preflight-browser-adapter.ts`
-  (composes the package proof in-process). Change proof behavior in this package,
-  not in those delegators.
+- **Change how browser entry consumes this package** ->
+  `runtime/browser-connect` consumes this package in-process (contract-pinned);
+  browser-use reaches it only through browser-connect's Verified Handoff
+  Envelope. Change proof behavior in this package, not in consumers. The
+  browser-use delegator surfaces are deleted (migration cleanup U5/KTD6).
 - **Choose next work** -> `TASKS.md`.
 - **Close or reclassify task detail** -> update `TASKS.md` and
   `TASKS.archive.md` in the same pass.
@@ -66,8 +65,7 @@ Reference owners:
   `docs/decisions/2026-07-03-warm-chrome-runtime-package-definition.md`.
 - Implementation plan:
   `docs/plans/2026-07-03-001-feat-warm-chrome-runtime-package-plan.md`.
-- browser-use front-door delegator (routes to this package's `main()`):
-  `skills/browser-use/src/preflight-warm-chrome.ts`.
+- In-process consumer (browser entry front door): `runtime/browser-connect`.
 - Warm Chrome research:
   `skills/browser-use/docs/research/2026-07-03-warm-chrome-cdp-gotchas-and-port-policy.md`.
 
@@ -133,9 +131,8 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
   prose when `src/command-contract.ts`, CLI help, or tests own them.
 - Do not let `TASKS.md` become a review transcript; move closed detail to
   `TASKS.archive.md`.
-- Do not add proof/station behavior to browser-use's delegators
-  (`skills/browser-use/src/preflight-warm-chrome.ts` and the adapter proof); the
-  switchover made this package the single owner of that behavior.
+- Do not add proof/station behavior to consumers (browser-connect or
+  browser-use); this package is the single owner of that behavior.
 - Do not route agents on `data.reason`; route on station action.
 
 ## Debug
@@ -157,8 +154,9 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
 - `check` and `status` are read-only.
 - `launch` may write browser state only through declared mutation pins.
 - `repair` may write dedicated-profile proof state only after refusal gates.
-- This package is the single owner of Warm Chrome proof behavior; browser-use's
-  `preflight-warm-chrome.ts` only delegates to `main()`.
+- This package is the single owner of Warm Chrome proof behavior; consumers
+  (browser-connect in-process, browser-use via the handoff envelope) never
+  reimplement it.
 
 ## Verification
 

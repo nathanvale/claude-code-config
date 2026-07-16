@@ -145,6 +145,7 @@ Station stance:
   failure has not, which the re-emit rule cannot express.
 - The ok envelope is the only endpoint authority; guidance carries the actual
   verified endpoint, never the `9222` convention.
-- `skills/browser-use/src/preflight-warm-chrome.ts` is now a thin delegator to
-  this package's `main()`; the switchover is closed and the parity harness that
-  measured old-vs-new station/exit/envelope parity has been retired.
+- The switchover is closed: the parity harness that measured old-vs-new
+  station/exit/envelope parity is retired, and the browser-use thin delegator
+  that bridged the cutover is deleted (migration cleanup U5/KTD6). The
+  in-process consumer is `runtime/browser-connect`.

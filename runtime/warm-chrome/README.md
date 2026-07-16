@@ -122,9 +122,9 @@ Package docs: [AGENTS.md](./AGENTS.md) maintenance routing,
 [CONTEXT.md](./CONTEXT.md) vocabulary, [TASKS.md](./TASKS.md) active work,
 and [TASKS.archive.md](./TASKS.archive.md) closed task detail.
 
-Current browser-use authority remains
-`skills/browser-use/src/preflight-warm-chrome.ts` until the switchover task
-closes.
+Browser entry authority is `runtime/browser-connect`, which consumes this
+package in-process; the legacy browser-use delegator is deleted (migration
+cleanup U5/KTD6).
 
 ## Authority
 
@@ -136,8 +136,7 @@ closes.
   `docs/plans/2026-07-03-001-feat-warm-chrome-runtime-package-plan.md`
 - Research:
   `skills/browser-use/docs/research/2026-07-03-warm-chrome-cdp-gotchas-and-port-policy.md`
-- Port source:
-  `skills/browser-use/src/preflight-warm-chrome.ts`
+- In-process consumer: `runtime/browser-connect`
 
 ## Safety Rules
 

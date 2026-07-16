@@ -109,10 +109,6 @@
       "version": "0.1.0",
       "bin": {
         "browser-use": "dist/browser-use.js",
-        "preflight-warm-chrome": "dist/preflight-warm-chrome.js",
-      },
-      "dependencies": {
-        "@side-quest/warm-chrome": "workspace:*",
       },
       "devDependencies": {
         "@side-quest/cli-command-facade": "0.1.0",

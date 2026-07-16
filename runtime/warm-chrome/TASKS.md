@@ -133,6 +133,10 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-16: browser-use delegator retired (migration cleanup U5/KTD6).
+  `skills/browser-use/src/preflight-warm-chrome.ts` + test + bin deleted; the
+  only consumer path is now `runtime/browser-connect` in-process. The
+  delegator's `BROWSER_USE_*` -> `WARM_CHROME_*` env bridge retired with it.
 - 2026-07-04: browser-use switchover closed (P1 done). Front door delegates to
   `main()`; adapter router gates on `data.contract_id`; adapter proof composes
   the package proof in-process; legacy `preflight-warm-chrome` impl + parity

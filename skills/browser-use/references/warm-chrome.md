@@ -17,7 +17,6 @@ entry front door: `runtime/browser-connect`.
 
 - Browser entry front door: `runtime/browser-connect` (`@side-quest/browser-connect`) — `check`, `connect`, `run`, `repair-adapter`; contract: `runtime/browser-connect/src/command-contract.ts`; repair procedures: `runtime/browser-connect/REPAIR.md`.
 - Environment proof runtime: `@side-quest/warm-chrome` (`runtime/warm-chrome`), consumed in-process by browser-connect; proof, station, and reason behavior are owned there (`runtime/warm-chrome/AGENTS.md`).
-- Legacy delegator: `skills/browser-use/src/preflight-warm-chrome.ts` still exists as a thin delegator to warm-chrome's `main()`. It is not the front door; its deletion is a later operator-gated unit.
 - Targets and operations contracts: `skills/browser-use/src/command-contract.ts`.
 - Focused tests: `runtime/warm-chrome/tests/` (station + proof suites).
 

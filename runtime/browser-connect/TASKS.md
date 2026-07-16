@@ -28,8 +28,10 @@ Next work is slice two — Human Chrome via the UI-consent door
 freshly verifies the territory ADR 0006 recorded as a dead end. See the plan
 Scope Boundaries and `docs/decisions/2026-07-14-001-browser-connect-architecture-decision-log.md`.
 
-Open follow-up: retire `rules/browser-access.md` via the prompt-system
-workflow (issue #230) — the coexistence window's closing trigger.
+Closed follow-up (2026-07-16): `rules/browser-access.md` retired via the
+prompt-system workflow (issue #230) — full removal; invariants are
+mechanically enforced here and re-homed in `skills/browser-use/SKILL.md`. The
+coexistence window is closed.
 
 Next safe action:
 
