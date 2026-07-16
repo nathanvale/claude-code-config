@@ -844,10 +844,58 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 
 export const BROWSER_USE_TARGETS_CONTRACT_ID =
 	"browser-use.browser-targets" as const;
-export const BROWSER_USE_TARGETS_SCHEMA_VERSION = "1" as const;
+// v2 (browser-use migration U1): the discovery binding derives from the
+// browser-connect Verified Handoff Envelope (handoff_evidence_id replaces the
+// Router-era adapter_proof_id / warm_chrome_run_id / route_evidence_hash
+// tuple), the mode renamed route-bound -> handoff-bound (KTD2), and the
+// success envelope self-describes contract identity in data.
+export const BROWSER_USE_TARGETS_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_OPERATION_CONTRACT_ID =
 	"browser-use.browser-operation" as const;
-export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "1" as const;
+// v2 (browser-use migration U1): operation binding fields derive from the
+// Verified Handoff Envelope.
+export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "2" as const;
+
+// ---------------------------------------------------------------------------
+// browser-connect Verified Handoff Envelope — consumer-side pin (KTD1).
+//
+// browser-use derives its binding identity (adapter, endpoint identity, run
+// id) from envelope fields. The contract id and schema version are pinned
+// here, NOT imported from browser-connect: the pin is the drift tripwire —
+// when browser-connect revs its envelope schema, browser-use fails closed
+// with a typed rejection instead of silently parsing a shape it never proved.
+// ---------------------------------------------------------------------------
+
+export const BROWSER_CONNECT_HANDOFF_CONTRACT_ID =
+	"browser-connect.verified-handoff" as const;
+export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "1" as const;
+
+// browser-connect attachment adapter ids mapped to browser-use adapter ids
+// (mcporter server names). Adapter choice is browser-use operational policy:
+// an attachment naming an unmapped adapter fails closed rather than guessing
+// a transport.
+export const BROWSER_CONNECT_ATTACHMENT_ADAPTERS = {
+	"chrome-devtools-mcp": "chrome-devtools",
+	"agent-browser": "agent-browser",
+} as const satisfies Record<string, BrowserAdapterRouterAdapter>;
+
+// Operation capabilities browser-use's transport can honor per adapter. The
+// Verified Handoff Envelope authorizes an attachment, not capabilities;
+// capability policy stays browser-use-owned and is enforced through the
+// surviving router engine's authorizesOperationClass. Adapters without an
+// implemented operation transport authorize nothing.
+export const BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES = {
+	"chrome-devtools": [
+		"snapshot_refs",
+		"screenshot_media",
+		"viewport_emulation",
+	],
+	"agent-browser": [],
+	"playwright-cdp": [],
+} as const satisfies Record<
+	BrowserAdapterRouterAdapter,
+	readonly BrowserAdapterRouterCapability[]
+>;
 
 // Command families and their subcommands. Public surface is `browser-use
 // <family> <subcommand>`; facade contract keys flatten to `<family>-<sub>`.
@@ -870,13 +918,13 @@ export type BrowserUseOperateSubcommand =
 export const BROWSER_USE_FAMILIES = ["targets", "operate"] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
 
-// Browser Target Discovery modes (plan U5 R18-R20). `targets list --mode` takes
-// these, not the Router policy modes (auto/prefer/force): discovery is a
-// route-bound vs recovery distinction, not an adapter-selection policy. The U3
-// shell reused Router modes as a placeholder; U5 replaces it.
+// Browser Target Discovery modes (migration U1, KTD2). handoff-bound replaced
+// route-bound: the mode's evidence is a browser-connect Verified Handoff
+// Envelope, not a Router route artifact; keeping "route-bound" would silently
+// re-ground "route" onto browser-connect's attachment route.
 export const BROWSER_USE_TARGET_DISCOVERY_MODES = [
 	"recovery",
-	"route-bound",
+	"handoff-bound",
 ] as const;
 export type BrowserUseTargetDiscoveryMode =
 	(typeof BROWSER_USE_TARGET_DISCOVERY_MODES)[number];
@@ -900,9 +948,11 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
 	"browser_operation_transport_failed",
-	"browser_operation_route_invalid",
-	"browser_operation_adapter_proof_invalid",
-	"browser_operation_adapter_proof_mismatch",
+	// Verified Handoff Envelope evidence failures (migration U1): an invalid,
+	// failed, or drift-rejected envelope and a caller run id disagreeing with
+	// the envelope run id each map to their own recovery.
+	"browser_operation_handoff_invalid",
+	"browser_operation_run_mismatch",
 	"browser_operation_capability_unauthorized",
 	"browser_operation_artifact_path_required",
 	"browser_operation_artifact_path_unsafe",
@@ -912,18 +962,20 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_target_no_match",
 	"browser_operation_target_missing",
 	"browser_operation_target_moved",
-	// Browser Target Discovery (U5). Distinct codes so empty / mismatched-proof /
+	// Browser Target Discovery (U5, evidence re-based on the Verified Handoff
+	// Envelope in migration U1). Distinct codes so empty / mismatched-evidence /
 	// missing-evidence outcomes each map to their own recovery, never to a wrong
 	// or silent success (handoff envelope-mapping class).
-	"target_discovery_adapter_proof_invalid",
-	"target_discovery_adapter_proof_mismatch",
-	"target_discovery_route_invalid",
+	"target_discovery_handoff_invalid",
+	"target_discovery_handoff_mismatch",
+	"target_discovery_run_mismatch",
+	"target_discovery_input_invalid",
 	"target_discovery_no_candidates",
 	"target_discovery_dependency_missing",
 	"target_discovery_transport_timeout",
 	"target_discovery_transport_failed",
 	"target_discovery_command_override_invalid",
-	// Browser Target Selection (U6). `targets select` resolves a route-bound
+	// Browser Target Selection (U6). `targets select` resolves a handoff-bound
 	// discovery envelope to one candidate and writes run-scoped state; `targets
 	// status` projects it. Each distinct cause maps to its own code + continuation
 	// so selection and state failures never resolve silently to success or the
@@ -947,28 +999,22 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
 
-// Browser Target Discovery runtime action ids (plan U5). The stable
-// continuation.next_action_id vocabulary `targets list` emits on recovery.
-// supply_adapter_proof / refresh_adapter_proof are the proof-mismatch
-// continuations the plan names (R, AE); the rest cover dependency, transport,
-// route, and empty-candidate recovery.
+// Browser Target Discovery runtime action ids (plan U5, envelope-era
+// vocabulary from migration U1). The stable continuation.next_action_id
+// vocabulary `targets list` emits on recovery. supply_verified_handoff /
+// refresh_verified_handoff are the evidence continuations; the rest cover
+// dependency, transport, and empty-candidate recovery.
 export const browserUseTargetDiscoveryFailureActions = [
 	{
-		id: "supply_adapter_proof",
+		id: "supply_verified_handoff",
 		summary:
-			"Run Browser Adapter Proof for the requested adapter and pass it to targets list --adapter-proof.",
+			"Run browser-connect connect <adapter> --json and pass the Verified Handoff Envelope to targets list --handoff.",
 		sideEffects: ["check"],
 	},
 	{
-		id: "refresh_adapter_proof",
+		id: "refresh_verified_handoff",
 		summary:
-			"Re-run Browser Adapter Proof for the selected adapter; the supplied proof does not match the route's adapter.",
-		sideEffects: ["check"],
-	},
-	{
-		id: "rerun_route_bound_target_discovery",
-		summary:
-			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+			"Re-run browser-connect connect for the requested adapter; the supplied handoff envelope does not match it.",
 		sideEffects: ["check"],
 	},
 	{
@@ -991,7 +1037,7 @@ export const browserUseTargetDiscoveryFailureActions = [
 	},
 	{
 		id: "change_target_discovery_input",
-		summary: "Correct targets list mode, adapter, route, or proof arguments.",
+		summary: "Correct targets list mode, adapter, or handoff arguments.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1000,13 +1046,13 @@ export const browserUseTargetDiscoverySuccessActions = [
 	{
 		id: "select_browser_target",
 		summary:
-			"Select one route-bound Browser Target Candidate with browser-use targets select.",
+			"Select one handoff-bound Browser Target Candidate with browser-use targets select.",
 		sideEffects: ["check"],
 	},
 	{
-		id: "prepare_with_target_discovery",
+		id: "connect_verified_browser",
 		summary:
-			"Pass recovery target discovery output to browser-adapter-router prepare --target-discovery.",
+			"Mint a Verified Handoff Envelope with browser-connect connect <adapter> --json, then re-run targets list --mode handoff-bound.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1028,7 +1074,7 @@ export const browserUseTargetSelectionFailureActions = [
 	{
 		id: "choose_target_candidate",
 		summary:
-			"Pick one candidate ordinal from the route-bound targets list envelope, then re-run targets select.",
+			"Pick one candidate ordinal from the handoff-bound targets list envelope, then re-run targets select.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1038,12 +1084,12 @@ export const browserUseTargetSelectionFailureActions = [
 		sideEffects: ["check"],
 	},
 	{
-		// Shared continuation id with browserUseTargetDiscoveryFailureActions; keep
+		// Shared continuation id across the selection and operation surfaces; keep
 		// the summary identical so one next_action_id never documents two different
-		// recovery prose strings across the discovery and selection surfaces.
-		id: "rerun_route_bound_target_discovery",
+		// recovery prose strings.
+		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1055,7 +1101,7 @@ export const browserUseTargetSelectionFailureActions = [
 	{
 		id: "change_selection_input",
 		summary:
-			"Correct targets select route, proof, candidate, hint, or state arguments.",
+			"Correct targets select handoff, candidate, hint, or state arguments.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1077,21 +1123,15 @@ export const browserUseTargetSelectionSuccessActions = [
 
 export const browserUseOperationFailureActions = [
 	{
-		id: "supply_adapter_proof",
+		id: "supply_verified_handoff",
 		summary:
-			"Run Browser Adapter Proof for the selected adapter and pass it to browser-use operate --adapter-proof.",
+			"Run browser-connect connect <adapter> --json and pass the Verified Handoff Envelope to browser-use operate --handoff.",
 		sideEffects: ["check"],
 	},
 	{
-		id: "refresh_adapter_proof",
+		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Re-run Browser Adapter Proof for the selected adapter; the supplied proof does not match the route's adapter.",
-		sideEffects: ["check"],
-	},
-	{
-		id: "rerun_route_bound_target_discovery",
-		summary:
-			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1103,7 +1143,7 @@ export const browserUseOperationFailureActions = [
 	{
 		id: "choose_target_candidate",
 		summary:
-			"Select one candidate from route-bound targets list output, then re-run browser-use operate.",
+			"Select one candidate from handoff-bound targets list output, then re-run browser-use operate.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1138,7 +1178,7 @@ export const browserUseOperationFailureActions = [
 	{
 		id: "change_operation_input",
 		summary:
-			"Correct browser-use operate route, proof, target, artifact, or viewport arguments.",
+			"Correct browser-use operate handoff, target, artifact, or viewport arguments.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1165,17 +1205,13 @@ const browserUseOutputFlags = {
 } as const satisfies BrowserUseCommandContract["flags"];
 
 // --dry-run + the mock-outcome env exercise success and failure envelopes
-// without any live browser call (R7-shell). --route/--adapter-proof are the
-// route-bound prerequisites the live units (U5/U7) consume; declared here so
-// parser acceptance and help cross-link to Router prepare/route now.
-const browserUseRouteBoundFlags = {
-	"--route": {
+// without any live browser call (R7-shell). --handoff is the binding evidence
+// every live surface consumes: the browser-connect Verified Handoff Envelope.
+const browserUseHandoffFlags = {
+	"--handoff": {
 		type: "path",
-		description: "Router success envelope from browser-adapter-router route.",
-	},
-	"--adapter-proof": {
-		type: "path",
-		description: "Fresh Browser Adapter Proof envelope for the selected adapter.",
+		description:
+			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect <adapter> --json, or the run wrapper's stderr envelope).",
 	},
 	"--dry-run": {
 		type: "boolean",
@@ -1189,7 +1225,7 @@ const browserUseTargetsListFlags = {
 		type: "enum",
 		values: BROWSER_USE_TARGET_DISCOVERY_MODES,
 		description:
-			"Discovery mode: recovery (requested adapter + proof) or route-bound (route success + proof).",
+			"Discovery mode: recovery (requested adapter + optional handoff evidence) or handoff-bound (verified handoff envelope).",
 	},
 	"--adapter": {
 		type: "enum",
@@ -1200,7 +1236,7 @@ const browserUseTargetsListFlags = {
 		type: "boolean",
 		description: "Display origin and redacted path shape only.",
 	},
-	...browserUseRouteBoundFlags,
+	...browserUseHandoffFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseTargetsSelectFlags = {
@@ -1224,7 +1260,7 @@ const browserUseTargetsSelectFlags = {
 		type: "string",
 		description: "Candidate ordinal scoped to one target envelope.",
 	},
-	...browserUseRouteBoundFlags,
+	...browserUseHandoffFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseTargetsStatusFlags = {
@@ -1254,7 +1290,7 @@ const browserUseOperateCommonFlags = {
 		type: "path",
 		description: "Run-scoped selected-target state file.",
 	},
-	...browserUseRouteBoundFlags,
+	...browserUseHandoffFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseSnapshotFlags = {
@@ -1328,17 +1364,17 @@ const browserUseStateEnvVars = [
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
-// `targets select` also accepts the route-bound `targets list` success envelope
-// to resolve against: piped on stdin, or inline via this env var (env overridden
-// by stdin when both are present, mirroring the Router envelope contract). The
-// envelope is the candidate source; --route/--adapter-proof, when supplied, are
-// cross-checked against its binding and must agree.
+// `targets select` also accepts the handoff-bound `targets list` success
+// envelope to resolve against: piped on stdin, or inline via this env var (env
+// overridden by stdin when both are present). The envelope is the candidate
+// source; --handoff, when supplied, is cross-checked against its binding and
+// must agree.
 const browserUseSelectEnvVars = [
 	...browserUseStateEnvVars,
 	{
 		name: "BROWSER_USE_TARGETS_ENVELOPE_JSON",
 		description:
-			"Inline route-bound targets list success envelope JSON to select against; overridden by piped stdin.",
+			"Inline handoff-bound targets list success envelope JSON to select against; overridden by piped stdin.",
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
@@ -1366,10 +1402,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"targets-list": {
 			script: "browser-use",
 			summary:
-				"List route-bound or recovery Browser Target Candidates. Get route evidence from browser-adapter-router prepare then route.",
+				"List handoff-bound or recovery Browser Target Candidates. Get the Verified Handoff Envelope from browser-connect connect <adapter> --json.",
 			usage: [
-				"targets list --mode recovery --adapter <id> --adapter-proof <path> [--show-url] [--json|--plain]",
-				"targets list --mode route-bound --route <path> --adapter-proof <path> [--show-url] [--json|--plain]",
+				"targets list --mode handoff-bound --handoff <path> [--show-url] [--json|--plain]",
+				"targets list --mode recovery --adapter <id> [--handoff <path>] [--show-url] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -1390,10 +1426,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"targets-select": {
 			script: "browser-use",
 			summary:
-				"Select one route-bound Browser Target into run-scoped state using hints or a candidate ordinal. Pipe the route-bound targets list success envelope on stdin.",
+				"Select one handoff-bound Browser Target into run-scoped state using hints or a candidate ordinal. Pipe the handoff-bound targets list success envelope on stdin.",
 			usage: [
-				"targets list --mode route-bound --route <path> --adapter-proof <path> --json | targets select --candidate <ordinal> [--state <path>] [--json|--plain]",
-				"targets select [--state <path>] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--candidate <ordinal>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+				"targets list --mode handoff-bound --handoff <path> --json | targets select --candidate <ordinal> [--state <path>] [--json|--plain]",
+				"targets select [--state <path>] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--candidate <ordinal>] [--handoff <path>] [--dry-run] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -1438,9 +1474,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"operate-snapshot": {
 			script: "browser-use",
 			summary:
-				"Capture a normalized accessibility snapshot of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
+				"Capture a normalized accessibility snapshot of the resolved Browser Target. Requires a browser-connect Verified Handoff Envelope.",
 			usage: [
-				"operate snapshot [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--verbose] [--dry-run] [--json|--plain]",
+				"operate snapshot [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--handoff <path>] [--verbose] [--dry-run] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -1465,9 +1501,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"operate-screenshot": {
 			script: "browser-use",
 			summary:
-				"Capture a screenshot artifact of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
+				"Capture a screenshot artifact of the resolved Browser Target. Requires a browser-connect Verified Handoff Envelope.",
 			usage: [
-				"operate screenshot --out <path> [--full-page] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+				"operate screenshot --out <path> [--full-page] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--handoff <path>] [--dry-run] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -1491,9 +1527,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"operate-emulate": {
 			script: "browser-use",
 			summary:
-				"Emulate viewport metrics on the resolved Browser Target. Requires a route that proves the viewport emulation capability.",
+				"Emulate viewport metrics on the resolved Browser Target. Requires a Verified Handoff Envelope whose adapter authorizes viewport emulation.",
 			usage: [
-				"operate emulate [--width <px>] [--height <px>] [--dpr <n>] [--mobile] [--touch] [--landscape] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+				"operate emulate [--width <px>] [--height <px>] [--dpr <n>] [--mobile] [--touch] [--landscape] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--handoff <path>] [--dry-run] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",

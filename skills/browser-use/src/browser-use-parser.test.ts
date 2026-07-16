@@ -18,14 +18,17 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("operate");
 	});
 
-	// Scenario 8: root help points back to the route-bound prerequisites.
-	test("--help points back to browser-adapter-router prepare and route", async () => {
+	// Scenario 8: root help points back to the connection prerequisite.
+	test("--help points back to browser-connect connect", async () => {
 		const result = await runForTest(["--help"], makeRuntime());
-		expect(result.stdout).toContain("browser-adapter-router prepare");
-		expect(result.stdout).toContain("browser-adapter-router route");
-		// Does not copy the route evidence schema, only a pointer.
-		expect(result.stdout).not.toContain("preconditions");
-		expect(result.stdout).not.toContain("adapter_proof_id");
+		expect(result.stdout).toContain("browser-connect connect");
+		expect(result.stdout).toContain("--handoff");
+		// Does not copy the envelope schema, only a pointer.
+		expect(result.stdout).not.toContain("browser_entry_mode");
+		expect(result.stdout).not.toContain("probe_executable");
+		// R4: no dangling references to the deleted Router chain.
+		expect(result.stdout).not.toContain("browser-adapter-router");
+		expect(result.stdout).not.toContain("preflight-browser-adapter");
 	});
 
 	// Scenario 2: version JSON parses with name and version.
@@ -52,7 +55,7 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("list");
 		expect(result.stdout).toContain("select");
 		expect(result.stdout).toContain("status");
-		expect(result.stdout).toContain("browser-adapter-router");
+		expect(result.stdout).toContain("browser-connect");
 	});
 
 	// Scenario 4: operate family help renders snapshot, screenshot, emulate.
@@ -62,10 +65,10 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("snapshot");
 		expect(result.stdout).toContain("screenshot");
 		expect(result.stdout).toContain("emulate");
-		expect(result.stdout).toContain("browser-adapter-router");
+		expect(result.stdout).toContain("browser-connect");
 	});
 
-	test("subcommand help advertises every declared flag and the route pointer", async () => {
+	test("subcommand help advertises every declared flag and the handoff pointer", async () => {
 		const cases: Array<[string[], BrowserUseCommand]> = [
 			[["targets", "list", "--help"], "targets-list"],
 			[["targets", "select", "--help"], "targets-select"],
@@ -82,7 +85,7 @@ describe("U3 help and version", () => {
 				contract: browserUseContracts[command],
 				help: result.stdout,
 			});
-			expect(result.stdout).toContain("browser-adapter-router");
+			expect(result.stdout).toContain("browser-connect");
 		}
 	});
 });
@@ -129,7 +132,7 @@ describe("U3 parser", () => {
 
 	test("declared flags are accepted without a usage error", async () => {
 		const result = await runForTest(
-			["targets", "list", "--mode", "route-bound", "--show-url", "--dry-run", "--json"],
+			["targets", "list", "--mode", "handoff-bound", "--show-url", "--dry-run", "--json"],
 			makeRuntime(),
 		);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
@@ -241,7 +244,7 @@ describe("U3 dry-run envelopes", () => {
 		expect(json.error).toMatchObject({ code: "browser_use_mock_failure" });
 	});
 
-	test("without dry-run operate requires live route evidence", async () => {
+	test("without dry-run operate requires live handoff evidence", async () => {
 		const result = await runForTest(
 			["operate", "snapshot", "--json"],
 			makeRuntime(),
@@ -249,6 +252,6 @@ describe("U3 dry-run envelopes", () => {
 		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
 		expect(json.status).toBe("error");
-		expect(json.error).toMatchObject({ code: "browser_operation_route_invalid" });
+		expect(json.error).toMatchObject({ code: "browser_operation_handoff_invalid" });
 	});
 });

@@ -195,8 +195,8 @@ async function executeCommand(input: {
 		parsed.family === "targets" ? "browser_targets" : "browser_operation";
 
 	// Browser Target Discovery (U5). The first live `browser-use` surface: real
-	// recovery and route-bound target listing through a proven adapter. Dry-run
-	// still short-circuits to the mock envelope below.
+	// recovery and handoff-bound target listing through an attached adapter.
+	// Dry-run still short-circuits to the mock envelope below.
 	if (parsed.command === "targets-list" && !parsed.dryRun) {
 		return runTargetsList({
 			parsed,
@@ -204,6 +204,7 @@ async function executeCommand(input: {
 			stdout: input.stdout,
 			stderr: input.stderr,
 			runId: input.runId,
+			runIdExplicit: input.runIdExplicit,
 			durationMs: input.durationMs,
 		});
 	}

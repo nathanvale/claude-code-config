@@ -47,10 +47,10 @@ describe("core substrate — pure functions", () => {
 
 describe("core substrate", () => {
 	test("a runtime action id shared across discovery and selection has one summary", () => {
-		// rerun_route_bound_target_discovery is declared in both action arrays. The
-		// two surfaces build separate Maps, so nothing fails at runtime if they
-		// drift — guard here that one continuation id never documents two different
-		// recovery strings.
+		// A continuation id declared in both action arrays (e.g. a shared recovery
+		// id) builds into separate Maps per surface, so nothing fails at runtime if
+		// they drift — guard here that one continuation id never documents two
+		// different recovery strings.
 		const discovery = new Map<string, string>(
 			browserUseTargetDiscoveryFailureActions.map((a) => [a.id, a.summary]),
 		);

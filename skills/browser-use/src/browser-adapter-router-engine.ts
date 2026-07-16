@@ -97,7 +97,10 @@ function requestsOperationCapability(
 }
 
 export function authorizesOperationClass(
-	binding: RouteBinding,
+	// Pick keeps the function reusable by any binding that carries an authorized
+	// capability set: the Router-era RouteBinding and the handoff-derived
+	// operation binding (migration U1) both satisfy it.
+	binding: Pick<RouteBinding, "authorized_capabilities">,
 	operationClass: BrowserOperationClass,
 ): boolean {
 	const required = OPERATION_CLASS_CAPABILITY[operationClass];

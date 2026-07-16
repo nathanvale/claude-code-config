@@ -42,10 +42,11 @@ import {
 
 const VERSION = "0.1.0";
 // One-line pointer the help surface uses to send agents back to the
-// route-bound prerequisites without copying route evidence schemas (R17, U3
-// scenario 8). browser-use never re-declares the route envelope shape.
+// connection prerequisite without copying the envelope schema. browser-use
+// never re-declares the Verified Handoff Envelope shape; browser-connect owns
+// it.
 const ROUTE_PREREQUISITE_POINTER =
-	"Prerequisite: get route evidence from `browser-adapter-router prepare` then `browser-adapter-router route` (--route).";
+	"Prerequisite: mint a Verified Handoff Envelope with `browser-connect connect <adapter> --json` (or `browser-connect run`), then pass it via --handoff.";
 
 export type ParsedBrowserUseCommand =
 	| { kind: "help"; family?: BrowserUseFamily; command?: BrowserUseCommand }

@@ -49,33 +49,30 @@ import {
 	truncateText,
 } from "./browser-use-core";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
-import {
-	readAdapterProofFacts,
-	readRouteFacts,
-} from "./browser-use-discovery";
+import { readHandoffFacts } from "./browser-use-discovery";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
-// Browser Target Selection (plan U6).
+// Browser Target Selection (plan U6, evidence re-based in migration U1).
 //
-// `browser-use targets select` turns a route-bound `targets list` success
+// `browser-use targets select` turns a handoff-bound `targets list` success
 // envelope plus one selector (a candidate ordinal OR Browser Target Hints) into
 // run-scoped selected-target state. `browser-use targets status` projects that
 // state for a human. A pure resolver (resolveOperationTarget) is exported for
 // the U7 `operate` front door.
 //
-// Selection discipline (R20, R25, AE5): only route-bound, operation-ready
-// candidates are selectable. A recovery-mode envelope (route_bound=false or
+// Selection discipline (R20, R25, AE5): only handoff-bound, operation-ready
+// candidates are selectable. A recovery-mode envelope (handoff_bound=false or
 // operation_ready=false) is rejected — its candidates are evidence-gathering
-// only. The supplied envelope is the candidate source; --route/--adapter-proof,
-// when supplied, are cross-checked against the envelope binding and must agree
-// (U5 review rigor: require contract identity, reject internally inconsistent
-// bindings, fail closed on mismatch).
+// only. The supplied envelope is the candidate source; --handoff, when
+// supplied, is cross-checked against the envelope binding and must agree
+// (require contract identity, reject internally inconsistent bindings, fail
+// closed on mismatch).
 //
 // State discipline: selected state is explicit run state, not ambient latest-tab
 // state. It is written owner-only and atomically, carries a short TTL, and binds
-// to the run/route/proof/target envelope so `status` and `operate` fail closed
-// on stale, mismatched, or cross-run state. Every distinct state cause (missing,
+// to the run/handoff/target envelope so `status` and `operate` fail closed on
+// stale, mismatched, or cross-run state. Every distinct state cause (missing,
 // unreadable, stale, mismatched, cross-run) maps to its own code + continuation.
 //
 // Privacy (R32, KTD7): state display facts reuse the same redaction the U5
@@ -87,7 +84,9 @@ import { retryabilityForRecoverability } from "./runtime-error-retryability";
 // Selected-target state shares the Browser Targets result-contract identity, so
 // a foreign or hand-written file cannot pass as selected state.
 const SELECTED_TARGET_STATE_CONTRACT_ID = BROWSER_USE_TARGETS_CONTRACT_ID;
-const SELECTED_TARGET_STATE_SCHEMA_VERSION = "1";
+// v2 (migration U1): binding fields derive from the Verified Handoff Envelope
+// (handoff_evidence_id replaces the proof/route tuple).
+const SELECTED_TARGET_STATE_SCHEMA_VERSION = "2";
 // Short TTL: selected state binds to a live tab and a fresh proof; a stale
 // selection must be re-made rather than silently operated against.
 const SELECTED_TARGET_STATE_TTL_MS = 15 * 60_000;
@@ -110,7 +109,8 @@ export type SelectionFailure = Failure<SelectionFailureActionId>;
 
 // Run-scoped selected-target state. Written by `targets select`, read by
 // `targets status` and (U7) `operate`. Display facts are already redacted; the
-// binding mirrors the route-bound discovery binding plus the selected candidate.
+// binding mirrors the handoff-bound discovery binding plus the selected
+// candidate.
 export type SelectedTargetState = {
 	// The persisted contract id as read. status/operate reject any value other
 	// than SELECTED_TARGET_STATE_CONTRACT_ID; carrying the real value (not a
@@ -119,10 +119,8 @@ export type SelectedTargetState = {
 	schema_version: string;
 	run_id: string;
 	selected_adapter_id: BrowserAdapterId;
-	warm_chrome_run_id: string;
-	adapter_proof_id: string;
 	verified_endpoint_identity: string;
-	route_evidence_hash: string;
+	handoff_evidence_id: string;
 	target_envelope_id: string;
 	// The selected candidate. candidate_id is the per-envelope id; ordinal is the
 	// public handle scoped to target_envelope_id.
@@ -135,15 +133,13 @@ export type SelectedTargetState = {
 	display: { origin: string; path_shape?: string; title?: string };
 };
 
-// Route-bound discovery binding parsed from the supplied envelope. Every field
-// is required for an operation-ready selection.
+// Handoff-bound discovery binding parsed from the supplied envelope. Every
+// field is required for an operation-ready selection.
 type SelectionEnvelopeBinding = {
 	runId: string;
 	selectedAdapter: BrowserAdapterId;
-	warmChromeRunId: string;
-	adapterProofId: string;
 	verifiedEndpointIdentity: string;
-	routeEvidenceHash: string;
+	handoffEvidenceId: string;
 	targetEnvelopeId: string;
 };
 
@@ -174,8 +170,9 @@ export async function runTargetsSelect(input: {
 			durationMs: input.durationMs(),
 		});
 
-	// 1. Read the route-bound targets list success envelope (stdin, else inline
-	// env). Empty input is a distinct, recoverable usage failure, not a crash.
+	// 1. Read the handoff-bound targets list success envelope (stdin, else
+	// inline env). Empty input is a distinct, recoverable usage failure, not a
+	// crash.
 	const stdin = await runtime.readStdin();
 	const rawEnvelope =
 		stdin.trim() !== ""
@@ -185,8 +182,8 @@ export async function runTargetsSelect(input: {
 		return fail({
 			code: "target_selection_envelope_invalid",
 			message:
-				"targets select requires a route-bound targets list success envelope on stdin or BROWSER_USE_TARGETS_ENVELOPE_JSON.",
-			actionId: "rerun_route_bound_target_discovery",
+				"targets select requires a handoff-bound targets list success envelope on stdin or BROWSER_USE_TARGETS_ENVELOPE_JSON.",
+			actionId: "rerun_handoff_bound_target_discovery",
 			exitCode: TARGET_SELECTION_EXIT_CODE,
 			recoverability: "change_input",
 		});
@@ -196,10 +193,10 @@ export async function runTargetsSelect(input: {
 	if (!envelopeParse.ok) return fail(envelopeParse.failure);
 	const envelope = envelopeParse.envelope;
 
-	// 2. Cross-check supplied route/proof evidence against the envelope binding.
-	// The envelope is the candidate source, but a caller may also pass --route /
-	// --adapter-proof; if they disagree with what produced the envelope, fail
-	// closed rather than selecting against ambiguous evidence (R9 rigor).
+	// 2. Cross-check supplied handoff evidence against the envelope binding.
+	// The envelope is the candidate source, but a caller may also pass
+	// --handoff; if it disagrees with what produced the envelope, fail closed
+	// rather than selecting against ambiguous evidence.
 	const crossCheck = await crossCheckSelectionEvidence(
 		runtime,
 		flags,
@@ -208,17 +205,17 @@ export async function runTargetsSelect(input: {
 	if (crossCheck) return fail(crossCheck);
 
 	// 2b. When the caller asserts a run (explicit --run-id / BROWSER_USE_RUN_ID),
-	// the envelope's route run must be that run. Selecting an envelope from a
-	// different route run into this run's state is a cross-run mistake; fail
-	// closed at select time rather than writing state that `status`/`operate`
-	// would later reject. With no explicit run id, the envelope's route run is
-	// authoritative and is used to correlate the run end to end.
+	// the envelope's run must be that run. Selecting an envelope from a
+	// different run into this run's state is a cross-run mistake; fail closed at
+	// select time rather than writing state that `status`/`operate` would later
+	// reject. With no explicit run id, the envelope's run is authoritative and
+	// is used to correlate the run end to end.
 	if (input.runIdExplicit && envelope.binding.runId !== input.runId) {
 		return fail({
 			code: "target_state_cross_run",
 			message:
 				"The supplied targets list envelope belongs to a different run than the asserted run id.",
-			actionId: "rerun_route_bound_target_discovery",
+			actionId: "rerun_handoff_bound_target_discovery",
 			exitCode: TARGET_SELECTION_EXIT_CODE,
 			recoverability: "change_input",
 		});
@@ -252,10 +249,8 @@ export async function runTargetsSelect(input: {
 		schema_version: SELECTED_TARGET_STATE_SCHEMA_VERSION,
 		run_id: envelope.binding.runId,
 		selected_adapter_id: envelope.binding.selectedAdapter,
-		warm_chrome_run_id: envelope.binding.warmChromeRunId,
-		adapter_proof_id: envelope.binding.adapterProofId,
 		verified_endpoint_identity: envelope.binding.verifiedEndpointIdentity,
-		route_evidence_hash: envelope.binding.routeEvidenceHash,
+		handoff_evidence_id: envelope.binding.handoffEvidenceId,
 		target_envelope_id: envelope.binding.targetEnvelopeId,
 		target_candidate_id: candidate.candidate_id,
 		selected_candidate_ordinal: candidate.candidate_ordinal,
@@ -349,16 +344,17 @@ type SelectionEnvelopeParse =
 	| { ok: true; envelope: SelectionEnvelope }
 	| { ok: false; failure: SelectionFailure };
 
-// Parse and validate the supplied route-bound targets list success envelope.
+// Parse and validate the supplied handoff-bound targets list success envelope.
 // Rejects recovery-mode envelopes (AE5), envelopes missing the Browser Targets
-// result-contract identity, and internally inconsistent bindings.
+// result-contract identity or schema version, and internally inconsistent
+// bindings.
 function parseSelectionEnvelope(raw: string): SelectionEnvelopeParse {
 	const invalid = (detail: string): SelectionEnvelopeParse => ({
 		ok: false,
 		failure: {
 			code: "target_selection_envelope_invalid",
 			message: `The supplied targets list envelope is invalid: ${detail}.`,
-			actionId: "rerun_route_bound_target_discovery",
+			actionId: "rerun_handoff_bound_target_discovery",
 			exitCode: TARGET_SELECTION_EXIT_CODE,
 			recoverability: "change_input",
 		},
@@ -373,15 +369,20 @@ function parseSelectionEnvelope(raw: string): SelectionEnvelopeParse {
 	if (data.contract !== SELECTED_TARGET_STATE_CONTRACT_ID) {
 		return invalid("data.contract is not the Browser Targets contract");
 	}
-	// AE5 / R25: only route-bound, operation-ready candidates are selectable.
-	if (data.route_bound !== true || data.operation_ready !== true) {
+	// A v1 (Router-era) envelope carries incompatible binding semantics under
+	// the same contract id; reject rather than half-parse.
+	if (data.schema_version !== SELECTED_TARGET_STATE_SCHEMA_VERSION) {
+		return invalid("data.schema_version is not the supported version");
+	}
+	// AE5 / R25: only handoff-bound, operation-ready candidates are selectable.
+	if (data.handoff_bound !== true || data.operation_ready !== true) {
 		return {
 			ok: false,
 			failure: {
 				code: "target_selection_recovery_rejected",
 				message:
-					"The supplied targets list output is recovery-mode (evidence-gathering only); selection requires route-bound, operation-ready candidates.",
-				actionId: "rerun_route_bound_target_discovery",
+					"The supplied targets list output is recovery-mode (evidence-gathering only); selection requires handoff-bound, operation-ready candidates.",
+				actionId: "rerun_handoff_bound_target_discovery",
 				exitCode: TARGET_SELECTION_EXIT_CODE,
 				recoverability: "change_input",
 			},
@@ -404,24 +405,22 @@ function parseSelectionEnvelope(raw: string): SelectionEnvelopeParse {
 		);
 	}
 	const runId = stringField(binding.run_id);
-	const warmChromeRunId = stringField(binding.warm_chrome_run_id);
-	const adapterProofId = stringField(binding.adapter_proof_id);
 	const verifiedEndpointIdentity = stringField(
 		binding.verified_endpoint_identity,
 	);
 	const targetEnvelopeId = stringField(binding.target_envelope_id);
-	// Route-bound bindings carry the route slice (R18); a route-bound envelope
+	// Handoff-bound bindings carry the identity slice; a handoff-bound envelope
 	// without it is internally inconsistent.
-	const routeEvidenceHash = stringField(binding.route_evidence_hash);
+	const handoffEvidenceId = stringField(binding.handoff_evidence_id);
 	if (
 		!runId ||
-		!warmChromeRunId ||
-		!adapterProofId ||
 		!verifiedEndpointIdentity ||
 		!targetEnvelopeId ||
-		!routeEvidenceHash
+		!handoffEvidenceId
 	) {
-		return invalid("binding fields are incomplete for an operation-ready route");
+		return invalid(
+			"binding fields are incomplete for an operation-ready handoff",
+		);
 	}
 	const candidates = parseEnvelopeCandidates(data.candidates);
 	if (!candidates) return invalid("candidates are missing or malformed");
@@ -455,10 +454,8 @@ function parseSelectionEnvelope(raw: string): SelectionEnvelopeParse {
 			binding: {
 				runId,
 				selectedAdapter,
-				warmChromeRunId,
-				adapterProofId,
 				verifiedEndpointIdentity,
-				routeEvidenceHash,
+				handoffEvidenceId,
 				targetEnvelopeId,
 			},
 			candidates,
@@ -537,83 +534,48 @@ function safeDisplayTitle(value: unknown): string | undefined {
 	return typeof value === "string" ? redactTitle(value) : undefined;
 }
 
-// --- Route/proof cross-check (optional, fail-closed on disagreement) -------
+// --- Handoff cross-check (optional, fail-closed on disagreement) -----------
 
-// When the caller also supplies --route / --adapter-proof, they must agree with
-// the envelope's binding. The envelope already encodes which route+proof
-// produced it; a contradicting flag is a caller mistake we must not silently
-// discard. Returns a failure when supplied evidence disagrees, else undefined.
+// When the caller also supplies --handoff, it must agree with the envelope's
+// binding. The envelope already encodes which verified handoff produced it; a
+// contradicting flag is a caller mistake we must not silently discard.
+// Returns a failure when supplied evidence disagrees, else undefined.
 async function crossCheckSelectionEvidence(
 	runtime: BrowserUseRuntime,
 	flags: Record<string, string>,
 	binding: SelectionEnvelopeBinding,
 ): Promise<SelectionFailure | undefined> {
-	const proofPath = flags["--adapter-proof"];
-	if (proofPath) {
-		const proofParse = await readAdapterProofFacts(runtime, proofPath);
-		if (!proofParse.ok) {
-			return {
-				code: "target_selection_envelope_invalid",
-				message:
-					"The supplied --adapter-proof could not be validated against the selection envelope.",
-				actionId: "change_selection_input",
-				exitCode: TARGET_SELECTION_EXIT_CODE,
-				recoverability: "change_input",
-			};
-		}
-		const proof = proofParse.facts;
-		if (
-			proof.adapter !== binding.selectedAdapter ||
-			proof.adapterProofId !== binding.adapterProofId ||
-			proof.verifiedEndpointIdentity !== binding.verifiedEndpointIdentity ||
-			proof.warmChromeRunId !== binding.warmChromeRunId
-		) {
-			return {
-				code: "target_selection_envelope_invalid",
-				message:
-					"The supplied --adapter-proof does not match the selection envelope binding.",
-				actionId: "change_selection_input",
-				exitCode: TARGET_SELECTION_EXIT_CODE,
-				recoverability: "change_input",
-			};
-		}
+	const handoffPath = flags["--handoff"];
+	if (!handoffPath) return undefined;
+	const parse = await readHandoffFacts(runtime, handoffPath);
+	if (!parse.ok || parse.kind !== "verified") {
+		return {
+			code: "target_selection_envelope_invalid",
+			message:
+				"The supplied --handoff could not be validated against the selection envelope.",
+			actionId: "change_selection_input",
+			exitCode: TARGET_SELECTION_EXIT_CODE,
+			recoverability: "change_input",
+		};
 	}
-	const routePath = flags["--route"];
-	if (routePath) {
-		const routeParse = await readRouteFacts(runtime, routePath);
-		if (!routeParse.ok) {
-			return {
-				code: "target_selection_envelope_invalid",
-				message:
-					"The supplied --route could not be validated against the selection envelope.",
-				actionId: "change_selection_input",
-				exitCode: TARGET_SELECTION_EXIT_CODE,
-				recoverability: "change_input",
-			};
-		}
-		const route = routeParse.facts;
-		// Compare the FULL route binding, not a subset. readRouteFacts already
-		// parsed warm_chrome_run_id and verified_endpoint_identity; omitting them
-		// would let a route that agrees on adapter/proof/hash but disagrees on the
-		// warm-Chrome run or endpoint pass the cross-check and bind selected state
-		// to the wrong endpoint facts.
-		if (
-			route.selectedAdapter !== binding.selectedAdapter ||
-			route.adapterProofId !== binding.adapterProofId ||
-			route.warmChromeRunId !== binding.warmChromeRunId ||
-			route.verifiedEndpointIdentity !== binding.verifiedEndpointIdentity ||
-			route.routeEvidenceHash !== binding.routeEvidenceHash ||
-			route.runId !== binding.runId
-		) {
-			return {
-				code: "target_selection_envelope_invalid",
-				message:
-					"The supplied --route does not match the selection envelope binding.",
-				actionId: "change_selection_input",
-				exitCode: TARGET_SELECTION_EXIT_CODE,
-				recoverability: "change_input",
-			};
-		}
+	// Compare the FULL derived binding, not a subset: adapter, evidence hash,
+	// endpoint identity, and run id must all agree, or the selection would bind
+	// state to the wrong attachment facts.
+	const facts = parse.facts;
+	if (
+		facts.adapter !== binding.selectedAdapter ||
+		facts.handoffEvidenceId !== binding.handoffEvidenceId ||
+		facts.verifiedEndpointIdentity !== binding.verifiedEndpointIdentity ||
+		facts.runId !== binding.runId
+	) {
+		return {
+			code: "target_selection_envelope_invalid",
+			message:
+				"The supplied --handoff does not match the selection envelope binding.",
+			actionId: "change_selection_input",
+			exitCode: TARGET_SELECTION_EXIT_CODE,
+			recoverability: "change_input",
+		};
 	}
 	return undefined;
 }
@@ -749,7 +711,7 @@ function resolveSelectionCandidate(
 						code: "target_selection_hint_no_match",
 						message:
 							"--url-contains matched no candidate, and the supplied envelope carries no path detail for some targets. Re-run targets list with --show-url, then select against that envelope.",
-						actionId: "rerun_route_bound_target_discovery",
+						actionId: "rerun_handoff_bound_target_discovery",
 						exitCode: TARGET_SELECTION_EXIT_CODE,
 						recoverability: "change_input",
 					},
@@ -761,7 +723,7 @@ function resolveSelectionCandidate(
 			failure: {
 				code: "target_selection_hint_no_match",
 				message:
-					"No Browser Target Candidate matches the supplied hints in the route-bound envelope.",
+					"No Browser Target Candidate matches the supplied hints in the handoff-bound envelope.",
 				actionId: "refine_target_hint",
 				exitCode: TARGET_SELECTION_EXIT_CODE,
 				recoverability: "change_input",
@@ -971,10 +933,8 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 	const schemaVersion = stringField(value.schema_version);
 	const runId = stringField(value.run_id);
 	const selectedAdapter = value.selected_adapter_id;
-	const warmChromeRunId = stringField(value.warm_chrome_run_id);
-	const adapterProofId = stringField(value.adapter_proof_id);
 	const verifiedEndpointIdentity = stringField(value.verified_endpoint_identity);
-	const routeEvidenceHash = stringField(value.route_evidence_hash);
+	const handoffEvidenceId = stringField(value.handoff_evidence_id);
 	const targetEnvelopeId = stringField(value.target_envelope_id);
 	const targetCandidateId = stringField(value.target_candidate_id);
 	const ordinal = value.selected_candidate_ordinal;
@@ -986,10 +946,8 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 		!schemaVersion ||
 		!runId ||
 		!isBrowserAdapterId(selectedAdapter) ||
-		!warmChromeRunId ||
-		!adapterProofId ||
 		!verifiedEndpointIdentity ||
-		!routeEvidenceHash ||
+		!handoffEvidenceId ||
 		!targetEnvelopeId ||
 		!targetCandidateId ||
 		typeof ordinal !== "number" ||
@@ -1008,10 +966,8 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 		schema_version: schemaVersion,
 		run_id: runId,
 		selected_adapter_id: selectedAdapter,
-		warm_chrome_run_id: warmChromeRunId,
-		adapter_proof_id: adapterProofId,
 		verified_endpoint_identity: verifiedEndpointIdentity,
-		route_evidence_hash: routeEvidenceHash,
+		handoff_evidence_id: handoffEvidenceId,
 		target_envelope_id: targetEnvelopeId,
 		target_candidate_id: targetCandidateId,
 		selected_candidate_ordinal: ordinal,
@@ -1031,9 +987,10 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 // same hint surface `select` accepts.
 export type OperationTargetHints = TargetHints;
 
-// The route-bound discovery context an operation already holds: its candidate
-// set and whether the discovery binding is fresh. Selected state is optional;
-// hints are optional. U7 owns the I/O that produces these; this resolver is pure.
+// The handoff-bound discovery context an operation already holds: its
+// candidate set and whether the discovery binding is fresh. Selected state is
+// optional; hints are optional. U7 owns the I/O that produces these; this
+// resolver is pure.
 export type OperationResolutionInput = {
 	hints: OperationTargetHints;
 	candidates: readonly BrowserTargetCandidate[];
@@ -1043,10 +1000,10 @@ export type OperationResolutionInput = {
 		target_candidate_id: string;
 		selected_candidate_ordinal: number;
 	};
-	// True only for a fresh, route-bound discovery binding. The exactly-one
-	// fallback is gated on this (R: "Exactly-one-candidate fallback runs only with
-	// route-bound discovery and fresh binding").
-	routeBoundFreshBinding: boolean;
+	// True only for a fresh, handoff-bound discovery binding. The exactly-one
+	// fallback is gated on this (R: "Exactly-one-candidate fallback runs only
+	// with handoff-bound discovery and fresh binding").
+	handoffBoundFreshBinding: boolean;
 };
 
 export type OperationResolution =
@@ -1066,7 +1023,7 @@ export type OperationResolution =
 //      back to selected state (AE8); it fails on the hints.
 //   2. With no hints, use selected state when present.
 //   3. With no hints and no selected state, the exactly-one-candidate fallback
-//      applies ONLY when the discovery binding is route-bound and fresh.
+//      applies ONLY when the discovery binding is handoff-bound and fresh.
 export function resolveOperationTarget(
 	input: OperationResolutionInput,
 ): OperationResolution {
@@ -1107,7 +1064,7 @@ export function resolveOperationTarget(
 		return { kind: "selection_moved" };
 	}
 
-	if (input.routeBoundFreshBinding && input.candidates.length === 1) {
+	if (input.handoffBoundFreshBinding && input.candidates.length === 1) {
 		return {
 			kind: "resolved",
 			source: "single_candidate",
@@ -1233,8 +1190,7 @@ function selectedTargetView(state: SelectedTargetState): Record<string, unknown>
 	return {
 		run_id: state.run_id,
 		selected_adapter_id: state.selected_adapter_id,
-		adapter_proof_id: state.adapter_proof_id,
-		route_evidence_hash: state.route_evidence_hash,
+		handoff_evidence_id: state.handoff_evidence_id,
 		target_envelope_id: state.target_envelope_id,
 		target_candidate_id: state.target_candidate_id,
 		candidate_ordinal: state.selected_candidate_ordinal,

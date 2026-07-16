@@ -30,7 +30,6 @@ import type {
 	BrowserAdapterId,
 	BrowserOperationClass,
 	BrowserTargetCandidate,
-	RouteBinding,
 } from "./browser-adapter-router-model";
 import { authorizesOperationClass } from "./browser-adapter-router-engine";
 import type { McporterCommandResult } from "./mcporter-transport";
@@ -57,12 +56,10 @@ import {
 } from "./browser-use-core";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
-	type AdapterProofFacts,
-	type RouteFacts,
+	type HandoffFacts,
 	type TargetDiscoveryFailure,
 	discoverPages,
-	readAdapterProofFacts,
-	readRouteFacts,
+	readHandoffFacts,
 } from "./browser-use-discovery";
 import {
 	type OperationResolution,
@@ -77,14 +74,14 @@ import {
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
-// Browser Operations (plan U7).
+// Browser Operations (plan U7, evidence re-based in migration U1).
 //
 // `browser-use operate snapshot|screenshot|emulate` runs one authorized live
-// browser operation. The pipeline reads inputs, loads the route binding, loads
-// the selected-target context, resolves the operation target, selects the
-// adapter page, runs the mcporter transport, and emits a bounded result.
-// Every failure mode bridges down into the operation failure taxonomy
-// (route, proof, selection, discovery, transport, resolution).
+// browser operation. The pipeline reads inputs, loads the Verified Handoff
+// Envelope binding, loads the selected-target context, resolves the operation
+// target, selects the adapter page, runs the mcporter transport, and emits a
+// bounded result. Every failure mode bridges down into the operation failure
+// taxonomy (handoff, selection, discovery, transport, resolution).
 // ---------------------------------------------------------------------------
 
 const SNAPSHOT_MAX_BYTES = 64 * 1024;
@@ -138,8 +135,7 @@ type OperationInputs = {
 };
 
 type OperationBindingContext = {
-	route: RouteFacts;
-	proof: AdapterProofFacts;
+	handoff: HandoffFacts;
 };
 
 type OperationTargetContext = {
@@ -189,7 +185,8 @@ export async function runOperate(input: {
 		runtime,
 		flags,
 		operation: operationInputs.inputs.operation,
-		now: runtime.now(),
+		runId: input.runId,
+		runIdExplicit: input.runIdExplicit,
 	});
 	if (!binding.ok) return fail(binding.failure);
 
@@ -203,7 +200,7 @@ export async function runOperate(input: {
 		runIdExplicit: input.runIdExplicit,
 		targetEnvelopeId: targetContext.context.targetEnvelopeId,
 		targetEntries: targetContext.context.targetEntries,
-		route: binding.context.route,
+		handoff: binding.context.handoff,
 		now: runtime.now(),
 	});
 	if (!target.ok) return fail(target.failure);
@@ -219,7 +216,7 @@ export async function runOperate(input: {
 	const bringToFront = flags["--bring-to-front"] !== undefined;
 	const selectedPage = await selectOperationPage({
 		runtime,
-		adapter: binding.context.route.selectedAdapter,
+		adapter: binding.context.handoff.adapter,
 		pageId: target.target.pageId,
 		bringToFront,
 	});
@@ -227,7 +224,7 @@ export async function runOperate(input: {
 
 	const operationCall = await runOperationTransport({
 		runtime,
-		adapter: binding.context.route.selectedAdapter,
+		adapter: binding.context.handoff.adapter,
 		operation: operationInputs.inputs.operation,
 		screenshot: operationInputs.inputs.screenshot,
 		viewport: operationInputs.inputs.viewport,
@@ -248,8 +245,8 @@ export async function runOperate(input: {
 	return emitOperationSuccess({
 		command: parsed.command,
 		operation: operationInputs.inputs.operation,
-		adapter: binding.context.route.selectedAdapter,
-		route: binding.context.route,
+		adapter: binding.context.handoff.adapter,
+		handoff: binding.context.handoff,
 		target: target.target.candidate,
 		targetSource: target.target.source,
 		outputMode: parsed.outputMode,
@@ -298,78 +295,75 @@ async function loadOperationBinding(input: {
 	runtime: BrowserUseRuntime;
 	flags: Record<string, string>;
 	operation: BrowserOperationClass;
-	now: number;
+	runId: string;
+	runIdExplicit: boolean;
 }): Promise<
 	{ ok: true; context: OperationBindingContext } | { ok: false; failure: OperationFailure }
 > {
-	const routePath = stringField(input.flags["--route"]);
-	if (!routePath) {
-		return { ok: false, failure: operationRouteFailure("operate requires --route <path>.") };
-	}
-	const proofPath = stringField(input.flags["--adapter-proof"]);
-	if (!proofPath) {
+	const handoffPath = stringField(input.flags["--handoff"]);
+	if (!handoffPath) {
 		return {
 			ok: false,
-			failure: operationProofInvalidFailure("operate requires --adapter-proof <path>."),
+			failure: operationHandoffInvalidFailure("operate requires --handoff <path>"),
 		};
 	}
 
-	const routeParse = await readRouteFacts(input.runtime, routePath);
-	if (!routeParse.ok) {
-		return { ok: false, failure: operationRouteFailure(routeParse.failure.message) };
-	}
-	const route = routeParse.facts;
-	const routeFresh = routeFreshForOperation(route.binding, input.now);
-	if (!routeFresh.ok) return { ok: false, failure: routeFresh.failure };
-
-	const proofParse = await readAdapterProofFacts(input.runtime, proofPath);
-	if (!proofParse.ok) {
+	const parse = await readHandoffFacts(input.runtime, handoffPath);
+	if (!parse.ok) {
 		return {
 			ok: false,
-			failure: operationProofInvalidFailure(proofParse.failure.message),
+			failure: operationHandoffInvalidFailure(parse.failure.message),
 		};
 	}
-	const proof = proofParse.facts;
-	const mismatch = operationProofMismatch(route, proof);
-	if (mismatch) return { ok: false, failure: mismatch };
+	if (parse.kind === "failed") {
+		return {
+			ok: false,
+			failure: operationHandoffInvalidFailure(
+				"the supplied envelope is a browser-connect failure envelope; it authorizes no attachment",
+			),
+		};
+	}
+	const handoff = parse.facts;
 
-	if (!authorizesOperationClass(route.binding, input.operation)) {
+	// One run id threads the chain (R3): an explicitly asserted run id must be
+	// the envelope's run id.
+	if (input.runIdExplicit && input.runId !== handoff.runId) {
 		return {
 			ok: false,
 			failure: {
-				code: "browser_operation_capability_unauthorized",
+				code: "browser_operation_run_mismatch",
 				message:
-					"The route success envelope does not authorize the requested Browser Operation capability.",
-				actionId: "rerun_route_bound_target_discovery",
+					"The asserted --run-id does not match the handoff envelope's run id.",
+				actionId: "supply_verified_handoff",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "change_input",
 			},
 		};
 	}
 
-	return { ok: true, context: { route, proof } };
-}
-
-function operationProofMismatch(
-	route: RouteFacts,
-	proof: AdapterProofFacts,
-): OperationFailure | undefined {
+	// Capability authorization (R5): the envelope authorizes an attachment; the
+	// capability set for that adapter is browser-use policy, enforced through
+	// the surviving router engine.
 	if (
-		proof.adapter === route.selectedAdapter &&
-		proof.adapterProofId === route.adapterProofId &&
-		proof.verifiedEndpointIdentity === route.verifiedEndpointIdentity &&
-		proof.warmChromeRunId === route.warmChromeRunId
+		!authorizesOperationClass(
+			{ authorized_capabilities: [...handoff.authorizedCapabilities] },
+			input.operation,
+		)
 	) {
-		return undefined;
+		return {
+			ok: false,
+			failure: {
+				code: "browser_operation_capability_unauthorized",
+				message:
+					"The verified handoff's adapter does not authorize the requested Browser Operation capability.",
+				actionId: "change_operation_input",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			},
+		};
 	}
-	return {
-		code: "browser_operation_adapter_proof_mismatch",
-		message:
-			"The supplied Adapter Proof does not match the route's selected adapter binding.",
-		actionId: "refresh_adapter_proof",
-		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-		recoverability: "change_input",
-	};
+
+	return { ok: true, context: { handoff } };
 }
 
 async function loadOperationTargetContext(
@@ -378,17 +372,16 @@ async function loadOperationTargetContext(
 ): Promise<
 	{ ok: true; context: OperationTargetContext } | { ok: false; failure: OperationFailure }
 > {
-	const discovery = await discoverPages(runtime, binding.route.selectedAdapter);
+	const discovery = await discoverPages(runtime, binding.handoff.adapter);
 	if (!discovery.ok) {
 		return { ok: false, failure: operationFailureFromDiscovery(discovery.failure) };
 	}
 
 	const targetEnvelopeId = targetEnvelopeIdOf({
-		runId: binding.route.runId,
-		mode: "route-bound",
-		adapter: binding.route.selectedAdapter,
-		adapterProofId: binding.proof.adapterProofId,
-		routeEvidenceHash: binding.route.routeEvidenceHash,
+		runId: binding.handoff.runId,
+		mode: "handoff-bound",
+		adapter: binding.handoff.adapter,
+		handoffEvidenceId: binding.handoff.handoffEvidenceId,
 	});
 	const targetEntries = operationTargetEntries(discovery.pages, targetEnvelopeId);
 	if (targetEntries.length === 0) {
@@ -397,8 +390,8 @@ async function loadOperationTargetContext(
 			failure: {
 				code: "browser_operation_target_missing",
 				message:
-					"No operation-ready Browser Target Candidates were discovered through the proven adapter.",
-				actionId: "rerun_route_bound_target_discovery",
+					"No operation-ready Browser Target Candidates were discovered through the attached adapter.",
+				actionId: "rerun_handoff_bound_target_discovery",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "retry",
 			},
@@ -415,7 +408,7 @@ async function resolveOperationTargetEntry(input: {
 	runIdExplicit: boolean;
 	targetEnvelopeId: string;
 	targetEntries: OperationTargetEntry[];
-	route: RouteFacts;
+	handoff: HandoffFacts;
 	now: number;
 }): Promise<
 	{ ok: true; target: ResolvedOperationTarget } | { ok: false; failure: OperationFailure }
@@ -427,7 +420,7 @@ async function resolveOperationTargetEntry(input: {
 		runId: input.runId,
 		runIdExplicit: input.runIdExplicit,
 		targetEnvelopeId: input.targetEnvelopeId,
-		route: input.route,
+		handoff: input.handoff,
 		now: input.now,
 	});
 	if (!selectedState.ok) return { ok: false, failure: selectedState.failure };
@@ -445,7 +438,7 @@ async function resolveOperationTargetEntry(input: {
 					},
 				}
 			: {}),
-		routeBoundFreshBinding: true,
+		handoffBoundFreshBinding: true,
 	});
 	if (resolution.kind !== "resolved") {
 		return {
@@ -463,8 +456,8 @@ async function resolveOperationTargetEntry(input: {
 			failure: {
 				code: "browser_operation_target_missing",
 				message:
-					"The resolved Browser Target no longer carries an adapter page handle; re-run route-bound target discovery.",
-				actionId: "rerun_route_bound_target_discovery",
+					"The resolved Browser Target no longer carries an adapter page handle; re-run handoff-bound target discovery.",
+				actionId: "rerun_handoff_bound_target_discovery",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "retry",
 			},
@@ -566,7 +559,7 @@ async function loadOperationSelectedState(input: {
 	runId: string;
 	runIdExplicit: boolean;
 	targetEnvelopeId: string;
-	route: RouteFacts;
+	handoff: HandoffFacts;
 	now: number;
 }): Promise<OperationStateLoad> {
 	const hasStateSource =
@@ -592,11 +585,9 @@ async function loadOperationSelectedState(input: {
 	}
 	const state = load.state;
 	if (
-		state.selected_adapter_id !== input.route.selectedAdapter ||
-		state.warm_chrome_run_id !== input.route.warmChromeRunId ||
-		state.adapter_proof_id !== input.route.adapterProofId ||
-		state.verified_endpoint_identity !== input.route.verifiedEndpointIdentity ||
-		state.route_evidence_hash !== input.route.routeEvidenceHash ||
+		state.selected_adapter_id !== input.handoff.adapter ||
+		state.verified_endpoint_identity !== input.handoff.verifiedEndpointIdentity ||
+		state.handoff_evidence_id !== input.handoff.handoffEvidenceId ||
 		state.target_envelope_id !== input.targetEnvelopeId
 	) {
 		return {
@@ -604,7 +595,7 @@ async function loadOperationSelectedState(input: {
 			failure: {
 				code: "target_state_mismatch",
 				message:
-					"The selected-target state does not match the supplied route and Adapter Proof binding.",
+					"The selected-target state does not match the supplied Verified Handoff Envelope binding.",
 				actionId: "refresh_target_selection",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "change_input",
@@ -612,25 +603,6 @@ async function loadOperationSelectedState(input: {
 		};
 	}
 	return { ok: true, state };
-}
-
-function routeFreshForOperation(
-	binding: RouteBinding,
-	now: number,
-): { ok: true } | { ok: false; failure: OperationFailure } {
-	const expiresAt = Date.parse(binding.expires_at);
-	if (Number.isNaN(expiresAt)) {
-		return { ok: false, failure: operationRouteFailure("route expiry is invalid") };
-	}
-	if (now >= expiresAt) {
-		return {
-			ok: false,
-			failure: operationRouteFailure(
-				"route success has expired; re-run prepare and route before operating",
-			),
-		};
-	}
-	return { ok: true };
 }
 
 function readScreenshotArtifact(
@@ -851,21 +823,11 @@ async function runOperationTransport(input: {
 	]);
 }
 
-function operationRouteFailure(detail: string): OperationFailure {
+function operationHandoffInvalidFailure(detail: string): OperationFailure {
 	return {
-		code: "browser_operation_route_invalid",
-		message: `The supplied route success envelope cannot authorize the operation: ${detail}.`,
-		actionId: "rerun_route_bound_target_discovery",
-		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-		recoverability: "change_input",
-	};
-}
-
-function operationProofInvalidFailure(detail: string): OperationFailure {
-	return {
-		code: "browser_operation_adapter_proof_invalid",
-		message: `The supplied Adapter Proof cannot authorize the operation: ${detail}.`,
-		actionId: "supply_adapter_proof",
+		code: "browser_operation_handoff_invalid",
+		message: `The supplied Verified Handoff Envelope cannot authorize the operation: ${detail}.`,
+		actionId: "supply_verified_handoff",
 		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 		recoverability: "change_input",
 	};
@@ -975,7 +937,7 @@ function operationFailureFromResolution(
 		return {
 			code: "browser_operation_target_moved",
 			message:
-				"The selected Browser Target is no longer present in the current route-bound target set.",
+				"The selected Browser Target is no longer present in the current handoff-bound target set.",
 			actionId: "refresh_target_selection",
 			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 			recoverability: "change_input",
@@ -984,7 +946,7 @@ function operationFailureFromResolution(
 	return {
 		code: "browser_operation_target_missing",
 		message:
-			"No Browser Target was selected and no single route-bound candidate is available.",
+			"No Browser Target was selected and no single handoff-bound candidate is available.",
 		actionId: "choose_target_candidate",
 		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 		recoverability: "change_input",
@@ -1043,7 +1005,7 @@ function emitOperationSuccess(input: {
 	command: BrowserUseCommand;
 	operation: BrowserOperationClass;
 	adapter: BrowserAdapterId;
-	route: RouteFacts;
+	handoff: HandoffFacts;
 	target: BrowserTargetCandidate;
 	targetSource: "hints" | "selected_state" | "single_candidate";
 	outputMode: OutputMode;
@@ -1083,9 +1045,8 @@ function emitOperationSuccess(input: {
 				operation: input.operation,
 				adapter: input.adapter,
 				binding: {
-					run_id: input.route.runId,
-					adapter_proof_id: input.route.adapterProofId,
-					route_evidence_hash: input.route.routeEvidenceHash,
+					run_id: input.handoff.runId,
+					handoff_evidence_id: input.handoff.handoffEvidenceId,
 					target_candidate_id: input.target.candidate_id,
 				},
 				target_source: input.targetSource,
