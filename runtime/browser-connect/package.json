@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@side-quest/cli-command-facade": "workspace:*",
+		"@side-quest/mcporter-transport": "workspace:*",
 		"@side-quest/warm-chrome": "workspace:*"
 	},
 	"devDependencies": {

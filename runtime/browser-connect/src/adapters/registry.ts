@@ -9,47 +9,40 @@ import {
 } from "../../src/model.ts";
 
 // ---------------------------------------------------------------------------
-// KTD8 — package-local no-shell argv transport.
+// KTD8/KTD5 — no-shell argv transport, consumed from the shared owner.
 //
-// Reimplements the no-shell, positional-argv, bounded-timeout invocation shape
-// from `skills/browser-use/src/mcporter-transport.ts` (browser-use exports no
-// module surface, so it cannot be imported). Injection produces exact argv
+// The no-shell, positional-argv, bounded-timeout invocation shape is owned by
+// `@side-quest/mcporter-transport` (runtime/mcporter-transport); this module
+// binds it to the Adapter Definition seam. Injection produces exact argv
 // ARRAYS — never shell strings. This is the ONLY channel through which an
 // Adapter Definition reaches its own binary; browser-connect never probes on an
 // adapter's behalf (R4).
 // ---------------------------------------------------------------------------
+
+import {
+	isMissingTransportCommandResult,
+	spawnTransportCommand,
+	type TransportCommandInput,
+	type TransportCommandResult,
+} from "@side-quest/mcporter-transport";
 
 /**
  * Bounded, no-shell command invocation. `command` + `args` are passed
  * positionally to the runtime spawner; nothing is ever joined into a shell
  * string, so injected endpoints and arguments are never shell-evaluated.
  * `cwd` is optional and used only by the isolated installer boundary (R28:
- * neutral working directory); adapter probes never set it.
+ * neutral working directory); adapter probes never set it. `env` with
+ * `exactEnv` is the isolated installer's EXACT allowlisted environment (R28);
+ * probes merge `env` over the inherited environment. `detached` is omitted:
+ * `spawnAdapterCommand` always runs the child as its own process-group leader.
  */
-export type AdapterCommandInput = {
-	command: string;
-	args: readonly string[];
-	env?: Record<string, string | undefined>;
-	cwd?: string;
-	/**
-	 * When true, `env` is the child's EXACT environment — never merged over
-	 * `process.env` (R28: the isolated installer's allowlist is authoritative).
-	 * Default false: probes merge `env` over the inherited environment.
-	 */
-	exactEnv?: boolean;
-	timeoutMs: number;
-};
+export type AdapterCommandInput = Omit<TransportCommandInput, "detached">;
 
 /**
  * Result of a bounded command invocation. `exitCode` 127 (or a
  * spawn-failure-shaped result) signals the resolved binary was not found.
  */
-export type AdapterCommandResult = {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-	timedOut?: boolean;
-};
+export type AdapterCommandResult = TransportCommandResult;
 
 /**
  * Executable provenance resolution (R5): resolve an adapter's identity to an
@@ -313,94 +306,19 @@ export function findAdapterDefinition(
 }
 
 /**
- * Default no-shell command spawner (KTD8), mirroring
- * `spawnMcporterCommand`: bounded timeout, piped output, argv passed
- * positionally (never shell-evaluated). Missing binary surfaces as an
- * exit-127 result rather than a throw. Not used in unit tests — those inject a
- * fake `runCommand`.
+ * Default no-shell command spawner (KTD8/KTD5): the shared
+ * `@side-quest/mcporter-transport` spawn — bounded timeout, piped output, argv
+ * passed positionally (never shell-evaluated) — pinned to `detached: true` so
+ * the child is its own process-group leader and the timeout kill reaps the
+ * ENTIRE group (an installer's own children included). Missing binary surfaces
+ * as an exit-127 result rather than a throw; `exactEnv` without an explicit
+ * env allowlist fails closed inside the shared spawn (R28). Not used in unit
+ * tests — those inject a fake `runCommand`.
  */
 export async function spawnAdapterCommand(
 	input: AdapterCommandInput,
 ): Promise<AdapterCommandResult> {
-	if (input.exactEnv === true && input.env === undefined) {
-		// Fail closed (R28): exactEnv with no env would fall through to full
-		// process.env inheritance — the exact leak the flag exists to prevent.
-		throw new Error(
-			"spawnAdapterCommand: exactEnv requires an explicit env allowlist",
-		);
-	}
-	let proc: ReturnType<typeof Bun.spawn>;
-	try {
-		proc = Bun.spawn([input.command, ...input.args], {
-			stdout: "pipe",
-			stderr: "pipe",
-			// The isolated installer passes a neutral cwd and an EXACT allowlisted
-			// environment (`exactEnv`, R28) — never merged over process.env, so no
-			// inherited registry, auth, or proxy value can leak. Probes keep the
-			// merge-over-inherited behavior. stdin is never inherited: no prompt.
-			...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-			env: input.env
-				? input.exactEnv === true
-					? stripUndefined(input.env)
-					: { ...process.env, ...stripUndefined(input.env) }
-				: undefined,
-			stdin: "ignore",
-			// Own process group (POSIX `setsid` via Bun >= 1.3 `detached`): the
-			// timeout kill below can then reap the ENTIRE group — an installer's
-			// own children included — so no straggler outlives the SIGKILL and
-			// keeps writing into staging during cleanup. Completion still awaits
-			// only the direct child; the trade-off is that a detached child no
-			// longer receives the parent terminal's signals (e.g. Ctrl-C), which
-			// bounded timeouts already cover.
-			detached: true,
-		});
-	} catch {
-		return {
-			exitCode: 127,
-			stdout: "",
-			stderr: `${input.command}: command not found`,
-		};
-	}
-	const completion = Promise.all([
-		new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-		new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-		proc.exited,
-	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const timeoutResult = new Promise<AdapterCommandResult>((resolve) => {
-		timeout = setTimeout(() => {
-			// The child is its own process-group leader (`detached` above), so
-			// signal the GROUP (negative pid): the installer's own children die
-			// with it instead of surviving a direct-child-only SIGKILL. Fall back
-			// to the direct child if the group signal fails (already exited).
-			try {
-				process.kill(-proc.pid, "SIGKILL");
-			} catch {
-				try {
-					proc.kill("SIGKILL");
-				} catch {
-					// Best effort. Timeout result still preserves bounded CLI behavior.
-				}
-			}
-			resolve({ exitCode: 1, stdout: "", stderr: "", timedOut: true });
-		}, input.timeoutMs);
-	});
-	try {
-		return await Promise.race([completion, timeoutResult]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-		completion.catch(() => undefined);
-	}
-}
-
-function stripUndefined(
-	env: Record<string, string | undefined>,
-): Record<string, string> {
-	const out: Record<string, string> = {};
-	for (const [key, value] of Object.entries(env)) {
-		if (value !== undefined) out[key] = value;
-	}
-	return out;
+	return spawnTransportCommand({ ...input, detached: true });
 }
 
 /**
@@ -411,11 +329,7 @@ function stripUndefined(
 export function isMissingAdapterCommandResult(
 	result: AdapterCommandResult,
 ): boolean {
-	const text = `${result.stderr}\n${result.stdout}`;
-	return (
-		result.exitCode === 127 ||
-		/(command not found|not found|ENOENT|No such file or directory)/i.test(text)
-	);
+	return isMissingTransportCommandResult(result);
 }
 
 /** Bounded read for an adapter's `--version` probe. Shared by both adapters. */
