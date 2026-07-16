@@ -32,7 +32,7 @@ safety.
 Name the browser outcome, then connect once and operate:
 
 - For browser-use project work, read `skills/browser-use/references/coding-task-tracker.md` before choosing or updating a tracker task.
-- Choose one run id; pass it once as `--run-id` on the browser-connect command. The Verified Handoff Envelope threads it through targets, run-scoped target state, and operate.
+- Choose one run id. Pass it as `--run-id` on the browser-connect command, and export `BROWSER_USE_RUN_ID=<run-id>` plus `BROWSER_USE_TARGET_STATE_DIR=<dir>` for the browser-use commands (or pass `--state <path>` explicitly on select/status/operate). The envelope carries the run id into each command's binding; the state path needs the explicit run id or `--state` — select fails closed with `target_selection_state_path_missing` otherwise.
 - Wrapped-tool outcome: `browser-connect run <adapter> -- <cmd>` proves the connection, injects the verified endpoint, and execs the command (envelope on stderr pre-exec; exit passthrough).
 - browser-use outcome: `browser-connect connect <adapter> --json` mints the Verified Handoff Envelope on stdout; save it.
 - Discover: `browser-use targets list --mode handoff-bound --handoff <envelope> --json`; save the success envelope. Handoff-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates.
@@ -78,5 +78,5 @@ Continuation precedence: a hard preflight failure governs; only then does a `con
 - Adapter not installed: `browser-connect repair-adapter <adapter> --check --json` to preview, `--execute` to repair (`runtime/browser-connect/REPAIR.md#v1-install_adapter`).
 - Attachment probe failed: reproduce with `browser-connect connect <adapter> --json --verbose --run-id <run_id>` (`runtime/browser-connect/REPAIR.md#v1-inspect_attachment_probe`).
 - Untyped or unknown connection failure: `browser-connect check --json --verbose --run-id <run_id>` (`runtime/browser-connect/REPAIR.md#v1-inspect_diagnostics`).
-- Blocked on targets or handoff evidence (invalid, stale, run-id mismatch): mint a fresh envelope with `browser-connect connect <adapter> --json`, then re-run `browser-use targets list --mode handoff-bound --handoff <path> --json`; for evidence-gathering discovery use `--mode recovery --adapter <id>`.
+- Blocked on targets or handoff evidence (invalid, stale, run-id mismatch): mint a fresh envelope with `browser-connect connect <adapter> --json`, then re-run `browser-use targets list --mode handoff-bound --handoff <path> --json`; for evidence-gathering discovery use `--mode recovery --adapter <id>` (`chrome-devtools` is the implemented discovery/operation transport; the full adapter enum lives in `skills/browser-use/src/command-contract.ts`).
 - Unknown browser-use failure: read the JSON envelope `error.code` against the diagnostic codes in `skills/browser-use/src/command-contract.ts`; each code names its own recovery action.

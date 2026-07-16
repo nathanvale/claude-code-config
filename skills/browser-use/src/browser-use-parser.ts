@@ -127,14 +127,18 @@ export function parseBrowserUseArgv(
 	const flags = browserUseContracts[command].flags ?? {};
 	rejectUnknownFlags(rest, flags);
 	const flagValues = collectFlagValues(rest, flags);
-	const dryRun = rest.includes("--dry-run");
+	// Derive from parsed flags, not token scans: a value-bearing flag can
+	// legitimately consume a token that looks like "--dry-run" or "--json"
+	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread
+	// that value as the flag being set.
+	const dryRun = flagValues["--dry-run"] !== undefined;
 
 	return {
 		kind: "command",
 		command,
 		family,
 		subcommand,
-		outputMode: outputModeFor(command, rest),
+		outputMode: outputModeFor(command, flagValues),
 		dryRun,
 		flagValues,
 	};
@@ -220,10 +224,10 @@ function rejectUnknownFlags(
 // from flipping output mode.
 function outputModeFor(
 	command: BrowserUseCommand,
-	rest: readonly string[],
+	flagValues: Readonly<Record<string, string>>,
 ): OutputMode {
-	if (rest.includes("--plain")) return "plain";
-	if (rest.includes("--json")) return "json";
+	if (flagValues["--plain"] !== undefined) return "plain";
+	if (flagValues["--json"] !== undefined) return "json";
 	return command === "targets-status" ? "plain" : "json";
 }
 

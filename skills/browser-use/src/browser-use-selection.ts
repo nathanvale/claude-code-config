@@ -22,6 +22,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_TARGETS_CONTRACT_ID,
+	BROWSER_USE_TARGETS_SCHEMA_VERSION,
 	browserUseTargetSelectionFailureActions,
 	browserUseTargetSelectionSuccessActions,
 } from "./command-contract";
@@ -85,8 +86,9 @@ import { retryabilityForRecoverability } from "./runtime-error-retryability";
 // a foreign or hand-written file cannot pass as selected state.
 const SELECTED_TARGET_STATE_CONTRACT_ID = BROWSER_USE_TARGETS_CONTRACT_ID;
 // v2 (migration U1): binding fields derive from the Verified Handoff Envelope
-// (handoff_evidence_id replaces the proof/route tuple).
-const SELECTED_TARGET_STATE_SCHEMA_VERSION = "2";
+// (handoff_evidence_id replaces the proof/route tuple). Aliased to the targets
+// contract version so a future schema bump cannot drift the state gate.
+const SELECTED_TARGET_STATE_SCHEMA_VERSION = BROWSER_USE_TARGETS_SCHEMA_VERSION;
 // Short TTL: selected state binds to a live tab and a fresh proof; a stale
 // selection must be re-made rather than silently operated against.
 const SELECTED_TARGET_STATE_TTL_MS = 15 * 60_000;

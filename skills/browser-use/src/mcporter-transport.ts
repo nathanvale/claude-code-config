@@ -14,9 +14,9 @@
 //
 // This module stays surface-neutral: resolution and execution return
 // discriminated unions, never throw a surface-specific error class. Each caller
-// maps a neutral reason onto its own runtime-error envelope so Adapter Proof and
-// Browser Operation keep their distinct failure taxonomies while sharing the
-// transport semantics.
+// maps a neutral reason onto its own runtime-error envelope so each consuming
+// surface keeps its distinct failure taxonomy while sharing the transport
+// semantics.
 
 // Native Chrome DevTools MCP transport — parity checklist for V2 (plan U4).
 //
@@ -34,7 +34,7 @@
 //      family.
 //   3. Loopback/binding parity — native selection still binds to the verified
 //      loopback Warm Chrome endpoint; it does not introduce a non-loopback or
-//      auto-connect path that bypasses Adapter Proof binding checks.
+//      auto-connect path that bypasses the verified-handoff binding checks.
 //   4. No-shell-eval parity — native launch passes argv positionally; override
 //      and argument input are never shell-evaluated.
 //   5. Privacy parity — native output redaction matches mcporter output: no raw
@@ -42,8 +42,8 @@
 //      or fragments in JSON, logs, or diagnostics.
 //   6. Selection determinism — when both transports are configured, selection is
 //      explicit and evidence-driven, not implicit "latest" or PATH probing.
-//   7. Parity tests — both surfaces (Adapter Proof, Browser Operation) exercise
-//      the native transport through the same shared seam, the way they share this
+//   7. Parity tests — every consuming surface exercises the native transport
+//      through the same shared seam, the way Browser Operation shares this
 //      mcporter transport today.
 //
 // Until all seven hold, native transport selection stays out of scope.
@@ -201,9 +201,9 @@ export function isMissingCommandResult(result: McporterCommandResult): boolean {
 	);
 }
 
-// Diagnostic hint text shared by both surfaces. Keeping the wording here means
-// the "choose one; does not auto-try package runners" guidance and the override
-// examples cannot drift between Adapter Proof and Browser Operation.
+// Diagnostic hint text shared by every consuming surface. Keeping the wording
+// here means the "choose one; does not auto-try package runners" guidance and
+// the override examples cannot drift between consumers.
 export function mcporterDependencyHintText(problem: string): string {
 	return `${problem} Expose mcporter on PATH, or set ${MCPORTER_COMMAND_ENV_VAR} to a JSON array command vector. Examples: ${MCPORTER_COMMAND_EXAMPLES}. Choose one; this transport does not auto-try package runners.`;
 }
@@ -213,8 +213,8 @@ export function mcporterOverrideInvalidHintText(message: string): string {
 }
 
 // Spawn a command without a shell. Mirrors the bounded-timeout, piped-output
-// runner both surfaces use as their default runtime.runCommand. Lives here so a
-// single implementation backs both Adapter Proof and Browser Operation.
+// runner consumers use as their default runtime.runCommand. Lives here so a
+// single implementation backs every consuming surface.
 export async function spawnMcporterCommand(
 	input: McporterCommandInput,
 ): Promise<McporterCommandResult> {

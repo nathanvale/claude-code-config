@@ -18,7 +18,7 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
-	BROWSER_ADAPTER_PROOF_ADAPTERS,
+	BROWSER_USE_TRANSPORT_ADAPTERS,
 	BROWSER_CONNECT_ATTACHMENT_ADAPTERS,
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
 	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
@@ -441,7 +441,7 @@ export async function discoverPages(
 	// (agent-browser, playwright-cdp); fail closed rather than silently listing
 	// chrome-devtools pages against the wrong adapter, until those transports
 	// land (V2).
-	if (!(BROWSER_ADAPTER_PROOF_ADAPTERS as readonly string[]).includes(adapter)) {
+	if (!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(adapter)) {
 		return {
 			ok: false,
 			failure: {

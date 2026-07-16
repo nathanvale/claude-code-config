@@ -30,10 +30,18 @@ import { renderHelp } from "./browser-use-parser";
 // those arrays, so they are deliberately outside this sweep's corpus.
 // =========================================================================
 
+// Both the hyphenated command names and their prose/product-name forms: a
+// contract string that says "Browser Adapter Proof" points an agent at the
+// deleted preflight-browser-adapter command just as surely as the bin name.
+// Matching is case-insensitive (see offendersIn).
 const DELETED_COMMAND_NAMES = [
 	"browser-adapter-router",
 	"preflight-browser-adapter",
 	"browser-adapter-map",
+	"browser adapter router",
+	"browser adapter proof",
+	"adapter-proof",
+	"browser adapter map",
 ] as const;
 
 type RuntimeAction = { id: string; summary: string };
@@ -69,21 +77,41 @@ function collectStrings(value: unknown, path: string, out: Array<{ path: string;
 
 function offendersIn(corpus: Array<{ path: string; text: string }>): string[] {
 	return corpus
-		.filter(({ text }) =>
-			DELETED_COMMAND_NAMES.some((name) => text.includes(name)),
-		)
+		.filter(({ text }) => {
+			const lowered = text.toLowerCase();
+			return DELETED_COMMAND_NAMES.some((name) => lowered.includes(name));
+		})
 		.map(({ path, text }) => `${path}: ${text}`);
 }
 
 describe("R4 no-dangle sweep — deleted command surfaces", () => {
+	// Canary: the sweep itself must be able to fail. A matcher regression that
+	// silently stops matching (case handling, prose forms) would otherwise turn
+	// every test below into a vacuous pass.
+	test("offendersIn catches hyphenated and prose forms, case-insensitively", () => {
+		expect(
+			offendersIn([
+				{ path: "canary.hyphen", text: "run browser-adapter-router route" },
+				{ path: "canary.prose", text: "Shared with Browser Adapter Proof." },
+				{ path: "canary.case", text: "BROWSER-ADAPTER-MAP validates docs" },
+				{ path: "canary.clean", text: "browser-connect connect --json" },
+			]),
+		).toHaveLength(3);
+	});
+
 	test("surviving command contracts never reference a deleted command name", () => {
+		const commandCount = Object.keys(browserUseContracts).length;
+		// The surviving surface is exactly the six targets/operate commands; a
+		// shrunken contract table means the harvest is scanning less surface than
+		// this gate promises, not that the surface got cleaner.
+		expect(commandCount).toBeGreaterThanOrEqual(6);
 		const corpus: Array<{ path: string; text: string }> = [];
 		for (const [command, contract] of Object.entries(browserUseContracts)) {
 			collectStrings(contract, `browserUseContracts.${command}`, corpus);
 		}
-		// Contracts are non-trivial: an empty corpus means the harvest broke, not
-		// that the surface is clean.
-		expect(corpus.length).toBeGreaterThan(50);
+		// Floor calibrated against the real corpus (424 strings at gate
+		// creation): tolerate pruning, fail on a broken harvest.
+		expect(corpus.length).toBeGreaterThan(300);
 		expect(offendersIn(corpus)).toEqual([]);
 	});
 

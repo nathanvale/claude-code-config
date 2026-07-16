@@ -157,6 +157,20 @@ describe("U3 parser", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
+	// Regression: mode flags derive from parsed flag values, never token scans.
+	// A value-bearing flag that consumes a "--dry-run"/"--json"-shaped token must
+	// not flip dry-run mode (a live command would silently return a mock envelope).
+	test("a flag value shaped like --dry-run does not enable dry-run mode", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		// Not a dry-run: without live state/handoff evidence the real command
+		// fails instead of emitting the dry-run mock success envelope.
+		expect(result.exitCode).not.toBe(0);
+		expect(`${result.stdout}\n${result.stderr}`).not.toContain('"mode": "dry_run"');
+	});
+
 	// Regression: family/subcommand resolve POSITIONALLY, so a flag value equal
 	// to a reserved word must not be misread as the command.
 	test("a flag value equal to a subcommand name does not change the resolved command", async () => {

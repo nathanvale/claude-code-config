@@ -11,9 +11,9 @@ import {
 // The Browser Adapter Proof, Browser Adapter Map, and Browser Adapter Router
 // command surfaces were deleted by the browser-use migration cleanup (U3):
 // browser-connect's Verified Handoff Envelope replaced their evidence chain.
-// This registry now names the adapters with an implemented browser-use
-// discovery/operation transport (previously the proof-scope registry).
-export const BROWSER_ADAPTER_PROOF_ADAPTERS = ["chrome-devtools"] as const;
+// This registry names the adapters with an implemented browser-use
+// discovery/operation transport.
+export const BROWSER_USE_TRANSPORT_ADAPTERS = ["chrome-devtools"] as const;
 
 // ---------------------------------------------------------------------------
 // Browser Adapter vocabulary (plan 2026-06-02-004, retained R9 cluster)
@@ -740,30 +740,31 @@ const browserUseEnvVars = [
 	{
 		name: "BROWSER_USE_MCPORTER_COMMAND_JSON",
 		description:
-			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). Shared with Browser Adapter Proof; no shell strings, no package-runner fallback.",
-	},
-] as const satisfies BrowserUseCommandContract["envVars"];
-
-const browserUseScreenshotEnvVars = [
-	...browserUseEnvVars,
-	{
-		name: "BROWSER_USE_ARTIFACT_ROOT",
-		description:
-			"Optional absolute run-scoped root for browser-use screenshot artifacts. When unset, operate screenshot uses a temp run-scoped root derived from the run id.",
+			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). No shell strings, no package-runner fallback.",
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
 // Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
 // absent the state path is derived deterministically from this base directory
 // and the run id (BROWSER_USE_TARGET_STATE_DIR + run id). Shared by select
-// (writes) and status (reads); a state file is never placed implicitly with
-// neither a flag nor a base dir supplied.
+// (writes), status (reads), and operate (reads: when set, operate enforces
+// run-scoped selected state instead of the single-candidate fallback); a state
+// file is never placed implicitly with neither a flag nor a base dir supplied.
 const browserUseStateEnvVars = [
 	...browserUseEnvVars,
 	{
 		name: "BROWSER_USE_TARGET_STATE_DIR",
 		description:
 			"Base directory for run-scoped selected-target state when --state is omitted. The state path is derived deterministically from this directory and the run id.",
+	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+const browserUseScreenshotEnvVars = [
+	...browserUseStateEnvVars,
+	{
+		name: "BROWSER_USE_ARTIFACT_ROOT",
+		description:
+			"Optional absolute run-scoped root for browser-use screenshot artifacts. When unset, operate screenshot uses a temp run-scoped root derived from the run id.",
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
@@ -892,7 +893,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseEnvVars,
+			envVars: browserUseStateEnvVars,
 			resultContract: browserUseOperationResultContract,
 			actionAffordances: {
 				success: browserUseOperationSuccessActions,
@@ -945,7 +946,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseEnvVars,
+			envVars: browserUseStateEnvVars,
 			resultContract: browserUseOperationResultContract,
 			actionAffordances: {
 				success: browserUseOperationSuccessActions,
