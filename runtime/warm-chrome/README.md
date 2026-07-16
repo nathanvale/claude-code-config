@@ -147,7 +147,8 @@ cleanup U5/KTD6).
 - Do not terminate a listener unless proof verified it as Warm Chrome.
 - Keep foreign-listener diagnostics to pid and process basename.
 - Preview lifecycle posture with `check` before `launch` or `repair`.
-- Keep browser-use preflight authoritative until parity switchover closes.
+- Route browser entry through `runtime/browser-connect` and the Verified
+  Handoff Envelope; keep proof behavior in this package.
 
 ## Develop
 
