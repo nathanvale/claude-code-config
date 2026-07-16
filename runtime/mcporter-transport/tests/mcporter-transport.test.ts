@@ -47,11 +47,11 @@ describe("command-vector resolution", () => {
 		expect(resolved).toEqual({ ok: true, vector: ["bunx", "fake-transport"] });
 	});
 
-	test("override entries are trimmed", () => {
+	test("override entries preserve boundary whitespace (trim is validation-only)", () => {
 		const resolved = resolveTransportCommandVector(CHANNEL, {
 			TEST_TRANSPORT_COMMAND_JSON: '[" bunx ","fake-transport"]',
 		});
-		expect(resolved).toEqual({ ok: true, vector: ["bunx", "fake-transport"] });
+		expect(resolved).toEqual({ ok: true, vector: [" bunx ", "fake-transport"] });
 	});
 
 	test("a shell string override is rejected, never shell-evaluated", () => {
@@ -195,6 +195,16 @@ describe("dependency-missing mapping", () => {
 		).toBe(true);
 	});
 
+	test("application output containing 'not found' is not a missing binary", () => {
+		expect(
+			isMissingTransportCommandResult({
+				exitCode: 1,
+				stdout: "error: target not found in the candidate list",
+				stderr: "",
+			}),
+		).toBe(false);
+	});
+
 	test("a clean non-zero exit is not a missing binary", () => {
 		expect(
 			isMissingTransportCommandResult({
@@ -269,7 +279,64 @@ describe("spawnTransportCommand", () => {
 			timedOut: true,
 		});
 	});
+
+	test("an invalid cwd surfaces as 126, not a missing binary", async () => {
+		const result = await spawnTransportCommand({
+			command: "sleep",
+			args: ["0"],
+			cwd: "/nonexistent-transport-test-dir",
+			timeoutMs: 5_000,
+		});
+
+		expect(result.exitCode).toBe(126);
+		expect(result.stderr).toContain("working directory");
+		expect(isMissingTransportCommandResult(result)).toBe(false);
+	});
+
+	// Proves group termination, not just the timeout result: a parent that
+	// spawns its own child (both PIDs printed) must leave NEITHER alive after
+	// the detached timeout kill returns — the group SIGKILL plus the confirmed-
+	// exit wait is the contract the installer's staging cleanup relies on.
+	test("detached timeout kill leaves neither parent nor descendant alive", async () => {
+		const marker = `transport-group-${process.pid}-${Date.now()}`;
+		const result = await spawnTransportCommandForGroupProof(marker);
+		expect(result.result.timedOut).toBe(true);
+		for (const pid of result.pids) {
+			expect(isProcessAlive(pid)).toBe(false);
+		}
+	});
 });
+
+// Spawn a bash parent that prints its own PID and a background child's PID,
+// then sleeps well past the timeout. Returns the timeout result plus both PIDs.
+async function spawnTransportCommandForGroupProof(
+	marker: string,
+): Promise<{ result: TransportCommandResult; pids: number[] }> {
+	const pidFile = `/tmp/${marker}.pids`;
+	const script = `echo "$$" > ${pidFile}; sleep 30 & echo "$!" >> ${pidFile}; wait`;
+	const result = await spawnTransportCommand({
+		command: "bash",
+		args: ["-c", script],
+		detached: true,
+		timeoutMs: 300,
+	});
+	const raw = await Bun.file(pidFile).text();
+	const pids = raw
+		.split("\n")
+		.map((line) => Number.parseInt(line.trim(), 10))
+		.filter((pid) => Number.isFinite(pid) && pid > 1);
+	expect(pids.length).toBe(2);
+	return { result, pids };
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 describe("hint text", () => {
 	test("dependency hint names the channel binary, env var, and examples", () => {

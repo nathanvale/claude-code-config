@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 // @side-quest/mcporter-transport — the one owner of the no-shell argv
 // transport contract (browser-use migration plan KTD5).
 //
@@ -147,6 +149,10 @@ export function resolveTransportCommandVector(
 	}
 	const vector: string[] = [];
 	for (const value of parsed) {
+		// Trim for VALIDATION only: a whitespace-only entry is rejected, but the
+		// original value is pushed verbatim — argv entries with intentional
+		// boundary whitespace (JSON values, script fragments) pass through
+		// unchanged.
 		if (typeof value !== "string" || value.trim() === "") {
 			return {
 				ok: false,
@@ -154,7 +160,7 @@ export function resolveTransportCommandVector(
 				message: `${channel.envVarName} entries must be non-empty strings.`,
 			};
 		}
-		vector.push(value.trim());
+		vector.push(value);
 	}
 	const [command, ...args] = vector;
 	return { ok: true, vector: [command, ...args] };
@@ -184,9 +190,10 @@ function isStartFailureError(error: unknown): boolean {
 		}
 	}
 	const message = error instanceof Error ? error.message : String(error ?? "");
-	return /(command not found|not found|ENOENT|No such file or directory|spawn\b)/i.test(
-		message,
-	);
+	// Anchored phrases only: a bare "not found" or "spawn" fragment would
+	// misclassify application failures ("target not found") as a missing
+	// executable.
+	return /(command not found|ENOENT|No such file or directory)/i.test(message);
 }
 
 // Resolve the channel's override, prefix the command vector, and run the
@@ -234,9 +241,12 @@ export function isMissingTransportCommandResult(
 	result: TransportCommandResult,
 ): boolean {
 	const text = `${result.stderr}\n${result.stdout}`;
+	// Exit 127 is the primary signal; the text fallback matches anchored
+	// missing-executable phrases only — a bare "not found" would misclassify
+	// ordinary application output ("target not found") as a missing binary.
 	return (
 		result.exitCode === 127 ||
-		/(command not found|not found|ENOENT|No such file or directory)/i.test(text)
+		/(command not found|ENOENT|No such file or directory)/i.test(text)
 	);
 }
 
@@ -295,11 +305,40 @@ export async function spawnTransportCommand(
 			// bounded timeouts already cover.
 			...(input.detached === true ? { detached: true } : {}),
 		});
-	} catch {
+	} catch (error) {
+		// Only a definitively-missing executable maps to the shell's 127
+		// convention. Other startup failures — invalid cwd, permission denied,
+		// bad spawn option — surface as 126 (found-but-cannot-execute) with the
+		// original error preserved, so they never masquerade as a missing
+		// dependency and route to the wrong recovery.
+		const code = errnoCode(error);
+		const message = error instanceof Error ? error.message : String(error ?? "");
+		// ENOENT is ambiguous when a cwd was supplied: a missing working
+		// directory throws it too. Attribute it to the cwd when the cwd does not
+		// exist, so an installer's staging mistake is not reported as a missing
+		// binary.
+		if (code === "ENOENT" && input.cwd !== undefined && !existsSync(input.cwd)) {
+			return {
+				exitCode: 126,
+				stdout: "",
+				stderr: `${input.command}: could not start: working directory ${input.cwd} does not exist`,
+			};
+		}
+		const missing =
+			code === "ENOENT" ||
+			(code === undefined &&
+				/(command not found|No such file or directory|ENOENT)/i.test(message));
+		if (missing) {
+			return {
+				exitCode: 127,
+				stdout: "",
+				stderr: `${input.command}: command not found`,
+			};
+		}
 		return {
-			exitCode: 127,
+			exitCode: 126,
 			stdout: "",
-			stderr: `${input.command}: command not found`,
+			stderr: `${input.command}: could not start: ${message}`,
 		};
 	}
 	const completion = Promise.all([
@@ -308,8 +347,10 @@ export async function spawnTransportCommand(
 		proc.exited,
 	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
 	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
 	const timeoutResult = new Promise<TransportCommandResult>((resolve) => {
-		timeout = setTimeout(() => {
+		timeout = setTimeout(async () => {
+			timedOut = true;
 			if (input.detached === true) {
 				// The child is its own process-group leader (`detached` above), so
 				// signal the GROUP (negative pid): the child's own children die with
@@ -331,15 +372,40 @@ export async function spawnTransportCommand(
 					// Best effort. Timeout result still preserves bounded CLI behavior.
 				}
 			}
+			// Wait for CONFIRMED termination (bounded): a caller that begins
+			// cleanup while the killed child is still exiting can race its final
+			// writes. The grace bound keeps the CLI's bounded behavior if an
+			// unkillable child never exits.
+			await Promise.race([
+				proc.exited.catch(() => undefined),
+				new Promise((settle) => setTimeout(settle, KILL_CONFIRM_GRACE_MS)),
+			]);
 			resolve({ exitCode: 1, stdout: "", stderr: "", timedOut: true });
 		}, input.timeoutMs);
 	});
 	try {
-		return await Promise.race([completion, timeoutResult]);
+		const result = await Promise.race([completion, timeoutResult]);
+		// The kill's confirmation await can let `completion` win the race after
+		// the deadline fired; the flag keeps the timedOut contract deterministic.
+		return timedOut
+			? { exitCode: 1, stdout: "", stderr: "", timedOut: true }
+			: result;
 	} finally {
 		if (timeout) clearTimeout(timeout);
 		completion.catch(() => undefined);
 	}
+}
+
+// Bounded post-SIGKILL wait for the child's confirmed exit before the timeout
+// result is returned to the caller.
+const KILL_CONFIRM_GRACE_MS = 2_000;
+
+function errnoCode(error: unknown): string | undefined {
+	if (error && typeof error === "object") {
+		const code = (error as { code?: unknown }).code;
+		if (typeof code === "string") return code;
+	}
+	return undefined;
 }
 
 function stripUndefined(
