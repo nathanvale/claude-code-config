@@ -19,7 +19,7 @@ import type {
 	BrowserAdapterId,
 	BrowserTargetCandidate,
 	TargetDiscoveryMode,
-} from "./browser-adapter-router-model";
+} from "./discovery-model";
 import { BROWSER_ADAPTER_ROUTER_ADAPTERS } from "./command-contract";
 
 // --- Exit codes ------------------------------------------------------------

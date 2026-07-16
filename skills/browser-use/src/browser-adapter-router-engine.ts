@@ -7,10 +7,10 @@ import {
 	type BrowserAdapterRouterDiagnosticCode,
 	type BrowserAdapterRouterMode,
 } from "./command-contract";
+import { OPERATION_CLASS_CAPABILITY } from "./capability-policy";
 import type {
 	AdapterCapability,
 	BrowserAdapterId,
-	BrowserOperationClass,
 	CapabilityReport,
 	CapabilityReportProvenance,
 	CandidateDecision,
@@ -71,21 +71,10 @@ export function resolveRequiredCapabilities(
 	return [...merged];
 }
 
-// ---------------------------------------------------------------------------
-// Operation capability mapping (U2 R10, R11). Each Browser Operation class
-// authorizes only when its required capability is present in the route's
-// authorized capability set. Runtime-owned so the public operation vocabulary
-// never leaks adapter method names.
-// ---------------------------------------------------------------------------
-
-const OPERATION_CLASS_CAPABILITY = {
-	snapshot: "snapshot_refs",
-	screenshot: "screenshot_media",
-	emulate: "viewport_emulation",
-} as const satisfies Record<BrowserOperationClass, AdapterCapability>;
-
 // Capabilities that authorize a Browser Operation class (U2 R12). A route that
 // requests any of these is operation-capable and must carry proof binding.
+// The class->capability mapping is live-owned policy (migration U2, KTD4);
+// re-imported from capability-policy so no drift-prone duplicate exists here.
 const OPERATION_CAPABILITIES = new Set<AdapterCapability>(
 	Object.values(OPERATION_CLASS_CAPABILITY),
 );
@@ -94,17 +83,6 @@ function requestsOperationCapability(
 	requiredCapabilities: readonly AdapterCapability[],
 ): boolean {
 	return requiredCapabilities.some((cap) => OPERATION_CAPABILITIES.has(cap));
-}
-
-export function authorizesOperationClass(
-	// Pick keeps the function reusable by any binding that carries an authorized
-	// capability set: the Router-era RouteBinding and the handoff-derived
-	// operation binding (migration U1) both satisfy it.
-	binding: Pick<RouteBinding, "authorized_capabilities">,
-	operationClass: BrowserOperationClass,
-): boolean {
-	const required = OPERATION_CLASS_CAPABILITY[operationClass];
-	return binding.authorized_capabilities.includes(required);
 }
 
 // ---------------------------------------------------------------------------

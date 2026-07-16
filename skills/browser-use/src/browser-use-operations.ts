@@ -26,12 +26,14 @@ import {
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
 } from "./command-contract";
+import {
+	authorizesOperationClass,
+	type BrowserOperationClass,
+} from "./capability-policy";
 import type {
 	BrowserAdapterId,
-	BrowserOperationClass,
 	BrowserTargetCandidate,
-} from "./browser-adapter-router-model";
-import { authorizesOperationClass } from "./browser-adapter-router-engine";
+} from "./discovery-model";
 import type { McporterCommandResult } from "./mcporter-transport";
 import {
 	type BrowserOperationTransportFailure,
@@ -349,7 +351,7 @@ async function loadOperationBinding(input: {
 
 	// Capability authorization (R5): the envelope authorizes an attachment; the
 	// capability set for that adapter is browser-use policy, enforced through
-	// the surviving router engine.
+	// the live capability-policy module.
 	if (
 		!authorizesOperationClass(
 			{ authorized_capabilities: [...handoff.authorizedCapabilities] },
