@@ -32,10 +32,11 @@ Verification.
 
 Implementation U1-U8 closed on 2026-07-03. Sixteen stations, redaction proofs,
 entrypoint gate membership, and docs-drift are live. The browser-use switchover
-closed on 2026-07-04: browser-use's front door delegates to this package's
-`main()`, the adapter router gates on `data.contract_id`, the Browser Adapter
-Proof composes the package proof in-process, and the parity harness is deleted.
-This package is now the single owner of the production Warm Chrome proof path.
+closed on 2026-07-04 and the interim delegator retired on 2026-07-16 (migration
+cleanup U5/KTD6): browser entry reaches this package only through
+`runtime/browser-connect` in-process, and browser-use consumes the Verified
+Handoff Envelope. This package is now the single owner of the production Warm
+Chrome proof path. Retired-path detail: `TASKS.archive.md` + Latest Signals.
 
 Next safe action:
 
@@ -133,6 +134,10 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Latest Signals
 
+- 2026-07-16: browser-use delegator retired (migration cleanup U5/KTD6).
+  `skills/browser-use/src/preflight-warm-chrome.ts` + test + bin deleted; the
+  only consumer path is now `runtime/browser-connect` in-process. The
+  delegator's `BROWSER_USE_*` -> `WARM_CHROME_*` env bridge retired with it.
 - 2026-07-04: browser-use switchover closed (P1 done). Front door delegates to
   `main()`; adapter router gates on `data.contract_id`; adapter proof composes
   the package proof in-process; legacy `preflight-warm-chrome` impl + parity

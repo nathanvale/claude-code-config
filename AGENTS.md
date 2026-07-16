@@ -45,7 +45,7 @@
 - Name contract, model, engine, discovery, and CLI owners before implementation.
 - Code-structure choices, a new module, or reaching for a design pattern: run the `context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
-- Before connecting a browser adapter to CDP, gate on `warm-chrome check --json`; `rules/browser-access.md`.
+- Connect browser adapters only through `browser-connect connect --json`; workflow: `skills/browser-use/SKILL.md`.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.

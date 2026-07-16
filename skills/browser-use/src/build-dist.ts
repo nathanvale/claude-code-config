@@ -7,7 +7,6 @@ const skillRoot = join(import.meta.dir, "..");
 const distRoot = join(skillRoot, "dist");
 const entrypoints = [
 	"browser-use.ts",
-	"preflight-warm-chrome.ts",
 ].map((entrypoint) => join(import.meta.dir, entrypoint));
 const expectedDistFiles = new Set(
 	entrypoints.map((entrypoint) => `${basename(entrypoint, ".ts")}.js`),

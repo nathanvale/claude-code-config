@@ -51,17 +51,16 @@ _Avoid example_: "The docs look right by inspection, so skip the drift test."
 
 **Browser-use switchover**:
 The closed cutover where `skills/browser-use` stopped using its legacy
-`preflight-warm-chrome` implementation and now routes through this package's
-`warm-chrome.browser-entry` contract. The front door
-(`skills/browser-use/src/preflight-warm-chrome.ts`) is a thin delegator to this
-package's `main()`; the adapter router gates on `data.contract_id`; the Browser
-Adapter Proof composes the package proof in-process. The legacy implementation
-and the parity harness are deleted.
+preflight implementation and now reaches this package's
+`warm-chrome.browser-entry` contract only through `runtime/browser-connect`,
+which consumes the package in-process. The legacy implementation, the parity
+harness, and the thin delegator that briefly bridged the gap are all deleted
+(delegator retired in migration cleanup U5/KTD6).
 _Avoid_: deferred, old preflight authoritative, parity checklist input
-_Developer example_: "browser-use's Warm Chrome front door delegates to the
-package; edit proof behavior in `runtime/warm-chrome`, not browser-use."
-_Avoid example_: "Edit `skills/browser-use/src/preflight-warm-chrome.ts` to
-change proof behavior — it only delegates now."
+_Developer example_: "browser entry proves Warm Chrome through
+browser-connect; edit proof behavior in `runtime/warm-chrome`, not consumers."
+_Avoid example_: "Edit a browser-use preflight script to change proof
+behavior — no such script exists anymore."
 
 **Station**:
 One deterministic agent-visible command outcome in the Branch Station

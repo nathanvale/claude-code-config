@@ -16,10 +16,10 @@ import {
 import { renderHelp } from "./browser-use-parser";
 
 // =========================================================================
-// R4 no-dangle sweep (migration cleanup U3, AE3). The browser-adapter-router,
-// preflight-browser-adapter, and browser-adapter-map command surfaces were
-// deleted; nothing an agent can reach from the surviving browser-use surface
-// may still point at them. This gate mechanically enumerates every string the
+// R4 no-dangle sweep (migration cleanup U3, AE3; extended by U5/KTD6). The
+// browser-adapter-router, preflight-browser-adapter, browser-adapter-map, and
+// preflight-warm-chrome command surfaces were deleted; nothing an agent can
+// reach from the surviving browser-use surface may still point at them. This gate mechanically enumerates every string the
 // surviving command contracts and rendered help expose — summaries, usage,
 // flag/env descriptions, exit-code prose, runtime action ids and summaries,
 // continuation prose — and rejects any reference to a deleted command name.
@@ -38,10 +38,12 @@ const DELETED_COMMAND_NAMES = [
 	"browser-adapter-router",
 	"preflight-browser-adapter",
 	"browser-adapter-map",
+	"preflight-warm-chrome",
 	"browser adapter router",
 	"browser adapter proof",
 	"adapter-proof",
 	"browser adapter map",
+	"warm chrome preflight",
 ] as const;
 
 type RuntimeAction = { id: string; summary: string };
