@@ -8,12 +8,20 @@ ADRs stay in repo-root `docs/adr/` — they are cross-referenced by other domain
 (cli-author, prototypes) and bind repo-wide architecture, so they are root-level
 records. They are linked below but not moved.
 
+> **Historical note (2026-07-16):** entries below describing the Warm Chrome
+> preflight / Adapter Proof / Browser Adapter Router chain document deleted
+> machinery — the browser-use → browser-connect migration (PRs #237/#239)
+> replaced that chain with the Verified Handoff Envelope from
+> `browser-connect connect --json`. They stay listed as design lineage.
+> Current truth: `skills/browser-use/SKILL.md`, `runtime/browser-connect/`,
+> and `docs/decisions/2026-07-16-001-browser-use-migration-cleanup-decision-log.md`.
+
 ---
 
 ## Product
 
 - [PRODUCT.md](PRODUCT.md) — what the core product IS: one warm Chrome driven by N independent engines over CDP; the trust-signal moat ("no engine can be a second opinion on itself"); who it's for; what it is NOT; plus the product-trio ideation and top-5 directions. Start here.
-- [PRODUCT-BASELINE.md](PRODUCT-BASELINE.md) — current-state baseline of the skill's shape.
+- [PRODUCT-BASELINE.md](PRODUCT-BASELINE.md) — historical 2026-06-10 baseline of the pre-migration shape (see its banner).
 - [USE-CASES.md](USE-CASES.md) — the two daily-driver modes: engineering driver (human-supervised Figma-parity / WCAG / React memory-perf, engine-strength composition) and no-touch life-admin (timesheets/appointments via runbooks + 1Password, where the trust layer is a requirement not a feature).
 
 ## Plans

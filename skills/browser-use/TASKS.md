@@ -1,5 +1,10 @@
 # Browser Use Tasks
 
+## Roadmap
+
+Browser entry roadmap pitches live in `runtime/browser-connect/TASKS.md`
+`## Roadmap` (KTD7) — including the re-scoped #136–#146 cluster.
+
 ## Source Of Truth
 
 - Source of truth: Notion `Browser-use Task Tracker`.
