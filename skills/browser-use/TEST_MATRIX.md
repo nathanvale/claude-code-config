@@ -18,6 +18,20 @@ Convention:
 | AE3 | No dangling deleted-command references | `bun --filter browser-use-scripts test` → `src/command-contract-no-dangle.test.ts` | Zero references to deleted commands (`browser-adapter-router`, `preflight-browser-adapter`, `browser-adapter-map`) in surviving contracts, runtime action vocabulary, and rendered help. | permanent test | PASS |
 | AE4 | Fail-closed connection entry | Agent Chrome stopped → `browser-connect connect <adapter> --json` | Exit `20`; failure envelope carries exactly one Repair Path with a live `runtime/browser-connect/REPAIR.md` anchor; no surviving browser-use path falls back to a cold browser. | live smoke | PASS (2026-07-16, run id `ae4-fail-closed-live`, exercised via an operator-owned foreign listener on the convention port: exit `20`, `foreign_listener`, exactly one Repair Path `use_suggested_port` → live anchor `REPAIR.md:553`; constraints included `no_adapter_fallback` + `no_process_destruction`; no launch, no fallback.) |
 
+## Envelope-Derived Transport Matrix (refactor U1 proof)
+
+Proof-first pin for the envelope-derived ad-hoc mcporter invocation (`--stdio
+<pinned adapter> --stdio-arg --browser-url --stdio-arg <endpoint.http>
+--stdio-arg --experimentalPageIdRouting`, env guard `MCPORTER_NO_KEEPALIVE=*`),
+captured empirically before the U3 transport change lands. Argv contract
+constant: `ENVELOPE_ADAPTER_ARGV_CONTRACT` in
+`src/mcporter-adapter-process-boundary.test.ts`.
+
+| ID | Case | Chain | Expected | Kind | Status |
+| --- | --- | --- | --- | --- | --- |
+| U1-ET1 | Hermetic invocation + fail-closed + taxonomy proof | `src/mcporter-adapter-process-boundary.test.ts` via `skills/test-runner/src/test-runner.sh` — real mcporter + pinned chrome-devtools-mcp 1.5.0 adapter (both hard-required; the test fails with install guidance instead of skipping — no remote CI, the local suite is the gate) | Ad-hoc argv accepted; unreachable endpoint fails closed (non-zero exit, `Could not connect to Chrome`, `isError: true`, no page listing — the daemon-shadow tripwire); missing adapter binary routes to `dependency_missing` through the real taxonomy via the ENOENT text (mcporter exits 1, not 127); the captured success envelopes feed the current discovery and operate-snapshot parsers unchanged. | permanent test | PASS (2026-07-17, 5 tests / 28 expect calls via test-runner) |
+| U1-ET2 | Live success-shape capture | Orchestrator live capture against real Agent Chrome on the verified endpoint through the exact pinned invocation | `list_pages` and pageId-routed `take_snapshot` envelopes captured verbatim; embedded as redacted fixtures (personal FastTrack page lines swapped for same-shape placeholders; `## Pages` / `## Latest page snapshot` shapes byte-for-byte) in `src/mcporter-adapter-process-boundary.test.ts`, which replays them through the real parsers on every run. | live smoke | PASS (2026-07-17, run id `u1-live-capture-2026-07-17`) |
+
 ---
 
 # ARCHIVED: Router-Era Warm Chrome Ledger (historical; do not execute)
