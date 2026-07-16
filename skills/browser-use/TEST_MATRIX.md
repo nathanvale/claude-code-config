@@ -1,8 +1,35 @@
-# Warm Chrome Test Matrix
+# Browser Use Test Matrix
 
-Purpose: rerun Warm Chrome CLI smoke cases and judge observability, agent hints, and cleanup.
+Purpose: prove the migrated chain — browser-connect connection → browser-use
+targets/operate.
 
 Convention:
+
+- Envelope source: `browser-connect connect <adapter> --json` (repo-local: `bun run runtime/browser-connect/src/cli.ts connect <adapter> --json`).
+- browser-use commands run repo-local via `bun run <command>` from `skills/browser-use`.
+- Live smoke is **pending-operator**: a foreign listener currently occupies the default CDP port on this machine; live smoke is deferred until an operator remediates the listener externally (`runtime/browser-connect/REPAIR.md#v1-inspect_listener`).
+
+## Migrated Chain Matrix
+
+| ID | Case | Chain | Expected | Kind | Status |
+| --- | --- | --- | --- | --- | --- |
+| AE1 | Run-id threading | `browser-connect connect <adapter> --run-id R --json` → envelope → `targets list --mode handoff-bound --handoff <envelope> --json` → `targets select` → `operate snapshot` | Every envelope carries run id `R`; the run-scoped target-state path derives from `R`. | live smoke | pending-operator |
+| AE2 | Recovery discovery from envelope only | `targets list --mode recovery --adapter <id> --handoff <envelope> --json` with only the browser-connect envelope as evidence | Evidence-gathering candidates listed; `continuation.next_action_id` names an existing command. | live smoke | pending-operator |
+| AE3 | No dangling deleted-command references | `bun --filter browser-use-scripts test` → `src/command-contract-no-dangle.test.ts` | Zero references to deleted commands (`browser-adapter-router`, `preflight-browser-adapter`, `browser-adapter-map`) in surviving contracts, runtime action vocabulary, and rendered help. | permanent test | PASS |
+| AE4 | Fail-closed connection entry | Agent Chrome stopped → `browser-connect connect <adapter> --json` | Exit `20`; failure envelope carries exactly one Repair Path with a live `runtime/browser-connect/REPAIR.md` anchor; no surviving browser-use path falls back to a cold browser. | live smoke | pending-operator |
+
+---
+
+# ARCHIVED: Router-Era Warm Chrome Ledger (historical; do not execute)
+
+> Archived 2026-07-16 (browser-connect migration U2). Everything below this
+> banner is the pre-migration live-smoke record. `preflight-browser-adapter`
+> and the Browser Adapter Router chain are deleted; the convention endpoint
+> and profile values are Router-era setup detail. Warm Chrome environment
+> proof now lives in `runtime/warm-chrome/tests/`; connection smoke belongs
+> to `runtime/browser-connect`. Kept verbatim as history only.
+
+Convention (historical):
 
 - Primary CDP endpoint: `http://127.0.0.1:9222`
 - Primary profile: `~/.agent-warm-profile`
@@ -12,7 +39,7 @@ Convention:
 - Failure signal: `error.hint`, `runtime_actions`, and `continuation.next_action_id` point at one safe next step.
 - Page signal: every real Chrome setup opens `https://example.com/`; every successful launch/reuse run checks `/json/list` for a `page` target at that URL.
 
-## Live Matrix
+## Live Matrix (archived)
 
 | ID | Case | Setup | Command | Expected CLI Contract | Expected Observability | Status | Result Notes | Cleanup |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -29,7 +56,7 @@ Convention:
 | C11 | Startup URL | No `9222` listener; primary profile exists. | `launch --debug --json --run-id example-startup-url-debug`, then inspect `/json/list`. | `status=ok`; `launch_performed=true`; page target URL is `https://example.com/`. | Launch diagnostics match cold-start path; target list proves visible page. | PASS | `browser_pid=69300`; `/json/list` contained `page https://example.com/`; duration `843ms`. | Killed `9222`. |
 | C12 | CDP off / no listener | No `9222` listener; no Warm Chrome process; remote debugging disabled in `chrome://inspect/#remote-debugging`. | `check --debug --json --run-id remote-debugging-off-hard-fail`. | Exit `20`; `code=endpoint_unreachable`; hint says remote debugging is off; `hint.docs_url` points to Chrome docs; `runtime_actions[0]=enable_remote_debugging`; `continuation.next_action_id=enable_remote_debugging`; `no_adapter_fallback` present. | Failure diagnostics are fast and correlated: `command-start` -> `preflight-check` -> `endpoint_unreachable`. No launch or repair diagnostics. | PASS | Final check run `remote-debugging-off-hard-fail`: duration `6ms`; hard-fail continuation; docs URL present. | None. |
 
-## Browser Adapter Proof Cases
+## Browser Adapter Proof Cases (archived; command deleted)
 
 ### BAP-C1 Chrome DevTools healthy mcporter
 
@@ -440,7 +467,7 @@ expect:
 cleanup:
 - [ ] Restore adapter fixture.
 
-## Coverage Notes
+## Coverage Notes (archived)
 
 - Live cases avoid opening the everyday default Chrome profile.
 - Default-profile rejection stays unit-covered unless explicitly approved for a risky live run.

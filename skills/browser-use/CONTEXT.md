@@ -1,37 +1,15 @@
 # Browser Use
 
-Scoped vocabulary for browser-use and browser-domain-memory: Warm Chrome, Browser Adapters, the Router, durable browser knowledge, and the playback modes. Glossary only.
+Scoped vocabulary for browser-use and browser-domain-memory: Warm Chrome, Browser Adapters, the browser-connect handoff, durable browser knowledge, and the playback modes. Glossary only.
 
 ## Language
 
-### Router and route evidence
-**Validated Route Evidence Envelope**:
-Browser Adapter Router route input that has passed runtime-owned validation before route evaluation. Use this term for the engine input boundary; keep raw JSON, CLI flags, file paths, and stdin outside it.
-_Avoid_: raw route envelope, trusted CLI envelope, typed envelope
-
-**Adapter capability report**:
-A runtime-owned browser adapter support fact set with provenance and freshness. It is Adapter capability evidence for Browser Adapter Router decisions, not an Agent Capability Registry capability.
-_Avoid_: capability, docs matrix, adapter truth prose, projection slice
-
-**Router Recovery**:
-Browser Adapter Router failure guidance for how an agent can continue or stop after route evidence fails. It names package-owned recovery meaning; the facade owns only the shared envelope shape.
-_Avoid_: facade recovery payload, error metadata, hint contract
-
-**Route Validity**:
-Browser Adapter Router constraint on a selected route or failed route evaluation. It does not describe report discovery, Adapter capability report freshness, or generic CLI errors.
-_Avoid_: report validity, capability validity, Router validity
-
-**Route Evidence Invalid**:
-Browser Adapter Router input failure where supplied route evidence never becomes a Validated Route Evidence Envelope. It occurs inside the `route` command before route evaluation, so it does not create Route Validity.
-_Avoid_: failed route decision, route validity failure, malformed route
-
-**Research Recovery**:
-Browser Adapter Router recovery for stale or unknown Adapter capability report evidence. Continuation names the next action; a Diagnostic trail pointer names the Router-owned diagnostic detail an agent follows after the Router stops. Research signal is advisory diagnostic metadata, not route confidence.
-_Avoid_: facade research schema, hint metadata, docs-only recovery
+### Retired terms (Router era)
+The Browser Adapter Router chain (Router CLI with prepare/route/report, Browser Adapter Proof, Browser Adapter Map) is deleted; `runtime/browser-connect` owns the connection and its Verified Handoff Envelope replaced route evidence. The surviving router engine/model/recovery/validation modules are internal capability-policy detail, not agent vocabulary. Retired — do not reintroduce as live terms: Validated Route Evidence Envelope, Adapter capability report, Router Recovery, Route Validity, Route Evidence Invalid, Research Recovery, Browser Adapter Router, Browser Adapter Proof, Browser Adapter Map, Browser Adapter Command Resolution, route-bound (renamed handoff-bound), Evidence-First Selection (its evidence-or-recovery discipline lives on in browser-connect's fail-closed gates).
 
 ### Browser entry and adapters
 **browser-use**:
-The browser-driving capability. It owns browser operational policy — adapter policy, capability-routed adapter selection, inspection, navigation, clicking, filling, and live browser control — and delegates the proven *connection* (prove Agent Chrome, attach an adapter) to `browser-connect` (`runtime/browser-connect`). It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge, and it no longer owns browser entry outright — that connection guarantee is browser-connect's.
+The browser-driving capability. It owns browser operational policy — adapter policy, operation capability policy, inspection, navigation, clicking, filling, and live browser control — and delegates the proven *connection* (prove Agent Chrome, attach an adapter) to `browser-connect` (`runtime/browser-connect`). It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge, and it no longer owns browser entry outright — that connection guarantee is browser-connect's.
 _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill, owns all browser entry
 
 **Warm Chrome**:
@@ -53,29 +31,17 @@ _Avoid_: port allocation, automatic rebinding, durable port binding, port author
 A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
 _Avoid_: manual checklist, browser-domain-memory preflight
 
-**Browser Adapter Proof**:
-A read-only `browser-use` proof that a Router-selected or requested Browser Adapter is attached to verified Warm Chrome. It runs after Warm Chrome Preflight, usually when Router emits `prove_adapter_attachment`, and before adapter action.
-_Avoid_: manual checklist, durable binding, adapter fallback
-
-**Browser Adapter Router**:
-The `browser-use` decision point that chooses a Browser Adapter for a Bounded Browser Outcome from current adapter capability evidence. It ranks proven candidates; missing proof is recovery, not inference. It is not a universal browser API, browser entry point, or browser memory owner.
-_Avoid_: browser adapter facade, browser orchestrator, adapter fallback, driver
+**handoff-bound**:
+The `targets` discovery mode whose binding evidence is the browser-connect Verified Handoff Envelope. Formerly route-bound, whose evidence was the Router's route artifact; the rename keeps "route" grounded in browser-connect's attachment-route sense. `recovery` mode keeps its name and yields evidence-gathering candidates, not operation-ready ones.
+_Avoid_: route-bound, route artifact, proof-bound
 
 **Bounded Browser Outcome**:
-A scoped browser objective that `browser-use` can route while its assumptions remain valid. It is narrower than a whole user request and broader than a single element action.
+A scoped browser objective that `browser-use` can pursue while its assumptions remain valid. It is narrower than a whole user request and broader than a single element action.
 _Avoid_: browser task, action window, runbook step, whole request
 
 **Browser Adapter**:
 Within `browser-use`, a consumer of a verified attachment: a mechanism `browser-use` operates against a proven browser once browser-connect has attached it — `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge, and they never find Chrome themselves. `puppeteer-core` is deterministic replay detail, not public adapter name. The canonical environment-agnostic definition (a tool that attaches to a proven browser environment via a declared route) is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter
-
-**Browser Adapter Map**:
-A local `browser-use` reference for one Browser Adapter that maps Browser Adapter Proof or Router recovery vocabulary to next safe actions, adapter-specific inspection, and operator repair commands. Required sections are `Owners`, `Rules`, `Recovery Map`, and `Verify`; adapter-specific sections stay optional. It is model-readable operational guidance, not a runtime contract or local `docs_url` target.
-_Avoid_: config doc, repair doc, adapter orchestrator, browser adapter facade
-
-**Browser Adapter Command Resolution**:
-Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; Router-selected page action uses the selected adapter surface after proof.
-_Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
 
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure. It is the failure-direction mirror of browser-connect's success-direction **Verified Handoff Envelope** (a proven connection handed forward to a consumer): the Browser Entry Handoff hands an *unready* state back; the Verified Handoff Envelope hands a *proven* connection forward. Both names live; do not conflate them.
@@ -96,10 +62,6 @@ _Avoid_: facade, LLM oracle, model judgment, single-engine check, consensus engi
 **Adapter (pattern sense)**:
 Each Browser Adapter is a GoF Adapter — the two-axis mapping layer (parser-per-ref-format + dispatch-per-transport, engine-origin-tagged ref) converts each engine's native vocabulary and dispatch to the Browser Facade contract. Fully pressure-earned: delete the mapping and N collapses to 1.
 _Avoid_: thin wrapper, passthrough, shim
-
-**Evidence-First Selection**:
-The Browser Adapter Router's selection discipline — candidates are presumed invalid until proven (attachment proof + capability match); missing evidence yields recovery, not a route. It is NOT a GoF Strategy (no free swap of interchangeable algorithms); calling it Strategy is decorative.
-_Avoid_: Strategy, algorithm swap, interchangeable engines, automatic fallback
 
 ### Durable browser knowledge
 **browser-domain-memory**:
@@ -169,7 +131,7 @@ Dev: "Should `browser-use` remember the login path it just discovered?"
 Domain expert: "No. `browser-use` drives Chrome. `browser-domain-memory` owns browser capture and durable compound browser knowledge."
 
 Dev: "Can `browser-domain-memory` open or repair Warm Chrome?"
-Domain expert: "No. `browser-use` owns all browser entry, including Warm Chrome repair. `browser-domain-memory` consumes the browser environment and owns durable browser knowledge."
+Domain expert: "No. It hands back to `browser-use`, which routes connection and repair through `browser-connect`. `browser-domain-memory` consumes the browser environment and owns durable browser knowledge."
 
 Dev: "What does `browser-domain-memory` do when Warm Chrome is missing or wrong?"
 Domain expert: "It makes a Browser Entry Handoff. `browser-use` repairs or prepares Warm Chrome; browser-domain-memory does not launch or switch adapters itself."
@@ -193,7 +155,7 @@ Dev: "Is an isolated browser tool a Browser Adapter?"
 Domain expert: "No. Browser Adapters attach to Warm Chrome. Isolated or cold browser tools are explicit escape hatches, not adapters in this domain."
 
 Dev: "Can each adapter decide whether Chrome is ready?"
-Domain expert: "No. `browser-use` runs the shared Warm Chrome Preflight proof before adapter action; adapters consume that proof."
+Domain expert: "No. `browser-connect` proves the environment before any adapter acts; adapters consume the Verified Handoff Envelope and never find Chrome themselves."
 
 Dev: "Is browser capture a separate skill?"
 Domain expert: "No. Browser capture is a `browser-domain-memory` workflow that distills messy browser-run evidence into curated domain memory."
@@ -222,8 +184,8 @@ Domain expert: "No. It requests a playback mode or browser outcome. `browser-use
 Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
 
-Dev: "Can Browser Adapter Router pick the likely best adapter when proof is missing?"
-Domain expert: "No. It ranks proven candidates. Missing proof becomes recovery, not selection."
+Dev: "Can `browser-use` pick the likely best adapter when connection evidence is missing?"
+Domain expert: "No. Missing evidence fails closed — mint a fresh Verified Handoff Envelope through `browser-connect`; adapters never switch automatically."
 
 Dev: "Is Puppeteer banned?"
 Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is deterministic replay detail that connects to verified Warm Chrome."
