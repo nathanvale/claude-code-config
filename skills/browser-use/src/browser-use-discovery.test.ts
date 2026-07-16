@@ -519,6 +519,37 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		});
 	});
 
+	test("real chrome-devtools-mcp 1.5.0 list_pages text yields candidates", async () => {
+		// Captured verbatim from a live `mcporter call chrome-devtools.list_pages`
+		// against the pinned adapter (2026-07-16 AE1 smoke). The adapter emits an
+		// MCP content block whose text lines are `N: Title (url) [flags]` — NOT
+		// the `{"pages":[...]}` shape the older fakes used. A parser that only
+		// matches bare-URL lines returns zero candidates for every real page
+		// whose title contains spaces (fakes-vs-real-shape class, decision log
+		// 2026-07-16-001 Decision 4).
+		const realStdout = JSON.stringify({
+			content: [
+				{
+					type: "text",
+					text: "## Pages\n1: Example Domain (https://example.com/) [selected]",
+				},
+			],
+		});
+		const { runtime } = discoveryRuntime({
+			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },
+			pages: { exitCode: 0, stdout: realStdout, stderr: "" },
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseJson(result.stdout);
+		const candidates = (envelope.data as { candidates: Array<Record<string, unknown>> })
+			.candidates;
+		expect(candidates).toHaveLength(1);
+	});
+
 	test("discovery calls list_pages through the shared transport", async () => {
 		const { runtime, calls } = discoveryRuntime({
 			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },

@@ -556,15 +556,24 @@ function pageArray(value: unknown): unknown[] {
 	return [];
 }
 
+// chrome-devtools-mcp (pinned 1.5.0) renders each page line as
+// `N: Title (url) [flags]` — the title may contain spaces and parentheses,
+// but the URL is always the final parenthesized token. Bare `N: url` lines
+// stay accepted for titleless pages.
 function parsePagesText(text: string): RawPage[] {
 	return text
 		.split("\n")
 		.map((line) => line.trim())
 		.flatMap((line): RawPage[] => {
-			const match = line.match(/^(\d+):\s+(\S+)(?:\s+\[[^\]]+\])?$/);
+			const match = line.match(/^(\d+):\s+(.*?)(?:\s+\[[^\]]+\])?$/);
 			if (!match) return [];
-			const [, id, url] = match;
-			return [{ id, url }];
+			const [, id, rest] = match;
+			const parens = rest.match(/^(?:(.*)\s+)?\((\S+)\)$/);
+			if (parens) {
+				const [, title, url] = parens;
+				return [{ id, url, ...(title === undefined ? {} : { title }) }];
+			}
+			return /^\S+$/.test(rest) ? [{ id, url: rest }] : [];
 		});
 }
 
