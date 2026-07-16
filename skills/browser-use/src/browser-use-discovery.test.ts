@@ -242,6 +242,80 @@ describe("U1 target discovery — handoff-bound mode", () => {
 		);
 	});
 
+	// R3: with no explicit --run-id the envelope's run id is inherited — and the
+	// emitted TOP-LEVEL run_id must agree with binding.run_id, or a chained
+	// consumer adopting it would hit a run mismatch.
+	test("without an explicit run id the emitted run_id is the envelope's (top-level agrees with binding)", async () => {
+		const { runtime } = discoveryRuntime({
+			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const json = parseJson(result.stdout);
+		expect(json.run_id).toBe("fixture-run");
+		expect((json.data as Record<string, any>).binding.run_id).toBe("fixture-run");
+	});
+
+	// Endpoint forms must be real HTTP(S)/WS(S) URLs: a file: http form or a
+	// bare-string ws form must never reach kind:"verified" and authorize
+	// operations.
+	test("a file:// endpoint http form is a typed rejection", async () => {
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.endpoint.http = "file:///tmp";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
+	test("a non-ws endpoint ws form is a typed rejection", async () => {
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.endpoint.ws = "not-a-websocket-url";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
+	test("a verified outcome inside a non-ok envelope is a typed rejection", async () => {
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.status = "error";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
 	test("a matching caller --run-id is accepted and threads through (AE1)", async () => {
 		const { runtime } = discoveryRuntime({
 			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },

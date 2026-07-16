@@ -5,7 +5,7 @@ import {
 	truncateText,
 } from "./browser-use-core";
 import {
-	browserUseTargetDiscoveryFailureActions,
+	browserUseOperationFailureActions,
 	browserUseTargetSelectionFailureActions,
 } from "./command-contract";
 
@@ -46,19 +46,23 @@ describe("core substrate — pure functions", () => {
 });
 
 describe("core substrate", () => {
-	test("a runtime action id shared across discovery and selection has one summary", () => {
-		// A continuation id declared in both action arrays (e.g. a shared recovery
-		// id) builds into separate Maps per surface, so nothing fails at runtime if
-		// they drift — guard here that one continuation id never documents two
-		// different recovery strings.
-		const discovery = new Map<string, string>(
-			browserUseTargetDiscoveryFailureActions.map((a) => [a.id, a.summary]),
+	test("the rerun_handoff_bound_target_discovery continuation shared by selection and operation has one summary", () => {
+		// command-contract declares this id shared across the selection and
+		// operation failure surfaces with an identical summary (the other shared
+		// ids carry deliberately per-surface prose: "re-run targets select" vs
+		// "re-run browser-use operate"). The arrays build into separate Maps per
+		// surface, so nothing fails at runtime if they drift — guard it here.
+		// Assert presence in BOTH arrays first so the equality check can never
+		// pass vacuously if the id is renamed or dropped on one side.
+		const sharedId = "rerun_handoff_bound_target_discovery";
+		const selection = browserUseTargetSelectionFailureActions.find(
+			(action) => action.id === sharedId,
 		);
-		for (const action of browserUseTargetSelectionFailureActions) {
-			const shared = discovery.get(action.id);
-			if (shared !== undefined) {
-				expect(action.summary as string).toBe(shared);
-			}
-		}
+		const operation = browserUseOperationFailureActions.find(
+			(action) => action.id === sharedId,
+		);
+		expect(selection).toBeDefined();
+		expect(operation).toBeDefined();
+		expect(operation?.summary as string).toBe(selection?.summary as string);
 	});
 });

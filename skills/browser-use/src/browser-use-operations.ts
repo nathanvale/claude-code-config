@@ -161,6 +161,11 @@ export async function runOperate(input: {
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	const flags = parsed.flagValues;
+	// One run id threads the chain (R3): once the binding's handoff run id is
+	// inherited below, every emitted envelope — failures after that point and
+	// the success — carries it, so the top-level run_id agrees with
+	// binding.run_id.
+	let runId = input.runId;
 	const fail = (failure: OperationFailure, sideEffects: OperationSideEffects = {}) =>
 		emitOperationFailure({
 			failure,
@@ -169,7 +174,7 @@ export async function runOperate(input: {
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
-			runId: input.runId,
+			runId,
 			durationMs: input.durationMs(),
 		});
 
@@ -189,6 +194,7 @@ export async function runOperate(input: {
 		runIdExplicit: input.runIdExplicit,
 	});
 	if (!binding.ok) return fail(binding.failure);
+	runId = binding.context.handoff.runId;
 
 	const targetContext = await loadOperationTargetContext(runtime, binding.context);
 	if (!targetContext.ok) return fail(targetContext.failure);
@@ -251,7 +257,7 @@ export async function runOperate(input: {
 		targetSource: target.target.source,
 		outputMode: parsed.outputMode,
 		stdout: input.stdout,
-		runId: input.runId,
+		runId,
 		durationMs: input.durationMs(),
 		transportResult: operationCall.result,
 		...(operationInputs.inputs.screenshot

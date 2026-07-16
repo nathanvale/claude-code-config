@@ -70,15 +70,6 @@ export type ParsedBrowserUseCommand =
 export function parseBrowserUseArgv(
 	argv: readonly string[],
 ): ParsedBrowserUseCommand {
-	if (argv.includes("--version")) {
-		return {
-			kind: "version",
-			outputMode: argv.includes("--json") ? "json" : "plain",
-		};
-	}
-
-	const helpRequested = argv.includes("-h") || argv.includes("--help");
-
 	// Resolve family/subcommand POSITIONALLY from the leading non-flag tokens.
 	// The public form is `browser-use <family> <subcommand> [flags]`. Scanning
 	// the whole argv by value (argv.find) would misread a flag VALUE equal to a
@@ -92,6 +83,45 @@ export function parseBrowserUseArgv(
 	}
 	const familyToken = positionals[0];
 	const family = isFamily(familyToken) ? familyToken : undefined;
+	const subcommandCandidate = positionals[1];
+	const resolvedCommand =
+		family &&
+		subcommandCandidate &&
+		subcommandsFor(family).includes(subcommandCandidate)
+			? toCommand(family, subcommandCandidate)
+			: undefined;
+
+	// Detect --help/--version from STANDALONE option tokens only, mirroring
+	// collectFlagValues' value-pairing: a token consumed as a declared
+	// value-bearing flag's value (e.g. `--title-contains --version`) must not
+	// short-circuit the command. With no resolvable command there are no
+	// declared flags, so every option token is standalone (root/family help and
+	// bare --version keep their behavior).
+	const declaredFlags: Readonly<Record<string, FlagSpec>> = resolvedCommand
+		? (browserUseContracts[resolvedCommand].flags ?? {})
+		: {};
+	const standalone = new Set<string>();
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("-")) continue;
+		const hasInline = arg.includes("=");
+		const name = hasInline ? arg.slice(0, arg.indexOf("=")) : arg;
+		const spec = declaredFlags[name];
+		if (spec && spec.type !== "boolean" && !hasInline) {
+			index += 1;
+			continue;
+		}
+		standalone.add(name);
+	}
+
+	if (standalone.has("--version")) {
+		return {
+			kind: "version",
+			outputMode: standalone.has("--json") ? "json" : "plain",
+		};
+	}
+
+	const helpRequested = standalone.has("-h") || standalone.has("--help");
 
 	if (!family) {
 		if (helpRequested) return { kind: "help" };
@@ -299,7 +329,15 @@ export function renderHelp(
 	command?: BrowserUseCommand,
 ): string {
 	if (command) {
-		return `${renderCommandUsage(browserUseContracts[command])}\n${ROUTE_PREREQUISITE_POINTER}\n`;
+		// Contract-driven: only commands that actually accept --handoff carry the
+		// mint-an-envelope prerequisite (targets status reads selected state only).
+		const commandFlags: Readonly<Record<string, FlagSpec>> =
+			browserUseContracts[command].flags ?? {};
+		const prerequisite =
+			commandFlags["--handoff"] !== undefined
+				? `\n${ROUTE_PREREQUISITE_POINTER}`
+				: "";
+		return `${renderCommandUsage(browserUseContracts[command])}${prerequisite}\n`;
 	}
 	if (family) return renderFamilyHelp(family);
 	return renderRootHelp();

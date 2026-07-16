@@ -49,6 +49,29 @@ const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
 });
 const FIXTURE_RUN_ID = FIXTURE_ENVELOPE.run_id as string;
 
+describe("handoff evidence id — golden fixed vector", () => {
+	test("handoffEvidenceIdOf reproduces the pinned golden id for a literal input", () => {
+		// FIXTURE_EVIDENCE_ID above is computed with the implementation under
+		// test, so a field-order or field-omission regression in
+		// handoffEvidenceIdOf would change production and fixtures together
+		// without failing any test. This literal pins the algorithm itself:
+		// if it fails, the identity derivation changed and every persisted
+		// binding/state hash breaks — that is a contract rev, not a fixture
+		// refresh. Never regenerate this value to make the test pass.
+		expect(
+			handoffEvidenceIdOf({
+				runId: "golden-run",
+				attachmentAdapterId: "chrome-devtools",
+				route: "cdp",
+				endpointHttp: "http://127.0.0.1:53412",
+				endpointWs: "ws://127.0.0.1:53412/devtools/browser/golden",
+				proofContractId: "warm-chrome.environment",
+				proofSchemaVersion: "1",
+			}),
+		).toBe("ef208426bf7c7dc5f8722f732d8c0976");
+	});
+});
+
 // A handoff-bound `targets list` success envelope (the CLI success envelope U5
 // emits), as `targets select` receives it on stdin. handoff_bound and
 // operation_ready default true; override to forge a recovery envelope for AE5.
