@@ -33,6 +33,10 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const BROWSER_CONNECT_CLI = join(REPO_ROOT, "runtime", "browser-connect", "src", "cli.ts");
 const BROWSER_CONNECT_ROOT = join(REPO_ROOT, "runtime", "browser-connect");
 const SPAWN_TIMEOUT_MS = 20_000;
+// Bun test deadline sits above the child kill timer so a slow shutdown still
+// has room for child.exited to settle and stdout to drain; otherwise both fire
+// at the same instant and the controlled failure becomes a runner timeout.
+const TEST_TIMEOUT_MS = SPAWN_TIMEOUT_MS + 10_000;
 
 // A bare /json/version responder that is NOT an inspectable Google Chrome
 // process: warm-chrome's real proof answers the round-trip, fails to resolve
@@ -122,5 +126,5 @@ describe("U1 process-boundary proof against the real browser-connect CLI", () =>
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
 			"supply_verified_handoff",
 		);
-	}, SPAWN_TIMEOUT_MS);
+	}, TEST_TIMEOUT_MS);
 });

@@ -17,8 +17,8 @@ A reusable authenticated browser environment that `browser-use` drives for login
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
 
 **Warm Chrome Runtime Package**:
-The independently hardened browser-entry layer inside `browser-use`. It owns Warm Chrome readiness semantics while `browser-use` remains the agent-facing browser product.
-_Avoid_: Warm Chrome product, separate browser product, browser-use replacement
+The independently hardened browser-entry layer shipped as `runtime/warm-chrome` (`@side-quest/warm-chrome`). It implements the Warm Chrome proof — verifying that a candidate browser endpoint satisfies the Warm Chrome contract. `runtime/browser-connect` is the front door that consumes this proof, injects the verified endpoint, attaches the adapter, and mints the Verified Handoff Envelope; `browser-use` is the downstream consumer of that envelope and owns no entry or proof logic itself.
+_Avoid_: Warm Chrome product, separate browser product, browser-use replacement, browser-use-owned entry layer
 
 **Suggested Explicit Port**:
 An informational repair hint emitted when the Warm Chrome convention port is
@@ -28,8 +28,8 @@ the Warm Chrome proof.
 _Avoid_: port allocation, automatic rebinding, durable port binding, port authority
 
 **Warm Chrome Preflight**:
-A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
-_Avoid_: manual checklist, browser-domain-memory preflight
+The readiness proof that `runtime/browser-connect` (the front door) runs before any Browser Adapter acts, delegating to `runtime/warm-chrome` for implementation. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result via the Verified Handoff Envelope rather than owning separate readiness policies. `browser-use` is not the proof owner — it consumes the envelope.
+_Avoid_: manual checklist, browser-domain-memory preflight, browser-use-owned preflight
 
 **handoff-bound**:
 The `targets` discovery mode whose binding evidence is the browser-connect Verified Handoff Envelope. Formerly route-bound, whose evidence was the Router's route artifact; the rename keeps "route" grounded in browser-connect's attachment-route sense. `recovery` mode keeps its name and yields evidence-gathering candidates, not operation-ready ones.
@@ -134,7 +134,7 @@ Dev: "Can `browser-domain-memory` open or repair Warm Chrome?"
 Domain expert: "No. It hands back to `browser-use`, which routes connection and repair through `browser-connect`. `browser-domain-memory` consumes the browser environment and owns durable browser knowledge."
 
 Dev: "What does `browser-domain-memory` do when Warm Chrome is missing or wrong?"
-Domain expert: "It makes a Browser Entry Handoff. `browser-use` repairs or prepares Warm Chrome; browser-domain-memory does not launch or switch adapters itself."
+Domain expert: "It makes a Browser Entry Handoff. `browser-use` routes the repair through `browser-connect`, which owns the connection proof and repair paths; browser-domain-memory does not launch or switch adapters itself."
 
 Dev: "Is a missing Warm Chrome endpoint from preflight a Browser Entry Handoff?"
 Domain expert: "Yes, when the failure means the Warm Chrome environment is not ready. Stop adapter work and continue through `browser-use` recovery."

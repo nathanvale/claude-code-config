@@ -128,13 +128,18 @@ export async function runTargetsList(input: {
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	const flags = parsed.flagValues;
+	// One run id threads the chain (R3): once the handoff envelope's run id is
+	// inherited below, every emitted envelope — failures after that point and
+	// the success — carries it, so the top-level run_id always agrees with
+	// binding.run_id.
+	let runId = input.runId;
 	const fail = (failure: TargetDiscoveryFailure) =>
 		emitTargetDiscoveryFailure({
 			failure,
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
-			runId: input.runId,
+			runId,
 			durationMs: input.durationMs(),
 		});
 
@@ -152,7 +157,6 @@ export async function runTargetsList(input: {
 	// mode, then fail closed on any adapter or run mismatch (R9-era rigor).
 	let requestedAdapter: BrowserAdapterId;
 	let handoff: HandoffFacts | undefined;
-	let runId = input.runId;
 	if (mode === "handoff-bound") {
 		const handoffPath = flags["--handoff"];
 		if (!handoffPath) {
@@ -292,7 +296,7 @@ export async function runTargetsList(input: {
 		envelope,
 		outputMode: parsed.outputMode,
 		stdout: input.stdout,
-		runId: input.runId,
+		runId,
 		durationMs: input.durationMs(),
 	});
 }
@@ -349,6 +353,11 @@ export async function readHandoffFacts(
 	}
 	if (data.outcome === "failed") return { ok: true, kind: "failed" };
 	if (data.outcome !== "verified") return invalid("outcome is not verified");
+	// Outcome/status consistency: a "verified" payload inside a non-ok envelope
+	// is a contradiction (hand-assembled or tampered), never authorization.
+	if (value.status !== "ok") {
+		return invalid("outcome is verified but envelope status is not ok");
+	}
 	const attachment = isJsonObject(data.attachment) ? data.attachment : undefined;
 	if (!attachment) return invalid("attachment is missing");
 	const attachmentAdapterId = stringField(attachment.adapter_id);
@@ -365,8 +374,25 @@ export async function readHandoffFacts(
 	const endpointHttp = endpoint ? stringField(endpoint.http) : undefined;
 	const endpointWs = endpoint ? stringField(endpoint.ws) : undefined;
 	if (!endpointHttp || !endpointWs) return invalid("endpoint forms missing");
+	// Endpoint forms must be real HTTP(S)/WS(S) URLs with hosts. Anything else
+	// (file:, data:, a bare string) must never reach kind:"verified" and
+	// authorize operations.
 	const endpointUrl = safeUrl(endpointHttp);
-	if (!endpointUrl) return invalid("endpoint http form is not a valid URL");
+	if (
+		!endpointUrl ||
+		(endpointUrl.protocol !== "http:" && endpointUrl.protocol !== "https:") ||
+		endpointUrl.host === ""
+	) {
+		return invalid("endpoint http form is not an http(s) URL with a host");
+	}
+	const endpointWsUrl = safeUrl(endpointWs);
+	if (
+		!endpointWsUrl ||
+		(endpointWsUrl.protocol !== "ws:" && endpointWsUrl.protocol !== "wss:") ||
+		endpointWsUrl.host === ""
+	) {
+		return invalid("endpoint ws form is not a ws(s) URL with a host");
+	}
 	const proof = isJsonObject(data.proof) ? data.proof : undefined;
 	const proofContractId = proof
 		? stringField(proof.environment_contract_id)

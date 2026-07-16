@@ -85,7 +85,14 @@ describe("U3 help and version", () => {
 				contract: browserUseContracts[command],
 				help: result.stdout,
 			});
-			expect(result.stdout).toContain("browser-connect");
+			// The mint-an-envelope prerequisite is contract-driven: rendered only
+			// for commands that accept --handoff (targets status reads selected
+			// state and carries no connection prerequisite).
+			if (command === "targets-status") {
+				expect(result.stdout).not.toContain("Prerequisite:");
+			} else {
+				expect(result.stdout).toContain("browser-connect");
+			}
 		}
 	});
 });
@@ -155,6 +162,29 @@ describe("U3 parser", () => {
 		);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
 		expect(result.exitCode).toBe(0);
+	});
+
+	// Regression: --help/--version detect from STANDALONE tokens only. A token
+	// shaped like them consumed as a value-bearing flag's value must not
+	// short-circuit the command into help/version output.
+	test("a flag value shaped like --version does not short-circuit to version", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--version", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		const json = parseJson(result.stdout);
+		expect(json.data).toMatchObject({ command: "targets-select" });
+	});
+
+	test("a flag value shaped like --help does not short-circuit to help", async () => {
+		const result = await runForTest(
+			["targets", "select", "--title-contains", "--help", "--dry-run", "--json"],
+			makeRuntime(),
+		);
+		expect(result.stdout).not.toContain("Usage");
+		expect(parseJson(result.stdout).data).toMatchObject({
+			command: "targets-select",
+		});
 	});
 
 	// Regression: mode flags derive from parsed flag values, never token scans.

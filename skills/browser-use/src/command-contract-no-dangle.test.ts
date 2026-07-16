@@ -55,8 +55,10 @@ const SURVIVING_ACTION_ARRAYS: Record<string, readonly RuntimeAction[]> = {
 	browserUseOperationSuccessActions,
 };
 
-// Recursively harvest every string value (and string key prose is static
-// identifiers, so values suffice) from a contract object.
+// Recursively harvest every string value AND every object key from a contract
+// object. Keys matter: a deleted command exposed as a contract key (e.g. a
+// browserUseContracts entry) never appears as a value, so a values-only sweep
+// would let it pass offendersIn.
 function collectStrings(value: unknown, path: string, out: Array<{ path: string; text: string }>): void {
 	if (typeof value === "string") {
 		out.push({ path, text: value });
@@ -70,6 +72,7 @@ function collectStrings(value: unknown, path: string, out: Array<{ path: string;
 	}
 	if (typeof value === "object" && value !== null) {
 		for (const [key, entry] of Object.entries(value)) {
+			out.push({ path: `${path}.${key}(key)`, text: key });
 			collectStrings(entry, `${path}.${key}`, out);
 		}
 	}
@@ -105,10 +108,10 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 		// shrunken contract table means the harvest is scanning less surface than
 		// this gate promises, not that the surface got cleaner.
 		expect(commandCount).toBeGreaterThanOrEqual(6);
+		// Harvest the whole table (not per-entry) so the command names themselves
+		// — the top-level keys — land in the corpus too.
 		const corpus: Array<{ path: string; text: string }> = [];
-		for (const [command, contract] of Object.entries(browserUseContracts)) {
-			collectStrings(contract, `browserUseContracts.${command}`, corpus);
-		}
+		collectStrings(browserUseContracts, "browserUseContracts", corpus);
 		// Floor calibrated against the real corpus (424 strings at gate
 		// creation): tolerate pruning, fail on a broken harvest.
 		expect(corpus.length).toBeGreaterThan(300);
