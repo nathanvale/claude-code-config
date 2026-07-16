@@ -548,6 +548,12 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		const candidates = (envelope.data as { candidates: Array<Record<string, unknown>> })
 			.candidates;
 		expect(candidates).toHaveLength(1);
+		// Candidates carry the parsed title and the privacy-redacted origin
+		// (never the raw URL — that stays behind --show-url).
+		expect(candidates[0]).toMatchObject({
+			title: "Example Domain",
+			origin: "https://example.com",
+		});
 	});
 
 	test("discovery calls list_pages through the shared transport", async () => {
