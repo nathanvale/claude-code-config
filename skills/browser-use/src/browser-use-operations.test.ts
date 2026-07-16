@@ -206,6 +206,68 @@ describe("U7 operation gates", () => {
 		expect(calls).toHaveLength(0);
 	});
 
+	// Ported from the deleted browser-adapter-router suite ("emulate authorizes
+	// only when viewport_emulation is routed" / "operation capability mapping
+	// fails closed when capability not routed"): the operation-class ->
+	// capability mapping is still enforced through the surviving engine's
+	// authorizesOperationClass, now fed by the handoff adapter's pinned
+	// operation capability set (BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES).
+	test("emulate is refused before transport when the adapter does not authorize viewport_emulation", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"emulate",
+				"--width",
+				"390",
+				"--height",
+				"844",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_capability_unauthorized",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("screenshot is refused before transport when the adapter does not authorize screenshot_media", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"screenshot",
+				"--out",
+				"shot.png",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_capability_unauthorized",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
 	test("screenshot requires --out before transport", async () => {
 		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(

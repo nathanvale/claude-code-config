@@ -2,10 +2,9 @@
 
 // Shared mcporter transport runner (plan 2026-06-04-001, U4).
 //
-// One source of truth for the `mcporter` command-vector contract that both
-// Browser Adapter Proof (preflight-browser-adapter.ts) and Browser Operation
-// execution (browser-use.ts) run through. AE10: both surfaces resolve and
-// prefix the command vector with identical semantics.
+// One source of truth for the `mcporter` command-vector contract that Browser
+// Operation execution (browser-use.ts) runs through. AE10: every consuming
+// surface resolves and prefixes the command vector with identical semantics.
 //
 // Hard contract:
 //   - The only override channel is BROWSER_USE_MCPORTER_COMMAND_JSON, a JSON

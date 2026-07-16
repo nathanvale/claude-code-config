@@ -6,10 +6,7 @@ import { basename, join, relative } from "node:path";
 const skillRoot = join(import.meta.dir, "..");
 const distRoot = join(skillRoot, "dist");
 const entrypoints = [
-	"browser-adapter-map.ts",
-	"browser-adapter-router.ts",
 	"browser-use.ts",
-	"preflight-browser-adapter.ts",
 	"preflight-warm-chrome.ts",
 ].map((entrypoint) => join(import.meta.dir, entrypoint));
 const expectedDistFiles = new Set(

@@ -99,10 +99,7 @@
       "name": "browser-use-scripts",
       "version": "0.1.0",
       "bin": {
-        "browser-adapter-map": "dist/browser-adapter-map.js",
-        "browser-adapter-router": "dist/browser-adapter-router.js",
         "browser-use": "dist/browser-use.js",
-        "preflight-browser-adapter": "dist/preflight-browser-adapter.js",
         "preflight-warm-chrome": "dist/preflight-warm-chrome.js",
       },
       "dependencies": {

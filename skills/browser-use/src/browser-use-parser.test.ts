@@ -130,6 +130,24 @@ describe("U3 parser", () => {
 		}
 	});
 
+	// Ported from the deleted browser-adapter-router safety suite ("usage errors
+	// redact filesystem-looking values"): the surviving front door sanitizes
+	// usage-error prose (sanitizeUsageValue at the throw site, redactUnsafeText
+	// in emitCliError), so a filesystem-looking value smuggled into an
+	// undeclared flag token never appears in CLI output.
+	test("usage errors never echo filesystem-looking flag values", async () => {
+		const result = await runForTest(
+			["targets", "list", "--state=/tmp/router-secret.json", "--json"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(2);
+		expect(result.stdout).not.toContain("/tmp/router-secret.json");
+		expect(result.stderr).not.toContain("/tmp/router-secret.json");
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "usage_error",
+		});
+	});
+
 	test("declared flags are accepted without a usage error", async () => {
 		const result = await runForTest(
 			["targets", "list", "--mode", "handoff-bound", "--show-url", "--dry-run", "--json"],
