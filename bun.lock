@@ -111,6 +111,7 @@
         "browser-use": "dist/browser-use.js",
       },
       "devDependencies": {
+        "@side-quest/browser-connect": "0.1.0",
         "@side-quest/cli-command-facade": "0.1.0",
         "@side-quest/mcporter-transport": "0.1.0",
         "@types/bun": "catalog:",

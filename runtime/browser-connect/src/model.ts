@@ -4,6 +4,38 @@ import {
 	type CommandResultData,
 	createCommandResultData,
 } from "@side-quest/cli-command-facade";
+import type {
+	BrowserConnectEnvironmentIdentity,
+	BrowserConnectEnvironmentName,
+	BrowserConnectHandoffPayload,
+	BrowserConnectLaunchProvenance,
+	BrowserConnectRouteEvidenceStatus,
+	BrowserConnectRouteId,
+} from "./contract";
+
+// The Verified Handoff Envelope payload type graph lives value-free in
+// `contract.ts` (KTD6/R8) so consumers can `import type` it through the
+// `./contract` subpath. Re-exported here so browser-connect internals keep
+// importing from `./model` unchanged.
+export type {
+	BrowserConnectAuthorizedAttachment,
+	BrowserConnectEnvironmentIdentity,
+	BrowserConnectEnvironmentName,
+	BrowserConnectHandoffPayload,
+	BrowserConnectLaunchProvenance,
+	BrowserConnectProofEvidence,
+	BrowserConnectRouteEvidenceStatus,
+	BrowserConnectRouteId,
+	BrowserConnectVerifiedEndpoint,
+} from "./contract";
+
+// Compile-time parity between the value-free literal unions in `contract.ts`
+// and the runtime const arrays below, enforced in BOTH directions: the
+// `satisfies` clause on each array rejects a literal outside the union, and
+// the `AssertTrue<IsEqual<…>>` aliases reject a union member the array lacks.
+// Either drift direction is a type error, not a silent divergence.
+type IsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type AssertTrue<T extends true> = T;
 
 /**
  * Package-owned contract id for browser-connect verified handoff envelopes.
@@ -50,13 +82,16 @@ export const BROWSER_CONNECT_RESULT_CONTRACT = {
  * multi-identity means multiple Agent Chrome instances distinguished by
  * envelope environment identity, never new environment names.
  */
-export const BROWSER_CONNECT_ENVIRONMENT_NAMES = ["agent-chrome"] as const;
+export const BROWSER_CONNECT_ENVIRONMENT_NAMES = [
+	"agent-chrome",
+] as const satisfies readonly BrowserConnectEnvironmentName[];
 
-/**
- * Environment name union.
- */
-export type BrowserConnectEnvironmentName =
-	(typeof BROWSER_CONNECT_ENVIRONMENT_NAMES)[number];
+type _EnvironmentNameParity = AssertTrue<
+	IsEqual<
+		(typeof BROWSER_CONNECT_ENVIRONMENT_NAMES)[number],
+		BrowserConnectEnvironmentName
+	>
+>;
 
 /**
  * Three-door route model (KTD7), declared from day one so door assumptions
@@ -68,13 +103,11 @@ export const BROWSER_CONNECT_ROUTES = [
 	"explicit-cdp",
 	"ui-consent",
 	"extension",
-] as const;
+] as const satisfies readonly BrowserConnectRouteId[];
 
-/**
- * Route id union — also the browser-entry mode vocabulary the envelope names
- * (R16): the door through which the browser session is entered.
- */
-export type BrowserConnectRouteId = (typeof BROWSER_CONNECT_ROUTES)[number];
+type _RouteIdParity = AssertTrue<
+	IsEqual<(typeof BROWSER_CONNECT_ROUTES)[number], BrowserConnectRouteId>
+>;
 
 /**
  * Evidence status a route capability carries per Adapter Definition (KTD7).
@@ -83,13 +116,14 @@ export const BROWSER_CONNECT_ROUTE_EVIDENCE_STATUSES = [
 	"verified-live",
 	"documented",
 	"candidate",
-] as const;
+] as const satisfies readonly BrowserConnectRouteEvidenceStatus[];
 
-/**
- * Route evidence status union.
- */
-export type BrowserConnectRouteEvidenceStatus =
-	(typeof BROWSER_CONNECT_ROUTE_EVIDENCE_STATUSES)[number];
+type _RouteEvidenceStatusParity = AssertTrue<
+	IsEqual<
+		(typeof BROWSER_CONNECT_ROUTE_EVIDENCE_STATUSES)[number],
+		BrowserConnectRouteEvidenceStatus
+	>
+>;
 
 /**
  * Closed failure-class union covering the Branch Station Catalog's failure
@@ -629,72 +663,6 @@ export type BrowserConnectRepairContext =
 			failure_class: "runtime-error-unexpected";
 			cause: "unexpected_runtime_error";
 	  };
-
-/**
- * Environment identity (R2): whose browser this is. v1 names exactly one
- * Agent Chrome; future multi-identity distinguishes instances here.
- */
-export type BrowserConnectEnvironmentIdentity = {
-	name: BrowserConnectEnvironmentName;
-};
-
-/**
- * Verified endpoint forms (R2). Both forms come verbatim from the environment
- * proof (structured ok-envelope exemption — the JSON envelope is the one
- * surface that carries the verified websocket URL intact); neither is ever
- * derived from the port convention.
- */
-export type BrowserConnectVerifiedEndpoint = {
-	http: string;
-	ws: string;
-};
-
-/**
- * The specific adapter attachment the envelope authorizes (R16). The
- * `probe_executable` names which executable performed the attachment probe
- * (R4: proof names a handshake the adapter itself performed).
- */
-export type BrowserConnectAuthorizedAttachment = {
-	adapter_id: string;
-	route: BrowserConnectRouteId;
-	probe_executable: string;
-};
-
-/**
- * Launch provenance (R3): mandatory structured field on every envelope.
- * `launched` is true only when browser-connect launched Agent Chrome during
- * this run.
- */
-export type BrowserConnectLaunchProvenance = {
-	launched: boolean;
-};
-
-/**
- * Proof evidence summary (R2): names the environment proof contract that
- * vouched for the endpoint and the declared evidence status of the authorized
- * route.
- */
-export type BrowserConnectProofEvidence = {
-	environment_contract_id: string;
-	environment_schema_version: string;
-	route_evidence: BrowserConnectRouteEvidenceStatus;
-};
-
-/**
- * Verified handoff payload (R2/R16): decision-complete in one read — names
- * the browser-entry mode and the specific adapter attachment it authorizes.
- * Run-id correlation stays facade-owned on the outer runtime envelope
- * (`run_id`, caller-suppliable, warm-chrome `--run-id` parity).
- */
-export type BrowserConnectHandoffPayload = {
-	outcome: "verified";
-	environment: BrowserConnectEnvironmentIdentity;
-	browser_entry_mode: BrowserConnectRouteId;
-	attachment: BrowserConnectAuthorizedAttachment;
-	endpoint: BrowserConnectVerifiedEndpoint;
-	launch: BrowserConnectLaunchProvenance;
-	proof: BrowserConnectProofEvidence;
-};
 
 /**
  * Failure payload (R2): failure class plus exactly one next safe action.
