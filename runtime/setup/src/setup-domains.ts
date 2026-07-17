@@ -2,6 +2,12 @@ import { join } from "node:path";
 
 import { applyLockResult, applySetup } from "./apply.ts";
 import {
+	applyBinTopology,
+	inspectBinTopology,
+	inspectRemovableBins,
+	type BinTopologyOptions,
+} from "./bin-topology.ts";
+import {
 	applyHookTopology,
 	inspectHookTopology,
 	projectHookTopologyPlan,
@@ -33,6 +39,10 @@ export interface ApplySetupDomainsOptions {
 	readonly beforeSymlink?: (source: string, destination: string) => Promise<void>;
 	/** Deterministic hook transaction seam used to prove lock and race behavior. */
 	readonly beforeHookMutation?: (phase: HookMutationPhase, path: string) => Promise<void>;
+	/** Destination and PATH seams so tests never touch the real `~/.bun/bin`. */
+	readonly binTopology?: BinTopologyOptions;
+	/** Deterministic bin mutation seam used to prove concurrent-change deferral. */
+	readonly beforeBinMutation?: (phase: "remove" | "symlink", destination: string) => Promise<void>;
 }
 
 /** Read-only composition options, including lock and provenance state diagnostics. */
@@ -48,6 +58,8 @@ export interface UnlinkSetupDomainsOptions {
 	/** Deterministic lock seam used to prove composed busy outcomes never retry a projection-only unlink. */
 	readonly acquireLock?: typeof acquireOperationLock;
 	readonly beforeRemove?: (path: string) => Promise<void>;
+	/** Destination and PATH seams so tests never touch the real `~/.bun/bin`. */
+	readonly binTopology?: BinTopologyOptions;
 }
 
 /** Add read-only user-domain evidence to sync check without probing project scope. */
@@ -59,17 +71,19 @@ export async function checkSetupDomains(
 	const scope = await resolveSetupScope(input);
 	const lockFindings = await inspectReadOnlyLockFindings(input, scope.target_anchor, options.stateRoot, base.command);
 	if (input.scope === "project") return mergeReadOnlyLockFindings(base, lockFindings);
-	const [startupPlan, hookInspection, instruction] = await Promise.all([
+	const [startupPlan, binPlan, hookInspection, instruction] = await Promise.all([
 		inspectStartupTopology(input.sourceRepoRoot, scope.target_anchor),
+		inspectBinTopology(input.sourceRepoRoot, scope.target_anchor, options.binTopology),
 		inspectHookDomain(input.sourceRepoRoot, options.stateRoot, options.hookPath),
 		checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner),
 	]);
-	const findings: SetupFinding[] = [...lockFindings, ...startupPlan.findings, ...hookInspection.findings];
+	const findings: SetupFinding[] = [...lockFindings, ...startupPlan.findings, ...binPlan.findings, ...hookInspection.findings];
 	if (instruction.finding) findings.push(instruction.finding);
 	const runbook = checkRunbookHealth(join(input.sourceRepoRoot, RUNBOOK_SUBPATH));
 	if (runbook.finding) findings.push(runbook.finding);
 	const domains: SetupDomainResult[] = [
 		{ domain: "startup", planned: startupPlan.operations.map((item) => item.destination), applied: [], deferred: [], preserved: startupPlan.preserved, failed: [] },
+		{ domain: "bins", planned: binPlan.operations.map((item) => item.destination), applied: [], deferred: [], preserved: binPlan.preserved, failed: [] },
 		hookInspection.domain,
 		domainWithFailures("instruction", instruction.healthy ? [] : [instructionScriptPath(input.sourceRepoRoot)]),
 		domainWithFailures("runbook", runbook.healthy ? [] : runbook.missing.map((tag) => `runbook:${tag}`)),
@@ -88,7 +102,7 @@ export async function checkSetupDomains(
 		...base,
 		state,
 		station,
-		findings: [...base.findings, ...findings],
+		findings: [...base.findings, ...findings, ...binPlan.advisories],
 		domains: [...base.domains, ...domains],
 		counts: { ...base.counts, planned, blockers: base.counts.blockers + findings.length },
 		next_action: busy ? "retry" : blocked ? "run_doctor" : fresh ? "preview_sync" : planned > 0 ? "run_sync" : "setup_healthy",
@@ -166,23 +180,27 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 	const scope = await resolveSetupScope(input);
 	const startupInspection = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
 	const removable = startupInspection.removable;
+	const binsInspection = await inspectRemovableBins(input.sourceRepoRoot, scope.target_anchor, options.binTopology);
+	const binsRemovable = binsInspection.removable;
 	if (options.check) {
 		const projection = await unlinkSetup(input, options);
 		const startup = { domain: "startup", planned: removable, applied: [], deferred: [], preserved: startupInspection.preserved, failed: [] } satisfies SetupDomainResult;
-		const findings = [...projection.findings, ...startupInspection.findings];
-		const blocked = startupInspection.findings.length > 0 || projection.station === "unlink.check_blocked";
+		const bins = { domain: "bins", planned: binsRemovable, applied: [], deferred: [], preserved: binsInspection.preserved, failed: [] } satisfies SetupDomainResult;
+		const findings = [...projection.findings, ...startupInspection.findings, ...binsInspection.findings];
+		const blocked = startupInspection.findings.length > 0 || binsInspection.findings.length > 0 || projection.station === "unlink.check_blocked";
+		const plannedRemovals = removable.length + binsRemovable.length;
 		return {
 			...projection,
 			findings,
-			domains: [...projection.domains, startup],
+			domains: [...projection.domains, startup, bins],
 			counts: {
 				...projection.counts,
-				planned: projection.counts.planned + removable.length,
-				blockers: projection.counts.blockers + startupInspection.findings.length,
+				planned: projection.counts.planned + plannedRemovals,
+				blockers: projection.counts.blockers + startupInspection.findings.length + binsInspection.findings.length,
 			},
-			state: blocked ? "blocked" : removable.length > 0 ? "changes" : projection.state,
-			station: blocked ? "unlink.check_blocked" : removable.length > 0 ? "unlink.check_removable" : projection.station,
-			next_action: blocked ? "human_repair" : removable.length > 0 ? "run_unlink" : projection.next_action,
+			state: blocked ? "blocked" : plannedRemovals > 0 ? "changes" : projection.state,
+			station: blocked ? "unlink.check_blocked" : plannedRemovals > 0 ? "unlink.check_removable" : projection.station,
+			next_action: blocked ? "human_repair" : plannedRemovals > 0 ? "run_unlink" : projection.next_action,
 		};
 	}
 	const lock = await (options.acquireLock ?? acquireOperationLock)({ scope: "user", targetAnchor: scope.target_anchor, stateRoot: options.stateRoot });
@@ -192,19 +210,19 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 		const applied: string[] = [];
 		const failed: string[] = [];
 		const preserved: string[] = [...startupInspection.preserved];
-		const findings: SetupFinding[] = [...startupInspection.findings];
+		const findings: SetupFinding[] = [...startupInspection.findings, ...binsInspection.findings];
 		let deferred: readonly string[] = [];
 		let concurrent = false;
 		for (let index = 0; index < removable.length; index += 1) {
 			const path = removable[index];
 			if (!path) continue;
 			const before = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
-			mergeStartupEvidence(before, findings, preserved);
+			mergeRemovableEvidence(before, findings, preserved);
 			if (!before.removable.includes(path)) { failed.push(path); deferred = removable.slice(index + 1); concurrent = true; break; }
 			try {
 				await options.beforeRemove?.(path);
 				const immediate = await inspectRemovableStartupLinks(input.sourceRepoRoot, scope.target_anchor);
-				mergeStartupEvidence(immediate, findings, preserved);
+				mergeRemovableEvidence(immediate, findings, preserved);
 				if (!immediate.removable.includes(path)) {
 					failed.push(path);
 					deferred = removable.slice(index + 1);
@@ -215,19 +233,44 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 				applied.push(path);
 			} catch { failed.push(path); deferred = removable.slice(index + 1); break; }
 		}
+		const binsApplied: string[] = [];
+		const binsFailed: string[] = [];
+		const binsPreserved: string[] = [...binsInspection.preserved];
+		let binsDeferred: readonly string[] = [];
+		for (let index = 0; index < binsRemovable.length; index += 1) {
+			const path = binsRemovable[index];
+			if (!path) continue;
+			const before = await inspectRemovableBins(input.sourceRepoRoot, scope.target_anchor, options.binTopology);
+			mergeRemovableEvidence(before, findings, binsPreserved);
+			if (!before.removable.includes(path)) { binsFailed.push(path); binsDeferred = binsRemovable.slice(index + 1); concurrent = true; break; }
+			try {
+				await options.beforeRemove?.(path);
+				const immediate = await inspectRemovableBins(input.sourceRepoRoot, scope.target_anchor, options.binTopology);
+				mergeRemovableEvidence(immediate, findings, binsPreserved);
+				if (!immediate.removable.includes(path)) {
+					binsFailed.push(path);
+					binsDeferred = binsRemovable.slice(index + 1);
+					concurrent = true;
+					break;
+				}
+				await rm(path);
+				binsApplied.push(path);
+			} catch { binsFailed.push(path); binsDeferred = binsRemovable.slice(index + 1); break; }
+		}
 		const startup: SetupDomainResult = { domain: "startup", planned: removable, applied, deferred, preserved, failed };
+		const bins: SetupDomainResult = { domain: "bins", planned: binsRemovable, applied: binsApplied, deferred: binsDeferred, preserved: binsPreserved, failed: binsFailed };
 		const allFindings = [...projection.findings, ...findings];
-		const incomplete = projection.state === "partial" || projection.state === "blocked" || failed.length > 0 || findings.length > 0;
-		const any = projection.domains.some((domain) => domain.applied.length > 0) || applied.length > 0;
+		const incomplete = projection.state === "partial" || projection.state === "blocked" || failed.length > 0 || binsFailed.length > 0 || findings.length > 0;
+		const any = projection.domains.some((domain) => domain.applied.length > 0) || applied.length > 0 || binsApplied.length > 0;
 		return {
 			...projection,
 			findings: allFindings,
-			domains: [...projection.domains, startup],
+			domains: [...projection.domains, startup, bins],
 			state: incomplete ? any ? "partial" : "blocked" : any ? "removed" : "noop",
 			station: concurrent ? "unlink.concurrent_change" : incomplete ? "unlink.partial_failure" : any ? "unlink.removed" : "unlink.noop",
 			counts: {
 				...projection.counts,
-				planned: projection.counts.planned + removable.length,
+				planned: projection.counts.planned + removable.length + binsRemovable.length,
 				blockers: projection.counts.blockers + findings.length,
 			},
 			next_action: concurrent ? "rerun_check" : incomplete ? "inspect_results" : "clean_state",
@@ -235,8 +278,8 @@ export async function unlinkSetupDomains(input: SetupInspectionInput, options: U
 	} finally { await lock.release(); }
 }
 
-function mergeStartupEvidence(
-	inspection: Awaited<ReturnType<typeof inspectRemovableStartupLinks>>,
+function mergeRemovableEvidence(
+	inspection: { readonly findings: readonly SetupFinding[]; readonly preserved: readonly string[] },
 	findings: SetupFinding[],
 	preserved: string[],
 ): void {
@@ -266,9 +309,16 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 			planned: startupPlan.operations.map((item) => item.destination),
 			preserved: startupPlan.preserved,
 		};
+		const binPlan = await inspectBinTopology(input.sourceRepoRoot, homeDir, options.binTopology);
+		const binsPreview: SetupDomainResult = {
+			...emptyDomain("bins"),
+			planned: binPlan.operations.map((item) => item.destination),
+			preserved: binPlan.preserved,
+		};
+		const advisories = binPlan.advisories;
 		let hookPlan: Awaited<ReturnType<typeof inspectHookTopology>> | undefined;
 		let hookPreview = emptyDomain("hooks");
-		const extraFindings: SetupFinding[] = [...startupPlan.findings];
+		const extraFindings: SetupFinding[] = [...startupPlan.findings, ...binPlan.findings];
 		try {
 			const hookRoot = await (options.hookPath ?? resolveGitHookPath)(input.sourceRepoRoot);
 			hookPlan = await inspectHookTopology(join(input.sourceRepoRoot, HOOK_SOURCE_SUBPATH), hookRoot, options.stateRoot);
@@ -292,21 +342,24 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 			if (instruction.finding) extraFindings.push(instruction.finding);
 			return aggregate(
 				projectionPlan,
-				[startupPreview, hookPreview, instructionResultDomain(input.sourceRepoRoot, instruction.healthy), runbookDomain],
+				[startupPreview, binsPreview, hookPreview, instructionResultDomain(input.sourceRepoRoot, instruction.healthy), runbookDomain],
 				extraFindings,
+				advisories,
 				`${instruction.stdout}${instruction.stderr}`,
 			);
 		}
 
 		const startup = await applyStartupTopology(startupPlan);
+		const bins = await applyBinTopology(binPlan, { beforeMutation: options.beforeBinMutation });
 		const instruction = await checkInstructionHealth(input.sourceRepoRoot, options.instructionRunner);
 		if (instruction.finding) extraFindings.push(instruction.finding);
 		const instructionDomain = instructionResultDomain(input.sourceRepoRoot, instruction.healthy);
 		if (!instruction.healthy) {
 			return aggregate(
 				projectionPlan,
-				[startup, hookPreview, instructionDomain, runbookDomain],
+				[startup, bins, hookPreview, instructionDomain, runbookDomain],
 				extraFindings,
+				advisories,
 				`${instruction.stdout}${instruction.stderr}`,
 			);
 		}
@@ -315,7 +368,7 @@ export async function applySetupDomains(input: SetupInspectionInput, options: Ap
 		const hook = hookPlan
 			? await applyHookTopology(hookPlan, { beforeMutation: options.beforeHookMutation })
 			: hookPreview;
-		return aggregate(projection, [startup, hook, instructionDomain, runbookDomain], extraFindings, `${instruction.stdout}${instruction.stderr}`);
+		return aggregate(projection, [startup, bins, hook, instructionDomain, runbookDomain], extraFindings, advisories, `${instruction.stdout}${instruction.stderr}`);
 	} finally {
 		await lock.release();
 	}
@@ -358,9 +411,16 @@ async function inspectHookDomain(
 	}
 }
 
-function aggregate(base: SetupResult, domains: readonly SetupDomainResult[], findings: readonly SetupFinding[], childOutput: string): SetupResult {
+function aggregate(
+	base: SetupResult,
+	domains: readonly SetupDomainResult[],
+	findings: readonly SetupFinding[],
+	advisories: readonly SetupFinding[],
+	childOutput: string,
+): SetupResult {
 	const all = [...base.domains, ...domains];
-	const allFindings = [...base.findings, ...findings];
+	// Advisories surface in findings but never join the blocked/blockers computation (KTD: advisory channel).
+	const allFindings = [...base.findings, ...findings, ...advisories];
 	const applied = all.some((domain) => domain.applied.length > 0);
 	const incomplete = base.state === "blocked" || base.state === "partial" || base.counts.blockers > 0 || findings.length > 0 || all.some((domain) => domain.failed.length > 0 || domain.deferred.length > 0);
 	const partial = base.state === "partial" || (incomplete && applied);

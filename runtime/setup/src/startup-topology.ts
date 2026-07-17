@@ -2,7 +2,7 @@ import { lstat, mkdir, readlink, realpath, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { SetupDomainResult, SetupFinding } from "./model.ts";
-import { canonicalPath, isInsideOrEqual } from "./path-safety.ts";
+import { canonicalPath, isInsideOrEqual, unsafeExistingParent } from "./path-safety.ts";
 
 export const STARTUP_LINKS = [
 	{ destination: ".claude/CLAUDE.md", source: "CLAUDE.md" },
@@ -183,21 +183,6 @@ function sourceEscapeFinding(source: string): SetupFinding {
 		summary: "Startup source resolves outside the selected source repository.",
 		repair: "human_repair",
 	};
-}
-
-async function unsafeExistingParent(homeRoot: string, destination: string): Promise<string | undefined> {
-	let current = dirname(destination);
-	while (true) {
-		if (await exists(current)) {
-			const resolved = await canonicalPath(current);
-			if (!isInsideOrEqual(homeRoot, resolved)) return current;
-			if (resolve(resolved) === resolve(homeRoot)) return undefined;
-		}
-		if (resolve(current) === resolve(homeRoot)) return undefined;
-		const parent = dirname(current);
-		if (parent === current) return current;
-		current = parent;
-	}
 }
 
 async function exists(path: string): Promise<boolean> {
