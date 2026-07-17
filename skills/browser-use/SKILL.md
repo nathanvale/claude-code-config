@@ -22,10 +22,19 @@ safety.
 
 ## Invocation Forms
 
+- Installed bins (primary from any CWD): `browser-connect`, `browser-use`, and `warm-chrome` resolve on PATH as setup-owned `~/.bun/bin` symlinks into the source repo. `setup sync` installs and repairs them; `setup status` verifies. Agents outside the repo use these, never repo-relative paths.
 - browser-use repo-local: run `bun run <command>` from `skills/browser-use`; this executes `src`.
-- browser-connect repo-local: run `bun run runtime/browser-connect/src/cli.ts <args>`; installed environments call the `browser-connect` bin.
+- browser-connect repo-local: run `bun run runtime/browser-connect/src/cli.ts <args>` from the repo root.
 - Repo-root verification: run `bun run check:workspace-facade`; this rebuilds `dist` before invariant checks.
 - Command contracts name command identity only; omit `bun run`, `src`, `dist`, and repo paths.
+
+## Engine Lanes
+
+Read the domain file's `engine` before connecting; it selects the adapter and the operating surface:
+
+- `engine: agent-browser`: connect with `browser-connect connect agent-browser --json`, then drive the agent-browser CLI directly (`eval`, `click`, `fill`, domain scripts). `targets`/`operate` does not apply to this lane.
+- No engine declared, or `chrome-devtools-mcp`: connect with `browser-connect connect chrome-devtools-mcp --json` and follow the Workflow below (`targets list → targets select → operate`).
+- Adapter ids come from the registered enum in `skills/browser-use/src/command-contract.ts`; never abbreviate them.
 
 ## Workflow
 
