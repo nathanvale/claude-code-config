@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { resolveMcporterCommandVector } from "./mcporter-transport";
-import { runBrowserUseMcporter } from "./browser-use-transport";
+import {
+	ENVELOPE_ADAPTER_CALL_ENV,
+	envelopeAdapterCallArgs,
+	runBrowserUseMcporter,
+	runEnvelopeAdapterCall,
+} from "./browser-use-transport";
 import {
 	capturingRuntime,
 	commandVector,
@@ -12,14 +17,14 @@ import {
 // mcporter neutral-outcome -> operation-failure mapping coverage attributes to
 // the module under test.
 
-const TRANSPORT_ARGS = [
-	"call",
-	"chrome-devtools.take_snapshot",
-	"--args",
-	"{}",
-	"--output",
-	"json",
-] as const;
+// Representative envelope-derived args (the only live call form since U3);
+// the mapping tests below treat them as opaque pass-through argv.
+const TRANSPORT_ARGS = envelopeAdapterCallArgs({
+	probeExecutable: "/pinned/adapter",
+	endpointHttp: "http://127.0.0.1:9222",
+	tool: "take_snapshot",
+	argsJson: "{}",
+});
 
 describe("U4 mcporter transport", () => {
 	// Scenario: default operation transport invokes `mcporter`.
@@ -201,6 +206,79 @@ describe("U4 mcporter transport", () => {
 				"chrome-devtools",
 			]);
 		}
+	});
+
+	// Parity guard: the envelope-derived transport (U3) builds the exact ad-hoc
+	// argv the U1 process-boundary proof pinned against real mcporter
+	// (ENVELOPE_ADAPTER_ARGV_CONTRACT in mcporter-adapter-process-boundary
+	// .test.ts): pinned binary via --stdio, endpoint verbatim via --stdio-arg
+	// --browser-url, --experimentalPageIdRouting for direct pageId routing, and
+	// a fresh --name so no configured server is ever consulted.
+	test("the envelope call builder substitutes the envelope slots into the pinned argv and nothing else", () => {
+		expect(
+			envelopeAdapterCallArgs({
+				probeExecutable: "/pinned/adapters/chrome-devtools-mcp/bin/chrome-devtools-mcp",
+				endpointHttp: "http://127.0.0.1:9222",
+				tool: "take_snapshot",
+				argsJson: '{"pageId":3}',
+			}),
+		).toEqual([
+			"call",
+			"--stdio",
+			"/pinned/adapters/chrome-devtools-mcp/bin/chrome-devtools-mcp",
+			"--stdio-arg",
+			"--browser-url",
+			"--stdio-arg",
+			"http://127.0.0.1:9222",
+			"--stdio-arg",
+			"--experimentalPageIdRouting",
+			"--name",
+			"browser-use-envelope-adapter",
+			"--tool",
+			"take_snapshot",
+			"--args",
+			'{"pageId":3}',
+			"--output",
+			"json",
+		]);
+	});
+
+	// Scenario: every envelope-derived call rides the keep-alive env guard.
+	// Without MCPORTER_NO_KEEPALIVE=* a running mcporter daemon with a configured
+	// chrome-devtools server silently answers the call itself (wrong binary,
+	// wrong endpoint, exit 0) — the U1-proven config-seam shadowing defect.
+	test("runEnvelopeAdapterCall rides the keep-alive env guard on the spawn", async () => {
+		const { runtime, calls } = capturingRuntime({});
+		const call = {
+			probeExecutable: "/pinned/adapter",
+			endpointHttp: "http://127.0.0.1:9222",
+			tool: "list_pages",
+			argsJson: "{}",
+		};
+		const outcome = await runEnvelopeAdapterCall(runtime, call);
+
+		expect(outcome.ok).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			"mcporter",
+			...envelopeAdapterCallArgs(call),
+		]);
+		expect(calls[0].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+		expect(ENVELOPE_ADAPTER_CALL_ENV).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+	});
+
+	// Scenario: caller env threads through the shared transport untouched, and
+	// stays absent when not supplied (backward-compatible seam).
+	test("caller env threads through runBrowserUseMcporter and defaults to none", async () => {
+		const withEnv = capturingRuntime({});
+		await runBrowserUseMcporter(withEnv.runtime, ["call", "x"], {
+			MCPORTER_NO_KEEPALIVE: "*",
+		});
+		expect(withEnv.calls[0].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+
+		const withoutEnv = capturingRuntime({});
+		await runBrowserUseMcporter(withoutEnv.runtime, ["call", "x"]);
+		expect(withoutEnv.calls[0].env).toBeUndefined();
 	});
 
 	// Parity guard: the operation transport derives its command vector from the

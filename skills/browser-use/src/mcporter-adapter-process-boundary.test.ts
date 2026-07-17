@@ -26,12 +26,12 @@ import { REAL_VERIFIED_HANDOFF_ENVELOPE } from "./browser-connect-handoff-fixtur
 // =========================================================================
 // U1 process-boundary proof: the envelope-derived mcporter transport (R6).
 //
-// U3 will replace the configured-server call path (`call chrome-devtools.
+// U3 replaced the configured-server call path (`call chrome-devtools.
 // list_pages`) with an ad-hoc invocation derived entirely from the verified
 // handoff envelope: `--stdio <pinned adapter> --stdio-arg --browser-url
-// --stdio-arg <endpoint.http>`. This file pins that invocation's REAL syntax
-// and output shapes against real mcporter BEFORE the transport change lands,
-// so U3 implements an observed contract, not an inferred one. Everything here
+// --stdio-arg <endpoint.http>`. This file pinned that invocation's REAL syntax
+// and output shapes against real mcporter BEFORE the transport change landed,
+// so U3 implemented an observed contract, not an inferred one. Everything here
 // was probed live 2026-07-17 against mcporter 0.12.2 and the pinned
 // chrome-devtools-mcp 1.5.0 adapter.
 //
@@ -186,7 +186,7 @@ const SELECTED_STATE_PAGE_3 = JSON.stringify({
 	schema_version: "2",
 	run_id: FIXTURE_RUN_ID,
 	selected_adapter_id: "chrome-devtools",
-	verified_endpoint_identity: "127.0.0.1:53412",
+	verified_endpoint_identity: "127.0.0.1:9222",
 	handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 	target_envelope_id: FIXTURE_TARGET_ENVELOPE_ID,
 	target_candidate_id: candidateIdOf(FIXTURE_TARGET_ENVELOPE_ID, [
@@ -313,7 +313,12 @@ describe("U1 envelope-derived transport proof against real mcporter", () => {
 		const runtime = makeRuntime({
 			runCommand: async () => okCommand(REAL_LIST_PAGES_STDOUT),
 		});
-		const discovery = await discoverPages(runtime, "chrome-devtools");
+		const discovery = await discoverPages(runtime, {
+			adapter: "chrome-devtools",
+			probeExecutable: FIXTURE_ENVELOPE.data.attachment
+				.probe_executable as string,
+			endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http as string,
+		});
 		if (!discovery.ok) {
 			throw new Error(
 				`real-shape list_pages failed discovery parse: ${discovery.failure.code}`,
@@ -356,11 +361,12 @@ describe("U1 envelope-derived transport proof against real mcporter", () => {
 				return contents;
 			},
 			runCommand: async (input) => {
-				const selector = input.args[input.args.indexOf("call") + 1];
-				if (selector === "chrome-devtools.list_pages") {
+				// The envelope-derived argv names the tool via --tool (U3).
+				const toolIndex = input.args.indexOf("--tool");
+				const tool = toolIndex >= 0 ? input.args[toolIndex + 1] : undefined;
+				if (tool === "list_pages") {
 					return okCommand(REAL_LIST_PAGES_STDOUT);
 				}
-				if (selector === "chrome-devtools.select_page") return okCommand("{}");
 				return okCommand(REAL_TAKE_SNAPSHOT_STDOUT);
 			},
 		});

@@ -65,7 +65,7 @@ function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 		schema_version: "2",
 		run_id: FIXTURE_RUN_ID,
 		selected_adapter_id: "chrome-devtools",
-		verified_endpoint_identity: "127.0.0.1:53412",
+		verified_endpoint_identity: "127.0.0.1:9222",
 		handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 		target_envelope_id: FIXTURE_TARGET_ENVELOPE_ID,
 		target_candidate_id: operationCandidateId(),
@@ -109,12 +109,14 @@ function operationRuntime(input: {
 		},
 		runCommand: async (call) => {
 			calls.push(call);
-			const callIndex = call.args.indexOf("call");
-			const selector = callIndex >= 0 ? call.args[callIndex + 1] : undefined;
-			if (selector === "chrome-devtools.list_pages") {
+			// The envelope-derived argv names the tool via --tool (U3); route the
+			// fake on that token, mirroring the real ad-hoc invocation shape.
+			const toolIndex = call.args.indexOf("--tool");
+			const tool = toolIndex >= 0 ? call.args[toolIndex + 1] : undefined;
+			if (tool === "list_pages") {
 				return okCommand(listPagesStdout(pages));
 			}
-			if (selector === "chrome-devtools.select_page") return okCommand("{}");
+			if (tool === "select_page") return okCommand("{}");
 			return (
 				input.operationResult ??
 				okCommand(JSON.stringify({ content: [{ type: "text", text: "Root\nButton" }] }))
@@ -355,7 +357,7 @@ describe("U7 operation gates", () => {
 			"choose_target_candidate",
 		);
 		expect(calls).toHaveLength(1);
-		expect(commandVector(calls[0])).toContain("chrome-devtools.list_pages");
+		expect(commandVector(calls[0])).toContain("list_pages");
 	});
 
 	test("target hint no-match emits refine-target recovery without selecting a page", async () => {
@@ -371,7 +373,7 @@ describe("U7 operation gates", () => {
 			"refine_target_hint",
 		);
 		expect(calls).toHaveLength(1);
-		expect(commandVector(calls[0])).toContain("chrome-devtools.list_pages");
+		expect(commandVector(calls[0])).toContain("list_pages");
 	});
 
 	test("selected target moved emits refresh target selection", async () => {
@@ -406,7 +408,7 @@ describe("U7 operation gates", () => {
 			code: "browser_operation_target_moved",
 		});
 		expect(calls).toHaveLength(1);
-		expect(commandVector(calls[0])).toContain("chrome-devtools.list_pages");
+		expect(commandVector(calls[0])).toContain("list_pages");
 	});
 
 	test("a v1 (Router-era) selected state fails with target_state_mismatch, never operates", async () => {
@@ -474,8 +476,47 @@ describe("U7 operation success and transport", () => {
 			},
 		});
 		expect((json.data as Record<string, any>).snapshot.text).toContain("Root");
-		expect(commandVector(calls[1])).toContain("chrome-devtools.select_page");
-		expect(commandVector(calls[2])).toContain("chrome-devtools.take_snapshot");
+		// Default operate path (U3): list_pages then the operation — no
+		// select_page call. Page routing rides the args pageId through
+		// --experimentalPageIdRouting; process-local selection state in a fresh
+		// adapter spawn is meaningless.
+		expect(calls).toHaveLength(2);
+		expect(
+			calls.filter((call) => commandVector(call).includes("select_page")),
+		).toHaveLength(0);
+		const snapshotVector = commandVector(calls[1]);
+		expect(snapshotVector).toContain("take_snapshot");
+		// R1/R2: the server portion is envelope-derived — pinned binary and
+		// endpoint.http verbatim — with the keep-alive env guard on the spawn.
+		expect(snapshotVector).toContain(
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+		);
+		expect(snapshotVector).toContain(FIXTURE_ENVELOPE.data.endpoint.http);
+		expect(calls[1].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+		expect(commandJsonArgs(calls[1])).toEqual({ pageId: 1 });
+	});
+
+	test("--bring-to-front issues an explicit select_page focus call before the operation", async () => {
+		// --bring-to-front keeps its contract meaning (explicit focus side
+		// effect): an explicit select_page {pageId, bringToFront:true} rides the
+		// same envelope-derived transport BEFORE the operation. Without the flag
+		// no select_page call happens at all.
+		const { runtime, calls } = operationRuntime({
+			env: { BROWSER_USE_ARTIFACT_ROOT: "/tmp/browser-use-artifacts-test" },
+		});
+		const result = await runForTest(
+			["operate", "screenshot", "--out", "shot.png", "--bring-to-front", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls).toHaveLength(3);
+		expect(commandVector(calls[1])).toContain("select_page");
+		expect(commandJsonArgs(calls[1])).toEqual({ pageId: 1, bringToFront: true });
+		expect(calls[1].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+		expect(commandVector(calls[2])).toContain("take_screenshot");
+		expect(parseJson(result.stdout).data).toMatchObject({
+			side_effects: { focus: true },
+		});
 	});
 
 	test("snapshot can operate against adapter page id 0", async () => {
@@ -492,10 +533,12 @@ describe("U7 operation success and transport", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(commandJsonArgs(calls[1])).toMatchObject({ pageId: 0 });
+		// The operation itself carries pageId 0 (no select_page step).
+		expect(commandVector(calls[1])).toContain("take_snapshot");
+		expect(commandJsonArgs(calls[1])).toEqual({ pageId: 0 });
 	});
 
-	test("snapshot --verbose passes verbose transport args", async () => {
+	test("snapshot --verbose passes verbose transport args alongside the page routing", async () => {
 		const { runtime, calls } = operationRuntime({
 			files: { "/state.json": selectedStateFile() },
 		});
@@ -504,7 +547,7 @@ describe("U7 operation success and transport", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(commandJsonArgs(calls[2])).toEqual({ verbose: true });
+		expect(commandJsonArgs(calls[1])).toEqual({ pageId: 1, verbose: true });
 	});
 
 	test("screenshot writes an artifact path and keeps screenshot bytes out of JSON (AE9)", async () => {
@@ -534,14 +577,18 @@ describe("U7 operation success and transport", () => {
 		});
 		expect(result.stdout).not.toContain("BASE64SECRET");
 		expect(ensuredDirectories).toEqual(["/tmp/browser-use-artifacts-test"]);
-		expect(commandVector(calls[2])).toContain("chrome-devtools.take_screenshot");
-		expect(commandJsonArgs(calls[2])).toMatchObject({
+		expect(commandVector(calls[1])).toContain("take_screenshot");
+		// filePath/fullPage survive alongside the pageId routing.
+		expect(commandJsonArgs(calls[1])).toEqual({
+			pageId: 1,
 			filePath: "/tmp/browser-use-artifacts-test/shot.png",
+			fullPage: true,
+			format: "png",
 		});
 	});
 
 	test("emulate emits normalized viewport facts without exposing adapter method names (AE12)", async () => {
-		const { runtime } = operationRuntime();
+		const { runtime, calls } = operationRuntime();
 		const result = await runForTest(
 			["operate", "emulate", "--width", "390", "--height", "844", "--dpr", "3", "--mobile", "--touch", "--handoff", "/h.json", "--json"],
 			runtime,
@@ -562,6 +609,11 @@ describe("U7 operation success and transport", () => {
 			},
 		});
 		expect(result.stdout).not.toContain("chrome-devtools.emulate");
+		// The emulate args carry the combined viewport string plus pageId routing.
+		expect(commandJsonArgs(calls[1])).toEqual({
+			pageId: 1,
+			viewport: "390x844x3,mobile,touch",
+		});
 	});
 
 	test("operation transport timeout maps to browser_operation_transport_timeout", async () => {
@@ -577,8 +629,10 @@ describe("U7 operation success and transport", () => {
 		expect(json.error).toMatchObject({
 			code: "browser_operation_transport_timeout",
 		});
+		// With the default select_page step deleted (U3), no focus side effect
+		// occurs unless --bring-to-front was passed.
 		expect(json.data).toMatchObject({
-			side_effects: { focus: true },
+			side_effects: { focus: false },
 		});
 	});
 
@@ -592,7 +646,7 @@ describe("U7 operation success and transport", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(commandVector(calls[0]).slice(0, 2)).toEqual(["bunx", "mcporter"]);
-		expect(commandVector(calls[2]).slice(0, 2)).toEqual(["bunx", "mcporter"]);
+		expect(commandVector(calls[1]).slice(0, 2)).toEqual(["bunx", "mcporter"]);
 	});
 
 	test("the envelope's websocket debugger URL never appears in operation output", async () => {
