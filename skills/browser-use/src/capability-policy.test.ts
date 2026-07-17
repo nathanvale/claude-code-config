@@ -76,6 +76,20 @@ describe("R7 — no live import edge into the dormant router cluster", () => {
 			.map((entry) => join(srcDir, entry.name));
 	}
 
+	// Parse, don't pattern-match: the transpiler's import scan sees exactly the
+	// module edges the runtime would resolve — single-line, multiline, dynamic,
+	// and export-from forms — and cannot be fooled by comments or string
+	// literals that merely mention the cluster.
+	function routerImportEdges(source: string): string[] {
+		const transpiler = new Bun.Transpiler({ loader: "ts" });
+		// The transpiler rejects a shebang (bin entrypoints carry one); the
+		// runtime strips it before parsing, so mirror that here.
+		return transpiler
+			.scanImports(source.replace(/^#!.*\n/, ""))
+			.map((edge) => edge.path)
+			.filter((specifier) => specifier.includes("browser-adapter-router-"));
+	}
+
 	test("no live module imports a browser-adapter-router-* path", async () => {
 		const paths = await liveModulePaths();
 		// Sanity: the sweep must actually scan the live surface, not an empty dir.
@@ -83,31 +97,39 @@ describe("R7 — no live import edge into the dormant router cluster", () => {
 		const offenders: string[] = [];
 		for (const path of paths) {
 			const source = await Bun.file(path).text();
-			for (const [index, line] of source.split("\n").entries()) {
-				const isImportEdge =
-					/(?:import|export)[^"']*from\s*["'][^"']*browser-adapter-router-/.test(
-						line,
-					) || /import\s*\(\s*["'][^"']*browser-adapter-router-/.test(line);
-				if (isImportEdge) {
-					offenders.push(`${path}:${index + 1}: ${line.trim()}`);
-				}
-			}
-			// A multiline declaration (specifier on its own line) evades the
-			// per-line pass above, so re-run the same edge patterns over the
-			// whitespace-normalized whole file; line numbers are lost, but the
-			// forbidden edge still names its file.
-			const normalized = source.replace(/\s+/g, " ");
-			const isMultilineImportEdge =
-				/(?:import|export)[^"']*from\s*["'][^"']*browser-adapter-router-/.test(
-					normalized,
-				) || /import\s*\(\s*["'][^"']*browser-adapter-router-/.test(normalized);
-			if (
-				isMultilineImportEdge &&
-				!offenders.some((offender) => offender.startsWith(`${path}:`))
-			) {
-				offenders.push(`${path}: multiline import edge onto browser-adapter-router-*`);
+			for (const specifier of routerImportEdges(source)) {
+				offenders.push(`${path}: imports ${specifier}`);
 			}
 		}
 		expect(offenders).toEqual([]);
+	});
+
+	test("the edge scanner flags real declarations and ignores comments and strings", () => {
+		// Negative: prose mentions of the cluster are not module edges.
+		expect(
+			routerImportEdges(
+				[
+					`// import { x } from "./browser-adapter-router-model";`,
+					`const note = 'see ./browser-adapter-router-engine for history';`,
+					"const template = `import x from \"./browser-adapter-router-model\"`;",
+				].join("\n"),
+			),
+		).toEqual([]);
+		// Positive: single-line, multiline, export-from, and dynamic forms all
+		// register as edges.
+		expect(
+			routerImportEdges(`import { a } from "./browser-adapter-router-model";`),
+		).toEqual(["./browser-adapter-router-model"]);
+		expect(
+			routerImportEdges(
+				`import {\n\ta,\n\tb,\n} from "./browser-adapter-router-engine";`,
+			),
+		).toEqual(["./browser-adapter-router-engine"]);
+		expect(
+			routerImportEdges(`export { a } from "./browser-adapter-router-model";`),
+		).toEqual(["./browser-adapter-router-model"]);
+		expect(
+			routerImportEdges(`const m = await import("./browser-adapter-router-recovery");`),
+		).toEqual(["./browser-adapter-router-recovery"]);
 	});
 });
