@@ -38,6 +38,11 @@ import { existsSync } from "node:fs";
 //   3. Loopback/binding parity — native selection still binds to the verified
 //      loopback Warm Chrome endpoint; it does not introduce a non-loopback or
 //      auto-connect path that bypasses the verified-handoff binding checks.
+//      RESOLVED on the mcporter path (2026-07-17 envelope-derived transport):
+//      every browser-use call now spawns the envelope's pinned binary with
+//      endpoint.http injected verbatim (--browser-url), so no configured or
+//      auto-connect endpoint exists to diverge from. A future native transport
+//      must preserve exactly that derivation.
 //   4. No-shell-eval parity — native launch passes argv positionally; override
 //      and argument input are never shell-evaluated.
 //   5. Privacy parity — native output redaction matches mcporter output: no raw
