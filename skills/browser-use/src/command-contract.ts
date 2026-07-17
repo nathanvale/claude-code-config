@@ -2,6 +2,11 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
+import {
+	type AdapterCapability,
+	type BrowserAdapterId,
+	BROWSER_USE_LIVE_ADAPTERS,
+} from "./discovery-model";
 
 // The Warm Chrome browser-entry proof contract id + schema version are owned by
 // @side-quest/warm-chrome (WARM_CHROME_CONTRACT_ID / WARM_CHROME_SCHEMA_VERSION);
@@ -13,7 +18,7 @@ import {
 // browser-connect's Verified Handoff Envelope replaced their evidence chain.
 // This registry names the adapters with an implemented browser-use
 // discovery/operation transport.
-export const BROWSER_USE_TRANSPORT_ADAPTERS = ["chrome-devtools"] as const;
+export const BROWSER_USE_TRANSPORT_ADAPTERS = ["chrome-devtools-mcp"] as const;
 
 // ---------------------------------------------------------------------------
 // Browser Adapter vocabulary (plan 2026-06-02-004, retained R9 cluster)
@@ -273,32 +278,21 @@ export const BROWSER_CONNECT_HANDOFF_CONTRACT_ID =
 	"browser-connect.verified-handoff" as const;
 export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "1" as const;
 
-// browser-connect attachment adapter ids mapped to browser-use adapter ids
-// (mcporter server names). Adapter choice is browser-use operational policy:
-// an attachment naming an unmapped adapter fails closed rather than guessing
-// a transport.
-export const BROWSER_CONNECT_ATTACHMENT_ADAPTERS = {
-	"chrome-devtools-mcp": "chrome-devtools",
-	"agent-browser": "agent-browser",
-} as const satisfies Record<string, BrowserAdapterRouterAdapter>;
-
-// Operation capabilities browser-use's transport can honor per adapter. The
-// Verified Handoff Envelope authorizes an attachment, not capabilities;
-// capability policy stays browser-use-owned and is enforced through the
-// surviving router engine's authorizesOperationClass. Adapters without an
-// implemented operation transport authorize nothing.
+// Operation capabilities browser-use's transport can honor per adapter, keyed
+// on the envelope's attachment adapter id verbatim (U4, R4/R5: one adapter
+// vocabulary across the seam). The Verified Handoff Envelope authorizes an
+// attachment, not capabilities; capability policy stays browser-use-owned and
+// is enforced through capability-policy.ts's authorizesOperationClass.
+// Adapters without an implemented operation transport authorize nothing.
 export const BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES = {
-	"chrome-devtools": [
+	"chrome-devtools-mcp": [
 		"snapshot_refs",
 		"screenshot_media",
 		"viewport_emulation",
 	],
 	"agent-browser": [],
 	"playwright-cdp": [],
-} as const satisfies Record<
-	BrowserAdapterRouterAdapter,
-	readonly BrowserAdapterRouterCapability[]
->;
+} as const satisfies Record<BrowserAdapterId, readonly AdapterCapability[]>;
 
 // Command families and their subcommands. Public surface is `browser-use
 // <family> <subcommand>`; facade contract keys flatten to `<family>-<sub>`.
@@ -632,7 +626,7 @@ const browserUseTargetsListFlags = {
 	},
 	"--adapter": {
 		type: "enum",
-		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
+		values: BROWSER_USE_LIVE_ADAPTERS,
 		description: "Requested Browser Adapter id for recovery-mode discovery.",
 	},
 	"--show-url": {

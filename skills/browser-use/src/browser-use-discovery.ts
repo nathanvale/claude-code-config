@@ -19,7 +19,6 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_TRANSPORT_ADAPTERS,
-	BROWSER_CONNECT_ATTACHMENT_ADAPTERS,
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
 	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
@@ -44,6 +43,7 @@ import {
 	USAGE_EXIT_CODE,
 	actionFor,
 	handoffEvidenceIdOf,
+	isBrowserAdapterId,
 	isJsonObject,
 	parseUrlSafe,
 	redactUnsafeText,
@@ -106,10 +106,10 @@ export type TargetDiscoveryFailure = Failure<TargetDiscoveryActionId>;
 // discovery, selection cross-checks, and operations; envelope fields that are
 // not binding-relevant are never re-emitted.
 export type HandoffFacts = {
-	// browser-use adapter id the attachment maps to.
+	// The envelope's attachment adapter id, verbatim (e.g. chrome-devtools-mcp).
+	// One adapter vocabulary across the seam (U4, R4): the same id keys the
+	// capability table, the transport gate, and every emitted binding.
 	adapter: BrowserAdapterId;
-	// browser-connect attachment adapter id, verbatim (e.g. chrome-devtools-mcp).
-	attachmentAdapterId: string;
 	// Outer envelope run id (facade-owned, caller-suppliable via --run-id).
 	runId: string;
 	// host:port of the verified endpoint, derived from endpoint.http.
@@ -339,7 +339,7 @@ export type HandoffParse =
 // surviving surface: validates the pinned contract id and schema version (the
 // KTD1 drift tripwire), discriminates verified/failed outcomes, and derives
 // browser-use's binding identity from the envelope's attachment and endpoint
-// fields. Never trusts unmapped adapters and never re-emits endpoint forms.
+// fields. Never trusts unregistered adapters and never re-emits endpoint forms.
 export async function readHandoffFacts(
 	runtime: BrowserUseRuntime,
 	path: string,
@@ -386,12 +386,14 @@ export async function readHandoffFacts(
 	if (!attachment) return invalid("attachment is missing");
 	const attachmentAdapterId = stringField(attachment.adapter_id);
 	if (!attachmentAdapterId) return invalid("attachment adapter id missing");
-	const adapter = mappedAdapterId(attachmentAdapterId);
-	if (!adapter) {
+	// U4 (R4): the envelope's adapter id is consumed verbatim — membership in
+	// the live registry is the only check; no second adapter-name vocabulary.
+	if (!isBrowserAdapterId(attachmentAdapterId)) {
 		return invalid(
 			`attachment adapter ${attachmentAdapterId} is not a registered browser-use adapter`,
 		);
 	}
+	const adapter = attachmentAdapterId;
 	const route = stringField(attachment.route);
 	if (!route) return invalid("attachment route missing");
 	// KTD3: the envelope is consumed verbatim per endpoint-authority doctrine,
@@ -448,14 +450,15 @@ export async function readHandoffFacts(
 		kind: "verified",
 		facts: {
 			adapter,
-			attachmentAdapterId,
 			runId,
 			verifiedEndpointIdentity: endpointUrl.host,
 			probeExecutable,
 			endpointHttp,
 			handoffEvidenceId: handoffEvidenceIdOf({
 				runId,
-				attachmentAdapterId,
+				// The envelope adapter id, verbatim — the hash INPUT SHAPE is
+				// unchanged by the U4 field collapse (same string as before).
+				attachmentAdapterId: adapter,
 				route,
 				endpointHttp,
 				endpointWs,
@@ -465,13 +468,6 @@ export async function readHandoffFacts(
 			authorizedCapabilities: BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES[adapter],
 		},
 	};
-}
-
-function mappedAdapterId(
-	attachmentAdapterId: string,
-): BrowserAdapterId | undefined {
-	const map: Record<string, BrowserAdapterId> = BROWSER_CONNECT_ATTACHMENT_ADAPTERS;
-	return map[attachmentAdapterId];
 }
 
 function isKnownAdapterId(value: unknown): value is BrowserAdapterId {
@@ -510,10 +506,11 @@ export async function discoverPages(
 	runtime: BrowserUseRuntime,
 	facts: EnvelopeTransportFacts,
 ): Promise<DiscoverResult> {
-	// The page-listing transport is implemented for chrome-devtools only. A
+	// The page-listing transport is implemented for chrome-devtools-mcp only. A
 	// handoff can attach another registry adapter (agent-browser,
 	// playwright-cdp); fail closed rather than silently spawning its binary
-	// through the chrome-devtools call shape, until those transports land (V2).
+	// through the chrome-devtools-mcp call shape, until those transports land
+	// (V2).
 	if (
 		!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(facts.adapter)
 	) {

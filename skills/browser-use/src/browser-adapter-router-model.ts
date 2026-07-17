@@ -1,4 +1,5 @@
 import type {
+	BrowserAdapterRouterAdapter,
 	BrowserAdapterRouterAttachmentModel,
 	BrowserAdapterRouterBundle,
 	BrowserAdapterRouterDiagnosticCode,
@@ -10,12 +11,14 @@ import type {
 	browserAdapterRouterPrepareSuccessActions,
 	browserAdapterRouterSuccessActions,
 } from "./command-contract";
-import type { AdapterCapability, BrowserAdapterId } from "./discovery-model";
+import type { AdapterCapability } from "./discovery-model";
 
-// Registry-aligned aliases moved to the live discovery model (migration U2,
-// KTD4); re-exported here so Router runtime modules keep one vocabulary source
-// (one-way dormant->live edge).
-export type { AdapterCapability, BrowserAdapterId };
+// Capability names stay shared with the live discovery model (migration U2,
+// KTD4; one-way dormant->live edge). The adapter-id axis diverged in migration
+// U4: the live BrowserAdapterId re-pointed to envelope ids, so the dormant
+// Router cluster keeps its own alias onto the Router-era registry ids.
+export type BrowserAdapterId = BrowserAdapterRouterAdapter;
+export type { AdapterCapability };
 
 // ---------------------------------------------------------------------------
 // Capability report shape (U1).

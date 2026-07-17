@@ -51,7 +51,7 @@ const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
 const FIXTURE_TARGET_ENVELOPE_ID = targetEnvelopeIdOf({
 	runId: FIXTURE_RUN_ID,
 	mode: "handoff-bound",
-	adapter: "chrome-devtools",
+	adapter: "chrome-devtools-mcp",
 	handoffEvidenceId: FIXTURE_EVIDENCE_ID,
 });
 
@@ -64,7 +64,7 @@ function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 		contract: TARGETS_CONTRACT,
 		schema_version: "2",
 		run_id: FIXTURE_RUN_ID,
-		selected_adapter_id: "chrome-devtools",
+		selected_adapter_id: "chrome-devtools-mcp",
 		verified_endpoint_identity: "127.0.0.1:9222",
 		handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 		target_envelope_id: FIXTURE_TARGET_ENVELOPE_ID,
@@ -468,7 +468,7 @@ describe("U7 operation success and transport", () => {
 			command: "operate-snapshot",
 			result_kind: "browser_operation",
 			operation: "snapshot",
-			adapter: "chrome-devtools",
+			adapter: "chrome-devtools-mcp",
 			target_source: "selected_state",
 			binding: {
 				run_id: FIXTURE_RUN_ID,

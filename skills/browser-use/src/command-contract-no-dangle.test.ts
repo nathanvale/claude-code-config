@@ -129,6 +129,46 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 		expect(offendersIn(corpus)).toEqual([]);
 	});
 
+	// U4 one-adapter-vocabulary sweep: the two-name attachment-adapter mapping
+	// is deleted; the live surface keys adapters on the envelope's
+	// attachment.adapter_id verbatim. No bare
+	// "chrome-devtools" token — the retired mcporter server name — may survive
+	// anywhere an agent can read. chrome-devtools-mcp CONTAINS that substring,
+	// so the match is precise: "chrome-devtools" not followed by "-mcp".
+	test("live contract, actions, and help carry no bare chrome-devtools token", () => {
+		const bareToken = /chrome-devtools(?!-mcp)/i;
+		// Canary: the precision must hold in both directions.
+		expect(bareToken.test("--adapter chrome-devtools-mcp")).toBe(false);
+		expect(bareToken.test("mcporter call chrome-devtools.list_pages")).toBe(true);
+		const corpus: Array<{ path: string; text: string }> = [];
+		collectStrings(browserUseContracts, "browserUseContracts", corpus);
+		for (const [name, actions] of Object.entries(SURVIVING_ACTION_ARRAYS)) {
+			collectStrings(actions, name, corpus);
+		}
+		corpus.push({ path: "help(root)", text: renderHelp() });
+		for (const family of BROWSER_USE_FAMILIES) {
+			corpus.push({ path: `help(${family})`, text: renderHelp(family) });
+		}
+		// Command-level help renders flag enum values (the --adapter union), so
+		// it must be in the corpus for this sweep to bite.
+		const commands: Array<[BrowserUseFamily, string]> = [
+			...BROWSER_USE_TARGETS_SUBCOMMANDS.map(
+				(sub): [BrowserUseFamily, string] => ["targets", sub],
+			),
+			...BROWSER_USE_OPERATE_SUBCOMMANDS.map(
+				(sub): [BrowserUseFamily, string] => ["operate", sub],
+			),
+		];
+		for (const [family, sub] of commands) {
+			const command = `${family}-${sub}` as BrowserUseCommand;
+			corpus.push({ path: `help(${command})`, text: renderHelp(family, command) });
+		}
+		const offenders = corpus
+			.filter(({ text }) => bareToken.test(text))
+			.map(({ path, text }) => `${path}: ${text}`);
+		expect(offenders).toEqual([]);
+	});
+
 	test("rendered help never references a deleted command name", () => {
 		const corpus: Array<{ path: string; text: string }> = [
 			{ path: "help(root)", text: renderHelp() },
