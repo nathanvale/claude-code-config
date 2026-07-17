@@ -8,14 +8,21 @@
 // the dormant model re-imports the aliases from here (one-way dormant->live).
 // ---------------------------------------------------------------------------
 
-import type {
-	BrowserAdapterRouterAdapter,
-	BrowserAdapterRouterCapability,
-} from "./command-contract";
+import type { BrowserAdapterRouterCapability } from "./command-contract";
 
-// Re-exported registry-aligned types so browser-use runtime modules share one
-// vocabulary source.
-export type BrowserAdapterId = BrowserAdapterRouterAdapter;
+// Live adapter identity (migration U4, KTD5): browser-use keys adapters on the
+// envelope's `attachment.adapter_id` verbatim — one adapter vocabulary across
+// the browser-connect seam. Membership is known identity, not routability:
+// agent-browser and playwright-cdp are registered with no implemented
+// transport (BROWSER_USE_TRANSPORT_ADAPTERS gates that separately).
+export const BROWSER_USE_LIVE_ADAPTERS = [
+	"chrome-devtools-mcp",
+	"agent-browser",
+	"playwright-cdp",
+] as const;
+export type BrowserAdapterId = (typeof BROWSER_USE_LIVE_ADAPTERS)[number];
+// Capability names stay sourced from the retained R9 vocabulary; only the
+// adapter-id axis re-pointed to envelope ids.
 export type AdapterCapability = BrowserAdapterRouterCapability;
 
 // ---------------------------------------------------------------------------

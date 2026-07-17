@@ -126,12 +126,12 @@ describe("U1 target discovery — handoff-bound mode", () => {
 			mode: "handoff-bound",
 			handoff_bound: true,
 			operation_ready: true,
-			requested_adapter: "chrome-devtools",
+			requested_adapter: "chrome-devtools-mcp",
 			candidate_count: 2,
 			binding: {
 				// Run id inherited from the envelope (R3).
 				run_id: "fixture-run",
-				selected_adapter_id: "chrome-devtools",
+				selected_adapter_id: "chrome-devtools-mcp",
 				verified_endpoint_identity: "127.0.0.1:9222",
 			},
 		});
@@ -238,9 +238,16 @@ describe("U1 target discovery — handoff-bound mode", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
+		const error = parseJson(result.stdout).error as Record<string, unknown>;
+		expect(error).toMatchObject({
 			code: "target_discovery_handoff_invalid",
 		});
+		// U4: one adapter vocabulary — the rejection names registry membership,
+		// never a mapping between two adapter-id vocabularies.
+		expect(String(error.message)).toContain(
+			"not a registered browser-use adapter",
+		);
+		expect(String(error.message)).not.toMatch(/mapp/i);
 		expect(calls).toHaveLength(0);
 	});
 
@@ -434,7 +441,7 @@ describe("U1 target discovery — recovery mode", () => {
 			),
 		});
 		const result = await runForTest(
-			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--handoff", "/h.json", "--json"],
+			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools-mcp", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -443,10 +450,10 @@ describe("U1 target discovery — recovery mode", () => {
 			mode: "recovery",
 			handoff_bound: false,
 			operation_ready: false,
-			requested_adapter: "chrome-devtools",
+			requested_adapter: "chrome-devtools-mcp",
 			candidate_count: 1,
 			binding: {
-				selected_adapter_id: "chrome-devtools",
+				selected_adapter_id: "chrome-devtools-mcp",
 				verified_endpoint_identity: "127.0.0.1:9222",
 			},
 		});
@@ -468,7 +475,7 @@ describe("U1 target discovery — recovery mode", () => {
 			files: { "/h.json": connectFailureEnvelope() },
 		});
 		const result = await runForTest(
-			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--handoff", "/h.json", "--json"],
+			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools-mcp", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -486,7 +493,7 @@ describe("U1 target discovery — recovery mode", () => {
 	test("recovery without --handoff fails closed before any transport", async () => {
 		const { runtime, calls } = discoveryRuntime({});
 		const result = await runForTest(
-			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--json"],
+			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools-mcp", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
@@ -631,6 +638,13 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		// configured mcporter server name anywhere in the vector.
 		expect(commandVector(calls[0])).toEqual(["mcporter", ...LIST_PAGES_ARGS]);
 		expect(commandVector(calls[0])).not.toContain("chrome-devtools.list_pages");
+		// U4 no-dangle: no bare "chrome-devtools" token (the retired two-name
+		// mapping's mcporter server name) survives in the argv. The envelope id
+		// chrome-devtools-mcp contains the substring, so the match is precise:
+		// "chrome-devtools" not followed by "-mcp" is an offender.
+		for (const member of commandVector(calls[0])) {
+			expect(member).not.toMatch(/chrome-devtools(?!-mcp)/);
+		}
 		// The env guard keeps a running mcporter daemon from answering the call
 		// through its configured server (U1-proven shadowing defect).
 		expect(calls[0].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });

@@ -198,12 +198,12 @@ describe("U4 mcporter transport", () => {
 		];
 		for (const [env, prefix] of cases) {
 			const { runtime, calls } = capturingRuntime(env);
-			await runBrowserUseMcporter(runtime, ["config", "get", "chrome-devtools"]);
+			await runBrowserUseMcporter(runtime, ["config", "get", "example-server"]);
 			expect(commandVector(calls[0])).toEqual([
 				...prefix,
 				"config",
 				"get",
-				"chrome-devtools",
+				"example-server",
 			]);
 		}
 	});

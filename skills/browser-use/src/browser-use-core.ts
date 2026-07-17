@@ -15,12 +15,12 @@ import type {
 	CommandFacadeSideEffect,
 	RuntimeActionGuidance,
 } from "@side-quest/cli-command-facade";
-import type {
-	BrowserAdapterId,
-	BrowserTargetCandidate,
-	TargetDiscoveryMode,
+import {
+	type BrowserAdapterId,
+	type BrowserTargetCandidate,
+	type TargetDiscoveryMode,
+	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
-import { BROWSER_ADAPTER_ROUTER_ADAPTERS } from "./command-contract";
 
 // --- Exit codes ------------------------------------------------------------
 
@@ -52,7 +52,7 @@ export type Failure<A extends string> = {
 export function isBrowserAdapterId(value: unknown): value is BrowserAdapterId {
 	return (
 		typeof value === "string" &&
-		(BROWSER_ADAPTER_ROUTER_ADAPTERS as readonly string[]).includes(value)
+		(BROWSER_USE_LIVE_ADAPTERS as readonly string[]).includes(value)
 	);
 }
 
