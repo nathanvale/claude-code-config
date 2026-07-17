@@ -1,0 +1,6 @@
+# Review-branch-only config: lets CodeRabbit review PR #249, whose base is the
+# pinned pre-wave branch (review-base/pre-envelope-wave) rather than main.
+# This file exists ONLY on review/envelope-wave; it is never merged to main.
+reviews:
+  base_branches:
+    - "review-base/.*"
