@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,7 +25,7 @@ describe("setup domain composition", () => {
 			instructionRunner: async () => ({ exitCode: 0, stdout: "captured child stdout\n", stderr: "" }),
 		});
 		expect(result).toMatchObject({ state: "applied", station: "sync.applied" });
-		expect(result.domains.map((domain) => domain.domain)).toEqual(["skill_projection", "startup", "hooks", "instruction", "runbook"]);
+		expect(result.domains.map((domain) => domain.domain)).toEqual(["skill_projection", "startup", "bins", "hooks", "instruction", "runbook"]);
 		expect(await lstat(join(fixture.home, ".config/context")).then((entry) => entry.isSymbolicLink())).toBe(true);
 		const identity = await hookProvenanceIdentity({
 			stateRoot: fixture.state,
@@ -351,7 +351,7 @@ describe("setup domain composition", () => {
 			},
 		});
 		expect(result.station).toBe("unlink.concurrent_change");
-		expect(result.domains.at(-1)?.failed).toEqual([target]);
+		expect(result.domains.find((domain) => domain.domain === "startup")?.failed).toEqual([target]);
 		expect(await Bun.file(target).text()).toBe("foreign replacement\n");
 	});
 
@@ -368,7 +368,7 @@ describe("setup domain composition", () => {
 
 		expect(result).toMatchObject({ state: "blocked", station: "unlink.check_blocked", next_action: "human_repair" });
 		expect(result.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: join(fixture.home, ".claude/skills") }));
-		expect(result.domains.at(-1)).toEqual({
+		expect(result.domains.find((domain) => domain.domain === "startup")).toEqual({
 			domain: "startup", planned: [startup], applied: [], deferred: [], preserved: [], failed: [],
 		});
 	});
@@ -390,11 +390,11 @@ describe("setup domain composition", () => {
 		const preview = await unlinkSetupDomains(fixture.input, { check: true, stateRoot: fixture.state });
 		expect(preview).toMatchObject({ state: "blocked", station: "unlink.check_blocked" });
 		expect(preview.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: escapedParent }));
-		expect(preview.domains.at(-1)?.preserved).toContain(join(escapedParent, "AGENTS.md"));
+		expect(preview.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "AGENTS.md"));
 
 		const result = await unlinkSetupDomains(fixture.input, { stateRoot: fixture.state });
 		expect(result).toMatchObject({ state: "partial", station: "unlink.partial_failure" });
-		expect(result.domains.at(-1)?.preserved).toContain(join(escapedParent, "AGENTS.md"));
+		expect(result.domains.find((domain) => domain.domain === "startup")?.preserved).toContain(join(escapedParent, "AGENTS.md"));
 		expect(await readlink(escapedLink)).toBe(join(fixture.source, "AGENTS.md"));
 	});
 
@@ -421,7 +421,7 @@ describe("setup domain composition", () => {
 
 		expect(result).toMatchObject({ state: "partial", station: "unlink.concurrent_change" });
 		expect(result.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root", path: escapedParent }));
-		expect(result.domains.at(-1)?.failed).toContain(target);
+		expect(result.domains.find((domain) => domain.domain === "startup")?.failed).toContain(target);
 		expect(await readlink(escapedLink)).toBe(join(fixture.source, "AGENTS.md"));
 	});
 
@@ -472,6 +472,82 @@ describe("setup domain composition", () => {
 		expect(await Bun.file(join(fixture.home, ".claude/skills/alpha")).exists()).toBe(false);
 	});
 
+	test("syncs declared bins and unlink removes them beside orphans", async () => {
+		const fixture = await binsUserFixture();
+		const destination = join(fixture.binDir, "tool");
+		const orphan = join(fixture.binDir, "legacy");
+		await symlink(join(fixture.source, "runtime/tool/src/cli.ts"), orphan);
+
+		const applied = await applySetupDomains(fixture.input, fixture.applyOptions);
+		expect(applied).toMatchObject({ state: "applied", station: "sync.applied" });
+		expect(applied.domains.find((domain) => domain.domain === "bins")?.applied).toEqual([destination]);
+		expect(await readlink(destination)).toBe(await realpath(join(fixture.source, "runtime/tool/src/cli.ts")));
+		expect(applied.findings).toContainEqual(expect.objectContaining({ id: "bin_orphan", path: orphan }));
+
+		const removed = await unlinkSetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			binTopology: fixture.binTopology,
+		});
+		expect(removed.state).toBe("removed");
+		expect([...(removed.domains.find((domain) => domain.domain === "bins")?.applied ?? [])].sort()).toEqual([orphan, destination].sort());
+		expect(await lstat(destination).then(() => true, () => false)).toBe(false);
+		expect(await lstat(orphan).then(() => true, () => false)).toBe(false);
+	});
+
+	test("preserves an occupied bin destination while other domains apply", async () => {
+		const fixture = await binsUserFixture();
+		const destination = join(fixture.binDir, "tool");
+		await writeFile(destination, "foreign binary\n");
+
+		const result = await applySetupDomains(fixture.input, fixture.applyOptions);
+
+		expect(result).toMatchObject({ state: "partial", station: "sync.partial", next_action: "inspect_results" });
+		expect(result.findings).toContainEqual(expect.objectContaining({ id: "real_entry", path: destination }));
+		expect(result.domains.find((domain) => domain.domain === "bins")).toMatchObject({ applied: [], preserved: [destination] });
+		expect(result.domains.find((domain) => domain.domain === "startup")?.applied).not.toHaveLength(0);
+		expect(await Bun.file(destination).text()).toBe("foreign binary\n");
+	});
+
+	test("keeps PATH and bin-dir advisories out of the blocked computation", async () => {
+		const fixture = await binsUserFixture();
+		const offPathOptions = {
+			...fixture.applyOptions,
+			binTopology: { pathEnv: "/usr/bin:/bin" },
+		};
+		const applied = await applySetupDomains(fixture.input, offPathOptions);
+		expect(applied).toMatchObject({ state: "applied", station: "sync.applied", next_action: "setup_healthy" });
+		expect(applied.findings).toContainEqual(expect.objectContaining({ id: "bin_dir_not_on_path", path: fixture.binDir }));
+
+		const status = await checkSetupDomains(
+			fixture.input,
+			planSetup(await inspectSetup(fixture.input), "status"),
+			offPathOptions,
+		);
+		expect(status).toMatchObject({ state: "healthy", station: "status.healthy", next_action: "setup_healthy" });
+		expect(status.findings).toContainEqual(expect.objectContaining({ id: "bin_dir_not_on_path" }));
+		expect(status.counts.blockers).toBe(0);
+	});
+
+	test("unlink defers a bin removal replaced concurrently with a foreign entry", async () => {
+		const fixture = await binsUserFixture();
+		const destination = join(fixture.binDir, "tool");
+		await applySetupDomains(fixture.input, fixture.applyOptions);
+
+		const result = await unlinkSetupDomains(fixture.input, {
+			stateRoot: fixture.state,
+			binTopology: fixture.binTopology,
+			beforeRemove: async (path) => {
+				if (path !== destination) return;
+				await unlink(path);
+				await writeFile(path, "foreign replacement\n");
+			},
+		});
+
+		expect(result.station).toBe("unlink.concurrent_change");
+		expect(result.domains.find((domain) => domain.domain === "bins")?.failed).toEqual([destination]);
+		expect(await Bun.file(destination).text()).toBe("foreign replacement\n");
+	});
+
 	test("cycles an explicit project baseline without touching user domains", async () => {
 		const fixture = await projectFixture();
 		const preview = planSetup(await inspectSetup(fixture.input), "sync");
@@ -514,6 +590,30 @@ async function userFixture() {
 	}
 	await writeFile(join(source, "runbooks/issue-to-pr-v2/cli.ts"), "x\n");
 	return { source, home, state, hooks, input: { scope: "user" as const, sourceRepoRoot: source, homeDir: home } };
+}
+
+async function binsUserFixture() {
+	const fixture = await userFixture();
+	await mkdir(join(fixture.source, "runtime/tool/src"), { recursive: true });
+	await writeFile(join(fixture.source, "runtime/tool/package.json"), JSON.stringify({
+		name: "tool",
+		bin: { tool: "./src/cli.ts" },
+	}));
+	await writeFile(join(fixture.source, "runtime/tool/src/cli.ts"), "#!/usr/bin/env bun\nconsole.log(\"tool\");\n");
+	const binDir = join(fixture.home, ".bun/bin");
+	await mkdir(binDir, { recursive: true });
+	const binTopology = { pathEnv: binDir };
+	return {
+		...fixture,
+		binDir,
+		binTopology,
+		applyOptions: {
+			stateRoot: fixture.state,
+			hookPath: async () => fixture.hooks,
+			instructionRunner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			binTopology,
+		},
+	};
 }
 
 async function projectFixture() {

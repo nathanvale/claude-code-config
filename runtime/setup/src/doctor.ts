@@ -10,7 +10,7 @@ export interface SetupDiagnosis {
 const BLOCKERS = new Set<SetupFindingId>([
 	"source_missing", "real_entry", "foreign_symlink", "invalid_skill",
 	"catalog_escape", "canonical_id_collision", "malformed_provider_lock", "unsafe_root", "external_entry",
-	"hook_ownership_unproven",
+	"hook_ownership_unproven", "bin_declaration_invalid", "bin_target_unhealthy",
 ]);
 const REPAIRABLE = new Set<SetupFindingId>([
 	"missing_link", "wrong_link", "broken_managed_link",
@@ -74,6 +74,8 @@ function ownerFor(id: SetupFindingId, fallback: string): string {
 
 function whyFor(id: SetupFindingId): string {
 	if (REPAIRABLE.has(id)) return "The selected runtime cannot resolve the intended first-party source consistently.";
+	if (id === "bin_orphan") return "A setup-owned bin link no longer matches any declaration and unlink can remove it.";
+	if (id === "bin_dir_unavailable" || id === "bin_dir_not_on_path") return "PATH delivery is degraded on this machine; bins stay undelivered until the directory is available on PATH.";
 	if (id === "duplicate_scope") return "Two discovery levels expose one canonical skill id and make precedence ambiguous.";
 	if (id === "external_entry") return "A separate package owner occupies this destination and Setup preserves it.";
 	if (id === "legacy_codex_root") return "The entry uses a retired discovery root and is preserved for explicit migration.";

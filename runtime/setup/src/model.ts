@@ -64,9 +64,21 @@ export const SETUP_FINDING_IDS = [
 	"hook_ownership_unproven",
 	"instruction_unhealthy",
 	"runbook_artifact_unhealthy",
+	"bin_declaration_invalid",
+	"bin_target_unhealthy",
+	"bin_orphan",
+	"bin_dir_unavailable",
+	"bin_dir_not_on_path",
 ] as const;
 
 export type SetupFindingId = (typeof SETUP_FINDING_IDS)[number];
+
+/** Advisory findings surface evidence without joining the blocked/blockers computation. */
+export const SETUP_ADVISORY_FINDING_IDS = [
+	"bin_orphan",
+	"bin_dir_unavailable",
+	"bin_dir_not_on_path",
+] as const satisfies readonly SetupFindingId[];
 
 /** Stable discovery and runtime continuation action ids. */
 export const SETUP_ACTION_IDS = [

@@ -18,6 +18,11 @@
 	"bin": {
 		"browser-use": "dist/browser-use.js"
 	},
+	"setup": {
+		"pathBin": {
+			"browser-use": "./src/browser-use.ts"
+		}
+	},
 	"scripts": {
 		"build": "bun run src/build-dist.ts",
 		"browser-use": "./src/browser-use.ts",
