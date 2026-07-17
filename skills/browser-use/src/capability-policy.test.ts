@@ -92,6 +92,21 @@ describe("R7 — no live import edge into the dormant router cluster", () => {
 					offenders.push(`${path}:${index + 1}: ${line.trim()}`);
 				}
 			}
+			// A multiline declaration (specifier on its own line) evades the
+			// per-line pass above, so re-run the same edge patterns over the
+			// whitespace-normalized whole file; line numbers are lost, but the
+			// forbidden edge still names its file.
+			const normalized = source.replace(/\s+/g, " ");
+			const isMultilineImportEdge =
+				/(?:import|export)[^"']*from\s*["'][^"']*browser-adapter-router-/.test(
+					normalized,
+				) || /import\s*\(\s*["'][^"']*browser-adapter-router-/.test(normalized);
+			if (
+				isMultilineImportEdge &&
+				!offenders.some((offender) => offender.startsWith(`${path}:`))
+			) {
+				offenders.push(`${path}: multiline import edge onto browser-adapter-router-*`);
+			}
 		}
 		expect(offenders).toEqual([]);
 	});
