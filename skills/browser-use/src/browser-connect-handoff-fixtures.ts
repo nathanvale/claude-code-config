@@ -5,13 +5,17 @@
 // a real parse bug in this repo before, so these fixtures are captured output,
 // not hand-written JSON.
 //
-// - REAL_VERIFIED_HANDOFF_ENVELOPE is verbatim stdout of a real
+// - REAL_VERIFIED_HANDOFF_ENVELOPE is stdout of a real
 //   `browser-connect connect chrome-devtools-mcp --json` run against live
 //   verified Agent Chrome (captured 2026-07-17). Stronger than the earlier
 //   emission-path capture and production-representative:
 //   attachment.probe_executable carries the absolute pinned adapter path the
 //   KTD3 spawn guard requires (the old capture's relative value came from a
-//   test resolver and would now fail that guard).
+//   test resolver and would now fail that guard). Two values are sanitized
+//   shape-for-shape (CodeRabbit PR #249): the capture's home-directory prefix
+//   became a neutral absolute root, and the live session's ws debugger GUID (a
+//   capability-bearing handle while that session runs) became a synthetic
+//   UUID. Path layout, URL forms, and every other byte are the capture's own.
 // - REAL_CONNECT_FAILURE_ENVELOPE is verbatim stdout of a real
 //   `browser-connect connect chrome-devtools-mcp --json --run-id
 //   fixture-connect-failure` spawn that failed closed (exit 20), captured
@@ -35,11 +39,11 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
     "attachment": {
       "adapter_id": "chrome-devtools-mcp",
       "route": "explicit-cdp",
-      "probe_executable": "/Users/nathanvale/.side-quest/browser-connect/adapters/chrome-devtools-mcp/1.5.0/node_modules/.bin/chrome-devtools-mcp"
+      "probe_executable": "/opt/side-quest/browser-connect/adapters/chrome-devtools-mcp/1.5.0/node_modules/.bin/chrome-devtools-mcp"
     },
     "endpoint": {
       "http": "http://127.0.0.1:9222",
-      "ws": "ws://127.0.0.1:9222/devtools/browser/d6cb7b60-ee46-44be-8e5a-a427e1b52f9d"
+      "ws": "ws://127.0.0.1:9222/devtools/browser/4f5a2b1c-8d3e-4a6f-9b0c-1e2d3c4b5a69"
     },
     "launch": {
       "launched": false

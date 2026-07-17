@@ -885,7 +885,7 @@ describe("U6 target status — projection and distinct failures", () => {
 			schema_version: "2",
 			run_id: FIXTURE_RUN_ID,
 			selected_adapter_id: "chrome-devtools-mcp",
-			verified_endpoint_identity: "127.0.0.1:53412",
+			verified_endpoint_identity: "127.0.0.1:9222",
 			handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 			target_envelope_id: "env-xyz",
 			target_candidate_id: "cid-1",
