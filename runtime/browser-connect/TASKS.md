@@ -47,8 +47,12 @@ name | source pointer | trigger. Decision context:
 - Operation floor | browser-domain-memory cluster (#136–#141) | two or more adapters each hold a green `browser-connect connect <adapter> --json` proof on the same host (evidence: `skills/browser-use/TEST_MATRIX.md` rows).
 
 Roadmap footnotes (review-surfaced hardening ideas, not pitches): operate-time
-endpoint re-verification; `playwright-cdp` recovery dead-end enum entry;
-`target_selection_input_invalid` diagnostic code split.
+endpoint re-verification (partially subsumed 2026-07-17: browser-use now
+injects `endpoint.http` verbatim into every adapter spawn — see
+`docs/decisions/2026-07-17-002-envelope-derived-transport-decision-log.md`;
+re-PROVING the endpoint at operate time remains open); `playwright-cdp`
+recovery dead-end enum entry; `target_selection_input_invalid` diagnostic
+code split.
 
 Next safe action:
 
