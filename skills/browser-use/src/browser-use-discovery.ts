@@ -34,6 +34,7 @@ import type {
 	TargetDiscoveryEnvelope,
 	TargetDiscoveryMode,
 } from "./discovery-model";
+import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
@@ -327,6 +328,24 @@ export async function runTargetsList(input: {
 
 // --- Verified Handoff Envelope parser (KTD1) --------------------------------
 
+// R8/KTD6: every payload field the parse reads is named through this
+// keyof-checked accessor against the shared contract type, so a field rename
+// in browser-connect's contract.ts breaks this file's typecheck instead of
+// silently drifting. The returned value stays unknown — the parse is still
+// runtime validation of untrusted JSON, never a cast. Facade metadata keys
+// (contract_id, schema_version) and outer envelope keys (status, run_id) are
+// not payload fields and stay direct reads.
+function contractField<Shape>(
+	object: Record<string, unknown>,
+	key: keyof Shape & string,
+): unknown {
+	return object[key];
+}
+
+type HandoffAttachment = BrowserConnectHandoffPayload["attachment"];
+type HandoffEndpoint = BrowserConnectHandoffPayload["endpoint"];
+type HandoffProof = BrowserConnectHandoffPayload["proof"];
+
 export type HandoffParse =
 	// A verified handoff: binding facts derived from envelope fields.
 	| { ok: true; kind: "verified"; facts: HandoffFacts }
@@ -375,16 +394,23 @@ export async function readHandoffFacts(
 			`schema version ${String(data.schema_version)} is not the pinned version ${BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION}`,
 		);
 	}
-	if (data.outcome === "failed") return { ok: true, kind: "failed" };
-	if (data.outcome !== "verified") return invalid("outcome is not verified");
+	const outcome = contractField<BrowserConnectHandoffPayload>(data, "outcome");
+	if (outcome === "failed") return { ok: true, kind: "failed" };
+	if (outcome !== "verified") return invalid("outcome is not verified");
 	// Outcome/status consistency: a "verified" payload inside a non-ok envelope
 	// is a contradiction (hand-assembled or tampered), never authorization.
 	if (value.status !== "ok") {
 		return invalid("outcome is verified but envelope status is not ok");
 	}
-	const attachment = isJsonObject(data.attachment) ? data.attachment : undefined;
+	const attachmentValue = contractField<BrowserConnectHandoffPayload>(
+		data,
+		"attachment",
+	);
+	const attachment = isJsonObject(attachmentValue) ? attachmentValue : undefined;
 	if (!attachment) return invalid("attachment is missing");
-	const attachmentAdapterId = stringField(attachment.adapter_id);
+	const attachmentAdapterId = stringField(
+		contractField<HandoffAttachment>(attachment, "adapter_id"),
+	);
 	if (!attachmentAdapterId) return invalid("attachment adapter id missing");
 	// U4 (R4): the envelope's adapter id is consumed verbatim — membership in
 	// the live registry is the only check; no second adapter-name vocabulary.
@@ -394,14 +420,16 @@ export async function readHandoffFacts(
 		);
 	}
 	const adapter = attachmentAdapterId;
-	const route = stringField(attachment.route);
+	const route = stringField(contractField<HandoffAttachment>(attachment, "route"));
 	if (!route) return invalid("attachment route missing");
 	// KTD3: the envelope is consumed verbatim per endpoint-authority doctrine,
 	// but the spawn input gets ONE structural trust guard — the pinned adapter
 	// path must be absolute. A relative value would resolve through PATH at the
 	// mcporter spawn, exactly the config/PATH-guessing seam R10 forbids. No
 	// other re-verification: browser-connect already proved the attachment.
-	const probeExecutable = stringField(attachment.probe_executable);
+	const probeExecutable = stringField(
+		contractField<HandoffAttachment>(attachment, "probe_executable"),
+	);
 	if (!probeExecutable) {
 		return invalid("attachment probe_executable missing");
 	}
@@ -410,9 +438,17 @@ export async function readHandoffFacts(
 			"attachment probe_executable is not an absolute pinned adapter path",
 		);
 	}
-	const endpoint = isJsonObject(data.endpoint) ? data.endpoint : undefined;
-	const endpointHttp = endpoint ? stringField(endpoint.http) : undefined;
-	const endpointWs = endpoint ? stringField(endpoint.ws) : undefined;
+	const endpointValue = contractField<BrowserConnectHandoffPayload>(
+		data,
+		"endpoint",
+	);
+	const endpoint = isJsonObject(endpointValue) ? endpointValue : undefined;
+	const endpointHttp = endpoint
+		? stringField(contractField<HandoffEndpoint>(endpoint, "http"))
+		: undefined;
+	const endpointWs = endpoint
+		? stringField(contractField<HandoffEndpoint>(endpoint, "ws"))
+		: undefined;
 	if (!endpointHttp || !endpointWs) return invalid("endpoint forms missing");
 	// Endpoint forms must be real HTTP(S)/WS(S) URLs with hosts. Anything else
 	// (file:, data:, a bare string) must never reach kind:"verified" and
@@ -433,12 +469,15 @@ export async function readHandoffFacts(
 	) {
 		return invalid("endpoint ws form is not a ws(s) URL with a host");
 	}
-	const proof = isJsonObject(data.proof) ? data.proof : undefined;
+	const proofValue = contractField<BrowserConnectHandoffPayload>(data, "proof");
+	const proof = isJsonObject(proofValue) ? proofValue : undefined;
 	const proofContractId = proof
-		? stringField(proof.environment_contract_id)
+		? stringField(contractField<HandoffProof>(proof, "environment_contract_id"))
 		: undefined;
 	const proofSchemaVersion = proof
-		? stringField(proof.environment_schema_version)
+		? stringField(
+				contractField<HandoffProof>(proof, "environment_schema_version"),
+			)
 		: undefined;
 	if (!proofContractId || !proofSchemaVersion) {
 		return invalid("proof evidence missing");
