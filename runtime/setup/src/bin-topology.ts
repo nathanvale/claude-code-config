@@ -94,7 +94,15 @@ async function validateDeclaration(
 	if (!isInsideOrEqual(canonicalPackageDir, canonicalEntry)) {
 		return { finding: declarationFinding(manifestPath, `Bin entry for '${name}' resolves outside its package.`) };
 	}
-	if (!(await readFile(canonicalEntry, "utf8")).startsWith("#!")) {
+	let contents: string;
+	try {
+		contents = await readFile(canonicalEntry, "utf8");
+	} catch (error) {
+		return {
+			finding: targetFinding(canonicalEntry, `Bin entry for '${name}' is unreadable: ${error instanceof Error ? error.message : String(error)}`),
+		};
+	}
+	if (!contents.startsWith("#!")) {
 		return { finding: targetFinding(canonicalEntry, `Bin entry for '${name}' lacks a '#!' shebang.`) };
 	}
 	return { declaration: { name, packageDir: canonicalPackageDir, entry: canonicalEntry } };
@@ -112,7 +120,7 @@ function declaredBins(parsed: unknown): Record<string, unknown> | undefined {
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length > 0;
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** One planned symlink mutation in the bin destination directory. */

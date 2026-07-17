@@ -23,11 +23,15 @@ export async function unsafeExistingParent(rootAnchor: string, destination: stri
 	let current = dirname(destination);
 	while (true) {
 		if (await pathExists(current)) {
-			const resolved = await canonicalPath(current);
+			let resolved: string;
+			try {
+				resolved = await realpath(current);
+			} catch {
+				return current;
+			}
 			if (!isInsideOrEqual(rootAnchor, resolved)) return current;
 			if (resolve(resolved) === resolve(rootAnchor)) return undefined;
 		}
-		if (resolve(current) === resolve(rootAnchor)) return undefined;
 		const parent = dirname(current);
 		if (parent === current) return current;
 		current = parent;

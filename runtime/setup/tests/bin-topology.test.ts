@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readlink, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -62,6 +62,35 @@ describe("bin manifest", () => {
 
 		expect(manifest.declarations).toEqual([]);
 		expect(manifest.findings.filter((finding) => finding.id === "bin_declaration_invalid")).toHaveLength(2);
+	});
+
+	test("an explicit empty pathBin suppresses the package #bin fallback", async () => {
+		const fixture = await binFixture();
+		await writePackage(fixture.source, "skills/tool", {
+			name: "tool",
+			bin: { tool: "./src/tool.ts" },
+			setup: { pathBin: {} },
+		}, { "src/tool.ts": SHEBANG_ENTRY });
+
+		const manifest = await readBinManifest(fixture.source);
+
+		expect(manifest.findings).toEqual([]);
+		expect(manifest.declarations).toEqual([]);
+	});
+
+	test("reports an unreadable entry as target-unhealthy, not a crash", async () => {
+		const fixture = await binFixture();
+		await writePackage(fixture.source, "runtime/tool", {
+			name: "tool",
+			bin: { tool: "./src/cli.ts" },
+		}, { "src/cli.ts": SHEBANG_ENTRY });
+		await chmod(join(fixture.source, "runtime/tool/src/cli.ts"), 0o000);
+
+		const manifest = await readBinManifest(fixture.source);
+		await chmod(join(fixture.source, "runtime/tool/src/cli.ts"), 0o644);
+
+		expect(manifest.declarations).toEqual([]);
+		expect(manifest.findings).toContainEqual(expect.objectContaining({ id: "bin_target_unhealthy" }));
 	});
 
 	test("reports a missing entry as target-unhealthy, not a declaration", async () => {

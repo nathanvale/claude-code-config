@@ -23,7 +23,7 @@ safety.
 ## Invocation Forms
 
 - Installed bins (primary from any CWD): `browser-connect`, `browser-use`, and `warm-chrome` resolve on PATH as setup-owned `~/.bun/bin` symlinks into the source repo. `setup sync` installs and repairs them; `setup status` verifies. Agents outside the repo use these, never repo-relative paths.
-- browser-use repo-local: run `bun run <command>` from `skills/browser-use`; this executes `src`.
+- browser-use repo-local: run `bun run browser-use <command>` from `skills/browser-use`; this executes `src`.
 - browser-connect repo-local: run `bun run runtime/browser-connect/src/cli.ts <args>` from the repo root.
 - Repo-root verification: run `bun run check:workspace-facade`; this rebuilds `dist` before invariant checks.
 - Command contracts name command identity only; omit `bun run`, `src`, `dist`, and repo paths.
