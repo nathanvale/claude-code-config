@@ -28,9 +28,27 @@ import {
 //     candidates stay evidence-gathering only.
 // =========================================================================
 
+// The envelope-derived ad-hoc invocation (U3, R1/R2): pinned binary and
+// verified endpoint come from the fixture envelope verbatim; every other token
+// is literal per the U1-pinned ENVELOPE_ADAPTER_ARGV_CONTRACT.
+const FIXTURE_ENVELOPE = JSON.parse(REAL_VERIFIED_HANDOFF_ENVELOPE);
+const FIXTURE_PROBE_EXECUTABLE = FIXTURE_ENVELOPE.data.attachment
+	.probe_executable as string;
+const FIXTURE_ENDPOINT_HTTP = FIXTURE_ENVELOPE.data.endpoint.http as string;
 const LIST_PAGES_ARGS = [
 	"call",
-	"chrome-devtools.list_pages",
+	"--stdio",
+	FIXTURE_PROBE_EXECUTABLE,
+	"--stdio-arg",
+	"--browser-url",
+	"--stdio-arg",
+	FIXTURE_ENDPOINT_HTTP,
+	"--stdio-arg",
+	"--experimentalPageIdRouting",
+	"--name",
+	"browser-use-envelope-adapter",
+	"--tool",
+	"list_pages",
 	"--args",
 	"{}",
 	"--output",
@@ -114,7 +132,7 @@ describe("U1 target discovery — handoff-bound mode", () => {
 				// Run id inherited from the envelope (R3).
 				run_id: "fixture-run",
 				selected_adapter_id: "chrome-devtools",
-				verified_endpoint_identity: "127.0.0.1:53412",
+				verified_endpoint_identity: "127.0.0.1:9222",
 			},
 		});
 		const binding = (json.data as Record<string, any>).binding;
@@ -223,6 +241,54 @@ describe("U1 target discovery — handoff-bound mode", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "target_discovery_handoff_invalid",
 		});
+		expect(calls).toHaveLength(0);
+	});
+
+	// KTD3: the spawn input gets one structural trust guard — the pinned adapter
+	// path must be absolute. A relative value would resolve through PATH at the
+	// mcporter spawn, exactly the config/PATH-guessing seam R10 forbids.
+	test("a relative probe executable is a typed rejection before any transport (KTD3)", async () => {
+		const { runtime, calls } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.probe_executable = "chrome-devtools-mcp";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "target_discovery_handoff_invalid" });
+		expect(String((json.error as Record<string, unknown>).message)).toContain(
+			"probe_executable",
+		);
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"supply_verified_handoff",
+		);
+		expect(calls).toHaveLength(0);
+	});
+
+	test("a missing probe executable is a typed rejection before any transport (KTD3)", async () => {
+		const { runtime, calls } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					delete envelope.data.attachment.probe_executable;
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "target_discovery_handoff_invalid" });
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"supply_verified_handoff",
+		);
 		expect(calls).toHaveLength(0);
 	});
 
@@ -381,7 +447,7 @@ describe("U1 target discovery — recovery mode", () => {
 			candidate_count: 1,
 			binding: {
 				selected_adapter_id: "chrome-devtools",
-				verified_endpoint_identity: "127.0.0.1:53412",
+				verified_endpoint_identity: "127.0.0.1:9222",
 			},
 		});
 		// AE2: the continuation names a command that exists post-migration.
@@ -392,48 +458,44 @@ describe("U1 target discovery — recovery mode", () => {
 		expect(action.summary).toContain("browser-connect connect");
 	});
 
-	test("recovery accepts a connect failure envelope as evidence (R2)", async () => {
-		const { runtime } = discoveryRuntime({
+	// R1/R3 behavior change (U3): the verified envelope is the ONLY invocation
+	// source — with the configured-server call form deleted, recovery evidence
+	// that carries no verified envelope has nothing to derive a live adapter
+	// invocation from, so live discovery fails closed instead of listing pages
+	// through user-level config.
+	test("recovery with only a connect failure envelope fails closed (no invocation source)", async () => {
+		const { runtime, calls } = discoveryRuntime({
 			files: { "/h.json": connectFailureEnvelope() },
-			pages: okCommand(
-				listPagesStdout([{ id: "P1", url: "https://example.com/", title: "Home" }]),
-			),
 		});
 		const result = await runForTest(
 			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
-		expect(json.data).toMatchObject({
-			mode: "recovery",
-			handoff_bound: false,
-			operation_ready: false,
-		});
-		// A failure envelope carries no verified identity; the recovery binding
-		// omits the handoff identity fields rather than inventing them.
-		const binding = (json.data as Record<string, any>).binding;
-		expect(binding.verified_endpoint_identity).toBeUndefined();
-		expect(binding.handoff_evidence_id).toBeUndefined();
+		expect(json.error).toMatchObject({ code: "target_discovery_transport_failed" });
+		expect(String((json.error as Record<string, unknown>).message)).toContain(
+			"verified handoff envelope",
+		);
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"supply_verified_handoff",
+		);
+		expect(calls).toHaveLength(0);
 	});
 
-	test("recovery without --handoff is an explicit no-evidence entry (R2)", async () => {
-		const { runtime } = discoveryRuntime({
-			pages: okCommand(
-				listPagesStdout([{ id: "P1", url: "https://example.com/", title: "Home" }]),
-			),
-		});
+	test("recovery without --handoff fails closed before any transport", async () => {
+		const { runtime, calls } = discoveryRuntime({});
 		const result = await runForTest(
 			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--json"],
 			runtime,
 		);
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
-		expect(json.data).toMatchObject({
-			mode: "recovery",
-			handoff_bound: false,
-			operation_ready: false,
-		});
+		expect(json.error).toMatchObject({ code: "target_discovery_transport_failed" });
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"supply_verified_handoff",
+		);
+		expect(calls).toHaveLength(0);
 	});
 
 	test("a verified envelope for a different adapter is a typed mismatch", async () => {
@@ -556,7 +618,7 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		});
 	});
 
-	test("discovery calls list_pages through the shared transport", async () => {
+	test("discovery builds the envelope-derived argv and rides the keep-alive env guard", async () => {
 		const { runtime, calls } = discoveryRuntime({
 			files: { "/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE },
 		});
@@ -565,16 +627,45 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 			runtime,
 		);
 		expect(calls).toHaveLength(1);
+		// R1/R2: pinned binary and endpoint.http verbatim from the envelope; no
+		// configured mcporter server name anywhere in the vector.
 		expect(commandVector(calls[0])).toEqual(["mcporter", ...LIST_PAGES_ARGS]);
+		expect(commandVector(calls[0])).not.toContain("chrome-devtools.list_pages");
+		// The env guard keeps a running mcporter daemon from answering the call
+		// through its configured server (U1-proven shadowing defect).
+		expect(calls[0].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
 	});
 
 	test("an adapter without a discovery transport fails closed, never lists chrome-devtools", async () => {
 		// Discovery must not silently list chrome-devtools pages for a
 		// non-chrome-devtools adapter. Recovery for playwright-cdp fails closed
-		// before any transport call.
+		// before any transport call (post-U3 it also lacks verified evidence).
 		const { runtime, calls } = discoveryRuntime({});
 		const result = await runForTest(
 			["targets", "list", "--mode", "recovery", "--adapter", "playwright-cdp", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_transport_failed",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
+	test("a verified envelope for a transport-less adapter fails closed at the transport gate", async () => {
+		// The BROWSER_USE_TRANSPORT_ADAPTERS membership gate survives U3: a
+		// verified agent-browser attachment carries invocation facts but no
+		// implemented discovery transport, so it fails closed rather than being
+		// spawned through the chrome-devtools call shape.
+		const { runtime, calls } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);

@@ -121,6 +121,30 @@ describe("runTransportCommand", () => {
 		expect(calls[0].timeoutMs).toBe(5000);
 	});
 
+	test("caller env threads into runCommand without exactEnv (merge-over-inherited)", async () => {
+		// The envelope-derived browser transport rides MCPORTER_NO_KEEPALIVE on
+		// every call; the shared runner must pass caller env through as a merge
+		// overlay — never as an exact environment (exactEnv is the installer's
+		// allowlist knob, not this path's).
+		const { runtime, calls } = capturingRuntime({});
+		const outcome = await runTransportCommand(CHANNEL, runtime, ["call"], 5000, {
+			MCPORTER_NO_KEEPALIVE: "*",
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
+		expect(calls[0].exactEnv).toBeUndefined();
+	});
+
+	test("no caller env leaves the runCommand input env-less", async () => {
+		const { runtime, calls } = capturingRuntime({});
+		const outcome = await runTransportCommand(CHANNEL, runtime, ["call"], 5000);
+
+		expect(outcome.ok).toBe(true);
+		expect(calls[0].env).toBeUndefined();
+	});
+
 	test("invalid override short-circuits without running a command", async () => {
 		const { runtime, calls } = capturingRuntime({
 			TEST_TRANSPORT_COMMAND_JSON: "not json",

@@ -61,8 +61,9 @@ export async function runMcporter(
 	runtime: McporterRuntime,
 	args: readonly string[],
 	timeoutMs: number,
+	env?: Record<string, string>,
 ): Promise<RunMcporterResult> {
-	return runTransportCommand(MCPORTER_CHANNEL, runtime, args, timeoutMs);
+	return runTransportCommand(MCPORTER_CHANNEL, runtime, args, timeoutMs, env);
 }
 
 export function isMissingCommandResult(result: McporterCommandResult): boolean {

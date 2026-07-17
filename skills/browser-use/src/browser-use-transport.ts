@@ -1,16 +1,23 @@
 // ---------------------------------------------------------------------------
-// Shared mcporter transport (plan U4).
+// Shared mcporter transport (plan U4) + the envelope-derived adapter call (U3).
 //
-// Browser Operation execution (the live operate path U7 lands) runs mcporter
-// subcommands through the same transport Browser Adapter Proof uses. This wrapper
-// resolves and prefixes the command vector via the shared core, then maps the
-// neutral failure reasons onto the Browser Operation diagnostic taxonomy:
+// Browser Operation execution runs mcporter subcommands through the same
+// transport Browser Adapter Proof used. This wrapper resolves and prefixes the
+// command vector via the shared core, then maps the neutral failure reasons
+// onto the Browser Operation diagnostic taxonomy:
 //   - invalid override   -> browser_operation_command_override_invalid (input)
 //   - missing binary     -> browser_operation_dependency_missing (dependency
 //                            recovery; never Warm Chrome repair or adapter
 //                            fallback)
 // AE10: identical command-vector semantics across both surfaces. The argv vector
 // is passed positionally to runtime.runCommand and never shell-evaluated.
+//
+// The envelope-derived call (R1/R2): every live adapter invocation is built
+// from Verified Handoff Envelope facts — pinned binary via `--stdio`, verified
+// endpoint verbatim via `--stdio-arg --browser-url` — never from a configured
+// mcporter server name. The exact argv and env guard were pinned empirically
+// against real mcporter 0.12.2 in mcporter-adapter-process-boundary.test.ts
+// (ENVELOPE_ADAPTER_ARGV_CONTRACT / ENVELOPE_ADAPTER_ENV_GUARD).
 // ---------------------------------------------------------------------------
 
 import type { BrowserUseRuntime } from "./browser-use-runtime";
@@ -54,21 +61,87 @@ export type BrowserOperationTransportResult =
 	| { ok: true; result: McporterCommandResult }
 	| { ok: false; failure: BrowserOperationTransportFailure };
 
+// --- Envelope-derived adapter call (U3, R1/R2) -------------------------------
+
+// The envelope-derived slots. Everything else in the argv is literal.
+export type EnvelopeAdapterCall = {
+	// attachment.probe_executable, verbatim (KTD3 guarantees it is absolute).
+	probeExecutable: string;
+	// endpoint.http, verbatim (R2: endpoint authority holds to the spawn).
+	endpointHttp: string;
+	tool: string;
+	argsJson: string;
+};
+
+// Mandatory env guard on every envelope-derived spawn. mcporter classifies any
+// stdio command containing the fragment `chrome-devtools-mcp` as keep-alive
+// and daemon-routes it: with a daemon running, the configured chrome-devtools
+// server silently answers the call — wrong binary, wrong endpoint, exit 0
+// (observed live in the U1 proof). `*` disables keep-alive routing for every
+// name; `=1` matches nothing.
+export const ENVELOPE_ADAPTER_CALL_ENV = {
+	MCPORTER_NO_KEEPALIVE: "*",
+} as const;
+
+// Build the pinned ad-hoc argv. Token notes (all observed, U1):
+//   - `--stdio-arg` space form only: the `=` form is parsed as a TOOL argument.
+//   - `--experimentalPageIdRouting` makes take_snapshot/take_screenshot/emulate
+//     accept a pageId directly, replacing the select_page two-call sequence
+//     (selection state is process-local and meaningless on a fresh spawn).
+//   - `--name` pins a fresh server name so no configured server is consulted.
+export function envelopeAdapterCallArgs(call: EnvelopeAdapterCall): string[] {
+	return [
+		"call",
+		"--stdio",
+		call.probeExecutable,
+		"--stdio-arg",
+		"--browser-url",
+		"--stdio-arg",
+		call.endpointHttp,
+		"--stdio-arg",
+		"--experimentalPageIdRouting",
+		"--name",
+		"browser-use-envelope-adapter",
+		"--tool",
+		call.tool,
+		"--args",
+		call.argsJson,
+		"--output",
+		"json",
+	];
+}
+
+// Run one envelope-derived adapter tool call: pinned argv + env guard through
+// the shared transport, so the override channel and failure taxonomy apply
+// unchanged (R9).
+export async function runEnvelopeAdapterCall(
+	runtime: BrowserUseRuntime,
+	call: EnvelopeAdapterCall,
+): Promise<BrowserOperationTransportResult> {
+	return runBrowserUseMcporter(
+		runtime,
+		envelopeAdapterCallArgs(call),
+		ENVELOPE_ADAPTER_CALL_ENV,
+	);
+}
+
 // Run an mcporter subcommand for a Browser Operation. Returns a structured
 // result U7's operation path maps onto its operation envelope. Failure routing
 // mirrors Browser Adapter Proof so the two surfaces stay aligned (AE10): a
 // missing binary or missing-command result routes to dependency recovery, a
 // timed-out call routes to a distinct transport-timeout failure, and an invalid
 // override routes to override-invalid. None fall back to an adapter or cold
-// browser.
+// browser. Optional `env` overlays the inherited environment on the spawn.
 export async function runBrowserUseMcporter(
 	runtime: BrowserUseRuntime,
 	args: readonly string[],
+	env?: Record<string, string>,
 ): Promise<BrowserOperationTransportResult> {
 	const outcome = await runMcporter(
 		runtime,
 		args,
 		OPERATION_TRANSPORT_TIMEOUT_MS,
+		env,
 	);
 	if (!outcome.ok) {
 		if (outcome.reason === "invalid_override") {

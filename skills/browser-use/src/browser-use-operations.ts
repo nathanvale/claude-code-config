@@ -1,12 +1,13 @@
 // ---------------------------------------------------------------------------
-// Browser Operations (plan U7).
+// Browser Operations (plan U7, transport re-anchored in migration U3).
 //
 // Owns the operate workflow: the runOperate pipeline (read inputs -> load
-// binding -> resolve target context -> select page -> run transport) plus the
-// failure bridges that map discovery/selection/transport/resolution failures
-// onto the operation diagnostic taxonomy, and snapshot bounding. Orchestrates
-// every layer below it — imports down into core, runtime, transport, discovery,
-// and selection. Single public entry: runOperate.
+// binding -> resolve target context -> optional explicit focus -> run
+// transport) plus the failure bridges that map discovery/selection/transport/
+// resolution failures onto the operation diagnostic taxonomy, and snapshot
+// bounding. Orchestrates every layer below it — imports down into core,
+// runtime, transport, discovery, and selection. Single public entry:
+// runOperate.
 // ---------------------------------------------------------------------------
 
 import { tmpdir } from "node:os";
@@ -38,7 +39,7 @@ import type { McporterCommandResult } from "./mcporter-transport";
 import {
 	type BrowserOperationTransportFailure,
 	type BrowserOperationTransportResult,
-	runBrowserUseMcporter,
+	runEnvelopeAdapterCall,
 } from "./browser-use-transport";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
@@ -81,9 +82,13 @@ import { retryabilityForRecoverability } from "./runtime-error-retryability";
 // `browser-use operate snapshot|screenshot|emulate` runs one authorized live
 // browser operation. The pipeline reads inputs, loads the Verified Handoff
 // Envelope binding, loads the selected-target context, resolves the operation
-// target, selects the adapter page, runs the mcporter transport, and emits a
-// bounded result. Every failure mode bridges down into the operation failure
-// taxonomy (handoff, selection, discovery, transport, resolution).
+// target, runs the envelope-derived mcporter transport (the operation args
+// carry the resolved pageId via --experimentalPageIdRouting; no select_page
+// step — selection state is process-local and meaningless on a fresh adapter
+// spawn), and emits a bounded result. --bring-to-front keeps its contract
+// meaning as an explicit select_page focus call before the operation. Every
+// failure mode bridges down into the operation failure taxonomy (handoff,
+// selection, discovery, transport, resolution).
 // ---------------------------------------------------------------------------
 
 const SNAPSHOT_MAX_BYTES = 64 * 1024;
@@ -221,18 +226,23 @@ export async function runOperate(input: {
 		: undefined;
 	if (artifactDirectory && !artifactDirectory.ok) return fail(artifactDirectory.failure);
 
+	// Explicit focus side effect only (U3): with pageId routing on the spawn,
+	// no default select_page call exists. --bring-to-front issues one
+	// deliberately, through the same envelope-derived transport.
 	const bringToFront = flags["--bring-to-front"] !== undefined;
-	const selectedPage = await selectOperationPage({
-		runtime,
-		adapter: binding.context.handoff.adapter,
-		pageId: target.target.pageId,
-		bringToFront,
-	});
-	if (!selectedPage.ok) return fail(selectedPage.failure);
+	if (bringToFront) {
+		const focused = await focusOperationPage({
+			runtime,
+			handoff: binding.context.handoff,
+			pageId: target.target.pageId,
+		});
+		if (!focused.ok) return fail(focused.failure);
+	}
 
 	const operationCall = await runOperationTransport({
 		runtime,
-		adapter: binding.context.handoff.adapter,
+		handoff: binding.context.handoff,
+		pageId: target.target.pageId,
 		operation: operationInputs.inputs.operation,
 		screenshot: operationInputs.inputs.screenshot,
 		viewport: operationInputs.inputs.viewport,
@@ -240,13 +250,13 @@ export async function runOperate(input: {
 	});
 	if (!operationCall.ok) {
 		return fail(operationFailureFromTransport(operationCall.failure), {
-			focus: true,
+			focus: bringToFront,
 		});
 	}
 	if (operationCall.result.exitCode !== 0) {
 		return fail(
 			operationTransportExitedFailure("The adapter Browser Operation call failed."),
-			{ focus: true },
+			{ focus: bringToFront },
 		);
 	}
 
@@ -380,7 +390,7 @@ async function loadOperationTargetContext(
 ): Promise<
 	{ ok: true; context: OperationTargetContext } | { ok: false; failure: OperationFailure }
 > {
-	const discovery = await discoverPages(runtime, binding.handoff.adapter);
+	const discovery = await discoverPages(runtime, binding.handoff);
 	if (!discovery.ok) {
 		return { ok: false, failure: operationFailureFromDiscovery(discovery.failure) };
 	}
@@ -482,23 +492,21 @@ async function resolveOperationTargetEntry(input: {
 	};
 }
 
-async function selectOperationPage(input: {
+// Explicit focus request (--bring-to-front): a select_page call with
+// bringToFront through the envelope-derived transport, BEFORE the operation.
+// The call's selection side effect is irrelevant (process-local, fresh spawn);
+// bringToFront's window-focus side effect is the contract meaning kept.
+async function focusOperationPage(input: {
 	runtime: BrowserUseRuntime;
-	adapter: BrowserAdapterId;
+	handoff: HandoffFacts;
 	pageId: number;
-	bringToFront: boolean;
 }): Promise<{ ok: true } | { ok: false; failure: OperationFailure }> {
-	const selectPage = await runBrowserUseMcporter(input.runtime, [
-		"call",
-		`${input.adapter}.select_page`,
-		"--args",
-		JSON.stringify({
-			pageId: input.pageId,
-			bringToFront: input.bringToFront,
-		}),
-		"--output",
-		"json",
-	]);
+	const selectPage = await runEnvelopeAdapterCall(input.runtime, {
+		probeExecutable: input.handoff.probeExecutable,
+		endpointHttp: input.handoff.endpointHttp,
+		tool: "select_page",
+		argsJson: JSON.stringify({ pageId: input.pageId, bringToFront: true }),
+	});
 	if (!selectPage.ok) {
 		return { ok: false, failure: operationFailureFromTransport(selectPage.failure) };
 	}
@@ -789,46 +797,36 @@ function positiveNumberFlag(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+// Run the operation tool through the envelope-derived transport. Each
+// operation's args carry the resolved pageId: --experimentalPageIdRouting on
+// the spawn routes the call to that page directly on a fresh adapter process.
 async function runOperationTransport(input: {
 	runtime: BrowserUseRuntime;
-	adapter: BrowserAdapterId;
+	handoff: HandoffFacts;
+	pageId: number;
 	operation: BrowserOperationClass;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 	verbose: boolean;
 }): Promise<BrowserOperationTransportResult> {
+	const call = (tool: string, args: Record<string, unknown>) =>
+		runEnvelopeAdapterCall(input.runtime, {
+			probeExecutable: input.handoff.probeExecutable,
+			endpointHttp: input.handoff.endpointHttp,
+			tool,
+			argsJson: JSON.stringify({ pageId: input.pageId, ...args }),
+		});
 	if (input.operation === "snapshot") {
-		return runBrowserUseMcporter(input.runtime, [
-			"call",
-			`${input.adapter}.take_snapshot`,
-			"--args",
-			JSON.stringify(input.verbose ? { verbose: true } : {}),
-			"--output",
-			"json",
-		]);
+		return call("take_snapshot", input.verbose ? { verbose: true } : {});
 	}
 	if (input.operation === "screenshot") {
-		return runBrowserUseMcporter(input.runtime, [
-			"call",
-			`${input.adapter}.take_screenshot`,
-			"--args",
-			JSON.stringify({
-				filePath: input.screenshot?.path,
-				fullPage: input.screenshot?.fullPage ?? false,
-				format: "png",
-			}),
-			"--output",
-			"json",
-		]);
+		return call("take_screenshot", {
+			filePath: input.screenshot?.path,
+			fullPage: input.screenshot?.fullPage ?? false,
+			format: "png",
+		});
 	}
-	return runBrowserUseMcporter(input.runtime, [
-		"call",
-		`${input.adapter}.emulate`,
-		"--args",
-		JSON.stringify({ viewport: input.viewport?.viewport_arg }),
-		"--output",
-		"json",
-	]);
+	return call("emulate", { viewport: input.viewport?.viewport_arg });
 }
 
 function operationHandoffInvalidFailure(detail: string): OperationFailure {

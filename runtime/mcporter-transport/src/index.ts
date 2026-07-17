@@ -209,11 +209,17 @@ function isStartFailureError(error: unknown): boolean {
 // any other throw (an override bug, cancellation, unexpected I/O fault) is
 // execution_failed and carries the original error rather than being mislabelled
 // as a missing binary.
+//
+// Optional `env` is a caller overlay merged over the inherited environment by
+// the default runtime (never exactEnv — that is the installer's allowlist
+// knob). browser-use's envelope-derived adapter calls ride
+// MCPORTER_NO_KEEPALIVE through it.
 export async function runTransportCommand(
 	channel: TransportCommandChannel,
 	runtime: TransportRuntime,
 	args: readonly string[],
 	timeoutMs: number,
+	env?: Record<string, string>,
 ): Promise<RunTransportCommandResult> {
 	const resolved = resolveTransportCommandVector(channel, runtime.env);
 	if (!resolved.ok) return resolved;
@@ -224,6 +230,7 @@ export async function runTransportCommand(
 			command,
 			args: [...baseArgs, ...args],
 			timeoutMs,
+			...(env === undefined ? {} : { env }),
 		});
 		return { ok: true, result };
 	} catch (error) {

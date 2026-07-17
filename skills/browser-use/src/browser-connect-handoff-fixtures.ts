@@ -5,18 +5,19 @@
 // a real parse bug in this repo before, so these fixtures are captured output,
 // not hand-written JSON.
 //
-// - REAL_VERIFIED_HANDOFF_ENVELOPE was produced through browser-connect's real
-//   success emission path (createBrowserConnectEnvelopeData ->
-//   createCliRuntimeSuccessEnvelope -> writeJsonEnvelope), the exact chain
-//   `browser-connect connect --json` runs on success. A verified environment
-//   cannot be synthesized at the process boundary (browser-connect consumes
-//   warm-chrome in-process and pins the real Chrome binary), so the emission
-//   path is the strongest capture available without a live Agent Chrome.
+// - REAL_VERIFIED_HANDOFF_ENVELOPE is verbatim stdout of a real
+//   `browser-connect connect chrome-devtools-mcp --json` run against live
+//   verified Agent Chrome (captured 2026-07-17). Stronger than the earlier
+//   emission-path capture and production-representative:
+//   attachment.probe_executable carries the absolute pinned adapter path the
+//   KTD3 spawn guard requires (the old capture's relative value came from a
+//   test resolver and would now fail that guard).
 // - REAL_CONNECT_FAILURE_ENVELOPE is verbatim stdout of a real
 //   `browser-connect connect chrome-devtools-mcp --json --run-id
-//   fixture-connect-failure` spawn that failed closed (exit 20).
+//   fixture-connect-failure` spawn that failed closed (exit 20), captured
+//   2026-07-16.
 //
-// Captured 2026-07-16 against browser-connect schema_version 1. The
+// Both captured against browser-connect schema_version 1. The
 // process-boundary test (browser-connect-process-boundary.test.ts) re-proves
 // the failure shape against the live CLI on every run, so drift between these
 // captures and the real binary cannot go unnoticed.
@@ -34,11 +35,11 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
     "attachment": {
       "adapter_id": "chrome-devtools-mcp",
       "route": "explicit-cdp",
-      "probe_executable": "chrome-devtools-mcp"
+      "probe_executable": "/Users/nathanvale/.side-quest/browser-connect/adapters/chrome-devtools-mcp/1.5.0/node_modules/.bin/chrome-devtools-mcp"
     },
     "endpoint": {
-      "http": "http://127.0.0.1:53412",
-      "ws": "ws://127.0.0.1:53412/devtools/browser/2f9c1f4e-77aa-4a1c-9c30-5f1f9d3f8b21"
+      "http": "http://127.0.0.1:9222",
+      "ws": "ws://127.0.0.1:9222/devtools/browser/d6cb7b60-ee46-44be-8e5a-a427e1b52f9d"
     },
     "launch": {
       "launched": false
@@ -63,7 +64,7 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
   "continuation": {
     "next_action_id": "use_verified_handoff"
   },
-  "duration_ms": 42
+  "duration_ms": 737
 }
 `;
 

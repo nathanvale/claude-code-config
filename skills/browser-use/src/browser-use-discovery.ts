@@ -52,19 +52,22 @@ import {
 	targetEnvelopeIdOf,
 	toCandidate,
 } from "./browser-use-core";
+import { isAbsolute } from "node:path";
 import {
 	type BrowserOperationTransportFailure,
-	runBrowserUseMcporter,
+	runEnvelopeAdapterCall,
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // `browser-use targets list` discovers Browser Target Candidates in two modes:
-//   - recovery (R2, R20): requested adapter + optional handoff evidence
-//     (verified envelope, a connect failure state, or explicit no-evidence
-//     entry). Candidates are evidence-gathering only; they never feed `targets
-//     select` or `operate` (R25). handoff_bound/operation_ready = false.
+//   - recovery (R2, R20): requested adapter + handoff evidence. Candidates are
+//     evidence-gathering only; they never feed `targets select` or `operate`
+//     (R25). handoff_bound/operation_ready = false. Since migration U3 the
+//     verified envelope is the only live invocation source: a connect failure
+//     envelope or an explicit no-evidence entry still parses as evidence, but
+//     live discovery fails closed on it (supply_verified_handoff).
 //   - handoff-bound (R1, R20): a verified handoff envelope for the attached
 //     adapter. Candidates are operation-ready and carry the identity slice.
 //
@@ -103,7 +106,7 @@ export type TargetDiscoveryFailure = Failure<TargetDiscoveryActionId>;
 // discovery, selection cross-checks, and operations; envelope fields that are
 // not binding-relevant are never re-emitted.
 export type HandoffFacts = {
-	// browser-use adapter id (mcporter server name) the attachment maps to.
+	// browser-use adapter id the attachment maps to.
 	adapter: BrowserAdapterId;
 	// browser-connect attachment adapter id, verbatim (e.g. chrome-devtools-mcp).
 	attachmentAdapterId: string;
@@ -111,6 +114,13 @@ export type HandoffFacts = {
 	runId: string;
 	// host:port of the verified endpoint, derived from endpoint.http.
 	verifiedEndpointIdentity: string;
+	// Pinned adapter binary path (attachment.probe_executable, verbatim; the
+	// KTD3 guard proved it absolute). One of the two envelope-derived
+	// invocation slots (R1).
+	probeExecutable: string;
+	// Verified endpoint http form, verbatim (R2: injected into the adapter
+	// spawn unchanged). Never re-emitted in output.
+	endpointHttp: string;
 	// browser-use's content hash over the envelope's binding-relevant fields.
 	handoffEvidenceId: string;
 	// Operation capabilities browser-use authorizes for the mapped adapter.
@@ -235,8 +245,22 @@ export async function runTargetsList(input: {
 		}
 	}
 
-	// Discover live Browser Targets through the adapter.
-	const discovery = await discoverPages(runtime, requestedAdapter);
+	// Discover live Browser Targets through the attached adapter. The verified
+	// envelope is the ONLY invocation source (R1/R3): recovery evidence without
+	// one (a connect failure envelope or an explicit no-evidence entry) has
+	// nothing to derive the adapter spawn from, so live discovery fails closed
+	// rather than falling back to configured servers or PATH guessing (R10).
+	if (!handoff) {
+		return fail({
+			code: "target_discovery_transport_failed",
+			message:
+				"Live Browser Target Discovery requires a verified handoff envelope: the adapter invocation derives from its pinned binary and verified endpoint. Re-run browser-connect connect and supply --handoff.",
+			actionId: "supply_verified_handoff",
+			exitCode: TARGET_DISCOVERY_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const discovery = await discoverPages(runtime, handoff);
 	if (!discovery.ok) return fail(discovery.failure);
 
 	const showUrl = flags["--show-url"] !== undefined;
@@ -370,6 +394,20 @@ export async function readHandoffFacts(
 	}
 	const route = stringField(attachment.route);
 	if (!route) return invalid("attachment route missing");
+	// KTD3: the envelope is consumed verbatim per endpoint-authority doctrine,
+	// but the spawn input gets ONE structural trust guard — the pinned adapter
+	// path must be absolute. A relative value would resolve through PATH at the
+	// mcporter spawn, exactly the config/PATH-guessing seam R10 forbids. No
+	// other re-verification: browser-connect already proved the attachment.
+	const probeExecutable = stringField(attachment.probe_executable);
+	if (!probeExecutable) {
+		return invalid("attachment probe_executable missing");
+	}
+	if (!isAbsolute(probeExecutable)) {
+		return invalid(
+			"attachment probe_executable is not an absolute pinned adapter path",
+		);
+	}
 	const endpoint = isJsonObject(data.endpoint) ? data.endpoint : undefined;
 	const endpointHttp = endpoint ? stringField(endpoint.http) : undefined;
 	const endpointWs = endpoint ? stringField(endpoint.ws) : undefined;
@@ -413,6 +451,8 @@ export async function readHandoffFacts(
 			attachmentAdapterId,
 			runId,
 			verifiedEndpointIdentity: endpointUrl.host,
+			probeExecutable,
+			endpointHttp,
 			handoffEvidenceId: handoffEvidenceIdOf({
 				runId,
 				attachmentAdapterId,
@@ -458,35 +498,42 @@ type DiscoverResult =
 	| { ok: true; pages: RawPage[] }
 	| { ok: false; failure: TargetDiscoveryFailure };
 
+// The envelope-derived invocation slots discovery needs (R1): the transport
+// gate keys on the adapter id; the spawn carries the pinned binary and the
+// verified endpoint verbatim. HandoffFacts satisfies this structurally.
+export type EnvelopeTransportFacts = Pick<
+	HandoffFacts,
+	"adapter" | "probeExecutable" | "endpointHttp"
+>;
+
 export async function discoverPages(
 	runtime: BrowserUseRuntime,
-	adapter: BrowserAdapterId,
+	facts: EnvelopeTransportFacts,
 ): Promise<DiscoverResult> {
 	// The page-listing transport is implemented for chrome-devtools only. A
-	// handoff or recovery request can name another registry adapter
-	// (agent-browser, playwright-cdp); fail closed rather than silently listing
-	// chrome-devtools pages against the wrong adapter, until those transports
-	// land (V2).
-	if (!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(adapter)) {
+	// handoff can attach another registry adapter (agent-browser,
+	// playwright-cdp); fail closed rather than silently spawning its binary
+	// through the chrome-devtools call shape, until those transports land (V2).
+	if (
+		!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(facts.adapter)
+	) {
 		return {
 			ok: false,
 			failure: {
 				code: "target_discovery_transport_failed",
-				message: `Browser Target Discovery is not implemented for adapter ${adapter} yet.`,
+				message: `Browser Target Discovery is not implemented for adapter ${facts.adapter} yet.`,
 				actionId: "change_target_discovery_input",
 				exitCode: TARGET_DISCOVERY_EXIT_CODE,
 				recoverability: "change_input",
 			},
 		};
 	}
-	const transport = await runBrowserUseMcporter(runtime, [
-		"call",
-		`${adapter}.list_pages`,
-		"--args",
-		"{}",
-		"--output",
-		"json",
-	]);
+	const transport = await runEnvelopeAdapterCall(runtime, {
+		probeExecutable: facts.probeExecutable,
+		endpointHttp: facts.endpointHttp,
+		tool: "list_pages",
+		argsJson: "{}",
+	});
 	if (!transport.ok) {
 		return { ok: false, failure: transportDiscoveryFailure(transport.failure) };
 	}
