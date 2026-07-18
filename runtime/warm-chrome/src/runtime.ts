@@ -1063,7 +1063,7 @@ export function redactListenerDetail(
 	// so it must obey the foreign-listener rule — pid + basename, no filesystem
 	// paths — rather than leaking the default-profile user_data_dir just because
 	// the binary matches.
-	if (options?.forceForeign || parsed.executable !== REAL_GOOGLE_CHROME_BINARY) {
+	if (options?.forceForeign || !isRealGoogleChromeBinary(parsed.executable)) {
 		return {
 			pid: listener.pid,
 			process: safeProcessBasename(parsed.executable),

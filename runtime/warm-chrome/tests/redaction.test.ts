@@ -164,6 +164,41 @@ describe("warm-chrome foreign listener redaction (R13)", () => {
 		assertNoRuntimeContractFixtureLeaks(detail);
 	});
 
+	// #252: a real Chrome whose executable is the macOS code-sign clone path is
+	// still real Chrome — non-foreign, and may expose its non-default user-data-dir.
+	test("code-sign clone real-Chrome listener is non-foreign and may expose its user-data-dir", () => {
+		const cloneBinary =
+			"/private/var/folders/_b/0fxx/X/com.google.Chrome.code_sign_clone/code_sign_clone.H5bJ4j/Google Chrome.app.bundle/Contents/MacOS/Google Chrome";
+		const detail = redactListenerDetail({
+			pid: 7,
+			command: `${cloneBinary} --remote-debugging-port=9223 --user-data-dir=/Users/example/other-warm-profile --auth-token=${credentialFixture}`,
+		});
+
+		expect(detail.foreign).toBe(false);
+		expect(detail.process).toBe("Google Chrome");
+		expect(detail.user_data_dir).toBe("/Users/example/other-warm-profile");
+		assertNoRuntimeContractFixtureLeaks(detail);
+	});
+
+	// #252: the default-profile guard must still fire when identity now passes via
+	// the clone path — a clone-path real Chrome on the default profile stays foreign
+	// and never leaks the default-profile path.
+	test("code-sign clone real-Chrome listener on the default profile drops its user-data-dir", () => {
+		const cloneBinary =
+			"/private/var/folders/_b/0fxx/X/com.google.Chrome.code_sign_clone/code_sign_clone.H5bJ4j/Google Chrome.app.bundle/Contents/MacOS/Google Chrome";
+		const detail = redactListenerDetail(
+			{
+				pid: 7,
+				command: `${cloneBinary} --remote-debugging-port=9222 --user-data-dir=/Users/example/Library/Application Support/Google/Chrome`,
+			},
+			{ env: { HOME: "/Users/example" } },
+		);
+
+		expect(detail.foreign).toBe(false);
+		expect(detail.user_data_dir).toBeUndefined();
+		assertNoRuntimeContractFixtureLeaks(detail);
+	});
+
 	// Re-audit (medium/low): a real Chrome on the operator's DEFAULT profile is a
 	// foreign instance; its user_data_dir discloses the OS account / HOME layout
 	// and must never reach the envelope, even though the binary matches.
