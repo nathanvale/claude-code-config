@@ -55,6 +55,31 @@ export const DEFAULT_SYSTEM_PROBE_TIMEOUT_MS = 3000;
 export const REAL_GOOGLE_CHROME_BINARY =
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" as const;
 
+// The real Google Chrome app-bundle tail, anchored at end of string. macOS's
+// hardened runtime maps Chrome's executable as a code-sign clone under a
+// private per-launch dir, so `lsof -d txt` reports a path like
+// `/private/.../code_sign_clone.../Google Chrome.app.bundle/Contents/MacOS/Google Chrome`
+// rather than `/Applications/...` — but the app-bundle tail is preserved
+// verbatim inside the clone. Matching the tail recognizes the real binary
+// through both the canonical and clone paths (issue #252) while the end anchor
+// still rejects the `Google Chrome Helper` superstring, `Chromium`, and
+// `Google Chrome for Testing` (whose `.app` name differs).
+const REAL_GOOGLE_CHROME_BINARY_TAIL =
+	/Google Chrome\.app(?:\.bundle)?\/Contents\/MacOS\/Google Chrome$/;
+
+/**
+ * True when the observed listener executable is the real Google Chrome app
+ * binary, recognized by its app-bundle tail so the macOS code-sign clone path
+ * is accepted alongside the canonical `/Applications` path (issue #252).
+ *
+ * Identity only: callers that decide which binary to *launch* keep matching
+ * `REAL_GOOGLE_CHROME_BINARY` exactly — warm-chrome spawns the canonical
+ * binary, never a clone path.
+ */
+export function isRealGoogleChromeBinary(path: string): boolean {
+	return REAL_GOOGLE_CHROME_BINARY_TAIL.test(path);
+}
+
 /**
  * Failure domains the warm-chrome envelopes report (plan U4 R12).
  */

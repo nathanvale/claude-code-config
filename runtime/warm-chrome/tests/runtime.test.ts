@@ -11,6 +11,7 @@ import {
 	createDefaultRuntime,
 	findListenerWithSystemTools,
 	isDefaultChromeProfilePath,
+	isRealGoogleChromeBinary,
 	type KillableChild,
 	parseProcessCommand,
 	REAL_GOOGLE_CHROME_BINARY,
@@ -90,6 +91,55 @@ describe("attach budget ordering (review: attach_timeout must be reachable)", ()
 		// fetch error and classify as no_listener (spawn-licensing) instead of
 		// the proof's attach_timeout verdict.
 		expect(DEFAULT_FETCH_ABORT_MS).toBeGreaterThan(WARM_CHROME_ATTACH_TIMEOUT_MS);
+	});
+});
+
+describe("real Google Chrome binary identity", () => {
+	// The macOS hardened runtime maps Chrome's executable as a code-sign clone
+	// under a private per-launch dir; lsof -d txt returns THAT path, not
+	// /Applications. The identity predicate must recognize the real app-bundle
+	// tail through the clone while still rejecting spoof shapes (issue #252).
+	const CLONE_BINARY =
+		"/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/X/com.google.Chrome.code_sign_clone/code_sign_clone.H5bJ4j/Google Chrome.app.bundle/Contents/MacOS/Google Chrome";
+
+	test("accepts the canonical /Applications binary", () => {
+		expect(isRealGoogleChromeBinary(REAL_GOOGLE_CHROME_BINARY)).toBe(true);
+	});
+
+	test("accepts the macOS code-sign clone binary path", () => {
+		expect(isRealGoogleChromeBinary(CLONE_BINARY)).toBe(true);
+	});
+
+	test("rejects the Google Chrome Helper superstring", () => {
+		expect(
+			isRealGoogleChromeBinary(
+				"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper",
+			),
+		).toBe(false);
+	});
+
+	test("rejects Chromium", () => {
+		expect(
+			isRealGoogleChromeBinary(
+				"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			),
+		).toBe(false);
+	});
+
+	test("rejects Chrome for Testing", () => {
+		expect(
+			isRealGoogleChromeBinary(
+				"/Users/example/chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+			),
+		).toBe(false);
+	});
+
+	test("rejects an arbitrary spoof path", () => {
+		expect(isRealGoogleChromeBinary("/private/tmp/fake-chrome")).toBe(false);
+	});
+
+	test("rejects the empty string", () => {
+		expect(isRealGoogleChromeBinary("")).toBe(false);
 	});
 });
 
