@@ -778,6 +778,26 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		expect(envelope.continuation?.next_action_id).toBe("use_verified_endpoint");
 	});
 
+	test("warm Chrome whose executable is the macOS code-sign clone still verifies (#252)", async () => {
+		const cloneBinary =
+			"/private/var/folders/_b/0fxx/X/com.google.Chrome.code_sign_clone/code_sign_clone.H5bJ4j/Google Chrome.app.bundle/Contents/MacOS/Google Chrome";
+		const fixture = warmChromeFixture({
+			listeners: {
+				"9222": {
+					pid: 4242,
+					command: `${cloneBinary} --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE} --no-first-run`,
+				},
+			},
+		});
+		const run = await runWarmChrome(["check", "--run-id", "clone-run"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		const envelope = parseEnvelope(run);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data?.browser_pid).toBe(4242);
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+	});
+
 	test("healthy warm Chrome can verify with no open page targets", async () => {
 		const fixture = warmChromeFixture({
 			cdp: healthyCdp({

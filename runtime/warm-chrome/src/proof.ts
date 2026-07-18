@@ -37,7 +37,7 @@ import {
 	parseProcessCommand,
 	type ProfileStat,
 	readCommandFlagValue,
-	REAL_GOOGLE_CHROME_BINARY,
+	isRealGoogleChromeBinary,
 	redactListenerDetail,
 	tokenizeCommandArgs,
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
@@ -1072,7 +1072,7 @@ type ListenerBinaryClass =
 	| "foreign";
 
 function classifyListenerBinary(executable: string): ListenerBinaryClass {
-	if (executable === REAL_GOOGLE_CHROME_BINARY) return "real_google_chrome";
+	if (isRealGoogleChromeBinary(executable)) return "real_google_chrome";
 	if (/chrome for testing|chrome-mac/i.test(executable)) {
 		return "chrome_for_testing";
 	}
