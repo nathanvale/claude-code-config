@@ -37,8 +37,8 @@ command -v mcporter && mcporter --version
 ```
 
 - If `mcporter` is on PATH → proceed to Quick Start.
-- If missing → install: `npm install -g mcporter` (or `bunx mcporter` for
-  one-shot use). Then re-check.
+- If missing → restore it through the machine's configured installation owner;
+  do not add another package manager or one-shot runner. Then re-check.
 - If install is blocked → report **mcporter-missing** state and stop. Without
   mcporter and without native session tools, no Figma MCP work is possible.
 

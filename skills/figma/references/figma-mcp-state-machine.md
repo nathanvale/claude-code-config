@@ -11,9 +11,10 @@ the state and next action.
 
 **Prerequisite check.** Run this before any other state detection.
 
-**Next action:** Install mcporter: `npm install -g mcporter` (or `bunx
-mcporter` for one-shot use). If install is blocked, no Figma MCP work is
-possible without native session tools. Report the blocked state.
+**Next action:** Restore mcporter through the machine's configured installation
+owner; do not add another package manager or one-shot runner. If recovery is
+blocked, no Figma MCP work is possible without native session tools. Report the
+blocked state.
 
 ### 1. `ready`
 
