@@ -56,13 +56,25 @@ Continuation precedence: a hard preflight failure governs; only then does a `con
 
 ## Page Actions
 
-- Use `browser-use operate` after a verified handoff and target selection.
-- Let `browser-use operate` enforce handoff binding, target state, and operation capability checks.
-- Use `browser-use operate --help` and current snapshot output for action syntax.
-- Let the selected adapter own its dependencies and transport.
-- Re-snapshot before element-ref actions.
-- Treat refs as stale after navigation or DOM-changing actions.
-- Take screenshots only when visual layout, media proof, or user request needs them.
+Every page action runs one lifecycle inside a single adapter's native continuity: **observe → name the postcondition and resolve the current ref → mutate → verify fresh structure**. The adapter selects the surface; browser use is never inherently MCP-based.
+
+Bind every element ref to the adapter, interaction context, browser target, and observed page state that produced it. A ref is valid only inside the continuity that minted it.
+
+**agent-browser lane** — native CLI, not MCP. Keep observe, mutate, and verify in one explicit native session, against the verified endpoint (envelope `endpoint.ws`, injected via `--cdp`), and one explicitly selected active tab. Drive the agent-browser CLI directly. agent-browser has been measured reporting success on a stale-ref click while the page did not change (2026-06-13 research; current builds may hard-error instead), so its return text never decides the outcome.
+
+**chrome-devtools-mcp lane** — keep the ref-producing observation, the mutation, and the fresh verification in one MCP client and server process, against one explicitly selected page. Its refs are process-scoped, so a replacement client never reuses a prior ref. `browser-use operate` starts a fresh adapter process per call and ships only `snapshot`, `screenshot`, `emulate` — never carry an `operate snapshot` ref into a separate mutation client.
+
+Discard the old ref and observe again after: navigation, any DOM-changing action, client or process restart, native session change, endpoint change, or target/tab change. If an adapter owner publishes no documented continuity contract, treat ref mutation as unsupported — never infer MCP or CLI semantics.
+
+**Decide completion from structure, not output.** Before a mutating action, name one task-specific structural postcondition: expected URL, scoped DOM or accessibility structure, element presence or absence, a control value or state, or persisted target data. Choose a shape the action's failure path cannot also produce — for a submit, save, or send, prefer persisted target data or success-distinct structure; a shared return URL or a disappearing control confirms nothing. After mutating, obtain fresh structural state through the same continuity (a fresh snapshot, or a scoped structural read such as the page URL); treat adapter return text and ambient keywords as supporting evidence only. Classify:
+
+- **confirmed** — the expected structure is present.
+- **not achieved** — no effect is proven: the adapter rejected the action, or absence is proven at the persisted target. For a submit, save, or send, an unchanged page alone never proves no effect — the mutation can commit server-side or land off-page; classify `unknown` instead.
+- **unknown** — evidence is partial, unrelated, or insufficient.
+
+On `unknown`, inspect; do not automatically repeat the mutation. Retry an externally-effecting mutation only when no effect is proven at the target (never from an unchanged page alone) and the repetition is known safe.
+
+Take screenshots only when visual layout, media proof, or user request needs them.
 
 ## Safety
 
