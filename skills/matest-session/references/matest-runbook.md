@@ -58,10 +58,16 @@ Skip auth when the warm tab already shows MATest.
 For a cold session:
 
 1. Open `https://experience-test.elluciancloud.com.au/matest/`.
-2. On the provider chooser, select the first option: **Monash University Users**.
-3. Fill the selected QA account username and password from 1Password.
-4. On MFA, choose **Google Authenticator**, fetch a fresh TOTP, and verify.
-5. Wait for the redirect back to MATest.
+2. On the provider chooser, select the option whose visible label reads
+   **Monash University Users**. Never select by position — provider ordering can
+   change.
+3. Assert the selected provider reads exactly "Monash University Users" before
+   entering any credentials. If it does not, stop and reselect.
+4. Fill the QA account username and password via the domain's Auth Pointer (see
+   below).
+5. On MFA, choose **Google Authenticator**, resolve a fresh TOTP through the Auth
+   Pointer, and verify.
+6. Wait for the redirect back to MATest.
 
 **Google Account** is a different identity provider. Never select it for this flow.
 
@@ -69,16 +75,14 @@ For a stale saved auth transaction, open MATest in a fresh tab and select **Mona
 University Users** again. Preserve cookies and storage so the working SSO session
 survives. Do not repair the flow by opening a direct Okta or Google Account URL.
 
-Use one persistent 1Password shell for the task. Extract exact JSON fields by ID:
-
-```bash
-op item get <item> --vault "API Credentials" --format json \
-  | jq -r '.fields[] | select(.id == "password") | .value'
-```
-
-Do not use wrapped `--fields label=password` output as the credential value. Fetch TOTP
-at fill time with `op item get <item> --vault "API Credentials" --otp`. Pass secret
-values directly into the browser command without logging them.
+Resolve credentials through the domain's Auth Pointer at fill time, per
+`skills/browser-use/SKILL.md` (Safety) and its Auth Pointer contract in
+`skills/browser-use/CONTEXT.md`. The Auth Pointer names the 1Password account,
+vault (`API Credentials`), item, the exact `password` field, and the OTP field;
+`one-password` owns safe resolution. Never extract secret values into shell
+variables or pass them as browser-command arguments — command args are
+shell-visible, which the browser owner forbids. Never log secret values; report
+secret checks by shape only (present/absent, length, account name).
 
 ## Live Reload
 

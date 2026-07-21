@@ -49,7 +49,7 @@ process at launch. Nothing in shell profiles or on disk.
 
 - Run health through the doctor; it preserves the inherited environment while forcing `MCPORTER_NO_KEEPALIVE="*"` for the child `mcporter list` process.
 - Treat the guarded `mcporter list` result as the discovery source of truth; do not parse raw config.
-- When `mcporter` is missing, report blocked and name the configured installation owner; never auto-install or suggest a second package manager.
+- When `mcporter` is missing, report blocked and direct the user to their machine's configured package owner; never auto-install or suggest a second package manager.
 - Inject secrets through `op run`; never paste keys into config, shell profiles, or history.
 - In-session MCP tools hold the connection from session start; after a config fix,
   the running session needs reload. `mcporter` spawns fresh, so verify fixes through it.

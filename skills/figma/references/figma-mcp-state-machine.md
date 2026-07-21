@@ -5,22 +5,29 @@ the state and next action.
 
 ## Detection Order
 
-### 0. `mcporter-missing`
+### 0. `ready`
 
-**Detection:** `command -v mcporter` fails — mcporter is not on PATH.
+**Detection:** ToolSearch for `mcp__figma` returns tools in the current session
+(native `mcp__figma__*` lane).
 
-**Prerequisite check.** Run this before any other state detection.
+**Evaluate this first.** Native session tools are a valid runtime that does not
+require mcporter. When they are present, take this lane directly and skip the
+mcporter prerequisite entirely.
+
+**Next action:** Proceed to Pick One in `SKILL.md`.
+
+### 1. `mcporter-missing`
+
+**Detection:** No native `mcp__figma__*` tools in the session **and**
+`command -v mcporter` fails — mcporter is not on PATH.
+
+**Prerequisite check for the mcporter lane only.** Reached only after `ready`
+fails; native tools already ruled out.
 
 **Next action:** Restore mcporter through the machine's configured installation
 owner; do not add another package manager or one-shot runner. If recovery is
 blocked, no Figma MCP work is possible without native session tools. Report the
 blocked state.
-
-### 1. `ready`
-
-**Detection:** ToolSearch for `mcp__figma` returns tools in the current session.
-
-**Next action:** Proceed to Pick One in `SKILL.md`.
 
 ### 2. `configured-needs-reload`
 

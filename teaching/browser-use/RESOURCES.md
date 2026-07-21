@@ -1,6 +1,6 @@
 # Browser Stack Resources
 
-All repo paths are relative to `/Users/nathanvale/code/claude-code-config`.
+All repository links are relative to this file.
 
 ## Knowledge
 

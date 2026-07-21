@@ -13,8 +13,8 @@ server warm. With no arguments, use the extension in the current request.
 
 - Browser connection and adapter recovery: `skills/browser-use/SKILL.md`.
 - Secret retrieval and reuse: `skills/one-password/SKILL.md`.
-- Extension-specific orientation: the nearest repo `AGENTS.md`, `CONTEXT.md`, and
-  extension config.
+- Startup guidance: `$HOME/code/claude-code-config/AGENTS.md` first, then the nearest
+  repo `AGENTS.md`, `CONTEXT.md`, and extension config.
 
 Read `references/matest-runbook.md` before a cold login, deploy, new-extension
 registration, or page-route repair.
@@ -25,7 +25,8 @@ registration, or page-route repair.
    browser state.
 2. Stop the extension dev server before any build, deploy, or handback command. Run the
    requested command, then restart the dev server in the persistent secret-backed shell.
-3. Connect through `browser-connect` using the `agent-browser` lane from `browser-use`.
+3. Connect only through `browser-connect connect agent-browser --json` (owner:
+   `browser-use`).
 4. Reuse an authenticated MATest tab. On cold auth, select **Monash University Users**,
    then use **Google Authenticator** for MFA.
 5. Wait for a successful compile and HTTP 200 from the local `manifest.json`. Enable

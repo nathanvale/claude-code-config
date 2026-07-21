@@ -50,6 +50,12 @@ class CdpClient {
 	constructor(socket) {
 		this.socket = socket
 		socket.addEventListener('message', (event) => this.#handleMessage(event))
+		socket.addEventListener('close', () =>
+			this.#rejectAll(new Error('CDP socket closed before response.')),
+		)
+		socket.addEventListener('error', () =>
+			this.#rejectAll(new Error('CDP socket errored before response.')),
+		)
 	}
 
 	static async connect(webSocketUrl) {
@@ -65,11 +71,24 @@ class CdpClient {
 		return new CdpClient(socket)
 	}
 
-	call(method, params = {}) {
+	call(method, params = {}, timeoutMs = 15000) {
 		const id = this.#nextId
 		this.#nextId += 1
 		const response = new Promise((resolveCall, rejectCall) => {
-			this.#pending.set(id, { resolve: resolveCall, reject: rejectCall })
+			const timer = setTimeout(() => {
+				this.#pending.delete(id)
+				rejectCall(new Error(`CDP call timed out: ${method}`))
+			}, timeoutMs)
+			this.#pending.set(id, {
+				resolve: (result) => {
+					clearTimeout(timer)
+					resolveCall(result)
+				},
+				reject: (error) => {
+					clearTimeout(timer)
+					rejectCall(error)
+				},
+			})
 		})
 		this.socket.send(JSON.stringify({ id, method, params }))
 		return response
@@ -77,6 +96,13 @@ class CdpClient {
 
 	close() {
 		this.socket.close()
+	}
+
+	#rejectAll(error) {
+		for (const pending of this.#pending.values()) {
+			pending.reject(error)
+		}
+		this.#pending.clear()
 	}
 
 	#handleMessage(event) {
