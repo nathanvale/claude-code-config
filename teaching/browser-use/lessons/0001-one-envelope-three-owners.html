@@ -79,6 +79,7 @@
   <p>mcporter isn't an owner — it's hired plumbing. The adapter's actions (<code>list_pages</code>, <code>take_snapshot</code>) are <em>MCP tools</em>, so something must speak the MCP protocol to it; mcporter is that protocol client, nothing more.</p>
 
   <h2>The envelope — the only thing that crosses the seam</h2>
+  <p class="note">Illustrative pseudo-JSON — the <code>…</code> placeholders and <code>←</code> annotations are not valid JSON; they mark the fields that matter.</p>
 <pre>{ "status": "ok", "run_id": "…",
   "data": {
     "contract_id": "browser-connect.verified-handoff",   ← browser-use pins this
@@ -113,7 +114,7 @@
     <button type="button">the mcporter config</button>
     <button type="button">the DevTools port</button>
     <button type="button">the handoff envelope</button>
-    <p class="expl">Envelope in, everything else out. (Fun fact: today's code still reaches the adapter via mcporter's static config — that's exactly the defect the current plan removes.)</p>
+    <p class="expl">Envelope in, everything else out. (Fun fact: as of the pre-migration state — before <a href="../../../docs/plans/2026-07-17-001-refactor-envelope-derived-transport-plan.md">the envelope-derived transport plan</a> lands — the code still reaches the adapter via mcporter's static config; that plan removes exactly that defect.)</p>
   </div>
   <div class="quiz" data-answer="1">
     <p class="q">3 · The adapter fails to connect. What may browser-use do?</p>
@@ -127,7 +128,7 @@
     <button type="button">it speaks MCP protocol</button>
     <button type="button">it verifies the proof</button>
     <button type="button">it selects the adapter</button>
-    <p class="expl">The adapter's actions are MCP tools over stdio; mcporter is the protocol client. It owns zero browser policy — which is why the current plan can demote it to envelope-fed plumbing.</p>
+    <p class="expl">The adapter's actions are MCP tools over stdio; mcporter is the protocol client. It owns zero browser policy — which is why <a href="../../../docs/plans/2026-07-17-001-refactor-envelope-derived-transport-plan.md">the envelope-derived transport plan</a> can demote it to envelope-fed plumbing.</p>
   </div>
 
   <div class="primary">
