@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser Stack Map — reference</title>
+<style>
+  :root { --ink:#1a1a1a; --faint:#6b6b6b; --line:#d8d3c8; --accent:#0f5132; --warn:#8a4b08; --bg:#fbfaf7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:17px/1.55 Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif; }
+  main { max-width:52rem; margin:0 auto; padding:3rem 1.5rem 5rem; }
+  h1 { font-size:1.9rem; font-weight:normal; letter-spacing:.01em; margin:0 0 .2rem; }
+  .sub { color:var(--faint); font-style:italic; margin-bottom:2.5rem; }
+  h2 { font-size:1.15rem; font-weight:600; margin:2.8rem 0 .8rem; border-bottom:1px solid var(--line); padding-bottom:.3rem; }
+  table { border-collapse:collapse; width:100%; font-size:.92rem; }
+  th { text-align:left; font-weight:600; border-bottom:2px solid var(--ink); padding:.35rem .6rem .35rem 0; }
+  td { border-bottom:1px solid var(--line); padding:.45rem .6rem .45rem 0; vertical-align:top; }
+  code { font:.86em/1.4 "SF Mono", Menlo, Consolas, monospace; background:#f0ede6; padding:.05em .3em; border-radius:3px; }
+  .pipe { display:flex; align-items:stretch; gap:0; margin:1.4rem 0; flex-wrap:wrap; }
+  .stage { flex:1 1 9rem; border:1.5px solid var(--ink); padding:.6rem .7rem; background:#fff; min-width:9rem; }
+  .stage h3 { margin:0 0 .25rem; font-size:.82rem; text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+  .stage p { margin:0; font-size:.83rem; color:var(--faint); }
+  .arrow { align-self:center; padding:0 .45rem; font-size:1.2rem; color:var(--accent); }
+  .env { border-style:dashed; border-color:var(--accent); background:#f2f7f3; }
+  dt { font-weight:600; margin-top:.9rem; }
+  dd { margin:0 0 0 0; color:#333; font-size:.94rem; }
+  .src { font-size:.8rem; color:var(--faint); }
+  a { color:var(--accent); }
+  @media print { body{background:#fff;font-size:12.5px} main{padding:0;max-width:none} .pipe{break-inside:avoid} }
+</style>
+</head>
+<body>
+<main>
+  <h1>Browser Stack Map</h1>
+  <p class="sub">One-page reference · claude-code-config · compressed from lesson 0001</p>
+
+  <h2 id="pipeline">The assembly line</h2>
+  <div class="pipe">
+    <div class="stage"><h3>warm-chrome</h3><p>Proves the browser is really Agent Chrome. Emits ok envelope or exit&nbsp;20.</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>browser-connect</h3><p>Runs the proof in-process, injects the verified endpoint, probes the adapter.</p></div>
+    <div class="arrow">→</div>
+    <div class="stage env"><h3>Verified Handoff Envelope</h3><p>The only artifact that crosses the seam.</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>browser-use</h3><p>Discovers targets, authorizes and runs operations. Never finds Chrome.</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>mcporter → adapter</h3><p>MCP protocol client speaking to chrome-devtools-mcp, which drives Chrome over CDP.</p></div>
+  </div>
+
+  <h2 id="ownership">Who owns what</h2>
+  <table>
+    <tr><th>Package</th><th>Owns</th><th>Never does</th><th>Home</th></tr>
+    <tr><td><strong>warm-chrome</strong></td><td>The browser-entry proof: loopback CDP, dedicated profile, listener identity, 16-station catalog, repair of profile state</td><td>Attach adapters; pick endpoints by convention</td><td><code>runtime/warm-chrome</code></td></tr>
+    <tr><td><strong>browser-connect</strong></td><td>The proven connection: environment × route × adapter model, endpoint injection, attachment probe, Repair Paths, minting the envelope</td><td>Perform browser operations; guess ports; fall back between adapters</td><td><code>runtime/browser-connect</code></td></tr>
+    <tr><td><strong>browser-use</strong></td><td>Browser operational policy: target discovery/selection, operation capability policy, snapshot/screenshot/emulate</td><td>Find Chrome; own entry or proof; switch adapters on failure</td><td><code>skills/browser-use</code></td></tr>
+    <tr><td><strong>mcporter-transport</strong></td><td>The no-shell argv spawn contract both consumers share (command vectors, exit-127 mapping, timeouts)</td><td>Know about browsers at all</td><td><code>runtime/mcporter-transport</code></td></tr>
+    <tr><td><strong>chrome-devtools-mcp</strong></td><td>Driving Chrome over CDP; exposes MCP tools (<code>list_pages</code>, <code>take_snapshot</code>…)</td><td>Discover Chrome itself — the endpoint is injected via <code>--browser-url</code></td><td>pinned npm binary</td></tr>
+  </table>
+
+  <h2 id="envelope">The Verified Handoff Envelope (schema 1)</h2>
+  <table>
+    <tr><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>data.contract_id</code> / <code>schema_version</code></td><td><code>browser-connect.verified-handoff</code> / <code>"1"</code> — browser-use pins both and fails closed on any other value</td></tr>
+    <tr><td><code>data.outcome</code>, outer <code>status</code></td><td><code>verified</code> + <code>ok</code>, or the failure direction</td></tr>
+    <tr><td><code>data.endpoint.http</code> / <code>.ws</code></td><td>The verified endpoint, verbatim. The <em>only</em> endpoint authority — never derived from the 9222 convention</td></tr>
+    <tr><td><code>data.attachment.adapter_id</code> / <code>.route</code> / <code>.probe_executable</code></td><td>Which adapter attached, via which route (<code>explicit-cdp</code>), and the pinned absolute binary path that proved it</td></tr>
+    <tr><td><code>data.proof.*</code></td><td>Environment-proof provenance (warm-chrome contract id + schema)</td></tr>
+    <tr><td>outer <code>run_id</code></td><td>Correlates the whole chain: connect → targets → operate</td></tr>
+  </table>
+  <p class="src">Producer type: <code>runtime/browser-connect/src/model.ts</code> · consumer parse: <code>skills/browser-use/src/browser-use-discovery.ts</code> (readHandoffFacts)</p>
+
+  <h2 id="commands">Command cheat sheet</h2>
+  <table>
+    <tr><th>Command</th><th>Does</th></tr>
+    <tr><td><code>browser-connect check [--json]</code></td><td>Read-only proof of Agent Chrome; exit 20 on failure with a station + repair path</td></tr>
+    <tr><td><code>browser-connect connect &lt;adapter&gt; --json</code></td><td>Prove + attach + mint the envelope</td></tr>
+    <tr><td><code>browser-connect run &lt;adapter&gt; -- &lt;cmd&gt;</code></td><td>Same guarantee, then exec the tool (human path)</td></tr>
+    <tr><td><code>browser-use targets list --handoff &lt;file&gt; --json</code></td><td>Discover pages through the attached adapter</td></tr>
+    <tr><td><code>browser-use targets select / status</code></td><td>Bind one target into selected state (15-min TTL, run-id-chained)</td></tr>
+    <tr><td><code>browser-use operate &lt;snapshot|screenshot|emulate&gt;</code></td><td>Run an operation the adapter's capabilities authorize</td></tr>
+  </table>
+
+  <h2 id="glossary">Glossary</h2>
+  <dl>
+    <dt>Agent Chrome / Human Chrome</dt><dd>The dedicated automation Chrome with explicit CDP (provided by warm-chrome) vs Nathan's everyday Chrome — never an attachment target. <span class="src">runtime/browser-connect/CONTEXT.md</span></dd>
+    <dt>Warm Chrome</dt><dd>The reusable authenticated browser environment; Agent Chrome and Warm Chrome name the same browser from two sides. <span class="src">skills/browser-use/CONTEXT.md</span></dd>
+    <dt>Browser Adapter</dt><dd>A tool that attaches to a proven browser via a declared route. Adapters never find Chrome themselves. <span class="src">runtime/browser-connect/CONTEXT.md</span></dd>
+    <dt>Verified Handoff Envelope</dt><dd>Success direction: a proven connection handed forward. Evidence to act on, not permission to guess. <span class="src">runtime/browser-connect/CONTEXT.md</span></dd>
+    <dt>Browser Entry Handoff</dt><dd>Failure direction: an unready browser environment handed back to browser-use for recovery. The envelope's deliberate mirror — never conflate them. <span class="src">skills/browser-use/CONTEXT.md</span></dd>
+    <dt>Proof chain</dt><dd>warm-chrome's single verification path every command shares: loopback, listener identity, profile posture, CDP round-trips. <span class="src">runtime/warm-chrome/CONTEXT.md</span></dd>
+    <dt>Station</dt><dd>One deterministic agent-visible command outcome (id = error code = action), pinned by tests. Sixteen in warm-chrome. <span class="src">runtime/warm-chrome/CONTEXT.md</span></dd>
+    <dt>Repair Path</dt><dd>The complete recovery contract every error station ships: stable action id, typed context, one continuation posture, versioned <code>REPAIR.md</code> anchor. <span class="src">runtime/browser-connect/CONTEXT.md</span></dd>
+    <dt>Endpoint authority</dt><dd>The ok envelope is the only source of endpoints; consumers take them verbatim, never from the 9222 convention. <span class="src">runtime/warm-chrome/CONTEXT.md</span></dd>
+    <dt>Exit 20</dt><dd>Browser-entry proof failed; adapter fallback and cold browsers are forbidden as continuations. <span class="src">runtime/warm-chrome/CONTEXT.md</span></dd>
+    <dt>handoff-bound</dt><dd>The discovery mode whose binding evidence is the envelope (formerly route-bound, Router era). <span class="src">skills/browser-use/CONTEXT.md</span></dd>
+    <dt>mcporter</dt><dd>A general MCP protocol client CLI. In this stack it is hired plumbing: it speaks initialize/tools-call over stdio to the adapter. It owns no browser policy.</dd>
+  </dl>
+</main>
+</body>
+</html>
