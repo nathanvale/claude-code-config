@@ -31,7 +31,7 @@
 - Execute in small, reviewable steps.
 - Test meaningful changes.
 - Preserve unrelated user/agent changes.
-- Startup source: `AGENTS.md`; prompt-system changes use `skills/prompt-system-workflow/SKILL.md`; check delivery with `scripts/agent-instructions.sh`.
+- Startup source: `$HOME/code/claude-code-config/AGENTS.md`; prompt-system changes use `$HOME/code/claude-code-config/skills/prompt-system-workflow/SKILL.md`; check delivery with `$HOME/code/claude-code-config/scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
 
 ## Agent-Native Work
@@ -43,9 +43,9 @@
 - Keep skills thin: read maps, choose next safe actions, and call owners.
 - Design failures to expose cause, repair path, or human handoff.
 - Name contract, model, engine, discovery, and CLI owners before implementation.
-- Code-structure choices, a new module, or reaching for a design pattern: run the `context/code-style.md` pressure gate.
+- Code-structure choices, a new module, or reaching for a design pattern: run the `$HOME/code/claude-code-config/context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
-- Connect browser adapters only through `browser-connect connect --json`; workflow: `skills/browser-use/SKILL.md`.
+- Connect browser adapters only through `browser-connect connect --json`; workflow: `$HOME/code/claude-code-config/skills/browser-use/SKILL.md`.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
@@ -55,9 +55,9 @@
 
 ## Skill Authoring
 
-- Create first-party skills in `skills/` only; never author in generated `~/.claude/skills/` or `~/.agents/skills/` roots.
-- First-party visibility: inspect with `./setup catalog`; agents/CI gate with `./setup sync --check --json`; repair with `./setup sync`. Third-party skills: preflight with `./setup catalog <id>`, acquire only with `bunx skills add <source> -s <skill>`, then diagnose with `./setup doctor`.
-- Never author, review, heal, or repair a `SKILL.md` before reading `skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
+- For any first-party skill create/update request, edit the canonical source under `$HOME/code/claude-code-config/skills/<id>/` regardless of the current project; never edit generated `~/.claude/skills/` or `~/.agents/skills/` projections.
+- After any first-party skill change, run `setup sync --check --json`; follow with `setup sync` after add/rename/remove or when Nathan asks to sync. Content-only edits use live projections, so a clean check needs no apply. Otherwise inspect with `setup catalog`; preflight named third-party work with `setup catalog <id>`, acquire with `bunx skills add <source> -s <skill>`, then diagnose with `setup doctor`.
+- Never author, review, heal, or repair a `SKILL.md` before reading `$HOME/code/claude-code-config/skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.
@@ -76,10 +76,10 @@
 
 - Search with `rg`; edit manually with `apply_patch`.
 - Parallel independent reads/checks: `multi_tool_use.parallel`.
-- Research tools: use `context/search-tools.md`; Context7 for library/framework/API docs.
+- Research tools: use `$HOME/code/claude-code-config/context/search-tools.md`; Context7 for library/framework/API docs.
 - Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers; don't rely on ambient shell env.
 - MCP auth checks: never source `.env` or print key prefixes; check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
-- Tests/lint/types: prefer MCP runners; see `context/bun-runner.md`.
+- Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
 
 ## External Data
 
@@ -93,11 +93,11 @@
 
 ## Context And Git
 
-- Context placement: use `skills/context-advisor/SKILL.md`.
-- New durable recall/synthesis belongs under `context/`.
-- Legacy storage framework lives under `context/archive/legacy-memory-framework/`.
+- Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
+- New durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`.
+- Legacy storage framework lives under `$HOME/code/claude-code-config/context/archive/legacy-memory-framework/`.
 - Repos own operational truth; context folders own durable recall and synthesis.
-- Git procedure: `docs/git/`.
+- Git procedure: `$HOME/code/claude-code-config/docs/git/`.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
@@ -107,12 +107,12 @@
 
 - Clear visual structure.
 - Warm, concise, low-cognitive-load.
-- Outbound comms: no em/en dashes; see `context/comms-style.md`.
+- Outbound comms: no em/en dashes; see `$HOME/code/claude-code-config/context/comms-style.md`.
 
 ## Personal Context
 
 - Keep relationship labels only when contextually relevant.
-- Lookup facts live in `context/personal.md` or the nearest owning `context/` file.
+- Lookup facts live in `$HOME/code/claude-code-config/context/personal.md` or the nearest owning `$HOME/code/claude-code-config/context/` file.
 
 ## Project Truth
 
