@@ -21,8 +21,8 @@ mcporter prerequisite entirely.
 **Detection:** No native `mcp__figma__*` tools in the session **and**
 `command -v mcporter` fails — mcporter is not on PATH.
 
-**Prerequisite check for the mcporter lane only.** Reached only after `ready`
-fails; native tools already ruled out.
+**Prerequisite for the mcporter lane, reached only after `ready` fails** (native
+tools already ruled out).
 
 **Next action:** Restore mcporter through the machine's configured installation
 owner; do not add another package manager or one-shot runner. If recovery is
