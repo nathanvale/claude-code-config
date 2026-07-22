@@ -98,7 +98,10 @@ describe("setup owner cutover", () => {
 		expect(findings).toEqual([]);
 
 		const startup = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
-		expect(startup).toContain("./setup sync --check --json");
+		expect(startup).toContain("After any first-party skill change");
+		expect(startup).toContain("setup sync --check --json");
+		expect(startup).toContain("$HOME/code/claude-code-config/");
+		expect(startup).not.toMatch(/`(?:\.\/setup|skills\/|context\/|docs\/git\/|scripts\/agent-instructions\.sh)/u);
 		expect(startup).toContain("bunx skills add");
 	});
 

@@ -1,6 +1,6 @@
 ---
 name: adhd-helper
-description: "Help with ADHD-shaped overwhelm, task initiation, stuckness, avoidance, context loss, or next-action selection."
+description: "Help with ADHD-shaped overwhelm, task initiation, stuckness, avoidance, context loss, scope reduction, or next-action selection."
 role: main-entry
 ---
 
@@ -29,14 +29,14 @@ qualified local help or emergency services.
 - `Unstick`: name the blocker, missing input, and smallest reversible move.
 - `Triage`: sort a pile into now, later, waiting, and delete.
 - `Resume`: rebuild context from files, state, and last known next action.
-- `Reduce`: cut scope until the work fits current energy and time.
+- `Reduce`: cut task or solution scope to the smallest durable outcome; preserve the root-cause fix.
 - `Reset`: make a short transition plan before starting again.
 
 ## Workflow
 
-1. Name the mode in one line.
+1. Name the mode when orientation helps; omit the label during a concrete conversational comparison.
 2. Reduce the prompt to one concrete objective.
-3. Read `skills/adhd-helper/references/support-cards.md` when the user names a Support Card or the Moment Map is too coarse.
+3. Read `skills/adhd-helper/references/support-cards.md` when the user names a Support Card, challenges a solution as too elaborate, or the Moment Map is too coarse.
 4. Ask at most one question only when acting would pick the wrong objective.
 5. Offer 2-4 choices when the user is deciding.
 6. Otherwise choose the next safe action and say why.

@@ -68,6 +68,7 @@ function parseLine(line: string): Server | null {
 function runMcporterList(): string {
 	const result = spawnSync("mcporter", ["list"], {
 		encoding: "utf8",
+		env: { ...process.env, MCPORTER_NO_KEEPALIVE: "*" },
 		timeout: 120_000,
 	});
 
@@ -129,7 +130,7 @@ function main(): void {
 			console.log(JSON.stringify({ status: "error", message }, null, 2));
 		} else {
 			console.error(`mcp-doctor: ${message}`);
-			console.error("Install mcporter or check it is on PATH (npm i -g mcporter).");
+			console.error("Restore mcporter through this machine's configured package owner or check it is on PATH.");
 		}
 		process.exitCode = 2;
 		return;

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 · One envelope, three owners</title>
+<style>
+  :root { --ink:#1a1a1a; --faint:#6b6b6b; --line:#d8d3c8; --accent:#0f5132; --bg:#fbfaf7;
+          --good:#0f5132; --bad:#8a1c1c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:18px/1.6 Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif; }
+  main { max-width:44rem; margin:0 auto; padding:3.5rem 1.5rem 6rem; }
+  .kicker { text-transform:uppercase; letter-spacing:.14em; font-size:.75rem; color:var(--faint); }
+  h1 { font-size:2rem; font-weight:normal; margin:.3rem 0 .4rem; }
+  .mission { font-style:italic; color:var(--faint); margin-bottom:2.6rem; }
+  h2 { font-size:1.2rem; font-weight:600; margin:2.6rem 0 .7rem; }
+  .big { font-size:1.28rem; line-height:1.5; border-left:3px solid var(--accent);
+         padding:.6rem 0 .6rem 1.1rem; margin:1.6rem 0; }
+  code { font:.84em/1.4 "SF Mono", Menlo, Consolas, monospace; background:#f0ede6; padding:.05em .3em; border-radius:3px; }
+  pre { background:#f0ede6; padding:.9rem 1rem; border-radius:6px; overflow-x:auto;
+        font:.78rem/1.5 "SF Mono", Menlo, Consolas, monospace; }
+  .pipe { display:flex; align-items:stretch; margin:1.5rem 0; flex-wrap:wrap; gap:.15rem; }
+  .stage { flex:1 1 8.5rem; border:1.5px solid var(--ink); padding:.55rem .65rem; background:#fff; min-width:8.5rem; }
+  .stage h3 { margin:0 0 .2rem; font-size:.75rem; text-transform:uppercase; letter-spacing:.07em; font-weight:600; }
+  .stage p { margin:0; font-size:.8rem; color:var(--faint); }
+  .arrow { align-self:center; padding:0 .35rem; color:var(--accent); font-size:1.15rem; }
+  .env { border-style:dashed; border-color:var(--accent); background:#f2f7f3; }
+  table { border-collapse:collapse; width:100%; font-size:.9rem; margin:.8rem 0; }
+  th { text-align:left; font-weight:600; border-bottom:2px solid var(--ink); padding:.3rem .5rem .3rem 0; }
+  td { border-bottom:1px solid var(--line); padding:.4rem .5rem .4rem 0; vertical-align:top; }
+  a { color:var(--accent); }
+  .cite { font-size:.78rem; color:var(--faint); }
+  .quiz { border:1px solid var(--line); background:#fff; border-radius:8px; padding:1.1rem 1.2rem; margin:1.2rem 0; }
+  .quiz p.q { margin:.1rem 0 .7rem; font-weight:600; }
+  .quiz button { display:block; width:100%; text-align:left; margin:.3rem 0; padding:.5rem .7rem;
+                 font:inherit; font-size:.92rem; background:#fbfaf7; border:1px solid var(--line);
+                 border-radius:6px; cursor:pointer; }
+  .quiz button:hover { border-color:var(--ink); }
+  .quiz button.correct { border-color:var(--good); background:#eef6f0; }
+  .quiz button.wrong { border-color:var(--bad); background:#faeeee; }
+  .quiz .expl { display:none; margin:.7rem 0 0; font-size:.88rem; color:#333;
+                border-top:1px dashed var(--line); padding-top:.6rem; }
+  .primary { border:1.5px solid var(--accent); border-radius:8px; padding:1rem 1.2rem; background:#f2f7f3; margin:2rem 0; }
+  .footer { margin-top:3rem; border-top:1px solid var(--line); padding-top:1.2rem; font-size:.9rem; color:var(--faint); }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">Browser stack · Lesson 1 · ~8 minutes</p>
+  <h1>One envelope, three owners</h1>
+  <p class="mission">Mission: judge architectural decisions about your own browser stack instead of rubber-stamping them. This lesson gives you the mental model everything else hangs off.</p>
+
+  <h2>The one sentence</h2>
+  <div class="big">
+    <strong>browser-connect</strong> proves the browser and attaches the tool; everything downstream acts only on the <strong>Verified Handoff Envelope</strong> it mints — nothing else is ever allowed to find Chrome.
+  </div>
+  <p>It <em>looks</em> like three CLI tools. It's really one assembly line with a single artifact passed along it. Hold onto that and the rest is detail.</p>
+
+  <h2>The assembly line</h2>
+  <div class="pipe">
+    <div class="stage"><h3>warm-chrome</h3><p>proves “this is really Agent Chrome”</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>browser-connect</h3><p>injects the verified endpoint, attaches the adapter</p></div>
+    <div class="arrow">→</div>
+    <div class="stage env"><h3>envelope</h3><p>the proven connection, as JSON</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>browser-use</h3><p>picks targets, runs operations</p></div>
+    <div class="arrow">→</div>
+    <div class="stage"><h3>adapter</h3><p>chrome-devtools-mcp drives Chrome over CDP</p></div>
+  </div>
+
+  <table>
+    <tr><th>Owner</th><th>Its one job</th><th>Forbidden</th></tr>
+    <tr><td><strong>warm-chrome</strong></td><td>Prove the browser: right profile, loopback CDP, our listener — or fail with exit 20 and a repair path</td><td>attaching tools</td></tr>
+    <tr><td><strong>browser-connect</strong></td><td>Turn that proof into an attached adapter and mint the envelope</td><td>browser operations</td></tr>
+    <tr><td><strong>browser-use</strong></td><td>Operate: discover pages, select one, snapshot / screenshot / emulate</td><td>finding Chrome</td></tr>
+  </table>
+  <p>mcporter isn't an owner — it's hired plumbing. The adapter's actions (<code>list_pages</code>, <code>take_snapshot</code>) are <em>MCP tools</em>, so something must speak the MCP protocol to it; mcporter is that protocol client, nothing more.</p>
+
+  <h2>The envelope — the only thing that crosses the seam</h2>
+  <p class="note">Illustrative pseudo-JSON — the <code>…</code> placeholders and <code>←</code> annotations are not valid JSON; they mark the fields that matter.</p>
+<pre>{ "status": "ok", "run_id": "…",
+  "data": {
+    "contract_id": "browser-connect.verified-handoff",   ← browser-use pins this
+    "schema_version": "1",                               ← …and this; anything else fails closed
+    "outcome": "verified",
+    "endpoint":   { "http": "http://127.0.0.1:53412", "ws": "…" },   ← the ONLY endpoint authority
+    "attachment": { "adapter_id": "chrome-devtools-mcp",
+                    "route": "explicit-cdp",
+                    "probe_executable": "/…/chrome-devtools-mcp" },  ← the binary that proved attachment
+    "proof": { …warm-chrome provenance… } } }</pre>
+  <p>browser-use enters a session <em>only</em> through this file (<code>--handoff</code>). It never sees a raw port, never guesses <code>9222</code>, and if the envelope's contract or schema doesn't match its pin, it refuses to parse at all.
+  <span class="cite">Consumer parse: <code>skills/browser-use/src/browser-use-discovery.ts</code> · producer: <code>runtime/browser-connect/src/model.ts</code></span></p>
+
+  <h2>Why three tools? Each seam was paid for</h2>
+  <table>
+    <tr><th>Failure that happened</th><th>Seam it bought</th></tr>
+    <tr><td>Chrome 150 sent your <em>everyday</em> Chrome's debug listener into automation's path</td><td>warm-chrome's proof: never touch Human Chrome; verify identity, don't trust a port <span class="cite">(decision log, Frame)</span></td></tr>
+    <tr><td>Adapters guessing port 9222 stranded orphaned headless browsers</td><td>Endpoint authority: endpoints come only from the proof's envelope, injected by browser-connect</td></tr>
+    <tr><td>The old Router's multi-proof choreography collapsed under its own weight</td><td>One envelope seam replaced the whole evidence chain (migration cleanup, Decision 1)</td></tr>
+  </table>
+
+  <h2>Check yourself</h2>
+  <div class="quiz" data-answer="0">
+    <p class="q">1 · Which package implements the “is this really our Chrome?” proof?</p>
+    <button type="button">warm-chrome</button>
+    <button type="button">browser-connect</button>
+    <button type="button">browser-use</button>
+    <p class="expl">warm-chrome owns the proof chain; browser-connect <em>runs</em> it in-process as the front door, and everyone else consumes the result.</p>
+  </div>
+  <div class="quiz" data-answer="2">
+    <p class="q">2 · What is the only thing browser-use may act on to enter a session?</p>
+    <button type="button">the mcporter config</button>
+    <button type="button">the DevTools port</button>
+    <button type="button">the handoff envelope</button>
+    <p class="expl">Envelope in, everything else out. (Fun fact: as of the pre-migration state — before <a href="../../../docs/plans/2026-07-17-001-refactor-envelope-derived-transport-plan.md">the envelope-derived transport plan</a> lands — the code still reaches the adapter via mcporter's static config; that plan removes exactly that defect.)</p>
+  </div>
+  <div class="quiz" data-answer="1">
+    <p class="q">3 · The adapter fails to connect. What may browser-use do?</p>
+    <button type="button">switch to another adapter</button>
+    <button type="button">fail closed, re-mint envelope</button>
+    <button type="button">fall back to port 9222</button>
+    <p class="expl">Missing or stale evidence always fails closed — mint a fresh envelope through browser-connect. Adapter fallback after a failure is explicitly forbidden (exit 20 carries <code>no_adapter_fallback</code>).</p>
+  </div>
+  <div class="quiz" data-answer="0">
+    <p class="q">4 · Why is mcporter in the stack at all?</p>
+    <button type="button">it speaks MCP protocol</button>
+    <button type="button">it verifies the proof</button>
+    <button type="button">it selects the adapter</button>
+    <p class="expl">The adapter's actions are MCP tools over stdio; mcporter is the protocol client. It owns zero browser policy — which is why <a href="../../../docs/plans/2026-07-17-001-refactor-envelope-derived-transport-plan.md">the envelope-derived transport plan</a> can demote it to envelope-fed plumbing.</p>
+  </div>
+
+  <div class="primary">
+    <strong>Primary source (15 min):</strong> read the <em>Frame</em> and <em>Decision 1</em> of
+    <a href="../../../docs/decisions/2026-07-14-001-browser-connect-architecture-decision-log.md">the browser-connect architecture decision log</a>.
+    It's the single best account of why the stack is shaped this way — environment × route × adapter, written from the incidents that forced it.
+  </div>
+
+  <p>Next stop when you're ready: the <a href="../reference/browser-stack-map.html">Browser Stack Map</a> — the one-page reference with the full ownership table, envelope fields, commands, and glossary.</p>
+
+  <p class="footer">Stuck or curious? Ask your teacher — the agent that made this lesson has the whole stack in context. Good follow-ups: “walk me through a real envelope from my machine”, “what happens on failure?”, “why did the Router die?”</p>
+</main>
+<script>
+  document.querySelectorAll('.quiz').forEach(function (q) {
+    var answer = parseInt(q.dataset.answer, 10);
+    var buttons = q.querySelectorAll('button');
+    buttons.forEach(function (b, i) {
+      b.addEventListener('click', function () {
+        buttons.forEach(function (x) { x.disabled = true; });
+        b.classList.add(i === answer ? 'correct' : 'wrong');
+        if (i !== answer) buttons[answer].classList.add('correct');
+        q.querySelector('.expl').style.display = 'block';
+      });
+    });
+  });
+</script>
+</body>
+</html>

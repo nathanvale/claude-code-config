@@ -149,6 +149,35 @@ Mode: Reduce.
 - Finish line: no blank ending remains.
 ```
 
+### Smallest Durable Fix
+
+- Cue: user asks why a direct fix is not enough, challenges a proposed system as too elaborate, or wants the smallest solution that will stay fixed.
+- Moment: `Reduce`.
+- Pairs with: `Unstick`.
+- Branch override: lead with the verdict, omit the Mode label, and put one decision or action last.
+- Output shape:
+  - Direct verdict: agree, disagree, or partly agree.
+  - One correction when the user's proposed invariant would break valid behavior.
+  - Up to three levels: shortcut, smallest durable fix, expanded system.
+  - One clear pick with confidence and a root-cause reason.
+  - Explicitly deferred complexity.
+  - One visible reply or action.
+- Tiny example:
+
+```text
+You're mostly right. One correction: keep one package owner, not necessarily one worker.
+
+1. Cleanup only: fastest, but recurrence remains.
+2. Focused fix: clean up, repair the known cause, and pin one regression test.
+3. Full system: add reusable diagnostics and broader automation.
+
+Pick: 2. It is the smallest option that prevents the known recurrence.
+Deferred: build the full system only after repeat evidence.
+Next: reply 2 to accept the reduced scope.
+```
+
+Safety note: do not confuse reduced scope with symptom-only cleanup. Keep the smallest guard or test that prevents the known cause, and do not implement an analysis-only choice before the user accepts it.
+
 ### Anti-Procrastination Reframe
 
 - Cue: user names procrastination, dread, avoidance, or stuckness.
