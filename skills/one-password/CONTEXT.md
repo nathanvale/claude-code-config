@@ -20,6 +20,10 @@ _Avoid_: central secret manifest, global env bucket, one-password mapping
 The preferred non-interactive 1Password access path for agents. A service account token may act as the bootstrap secret only when its vault and item permissions are scoped to the capability's declared secret reference mappings.
 _Avoid_: broad service account, ambient 1Password access, desktop-first auth
 
+**Token-scoped vault authority**:
+The service account's effective vault grant is the access authority for a capability. A capability that requires one dedicated vault fails when the token exposes zero or multiple vaults; it does not duplicate access policy in a local vault allowlist.
+_Avoid_: shadow vault allowlist, automatic cross-vault search, locally widened access
+
 **Persistent shell session**:
 A stable shell context reused for an interactive 1Password task so sign-in, verification, and follow-up commands share session state. Tmux is the usual CLI implementation; Codex desktop may use a persistent Codex PTY or start a dedicated tmux session.
 _Avoid_: tmux-only rule, fresh shell per `op` command, scattered sign-in
@@ -31,6 +35,10 @@ _Avoid_: ambient read, probing read, service-account enumeration
 **Targeted metadata check**:
 A 1Password metadata command against an exact account, vault, item, or field already declared by an owning capability. It may prove existence or shape, but must not discover candidates by listing broad accounts, vaults, or items.
 _Avoid_: broad enumeration, vault discovery, item discovery
+
+**Vault-scoped discovery**:
+A metadata-only search within the vault scope granted to a capability's service account, used when the capability knows the token-scoped vault but not yet the exact item. Candidate Login items require the approved origin; an optional login path may rank or disambiguate same-origin candidates after query and fragment removal. A unique deterministic match may bind automatically; ambiguity requires human selection. Title and field shape are hints only.
+_Avoid_: account-wide enumeration, cross-vault search, secret-value scan, ambiguous automatic binding
 
 **Materialized secret adapter**:
 A generated compatibility surface that contains plaintext secret values only because a target tool cannot consume `op run` or 1Password references directly. It is never the source of truth and should be scoped to the tool that needs it.
@@ -57,5 +65,4 @@ Dev: "Can a service-account read run outside tmux?"
 Domain expert: "Yes, when it is a direct service-account read for a declared vault, item, field, and shape. Interactive fallback still needs a persistent shell session."
 
 Dev: "Can an agent list vaults to find the right one?"
-Domain expert: "No. It can run targeted metadata checks for declared names, but broad vault or item discovery is outside the `one-password` safety contract."
-
+Domain expert: "It cannot enumerate the whole account. A capability may use Vault-scoped discovery inside the service account's granted vault and automatically bind one deterministic match; ambiguity requires human selection."

@@ -1,20 +1,43 @@
 # Browser Use
 
-Scoped vocabulary for browser-use and browser-domain-memory: Warm Chrome, Browser Adapters, the browser-connect handoff, durable browser knowledge, and the playback modes. Glossary only.
+Scoped vocabulary for browser-use: Warm Chrome, Browser Adapters, the browser-connect handoff, durable browser knowledge, and playback modes. Glossary only.
 
 ## Language
 
 ### Retired terms (Router era)
 The Browser Adapter Router chain (Router CLI with prepare/route/report, Browser Adapter Proof, Browser Adapter Map) is deleted; `runtime/browser-connect` owns the connection and its Verified Handoff Envelope replaced route evidence. The surviving router engine/model/recovery/validation modules are internal capability-policy detail, not agent vocabulary. Retired — do not reintroduce as live terms: Validated Route Evidence Envelope, Adapter capability report, Router Recovery, Route Validity, Route Evidence Invalid, Research Recovery, Browser Adapter Router, Browser Adapter Proof, Browser Adapter Map, Browser Adapter Command Resolution, route-bound (renamed handoff-bound), Evidence-First Selection (its evidence-or-recovery discipline lives on in browser-connect's fail-closed gates).
 
+### Retired terms (browser memory era)
+`browser-domain-memory` is archived with no compatibility route. Browser Use owns future durable browser knowledge and capture work.
+
 ### Browser entry and adapters
 **browser-use**:
-The browser-driving capability. It owns browser operational policy — adapter policy, operation capability policy, inspection, navigation, clicking, filling, and live browser control — and delegates the proven *connection* (prove Agent Chrome, attach an adapter) to `browser-connect` (`runtime/browser-connect`). It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge, and it no longer owns browser entry outright — that connection guarantee is browser-connect's.
+The browser-work capability. It owns browser operational policy and Durable Browser Knowledge, including Auth Pointers, Browser Runbooks, capture, and playback. It delegates proven connection to `browser-connect` and generic secret-access safety to `one-password`.
 _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill, owns all browser entry
 
 **Warm Chrome**:
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
+
+**Authenticated Session Reuse**:
+Use of the still-live authenticated state in the selected Warm Chrome environment by any attached Browser Adapter, after Browser Use proves the expected account and login state. Expiry, logout, account drift, or environment change ends reuse and requires a fresh authentication path.
+_Avoid_: cross-adapter session store, session transfer, permanent login, credential cache
+
+**Session Identity Proof**:
+Per-portal evidence that a live authenticated session belongs to the expected subject, account, and tenant. Prefer stable machine-readable identity; when unavailable, require at least two independent page-level identity facts plus exact mutation-target ownership and scope proof. Session presence, cookies, or one display label alone do not prove identity. Missing, conflicting, or non-unique evidence means proof is absent; it never silently degrades.
+_Avoid_: name-badge check, logged-in assumption, cookie-presence proof
+
+**Human Identity Attestation**:
+A one-run human assertion of the current subject, account, tenant, and mutation target when Session Identity Proof cannot be completed. It never becomes a standing exception, overrides a proven identity mismatch, or survives target change.
+_Avoid_: identity override, standing identity exception, trust-me approval
+
+**Browser Use Security**:
+The local security capability that establishes human authority and confines credential retrieval and delivery for Browser Use. It returns admitted security outcomes without making Browser Adapters, Browser Connect, or One Password owners of browser authorization.
+_Avoid_: auth adapter, credential manager, secret daemon, browser security process
+
+**Confidential Field Delivery Helper**:
+The disposable, transaction-internal process that receives one raw username, password, or current OTP value through a private inherited pipe and writes it to one pre-proven browser field through a pre-opened verified browser-channel handle. It is one of only two raw-secret processes; the other is the disposable 1Password helper. Task adapters, adapter plugins/daemons, long-lived Browser Use processes, and the approval broker never receive the value. The helper is not a Browser Adapter and never changes the selected task lane.
+_Avoid_: auth adapter, credential broker, secret daemon, Agent Browser login helper, adapter-native secret fill
 
 **Warm Chrome Runtime Package**:
 The independently hardened browser-entry layer shipped as `runtime/warm-chrome` (`@side-quest/warm-chrome`). It implements the Warm Chrome proof — verifying that a candidate browser endpoint satisfies the Warm Chrome contract. `runtime/browser-connect` is the front door that consumes this proof, injects the verified endpoint, attaches the adapter, and mints the Verified Handoff Envelope; `browser-use` is the downstream consumer of that envelope and owns no entry or proof logic itself.
@@ -64,12 +87,8 @@ Each Browser Adapter is a GoF Adapter — the two-axis mapping layer (parser-per
 _Avoid_: thin wrapper, passthrough, shim
 
 ### Durable browser knowledge
-**browser-domain-memory**:
-The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, runbooks, gotchas — and browser capture/distillation plus the three playback modes (prose, runbook, deterministic).
-_Avoid_: domain-memory, browser-capture skill
-
 **Browser capture**:
-The `browser-domain-memory` workflow that turns messy browser-run evidence into durable browser knowledge. It may use raw scratch evidence as source material, but durable output is curated memory, not a trace.
+The Browser Use workflow that turns messy browser-run evidence into Durable Browser Knowledge. It may use raw Scratch Evidence as source material, but durable output is curated knowledge, not a trace.
 _Avoid_: capture everything, raw trace archive, recording, replay capture, capture skill
 
 **Scratch Evidence**:
@@ -89,7 +108,7 @@ Human-readable stable slug for a repeated browser intent, such as `submit-timesh
 _Avoid_: opaque id, URL slug, page slug
 
 **Auth Pointer**:
-A safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, and login context needed for browser auth. It belongs with Durable Browser Knowledge, points to secrets, and never contains secret values. Playback artifacts may reference it and resolve it through `one-password` at runtime.
+A safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, approved origins, optional login paths, and login context needed for browser auth. Origins authorize credential use; paths only rank or disambiguate within an approved origin. Browser Use may create it automatically from one deterministic Vault-scoped discovery match; ambiguity requires human selection. It points to secrets and never contains secret values.
 _Avoid_: password note, secret mapping, auth tape, login recording
 
 **Browser Runbook**:
@@ -122,19 +141,16 @@ A non-obvious domain fact, fork, trap, warning, label mismatch, slow state, or f
 _Avoid_: note, trivia, ordinary noise, raw observation
 
 **Compound browser knowledge**:
-The loop where browser work produces learning evidence, browser capture distills it into durable browser knowledge, and later runs start from `browser-domain-memory` — agentic prose, coded runbook replay, or deterministic Recorder replay. The compounding is curated memory, not blind capture-everything.
+The loop where browser work produces learning evidence, Browser capture distills it into Durable Browser Knowledge, and later Browser Use runs start from that knowledge. The compounding is curated memory, not blind capture-everything.
 _Avoid_: raw record/replay everything, browser automation engine
 
 ## Example Dialogue
 
 Dev: "Should `browser-use` remember the login path it just discovered?"
-Domain expert: "No. `browser-use` drives Chrome. `browser-domain-memory` owns browser capture and durable compound browser knowledge."
+Domain expert: "Yes, through Browser capture. Browser Use owns the resulting Durable Browser Knowledge."
 
-Dev: "Can `browser-domain-memory` open or repair Warm Chrome?"
-Domain expert: "No. It hands back to `browser-use`, which routes connection and repair through `browser-connect`. `browser-domain-memory` consumes the browser environment and owns durable browser knowledge."
-
-Dev: "What does `browser-domain-memory` do when Warm Chrome is missing or wrong?"
-Domain expert: "It makes a Browser Entry Handoff. `browser-use` routes the repair through `browser-connect`, which owns the connection proof and repair paths; browser-domain-memory does not launch or switch adapters itself."
+Dev: "Can Browser capture open or repair Warm Chrome?"
+Domain expert: "No. Browser Use routes connection and repair through `browser-connect`; capture owns knowledge, not browser entry."
 
 Dev: "Is a missing Warm Chrome endpoint from preflight a Browser Entry Handoff?"
 Domain expert: "Yes, when the failure means the Warm Chrome environment is not ready. Stop adapter work and continue through `browser-use` recovery."
@@ -158,7 +174,7 @@ Dev: "Can each adapter decide whether Chrome is ready?"
 Domain expert: "No. `browser-connect` proves the environment before any adapter acts; adapters consume the Verified Handoff Envelope and never find Chrome themselves."
 
 Dev: "Is browser capture a separate skill?"
-Domain expert: "No. Browser capture is a `browser-domain-memory` workflow that distills messy browser-run evidence into curated domain memory."
+Domain expert: "No. Browser capture is a Browser Use workflow that distills messy browser-run evidence into Durable Browser Knowledge."
 
 Dev: "Is the Chrome Recorder-shaped JSON a recording?"
 Domain expert: "Not by itself. Recorder-shaped Scratch Evidence may be retained as source evidence, but only verified Recorder JSON is durable replay material."
@@ -178,8 +194,8 @@ Domain expert: "It may include login choreography and selectors. Secret source d
 Dev: "Can a runbook click through the site next time?"
 Domain expert: "Yes, in Runbook mode. Code reads the Browser Runbook and drives a Browser Adapter step-by-step. Deterministic mode replays Recorder JSON through a Browser Adapter. Prose mode keeps the agent in the loop and uses memory to avoid rediscovery."
 
-Dev: "Can browser-domain-memory choose `agent-browser` or Chrome DevTools MCP directly?"
-Domain expert: "No. It requests a playback mode or browser outcome. `browser-use` owns adapter policy and selection."
+Dev: "Can Browser capture choose `agent-browser` or Chrome DevTools MCP directly?"
+Domain expert: "No. It requests a playback mode or Bounded Browser Outcome. Browser Use owns adapter policy and selection."
 
 Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."

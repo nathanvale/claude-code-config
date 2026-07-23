@@ -15,3 +15,4 @@ When writing or routing information, follow these rules:
 - When unsure which repo owns something, ask — don't default to the current repo.
 - Storage routing owner: `skills/context-advisor/SKILL.md`.
 - Stable user context path: `~/.config/context`.
+- **Runbooks** (repair procedures, login flows, auth walkthroughs) belong in `~/.config/` — not in skills, docs, or project repos.
