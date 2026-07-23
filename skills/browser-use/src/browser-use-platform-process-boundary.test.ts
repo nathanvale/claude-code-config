@@ -1,0 +1,303 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import {
+	fixedClock,
+	makeTempXdgEnv,
+} from "./browser-use-platform-test-helpers";
+import { writeArtifactManifest } from "./browser-use-retention";
+import type { BrowserUseSharedRun } from "./browser-use-run-model";
+import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
+
+// =========================================================================
+// U2 process-boundary proof (ledger V4, AE15): a fresh agent process in a
+// NEUTRAL empty working directory discovers and drives shared runs through
+// JSON alone. The store is seeded through the U2 library seams in-process,
+// then the REAL browser-use CLI entry is spawned with an env carrying ONLY
+// temp XDG roots + HOME — no repo cwd, no inherited environment — and every
+// store-backed command must parse, carry its exactly-one continuation, and
+// project the same durable truth the library wrote. Mirrors
+// browser-connect-process-boundary.test.ts: fakes must match real output
+// shape, so the spawn is the proof, not a captured fixture.
+// =========================================================================
+
+const BROWSER_USE_CLI = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"browser-use.ts",
+);
+const SPAWN_TIMEOUT_MS = 15_000;
+// Bun test deadline sits above the child kill timer so a slow shutdown still
+// has room for child.exited to settle and stdout to drain.
+const TEST_TIMEOUT_MS = SPAWN_TIMEOUT_MS + 10_000;
+
+const xdg = makeTempXdgEnv();
+// The neutral CWD: an empty directory unrelated to the repo or the store.
+const neutralCwd = mkdtempSync(join(tmpdir(), "browser-use-neutral-"));
+mkdirSync(neutralCwd, { recursive: true });
+
+afterAll(() => {
+	xdg.dispose();
+	rmSync(neutralCwd, { recursive: true, force: true });
+});
+
+async function seededDeps(): Promise<RunStoreDeps> {
+	const fs = createDefaultPlatformFs();
+	const opened = await openBrowserUsePaths(fs, xdg.env);
+	if (!opened.ok) throw new Error(`paths refused: ${opened.refusal.code}`);
+	return { fs, paths: opened.paths, clock: fixedClock().now };
+}
+
+const CONTINUATION = {
+	next_action_id: "prepare_auth_binding",
+	summary: "Prepare the credential binding, then resume this run.",
+};
+
+async function seedStore(): Promise<void> {
+	const deps = await seededDeps();
+	const blocked: Omit<BrowserUseSharedRun, "revision"> = {
+		run_id: "run-blocked",
+		state: "awaiting-auth",
+		task_intent: "runbook-execution",
+		environment_profile: { environment: "agent-chrome", profile: "default" },
+		mutation_dispatched: false,
+		artifacts: [],
+		continuation: CONTINUATION,
+	};
+	const dispatched: Omit<BrowserUseSharedRun, "revision"> = {
+		run_id: "run-live",
+		state: "running",
+		task_intent: "runbook-execution",
+		environment_profile: { environment: "agent-chrome", profile: "default" },
+		adapter_id: "chrome-devtools-mcp",
+		mutation_dispatched: true,
+		artifacts: [],
+	};
+	for (const run of [blocked, dispatched]) {
+		const created = await createSharedRun(deps, run);
+		if (!created.ok) throw new Error(`seed create failed: ${created.code}`);
+	}
+	// One present artifact so the listing carries a real row. The content hash
+	// matches the durable bytes (readArtifactStatus verifies it).
+	const bytesPath = join(
+		deps.paths.state.artifactDir("run-blocked"),
+		"art-evidence",
+	);
+	await deps.fs.mkdir(dirname(bytesPath), { recursive: true, mode: 0o700 });
+	await deps.fs.writeFileDurable(bytesPath, "evidence-bytes", 0o600);
+	const manifest = await writeArtifactManifest(deps, {
+		artifact_id: "art-evidence",
+		run_id: "run-blocked",
+		task_intent: "runbook-execution",
+		adapter_id: "chrome-devtools-mcp",
+		adapter_version: "1.0.0",
+		sanitized_target: { origin: "https://example.test" },
+		producer_capability: "snapshot_refs",
+		content_hash: new Bun.CryptoHasher("sha256")
+			.update("evidence-bytes")
+			.digest("hex"),
+		sensitivity: "high",
+		retention: "failure-evidence",
+		outcome_ref: null,
+		created_at_epoch_ms: 1_000,
+		export_receipt: null,
+	});
+	if (!manifest.ok) throw new Error(`seed manifest failed: ${manifest.code}`);
+}
+
+const seeded = seedStore();
+
+async function spawnBrowserUse(
+	args: readonly string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	await seeded;
+	const child = Bun.spawn([process.execPath, BROWSER_USE_CLI, ...args], {
+		cwd: neutralCwd,
+		// ONLY the temp XDG roots + HOME: the neutral process inherits nothing.
+		env: {
+			HOME: xdg.env.HOME,
+			XDG_CONFIG_HOME: xdg.env.XDG_CONFIG_HOME,
+			XDG_DATA_HOME: xdg.env.XDG_DATA_HOME,
+			XDG_STATE_HOME: xdg.env.XDG_STATE_HOME,
+			XDG_CACHE_HOME: xdg.env.XDG_CACHE_HOME,
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const timeout = setTimeout(() => child.kill(), SPAWN_TIMEOUT_MS);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	clearTimeout(timeout);
+	return { exitCode, stdout, stderr };
+}
+
+function parse(stdout: string): Record<string, unknown> {
+	return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE15)", () => {
+	test(
+		"run status lists receipts with each blocked run's continuation",
+		async () => {
+			const result = await spawnBrowserUse(["run", "status", "--json"]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.contract).toBe("browser-use.shared-run");
+			const receipts = data.receipts as Array<Record<string, unknown>>;
+			expect(receipts.map((receipt) => receipt.run_id)).toEqual([
+				"run-blocked",
+				"run-live",
+			]);
+			expect(receipts[0]?.summary).toContain("next: prepare_auth_binding");
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe("inspect_shared_run");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"run status --run projects the seeded run without the auth fragment",
+		async () => {
+			const result = await spawnBrowserUse([
+				"run",
+				"status",
+				"--run",
+				"run-blocked",
+				"--json",
+			]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const run = (envelope.data as Record<string, unknown>).run as Record<
+				string,
+				unknown
+			>;
+			expect(run).toMatchObject({
+				run_id: "run-blocked",
+				revision: 1,
+				state: "awaiting-auth",
+				continuation: CONTINUATION,
+			});
+			expect(result.stdout).not.toContain("auth_fragment");
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe("resume_shared_run");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"run status defaults to the plain operator projection at the boundary",
+		async () => {
+			const result = await spawnBrowserUse(["run", "status"]);
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain(
+				"contract=browser-use.shared-run schema=1",
+			);
+			expect(result.stdout).toContain("run_id=run-blocked");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"run resume re-emits the blocked run plus its exactly-one continuation",
+		async () => {
+			const result = await spawnBrowserUse([
+				"run",
+				"resume",
+				"--run",
+				"run-blocked",
+				"--json",
+			]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.resume).toBe("blocked");
+			expect(data.continuation).toEqual(CONTINUATION);
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe("prepare_auth_binding");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"cancel after possible mutation reports unknown, never rolled back (AE15)",
+		async () => {
+			const result = await spawnBrowserUse([
+				"run",
+				"cancel",
+				"--run",
+				"run-live",
+				"--json",
+			]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect((data.run as Record<string, unknown>).state).toBe("unknown");
+			expect(data.cancellation).toEqual({
+				external_effect: "unknown",
+				rolled_back: false,
+			});
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe("inspect_shared_run");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"artifact list projects the seeded manifest row",
+		async () => {
+			const result = await spawnBrowserUse(["artifact", "list", "--json"]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.artifact_count).toBe(1);
+			const rows = data.artifacts as Array<Record<string, unknown>>;
+			expect(rows[0]).toMatchObject({
+				artifact_id: "art-evidence",
+				run_id: "run-blocked",
+				status: "present",
+				retention: "failure-evidence",
+			});
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe("inspect_shared_run");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"repair status projects roots, the warned runtime fallback, and one next action",
+		async () => {
+			const result = await spawnBrowserUse(["repair", "status", "--json"]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.contract).toBe("browser-use.repair-status");
+			expect(Object.keys(data.roots as Record<string, unknown>).sort()).toEqual(
+				["cache", "config", "data", "runtime", "state"],
+			);
+			// The spawned env carries no XDG_RUNTIME_DIR: the warned fallback is on.
+			expect(data.runtime_fallback).toEqual({
+				active: true,
+				reason: "runtime_dir_unset",
+			});
+			expect(typeof data.next_action).toBe("string");
+			expect(
+				(envelope.continuation as Record<string, unknown>).next_action_id,
+			).toBe(data.next_action);
+		},
+		TEST_TIMEOUT_MS,
+	);
+});

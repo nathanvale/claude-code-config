@@ -1,0 +1,12 @@
+{
+	"record": "run-receipt",
+	"schema_version": "1",
+	"payload": {
+		"run_id": "run-fixture-violation",
+		"revision": 1,
+		"state": "confirmed",
+		"summary": "guard-proving fixture; the guard must flag the key below.",
+		"receipt_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+		"password": "fixture-sentinel-not-a-secret"
+	}
+}

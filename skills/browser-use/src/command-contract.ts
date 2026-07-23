@@ -497,6 +497,34 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"target_state_stale",
 	"target_state_mismatch",
 	"target_state_cross_run",
+	// Platform XDG store + shared-run substrate (platform plan U2).
+	"xdg_root_relative",
+	"xdg_root_unwritable",
+	"xdg_root_symlink_ancestor",
+	"xdg_root_wrong_owner",
+	"xdg_root_permissions_loose",
+	"xdg_root_version_controlled",
+	"store_cross_device",
+	"store_flush_failed",
+	"store_lock_contended",
+	"store_record_conflict",
+	"store_record_corrupt",
+	"store_record_missing",
+	"lease_held",
+	"lease_fencing_stale",
+	"lease_epoch_stale",
+	"lease_expired",
+	"run_not_found",
+	"run_record_invalid",
+	"run_record_corrupt",
+	"run_resume_execution_unavailable",
+	"run_terminal_truth",
+	"retention_collision",
+	"artifact_missing",
+	"artifact_corrupt",
+	"export_destination_unsafe",
+	"export_verify_failed",
+	"epoch_conflict",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -693,6 +721,64 @@ export const browserUseOperationSuccessActions = [
 	},
 ] as const;
 
+// Platform XDG store runtime action ids (platform plan U2). The stable
+// continuation.next_action_id vocabulary the store-backed run/artifact/repair
+// commands emit. repair_xdg_root is the single AE4 refusal continuation;
+// wait_for_lease / refresh_run_revision cover R27 serialization and CAS
+// staleness; supply_run_id / inspect_repair_status / change_export_destination
+// cover the load, corruption, and export refusal classes.
+export const browserUsePlatformStoreFailureActions = [
+	{
+		id: "repair_xdg_root",
+		summary:
+			"Fix the named XDG environment variable, ownership, or permissions, then re-run.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "wait_for_lease",
+		summary:
+			"Wait for the named lease holder to finish or expire, then re-run; repair status shows the holder.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_run_revision",
+		summary: "Re-read the shared run and retry against its current revision.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "supply_run_id",
+		summary:
+			"Pass an existing shared run id via --run; run status lists known runs.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_repair_status",
+		summary:
+			"Run browser-use repair status and follow its next safe repair action.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_export_destination",
+		summary:
+			"Pass an absolute export destination outside every browser-use root.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUsePlatformStoreSuccessActions = [
+	{
+		id: "inspect_shared_run",
+		summary: "Read the shared run projection and follow its continuation.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "resume_shared_run",
+		summary:
+			"Resume the blocked shared run with browser-use run resume --run <id>.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 type BrowserUseAudience = "agent" | "operator";
 type BrowserUseMutation = "check" | "browser";
 type BrowserUseCommandContract = CommandFacadeContract<
@@ -864,6 +950,45 @@ const browserUsePlatformEnvVars = [
 	browserUseCallerEnvVar,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
+// XDG env vars the store-backed platform commands consume (platform plan U2,
+// R7/R11). Declared once; browser-use-paths.ts is the one resolution owner —
+// this table only names the consumed vars for discovery/help.
+const browserUseXdgEnvVars = [
+	{
+		name: "XDG_CONFIG_HOME",
+		description:
+			"Absolute Browser Use config base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_DATA_HOME",
+		description:
+			"Absolute Browser Use data base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_STATE_HOME",
+		description:
+			"Absolute Browser Use run/artifact state base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_CACHE_HOME",
+		description:
+			"Absolute Browser Use cache base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		// "non-secret locks/sockets" is the R11 wording, but the facade's
+		// env-var validator refuses credential-class words in descriptions, so
+		// the sensitivity qualifier lives in the paths module docs instead.
+		name: "XDG_RUNTIME_DIR",
+		description:
+			"Absolute runtime dir for lock and socket files; a private warned state fallback applies when absent.",
+	},
+] as const;
+
+const browserUsePlatformStoreEnvVars = [
+	...browserUsePlatformEnvVars,
+	...browserUseXdgEnvVars,
+] as const satisfies BrowserUseCommandContract["envVars"];
+
 // Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
 // absent the state path is derived deterministically from this base directory
 // and the run id (BROWSER_USE_TARGET_STATE_DIR + run id). Shared by select
@@ -941,6 +1066,16 @@ const browserUseRunFlags = {
 	"--run": {
 		type: "string",
 		description: "Shared Browser Use run id to inspect, resume, or cancel.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// `artifact list --run` narrows the projection to one shared run (platform
+// plan U2, R35 "artifacts, retention").
+const browserUseArtifactFlags = {
+	"--run": {
+		type: "string",
+		description: "Filter artifacts to one shared run id.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -1171,8 +1306,12 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -1191,8 +1330,12 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -1211,8 +1354,12 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -1254,7 +1401,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			script: "browser-use",
 			summary:
 				"List run artifacts with sensitivity, retention class, and outcome references.",
-			usage: ["artifact list [--caller <label>] [--json|--plain]"],
+			usage: ["artifact list [--run <id>] [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
 			mutation: "check",
@@ -1262,9 +1409,13 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseArtifactManifestResultContract,
-			flags: browserUsePlatformFlags,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseArtifactFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"repair-status": {
@@ -1279,8 +1430,12 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseRepairStatusResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},

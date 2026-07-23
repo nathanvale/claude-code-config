@@ -3,6 +3,7 @@ import {
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 } from "./browser-use";
+import { createDefaultPlatformFs } from "./browser-use-paths";
 import type {
 	McporterCommandInput,
 	McporterCommandResult,
@@ -30,6 +31,11 @@ export function makeRuntime(
 		readStdin: async () => "",
 		writeTextFile: async () => {},
 		ensureDirectory: async () => {},
+		// Platform store fs (U2): the REAL fs rooted nowhere — with the empty
+		// env every store-backed command refuses at XDG resolution before any
+		// I/O. Store tests pass explicit temp XDG env + real fs, or the
+		// volatile-overlay fake.
+		platformFs: createDefaultPlatformFs(),
 		...overrides,
 	});
 }

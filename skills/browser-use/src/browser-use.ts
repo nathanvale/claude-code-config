@@ -13,6 +13,8 @@
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
+	type RuntimeActionGuidance,
+	type RuntimeErrorRecoverability,
 	CliUsageError,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
@@ -27,17 +29,29 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_CONNECT_ENVIRONMENT_NAME,
+	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
+	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
+	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
+	BROWSER_USE_TRANSPORT_ADAPTERS,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
+	browserUsePlatformStoreFailureActions,
+	browserUsePlatformStoreSuccessActions,
 } from "./command-contract";
 import {
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
 import {
 	BROWSER_USE_TASK_INTENT_DEFINITIONS,
+	BROWSER_USE_TERMINAL_RUN_STATES,
 	type BrowserUseCallerMetadata,
+	type BrowserUseRunState,
+	type BrowserUseSharedRun,
+	classifyCancellation,
 } from "./browser-use-run-model";
 import {
 	emitWithDiagnostics,
@@ -50,6 +64,7 @@ import {
 	NOT_IMPLEMENTED_EXIT_CODE,
 	RUNTIME_FAILURE_EXIT_CODE,
 	USAGE_EXIT_CODE,
+	actionFor,
 	redactUnsafeText,
 	stringField,
 	truncateText,
@@ -58,6 +73,25 @@ import {
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 } from "./browser-use-runtime";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import {
+	type BrowserUsePathRefusal,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import { listLeases } from "./browser-use-locks";
+import {
+	listPendingTombstones,
+	readArtifactStatus,
+} from "./browser-use-retention";
+import {
+	type RunResumeObservedIdentity,
+	type RunStoreDeps,
+	casUpdateSharedRun,
+	listSharedRunReceipts,
+	loadSharedRun,
+	resumeSharedRun,
+} from "./browser-use-runs";
+import { listOrphanTempFiles } from "./browser-use-store";
 import { runTargetsList } from "./browser-use-discovery";
 import {
 	runTargetsSelect,
@@ -287,6 +321,35 @@ async function executeCommand(input: {
 			caller,
 			durationMs: input.durationMs(),
 		});
+	}
+
+	// Platform store-backed commands (platform plan U2): run/artifact/repair
+	// inspection over the durable XDG substrate. Dry-run keeps its existing
+	// mock envelope below (run resume/cancel already reject --dry-run at the
+	// parser since the flag is undeclared). `runbook list` and `migration
+	// status` stay typed not-implemented shells for U3/U4.
+	if (
+		(parsed.command === "run-status" ||
+			parsed.command === "run-resume" ||
+			parsed.command === "run-cancel" ||
+			parsed.command === "artifact-list" ||
+			parsed.command === "repair-status") &&
+		!parsed.dryRun
+	) {
+		const platformInput: PlatformCommandInput = {
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		};
+		if (parsed.command === "run-status") return runRunStatus(platformInput);
+		if (parsed.command === "run-resume") return runRunResume(platformInput);
+		if (parsed.command === "run-cancel") return runRunCancel(platformInput);
+		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
+		return runRepairStatus(platformInput);
 	}
 
 	if (parsed.family === "operate" && !parsed.dryRun) {
@@ -520,6 +583,731 @@ function emitNotImplemented(input: {
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
 	return NOT_IMPLEMENTED_EXIT_CODE;
+}
+
+// ---------------------------------------------------------------------------
+// Platform store-backed commands (platform plan 2026-07-21-002 U2).
+//
+// The `run status|resume|cancel`, `artifact list`, and `repair status` entries
+// over the durable XDG substrate. Driver-level composition mirroring the
+// task-list precedent: every command opens the store through the ONE path
+// owner (`openBrowserUsePaths`), emits the identical typed XDG refusal on
+// admission failure (AE4), and projects run/artifact/repair truth through the
+// U2 library seams with JSON/plain parity (R35). No run byte is written here
+// outside `casUpdateSharedRun`, and the opaque `auth_fragment` is NEVER
+// emitted by any CLI surface (R6).
+// ---------------------------------------------------------------------------
+
+/** Shared input shape for the U2 store-backed command entries (spec B2). */
+type PlatformCommandInput = {
+	parsed: Extract<ParsedBrowserUseCommand, { kind: "command" }>;
+	runtime: BrowserUseRuntime;
+	stdout: CliWriter;
+	stderr: CliWriter;
+	runId: string;
+	caller: BrowserUseCallerMetadata;
+	durationMs: () => number;
+};
+
+const platformStoreActions = [
+	...browserUsePlatformStoreFailureActions,
+	...browserUsePlatformStoreSuccessActions,
+] as const;
+// Keyed on plain string so the blocked-resume path can probe whether a run's
+// persisted continuation id is a registry action.
+const platformStoreActionById = new Map<
+	string,
+	(typeof platformStoreActions)[number]
+>(platformStoreActions.map((action) => [action.id, action]));
+type PlatformStoreActionId = (typeof platformStoreActions)[number]["id"];
+
+function platformStoreAction(id: PlatformStoreActionId): RuntimeActionGuidance {
+	return actionFor(platformStoreActionById, id, "platform store");
+}
+
+// The observed lane identity the U2 platform can honestly assert at resume
+// time: the pinned Browser Connect schema-2 environment identity plus the one
+// transport-implemented adapter lane. A ready/running run bound to any other
+// lane cannot resume on this platform, so the U1 same-lane gate refuses it
+// truthfully; live observation replaces this static pin in U4.
+const RESUME_OBSERVED_IDENTITY: RunResumeObservedIdentity = {
+	adapter_id: BROWSER_USE_TRANSPORT_ADAPTERS[0],
+	environment_profile: {
+		environment: BROWSER_CONNECT_ENVIRONMENT_NAME,
+		profile: BROWSER_CONNECT_ENVIRONMENT_PROFILE,
+	},
+};
+
+/** Contract schema version every U2 result contract declares (B1 table). */
+const PLATFORM_STORE_SCHEMA_VERSION = "1";
+
+function isTerminalRunState(state: BrowserUseRunState): boolean {
+	return (
+		BROWSER_USE_TERMINAL_RUN_STATES as readonly BrowserUseRunState[]
+	).includes(state);
+}
+
+// The auth_fragment is stored opaque and surfaces only through the auth Port;
+// every other run field is redaction-safe by construction (R6, S20).
+function projectRunForCli(
+	run: BrowserUseSharedRun,
+): Omit<BrowserUseSharedRun, "auth_fragment"> {
+	const { auth_fragment: _fragment, ...projection } = run;
+	return projection;
+}
+
+// One typed failure record per store-backed refusal: code, exit code, and the
+// exactly-one continuation drawn from the U2 action tables (spec D).
+type PlatformStoreFailure = {
+	code: string;
+	message: string;
+	actionId: PlatformStoreActionId;
+	exitCode: number;
+	recoverability: RuntimeErrorRecoverability;
+};
+
+// Map library refusal codes onto exit codes and continuations. Every store
+// state failure fails closed at 20 (the U1 platform exit table); only
+// execution-unavailable reports the runtime-dependency exit 1.
+function platformStoreFailureOf(
+	code: string,
+	message: string,
+): PlatformStoreFailure {
+	switch (code) {
+		case "run_not_found":
+			return {
+				code,
+				message,
+				actionId: "supply_run_id",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			};
+		case "run_revision_stale":
+			return {
+				code,
+				message,
+				actionId: "refresh_run_revision",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "retry",
+			};
+		case "lease_held":
+		case "store_lock_contended":
+			return {
+				code,
+				message,
+				actionId: "wait_for_lease",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "retry",
+			};
+		default:
+			// run_record_corrupt/invalid, lease fencing/epoch/expiry, and every
+			// remaining store fault route through repair status.
+			return {
+				code,
+				message,
+				actionId: "inspect_repair_status",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+	}
+}
+
+function emitPlatformStoreFailure(
+	input: PlatformCommandInput,
+	failure: PlatformStoreFailure,
+): number {
+	const message = redactUnsafeText(failure.message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${failure.code}: ${message} action=${failure.actionId} (run_id=${input.runId})\n`,
+		);
+		return failure.exitCode;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: failure.exitCode,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+			runtime_actions: [platformStoreAction(failure.actionId)],
+			continuation: { next_action_id: failure.actionId },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: failure.code,
+				message,
+				exit_code: failure.exitCode,
+				severity: "error",
+				...retryabilityForRecoverability(failure.recoverability),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return failure.exitCode;
+}
+
+// The AE4 refusal: identical code, message, continuation, and exit code from
+// every store-backed command. The refusal carries its own exactly-one
+// repair_xdg_root continuation from the path owner.
+function emitXdgRefusal(
+	input: PlatformCommandInput,
+	refusal: BrowserUsePathRefusal,
+): number {
+	return emitPlatformStoreFailure(input, {
+		code: refusal.code,
+		message: refusal.message,
+		actionId: refusal.continuation.next_action_id,
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	});
+}
+
+// Open the store through the one XDG path owner. RunStoreDeps is structurally
+// identical to the lease/retention deps, so one deps object feeds every U2
+// library seam.
+async function openPlatformStore(
+	input: PlatformCommandInput,
+): Promise<{ ok: true; deps: RunStoreDeps } | { ok: false; exitCode: number }> {
+	const opened = await openBrowserUsePaths(
+		input.runtime.platformFs,
+		input.runtime.env,
+	);
+	if (!opened.ok) {
+		return { ok: false, exitCode: emitXdgRefusal(input, opened.refusal) };
+	}
+	return {
+		ok: true,
+		deps: {
+			fs: input.runtime.platformFs,
+			paths: opened.paths,
+			clock: input.runtime.now,
+		},
+	};
+}
+
+// Plain projection of one shared run: the SAME fields the JSON envelope
+// carries, as stable key=value lines (the emitTaskIntents pattern, R35).
+function writeRunPlain(
+	stdout: CliWriter,
+	run: Omit<BrowserUseSharedRun, "auth_fragment">,
+): void {
+	stdout.write(
+		[
+			`run_id=${run.run_id}`,
+			`revision=${run.revision}`,
+			`state=${run.state}`,
+			`task_intent=${run.task_intent}`,
+			`environment=${run.environment_profile.environment}`,
+			`profile=${run.environment_profile.profile}`,
+			`adapter=${run.adapter_id ?? "unbound"}`,
+			`mutation_dispatched=${run.mutation_dispatched}`,
+			...(run.auth_attestation !== undefined
+				? [
+						`attestation_digest=${run.auth_attestation.attestation_digest}`,
+						`attestation_fresh_until=${run.auth_attestation.fresh_until_epoch_ms}`,
+					]
+				: []),
+		].join(" ") + "\n",
+	);
+	if (run.continuation !== undefined) {
+		stdout.write(
+			`continuation=${run.continuation.next_action_id} ${run.continuation.summary}\n`,
+		);
+	}
+	for (const artifact of run.artifacts) {
+		stdout.write(
+			`artifact=${artifact.artifact_id} sensitivity=${artifact.sensitivity} retention=${artifact.retention}\n`,
+		);
+	}
+}
+
+function platformPlainHeader(
+	contract: string,
+	caller: BrowserUseCallerMetadata,
+	extra: readonly string[] = [],
+): string {
+	return (
+		[
+			`contract=${contract}`,
+			`schema=${PLATFORM_STORE_SCHEMA_VERSION}`,
+			`caller=${caller.label ?? "none"}`,
+			...extra,
+		].join(" ") + "\n"
+	);
+}
+
+// One shared-run success envelope (status/resume/cancel). The continuation is
+// EXACTLY one: the caller-chosen table action, or — for a blocked resume —
+// the run's own persisted next safe action (the continuation IS the resume
+// answer in U2), projected as the envelope's single runtime action so the
+// facade's continuation/actions pairing holds.
+function emitSharedRunSuccess(input: {
+	command: PlatformCommandInput;
+	run: BrowserUseSharedRun;
+	continuationId: string;
+	dataExtra?: Record<string, unknown>;
+	plainExtra?: readonly string[];
+}): number {
+	const projection = projectRunForCli(input.run);
+	const { command } = input;
+	if (command.parsed.outputMode === "plain") {
+		command.stdout.write(
+			platformPlainHeader(BROWSER_USE_SHARED_RUN_CONTRACT_ID, command.caller, [
+				`action=${input.continuationId}`,
+				...(input.plainExtra ?? []),
+			]),
+		);
+		writeRunPlain(command.stdout, projection);
+		return 0;
+	}
+	// A non-registry id is the run's own persisted next safe action (blocked
+	// resume). Its summary is run-authored prose, so the validated action
+	// guidance carries a fixed pointer while data.continuation carries the
+	// persisted summary verbatim.
+	const action: RuntimeActionGuidance = platformStoreActionById.has(
+		input.continuationId,
+	)
+		? platformStoreAction(input.continuationId as PlatformStoreActionId)
+		: {
+				id: input.continuationId,
+				summary: "Follow the run's persisted next safe action.",
+				side_effects: ["check"],
+			};
+	writeJsonEnvelope(
+		command.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: command.runId,
+			data: {
+				contract: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				run: projection,
+				...(input.dataExtra ?? {}),
+				caller: command.caller,
+			},
+			runtime_actions: [action],
+			continuation: { next_action_id: input.continuationId },
+		}),
+		{ runId: command.runId, durationMs: command.durationMs() },
+	);
+	return 0;
+}
+
+/**
+ * `run status` (R24/R35, AE15 substrate). Without `--run`: the redacted
+ * receipt listing — the "fresh agent discovers all safe next actions"
+ * surface; each blocked run's receipt names its one continuation. With
+ * `--run <id>`: the full shared-run projection under the shared-run contract
+ * (auth readiness reference only; the `auth_fragment` never surfaces).
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunStatus(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const runFlag = stringField(input.parsed.flagValues["--run"]);
+	if (runFlag === undefined) {
+		const receipts = await listSharedRunReceipts(store.deps);
+		if (input.parsed.outputMode === "plain") {
+			input.stdout.write(
+				platformPlainHeader(BROWSER_USE_SHARED_RUN_CONTRACT_ID, input.caller, [
+					"action=inspect_shared_run",
+					`run_count=${receipts.length}`,
+				]),
+			);
+			for (const receipt of receipts) {
+				input.stdout.write(
+					`run_id=${receipt.run_id} revision=${receipt.revision} state=${receipt.state} receipt_digest=${receipt.receipt_digest} ${receipt.summary}\n`,
+				);
+			}
+			return 0;
+		}
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope({
+				run_id: input.runId,
+				data: {
+					contract: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+					schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+					run_count: receipts.length,
+					receipts,
+					caller: input.caller,
+				},
+				runtime_actions: [platformStoreAction("inspect_shared_run")],
+				continuation: { next_action_id: "inspect_shared_run" },
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return 0;
+	}
+	const loaded = await loadSharedRun(store.deps, runFlag);
+	if (!loaded.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(loaded.code, loaded.message),
+		);
+	}
+	// A blocked run's next safe action is resuming it; anything else is
+	// inspection truth.
+	const continuationId =
+		loaded.run.continuation !== undefined && !isTerminalRunState(loaded.run.state)
+			? "resume_shared_run"
+			: "inspect_shared_run";
+	return emitSharedRunSuccess({
+		command: input,
+		run: loaded.run,
+		continuationId,
+	});
+}
+
+/**
+ * `run resume` (R28/R36, AE7/AE15 substrate). Blocked: re-emits the run plus
+ * its exactly-one persisted continuation (state unchanged — the continuation
+ * IS the resume answer in U2). Ready/running: the U1 same-lane gate runs
+ * against the pinned observed identity, then live execution reports typed
+ * unavailability (exit 1; lanes land in U4). Terminal truth never re-enters
+ * execution (exit 20).
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunResume(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const runFlag = stringField(input.parsed.flagValues["--run"]) ?? "";
+	const projection = await resumeSharedRun(store.deps, {
+		runId: runFlag,
+		observed: RESUME_OBSERVED_IDENTITY,
+	});
+	switch (projection.kind) {
+		case "blocked":
+			return emitSharedRunSuccess({
+				command: input,
+				run: projection.run,
+				continuationId: projection.continuation.next_action_id,
+				dataExtra: {
+					resume: "blocked",
+					continuation: projection.continuation,
+				},
+				plainExtra: ["resume=blocked"],
+			});
+		case "execution-unavailable":
+			return emitPlatformStoreFailure(input, {
+				code: "run_resume_execution_unavailable",
+				message: `run ${projection.run.run_id} is ${projection.run.state}; persistence and resume are proven, live lane execution is not implemented yet.`,
+				actionId: "inspect_shared_run",
+				exitCode: RUNTIME_FAILURE_EXIT_CODE,
+				recoverability: "none",
+			});
+		case "lane-mismatch":
+			return emitPlatformStoreFailure(input, {
+				code: projection.refusal.code,
+				message: projection.refusal.message,
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		case "terminal":
+			return emitPlatformStoreFailure(input, {
+				code: "run_terminal_truth",
+				message: `run ${projection.run.run_id} holds terminal truth ${projection.run.state}; terminal truth never re-enters execution.`,
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		case "load-failed":
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					projection.failure.code,
+					projection.failure.message,
+				),
+			);
+	}
+}
+
+/**
+ * `run cancel` (R37, AE15). Terminal-truth mapping through the U1 classifier:
+ * external effect `none` -> terminal `not-achieved`, `unknown` -> terminal
+ * `unknown`; `rolled_back` is ALWAYS the literal false. Cancelling an
+ * already-terminal run is an idempotent projection of the standing truth —
+ * no write, no revision bump.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunCancel(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const runFlag = stringField(input.parsed.flagValues["--run"]) ?? "";
+	const loaded = await loadSharedRun(store.deps, runFlag);
+	if (!loaded.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(loaded.code, loaded.message),
+		);
+	}
+	const report = classifyCancellation(loaded.run);
+	const cancellationExtra = {
+		dataExtra: { cancellation: report },
+		plainExtra: [
+			`external_effect=${report.external_effect}`,
+			`rolled_back=${report.rolled_back}`,
+		],
+	};
+	if (isTerminalRunState(loaded.run.state)) {
+		return emitSharedRunSuccess({
+			command: input,
+			run: loaded.run,
+			continuationId: "inspect_shared_run",
+			...cancellationExtra,
+		});
+	}
+	const targetState: BrowserUseRunState =
+		report.external_effect === "none" ? "not-achieved" : "unknown";
+	const updated = await casUpdateSharedRun(store.deps, {
+		runId: runFlag,
+		expectedRevision: loaded.run.revision,
+		mutate: (run) => {
+			// Terminal truth carries no blocked-state continuation; everything
+			// else (artifacts, attestation reference, dispatch truth) survives.
+			const { continuation: _continuation, ...rest } = run;
+			return { ...rest, state: targetState };
+		},
+	});
+	if (!updated.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(updated.code, updated.message),
+		);
+	}
+	return emitSharedRunSuccess({
+		command: input,
+		run: updated.run,
+		continuationId: "inspect_shared_run",
+		...cancellationExtra,
+	});
+}
+
+// Artifact metadata record suffixes (the retention naming contract; path
+// construction stays owned by browser-use-retention's helpers).
+const ARTIFACT_MANIFEST_SUFFIX = ".manifest.json";
+const ARTIFACT_TOMBSTONE_SUFFIX = ".tombstone.json";
+
+// One artifact listing row: the four-way R29 truth plus its redacted
+// retention facts. Deleted rows appear WITH their tombstone classification
+// (AE14 substrate); corrupt rows carry the redacted message only.
+async function artifactRowsForRun(
+	deps: RunStoreDeps,
+	runId: string,
+): Promise<Record<string, unknown>[]> {
+	const runDir = deps.paths.state.artifactDir(runId);
+	const dirStat = await deps.fs.lstat(runDir);
+	if (dirStat === undefined || dirStat.kind !== "directory") return [];
+	const artifactIds = new Set<string>();
+	for (const entry of await deps.fs.readDirectory(runDir)) {
+		if (entry.endsWith(ARTIFACT_MANIFEST_SUFFIX)) {
+			artifactIds.add(entry.slice(0, -ARTIFACT_MANIFEST_SUFFIX.length));
+		} else if (entry.endsWith(ARTIFACT_TOMBSTONE_SUFFIX)) {
+			artifactIds.add(entry.slice(0, -ARTIFACT_TOMBSTONE_SUFFIX.length));
+		}
+	}
+	const rows: Record<string, unknown>[] = [];
+	for (const artifactId of [...artifactIds].sort()) {
+		const status = await readArtifactStatus(deps, { runId, artifactId });
+		if (status.status === "missing") continue;
+		if (status.status === "present") {
+			rows.push({
+				artifact_id: artifactId,
+				run_id: runId,
+				status: "present",
+				sensitivity: status.manifest.sensitivity,
+				retention: status.manifest.retention,
+				content_hash: status.manifest.content_hash,
+				outcome_ref: status.manifest.outcome_ref,
+				exported: status.manifest.export_receipt !== null,
+			});
+			continue;
+		}
+		if (status.status === "deleted") {
+			rows.push({
+				artifact_id: artifactId,
+				run_id: runId,
+				status: "deleted",
+				retention: status.tombstone.retention,
+				reason: status.tombstone.reason,
+				phase: status.tombstone.phase,
+				deleted_at_epoch_ms: status.tombstone.deleted_at_epoch_ms,
+			});
+			continue;
+		}
+		rows.push({
+			artifact_id: artifactId,
+			run_id: runId,
+			status: "corrupt",
+			message: status.message,
+		});
+	}
+	return rows;
+}
+
+/**
+ * `artifact list [--run <id>]` (R29/R35, AE14 substrate). Projects manifests
+ * AND tombstones so deleted artifacts stay distinguishable from missing ones;
+ * `--run` narrows to one shared run.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runArtifactList(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const runFilter = stringField(input.parsed.flagValues["--run"]);
+	let runIds: string[];
+	if (runFilter !== undefined) {
+		try {
+			store.deps.paths.state.artifactDir(runFilter);
+		} catch {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					"run_not_found",
+					"the --run filter is not a safe run id segment.",
+				),
+			);
+		}
+		runIds = [runFilter];
+	} else {
+		const artifactsDir = store.deps.paths.state.artifactsDir;
+		const dirStat = await store.deps.fs.lstat(artifactsDir);
+		runIds =
+			dirStat !== undefined && dirStat.kind === "directory"
+				? [...(await store.deps.fs.readDirectory(artifactsDir))].sort()
+				: [];
+	}
+	const rows: Record<string, unknown>[] = [];
+	for (const runId of runIds) {
+		rows.push(...(await artifactRowsForRun(store.deps, runId)));
+	}
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID, input.caller, [
+				"action=inspect_shared_run",
+				...(runFilter !== undefined ? [`run=${runFilter}`] : []),
+				`artifact_count=${rows.length}`,
+			]),
+		);
+		for (const row of rows) {
+			input.stdout.write(
+				Object.entries(row)
+					.map(([key, value]) => `${key}=${value}`)
+					.join(" ") + "\n",
+			);
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				...(runFilter !== undefined ? { run: runFilter } : {}),
+				artifact_count: rows.length,
+				artifacts: rows,
+				caller: input.caller,
+			},
+			runtime_actions: [platformStoreAction("inspect_shared_run")],
+			continuation: { next_action_id: "inspect_shared_run" },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+/**
+ * `repair status` (R27/R35). Projects the admitted roots, the runtime
+ * fallback flag, every durable lease with its liveness classification,
+ * orphan temp files, and pending tombstones — plus EXACTLY one next safe
+ * action: a live lease -> wait_for_lease; pending tombstones -> rerun
+ * deletion via inspect_repair_status; else the healthy inspect_shared_run.
+ * Success data shows the operator's own admitted root paths (they are the
+ * repair surface); error envelopes never echo paths.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRepairStatus(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const { deps } = store;
+	const leases = await listLeases(deps);
+	const orphans = await listOrphanTempFiles(
+		deps.fs,
+		deps.paths.resolution.roots.state,
+	);
+	const tombstones = await listPendingTombstones(deps);
+	const nextActionId: PlatformStoreActionId = leases.some((lease) => lease.live)
+		? "wait_for_lease"
+		: tombstones.length > 0
+			? "inspect_repair_status"
+			: "inspect_shared_run";
+	const { roots } = deps.paths.resolution;
+	const runtimeFallback = deps.paths.resolution.runtime_fallback;
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_REPAIR_STATUS_CONTRACT_ID, input.caller, [
+				`action=${nextActionId}`,
+			]),
+		);
+		for (const [kind, root] of Object.entries(roots)) {
+			input.stdout.write(`root_${kind}=${root}\n`);
+		}
+		input.stdout.write(
+			`runtime_fallback=${runtimeFallback.active}${runtimeFallback.reason !== undefined ? ` reason=${runtimeFallback.reason}` : ""}\n`,
+		);
+		for (const lease of leases) {
+			input.stdout.write(
+				`lease=${JSON.stringify(lease.key)} holder=${lease.holder_id} fencing_token=${lease.fencing_token} activation_epoch=${lease.activation_epoch} heartbeat_at=${lease.heartbeat_at_epoch_ms} expires_at=${lease.expires_at_epoch_ms} live=${lease.live} recovered_from=${lease.recovered_from === null ? "none" : lease.recovered_from.holder_id}\n`,
+			);
+		}
+		for (const orphan of orphans) {
+			input.stdout.write(`orphan_temp_file=${orphan}\n`);
+		}
+		for (const tombstone of tombstones) {
+			input.stdout.write(
+				`pending_tombstone=${tombstone.artifact_id} run=${tombstone.run_id} reason=${tombstone.reason}\n`,
+			);
+		}
+		input.stdout.write(`next_action=${nextActionId}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				roots,
+				runtime_fallback: runtimeFallback,
+				leases,
+				orphan_temp_files: orphans,
+				pending_tombstones: tombstones,
+				next_action: nextActionId,
+				caller: input.caller,
+			},
+			runtime_actions: [platformStoreAction(nextActionId)],
+			continuation: { next_action_id: nextActionId },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
 }
 
 // ---------------------------------------------------------------------------

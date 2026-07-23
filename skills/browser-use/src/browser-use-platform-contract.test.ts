@@ -80,14 +80,32 @@ describe("platform family help and discovery", () => {
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 		} as const;
+		// Store-backed commands (platform plan U2) additionally declare the XDG
+		// env vars the one path owner consumes; the pure/shell commands keep the
+		// U1 pair only.
+		const PLATFORM_ENV_VARS = ["BROWSER_USE_RUN_ID", "BROWSER_USE_CALLER"];
+		const STORE_ENV_VARS = [
+			...PLATFORM_ENV_VARS,
+			"XDG_CONFIG_HOME",
+			"XDG_DATA_HOME",
+			"XDG_STATE_HOME",
+			"XDG_CACHE_HOME",
+			"XDG_RUNTIME_DIR",
+		];
+		const STORE_BACKED = new Set([
+			"run-status",
+			"run-resume",
+			"run-cancel",
+			"artifact-list",
+			"repair-status",
+		]);
 		for (const [command, contractId] of Object.entries(expectedContractIds)) {
 			const discovered = tree.commands[command];
 			expect(discovered?.result_contract?.id).toBe(contractId);
 			expect(discovered?.result_contract?.schema_version).toBe("1");
-			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual([
-				"BROWSER_USE_RUN_ID",
-				"BROWSER_USE_CALLER",
-			]);
+			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
+				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,
+			);
 		}
 	});
 });
@@ -135,14 +153,12 @@ describe("task list — live Task Intent projection", () => {
 });
 
 describe("platform shells fail closed as typed not-implemented", () => {
+	// U2 made run status/resume/cancel, artifact list, and repair status live
+	// over the XDG store (their scenarios live in browser-use-run-commands
+	// .test.ts); only the U3/U4 shells remain not-implemented.
 	const SHELL_ARGV: readonly (readonly string[])[] = [
-		["run", "status", "--json"],
-		["run", "resume", "--run", "run-1", "--json"],
-		["run", "cancel", "--run", "run-1", "--json"],
 		["runbook", "list", "--json"],
 		["migration", "status", "--json"],
-		["artifact", "list", "--json"],
-		["repair", "status", "--json"],
 	];
 
 	for (const argv of SHELL_ARGV) {
@@ -170,23 +186,30 @@ describe("platform shells fail closed as typed not-implemented", () => {
 	});
 
 	test("run status defaults to the plain operator projection", async () => {
+		// makeRuntime's empty env has no HOME, so the store-backed command
+		// refuses at XDG resolution — in plain operator mode the typed failure
+		// goes to stderr, never a JSON envelope on stdout (AE4 posture).
 		const result = await runForTest(["run", "status"], makeRuntime());
-		expect(result.exitCode).toBe(1);
-		// Plain mode writes the typed failure to stderr, not a JSON envelope.
+		expect(result.exitCode).toBe(20);
 		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("browser_use_not_implemented");
+		expect(result.stderr).toContain("xdg_root_relative");
+		expect(result.stderr).toContain("action=repair_xdg_root");
 	});
 });
 
 describe("caller metadata is audit-only and never authority (R35)", () => {
 	const CALLERS = ["claude-code", "codex", "launchd", undefined] as const;
 
+	// The probe command is `runbook list` (still a U3 shell) so the parity
+	// proof stays deterministic without a store; the live store-backed parity
+	// case (C ledger: run status against a temp store) lives in
+	// browser-use-run-commands.test.ts.
 	test("identical requests produce identical semantics across callers", async () => {
 		// Pin the run id so the whole envelope is deterministic: after removing
 		// the audit echo, every caller must produce a byte-identical result.
 		const envelopes: Array<Record<string, unknown>> = [];
 		for (const caller of CALLERS) {
-			const argv = ["run", "resume", "--run", "run-1", "--json"];
+			const argv = ["runbook", "list", "--json"];
 			if (caller !== undefined) argv.push("--caller", caller);
 			const result = await runForTest(
 				argv,
@@ -209,7 +232,7 @@ describe("caller metadata is audit-only and never authority (R35)", () => {
 
 	test("BROWSER_USE_CALLER env supplies the audit label when the flag is absent", async () => {
 		const result = await runForTest(
-			["run", "status", "--json"],
+			["runbook", "list", "--json"],
 			makeRuntime({ env: { BROWSER_USE_CALLER: "codex" } }),
 		);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
@@ -218,7 +241,7 @@ describe("caller metadata is audit-only and never authority (R35)", () => {
 
 	test("--caller wins over the env var", async () => {
 		const result = await runForTest(
-			["run", "status", "--caller", "launchd", "--json"],
+			["runbook", "list", "--caller", "launchd", "--json"],
 			makeRuntime({ env: { BROWSER_USE_CALLER: "codex" } }),
 		);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
@@ -227,8 +250,11 @@ describe("caller metadata is audit-only and never authority (R35)", () => {
 
 	test("a spoofed privileged-sounding caller changes nothing on existing surfaces", async () => {
 		// targets status does not read caller metadata at all: with the run id
-		// pinned, byte-identical output with and without a spoofed caller env
-		// proves spoofing grants no authority and changes no schema.
+		// pinned, identical output with and without a spoofed caller env proves
+		// spoofing grants no authority and changes no schema. duration_ms is
+		// dropped before comparing: it derives from the real wall-clock
+		// startedAtMs, so a millisecond tick between the two invocations would
+		// otherwise flake a test about authority, not timing.
 		const spoofed = await runForTest(
 			["targets", "status", "--json"],
 			makeRuntime({
@@ -240,13 +266,19 @@ describe("caller metadata is audit-only and never authority (R35)", () => {
 			makeRuntime({ env: { BROWSER_USE_RUN_ID: "spoof-run" } }),
 		);
 		expect(spoofed.exitCode).toBe(plainRun.exitCode);
-		expect(spoofed.stdout).toBe(plainRun.stdout);
+		const { duration_ms: _spoofedDuration, ...spoofedEnvelope } = parseJson(
+			spoofed.stdout,
+		);
+		const { duration_ms: _plainDuration, ...plainEnvelope } = parseJson(
+			plainRun.stdout,
+		);
+		expect(spoofedEnvelope).toEqual(plainEnvelope);
 		expect(spoofed.stderr).toBe(plainRun.stderr);
 	});
 
 	test("a caller label passes the redaction gate before it is echoed", async () => {
 		const result = await runForTest(
-			["run", "status", "--caller", "op://vault/item", "--json"],
+			["runbook", "list", "--caller", "op://vault/item", "--json"],
 			makeRuntime(),
 		);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
