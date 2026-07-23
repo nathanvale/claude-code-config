@@ -75,6 +75,8 @@ final class DeliveryService: NSObject, DeliveryServiceProtocol {
 		var result: [String: Any] = [
 			"scenario": scenario,
 			"xpc_connected": true,
+			"descriptor_transport": "xpc",
+			"sandbox_enforced": true,
 			"secret_pipe_transferred": true,
 			"browser_descriptor_transferred": true,
 			"new_network_denied": newNetworkIsDenied(port: networkPort),
@@ -159,8 +161,47 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
 	}
 }
 
-let listener = NSXPCListener.service()
-let delegate = ListenerDelegate()
-listener.delegate = delegate
-listener.resume()
-RunLoop.current.run()
+if CommandLine.arguments.count == 6,
+	CommandLine.arguments[1] == "--inherited-probe"
+{
+	let scenario = CommandLine.arguments[2]
+	let expectedOrigin = CommandLine.arguments[3]
+	let unrelatedPath = CommandLine.arguments[4]
+	let networkPort = Int32(CommandLine.arguments[5]) ?? 0
+	let completion = DispatchSemaphore(value: 0)
+	var response: [String: Any] = [:]
+	DeliveryService().probe(
+		[
+			"scenario": scenario,
+			"expected_origin": expectedOrigin,
+			"unrelated_path": unrelatedPath,
+			"network_port": networkPort,
+		] as NSDictionary,
+		secretPipe: FileHandle(fileDescriptor: 4, closeOnDealloc: true),
+		browserChannel: FileHandle(fileDescriptor: 3, closeOnDealloc: true),
+		writeAhead: FileHandle(fileDescriptor: 5, closeOnDealloc: true)
+	) { value in
+		response = value as? [String: Any] ?? [:]
+		completion.signal()
+	}
+	_ = completion.wait(timeout: .now() + 10)
+	response["xpc_connected"] = false
+	response["descriptor_transport"] = "inherited-fd"
+	// A plain posix_spawn'd child is NOT under an initialized App Sandbox
+	// container, so its network/file denial fields are incidental process
+	// behavior, not OS-enforced containment. Mark them unenforced so no
+	// downstream evidence launders them into a containment pass.
+	response["sandbox_enforced"] = false
+	let output = try JSONSerialization.data(
+		withJSONObject: response,
+		options: [.sortedKeys]
+	)
+	FileHandle.standardOutput.write(output)
+	FileHandle.standardOutput.write(Data([0x0a]))
+} else {
+	let listener = NSXPCListener.service()
+	let delegate = ListenerDelegate()
+	listener.delegate = delegate
+	listener.resume()
+	RunLoop.current.run()
+}

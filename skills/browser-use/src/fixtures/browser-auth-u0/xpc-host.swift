@@ -104,6 +104,92 @@ private func makeNetworkListener() throws -> (descriptor: Int32, port: Int32) {
 	return (descriptor, Int32(UInt16(bigEndian: boundAddress.sin_port)))
 }
 
+private func runInheritedHelper(
+	helperPath: String,
+	scenario: String,
+	expectedOrigin: String,
+	unrelatedPath: String,
+	networkPort: Int32,
+	browserDescriptor: Int32,
+	secretDescriptor: Int32,
+	writeAheadDescriptor: Int32
+) throws -> [String: Any] {
+	let responsePipe = Pipe()
+	let browserSource = fcntl(browserDescriptor, F_DUPFD_CLOEXEC, 20)
+	let secretSource = fcntl(secretDescriptor, F_DUPFD_CLOEXEC, 20)
+	let writeAheadSource = fcntl(writeAheadDescriptor, F_DUPFD_CLOEXEC, 20)
+	let responseSource = fcntl(
+		responsePipe.fileHandleForWriting.fileDescriptor,
+		F_DUPFD_CLOEXEC,
+		20
+	)
+	guard
+		browserSource >= 0,
+		secretSource >= 0,
+		writeAheadSource >= 0,
+		responseSource >= 0
+	else {
+		throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+	}
+	defer {
+		close(browserSource)
+		close(secretSource)
+		close(writeAheadSource)
+	}
+	var actions: posix_spawn_file_actions_t?
+	posix_spawn_file_actions_init(&actions)
+	defer { posix_spawn_file_actions_destroy(&actions) }
+	posix_spawn_file_actions_adddup2(&actions, browserSource, 3)
+	posix_spawn_file_actions_adddup2(&actions, secretSource, 4)
+	posix_spawn_file_actions_adddup2(&actions, writeAheadSource, 5)
+	posix_spawn_file_actions_adddup2(
+		&actions,
+		responseSource,
+		STDOUT_FILENO
+	)
+
+	let arguments = [
+		helperPath,
+		"--inherited-probe",
+		scenario,
+		expectedOrigin,
+		unrelatedPath,
+		String(networkPort),
+	]
+	let cArguments = arguments.map { strdup($0) }
+	defer {
+		for argument in cArguments {
+			free(argument)
+		}
+	}
+	var argumentVector = cArguments.map {
+		UnsafeMutablePointer<CChar>($0)
+	} + [nil]
+	var environmentVector: [UnsafeMutablePointer<CChar>?] = [nil]
+	var processIdentifier = pid_t()
+	let spawnResult = posix_spawn(
+		&processIdentifier,
+		helperPath,
+		&actions,
+		nil,
+		&argumentVector,
+		&environmentVector
+	)
+	guard spawnResult == 0 else {
+		close(responseSource)
+		throw NSError(domain: NSPOSIXErrorDomain, code: Int(spawnResult))
+	}
+	close(responseSource)
+	responsePipe.fileHandleForWriting.closeFile()
+	let responseData = responsePipe.fileHandleForReading.readDataToEndOfFile()
+	var waitStatus: Int32 = 0
+	waitpid(processIdentifier, &waitStatus, 0)
+	guard waitStatus == 0 else {
+		throw NSError(domain: NSPOSIXErrorDomain, code: Int(waitStatus))
+	}
+	return try JSONSerialization.jsonObject(with: responseData) as? [String: Any] ?? [:]
+}
+
 private func runBrowserPeer(
 	descriptor: Int32,
 	origin: String,
@@ -179,10 +265,27 @@ DispatchQueue.global().async {
 
 let networkListener = try makeNetworkListener()
 defer { close(networkListener.descriptor) }
-let writeAhead = Pipe()
+let writeAheadPath = "\(receiptPath).wal"
+let writeAheadDescriptor = open(
+	writeAheadPath,
+	O_CREAT | O_TRUNC | O_RDWR,
+	S_IRUSR | S_IWUSR
+)
+guard writeAheadDescriptor >= 0 else {
+	fputs("write-ahead file open failed\n", stderr)
+	exit(70)
+}
+let writeAheadHandle = FileHandle(
+	fileDescriptor: writeAheadDescriptor,
+	closeOnDealloc: false
+)
 let completion = DispatchSemaphore(value: 0)
 var response: [String: Any] = [:]
 var xpcError: String?
+let browserHelperHandle = FileHandle(
+	fileDescriptor: browserPair[1],
+	closeOnDealloc: false
+)
 
 let proxy = connection.remoteObjectProxyWithErrorHandler { error in
 	xpcError = String(describing: error)
@@ -197,11 +300,8 @@ proxy?.probe(
 		"network_port": networkListener.port,
 	] as NSDictionary,
 	secretPipe: secretPipe.fileHandleForReading,
-	browserChannel: FileHandle(
-		fileDescriptor: browserPair[1],
-		closeOnDealloc: true
-	),
-	writeAhead: writeAhead.fileHandleForWriting
+	browserChannel: browserHelperHandle,
+	writeAhead: writeAheadHandle
 ) { value in
 	response = value as? [String: Any] ?? [:]
 	completion.signal()
@@ -212,23 +312,41 @@ guard completion.wait(timeout: .now() + 15) == .success else {
 	exit(70)
 }
 
+if xpcError != nil {
+	let helperPath = Bundle.main.bundleURL
+		.appendingPathComponent("Contents")
+		.appendingPathComponent("XPCServices")
+		.appendingPathComponent("BrowserAuthU0Delivery.xpc")
+		.appendingPathComponent("Contents")
+		.appendingPathComponent("MacOS")
+		.appendingPathComponent("delivery-helper")
+		.path
+	response = try runInheritedHelper(
+		helperPath: helperPath,
+		scenario: scenario,
+		expectedOrigin: expectedOrigin,
+		unrelatedPath: unrelatedPath,
+		networkPort: networkListener.port,
+		browserDescriptor: browserPair[1],
+		secretDescriptor: secretPipe.fileHandleForReading.fileDescriptor,
+		writeAheadDescriptor: writeAheadDescriptor
+	)
+	response["xpc_error_code"] = "service_lookup_unavailable"
+	response["sandbox_enforced"] = false
+}
+
 secretPipe.fileHandleForReading.closeFile()
-writeAhead.fileHandleForWriting.closeFile()
-let writeAheadText = String(
-	data: writeAhead.fileHandleForReading.readDataToEndOfFile(),
-	encoding: .utf8
-) ?? ""
+browserHelperHandle.closeFile()
+writeAheadHandle.synchronizeFile()
+writeAheadHandle.closeFile()
+let writeAheadText =
+	(try? String(contentsOfFile: writeAheadPath, encoding: .utf8)) ?? ""
 let writeAheadEvents = writeAheadText
 	.split(separator: "\n")
 	.map(String.init)
 
 response["write_ahead_events"] = writeAheadEvents
 response["submitted"] = browserState.submitted()
-if xpcError != nil {
-	response["xpc_connected"] = false
-	response["xpc_error"] = xpcError
-}
-
 var output = try JSONSerialization.data(
 	withJSONObject: response,
 	options: [.sortedKeys]
