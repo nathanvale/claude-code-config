@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { advanceActivationEpoch, readActivationEpoch } from "./browser-use-locks";
 import { openBrowserUsePaths } from "./browser-use-paths";
 import {
@@ -190,6 +190,30 @@ describe("writeArtifactManifest immutable write (R29)", () => {
 		).toBe(encodeDurableRecord("artifact-manifest", manifest));
 	});
 
+	test("a tombstone permanently blocks manifest recreation", async () => {
+		const { deps } = await makeWorld();
+		await deps.fs.mkdir(deps.paths.state.artifactDir("run-1"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await deps.fs.writeFileDurable(
+			artifactTombstonePath(deps.paths, "run-1", "artifact-1"),
+			encodeDurableRecord("tombstone", {
+				artifact_id: "artifact-1",
+				run_id: "run-1",
+				retention: "failure-evidence",
+				reason: "explicit-delete",
+				phase: "complete",
+				deleted_at_epoch_ms: 3_000,
+			}),
+			0o600,
+		);
+		expect(await writeArtifactManifest(deps, makeManifest())).toMatchObject({
+			ok: false,
+			code: "retention_collision",
+		});
+	});
+
 	test("unsafe artifact ids are a TypeError caller bug, including reserved metadata suffixes", async () => {
 		const { deps } = await makeWorld();
 		expect(() => artifactBytesPath(deps.paths, "run-1", "../evil")).toThrow(TypeError);
@@ -198,7 +222,33 @@ describe("writeArtifactManifest immutable write (R29)", () => {
 		).toThrow(TypeError);
 		expect(() =>
 			artifactTombstonePath(deps.paths, "run-1", "x.tombstone.json"),
-		).toThrow(TypeError);
+			).toThrow(TypeError);
+		});
+
+	test("raw target details and secret-shaped manifest fields are refused before persistence", async () => {
+		const { deps } = await makeWorld();
+		for (const manifest of [
+			makeManifest({
+				artifact_id: "raw-target",
+				sanitized_target: {
+					origin: "https://example.test/private?account=7",
+					path_shape: "/private",
+				},
+			}),
+			makeManifest({
+				artifact_id: "secret-shaped",
+				producer_capability: "op://vault/item/field",
+			}),
+		]) {
+			const result = await writeArtifactManifest(deps, manifest);
+			expect(result).toMatchObject({ ok: false, code: "artifact_corrupt" });
+			expect(
+				await readDurableFile(
+					deps.fs,
+					artifactManifestPath(deps.paths, manifest.run_id, manifest.artifact_id),
+				),
+			).toEqual({ status: "missing" });
+		}
 	});
 });
 
@@ -266,6 +316,76 @@ describe("readArtifactStatus four-way truth (R29; S17)", () => {
 		expect(corrupt.status).toBe("corrupt");
 		if (corrupt.status !== "corrupt") throw new Error("unreachable");
 		expect(corrupt.message).toContain("do not match");
+	});
+
+	test("a manifest whose payload identity disagrees with its path is corrupt", async () => {
+		const { deps } = await makeWorld();
+		const path = artifactManifestPath(deps.paths, "run-path", "artifact-path");
+		await deps.fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+		await deps.fs.writeFileDurable(
+			path,
+			encodeDurableRecord(
+				"artifact-manifest",
+				makeManifest({
+					run_id: "run-other",
+					artifact_id: "artifact-other",
+					content_hash: sha256Hex("bytes"),
+				}),
+			),
+			0o600,
+		);
+		await deps.fs.writeFileDurable(
+			artifactBytesPath(deps.paths, "run-path", "artifact-path"),
+			"bytes",
+			0o600,
+		);
+		expect(
+			await readArtifactStatus(deps, {
+				runId: "run-path",
+				artifactId: "artifact-path",
+			}),
+		).toMatchObject({ status: "corrupt" });
+		expect(
+			await deleteArtifact(deps, {
+				runId: "run-path",
+				artifactId: "artifact-path",
+				reason: "explicit-delete",
+			}),
+		).toMatchObject({ ok: false, code: "artifact_corrupt" });
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		expect(
+			await exportArtifact(deps, {
+				runId: "run-path",
+				artifactId: "artifact-path",
+				destinationPath: "/exports/mismatch.har",
+			}),
+		).toMatchObject({ ok: false, code: "artifact_corrupt" });
+	});
+
+	test("a pending tombstone whose payload identity disagrees with its path is not repairable", async () => {
+		const { deps } = await makeWorld();
+		const path = artifactTombstonePath(deps.paths, "run-path", "artifact-path");
+		await deps.fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+		await deps.fs.writeFileDurable(
+			path,
+			encodeDurableRecord("tombstone", {
+				artifact_id: "artifact-other",
+				run_id: "run-other",
+				retention: "ephemeral",
+				reason: "retention-expiry",
+				phase: "pending",
+				deleted_at_epoch_ms: 1_000,
+			}),
+			0o600,
+		);
+		expect(await listPendingTombstones(deps)).toEqual([]);
+		expect(
+			await deleteArtifact(deps, {
+				runId: "run-path",
+				artifactId: "artifact-path",
+				reason: "retention-expiry",
+			}),
+		).toMatchObject({ ok: false, code: "artifact_corrupt" });
 	});
 
 	test("a pending tombstone already reads deleted — deletion intent is truth", async () => {
@@ -664,6 +784,200 @@ describe("exportArtifact ownership transfer (R29; S18)", () => {
 		).toBe("present");
 	});
 
+	test("the committed export destination survives a simulated power loss", async () => {
+		const { overlay, deps } = await makeWorld();
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		await seedArtifact(deps, {
+			runId: "run-durable-export",
+			artifactId: "artifact-durable-export",
+			contents: "durable export\n",
+			retention: "failure-evidence",
+		});
+		const result = await exportArtifact(deps, {
+			runId: "run-durable-export",
+			artifactId: "artifact-durable-export",
+			destinationPath: "/exports/durable.har",
+		});
+		expect(result.ok).toBe(true);
+		overlay.crash();
+		expect(await deps.fs.readTextFile("/exports/durable.har")).toBe(
+			"durable export\n",
+		);
+	});
+
+	test("a post-rename manifest sync failure retries without deleting the export", async () => {
+		const { deps } = await makeWorld();
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		await seedArtifact(deps, {
+			runId: "run-uncertain-export",
+			artifactId: "artifact-uncertain-export",
+			contents: "uncertain export\n",
+			retention: "failure-evidence",
+		});
+		const manifestDir = deps.paths.state.artifactDir("run-uncertain-export");
+		const originalFs = deps.fs;
+		let failOnce = true;
+		const uncertainDeps: RetentionDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async syncDirectory(path) {
+					await originalFs.syncDirectory(path);
+					if (failOnce && path === manifestDir) {
+						failOnce = false;
+						throw Object.assign(new Error("uncertain manifest sync"), {
+							code: "EIO",
+						});
+					}
+				},
+			},
+		};
+		const result = await exportArtifact(uncertainDeps, {
+			runId: "run-uncertain-export",
+			artifactId: "artifact-uncertain-export",
+			destinationPath: "/exports/uncertain.har",
+		});
+		expect(result).toMatchObject({
+			ok: true,
+			manifest: { retention: "export" },
+		});
+		expect(await deps.fs.readTextFile("/exports/uncertain.har")).toBe(
+			"uncertain export\n",
+		);
+		const standing = await readDurableFile(
+			deps.fs,
+			artifactManifestPath(
+				deps.paths,
+				"run-uncertain-export",
+				"artifact-uncertain-export",
+			),
+		);
+		expect(standing).toMatchObject({ status: "present" });
+		if (standing.status !== "present") throw new Error("manifest missing");
+		expect(parseDurableRecord(standing.raw, "artifact-manifest")).toMatchObject({
+			ok: true,
+			payload: { retention: "export" },
+		});
+	});
+
+	test("an existing export destination is never replaced", async () => {
+		const { deps } = await makeWorld();
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		await deps.fs.writeFileDurable("/exports/existing.har", "owner bytes\n", 0o600);
+		await seedArtifact(deps, {
+			runId: "run-existing-destination",
+			artifactId: "artifact-existing-destination",
+			contents: "new bytes\n",
+			retention: "failure-evidence",
+		});
+		const result = await exportArtifact(deps, {
+			runId: "run-existing-destination",
+			artifactId: "artifact-existing-destination",
+			destinationPath: "/exports/existing.har",
+		});
+		expect(result).toMatchObject({ ok: false, code: "retention_collision" });
+		expect(await deps.fs.readTextFile("/exports/existing.har")).toBe("owner bytes\n");
+		expect(
+			(
+				await readArtifactStatus(deps, {
+					runId: "run-existing-destination",
+					artifactId: "artifact-existing-destination",
+				})
+			).status,
+		).toBe("present");
+	});
+
+	test("a tombstoned artifact cannot be exported even if stale bytes reappear", async () => {
+		const { deps } = await makeWorld();
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		await deps.fs.mkdir(deps.paths.state.artifactDir("run-deleted-export"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await deps.fs.writeFileDurable(
+			artifactTombstonePath(
+				deps.paths,
+				"run-deleted-export",
+				"artifact-deleted-export",
+			),
+			encodeDurableRecord("tombstone", {
+				artifact_id: "artifact-deleted-export",
+				run_id: "run-deleted-export",
+				retention: "failure-evidence",
+				reason: "explicit-delete",
+				phase: "complete",
+				deleted_at_epoch_ms: 3_000,
+			}),
+			0o600,
+		);
+		expect(
+			await exportArtifact(deps, {
+				runId: "run-deleted-export",
+				artifactId: "artifact-deleted-export",
+				destinationPath: "/exports/deleted.har",
+			}),
+		).toMatchObject({ ok: false, code: "retention_collision" });
+		expect(await deps.fs.lstat("/exports/deleted.har")).toBeUndefined();
+	});
+
+	test("delete cannot enter while export owns the artifact lock", async () => {
+		const { deps } = await makeWorld();
+		await deps.fs.mkdir("/exports", { recursive: true, mode: 0o700 });
+		await seedArtifact(deps, {
+			runId: "run-export-race",
+			artifactId: "artifact-export-race",
+			contents: "race bytes\n",
+			retention: "failure-evidence",
+		});
+		const originalFs = deps.fs;
+		let releaseCopy!: () => void;
+		const copyGate = new Promise<void>((resolve) => {
+			releaseCopy = resolve;
+		});
+		let reachedCopy!: () => void;
+		const reachedCopyPromise = new Promise<void>((resolve) => {
+			reachedCopy = resolve;
+		});
+		let pauseOnce = true;
+		const gatedDeps: RetentionDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async copyFileDurable(source, destination) {
+					await originalFs.copyFileDurable(source, destination);
+					if (pauseOnce) {
+						pauseOnce = false;
+						reachedCopy();
+						await copyGate;
+					}
+				},
+			},
+		};
+		const exporting = exportArtifact(gatedDeps, {
+			runId: "run-export-race",
+			artifactId: "artifact-export-race",
+			destinationPath: "/exports/race.har",
+		});
+		await reachedCopyPromise;
+		const deleting = await deleteArtifact(gatedDeps, {
+			runId: "run-export-race",
+			artifactId: "artifact-export-race",
+			reason: "explicit-delete",
+		});
+		expect(deleting).toMatchObject({ ok: false, code: "store_lock_contended" });
+		releaseCopy();
+		expect(await exporting).toMatchObject({
+			ok: true,
+			manifest: { retention: "export" },
+		});
+		expect(
+			(await readArtifactStatus(gatedDeps, {
+				runId: "run-export-race",
+				artifactId: "artifact-export-race",
+			})).status,
+		).toBe("present");
+	});
+
 	test("S18: a destination inside any browser-use root (or a relative one) is export_destination_unsafe", async () => {
 		const { deps } = await makeWorld();
 		await seedArtifact(deps, {
@@ -835,6 +1149,75 @@ describe("stageGeneration immutable staging (AE12 substrate; V2)", () => {
 		).toBe("index\n");
 	});
 
+	test("same-id generation staging is serialized across callers", async () => {
+		const { deps } = await makeWorld();
+		const originalFs = deps.fs;
+		let releaseWrite!: () => void;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let reachedWrite!: () => void;
+		const reachedWritePromise = new Promise<void>((resolve) => {
+			reachedWrite = resolve;
+		});
+		let pauseOnce = true;
+		const gatedDeps: RetentionDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async writeFileDurable(path, contents, mode) {
+					await originalFs.writeFileDurable(path, contents, mode);
+					if (pauseOnce && path.includes("/generations/gen-serialized/")) {
+						pauseOnce = false;
+						reachedWrite();
+						await writeGate;
+					}
+				},
+			},
+		};
+		const first = stageGeneration(gatedDeps, {
+			generationId: "gen-serialized",
+			files: [{ relPath: "index.md", contents: "first\n" }],
+		});
+		await reachedWritePromise;
+		expect(
+			await stageGeneration(gatedDeps, {
+				generationId: "gen-serialized",
+				files: [{ relPath: "index.md", contents: "second\n" }],
+			}),
+		).toMatchObject({ ok: false, code: "store_lock_contended" });
+		releaseWrite();
+		expect(await first).toMatchObject({ ok: true, verified_noop: false });
+	});
+
+	test("a committed record with a missing staged file is corrupt, never a verified no-op", async () => {
+		const { deps } = await makeWorld();
+		await stageGeneration(deps, { generationId: "gen-missing", files: FILES });
+		await deps.fs.unlink(
+			generationFilePath(deps.paths, "gen-missing", "vendors/site.md"),
+		);
+		const restaged = await stageGeneration(deps, {
+			generationId: "gen-missing",
+			files: FILES,
+		});
+		expect(restaged).toMatchObject({ ok: false, code: "store_record_corrupt" });
+	});
+
+	test("an unexpected staged path blocks the generation record commit", async () => {
+		const { deps } = await makeWorld();
+		const extra = generationFilePath(deps.paths, "gen-extra", "unexpected.md");
+		await deps.fs.mkdir(dirname(extra), { recursive: true, mode: 0o700 });
+		await deps.fs.writeFileDurable(extra, "unexpected\n", 0o600);
+		const staged = await stageGeneration(deps, {
+			generationId: "gen-extra",
+			files: FILES,
+		});
+		expect(staged).toMatchObject({ ok: false, code: "store_record_corrupt" });
+		expect(
+			await readDurableFile(deps.fs, generationRecordPath(deps.paths, "gen-extra")),
+		).toEqual({ status: "missing" });
+	});
+
 	test("V2: a crash before the record commit preserves the prior generation; reapply completes, then verifies as a no-op", async () => {
 		const { overlay, deps } = await makeWorld();
 		const prior = await stageGeneration(deps, { generationId: "gen-1", files: FILES });
@@ -994,6 +1377,54 @@ describe("writeSourceSnapshot immutable write (R10)", () => {
 		expect(
 			await writeSourceSnapshot(deps, makeSnapshot({ snapshot_digest: "digest-2" })),
 		).toMatchObject({ ok: false, code: "retention_collision" });
+	});
+
+	test("same-id snapshot writes are serialized across callers", async () => {
+		const { deps } = await makeWorld();
+		const originalFs = deps.fs;
+		const snapshotPath = sourceSnapshotPath(deps.paths, "snap-serialized");
+		let releaseWrite!: () => void;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let reachedWrite!: () => void;
+		const reachedWritePromise = new Promise<void>((resolve) => {
+			reachedWrite = resolve;
+		});
+		let pauseOnce = true;
+		const gatedDeps: RetentionDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async writeFileDurable(path, contents, mode) {
+					await originalFs.writeFileDurable(path, contents, mode);
+					if (pauseOnce && path.startsWith(snapshotPath)) {
+						pauseOnce = false;
+						reachedWrite();
+						await writeGate;
+					}
+				},
+			},
+		};
+		const first = writeSourceSnapshot(
+			gatedDeps,
+			makeSnapshot({
+				snapshot_id: "snap-serialized",
+				snapshot_digest: "digest-first",
+			}),
+		);
+		await reachedWritePromise;
+		expect(
+			await writeSourceSnapshot(
+				gatedDeps,
+				makeSnapshot({
+					snapshot_id: "snap-serialized",
+					snapshot_digest: "digest-second",
+				}),
+			),
+		).toMatchObject({ ok: false, code: "store_lock_contended" });
+		releaseWrite();
+		expect(await first).toEqual({ ok: true, verified_noop: false });
 	});
 });
 

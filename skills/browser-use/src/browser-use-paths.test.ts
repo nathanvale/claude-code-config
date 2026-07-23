@@ -3,9 +3,12 @@ import { chmodSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
 	BROWSER_USE_ROOT_KINDS,
+	DARWIN_FULL_FSYNC_LIBRARY_PATH,
 	type BrowserUsePlatformFs,
 	admitBrowserUseRoot,
 	createDefaultPlatformFs,
+	fullFsyncDurableFile,
+	inspectBrowserUsePaths,
 	openBrowserUsePaths,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
@@ -43,6 +46,50 @@ afterAll(() => {
 	for (const overlay of overlays) {
 		overlay.dispose();
 	}
+});
+
+describe("darwin durable file barrier", () => {
+	test("pins the system image instead of using the current-directory loader search", () => {
+		expect(DARWIN_FULL_FSYNC_LIBRARY_PATH).toBe("/usr/lib/libSystem.B.dylib");
+		expect(DARWIN_FULL_FSYNC_LIBRARY_PATH.startsWith("/")).toBe(true);
+	});
+
+	test("issues F_FULLFSYNC command 51 and skips fallback fsync on success", async () => {
+		const calls: Array<[number, number, number]> = [];
+		let syncCalls = 0;
+		await fullFsyncDurableFile(
+			{
+				fd: 41,
+				sync: async () => {
+					syncCalls += 1;
+				},
+			},
+			"darwin",
+			{
+				call(fd, command, arg) {
+					calls.push([fd, command, arg]);
+					return 0;
+				},
+			},
+		);
+		expect(calls).toEqual([[41, 51, 0]]);
+		expect(syncCalls).toBe(0);
+	});
+
+	test("falls back to fsync when the darwin binding rejects the file descriptor", async () => {
+		let syncCalls = 0;
+		await fullFsyncDurableFile(
+			{
+				fd: 42,
+				sync: async () => {
+					syncCalls += 1;
+				},
+			},
+			"darwin",
+			{ call: () => -1 },
+		);
+		expect(syncCalls).toBe(1);
+	});
 });
 
 describe("pure XDG resolution (R7/R11; S1-S3)", () => {
@@ -226,7 +273,9 @@ describe("root admission (R12; S4-S6)", () => {
 	});
 
 	test("a throwing check-ignored seam fails closed on a version-controlled ancestor", async () => {
-		const root = join(xdg.base, "repo", "state", "browser-use");
+		const repo = join(xdg.base, "throwing-seam-repo");
+		mkdirSync(join(repo, ".git"), { recursive: true });
+		const root = join(repo, "state", "browser-use");
 		const admitted = await admitBrowserUseRoot(realFs, {
 			kind: "state",
 			path: root,
@@ -260,6 +309,38 @@ describe("root admission (R12; S4-S6)", () => {
 });
 
 describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
+	test("read-only inspection resolves absent roots without filesystem mutations", async () => {
+		const scoped = makeTempXdgEnv();
+		try {
+			const mutationCalls: string[] = [];
+			const readOnlyFs = {
+				...realFs,
+				mkdir: async () => {
+					mutationCalls.push("mkdir");
+				},
+				chmod: async () => {
+					mutationCalls.push("chmod");
+				},
+				writeFile: async () => {
+					mutationCalls.push("writeFile");
+				},
+				unlink: async () => {
+					mutationCalls.push("unlink");
+				},
+			};
+			const inspected = await inspectBrowserUsePaths(readOnlyFs, scoped.env);
+			expect(inspected.ok).toBe(true);
+			expect(mutationCalls).toEqual([]);
+			if (inspected.ok) {
+				expect(inspected.paths.resolution.roots.state).toBe(
+					join(scoped.env.XDG_STATE_HOME as string, "browser-use"),
+				);
+			}
+		} finally {
+			scoped.dispose();
+		}
+	});
+
 	test("S19: no XDG_RUNTIME_DIR puts locks under <state>/runtime-fallback created 0700 with the warned flag", async () => {
 		const scoped = makeTempXdgEnv();
 		try {

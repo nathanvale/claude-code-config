@@ -171,9 +171,11 @@ export async function readDurableFile(
 
 type LockHolderProbe =
 	| { state: "fresh"; holderLabel: string }
-	| { state: "stale" }
-	| { state: "garbage" }
+	| { state: "stale"; observedRaw: string }
+	| { state: "garbage"; observedRaw: string }
 	| { state: "missing" };
+
+let lockSequence = 0;
 
 // On EEXIST classify the standing lock: fresh (contended), stale (aged past
 // staleAfterMs), garbage (torn/unparseable — it can never age out, so
@@ -187,7 +189,7 @@ async function probeLockHolder(
 ): Promise<LockHolderProbe> {
 	const read = await readDurableFile(fs, lockPath);
 	if (read.status === "missing") return { state: "missing" };
-	if (read.status === "unreadable") return { state: "garbage" };
+	if (read.status === "unreadable") return { state: "garbage", observedRaw: "" };
 	let parsed: { holder_id?: unknown; acquired_at_epoch_ms?: unknown };
 	try {
 		parsed = JSON.parse(read.raw) as {
@@ -195,18 +197,71 @@ async function probeLockHolder(
 			acquired_at_epoch_ms?: unknown;
 		};
 	} catch {
-		return { state: "garbage" };
+		return { state: "garbage", observedRaw: read.raw };
 	}
 	const acquiredAt = parsed.acquired_at_epoch_ms;
 	if (typeof acquiredAt !== "number" || !Number.isFinite(acquiredAt)) {
-		return { state: "garbage" };
+		return { state: "garbage", observedRaw: read.raw };
 	}
-	if (clock() - acquiredAt > staleAfterMs) return { state: "stale" };
+	if (clock() - acquiredAt > staleAfterMs) {
+		return { state: "stale", observedRaw: read.raw };
+	}
 	const holderLabel =
 		typeof parsed.holder_id === "string" && parsed.holder_id !== ""
 			? parsed.holder_id
 			: "unknown";
 	return { state: "fresh", holderLabel };
+}
+
+async function releaseOwnedLock(
+	fs: BrowserUsePlatformFs,
+	lockPath: string,
+	nonce: string,
+): Promise<void> {
+	const current = await readDurableFile(fs, lockPath);
+	if (current.status !== "present") return;
+	try {
+		const parsed = JSON.parse(current.raw) as { nonce?: unknown };
+		if (parsed.nonce !== nonce) return;
+		await fs.unlink(lockPath);
+	} catch {
+		// A missing, unreadable, or replaced lock is no longer ours to release.
+	}
+}
+
+// O_EXCL on a separate reclamation claim ensures only one process can perform
+// the read-equal-unlink sequence. Without it, two stale observers could both
+// pass the equality check and the slower one could unlink the faster one's
+// successor lock.
+async function reclaimLockIfUnchanged(
+	fs: BrowserUsePlatformFs,
+	lockPath: string,
+	observedRaw: string,
+	nonce: string,
+): Promise<boolean> {
+	const reclaimPath = `${lockPath}.reclaim`;
+	const reclaimNonce = `${nonce}:reclaim`;
+	try {
+		await fs.createExclusive(
+			reclaimPath,
+			`${JSON.stringify({ nonce: reclaimNonce })}\n`,
+			PRIVATE_FILE_MODE,
+		);
+	} catch {
+		return false;
+	}
+	try {
+		const current = await readDurableFile(fs, lockPath);
+		if (current.status !== "present" || current.raw !== observedRaw) return false;
+		try {
+			await fs.unlink(lockPath);
+			return true;
+		} catch {
+			return false;
+		}
+	} finally {
+		await releaseOwnedLock(fs, reclaimPath, reclaimNonce);
+	}
 }
 
 async function acquireLockFile(
@@ -217,16 +272,19 @@ async function acquireLockFile(
 		staleAfterMs: number;
 		clock: () => number;
 	},
-): Promise<{ ok: true } | { ok: false; failure: StoreFailure }> {
+): Promise<{ ok: true; nonce: string } | { ok: false; failure: StoreFailure }> {
+	lockSequence += 1;
+	const nonce = `${process.pid}:${lockSequence}:${input.holderId}`;
 	// Attempt, then at most ONE stale-reclaim retry (spec A3).
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const contents = `${JSON.stringify({
 			holder_id: input.holderId,
 			acquired_at_epoch_ms: input.clock(),
+			nonce,
 		})}\n`;
 		try {
 			await fs.createExclusive(input.lockPath, contents, PRIVATE_FILE_MODE);
-			return { ok: true };
+			return { ok: true, nonce };
 		} catch (error) {
 			if (errorCode(error) !== "EEXIST") {
 				return storeFailure(
@@ -248,8 +306,19 @@ async function acquireLockFile(
 				`lock is held by another writer (holder ${holder.holderLabel}).`,
 			);
 		}
-		if (holder.state !== "missing") {
-			await unlinkBestEffort(fs, input.lockPath);
+		if (
+			(holder.state === "stale" || holder.state === "garbage") &&
+			!(await reclaimLockIfUnchanged(
+				fs,
+				input.lockPath,
+				holder.observedRaw,
+				nonce,
+			))
+		) {
+			return storeFailure(
+				"store_lock_contended",
+				"lock ownership changed during stale reclamation.",
+			);
 		}
 		// "missing" means the holder released between create and read; the loop
 		// simply retries the exclusive create once.
@@ -264,11 +333,10 @@ async function acquireLockFile(
  * Exclusive advisory lockfile around a read-modify-write critical section.
  * The lock path lives under `paths.runtime.locksDir` (R11). On EEXIST the
  * standing lock's `acquired_at_epoch_ms` is aged against `staleAfterMs`
- * through the injected clock: stale (or torn) locks are unlinked and the
- * create retried ONCE; a fresh lock is a typed `store_lock_contended`. The
- * lock is always released in `finally`. This is a fast mutual-exclusion aid;
- * `casReplaceRecord` is the correctness owner when the lockfile is
- * unavailable.
+ * through the injected clock. A separate exclusive reclamation claim
+ * serializes stale/torn removal before one retry; fresh locks are typed
+ * contention. Finally-release unlinks only this acquisition's nonce, never a
+ * reclaimed successor.
  *
  * @param fs - Platform fs port
  * @param input - Lock path, holder id, staleness window, injected clock
@@ -290,9 +358,9 @@ export async function withExclusiveFileLock<T>(
 	try {
 		return await body();
 	} finally {
-		// Best-effort release: a leftover lock ages out via staleAfterMs and
-		// never blocks correctness (the CAS revision check owns that).
-		await unlinkBestEffort(fs, input.lockPath);
+		// Release only the nonce this acquisition published. A delayed holder
+		// must never unlink the successor that reclaimed its stale lock.
+		await releaseOwnedLock(fs, input.lockPath, acquired.nonce);
 	}
 }
 
@@ -406,9 +474,22 @@ export async function listOrphanTempFiles(
 	while (pending.length > 0) {
 		const current = pending.pop();
 		if (current === undefined) break;
-		for (const entry of await fs.readDirectory(current)) {
+		let entries: readonly string[];
+		try {
+			entries = await fs.readDirectory(current);
+		} catch {
+			// Repair projection is best-effort: one unreadable subtree must not
+			// hide every other actionable orphan.
+			continue;
+		}
+		for (const entry of entries) {
 			const entryPath = join(current, entry);
-			const stat = await fs.lstat(entryPath);
+			let stat: Awaited<ReturnType<BrowserUsePlatformFs["lstat"]>>;
+			try {
+				stat = await fs.lstat(entryPath);
+			} catch {
+				continue;
+			}
 			if (stat === undefined) continue;
 			if (stat.kind === "directory") {
 				pending.push(entryPath);
@@ -420,4 +501,41 @@ export async function listOrphanTempFiles(
 		}
 	}
 	return orphans.sort();
+}
+
+/**
+ * Remove only temp files recognized by `listOrphanTempFiles`. Reapplication
+ * converges when another repair already removed a listed path.
+ */
+export async function removeOrphanTempFiles(
+	fs: BrowserUsePlatformFs,
+	dir: string,
+): Promise<{ ok: true; removed: number } | { ok: false; failure: StoreFailure }> {
+	const orphans = await listOrphanTempFiles(fs, dir);
+	const parents = new Set<string>();
+	let removed = 0;
+	for (const orphan of orphans) {
+		try {
+			await fs.unlink(orphan);
+			removed += 1;
+			parents.add(dirname(orphan));
+		} catch (error) {
+			if (errorCode(error) === "ENOENT") continue;
+			return storeFailure(
+				"store_flush_failed",
+				`orphan temp removal failed (${errorCode(error)}).`,
+			);
+		}
+	}
+	for (const parent of parents) {
+		try {
+			await fs.syncDirectory(parent);
+		} catch (error) {
+			return storeFailure(
+				"store_flush_failed",
+				`orphan temp directory flush failed (${errorCode(error)}).`,
+			);
+		}
+	}
+	return { ok: true, removed };
 }

@@ -107,6 +107,13 @@ export type ActivationEpochAdvanceResult =
 	| { ok: true; epoch: number }
 	| { ok: false; code: "epoch_conflict" | "epoch_store_failed"; message: string };
 
+/** Failure to enter the activation barrier shared by epoch advance and writes. */
+export type ActivationEpochBarrierFailure = {
+	ok: false;
+	code: "epoch_store_failed";
+	message: string;
+};
+
 // --- Internal helpers --------------------------------------------------------
 
 /** Private modes mirror the paths admission constants (R12). */
@@ -119,6 +126,31 @@ const LOCKFILE_STALE_AFTER_MS = 10_000;
 
 /** The epoch record starts here when the file is absent. */
 const INITIAL_ACTIVATION_EPOCH = 1;
+
+// Same-process callers for one admitted store queue before taking its
+// cross-process epoch lock. Independent roots retain independent concurrency.
+const activationBarrierTails = new Map<string, Promise<void>>();
+
+async function withLocalActivationBarrier<T>(
+	key: string,
+	body: () => Promise<T>,
+): Promise<T> {
+	const prior = activationBarrierTails.get(key) ?? Promise.resolve();
+	let release!: () => void;
+	const tail = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	activationBarrierTails.set(key, tail);
+	await prior;
+	try {
+		return await body();
+	} finally {
+		release();
+		if (activationBarrierTails.get(key) === tail) {
+			activationBarrierTails.delete(key);
+		}
+	}
+}
 
 function leaseStoreFailed(message: string): {
 	ok: false;
@@ -298,68 +330,79 @@ export async function acquireLease(
 	assertPositiveInteger(input.ttlMs, "ttlMs");
 	const dirs = await ensureLeaseDirs(deps);
 	if (!dirs.ok) return dirs;
-	const outcome = await withExclusiveFileLock<LeaseAcquireResult>(
-		deps.fs,
-		{
-			lockPath: leaseLockPath(deps.paths, input.key),
-			holderId: input.holderId,
-			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const current = await readLeaseRecord(deps, input.key);
-			if (current.status === "corrupt") {
-				return leaseStoreFailed(
-					`lease record is corrupt; acquisition fails closed to preserve token monotonicity. ${current.message}`,
-				);
-			}
-			const now = deps.clock();
-			if (current.status === "present" && isLive(current.lease, now)) {
-				const holder = projectionOf(current.lease, now);
-				return {
-					ok: false,
-					code: "lease_held",
-					holder,
-					continuation: {
-						next_action_id: "wait_for_lease",
-						summary: redactUnsafeText(
-							`lease is held by ${holder.holder_id} until epoch-ms ${holder.expires_at_epoch_ms}; wait for expiry or release, then retry.`,
-						),
-					},
+	const acquireUnderLeaseLock = async () =>
+		await withExclusiveFileLock<LeaseAcquireResult>(
+			deps.fs,
+			{
+				lockPath: leaseLockPath(deps.paths, input.key),
+				holderId: input.holderId,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const current = await readLeaseRecord(deps, input.key);
+				if (current.status === "corrupt") {
+					return leaseStoreFailed(
+						`lease record is corrupt; acquisition fails closed to preserve token monotonicity. ${current.message}`,
+					);
+				}
+				const now = deps.clock();
+				if (current.status === "present" && isLive(current.lease, now)) {
+					const holder = projectionOf(current.lease, now);
+					return {
+						ok: false,
+						code: "lease_held",
+						holder,
+						continuation: {
+							next_action_id: "wait_for_lease",
+							summary: redactUnsafeText(
+								`lease is held by ${holder.holder_id} until epoch-ms ${holder.expires_at_epoch_ms}; wait for expiry or release, then retry.`,
+							),
+						},
+					};
+				}
+				const epoch = await readActivationEpochRecord(deps);
+				if (epoch.status === "corrupt") {
+					return leaseStoreFailed(
+						`activation-epoch record is corrupt; acquisition fails closed. ${epoch.message}`,
+					);
+				}
+				const prior = current.status === "present" ? current.lease : undefined;
+				const lease: BrowserUseLeasePayload = {
+					key: input.key,
+					holder_id: input.holderId,
+					fencing_token: prior === undefined ? 1 : prior.fencing_token + 1,
+					activation_epoch: epoch.epoch,
+					acquired_at_epoch_ms: now,
+					heartbeat_at_epoch_ms: now,
+					expires_at_epoch_ms: now + input.ttlMs,
+					recovered_from:
+						prior === undefined
+							? null
+							: {
+									fencing_token: prior.fencing_token,
+									holder_id: prior.holder_id,
+									observed_expired_at_epoch_ms: now,
+								},
+					scope: input.scope ?? {},
 				};
-			}
-			const epoch = await readActivationEpochRecord(deps);
-			if (epoch.status === "corrupt") {
-				return leaseStoreFailed(
-					`activation-epoch record is corrupt; acquisition fails closed. ${epoch.message}`,
-				);
-			}
-			const prior = current.status === "present" ? current.lease : undefined;
-			const lease: BrowserUseLeasePayload = {
-				key: input.key,
-				holder_id: input.holderId,
-				fencing_token: prior === undefined ? 1 : prior.fencing_token + 1,
-				activation_epoch: epoch.epoch,
-				acquired_at_epoch_ms: now,
-				heartbeat_at_epoch_ms: now,
-				expires_at_epoch_ms: now + input.ttlMs,
-				recovered_from:
-					prior === undefined
-						? null
-						: {
-								fencing_token: prior.fencing_token,
-								holder_id: prior.holder_id,
-								observed_expired_at_epoch_ms: now,
-							},
-				scope: input.scope ?? {},
-			};
-			const written = await writeLeaseRecord(deps, lease);
-			if (!written.ok) {
-				return leaseStoreFailed(`lease write failed: ${written.failure.message}`);
-			}
-			return { ok: true, lease };
-		},
+				const written = await writeLeaseRecord(deps, lease);
+				if (!written.ok) {
+					return leaseStoreFailed(
+						`lease write failed: ${written.failure.message}`,
+					);
+				}
+				return { ok: true, lease };
+			},
+		);
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `lease-acquire-${input.holderId}` },
+		acquireUnderLeaseLock,
 	);
+	if (!outcome.ok && "code" in outcome && outcome.code === "epoch_store_failed") {
+		return leaseStoreFailed(`lease activation barrier failed: ${outcome.message}`);
+	}
 	if (isLockFailure(outcome)) {
 		return leaseStoreFailed(`lease lock unavailable: ${outcome.failure.message}`);
 	}
@@ -389,45 +432,52 @@ export async function heartbeatLease(
 	assertPositiveInteger(input.ttlMs, "ttlMs");
 	const dirs = await ensureLeaseDirs(deps);
 	if (!dirs.ok) return dirs;
-	const outcome = await withExclusiveFileLock<LeaseHeartbeatResult>(
-		deps.fs,
-		{
-			lockPath: leaseLockPath(deps.paths, lease.key),
-			holderId: lease.holder_id,
-			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const validated = await validateStoredLeaseForWrite(deps, {
-				key: lease.key,
-				presented: {
-					fencing_token: lease.fencing_token,
-					activation_epoch: lease.activation_epoch,
-					holderId: lease.holder_id,
-				},
-			});
-			if (!validated.ok) return validated;
-			const current = await readLeaseRecord(deps, lease.key);
-			if (current.status !== "present") {
-				// The record passed validation moments ago; only a store fault
-				// removes or corrupts it inside this exclusive section.
-				return leaseStoreFailed("lease record vanished during heartbeat.");
-			}
-			const now = deps.clock();
-			const extended: BrowserUseLeasePayload = {
-				...current.lease,
-				heartbeat_at_epoch_ms: now,
-				expires_at_epoch_ms: now + input.ttlMs,
-			};
-			const written = await writeLeaseRecord(deps, extended);
-			if (!written.ok) {
-				return leaseStoreFailed(
-					`lease heartbeat write failed: ${written.failure.message}`,
-				);
-			}
-			return { ok: true, lease: extended };
-		},
+	const heartbeatUnderLeaseLock = async () =>
+		await withExclusiveFileLock<LeaseHeartbeatResult>(
+			deps.fs,
+			{
+				lockPath: leaseLockPath(deps.paths, lease.key),
+				holderId: lease.holder_id,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const validated = await validateStoredLeaseForWrite(deps, {
+					key: lease.key,
+					presented: {
+						fencing_token: lease.fencing_token,
+						activation_epoch: lease.activation_epoch,
+						holderId: lease.holder_id,
+					},
+				});
+				if (!validated.ok) return validated;
+				const current = await readLeaseRecord(deps, lease.key);
+				if (current.status !== "present") {
+					return leaseStoreFailed("lease record vanished during heartbeat.");
+				}
+				const now = deps.clock();
+				const extended: BrowserUseLeasePayload = {
+					...current.lease,
+					heartbeat_at_epoch_ms: now,
+					expires_at_epoch_ms: now + input.ttlMs,
+				};
+				const written = await writeLeaseRecord(deps, extended);
+				if (!written.ok) {
+					return leaseStoreFailed(
+						`lease heartbeat write failed: ${written.failure.message}`,
+					);
+				}
+				return { ok: true, lease: extended };
+			},
+		);
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `lease-heartbeat-${lease.holder_id}` },
+		heartbeatUnderLeaseLock,
 	);
+	if (!outcome.ok && "code" in outcome && outcome.code === "epoch_store_failed") {
+		return leaseStoreFailed(`lease activation barrier failed: ${outcome.message}`);
+	}
 	if (isLockFailure(outcome)) {
 		return leaseStoreFailed(`lease lock unavailable: ${outcome.failure.message}`);
 	}
@@ -452,32 +502,37 @@ export async function releaseLease(
 ): Promise<{ ok: true }> {
 	const dirs = await ensureLeaseDirs(deps);
 	if (!dirs.ok) return { ok: true };
-	await withExclusiveFileLock<{ ok: true }>(
-		deps.fs,
-		{
-			lockPath: leaseLockPath(deps.paths, lease.key),
-			holderId: lease.holder_id,
-			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const current = await readLeaseRecord(deps, lease.key);
-			if (current.status !== "present") return { ok: true };
-			const now = deps.clock();
-			if (
-				current.lease.fencing_token !== lease.fencing_token ||
-				current.lease.holder_id !== lease.holder_id ||
-				!isLive(current.lease, now)
-			) {
-				// Superseded or already expired: nothing to mark.
+	const releaseUnderLeaseLock = async () =>
+		await withExclusiveFileLock<{ ok: true }>(
+			deps.fs,
+			{
+				lockPath: leaseLockPath(deps.paths, lease.key),
+				holderId: lease.holder_id,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const current = await readLeaseRecord(deps, lease.key);
+				if (current.status !== "present") return { ok: true };
+				const now = deps.clock();
+				if (
+					current.lease.fencing_token !== lease.fencing_token ||
+					current.lease.holder_id !== lease.holder_id ||
+					!isLive(current.lease, now)
+				) {
+					return { ok: true };
+				}
+				await writeLeaseRecord(deps, {
+					...current.lease,
+					expires_at_epoch_ms: now,
+				});
 				return { ok: true };
-			}
-			await writeLeaseRecord(deps, {
-				...current.lease,
-				expires_at_epoch_ms: now,
-			});
-			return { ok: true };
-		},
+			},
+		);
+	await withActivationEpochBarrier(
+		deps,
+		{ holderId: `lease-release-${lease.holder_id}` },
+		releaseUnderLeaseLock,
 	);
 	return { ok: true };
 }
@@ -579,6 +634,47 @@ export async function validateStoredLeaseForWrite(
 // --- Activation epoch (R27 / AE12 substrate) ---------------------------------
 
 /**
+ * Serialize a lease-validated commit against activation-epoch advance.
+ * Callers acquire this barrier before their narrower record lock, giving every
+ * mutation the fixed order epoch -> record and keeping the live epoch stable
+ * from validation through durable commit.
+ */
+export async function withActivationEpochBarrier<T extends { ok: boolean }>(
+	deps: LeaseDeps,
+	input: { holderId: string },
+	body: () => Promise<T>,
+): Promise<T | ActivationEpochBarrierFailure> {
+	const dirs = await ensureLeaseDirs(deps);
+	if (!dirs.ok) {
+		return { ok: false, code: "epoch_store_failed", message: dirs.message };
+	}
+	const outcome = await withLocalActivationBarrier(
+		epochLockPath(deps.paths),
+		async () =>
+			await withExclusiveFileLock<T>(
+				deps.fs,
+				{
+					lockPath: epochLockPath(deps.paths),
+					holderId: input.holderId,
+					staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+					clock: deps.clock,
+				},
+				body,
+			),
+	);
+	if (isLockFailure(outcome)) {
+		return {
+			ok: false,
+			code: "epoch_store_failed",
+			message: redactUnsafeText(
+				`epoch barrier unavailable: ${outcome.failure.message}`,
+			),
+		};
+	}
+	return outcome;
+}
+
+/**
  * Read + classify the activation-epoch record: an absent file is epoch 1 by
  * definition; a corrupt file is a typed classification so `repair status`
  * can project it instead of crashing.
@@ -646,48 +742,52 @@ export async function advanceActivationEpoch(
 	if (!dirs.ok) {
 		return { ok: false, code: "epoch_store_failed", message: dirs.message };
 	}
-	const outcome = await withExclusiveFileLock<ActivationEpochAdvanceResult>(
-		deps.fs,
-		{
-			lockPath: epochLockPath(deps.paths),
-			holderId: `epoch-advance-${input.expectedEpoch}`,
-			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const record = await readActivationEpochRecord(deps);
-			if (record.status === "corrupt") {
-				return {
-					ok: false,
-					code: "epoch_store_failed",
-					message: record.message,
-				};
-			}
-			if (record.epoch === input.expectedEpoch + 1) {
-				// Already applied: reapply is an idempotent no-op (AE12).
-				return { ok: true, epoch: record.epoch };
-			}
-			if (record.epoch !== input.expectedEpoch) {
-				return {
-					ok: false,
-					code: "epoch_conflict",
-					message: `expected epoch ${input.expectedEpoch} but the current epoch is ${record.epoch}.`,
-				};
-			}
-			const next = record.epoch + 1;
-			const written = await writeDurableFile(deps.fs, {
-				path: deps.paths.state.epochFile,
-				contents: encodeDurableRecord("activation-epoch", { epoch: next }),
-			});
-			if (!written.ok) {
-				return {
-					ok: false,
-					code: "epoch_store_failed",
-					message: `epoch write failed: ${written.failure.message}`,
-				};
-			}
-			return { ok: true, epoch: next };
-		},
+	const advanceUnderEpochLock = async () =>
+		await withExclusiveFileLock<ActivationEpochAdvanceResult>(
+			deps.fs,
+			{
+				lockPath: epochLockPath(deps.paths),
+				holderId: `epoch-advance-${input.expectedEpoch}`,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const record = await readActivationEpochRecord(deps);
+				if (record.status === "corrupt") {
+					return {
+						ok: false,
+						code: "epoch_store_failed",
+						message: record.message,
+					};
+				}
+				if (record.epoch === input.expectedEpoch + 1) {
+					return { ok: true, epoch: record.epoch };
+				}
+				if (record.epoch !== input.expectedEpoch) {
+					return {
+						ok: false,
+						code: "epoch_conflict",
+						message: `expected epoch ${input.expectedEpoch} but the current epoch is ${record.epoch}.`,
+					};
+				}
+				const next = record.epoch + 1;
+				const written = await writeDurableFile(deps.fs, {
+					path: deps.paths.state.epochFile,
+					contents: encodeDurableRecord("activation-epoch", { epoch: next }),
+				});
+				if (!written.ok) {
+					return {
+						ok: false,
+						code: "epoch_store_failed",
+						message: `epoch write failed: ${written.failure.message}`,
+					};
+				}
+				return { ok: true, epoch: next };
+			},
+		);
+	const outcome = await withLocalActivationBarrier(
+		epochLockPath(deps.paths),
+		advanceUnderEpochLock,
 	);
 	if (isLockFailure(outcome)) {
 		return {

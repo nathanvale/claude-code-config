@@ -386,6 +386,15 @@ describe("redaction walker (R13, V5 guard)", () => {
 		).toEqual([{ path: "endpoint", reason: "secret_shaped_value" }]);
 	});
 
+	test("absolute and home-relative paths are typed violations", () => {
+		expect(findRedactionViolations({ path: "/Users/example/private.txt" })).toEqual([
+			{ path: "path", reason: "secret_shaped_value" },
+		]);
+		expect(findRedactionViolations({ path: "~/private.txt" })).toEqual([
+			{ path: "path", reason: "secret_shaped_value" },
+		]);
+	});
+
 	test("array elements carry indexed paths", () => {
 		expect(
 			findRedactionViolations({ items: ["clean", "ws://127.0.0.1:1/x"] }),

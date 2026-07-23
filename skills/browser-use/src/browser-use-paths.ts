@@ -27,6 +27,7 @@ import { createReadStream } from "node:fs";
 import {
 	chmod as fsChmod,
 	copyFile as fsCopyFile,
+	link as fsLink,
 	lstat as fsLstat,
 	mkdir as fsMkdir,
 	readdir as fsReaddir,
@@ -53,24 +54,29 @@ import { redactUnsafeText } from "./browser-use-core";
 
 // macOS <sys/fcntl.h>: F_FULLFSYNC = 51. node:fs does not surface it or fcntl.
 const DARWIN_F_FULLFSYNC = 51;
+/** Pinned system image; a bare dylib name would search the caller's CWD. */
+export const DARWIN_FULL_FSYNC_LIBRARY_PATH = "/usr/lib/libSystem.B.dylib";
+
+/** Injectable binding seam for direct F_FULLFSYNC regression coverage. */
+export type DarwinFullFsyncBinding = {
+	call: (fd: number, cmd: number, arg: number) => number;
+};
 
 // Lazily dlopen libc's fcntl only on darwin, the ONE non-node:* dependency this
 // leaf takes and only for the durable-file barrier. Cached across calls; a
 // failed load degrades to `handle.sync()` (fsync) rather than throwing — the
 // alternative is refusing every durable write on a runtime without FFI.
 let fullFsyncBinding:
-	| { call: (fd: number, cmd: number, arg: number) => number }
+	| DarwinFullFsyncBinding
 	| null
 	| undefined;
 
-function loadFullFsync():
-	| { call: (fd: number, cmd: number, arg: number) => number }
-	| null {
+function loadFullFsync(): DarwinFullFsyncBinding | null {
 	if (fullFsyncBinding !== undefined) return fullFsyncBinding;
 	try {
 		// Import lazily so non-darwin platforms never touch bun:ffi.
 		const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
-		const lib = dlopen("libc.dylib", {
+		const lib = dlopen(DARWIN_FULL_FSYNC_LIBRARY_PATH, {
 			fcntl: {
 				args: [FFIType.int, FFIType.int, FFIType.int],
 				returns: FFIType.int,
@@ -98,9 +104,11 @@ function loadFullFsync():
 export async function fullFsyncDurableFile(
 	handle: Pick<FileHandle, "sync" | "fd">,
 	platform: NodeJS.Platform = process.platform,
+	bindingOverride?: DarwinFullFsyncBinding | null,
 ): Promise<void> {
 	if (platform === "darwin") {
-		const binding = loadFullFsync();
+		const binding =
+			bindingOverride === undefined ? loadFullFsync() : bindingOverride;
 		if (binding !== null) {
 			const rc = binding.call(handle.fd, DARWIN_F_FULLFSYNC, 0);
 			if (rc === 0) return;
@@ -184,13 +192,16 @@ export type BrowserUsePlatformFs = {
 	writeFile(path: string, contents: string, mode: number): Promise<void>;
 	/** Throws a `{ code: "EXDEV" }`-shaped error on a cross-device target. */
 	rename(oldPath: string, newPath: string): Promise<void>;
+	/** Atomic no-replace publication; throws `{ code: "EEXIST" }` when present. */
+	linkFileNoReplace(existingPath: string, newPath: string): Promise<void>;
 	/** ENOENT tolerated by callers. */
 	unlink(path: string): Promise<void>;
 	/** fsync the directory fd (open + fsync + close). */
 	syncDirectory(path: string): Promise<void>;
 	/** O_CREAT|O_EXCL create; throws `{ code: "EEXIST" }` when present. */
 	createExclusive(path: string, contents: string, mode: number): Promise<void>;
-	copyFile(source: string, destination: string): Promise<void>;
+	/** Copy bytes, then apply the durable file barrier before returning. */
+	copyFileDurable(source: string, destination: string): Promise<void>;
 	/** sha256 hex of file bytes (streamed). */
 	hashFile(path: string): Promise<string>;
 };
@@ -248,6 +259,9 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 		async rename(oldPath, newPath) {
 			await fsRename(oldPath, newPath);
 		},
+		async linkFileNoReplace(existingPath, newPath) {
+			await fsLink(existingPath, newPath);
+		},
 		async unlink(path) {
 			await fsUnlink(path);
 		},
@@ -269,8 +283,14 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 				await handle.close();
 			}
 		},
-		async copyFile(source, destination) {
+		async copyFileDurable(source, destination) {
 			await fsCopyFile(source, destination);
+			const handle = await open(destination, "r+");
+			try {
+				await fullFsyncDurableFile(handle);
+			} finally {
+				await handle.close();
+			}
 		},
 		async hashFile(path) {
 			const hash = createHash("sha256");
@@ -424,6 +444,69 @@ function componentPrefixes(absolutePath: string): string[] {
 	return prefixes;
 }
 
+async function validateExistingBrowserUseRoot(
+	fs: BrowserUsePlatformFs,
+	input: { kind: BrowserUseRootKind; path: string },
+): Promise<
+	| { ok: true; exists: boolean }
+	| { ok: false; refusal: BrowserUsePathRefusal }
+> {
+	const { kind, path } = input;
+	let rootStat: Awaited<ReturnType<BrowserUsePlatformFs["lstat"]>>;
+	for (const prefix of componentPrefixes(path)) {
+		const stat = await fs.lstat(prefix);
+		if (stat === undefined) return { ok: true, exists: false };
+		if (stat.kind === "symlink") {
+			return {
+				ok: false,
+				refusal: pathRefusal(
+					kind,
+					"xdg_root_symlink_ancestor",
+					"a path component is a symlink; symlink traversal is refused (R12).",
+					"Point the root at a directory without symlinked ancestors",
+				),
+			};
+		}
+		rootStat = stat;
+	}
+	if (rootStat === undefined) return { ok: true, exists: false };
+	if (rootStat.kind !== "directory") {
+		return {
+			ok: false,
+			refusal: pathRefusal(
+				kind,
+				"xdg_root_unwritable",
+				"the root exists but is not a directory.",
+				"Move the existing file aside so the root can be a private directory",
+			),
+		};
+	}
+	const processUid = process.getuid?.();
+	if (processUid !== undefined && rootStat.uid !== processUid) {
+		return {
+			ok: false,
+			refusal: pathRefusal(
+				kind,
+				"xdg_root_wrong_owner",
+				"the root exists but is owned by another user (R12).",
+				"Point the root at a directory owned by the current user",
+			),
+		};
+	}
+	if ((rootStat.mode & 0o077) !== 0) {
+		return {
+			ok: false,
+			refusal: pathRefusal(
+				kind,
+				"xdg_root_permissions_loose",
+				"the private root carries group/other permission bits (R12 requires 0700).",
+				"chmod the root to 0700",
+			),
+		};
+	}
+	return { ok: true, exists: true };
+}
+
 /**
  * I/O admission for one root (R12): ancestor symlink walk, ownership, mode,
  * mkdir 0700, writability probe, version-control ancestor check. Idempotent —
@@ -448,61 +531,9 @@ export async function admitBrowserUseRoot(
 ): Promise<{ ok: true } | { ok: false; refusal: BrowserUsePathRefusal }> {
 	const { kind, path } = input;
 	const prefixes = componentPrefixes(path);
-	// R12: refuse symlink traversal anywhere in the admitted path.
-	for (const prefix of prefixes) {
-		const stat = await fs.lstat(prefix);
-		if (stat === undefined) break;
-		if (stat.kind === "symlink") {
-			return {
-				ok: false,
-				refusal: pathRefusal(
-					kind,
-					"xdg_root_symlink_ancestor",
-					"a path component is a symlink; symlink traversal is refused (R12).",
-					"Point the root at a directory without symlinked ancestors",
-				),
-			};
-		}
-	}
-	const rootStat = await fs.lstat(path);
-	const processUid = process.getuid?.();
-	if (rootStat !== undefined) {
-		if (rootStat.kind !== "directory") {
-			return {
-				ok: false,
-				refusal: pathRefusal(
-					kind,
-					"xdg_root_unwritable",
-					"the root exists but is not a directory.",
-					"Move the existing file aside so the root can be a private directory",
-				),
-			};
-		}
-		if (processUid !== undefined && rootStat.uid !== processUid) {
-			return {
-				ok: false,
-				refusal: pathRefusal(
-					kind,
-					"xdg_root_wrong_owner",
-					"the root exists but is owned by another user (R12).",
-					"Point the root at a directory owned by the current user",
-				),
-			};
-		}
-		if ((rootStat.mode & 0o077) !== 0) {
-			// Repair is explicit via the continuation; never auto-chmod an
-			// existing root out from under its owner.
-			return {
-				ok: false,
-				refusal: pathRefusal(
-					kind,
-					"xdg_root_permissions_loose",
-					"the private root carries group/other permission bits (R12 requires 0700).",
-					"chmod the root to 0700",
-				),
-			};
-		}
-	} else {
+	const validated = await validateExistingBrowserUseRoot(fs, { kind, path });
+	if (!validated.ok) return validated;
+	if (!validated.exists) {
 		try {
 			await fs.mkdir(path, { recursive: true, mode: PRIVATE_DIR_MODE });
 			// Defeat the process umask: created roots are exactly 0700 (R12).
@@ -559,6 +590,19 @@ export async function admitBrowserUseRoot(
 		break;
 	}
 	return { ok: true };
+}
+
+/**
+ * Read-only validation for one resolved root. Missing roots are valid empty
+ * stores; existing roots retain the symlink, owner, type, and mode checks.
+ * No directory creation, chmod, write probe, or ignore probe occurs.
+ */
+async function inspectBrowserUseRoot(
+	fs: BrowserUsePlatformFs,
+	input: { kind: BrowserUseRootKind; path: string },
+): Promise<{ ok: true } | { ok: false; refusal: BrowserUsePathRefusal }> {
+	const validated = await validateExistingBrowserUseRoot(fs, input);
+	return validated.ok ? { ok: true } : validated;
 }
 
 // --- The Target XDG Shape -----------------------------------------------------
@@ -645,6 +689,59 @@ function deriveAdmittedPaths(
 		},
 		config: { root: roots.config },
 		data: { root: roots.data },
+	};
+}
+
+/**
+ * Resolve roots for a check-only command without mutating the filesystem.
+ * Existing roots are safety-checked; absent roots project an empty store.
+ *
+ * @param fs - Platform fs port
+ * @param env - Environment record
+ * @returns Read-only Target XDG Shape, or one typed refusal
+ */
+export async function inspectBrowserUsePaths(
+	fs: BrowserUsePlatformFs,
+	env: Record<string, string | undefined>,
+): Promise<
+	| { ok: true; paths: BrowserUseAdmittedPaths }
+	| { ok: false; refusal: BrowserUsePathRefusal }
+> {
+	const resolved = resolveBrowserUsePaths(env);
+	if (!resolved.ok) return resolved;
+	const { resolution } = resolved;
+	for (const kind of ["config", "data", "state", "cache"] as const) {
+		const inspected = await inspectBrowserUseRoot(fs, {
+			kind,
+			path: resolution.roots[kind],
+		});
+		if (!inspected.ok) return inspected;
+	}
+	let runtimeRoot = resolution.roots.runtime;
+	let runtimeFallback = resolution.runtime_fallback;
+	if (!runtimeFallback.active) {
+		const inspected = await inspectBrowserUseRoot(fs, {
+			kind: "runtime",
+			path: runtimeRoot,
+		});
+		if (!inspected.ok) {
+			runtimeFallback = { active: true, reason: "runtime_dir_unsafe" };
+			runtimeRoot = join(resolution.roots.state, RUNTIME_FALLBACK_NAME);
+		}
+	}
+	if (runtimeFallback.active) {
+		const inspected = await inspectBrowserUseRoot(fs, {
+			kind: "runtime",
+			path: runtimeRoot,
+		});
+		if (!inspected.ok) return inspected;
+	}
+	return {
+		ok: true,
+		paths: deriveAdmittedPaths({
+			roots: { ...resolution.roots, runtime: runtimeRoot },
+			runtime_fallback: runtimeFallback,
+		}),
 	};
 }
 

@@ -9,17 +9,17 @@
 // artifacts, generations, and snapshots (the exported *Path helpers); every
 // byte it persists flows through the store's durable-write pipeline.
 //
-// Import direction: schemas + store + paths + core only. No lease logic
-// (deletes and sweeps are idempotent, not serialized, in U2), no run
-// mutation, no migration inventory (U3). A recorded generation is NEVER
-// edited in place: an existing generation record short-circuits before any
-// file I/O, so staged files are only (re)written while the generation is
-// uncommitted. No Date.now anywhere — time enters through the injected
-// clock; ids are caller-supplied and content hashes are sha256.
+// Import direction: schemas + store + paths + core only. No lease logic, run
+// mutation, or migration inventory (U3). Per-artifact advisory locks serialize
+// manifest writes, exports, and deletes. A recorded generation is NEVER edited
+// in place: an identical re-stage first verifies the complete staged tree. No
+// Date.now anywhere — time enters through the injected clock; ids are
+// caller-supplied and content hashes are sha256.
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { redactUnsafeText } from "./browser-use-core";
 import type {
 	BrowserUseAdmittedPaths,
@@ -31,6 +31,7 @@ import {
 	type BrowserUseSourceSnapshotPayload,
 	type BrowserUseTombstonePayload,
 	encodeDurableRecord,
+	findRedactionViolations,
 	parseDurableRecord,
 } from "./browser-use-schemas";
 import {
@@ -72,8 +73,9 @@ export type BrowserUseRetentionFailure = {
 /** R29 retention window for failure/drift evidence: seven days. */
 export const RETENTION_FAILURE_EVIDENCE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Advisory-lock staleness for the single manifest rewrite path (export).
-const EXPORT_LOCK_STALE_MS = 30_000;
+// Advisory-lock staleness for retention ownership operations.
+const RETENTION_LOCK_STALE_MS = 30_000;
+let exportSequence = 0;
 
 // The on-disk suffixes reserved for retention metadata next to artifact bytes.
 const MANIFEST_SUFFIX = ".manifest.json";
@@ -242,6 +244,160 @@ function sha256Hex(text: string): string {
 	return createHash("sha256").update(text).digest("hex");
 }
 
+function retentionLockPath(
+	paths: BrowserUseAdmittedPaths,
+	identity: string,
+): string {
+	const digest = sha256Hex(identity).slice(0, 32);
+	return join(paths.runtime.locksDir, `retention-${digest}.lock`);
+}
+
+async function withRetentionLock<T extends { ok: boolean }>(
+	deps: RetentionDeps,
+	identity: string,
+	holderId: string,
+	body: () => Promise<T>,
+): Promise<T | BrowserUseRetentionFailure> {
+	await deps.fs.mkdir(deps.paths.runtime.locksDir, {
+		recursive: true,
+		mode: 0o700,
+	});
+	const result = await withExclusiveFileLock<T>(
+		deps.fs,
+		{
+			lockPath: retentionLockPath(deps.paths, identity),
+			holderId,
+			staleAfterMs: RETENTION_LOCK_STALE_MS,
+			clock: deps.clock,
+		},
+		body,
+	);
+	if ("failure" in result) {
+		return retentionFailure(result.failure.code, result.failure.message);
+	}
+	return result;
+}
+
+async function withArtifactLock<T extends { ok: boolean }>(
+	deps: RetentionDeps,
+	ref: { runId: string; artifactId: string },
+	holderId: string,
+	body: () => Promise<T>,
+): Promise<T | BrowserUseRetentionFailure> {
+	return await withRetentionLock(
+		deps,
+		`artifact\0${ref.runId}\0${ref.artifactId}`,
+		holderId,
+		body,
+	);
+}
+
+function manifestAdmissionProblem(
+	manifest: BrowserUseArtifactManifestPayload,
+	expected?: { runId: string; artifactId: string },
+): string | undefined {
+	if (
+		expected !== undefined &&
+		(manifest.run_id !== expected.runId || manifest.artifact_id !== expected.artifactId)
+	) {
+		return "manifest payload identity does not match its run/artifact path.";
+	}
+	const violations = findRedactionViolations(manifest);
+	if (violations.length > 0) {
+		return "manifest contains secret-shaped or sensitive durable data.";
+	}
+	try {
+		const target = new URL(manifest.sanitized_target.origin);
+		if (
+			(target.protocol !== "https:" && target.protocol !== "http:") ||
+			target.origin !== manifest.sanitized_target.origin
+		) {
+			return "sanitized_target.origin must be an origin-only http(s) value.";
+		}
+	} catch {
+		return "sanitized_target.origin must be an origin-only http(s) value.";
+	}
+	const pathShape = manifest.sanitized_target.path_shape;
+	if (
+		pathShape !== undefined &&
+		(!pathShape.startsWith("/") || pathShape.includes("?") || pathShape.includes("#"))
+	) {
+		return "sanitized_target.path_shape must be a query-free path shape.";
+	}
+	return undefined;
+}
+
+function parseManifestForRef(
+	raw: string,
+	ref: { runId: string; artifactId: string },
+):
+	| { ok: true; payload: BrowserUseArtifactManifestPayload }
+	| BrowserUseRetentionFailure {
+	const parsed = parseDurableRecord(raw, "artifact-manifest");
+	if (!parsed.ok) {
+		return retentionFailure(
+			"artifact_corrupt",
+			`manifest for artifact ${ref.artifactId} does not parse: ${parsed.message}`,
+		);
+	}
+	const problem = manifestAdmissionProblem(parsed.payload, ref);
+	if (problem !== undefined) {
+		return retentionFailure(
+			"artifact_corrupt",
+			`manifest for artifact ${ref.artifactId} is invalid: ${problem}`,
+		);
+	}
+	return { ok: true, payload: parsed.payload };
+}
+
+function parseTombstoneForRef(
+	raw: string,
+	ref: { runId: string; artifactId: string },
+):
+	| { ok: true; payload: BrowserUseTombstonePayload }
+	| BrowserUseRetentionFailure {
+	const parsed = parseDurableRecord(raw, "tombstone");
+	if (!parsed.ok) {
+		return retentionFailure(
+			"artifact_corrupt",
+			`tombstone for artifact ${ref.artifactId} does not parse: ${parsed.message}`,
+		);
+	}
+	if (
+		parsed.payload.run_id !== ref.runId ||
+		parsed.payload.artifact_id !== ref.artifactId
+	) {
+		return retentionFailure(
+			"artifact_corrupt",
+			`tombstone for artifact ${ref.artifactId} has mismatched path identity.`,
+		);
+	}
+	return { ok: true, payload: parsed.payload };
+}
+
+async function tombstoneMutationRefusal(
+	deps: RetentionDeps,
+	ref: { runId: string; artifactId: string },
+): Promise<BrowserUseRetentionFailure | undefined> {
+	const read = await readDurableFile(
+		deps.fs,
+		artifactTombstonePath(deps.paths, ref.runId, ref.artifactId),
+	);
+	if (read.status === "missing") return undefined;
+	if (read.status === "unreadable") {
+		return retentionFailure(
+			"artifact_corrupt",
+			`tombstone for artifact ${ref.artifactId} is unreadable.`,
+		);
+	}
+	const parsed = parseTombstoneForRef(read.raw, ref);
+	if (!parsed.ok) return parsed;
+	return retentionFailure(
+		"retention_collision",
+		`artifact ${ref.artifactId} is tombstoned and cannot be recreated or exported.`,
+	);
+}
+
 async function unlinkTolerateMissing(
 	fs: BrowserUsePlatformFs,
 	path: string,
@@ -292,6 +448,33 @@ export async function writeArtifactManifest(
 	deps: RetentionDeps,
 	manifest: BrowserUseArtifactManifestPayload,
 ): Promise<{ ok: true; verified_noop: boolean } | BrowserUseRetentionFailure> {
+	return await withArtifactLock(
+		deps,
+		{
+			runId: manifest.run_id,
+			artifactId: manifest.artifact_id,
+		},
+		"retention-manifest",
+		async () => await writeArtifactManifestUnderLock(deps, manifest),
+	);
+}
+
+async function writeArtifactManifestUnderLock(
+	deps: RetentionDeps,
+	manifest: BrowserUseArtifactManifestPayload,
+): Promise<{ ok: true; verified_noop: boolean } | BrowserUseRetentionFailure> {
+	const admissionProblem = manifestAdmissionProblem(manifest);
+	if (admissionProblem !== undefined) {
+		return retentionFailure(
+			"artifact_corrupt",
+			`artifact manifest failed durable admission: ${admissionProblem}`,
+		);
+	}
+	const tombstoneRefusal = await tombstoneMutationRefusal(deps, {
+		runId: manifest.run_id,
+		artifactId: manifest.artifact_id,
+	});
+	if (tombstoneRefusal !== undefined) return tombstoneRefusal;
 	const path = artifactManifestPath(deps.paths, manifest.run_id, manifest.artifact_id);
 	const existing = await readDurableFile(deps.fs, path);
 	if (existing.status === "unreadable") {
@@ -301,12 +484,12 @@ export async function writeArtifactManifest(
 		);
 	}
 	if (existing.status === "present") {
-		const parsed = parseDurableRecord(existing.raw, "artifact-manifest");
+		const parsed = parseManifestForRef(existing.raw, {
+			runId: manifest.run_id,
+			artifactId: manifest.artifact_id,
+		});
 		if (!parsed.ok) {
-			return retentionFailure(
-				"artifact_corrupt",
-				`standing manifest for artifact ${manifest.artifact_id} does not parse: ${parsed.message}`,
-			);
+			return parsed;
 		}
 		if (parsed.payload.content_hash === manifest.content_hash) {
 			return { ok: true, verified_noop: true };
@@ -365,13 +548,11 @@ export async function readArtifactStatus(
 		};
 	}
 	if (tombstoneRead.status === "present") {
-		const tombstone = parseDurableRecord(tombstoneRead.raw, "tombstone");
+		const tombstone = parseTombstoneForRef(tombstoneRead.raw, ref);
 		if (!tombstone.ok) {
 			return {
 				status: "corrupt",
-				message: redactUnsafeText(
-					`tombstone for artifact ${ref.artifactId} does not parse: ${tombstone.message}`,
-				),
+				message: tombstone.message,
 			};
 		}
 		return { status: "deleted", tombstone: tombstone.payload };
@@ -389,13 +570,11 @@ export async function readArtifactStatus(
 			),
 		};
 	}
-	const manifest = parseDurableRecord(manifestRead.raw, "artifact-manifest");
+	const manifest = parseManifestForRef(manifestRead.raw, ref);
 	if (!manifest.ok) {
 		return {
 			status: "corrupt",
-			message: redactUnsafeText(
-				`manifest for artifact ${ref.artifactId} does not parse: ${manifest.message}`,
-			),
+			message: manifest.message,
 		};
 	}
 	let bytesHash: string;
@@ -440,16 +619,32 @@ export async function readArtifactStatus(
  * @param input - Run + artifact ids and the deletion reason
  * @returns The complete tombstone, or one typed retention failure
  */
+type DeleteArtifactInput = {
+	runId: string;
+	artifactId: string;
+	reason: BrowserUseTombstonePayload["reason"];
+};
+
+type DeleteArtifactResult =
+	| { ok: true; tombstone: BrowserUseTombstonePayload }
+	| BrowserUseRetentionFailure;
+
 export async function deleteArtifact(
 	deps: RetentionDeps,
-	input: {
-		runId: string;
-		artifactId: string;
-		reason: BrowserUseTombstonePayload["reason"];
-	},
-): Promise<
-	{ ok: true; tombstone: BrowserUseTombstonePayload } | BrowserUseRetentionFailure
-> {
+	input: DeleteArtifactInput,
+): Promise<DeleteArtifactResult> {
+	return await withArtifactLock(
+		deps,
+		input,
+		"retention-delete",
+		async () => await deleteArtifactUnderLock(deps, input),
+	);
+}
+
+async function deleteArtifactUnderLock(
+	deps: RetentionDeps,
+	input: DeleteArtifactInput,
+): Promise<DeleteArtifactResult> {
 	const tombstonePath = artifactTombstonePath(
 		deps.paths,
 		input.runId,
@@ -464,12 +659,12 @@ export async function deleteArtifact(
 		);
 	}
 	if (standing.status === "present") {
-		const parsed = parseDurableRecord(standing.raw, "tombstone");
+		const parsed = parseTombstoneForRef(standing.raw, {
+			runId: input.runId,
+			artifactId: input.artifactId,
+		});
 		if (!parsed.ok) {
-			return retentionFailure(
-				"artifact_corrupt",
-				`tombstone for artifact ${input.artifactId} does not parse: ${parsed.message}`,
-			);
+			return parsed;
 		}
 		if (parsed.payload.phase === "complete") {
 			// Idempotent success: deletion already converged.
@@ -493,12 +688,12 @@ export async function deleteArtifact(
 				`manifest for artifact ${input.artifactId} is unreadable; repair before deleting.`,
 			);
 		}
-		const manifest = parseDurableRecord(manifestRead.raw, "artifact-manifest");
+		const manifest = parseManifestForRef(manifestRead.raw, {
+			runId: input.runId,
+			artifactId: input.artifactId,
+		});
 		if (!manifest.ok) {
-			return retentionFailure(
-				"artifact_corrupt",
-				`manifest for artifact ${input.artifactId} does not parse: ${manifest.message}`,
-			);
+			return manifest;
 		}
 		// Re-observe ownership on this FRESH read: an export that completed
 		// between a sweep's initial manifest read and this one transferred the
@@ -597,7 +792,8 @@ export async function sweepExpiredArtifacts(
 			if (!entry.endsWith(MANIFEST_SUFFIX)) continue;
 			const read = await readDurableFile(deps.fs, join(runDir, entry));
 			if (read.status !== "present") continue;
-			const manifest = parseDurableRecord(read.raw, "artifact-manifest");
+			const artifactId = entry.slice(0, -MANIFEST_SUFFIX.length);
+			const manifest = parseManifestForRef(read.raw, { runId, artifactId });
 			if (!manifest.ok) continue;
 			const payload = manifest.payload;
 			if (payload.retention === "export") continue;
@@ -609,7 +805,7 @@ export async function sweepExpiredArtifacts(
 			if (!expired) continue;
 			const result = await deleteArtifact(deps, {
 				runId,
-				artifactId: payload.artifact_id,
+				artifactId,
 				reason: "retention-expiry",
 			});
 			if (result.ok) deleted.push(payload.artifact_id);
@@ -623,28 +819,32 @@ export async function sweepExpiredArtifacts(
 /**
  * Export ownership transfer (R29). `destinationPath` must be absolute and
  * outside EVERY admitted browser-use root (else typed
- * `export_destination_unsafe`). Copy -> the destination's sha256 must equal
- * `manifest.content_hash` (else typed `export_verify_failed` and the
- * destination is unlinked) -> the manifest is CAS-rewritten under the
- * export lock with `retention: "export"` and an export receipt whose
- * `destination_digest` is the sha256 of the destination path — never the
- * raw path (R13 redaction). After export the artifact is outside default
- * retention: sweeps skip it. Re-export to the same destination is an
- * idempotent success; a different destination after transfer is a typed
- * `retention_collision`.
+ * `export_destination_unsafe`). Under the artifact ownership lock: copy to a
+ * sibling temp, durably flush and hash it, link it into place without
+ * replacement + sync the destination directory, re-hash the published bytes,
+ * then durably commit the export
+ * receipt. `destination_digest` is the sha256 of the destination path, never
+ * the raw path (R13 redaction). Re-export to the same destination is
+ * idempotent; a different destination after transfer is a typed collision.
  *
  * @param deps - Fs port, admitted paths, injected clock
  * @param input - Run + artifact ids and the absolute destination path
  * @returns The rewritten manifest, or one typed retention failure
  */
+type ExportArtifactInput = {
+	runId: string;
+	artifactId: string;
+	destinationPath: string;
+};
+
+type ExportArtifactResult =
+	| { ok: true; manifest: BrowserUseArtifactManifestPayload }
+	| BrowserUseRetentionFailure;
+
 export async function exportArtifact(
 	deps: RetentionDeps,
-	input: { runId: string; artifactId: string; destinationPath: string },
-): Promise<
-	| { ok: true; manifest: BrowserUseArtifactManifestPayload }
-	| BrowserUseRetentionFailure
-> {
-	const manifestPath = artifactManifestPath(deps.paths, input.runId, input.artifactId);
+	input: ExportArtifactInput,
+): Promise<ExportArtifactResult> {
 	if (!isAbsolute(input.destinationPath)) {
 		return retentionFailure(
 			"export_destination_unsafe",
@@ -660,6 +860,32 @@ export async function exportArtifact(
 			);
 		}
 	}
+	return await withArtifactLock(
+		deps,
+		input,
+		"retention-export",
+		async () =>
+			await withRetentionLock(
+				deps,
+				`destination\0${destination}`,
+				"retention-export-destination",
+				async () =>
+					await exportArtifactUnderLock(deps, {
+						...input,
+						destinationPath: destination,
+					}),
+			),
+	);
+}
+
+async function exportArtifactUnderLock(
+	deps: RetentionDeps,
+	input: ExportArtifactInput,
+): Promise<ExportArtifactResult> {
+	const manifestPath = artifactManifestPath(deps.paths, input.runId, input.artifactId);
+	const destination = input.destinationPath;
+	const tombstoneRefusal = await tombstoneMutationRefusal(deps, input);
+	if (tombstoneRefusal !== undefined) return tombstoneRefusal;
 	const manifestRead = await readDurableFile(deps.fs, manifestPath);
 	if (manifestRead.status === "missing") {
 		return retentionFailure(
@@ -673,12 +899,12 @@ export async function exportArtifact(
 			`manifest for artifact ${input.artifactId} is unreadable.`,
 		);
 	}
-	const parsed = parseDurableRecord(manifestRead.raw, "artifact-manifest");
+	const parsed = parseManifestForRef(manifestRead.raw, {
+		runId: input.runId,
+		artifactId: input.artifactId,
+	});
 	if (!parsed.ok) {
-		return retentionFailure(
-			"artifact_corrupt",
-			`manifest for artifact ${input.artifactId} does not parse: ${parsed.message}`,
-		);
+		return parsed;
 	}
 	const manifest = parsed.payload;
 	const destinationDigest = sha256Hex(destination);
@@ -692,10 +918,17 @@ export async function exportArtifact(
 			`artifact ${input.artifactId} ownership already transferred to a different destination.`,
 		);
 	}
+	exportSequence += 1;
+	const destinationDir = dirname(destination);
+	const tempDestination = join(
+		destinationDir,
+		`.browser-use-export-${process.pid}-${exportSequence}.tmp`,
+	);
+	let published = false;
 	try {
-		await deps.fs.copyFile(
+		await deps.fs.copyFileDurable(
 			artifactBytesPath(deps.paths, input.runId, input.artifactId),
-			destination,
+			tempDestination,
 		);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") {
@@ -709,10 +942,10 @@ export async function exportArtifact(
 			`export copy failed (${errorCode(error)}).`,
 		);
 	}
-	const copiedHash = await deps.fs.hashFile(destination);
+	const copiedHash = await deps.fs.hashFile(tempDestination);
 	if (copiedHash !== manifest.content_hash) {
 		try {
-			await deps.fs.unlink(destination);
+			await deps.fs.unlink(tempDestination);
 		} catch {
 			// Best-effort: an unverifiable copy must not be left claiming to be
 			// the artifact, but a failed unlink cannot mask the typed failure.
@@ -722,9 +955,36 @@ export async function exportArtifact(
 			`exported bytes for artifact ${input.artifactId} do not match the manifest content hash; the destination was removed.`,
 		);
 	}
-	// The ONE sanctioned manifest rewrite: swap only if the manifest is still
-	// byte-identical to what this export verified against.
-	await deps.fs.mkdir(deps.paths.runtime.locksDir, { recursive: true, mode: 0o700 });
+	try {
+		await deps.fs.linkFileNoReplace(tempDestination, destination);
+		published = true;
+		await deps.fs.syncDirectory(destinationDir);
+		if ((await deps.fs.hashFile(destination)) !== manifest.content_hash) {
+			throw Object.assign(new Error("published export hash mismatch"), {
+				code: "EVERIFY",
+			});
+		}
+		await deps.fs.unlink(tempDestination);
+		await deps.fs.syncDirectory(destinationDir);
+	} catch (error) {
+		try {
+			await deps.fs.unlink(published ? destination : tempDestination);
+			await deps.fs.syncDirectory(destinationDir);
+		} catch {
+			// Cleanup remains best effort; the typed failure never claims transfer.
+		}
+		const code = errorCode(error);
+		if (code === "EEXIST") {
+			return retentionFailure(
+				"retention_collision",
+				`export destination already exists; refusing to replace another owner's bytes.`,
+			);
+		}
+		return retentionFailure(
+			code === "EVERIFY" ? "export_verify_failed" : "store_flush_failed",
+			`export destination commit failed (${code}).`,
+		);
+	}
 	const next: BrowserUseArtifactManifestPayload = {
 		...manifest,
 		retention: "export",
@@ -733,41 +993,81 @@ export async function exportArtifact(
 			exported_at_epoch_ms: deps.clock(),
 		},
 	};
-	const result = await withExclusiveFileLock<
-		{ ok: true; manifest: BrowserUseArtifactManifestPayload } | BrowserUseRetentionFailure
-	>(
-		deps.fs,
-		{
-			lockPath: join(deps.paths.runtime.locksDir, `retention-${input.artifactId}.lock`),
-			holderId: "retention-export",
-			staleAfterMs: EXPORT_LOCK_STALE_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const current = await readDurableFile(deps.fs, manifestPath);
-			if (current.status !== "present" || current.raw !== manifestRead.raw) {
-				return retentionFailure(
-					"store_record_conflict",
-					`manifest for artifact ${input.artifactId} changed while the export was in flight.`,
-				);
-			}
-			const written = await writeDurableFile(deps.fs, {
+	const written = await writeDurableFile(deps.fs, {
+		path: manifestPath,
+		contents: encodeDurableRecord("artifact-manifest", next),
+	});
+	if (!written.ok) {
+		// The store can report failure after its rename but before the parent
+		// directory barrier returns. Retry the exact idempotent commit before
+		// considering cleanup, so a committed export receipt can never coexist
+		// with a destination this process removed.
+		const retried = await writeDurableFile(deps.fs, {
+			path: manifestPath,
+			contents: encodeDurableRecord("artifact-manifest", next),
+		});
+		if (retried.ok) return { ok: true, manifest: next };
+
+		const observed = await readDurableFile(deps.fs, manifestPath);
+		const observedManifest =
+			observed.status === "present"
+				? parseManifestForRef(observed.raw, {
+						runId: input.runId,
+						artifactId: input.artifactId,
+					})
+				: undefined;
+		const receiptObserved =
+			observedManifest?.ok === true &&
+			observedManifest.payload.retention === "export" &&
+			observedManifest.payload.export_receipt?.destination_digest ===
+				destinationDigest;
+		if (!receiptObserved) {
+			// Re-establish the pre-export manifest durably before deleting the
+			// destination. If rollback also fails, preserve the destination:
+			// ownership is uncertain and destructive cleanup would be unsafe.
+			const rolledBack = await writeDurableFile(deps.fs, {
 				path: manifestPath,
-				contents: encodeDurableRecord("artifact-manifest", next),
+				contents: encodeDurableRecord("artifact-manifest", manifest),
 			});
-			if (!written.ok) {
-				return retentionFailure(written.failure.code, written.failure.message);
+			if (rolledBack.ok) {
+				try {
+					await deps.fs.unlink(destination);
+					await deps.fs.syncDirectory(destinationDir);
+				} catch {
+					// The typed failure never claims transfer.
+				}
 			}
-			return { ok: true, manifest: next };
-		},
-	);
-	if ("failure" in result) {
-		return retentionFailure(result.failure.code, result.failure.message);
+		}
+		return retentionFailure(written.failure.code, written.failure.message);
 	}
-	return result;
+	return { ok: true, manifest: next };
 }
 
 // --- Immutable generation staging + snapshots (AE12 substrate) ----------------
+
+async function readGenerationPairs(
+	fs: BrowserUsePlatformFs,
+	root: string,
+): Promise<readonly (readonly [string, string])[] | undefined> {
+	const rootStat = await fs.lstat(root);
+	if (rootStat === undefined || rootStat.kind !== "directory") return undefined;
+	const pairs: Array<readonly [string, string]> = [];
+	async function walk(dir: string, prefix: string): Promise<boolean> {
+		for (const entry of [...(await fs.readDirectory(dir))].sort()) {
+			const path = join(dir, entry);
+			const relPath = prefix === "" ? entry : `${prefix}/${entry}`;
+			const stat = await fs.lstat(path);
+			if (stat?.kind === "directory") {
+				if (!(await walk(path, relPath))) return false;
+				continue;
+			}
+			if (stat?.kind !== "file") return false;
+			pairs.push([relPath, await fs.hashFile(path)]);
+		}
+		return true;
+	}
+	return (await walk(root, "")) ? pairs : undefined;
+}
 
 /**
  * Immutable generation staging (AE12 substrate; U3/U7 fill content and
@@ -795,6 +1095,25 @@ export async function stageGeneration(
 	| BrowserUseRetentionFailure
 > {
 	const recordPath = generationRecordPath(deps.paths, input.generationId);
+	return await withRetentionLock(
+		deps,
+		`generation\0${input.generationId}`,
+		"retention-generation",
+		async () => await stageGenerationUnderLock(deps, input, recordPath),
+	);
+}
+
+async function stageGenerationUnderLock(
+	deps: RetentionDeps,
+	input: {
+		generationId: string;
+		files: readonly { relPath: string; contents: string }[];
+	},
+	recordPath: string,
+): Promise<
+	| { ok: true; record: BrowserUseGenerationPayload; verified_noop: boolean }
+	| BrowserUseRetentionFailure
+> {
 	const sorted = [...input.files].sort((a, b) =>
 		a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
 	);
@@ -824,6 +1143,16 @@ export async function stageGeneration(
 			);
 		}
 		if (parsed.payload.content_hash === contentHash) {
+			const observed = await readGenerationPairs(
+				deps.fs,
+				join(deps.paths.state.generationsDir, input.generationId),
+			);
+			if (observed === undefined || !isDeepStrictEqual(observed, pairs)) {
+				return retentionFailure(
+					"store_record_corrupt",
+					`generation ${input.generationId} record does not match its staged tree.`,
+				);
+			}
 			return { ok: true, record: parsed.payload, verified_noop: true };
 		}
 		return retentionFailure(
@@ -831,20 +1160,48 @@ export async function stageGeneration(
 			`generation ${input.generationId} is already recorded with a different content hash; generations are immutable.`,
 		);
 	}
+	const generationRoot = join(
+		deps.paths.state.generationsDir,
+		input.generationId,
+	);
 	try {
-		await deps.fs.mkdir(join(deps.paths.state.generationsDir, input.generationId), {
+		await deps.fs.mkdir(generationRoot, {
 			recursive: true,
 			mode: 0o700,
 		});
+		const directories = new Set<string>([generationRoot]);
 		for (const file of sorted) {
 			const filePath = generationFilePath(deps.paths, input.generationId, file.relPath);
-			await deps.fs.mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-			await deps.fs.writeFileDurable(filePath, file.contents, 0o600);
+			const fileDir = dirname(filePath);
+			if (!directories.has(fileDir)) {
+				await deps.fs.mkdir(fileDir, { recursive: true, mode: 0o700 });
+			}
+			let current = fileDir;
+			while (current.startsWith(`${generationRoot}${sep}`)) {
+				directories.add(current);
+				current = dirname(current);
+			}
+			const written = await writeDurableFile(deps.fs, {
+				path: filePath,
+				contents: file.contents,
+			});
+			if (!written.ok) return retentionFailure(written.failure.code, written.failure.message);
 		}
+		for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
+			await deps.fs.syncDirectory(dir);
+		}
+		await deps.fs.syncDirectory(deps.paths.state.generationsDir);
 	} catch (error) {
 		return retentionFailure(
 			"store_flush_failed",
 			`generation staging failed before the record commit (${errorCode(error)}).`,
+		);
+	}
+	const observed = await readGenerationPairs(deps.fs, generationRoot);
+	if (observed === undefined || !isDeepStrictEqual(observed, pairs)) {
+		return retentionFailure(
+			"store_record_corrupt",
+			`generation ${input.generationId} staged tree does not match the commit manifest.`,
 		);
 	}
 	const record: BrowserUseGenerationPayload = {
@@ -878,6 +1235,19 @@ export async function writeSourceSnapshot(
 	snapshot: BrowserUseSourceSnapshotPayload,
 ): Promise<{ ok: true; verified_noop: boolean } | BrowserUseRetentionFailure> {
 	const path = sourceSnapshotPath(deps.paths, snapshot.snapshot_id);
+	return await withRetentionLock(
+		deps,
+		`snapshot\0${snapshot.snapshot_id}`,
+		"retention-snapshot",
+		async () => await writeSourceSnapshotUnderLock(deps, snapshot, path),
+	);
+}
+
+async function writeSourceSnapshotUnderLock(
+	deps: RetentionDeps,
+	snapshot: BrowserUseSourceSnapshotPayload,
+	path: string,
+): Promise<{ ok: true; verified_noop: boolean } | BrowserUseRetentionFailure> {
 	const standing = await readDurableFile(deps.fs, path);
 	if (standing.status === "unreadable") {
 		return retentionFailure(
@@ -936,7 +1306,8 @@ export async function listPendingTombstones(
 			if (!entry.endsWith(TOMBSTONE_SUFFIX)) continue;
 			const read = await readDurableFile(deps.fs, join(runDir, entry));
 			if (read.status !== "present") continue;
-			const parsed = parseDurableRecord(read.raw, "tombstone");
+			const artifactId = entry.slice(0, -TOMBSTONE_SUFFIX.length);
+			const parsed = parseTombstoneForRef(read.raw, { runId, artifactId });
 			if (!parsed.ok || parsed.payload.phase !== "pending") continue;
 			pending.push(parsed.payload);
 		}

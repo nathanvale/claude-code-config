@@ -271,6 +271,120 @@ describe("exclusive lockfile (S9 contention + stale reclaim)", () => {
 		});
 	});
 
+	test("only one stale observer can enter the reclamation sequence", async () => {
+		const lockPath = join(lockDir, "simultaneous-reclaim.lock");
+		const clock = fixedClock(100_000);
+		await realFs.createExclusive(
+			lockPath,
+			JSON.stringify({ holder_id: "dead-writer", acquired_at_epoch_ms: 1_000 }),
+			0o600,
+		);
+		let releaseUnlink!: () => void;
+		const unlinkGate = new Promise<void>((resolve) => {
+			releaseUnlink = resolve;
+		});
+		let reachedUnlink!: () => void;
+		const unlinkReached = new Promise<void>((resolve) => {
+			reachedUnlink = resolve;
+		});
+		const pausedFs = {
+			...realFs,
+			async unlink(path: string): Promise<void> {
+				if (path === lockPath) {
+					reachedUnlink();
+					await unlinkGate;
+				}
+				await realFs.unlink(path);
+			},
+		};
+		const winner = withExclusiveFileLock(
+			pausedFs,
+			{ lockPath, holderId: "writer-a", staleAfterMs: 5_000, clock: clock.now },
+			async () => "winner",
+		);
+		await unlinkReached;
+		let loserRan = false;
+		const loser = await withExclusiveFileLock(
+			realFs,
+			{ lockPath, holderId: "writer-b", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				loserRan = true;
+				return "loser";
+			},
+		);
+		expect(loserRan).toBe(false);
+		expect(loser).toMatchObject({
+			ok: false,
+			failure: { code: "store_lock_contended" },
+		});
+		releaseUnlink();
+		expect(await winner).toBe("winner");
+	});
+
+	test("a reclaimed holder cannot unlink its successor's nonce-owned lock", async () => {
+		const lockPath = join(lockDir, "reclaimed-holder.lock");
+		const clock = fixedClock(10_000);
+		let releaseA!: () => void;
+		const bodyA = new Promise<void>((resolve) => {
+			releaseA = resolve;
+		});
+		let enteredA!: () => void;
+		const enteredAPromise = new Promise<void>((resolve) => {
+			enteredA = resolve;
+		});
+		const writerA = withExclusiveFileLock(
+			realFs,
+			{ lockPath, holderId: "writer-a", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				enteredA();
+				await bodyA;
+				return "a";
+			},
+		);
+		await enteredAPromise;
+		clock.advance(5_001);
+
+		let releaseB!: () => void;
+		const bodyB = new Promise<void>((resolve) => {
+			releaseB = resolve;
+		});
+		let enteredB!: () => void;
+		const enteredBPromise = new Promise<void>((resolve) => {
+			enteredB = resolve;
+		});
+		const writerB = withExclusiveFileLock(
+			realFs,
+			{ lockPath, holderId: "writer-b", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				enteredB();
+				await bodyB;
+				return "b";
+			},
+		);
+		await enteredBPromise;
+
+		releaseA();
+		expect(await writerA).toBe("a");
+		let writerCRan = false;
+		const writerC = await withExclusiveFileLock(
+			realFs,
+			{ lockPath, holderId: "writer-c", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				writerCRan = true;
+				return "c";
+			},
+		);
+		expect(writerCRan).toBe(false);
+		expect(writerC).toMatchObject({
+			ok: false,
+			failure: { code: "store_lock_contended" },
+		});
+
+		releaseB();
+		expect(await writerB).toBe("b");
+		expect(await readDurableFile(realFs, lockPath)).toEqual({ status: "missing" });
+	});
+
 	test("a torn/garbage lockfile is reclaimed like a stale one — it can never age out", async () => {
 		const lockPath = join(lockDir, "garbage.lock");
 		const clock = fixedClock(10_000);
@@ -514,5 +628,28 @@ describe("listOrphanTempFiles repair projection", () => {
 		expect(
 			await listOrphanTempFiles(realFs, join(xdg.base, "no-such-dir")),
 		).toEqual([]);
+	});
+
+	test("an unreadable subtree is skipped without hiding other orphans", async () => {
+		const root = join(xdg.base, "orphan-unreadable");
+		const unreadable = join(root, "unreadable");
+		mkdirSync(unreadable, { recursive: true, mode: 0o700 });
+		writeFileSync(join(root, "visible.json.tmp-1-1"), "visible", {
+			mode: 0o600,
+		});
+		const faultingFs = {
+			...realFs,
+			async readDirectory(path: string) {
+				if (path === unreadable) {
+					throw Object.assign(new Error("permission denied"), {
+						code: "EACCES",
+					});
+				}
+				return await realFs.readDirectory(path);
+			},
+		};
+		expect(await listOrphanTempFiles(faultingFs, root)).toEqual([
+			join(root, "visible.json.tmp-1-1"),
+		]);
 	});
 });

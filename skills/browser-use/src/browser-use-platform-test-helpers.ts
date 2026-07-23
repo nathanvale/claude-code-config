@@ -6,8 +6,8 @@
 // makeVolatileOverlayFs — the volatile-overlay fault-injection fs fake, the
 // BrowserUsePlatformFs port's second adapter. The overlay wraps the REAL
 // default adapter over a backing temp dir with a durable/volatile split:
-// `writeFile`, `copyFile`, and `rename` land volatile; `writeFileDurable`'s
-// fsync and `syncDirectory` promote pending entries durable; `crash()`
+// `writeFile` and `rename` land volatile; durable file operations and
+// `syncDirectory` promote pending entries durable; `crash()`
 // discards everything volatile and re-materializes only durable state into a
 // fresh backing dir while callers keep their original logical paths. Hook
 // points (`onBeforeFsync`, `onAfterFsync`, `onAfterRename`) let tests call
@@ -24,6 +24,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { copyFile as fsCopyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
@@ -281,6 +282,11 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 			// so durable truth still holds the OLD state (never torn).
 			await runHook(hooks.onAfterRename, logical(newPath));
 		},
+		async linkFileNoReplace(existingPath, newPath) {
+			await real.linkFileNoReplace(live(existingPath), live(newPath));
+			volatileFiles.add(logical(newPath));
+			await runHook(hooks.onAfterRename, logical(newPath));
+		},
 		async unlink(path) {
 			await real.unlink(live(path));
 			const key = logical(path);
@@ -315,10 +321,12 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 			// Exclusive creates are lock/lease records; durable immediately.
 			await promoteFile(path);
 		},
-		async copyFile(source, destination) {
-			await real.copyFile(live(source), live(destination));
-			volatileFiles.add(logical(destination));
-		},
+			async copyFileDurable(source, destination) {
+				await fsCopyFile(live(source), live(destination));
+				await runHook(hooks.onBeforeFsync, logical(destination));
+				await promoteFile(destination);
+				await runHook(hooks.onAfterFsync, logical(destination));
+			},
 		async hashFile(path) {
 			return await real.hashFile(live(path));
 		},

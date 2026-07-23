@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import { acquireLease } from "./browser-use-locks";
+import { acquireLease, releaseLease } from "./browser-use-locks";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -19,7 +19,9 @@ import {
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import {
 	type RunStoreDeps,
+	createRunIntegrationPort,
 	createSharedRun,
+	leaseKeyForRun,
 	loadSharedRun,
 } from "./browser-use-runs";
 import {
@@ -232,6 +234,35 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		expect(continuation.next_action_id).toBe("inspect_shared_run");
 	});
 
+	test("receipt projection I/O failure becomes a typed CLI refusal", async () => {
+		const store = await makeStore();
+		await createOk(store.deps, blockedRun("run-read-failure"));
+		const originalFs = store.deps.fs;
+		const result = await runForTest(
+			["run", "status", "--json"],
+			makeRuntime({
+				env: store.env,
+				platformFs: {
+					...originalFs,
+					async readDirectory(path) {
+						if (path === store.deps.paths.state.runsDir) {
+							throw Object.assign(new Error("permission denied"), {
+								code: "EACCES",
+							});
+						}
+						return await originalFs.readDirectory(path);
+					},
+				},
+			}),
+		);
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "store_read_failed" });
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"repair_xdg_root",
+		);
+	});
+
 	test("--run projects the full shared run with JSON/plain field parity", async () => {
 		const store = await makeStore();
 		await createOk(store.deps, blockedRun("run-parity"));
@@ -284,7 +315,7 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		);
 	});
 
-	test("a corrupt run record fails closed as run_record_corrupt toward repair status", async () => {
+	test("a corrupt run record fails closed toward explicit manual record repair", async () => {
 		const store = await makeStore();
 		const path = store.deps.paths.state.runFile("run-corrupt");
 		await store.deps.fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -297,21 +328,42 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		const json = parseJson(result.stdout);
 		expect(json.error).toMatchObject({ code: "run_record_corrupt" });
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"inspect_repair_status",
+			"inspect_corrupt_store_record",
 		);
 	});
 
 	test("S20: receipts and run projections are redacted — the auth fragment never surfaces", async () => {
 		const store = await makeStore();
-		await createOk(
+		const runInput = blockedRun("run-opaque");
+		await createOk(store.deps, runInput);
+		const loadedBeforeAuth = await loadSharedRun(store.deps, runInput.run_id);
+		if (!loadedBeforeAuth.ok) throw new Error("unreachable");
+		const held = await acquireLease(store.deps, {
+			key: leaseKeyForRun(loadedBeforeAuth.run),
+			holderId: "auth-transaction",
+			ttlMs: 5_000,
+		});
+		if (!held.ok) throw new Error("unreachable");
+		const port = createRunIntegrationPort(
 			store.deps,
-			blockedRun("run-opaque", {
-				auth_fragment: {
-					schema_version: "1",
-					fragment: { binding_ref: "opaque-binding-ref-1" },
-				},
-			}),
+			{ validateSecretFreeFragment: () => true },
+			{
+				fencing_token: held.lease.fencing_token,
+				activation_epoch: held.lease.activation_epoch,
+				holderId: held.lease.holder_id,
+			},
 		);
+		const committed = await port.commitAuthOutcome({
+			run_id: runInput.run_id,
+			expected_revision: loadedBeforeAuth.run.revision,
+			fragment: {
+				schema_version: "1",
+				fragment: { binding_ref: "opaque-binding-ref-1" },
+			},
+			summary: { state: "awaiting-auth", continuation: CONTINUATION },
+		});
+		expect(committed.ok).toBe(true);
+		await releaseLease(store.deps, held.lease);
 		for (const argv of [
 			["run", "status", "--run", "run-opaque", "--json"],
 			["run", "status", "--json"],
@@ -508,6 +560,33 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 		expect(result.stdout).toContain("rolled_back=false");
 		expect(result.stdout).toContain("state=not-achieved");
 	});
+
+	test("cancel cannot mutate through another holder's live lease", async () => {
+		const store = await makeStore();
+		const run = blockedRun("run-cancel-contended", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "cancel-contended",
+				},
+			});
+		await createOk(store.deps, run);
+		const held = await acquireLease(store.deps, {
+			key: leaseKeyForRun(run),
+			holderId: "active-worker",
+			ttlMs: 5_000,
+		});
+		expect(held.ok).toBe(true);
+		const result = await runForTest(
+			["run", "cancel", "--run", run.run_id, "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({ code: "lease_held" });
+		const loaded = await loadSharedRun(store.deps, run.run_id);
+		if (!loaded.ok) throw new Error("unreachable");
+		expect(loaded.run.revision).toBe(1);
+		expect(loaded.run.state).toBe("awaiting-auth");
+	});
 });
 
 describe("artifact list (R29/R35, AE14 substrate)", () => {
@@ -666,7 +745,30 @@ describe("repair status projection (R27/R35)", () => {
 		expect(data.next_action).toBe("wait_for_lease");
 	});
 
-	test("pending tombstones route the next action to inspect_repair_status", async () => {
+	test("repair apply refuses while a live lease exists and leaves orphans untouched", async () => {
+		const store = await makeStore();
+		const acquired = await acquireLease(store.deps, {
+			key: "agent-chrome\0default",
+			holderId: "active-run",
+			ttlMs: 5_000,
+		});
+		expect(acquired.ok).toBe(true);
+		const orphanPath = `${store.deps.paths.state.runsDir}/active.tmp-42-8`;
+		await store.deps.fs.mkdir(store.deps.paths.state.runsDir, {
+			recursive: true,
+			mode: 0o700,
+		});
+		await store.deps.fs.writeFile(orphanPath, "", 0o600);
+		const result = await runForTest(
+			["repair", "apply", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({ code: "lease_held" });
+		expect(await store.deps.fs.lstat(orphanPath)).toMatchObject({ kind: "file" });
+	});
+
+	test("pending tombstones route the next action to apply_repair", async () => {
 		const store = await makeStore();
 		const tombstonePath = artifactTombstonePath(
 			store.deps.paths,
@@ -701,7 +803,94 @@ describe("repair status projection (R27/R35)", () => {
 			artifact_id: "art-t",
 			phase: "pending",
 		});
-		expect(data.next_action).toBe("inspect_repair_status");
+		expect(data.next_action).toBe("apply_repair");
+	});
+
+	test("repair apply converges pending tombstones and recognized orphan temp files", async () => {
+		const store = await makeStore();
+		const tombstonePath = artifactTombstonePath(
+			store.deps.paths,
+			"run-repair",
+			"art-repair",
+		);
+		await store.deps.fs.mkdir(dirname(tombstonePath), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await store.deps.fs.writeFileDurable(
+			tombstonePath,
+			encodeDurableRecord("tombstone", {
+				artifact_id: "art-repair",
+				run_id: "run-repair",
+				retention: "ephemeral",
+				reason: "retention-expiry",
+				phase: "pending",
+				deleted_at_epoch_ms: 1_000,
+			}),
+			0o600,
+		);
+		const orphanPath = `${store.deps.paths.state.runsDir}/abandoned.tmp-7-11`;
+		await store.deps.fs.mkdir(dirname(orphanPath), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await store.deps.fs.writeFile(orphanPath, "", 0o600);
+
+		const applied = await runForTest(
+			["repair", "apply", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(applied.exitCode).toBe(0);
+		const appliedData = parseJson(applied.stdout).data as Record<string, unknown>;
+		expect(appliedData).toMatchObject({
+			contract: "browser-use.repair-status",
+			repaired_tombstone_count: 1,
+			removed_orphan_count: 1,
+			repaired_artifact_ids: ["art-repair"],
+			next_action: "inspect_repair_status",
+		});
+		expect(JSON.stringify(appliedData)).not.toContain(orphanPath);
+
+		const standing = await store.deps.fs.readTextFile(tombstonePath);
+		expect(
+			(JSON.parse(standing) as { payload: { phase: string } }).payload.phase,
+		).toBe("complete");
+		expect(await store.deps.fs.lstat(orphanPath)).toBeUndefined();
+		const status = await runForTest(
+			["repair", "status", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		const statusData = parseJson(status.stdout).data as Record<string, unknown>;
+		expect(statusData.pending_tombstones).toEqual([]);
+		expect(statusData.orphan_temp_files).toEqual([]);
+	});
+
+	test("read-only status does not create or probe absent XDG roots", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const real = createDefaultPlatformFs();
+		const mutations: string[] = [];
+		const platformFs = {
+			...real,
+			mkdir: async () => {
+				mutations.push("mkdir");
+			},
+			chmod: async () => {
+				mutations.push("chmod");
+			},
+			writeFile: async () => {
+				mutations.push("writeFile");
+			},
+			unlink: async () => {
+				mutations.push("unlink");
+			},
+		};
+		const result = await runForTest(
+			["run", "status", "--json"],
+			makeRuntime({ env: xdg.env, platformFs }),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(mutations).toEqual([]);
 	});
 
 	test("plain output projects the same repair fields (R35 parity)", async () => {

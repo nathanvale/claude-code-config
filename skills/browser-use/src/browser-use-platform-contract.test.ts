@@ -79,6 +79,7 @@ describe("platform family help and discovery", () => {
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+			"repair-apply": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 		} as const;
 		// Store-backed commands (platform plan U2) additionally declare the XDG
 		// env vars the one path owner consumes; the pure/shell commands keep the
@@ -98,6 +99,7 @@ describe("platform family help and discovery", () => {
 			"run-cancel",
 			"artifact-list",
 			"repair-status",
+			"repair-apply",
 		]);
 		for (const [command, contractId] of Object.entries(expectedContractIds)) {
 			const discovered = tree.commands[command];

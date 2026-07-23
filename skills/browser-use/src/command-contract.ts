@@ -371,7 +371,7 @@ const BROWSER_USE_ARTIFACT_SUBCOMMANDS = ["list"] as const;
 export type BrowserUseArtifactSubcommand =
 	(typeof BROWSER_USE_ARTIFACT_SUBCOMMANDS)[number];
 
-const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status"] as const;
+const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
 export type BrowserUseRepairSubcommand =
 	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
 
@@ -409,7 +409,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	runbook: "Browser Runbook catalog.",
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
-	repair: "Platform repair status.",
+	repair: "Platform repair status and bounded repair execution.",
 } as const satisfies Record<BrowserUseFamily, string>;
 
 // Browser Target Discovery modes (migration U1, KTD2). handoff-bound replaced
@@ -437,7 +437,8 @@ export type BrowserUseCommand =
 	| "runbook-list"
 	| "migration-status"
 	| "artifact-list"
-	| "repair-status";
+	| "repair-status"
+	| "repair-apply";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -510,10 +511,16 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"store_record_conflict",
 	"store_record_corrupt",
 	"store_record_missing",
+	"store_read_failed",
 	"lease_held",
 	"lease_fencing_stale",
 	"lease_epoch_stale",
 	"lease_expired",
+	"lease_missing",
+	"lease_store_failed",
+	"epoch_store_failed",
+	"usage_error",
+	"runtime_error",
 	"run_not_found",
 	"run_record_invalid",
 	"run_record_corrupt",
@@ -758,6 +765,12 @@ export const browserUsePlatformStoreFailureActions = [
 		sideEffects: ["check"],
 	},
 	{
+		id: "inspect_corrupt_store_record",
+		summary:
+			"Inspect or restore the named corrupt durable record; bounded repair apply does not rewrite corrupt records.",
+		sideEffects: ["check"],
+	},
+	{
 		id: "change_export_destination",
 		summary:
 			"Pass an absolute export destination outside every browser-use root.",
@@ -766,6 +779,12 @@ export const browserUsePlatformStoreFailureActions = [
 ] as const;
 
 export const browserUsePlatformStoreSuccessActions = [
+	{
+		id: "apply_repair",
+		summary:
+			"Apply the bounded repair plan with browser-use repair apply, then inspect repair status again.",
+		sideEffects: ["write"],
+	},
 	{
 		id: "inspect_shared_run",
 		summary: "Read the shared run projection and follow its continuation.",
@@ -1428,6 +1447,31 @@ export const browserUseContracts = defineCommandFacadeContract(
 			mutation: "check",
 			sideEffects: ["check"],
 			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRepairStatusResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"repair-apply": {
+			script: "browser-use",
+			summary:
+				"Apply pending artifact tombstones and remove recognized orphan temp files; refuses while a live lease exists.",
+			usage: ["repair apply [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Repair status is the read-only preview; apply executes only its bounded repair classes.",
+			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,

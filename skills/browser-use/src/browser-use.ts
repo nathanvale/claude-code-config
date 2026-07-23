@@ -76,10 +76,17 @@ import {
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
 	type BrowserUsePathRefusal,
+	inspectBrowserUsePaths,
 	openBrowserUsePaths,
 } from "./browser-use-paths";
-import { listLeases } from "./browser-use-locks";
 import {
+	acquireLease,
+	listLeases,
+	releaseLease,
+	withActivationEpochBarrier,
+} from "./browser-use-locks";
+import {
+	deleteArtifact,
 	listPendingTombstones,
 	readArtifactStatus,
 } from "./browser-use-retention";
@@ -87,11 +94,15 @@ import {
 	type RunResumeObservedIdentity,
 	type RunStoreDeps,
 	casUpdateSharedRun,
+	leaseKeyForRun,
 	listSharedRunReceipts,
 	loadSharedRun,
 	resumeSharedRun,
 } from "./browser-use-runs";
-import { listOrphanTempFiles } from "./browser-use-store";
+import {
+	listOrphanTempFiles,
+	removeOrphanTempFiles,
+} from "./browser-use-store";
 import { runTargetsList } from "./browser-use-discovery";
 import {
 	runTargetsSelect,
@@ -208,7 +219,8 @@ export async function runBrowserUseCli(
 				parsedRunIdFlag(diagnosticInput) !== undefined;
 			const durationMs = () =>
 				runtime.now() - diagnosticArgv.options.startedAtMs;
-				return executeCommand({
+			try {
+				return await executeCommand({
 					parsed,
 					runtime,
 					stdout,
@@ -218,6 +230,16 @@ export async function runBrowserUseCli(
 					diagnosticVerbose: diagnosticArgv.options.verbose,
 					durationMs,
 				});
+			} catch (error) {
+				return emitCliError({
+					error,
+					outputMode: parsed.outputMode,
+					stdout,
+					stderr,
+					runId,
+					durationMs: durationMs(),
+				});
+			}
 		});
 	} finally {
 		resetCliDiagnostics();
@@ -333,7 +355,8 @@ async function executeCommand(input: {
 			parsed.command === "run-resume" ||
 			parsed.command === "run-cancel" ||
 			parsed.command === "artifact-list" ||
-			parsed.command === "repair-status") &&
+			parsed.command === "repair-status" ||
+			parsed.command === "repair-apply") &&
 		!parsed.dryRun
 	) {
 		const platformInput: PlatformCommandInput = {
@@ -349,7 +372,8 @@ async function executeCommand(input: {
 		if (parsed.command === "run-resume") return runRunResume(platformInput);
 		if (parsed.command === "run-cancel") return runRunCancel(platformInput);
 		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
-		return runRepairStatus(platformInput);
+		if (parsed.command === "repair-status") return runRepairStatus(platformInput);
+		return runRepairApply(platformInput);
 	}
 
 	if (parsed.family === "operate" && !parsed.dryRun) {
@@ -666,6 +690,11 @@ type PlatformStoreFailure = {
 	recoverability: RuntimeErrorRecoverability;
 };
 
+function platformErrorCode(error: unknown): string {
+	const code = (error as { code?: unknown }).code;
+	return typeof code === "string" && code !== "" ? code : "unknown";
+}
+
 // Map library refusal codes onto exit codes and continuations. Every store
 // state failure fails closed at 20 (the U1 platform exit table); only
 // execution-unavailable reports the runtime-dependency exit 1.
@@ -699,9 +728,27 @@ function platformStoreFailureOf(
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "retry",
 			};
+		case "run_record_corrupt":
+		case "run_record_invalid":
+		case "store_record_corrupt":
+			return {
+				code,
+				message,
+				actionId: "inspect_corrupt_store_record",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+		case "store_read_failed":
+			return {
+				code,
+				message,
+				actionId: "repair_xdg_root",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
 		default:
-			// run_record_corrupt/invalid, lease fencing/epoch/expiry, and every
-			// remaining store fault route through repair status.
+			// Lease fencing/epoch/expiry and remaining repairable store faults
+			// route through the bounded repair projection.
 			return {
 				code,
 				message,
@@ -771,11 +818,12 @@ function emitXdgRefusal(
 // library seam.
 async function openPlatformStore(
 	input: PlatformCommandInput,
+	access: "read" | "write" = "read",
 ): Promise<{ ok: true; deps: RunStoreDeps } | { ok: false; exitCode: number }> {
-	const opened = await openBrowserUsePaths(
-		input.runtime.platformFs,
-		input.runtime.env,
-	);
+	const opened =
+		access === "write"
+			? await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env)
+			: await inspectBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
 	if (!opened.ok) {
 		return { ok: false, exitCode: emitXdgRefusal(input, opened.refusal) };
 	}
@@ -911,7 +959,18 @@ async function runRunStatus(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 	const runFlag = stringField(input.parsed.flagValues["--run"]);
 	if (runFlag === undefined) {
-		const receipts = await listSharedRunReceipts(store.deps);
+		let receipts: Awaited<ReturnType<typeof listSharedRunReceipts>>;
+		try {
+			receipts = await listSharedRunReceipts(store.deps);
+		} catch (error) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					"store_read_failed",
+					`shared-run receipt listing failed (${platformErrorCode(error)}).`,
+				),
+			);
+		}
 		if (input.parsed.outputMode === "plain") {
 			input.stdout.write(
 				platformPlainHeader(BROWSER_USE_SHARED_RUN_CONTRACT_ID, input.caller, [
@@ -1041,7 +1100,7 @@ async function runRunResume(input: PlatformCommandInput): Promise<number> {
  * @returns Process exit code
  */
 async function runRunCancel(input: PlatformCommandInput): Promise<number> {
-	const store = await openPlatformStore(input);
+	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
 	const runFlag = stringField(input.parsed.flagValues["--run"]) ?? "";
 	const loaded = await loadSharedRun(store.deps, runFlag);
@@ -1069,16 +1128,42 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 	}
 	const targetState: BrowserUseRunState =
 		report.external_effect === "none" ? "not-achieved" : "unknown";
-	const updated = await casUpdateSharedRun(store.deps, {
-		runId: runFlag,
-		expectedRevision: loaded.run.revision,
-		mutate: (run) => {
-			// Terminal truth carries no blocked-state continuation; everything
-			// else (artifacts, attestation reference, dispatch truth) survives.
-			const { continuation: _continuation, ...rest } = run;
-			return { ...rest, state: targetState };
-		},
+	const acquired = await acquireLease(store.deps, {
+		key: leaseKeyForRun(loaded.run),
+		holderId: `cancel-${runFlag}`,
+		ttlMs: 10_000,
 	});
+	if (!acquired.ok) {
+		const message =
+			acquired.code === "lease_held"
+				? acquired.continuation.summary
+				: acquired.message;
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(acquired.code, message),
+		);
+	}
+	const claim = {
+		fencing_token: acquired.lease.fencing_token,
+		activation_epoch: acquired.lease.activation_epoch,
+		holderId: acquired.lease.holder_id,
+	};
+	let updated: Awaited<ReturnType<typeof casUpdateSharedRun>>;
+	try {
+		updated = await casUpdateSharedRun(store.deps, {
+			runId: runFlag,
+			expectedRevision: loaded.run.revision,
+			lease: claim,
+			mutate: (run) => {
+				// Terminal truth carries no blocked-state continuation; everything
+				// else (artifacts, attestation reference, dispatch truth) survives.
+				const { continuation: _continuation, ...rest } = run;
+				return { ...rest, state: targetState };
+			},
+		});
+	} finally {
+		await releaseLease(store.deps, acquired.lease);
+	}
 	if (!updated.ok) {
 		return emitPlatformStoreFailure(
 			input,
@@ -1234,8 +1319,8 @@ async function runArtifactList(input: PlatformCommandInput): Promise<number> {
  * `repair status` (R27/R35). Projects the admitted roots, the runtime
  * fallback flag, every durable lease with its liveness classification,
  * orphan temp files, and pending tombstones — plus EXACTLY one next safe
- * action: a live lease -> wait_for_lease; pending tombstones -> rerun
- * deletion via inspect_repair_status; else the healthy inspect_shared_run.
+ * action: a live lease -> wait_for_lease; a pending tombstone or orphan ->
+ * apply_repair; otherwise inspect_shared_run.
  * Success data shows the operator's own admitted root paths (they are the
  * repair surface); error envelopes never echo paths.
  *
@@ -1254,8 +1339,8 @@ async function runRepairStatus(input: PlatformCommandInput): Promise<number> {
 	const tombstones = await listPendingTombstones(deps);
 	const nextActionId: PlatformStoreActionId = leases.some((lease) => lease.live)
 		? "wait_for_lease"
-		: tombstones.length > 0
-			? "inspect_repair_status"
+		: tombstones.length > 0 || orphans.length > 0
+			? "apply_repair"
 			: "inspect_shared_run";
 	const { roots } = deps.paths.resolution;
 	const runtimeFallback = deps.paths.resolution.runtime_fallback;
@@ -1299,6 +1384,104 @@ async function runRepairStatus(input: PlatformCommandInput): Promise<number> {
 				leases,
 				orphan_temp_files: orphans,
 				pending_tombstones: tombstones,
+				next_action: nextActionId,
+				caller: input.caller,
+			},
+			runtime_actions: [platformStoreAction(nextActionId)],
+			continuation: { next_action_id: nextActionId },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+/**
+ * Apply the bounded plan projected by `repair status`. Live leases block all
+ * changes. Pending tombstones converge through the retention owner; only
+ * recognized durable-write temp orphans are removed.
+ */
+async function runRepairApply(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const { deps } = store;
+	const applied = await withActivationEpochBarrier(
+		deps,
+		{ holderId: "repair-apply" },
+		async () => {
+			const leases = await listLeases(deps);
+			if (leases.some((lease) => lease.live)) {
+				return {
+					ok: false as const,
+					code: "lease_held",
+					message:
+						"a live lease holds platform state; repair apply made no changes.",
+				};
+			}
+			const repairedArtifactIds: string[] = [];
+			for (const tombstone of await listPendingTombstones(deps)) {
+				const deleted = await deleteArtifact(deps, {
+					runId: tombstone.run_id,
+					artifactId: tombstone.artifact_id,
+					reason: tombstone.reason,
+				});
+				if (!deleted.ok) {
+					return {
+						ok: false as const,
+						code: deleted.code,
+						message: deleted.message,
+					};
+				}
+				repairedArtifactIds.push(tombstone.artifact_id);
+			}
+			const removed = await removeOrphanTempFiles(
+				deps.fs,
+				deps.paths.resolution.roots.state,
+			);
+			if (!removed.ok) {
+				return {
+					ok: false as const,
+					code: removed.failure.code,
+					message: removed.failure.message,
+				};
+			}
+			return {
+				ok: true as const,
+				repairedArtifactIds,
+				removedOrphanCount: removed.removed,
+			};
+		},
+	);
+	if (!applied.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(applied.code, applied.message),
+		);
+	}
+	const { repairedArtifactIds, removedOrphanCount } = applied;
+	const nextActionId: PlatformStoreActionId = "inspect_repair_status";
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_REPAIR_STATUS_CONTRACT_ID, input.caller, [
+				`repaired_tombstone_count=${repairedArtifactIds.length}`,
+				`removed_orphan_count=${removedOrphanCount}`,
+				`next_action=${nextActionId}`,
+			]),
+		);
+		for (const artifactId of repairedArtifactIds) {
+			input.stdout.write(`repaired_artifact=${artifactId}\n`);
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				repaired_tombstone_count: repairedArtifactIds.length,
+				removed_orphan_count: removedOrphanCount,
+				repaired_artifact_ids: repairedArtifactIds,
 				next_action: nextActionId,
 				caller: input.caller,
 			},

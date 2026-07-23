@@ -360,6 +360,7 @@ export const BROWSER_USE_OPAQUE_AUTH_REFERENCE_KEYS = [
 // A string value carrying an op:// reference or a raw ws(s):// endpoint is
 // secret-shaped regardless of its key (R13 redacted receipt).
 const SECRET_SHAPED_VALUE = /\b(?:op|wss?):\/\//i;
+const LOCAL_PATH_SHAPED_VALUE = /(?:^|[\s(])(?:~\/|\/)(?!\/)\S+/;
 
 /**
  * Redaction guarantee (R13 "redacted receipt"; plan verification "no
@@ -400,7 +401,13 @@ function walkForViolations(
 	seen: WeakSet<object>,
 ): void {
 	if (typeof value === "string") {
-		if (SECRET_SHAPED_VALUE.test(value)) {
+		const isSanitizedPathShape =
+			path === "sanitized_target.path_shape" ||
+			path.endsWith(".sanitized_target.path_shape");
+		if (
+			SECRET_SHAPED_VALUE.test(value) ||
+			(!isSanitizedPathShape && LOCAL_PATH_SHAPED_VALUE.test(value))
+		) {
 			out.push({ path: path === "" ? "(root)" : path, reason: "secret_shaped_value" });
 		}
 		return;

@@ -25,6 +25,7 @@ import { redactUnsafeText } from "./browser-use-core";
 import {
 	type LeaseWriteClaim,
 	validateStoredLeaseForWrite,
+	withActivationEpochBarrier,
 } from "./browser-use-locks";
 import type {
 	BrowserUseAdmittedPaths,
@@ -268,9 +269,9 @@ export async function loadSharedRun(
 
 /**
  * Create one shared run at revision 1 (R24). The initial run must pass the
- * U1 `validateSharedRun` guard — a fresh run is a blocked state with exactly
- * one continuation, or ready-with-attestation; which lane/state to start in
- * is U4/U6 routing policy, NOT decided here. Written via the store CAS with
+ * U1 `validateSharedRun` guard. Generic creation cannot forge auth-owned
+ * fragment, attestation, or ready state; auth readiness must enter through
+ * the leased auth integration Port. Written via the store CAS with
  * `expectedRevision: null` (must-not-exist), so a duplicate create is a
  * typed `store_record_conflict` and a rejected create writes nothing. U2's
  * CLI does not create runs; this is the library seam U4/U6 and tests call.
@@ -283,6 +284,18 @@ export async function createSharedRun(
 	deps: RunStoreDeps,
 	run: Omit<BrowserUseSharedRun, "revision">,
 ): Promise<{ ok: true; run: BrowserUseSharedRun } | RunFailure> {
+	if (run.auth_fragment !== undefined) {
+		return runFailure(
+			"run_auth_fragment_forbidden",
+			"generic run creation cannot persist auth_fragment; use the auth integration port.",
+		);
+	}
+	if (run.auth_attestation !== undefined || run.state === "ready") {
+		return runFailure(
+			"run_auth_state_forbidden",
+			"generic run creation cannot persist auth attestation or ready state; use the auth integration port.",
+		);
+	}
 	const path = deps.paths.state.runFile(run.run_id);
 	const initial: BrowserUseSharedRun = { ...run, revision: 1 };
 	const issues = validateSharedRun(initial);
@@ -323,16 +336,15 @@ export async function createSharedRun(
 
 /**
  * Every durable run mutation (R13 pipeline, R27 write gate): exclusive
- * per-run lock -> load -> revision CAS -> `validateStoredLeaseForWrite` when
- * a lease claim is presented (mutating transitions REQUIRE one; the caller
- * owns that policy — `commitAuthOutcome` writes under the run's already-held
- * lease without re-presenting it) -> pure `mutate` -> U1 `validateSharedRun`
- * -> durable write at `revision + 1`. `mutate` never manages identity or the
- * CAS token: a changed `run_id` is a typed refusal and `revision` is forced
- * to `expectedRevision + 1` by this module. A rejected update writes NOTHING.
+ * activation barrier -> per-run lock -> load -> revision CAS ->
+ * lease validation -> pure `mutate` -> auth-fragment boundary ->
+ * `validateSharedRun` -> durable write at `revision + 1`. The generic seam
+ * cannot create, replace, or remove `auth_fragment`/`auth_attestation`, or
+ * transition into `ready`; the auth integration Port owns those changes.
+ * A rejected update writes nothing.
  *
  * @param deps - Injected fs, admitted paths, clock
- * @param input - Run id, expected revision, optional lease claim, pure mutate
+ * @param input - Run id, expected revision, required lease claim, pure mutate
  * @returns The written run, or one typed refusal
  */
 export async function casUpdateSharedRun(
@@ -340,35 +352,33 @@ export async function casUpdateSharedRun(
 	input: {
 		runId: string;
 		expectedRevision: number;
-		lease?: LeaseWriteClaim;
+		lease: LeaseWriteClaim;
 		mutate: (run: BrowserUseSharedRun) => BrowserUseSharedRun;
 	},
 ): Promise<{ ok: true; run: BrowserUseSharedRun } | RunFailure> {
 	const path = deps.paths.state.runFile(input.runId);
 	const dirs = await ensureRunDirs(deps, input.runId);
 	if (!dirs.ok) return dirs;
-	const outcome = await withExclusiveFileLock<
-		{ ok: true; run: BrowserUseSharedRun } | RunFailure
-	>(
-		deps.fs,
-		{
-			lockPath: runLockPath(deps.paths, input.runId),
-			holderId: `update-${input.runId}`,
-			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
-		async () => {
-			const loaded = await loadSharedRun(deps, input.runId);
-			if (!loaded.ok) {
-				return { ok: false, code: loaded.code, message: loaded.message };
-			}
-			if (loaded.run.revision !== input.expectedRevision) {
-				return runFailure(
-					"run_revision_stale",
-					`expected revision ${input.expectedRevision} but the run is at ${loaded.run.revision}.`,
-				);
-			}
-			if (input.lease !== undefined) {
+	const updateUnderRunLock = async () =>
+		await withExclusiveFileLock<{ ok: true; run: BrowserUseSharedRun } | RunFailure>(
+			deps.fs,
+			{
+				lockPath: runLockPath(deps.paths, input.runId),
+				holderId: `update-${input.runId}`,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const loaded = await loadSharedRun(deps, input.runId);
+				if (!loaded.ok) {
+					return { ok: false, code: loaded.code, message: loaded.message };
+				}
+				if (loaded.run.revision !== input.expectedRevision) {
+					return runFailure(
+						"run_revision_stale",
+						`expected revision ${input.expectedRevision} but the run is at ${loaded.run.revision}.`,
+					);
+				}
 				const gate = await validateStoredLeaseForWrite(deps, {
 					key: leaseKeyForRun(loaded.run),
 					presented: input.lease,
@@ -376,45 +386,71 @@ export async function casUpdateSharedRun(
 				if (!gate.ok) {
 					return { ok: false, code: gate.code, message: gate.message };
 				}
-			}
-			const mutated = input.mutate(loaded.run);
-			if (mutated.run_id !== loaded.run.run_id) {
-				return runFailure(
-					"run_id_immutable",
-					"mutate changed run_id; run identity is immutable.",
-				);
-			}
-			const next: BrowserUseSharedRun = {
-				...mutated,
-				revision: loaded.run.revision + 1,
-			};
-			const issues = validateSharedRun(next);
-			const firstIssue = issues[0];
-			if (firstIssue !== undefined) {
-				return runFailure(
-					firstIssue.code,
-					issues.map((issue) => issue.message).join(" "),
-				);
-			}
-			const payload: BrowserUseSharedRunPayload = {
-				...next,
-				created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
-				updated_at_epoch_ms: deps.clock(),
-			};
-			const admitted = admitRedactionClean(payload);
-			if (!admitted.ok) return admitted;
-			const written = await writeDurableFile(deps.fs, {
-				path,
-				contents: encodeDurableRecord("shared-run", payload),
-			});
-			if (!written.ok) {
-				return runFailure(written.failure.code, written.failure.message);
-			}
-			return { ok: true, run: next };
-		},
+				const mutated = input.mutate(loaded.run);
+				if (
+					JSON.stringify(mutated.auth_fragment) !==
+					JSON.stringify(loaded.run.auth_fragment)
+				) {
+					return runFailure(
+						"run_auth_fragment_forbidden",
+						"generic run mutation cannot create, replace, or remove auth_fragment; use the auth integration port.",
+					);
+				}
+				if (
+					JSON.stringify(mutated.auth_attestation) !==
+						JSON.stringify(loaded.run.auth_attestation) ||
+					(loaded.run.state !== "ready" && mutated.state === "ready")
+				) {
+					return runFailure(
+						"run_auth_state_forbidden",
+						"generic run mutation cannot change auth attestation or transition into ready state; use the auth integration port.",
+					);
+				}
+				if (mutated.run_id !== loaded.run.run_id) {
+					return runFailure(
+						"run_id_immutable",
+						"mutate changed run_id; run identity is immutable.",
+					);
+				}
+				const next: BrowserUseSharedRun = {
+					...mutated,
+					revision: loaded.run.revision + 1,
+				};
+				const issues = validateSharedRun(next);
+				const firstIssue = issues[0];
+				if (firstIssue !== undefined) {
+					return runFailure(
+						firstIssue.code,
+						issues.map((issue) => issue.message).join(" "),
+					);
+				}
+				const payload: BrowserUseSharedRunPayload = {
+					...next,
+					created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
+					updated_at_epoch_ms: deps.clock(),
+				};
+				const admitted = admitRedactionClean(payload);
+				if (!admitted.ok) return admitted;
+				const written = await writeDurableFile(deps.fs, {
+					path,
+					contents: encodeDurableRecord("shared-run", payload),
+				});
+				if (!written.ok) {
+					return runFailure(written.failure.code, written.failure.message);
+				}
+				return { ok: true, run: next };
+			},
+		);
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `run-update-${input.runId}` },
+		updateUnderRunLock,
 	);
 	if (isLockFailure(outcome)) {
 		return runFailure(outcome.failure.code, outcome.failure.message);
+	}
+	if (!outcome.ok && outcome.code === "epoch_store_failed") {
+		return runFailure(outcome.code, outcome.message);
 	}
 	return outcome;
 }
@@ -422,18 +458,11 @@ export async function casUpdateSharedRun(
 // --- Auth integration Port (R6, AE7 substrate) ---------------------------------
 
 /**
- * The U1 integration Port made durable (spec §E). `commitAuthOutcome` =
- * exclusive per-run lock -> load -> `applyAuthCommit` (the U1 pure reducer —
- * it alone enforces revision CAS, terminal-state rejection, the
- * ready/blocked invariants, and the `validateSecretFreeFragment` gate) ->
- * durable write of the reducer's next run. Every reducer rejection is
- * returned VERBATIM and nothing touches disk — a rejected fragment is never
- * persisted. The write does NOT present a platform lease claim: the auth
- * transaction operates under the run's already-held lease (S12), and the
- * per-run lock plus the reducer's revision CAS serialize the write itself.
- * The Port's result vocabulary is auth-domain-only, so infrastructure faults
- * (unloadable run, failed flush, contended lock) THROW with a redacted
- * message instead of miscoding as an auth rejection.
+ * The U1 integration Port made durable (spec §E). Under the activation barrier
+ * and per-run lock it validates the presented lease, then applies the auth
+ * reducer and durably writes its next run. Every reducer rejection is returned
+ * verbatim and writes nothing. The Port's result vocabulary is auth-domain-only,
+ * so infrastructure faults throw with a redacted message.
  *
  * @param deps - Injected fs, admitted paths, clock
  * @param authContract - Auth-owned runtime fragment admission
@@ -442,69 +471,88 @@ export async function casUpdateSharedRun(
 export function createRunIntegrationPort(
 	deps: RunStoreDeps,
 	authContract: Pick<BrowserUseAuthContractPort, "validateSecretFreeFragment">,
+	lease: LeaseWriteClaim,
 ): BrowserUseRunIntegrationPort {
 	return {
 		async commitAuthOutcome(input): Promise<BrowserUseAuthCommitResult> {
 			const path = deps.paths.state.runFile(input.run_id);
 			const dirs = await ensureRunDirs(deps, input.run_id);
 			if (!dirs.ok) throw new Error(dirs.message);
-			const outcome = await withExclusiveFileLock<BrowserUseAuthCommitResult>(
-				deps.fs,
-				{
-					lockPath: runLockPath(deps.paths, input.run_id),
-					holderId: `auth-commit-${input.run_id}`,
-					staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-					clock: deps.clock,
-				},
-				async () => {
-					const loaded = await loadSharedRun(deps, input.run_id);
-					if (!loaded.ok) {
-						throw new Error(
-							redactUnsafeText(
-								`auth commit could not load the run (${loaded.code}).`,
-							),
+			const commitUnderRunLock = async () =>
+				await withExclusiveFileLock<BrowserUseAuthCommitResult>(
+					deps.fs,
+					{
+						lockPath: runLockPath(deps.paths, input.run_id),
+						holderId: `auth-commit-${input.run_id}`,
+						staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+						clock: deps.clock,
+					},
+					async () => {
+						const loaded = await loadSharedRun(deps, input.run_id);
+						if (!loaded.ok) {
+							throw new Error(
+								redactUnsafeText(
+									`auth commit could not load the run (${loaded.code}).`,
+								),
+							);
+						}
+						const gate = await validateStoredLeaseForWrite(deps, {
+							key: leaseKeyForRun(loaded.run),
+							presented: lease,
+						});
+						if (!gate.ok) {
+							throw new Error(
+								redactUnsafeText(
+									`auth commit lease rejected (${gate.code}).`,
+								),
+							);
+						}
+						const result = applyAuthCommit(
+							loaded.run,
+							{
+								expected_revision: input.expected_revision,
+								fragment: input.fragment,
+								summary: input.summary,
+							},
+							authContract,
 						);
-					}
-					const result = applyAuthCommit(
-						loaded.run,
-						{
-							expected_revision: input.expected_revision,
-							fragment: input.fragment,
-							summary: input.summary,
-						},
-						authContract,
-					);
-					if (!result.ok) return result;
-					const payload: BrowserUseSharedRunPayload = {
-						...result.run,
-						created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
-						updated_at_epoch_ms: deps.clock(),
-					};
-					// Redaction backstop is an infrastructure safety refusal, not an
-					// auth-domain rejection, so it THROWS (nothing persists) rather
-					// than miscoding as an auth outcome. The walker skips the opaque
-					// auth_fragment.fragment subtree (auth-commit gates it at admit).
-					const admitted = admitRedactionClean(payload);
-					if (!admitted.ok) throw new Error(admitted.message);
-					const written = await writeDurableFile(deps.fs, {
-						path,
-						contents: encodeDurableRecord("shared-run", payload),
-					});
-					if (!written.ok) {
-						throw new Error(
-							redactUnsafeText(
-								`auth commit could not persist the run (${written.failure.code}).`,
-							),
-						);
-					}
-					return result;
-				},
+						if (!result.ok) return result;
+						const payload: BrowserUseSharedRunPayload = {
+							...result.run,
+							created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
+							updated_at_epoch_ms: deps.clock(),
+						};
+						const admitted = admitRedactionClean(payload);
+						if (!admitted.ok) throw new Error(admitted.message);
+						const written = await writeDurableFile(deps.fs, {
+							path,
+							contents: encodeDurableRecord("shared-run", payload),
+						});
+						if (!written.ok) {
+							throw new Error(
+								redactUnsafeText(
+									`auth commit could not persist the run (${written.failure.code}).`,
+								),
+							);
+						}
+						return result;
+					},
+				);
+			const outcome = await withActivationEpochBarrier(
+				deps,
+				{ holderId: `auth-epoch-${input.run_id}` },
+				commitUnderRunLock,
 			);
 			if (isLockFailure(outcome)) {
 				throw new Error(
 					redactUnsafeText(
 						`auth commit lock unavailable (${outcome.failure.code}).`,
 					),
+				);
+			}
+			if (!outcome.ok && "code" in outcome) {
+				throw new Error(
+					redactUnsafeText(`auth commit epoch barrier unavailable (${outcome.code}).`),
 				);
 			}
 			return outcome;
@@ -608,7 +656,13 @@ export async function listSharedRunReceipts(
 	if (dirStat === undefined || dirStat.kind !== "directory") return [];
 	const receipts: BrowserUseRunReceiptPayload[] = [];
 	for (const entry of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
-		const read = await readDurableFile(deps.fs, deps.paths.state.runFile(entry));
+		let runPath: string;
+		try {
+			runPath = deps.paths.state.runFile(entry);
+		} catch {
+			continue;
+		}
+		const read = await readDurableFile(deps.fs, runPath);
 		if (read.status !== "present") continue;
 		const parsed = parseDurableRecord(read.raw, "shared-run");
 		if (!parsed.ok) continue;

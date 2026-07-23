@@ -40,7 +40,6 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "claude-fable-5[1m]",
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
   "hooks": {
@@ -183,7 +182,7 @@
     }
   },
   "alwaysThinkingEnabled": false,
-  "effortLevel": "xhigh",
+  "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark",

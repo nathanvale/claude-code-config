@@ -32,6 +32,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"migration-status",
 	"artifact-list",
 	"repair-status",
+	"repair-apply",
 ];
 
 function discoveryTree() {
@@ -106,4 +107,3 @@ describe("U3 command contract", () => {
 		}
 	});
 });
-

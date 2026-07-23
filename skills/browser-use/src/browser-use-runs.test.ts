@@ -1,6 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { dirname } from "node:path";
-import { acquireLease } from "./browser-use-locks";
+import {
+	type LeaseWriteClaim,
+	acquireLease,
+	advanceActivationEpoch,
+} from "./browser-use-locks";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -127,6 +131,25 @@ async function rawRecordOf(deps: RunStoreDeps, runId: string): Promise<string> {
 	return read.raw;
 }
 
+async function acquireClaim(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	holderId = "auth-transaction",
+): Promise<LeaseWriteClaim> {
+	const acquired = await acquireLease(deps, {
+		key: leaseKeyForRun(run),
+		holderId,
+		ttlMs: TTL_MS,
+	});
+	expect(acquired.ok).toBe(true);
+	if (!acquired.ok) throw new Error("unreachable");
+	return {
+		fencing_token: acquired.lease.fencing_token,
+		activation_epoch: acquired.lease.activation_epoch,
+		holderId: acquired.lease.holder_id,
+	};
+}
+
 // Seed an arbitrary record at the run's durable path (corrupt/wrong-kind
 // fixtures for the load matrix).
 async function seedRunRecord(
@@ -183,6 +206,43 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 			ok: true,
 			payload: loaded.payload,
 		});
+	});
+
+	test("generic create refuses an auth fragment that bypassed the integration port", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const result = await createSharedRun(deps, {
+			...blockedRun("run-create-auth-bypass"),
+			auth_fragment: FRAGMENT,
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			code: "run_auth_fragment_forbidden",
+		});
+		expect(
+			await readDurableFile(deps.fs, deps.paths.state.runFile("run-create-auth-bypass")),
+		).toEqual({ status: "missing" });
+	});
+
+	test("generic create refuses auth attestation and ready state", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const result = await createSharedRun(deps, {
+			...blockedRun("run-create-auth-state-bypass"),
+			state: "ready",
+			continuation: undefined,
+			auth_attestation: ATTESTATION,
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			code: "run_auth_state_forbidden",
+		});
+		expect(
+			await readDurableFile(
+				deps.fs,
+				deps.paths.state.runFile("run-create-auth-state-bypass"),
+			),
+		).toEqual({ status: "missing" });
 	});
 
 	test("an invalid initial run is a typed U1 issue and writes nothing", async () => {
@@ -292,11 +352,21 @@ describe("redaction admission on durable write (R13 backstop)", () => {
 	test("casUpdateSharedRun refuses a mutation that introduces a violation; the prior record is preserved", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		const created = await createOk(deps, blockedRun("run-redaction-update"));
+		const created = await createOk(
+			deps,
+			blockedRun("run-redaction-update", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "redaction-update",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, created, "redaction-writer");
 		const rawBefore = await rawRecordOf(deps, "run-redaction-update");
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-redaction-update",
 			expectedRevision: created.revision,
+			lease,
 			mutate: (run) => ({
 				...run,
 				continuation: {
@@ -314,14 +384,24 @@ describe("redaction admission on durable write (R13 backstop)", () => {
 });
 
 describe("casUpdateSharedRun (R13, R27)", () => {
-	test("a leaseless update mutates purely, bumps the revision, and keeps created_at", async () => {
+	test("a leased update mutates purely, bumps the revision, and keeps created_at", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-update-ok"));
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-ok", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "update-ok",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "update-writer");
 		clock.advance(500);
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-update-ok",
 			expectedRevision: 1,
+			lease,
 			mutate: (run) => ({
 				...run,
 				state: "awaiting-approval",
@@ -345,11 +425,21 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 	test("a stale expected revision is run_revision_stale and writes nothing", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-update-stale"));
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-stale", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "update-stale",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "stale-revision-writer");
 		const before = await rawRecordOf(deps, "run-update-stale");
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-update-stale",
 			expectedRevision: 7,
+			lease,
 			mutate: (run) => ({ ...run, state: "needs-human" }),
 		});
 		expect(updated).toMatchObject({ ok: false, code: "run_revision_stale" });
@@ -359,11 +449,21 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 	test("a mutate producing an invalid run is the typed U1 issue and writes nothing", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-update-invalid"));
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-invalid", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "update-invalid",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "invalid-writer");
 		const before = await rawRecordOf(deps, "run-update-invalid");
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-update-invalid",
 			expectedRevision: 1,
+			lease,
 			mutate: (run) => ({ ...run, continuation: undefined }),
 		});
 		expect(updated).toMatchObject({
@@ -376,10 +476,20 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 	test("a mutate changing run_id is a typed run_id_immutable refusal", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-update-identity"));
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-identity", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "update-identity",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "identity-writer");
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-update-identity",
 			expectedRevision: 1,
+			lease,
 			mutate: (run) => ({ ...run, run_id: "run-other" }),
 		});
 		expect(updated).toMatchObject({ ok: false, code: "run_id_immutable" });
@@ -391,6 +501,11 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 		const updated = await casUpdateSharedRun(deps, {
 			runId: "run-update-missing",
 			expectedRevision: 1,
+			lease: {
+				fencing_token: 1,
+				activation_epoch: 1,
+				holderId: "missing-writer",
+			},
 			mutate: (run) => run,
 		});
 		expect(updated).toMatchObject({ ok: false, code: "run_not_found" });
@@ -454,6 +569,118 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 		});
 		expect(updated).toMatchObject({ ok: false, code: "lease_fencing_stale" });
 		expect(await rawRecordOf(deps, "run-update-fenced")).toBe(before);
+	});
+
+	test("generic mutation cannot create or replace the auth-owned fragment", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-auth-bypass", {
+				environment_profile: { environment: "agent-chrome", profile: "auth-bypass" },
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "generic-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({ ...current, auth_fragment: FRAGMENT }),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "run_auth_fragment_forbidden",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("generic mutation cannot forge auth attestation or ready state", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-auth-state-bypass", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "auth-state-bypass",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "generic-auth-state-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				state: "ready",
+				continuation: undefined,
+				auth_attestation: ATTESTATION,
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "run_auth_state_forbidden",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("epoch advance waits for the lease-validated run commit barrier", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-epoch-barrier", {
+				environment_profile: { environment: "agent-chrome", profile: "epoch-barrier" },
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "barrier-writer");
+		const runPath = deps.paths.state.runFile(run.run_id);
+		let releaseWrite!: () => void;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let reachedWrite!: () => void;
+		const reachedWritePromise = new Promise<void>((resolve) => {
+			reachedWrite = resolve;
+		});
+		let pauseOnce = true;
+		const originalFs = deps.fs;
+		const gatedDeps: RunStoreDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async writeFileDurable(path, contents, mode) {
+					if (pauseOnce && path.startsWith(`${runPath}.tmp-`)) {
+						pauseOnce = false;
+						reachedWrite();
+						await writeGate;
+					}
+					await originalFs.writeFileDurable(path, contents, mode);
+				},
+			},
+		};
+		const update = casUpdateSharedRun(gatedDeps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({ ...current, state: "needs-human" }),
+		});
+		await reachedWritePromise;
+		let advanceSettled = false;
+		const advance = advanceActivationEpoch(gatedDeps, { expectedEpoch: 1 }).then(
+			(result) => {
+				advanceSettled = true;
+				return result;
+			},
+		);
+		await Bun.sleep(10);
+		expect(advanceSettled).toBe(false);
+		releaseWrite();
+		expect(await update).toMatchObject({ ok: true });
+		expect(await advance).toEqual({ ok: true, epoch: 2 });
 	});
 });
 
@@ -566,6 +793,37 @@ const ACCEPTING_AUTH_CONTRACT = {
 	validateSecretFreeFragment: () => true,
 };
 
+async function createReadyRun(
+	deps: RunStoreDeps,
+	runId: string,
+	overrides: Partial<BrowserUseSharedRun> = {},
+): Promise<BrowserUseSharedRun> {
+	const blocked = await createOk(
+		deps,
+		blockedRun(runId, {
+			environment_profile: {
+				environment: "agent-chrome",
+				profile: `ready-${runId}`,
+			},
+			...overrides,
+		}),
+	);
+	const port = createRunIntegrationPort(
+		deps,
+		ACCEPTING_AUTH_CONTRACT,
+		await acquireClaim(deps, blocked, `ready-${runId}`),
+	);
+	const committed = await port.commitAuthOutcome({
+		run_id: runId,
+		expected_revision: blocked.revision,
+		fragment: FRAGMENT,
+		summary: { state: "ready", attestation: ATTESTATION },
+	});
+	expect(committed.ok).toBe(true);
+	if (!committed.ok) throw new Error("unreachable");
+	return committed.run;
+}
+
 describe("S12: auth-held lease (R27, AE7)", () => {
 	test("an awaiting-auth run's lease admits commitAuthOutcome and excludes a second writer", async () => {
 		const clock = fixedClock();
@@ -584,8 +842,13 @@ describe("S12: auth-held lease (R27, AE7)", () => {
 			scope: { auth_context_ref: "auth-ref-1" },
 		});
 		expect(held.ok).toBe(true);
-		// The Port commits under that held lease without re-presenting it.
-		const port = createRunIntegrationPort(deps, ACCEPTING_AUTH_CONTRACT);
+		if (!held.ok) throw new Error("unreachable");
+		// The Port is bound to the exact held lease claim.
+		const port = createRunIntegrationPort(deps, ACCEPTING_AUTH_CONTRACT, {
+			fencing_token: held.lease.fencing_token,
+			activation_epoch: held.lease.activation_epoch,
+			holderId: held.lease.holder_id,
+		});
 		const committed = await port.commitAuthOutcome({
 			run_id: "run-auth-held",
 			expected_revision: 1,
@@ -613,10 +876,14 @@ describe("S12: auth-held lease (R27, AE7)", () => {
 describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 	test("a validated opaque fragment persists verbatim and stays redaction-clean", async () => {
 		const clock = fixedClock();
-		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-auth-roundtrip"));
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-auth-roundtrip"));
 		clock.advance(250);
-		const port = createRunIntegrationPort(deps, ACCEPTING_AUTH_CONTRACT);
+		const port = createRunIntegrationPort(
+			deps,
+			ACCEPTING_AUTH_CONTRACT,
+			await acquireClaim(deps, run),
+		);
 		const committed = await port.commitAuthOutcome({
 			run_id: "run-auth-roundtrip",
 			expected_revision: 1,
@@ -647,12 +914,14 @@ describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 
 	test("a rejected fragment returns the reducer rejection verbatim and never touches disk", async () => {
 		const clock = fixedClock();
-		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-auth-rejected"));
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-auth-rejected"));
 		const before = await rawRecordOf(deps, "run-auth-rejected");
-		const port = createRunIntegrationPort(deps, {
-			validateSecretFreeFragment: () => false,
-		});
+		const port = createRunIntegrationPort(
+			deps,
+			{ validateSecretFreeFragment: () => false },
+			await acquireClaim(deps, run),
+		);
 		const committed = await port.commitAuthOutcome({
 			run_id: "run-auth-rejected",
 			expected_revision: 1,
@@ -676,10 +945,14 @@ describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 
 	test("a stale expected revision is the reducer's run_revision_stale, nothing written", async () => {
 		const clock = fixedClock();
-		const deps = await makeSharedDeps(clock.now);
-		await createOk(deps, blockedRun("run-auth-stale"));
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-auth-stale"));
 		const before = await rawRecordOf(deps, "run-auth-stale");
-		const port = createRunIntegrationPort(deps, ACCEPTING_AUTH_CONTRACT);
+		const port = createRunIntegrationPort(
+			deps,
+			ACCEPTING_AUTH_CONTRACT,
+			await acquireClaim(deps, run),
+		);
 		const committed = await port.commitAuthOutcome({
 			run_id: "run-auth-stale",
 			expected_revision: 9,
@@ -695,15 +968,19 @@ describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 
 	test("a terminal run rejects the commit with run_terminal", async () => {
 		const clock = fixedClock();
-		const deps = await makeSharedDeps(clock.now);
-		await createOk(
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(
 			deps,
 			blockedRun("run-auth-terminal", {
 				state: "confirmed",
 				continuation: undefined,
 			}),
 		);
-		const port = createRunIntegrationPort(deps, ACCEPTING_AUTH_CONTRACT);
+		const port = createRunIntegrationPort(
+			deps,
+			ACCEPTING_AUTH_CONTRACT,
+			await acquireClaim(deps, run),
+		);
 		const committed = await port.commitAuthOutcome({
 			run_id: "run-auth-terminal",
 			expected_revision: 1,
@@ -714,6 +991,37 @@ describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 			ok: false,
 			rejection: { code: "run_terminal" },
 		});
+	});
+
+	test("a superseded auth lease cannot commit through its bound port", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-auth-superseded", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "auth-superseded",
+				},
+			}),
+		);
+		const staleClaim = await acquireClaim(deps, run, "auth-a");
+		const port = createRunIntegrationPort(
+			deps,
+			ACCEPTING_AUTH_CONTRACT,
+			staleClaim,
+		);
+		clock.set(6_000);
+		await acquireClaim(deps, run, "auth-b");
+		await expect(
+			port.commitAuthOutcome({
+				run_id: run.run_id,
+				expected_revision: run.revision,
+				fragment: FRAGMENT,
+				summary: { state: "ready", attestation: ATTESTATION },
+			}),
+		).rejects.toThrow("lease_fencing_stale");
+		expect((await loadOk(deps, run.run_id)).run.revision).toBe(1);
 	});
 });
 
@@ -755,15 +1063,13 @@ describe("S15: restart/resume (R24, AE7/AE15 substrate)", () => {
 	test("a ready run passes the same-lane gate and reports execution unavailable", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		const run = await createOk(
+		const run = await createReadyRun(
 			deps,
-			blockedRun("run-resume-ready", {
-				state: "ready",
-				continuation: undefined,
-				auth_attestation: ATTESTATION,
+			"run-resume-ready",
+			{
 				adapter_id: "agent-browser",
 				handoff_evidence_id: "evidence-1",
-			}),
+			},
 		);
 		const withObserved = await resumeSharedRun(deps, {
 			runId: "run-resume-ready",
@@ -783,15 +1089,13 @@ describe("S15: restart/resume (R24, AE7/AE15 substrate)", () => {
 	test("an observed lane mismatch surfaces the U1 refusal verbatim", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
-		const run = await createOk(
+		const run = await createReadyRun(
 			deps,
-			blockedRun("run-resume-mismatch", {
-				state: "ready",
-				continuation: undefined,
-				auth_attestation: ATTESTATION,
+			"run-resume-mismatch",
+			{
 				adapter_id: "agent-browser",
 				handoff_evidence_id: "evidence-1",
-			}),
+			},
 		);
 		const resumed = await resumeSharedRun(deps, {
 			runId: "run-resume-mismatch",
@@ -869,5 +1173,27 @@ describe("listSharedRunReceipts (R35, AE15 substrate)", () => {
 		const clock = fixedClock();
 		const { deps } = await makeIsolatedDeps(clock.now);
 		expect(await listSharedRunReceipts(deps)).toEqual([]);
+	});
+
+	test("foreign non-segment entries do not hide valid run receipts", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		await createOk(deps, blockedRun("run-valid-entry"));
+		const originalFs = deps.fs;
+		const faultingDeps: RunStoreDeps = {
+			...deps,
+			fs: {
+				...originalFs,
+				async readDirectory(path) {
+					if (path === deps.paths.state.runsDir) {
+						return ["../escape", "run-valid-entry"];
+					}
+					return await originalFs.readDirectory(path);
+				},
+			},
+		};
+		expect(
+			(await listSharedRunReceipts(faultingDeps)).map((receipt) => receipt.run_id),
+		).toEqual(["run-valid-entry"]);
 	});
 });
