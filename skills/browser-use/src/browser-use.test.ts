@@ -23,6 +23,15 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"operate-snapshot",
 	"operate-screenshot",
 	"operate-emulate",
+	// Platform families (platform plan 2026-07-21-002 U1).
+	"task-list",
+	"run-status",
+	"run-resume",
+	"run-cancel",
+	"runbook-list",
+	"migration-status",
+	"artifact-list",
+	"repair-status",
 ];
 
 function discoveryTree() {

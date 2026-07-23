@@ -35,7 +35,15 @@ export const TARGET_SELECTION_EXIT_CODE = 20;
 
 export type OutputMode = "json" | "plain";
 
-export type ResultKind = "browser_targets" | "browser_operation";
+export type ResultKind =
+	| "browser_targets"
+	| "browser_operation"
+	| "task_intents"
+	| "shared_run"
+	| "runbook_catalog"
+	| "migration_status"
+	| "artifact_manifest"
+	| "repair_status";
 
 // Generic structured failure carried by every region surface. Each surface
 // narrows the action-id type parameter to its own union.
@@ -235,6 +243,11 @@ function candidateIdentityOf(page: RawPage, ordinal: number): unknown[] {
 // participates in the hash but is never re-emitted (R32).
 export function handoffEvidenceIdOf(input: {
 	runId: string;
+	// Named logical environment/profile identity (schema 2, KTD13): part of the
+	// binding-relevant field set, so a profile change yields new evidence — a
+	// run bound to one profile can never silently consume another's handoff.
+	environmentName: string;
+	environmentProfile: string;
 	attachmentAdapterId: string;
 	route: string;
 	endpointHttp: string;
@@ -244,6 +257,8 @@ export function handoffEvidenceIdOf(input: {
 }): string {
 	const canonical = JSON.stringify([
 		input.runId,
+		input.environmentName,
+		input.environmentProfile,
 		input.attachmentAdapterId,
 		input.route,
 		input.endpointHttp,

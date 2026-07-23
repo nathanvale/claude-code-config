@@ -189,6 +189,97 @@ describe("U1 target discovery — handoff-bound mode", () => {
 		});
 	});
 
+	test("a superseded schema-1 envelope fails closed (KTD13 atomic pin bump)", async () => {
+		// The exact old-consumer shape: schema_version "1" with no environment
+		// profile — a stale browser-connect build. The pin rejects it before any
+		// field is half-parsed.
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.schema_version = "1";
+					delete envelope.data.environment.profile;
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
+	test("a missing environment identity is a typed rejection (KTD13)", async () => {
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					delete envelope.data.environment;
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
+	test("a missing environment profile is a typed rejection (KTD13)", async () => {
+		// Schema 2 with the profile stripped: the envelope cannot name which
+		// logical profile it proved, so it must never authorize discovery.
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					delete envelope.data.environment.profile;
+				}),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_handoff_invalid",
+		});
+	});
+
+	test("a fabricated environment or profile identity is rejected (KTD13)", async () => {
+		for (const identity of [
+			{ name: "foreign-chrome", profile: "default" },
+			{ name: "agent-chrome", profile: "fabricated" },
+		]) {
+			const { runtime } = discoveryRuntime({
+				files: {
+					"/h.json": verifiedHandoffEnvelope((envelope) => {
+						envelope.data.environment = identity;
+					}),
+				},
+			});
+			const result = await runForTest(
+				[
+					"targets",
+					"list",
+					"--mode",
+					"handoff-bound",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_discovery_handoff_invalid",
+			});
+		}
+	});
+
 	test("a real connect failure envelope never authorizes handoff-bound listing", async () => {
 		const { runtime, calls } = discoveryRuntime({
 			files: { "/h.json": connectFailureEnvelope() },

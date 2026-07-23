@@ -164,6 +164,8 @@ const FIXTURE_ENVELOPE = JSON.parse(REAL_VERIFIED_HANDOFF_ENVELOPE);
 const FIXTURE_RUN_ID = FIXTURE_ENVELOPE.run_id as string;
 const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
 	runId: FIXTURE_ENVELOPE.run_id,
+	environmentName: FIXTURE_ENVELOPE.data.environment.name,
+	environmentProfile: FIXTURE_ENVELOPE.data.environment.profile,
 	attachmentAdapterId: FIXTURE_ENVELOPE.data.attachment.adapter_id,
 	route: FIXTURE_ENVELOPE.data.attachment.route,
 	endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http,

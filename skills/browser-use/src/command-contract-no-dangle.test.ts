@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	BROWSER_USE_FAMILIES,
-	BROWSER_USE_OPERATE_SUBCOMMANDS,
-	BROWSER_USE_TARGETS_SUBCOMMANDS,
+	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
@@ -13,7 +12,17 @@ import {
 	browserUseTargetSelectionFailureActions,
 	browserUseTargetSelectionSuccessActions,
 } from "./command-contract";
+
 import { renderHelp } from "./browser-use-parser";
+
+// Every declared family/subcommand pair, so new platform families are swept
+// automatically instead of the corpus silently shrinking to targets/operate.
+const ALL_COMMANDS: Array<[BrowserUseFamily, string]> = BROWSER_USE_FAMILIES.flatMap(
+	(family): Array<[BrowserUseFamily, string]> =>
+		BROWSER_USE_FAMILY_SUBCOMMANDS[family].map(
+			(sub): [BrowserUseFamily, string] => [family, sub],
+		),
+);
 
 // =========================================================================
 // R4 no-dangle sweep (migration cleanup U3, AE3; extended by U5/KTD6). The
@@ -151,15 +160,7 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 		}
 		// Command-level help renders flag enum values (the --adapter union), so
 		// it must be in the corpus for this sweep to bite.
-		const commands: Array<[BrowserUseFamily, string]> = [
-			...BROWSER_USE_TARGETS_SUBCOMMANDS.map(
-				(sub): [BrowserUseFamily, string] => ["targets", sub],
-			),
-			...BROWSER_USE_OPERATE_SUBCOMMANDS.map(
-				(sub): [BrowserUseFamily, string] => ["operate", sub],
-			),
-		];
-		for (const [family, sub] of commands) {
+		for (const [family, sub] of ALL_COMMANDS) {
 			const command = `${family}-${sub}` as BrowserUseCommand;
 			corpus.push({ path: `help(${command})`, text: renderHelp(family, command) });
 		}
@@ -176,15 +177,7 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 		for (const family of BROWSER_USE_FAMILIES) {
 			corpus.push({ path: `help(${family})`, text: renderHelp(family) });
 		}
-		const commands: Array<[BrowserUseFamily, string]> = [
-			...BROWSER_USE_TARGETS_SUBCOMMANDS.map(
-				(sub): [BrowserUseFamily, string] => ["targets", sub],
-			),
-			...BROWSER_USE_OPERATE_SUBCOMMANDS.map(
-				(sub): [BrowserUseFamily, string] => ["operate", sub],
-			),
-		];
-		for (const [family, sub] of commands) {
+		for (const [family, sub] of ALL_COMMANDS) {
 			const command = `${family}-${sub}` as BrowserUseCommand;
 			corpus.push({
 				path: `help(${command})`,

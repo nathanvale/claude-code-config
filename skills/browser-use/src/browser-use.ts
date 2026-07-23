@@ -1,17 +1,14 @@
 #!/usr/bin/env bun
 
-// Browser Use CLI (plan 2026-06-04-001, U3).
+// Browser Use CLI (platform plan 2026-07-21-002, U1).
 //
-// Contract shell for live Browser Targets and Browser Operations. Router owns
-// `prepare`/`route`; this surface owns `targets` and `operate` (KTD3). U3 ships
-// help text, command discovery metadata, parser acceptance/rejection, and the
-// result contracts. Subcommand bodies emit dry-run/mock envelopes (gated by
-// --dry-run) or a structured not-implemented result. NO live browser calls,
-// target discovery, or operations here — those land in U5/U6/U7.
+// One public surface for live Browser Targets/Operations plus the platform
+// task/run/runbook/migration/artifact/repair command families.
 //
 // Command surfaces:
 //   targets list|select|status   — Browser Target Discovery/Selection (shell).
 //   operate snapshot|screenshot|emulate — Browser Operations (shell).
+//   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import {
 	type CliWriter,
@@ -29,7 +26,19 @@ import {
 	withCliDiagnosticContext,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
-import type { BrowserUseCommand } from "./command-contract";
+import {
+	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
+	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
+	type BrowserUseCommand,
+	type BrowserUseFamily,
+} from "./command-contract";
+import {
+	BROWSER_USE_LIVE_ADAPTERS,
+} from "./discovery-model";
+import {
+	BROWSER_USE_TASK_INTENT_DEFINITIONS,
+	type BrowserUseCallerMetadata,
+} from "./browser-use-run-model";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -43,6 +52,7 @@ import {
 	USAGE_EXIT_CODE,
 	redactUnsafeText,
 	stringField,
+	truncateText,
 } from "./browser-use-core";
 import {
 	type BrowserUseRuntime,
@@ -180,6 +190,37 @@ export async function runBrowserUseCli(
 	}
 }
 
+// One family -> result kind mapping for the mock/not-implemented envelopes.
+const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
+	targets: "browser_targets",
+	operate: "browser_operation",
+	task: "task_intents",
+	run: "shared_run",
+	runbook: "runbook_catalog",
+	migration: "migration_status",
+	artifact: "artifact_manifest",
+	repair: "repair_status",
+};
+
+// Non-authoritative caller metadata (platform plan U1, R35): --caller wins
+// over BROWSER_USE_CALLER. Audit record only — redaction-gated, length-bounded,
+// and never branched on anywhere in the driver or engines.
+function callerMetadataFrom(
+	parsed: Extract<ParsedBrowserUseCommand, { kind: "command" }>,
+	runtime: BrowserUseRuntime,
+): BrowserUseCallerMetadata {
+	const raw =
+		stringField(parsed.flagValues["--caller"]) ??
+		stringField(runtime.env.BROWSER_USE_CALLER);
+	if (!raw) return { label: null };
+	const bounded = truncateText(raw, 64);
+	return {
+		label: /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(bounded)
+			? bounded
+			: "[redacted]",
+	};
+}
+
 async function executeCommand(input: {
 	parsed: Extract<ParsedBrowserUseCommand, { kind: "command" }>;
 	runtime: BrowserUseRuntime;
@@ -191,8 +232,8 @@ async function executeCommand(input: {
 	durationMs: () => number;
 }): Promise<number> {
 	const { parsed, runtime } = input;
-	const resultKind: ResultKind =
-		parsed.family === "targets" ? "browser_targets" : "browser_operation";
+	const resultKind: ResultKind = RESULT_KIND_BY_FAMILY[parsed.family];
+	const caller = callerMetadataFrom(parsed, runtime);
 
 	// Browser Target Discovery (U5). The first live `browser-use` surface: real
 	// recovery and handoff-bound target listing through an attached adapter.
@@ -234,6 +275,18 @@ async function executeCommand(input: {
 				runIdExplicit: input.runIdExplicit,
 				durationMs: input.durationMs,
 			});
+	}
+
+	// Task Intent catalog (platform plan U1): a live pure projection of the
+	// code-owned vocabulary — no browser call, no store read.
+	if (parsed.command === "task-list" && !parsed.dryRun) {
+		return emitTaskIntents({
+			outputMode: parsed.outputMode,
+			stdout: input.stdout,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs(),
+		});
 	}
 
 	if (parsed.family === "operate" && !parsed.dryRun) {
@@ -279,7 +332,10 @@ async function executeCommand(input: {
 	}
 
 	// Live path is not implemented in the contract shell. Emit a structured
-	// not-implemented result rather than touching a browser (U5/U6/U7 own it).
+	// not-implemented result rather than touching a browser (platform U2-U7
+	// and the auth plan own the live bodies). Caller metadata is echoed as an
+	// audit fact only — the envelope, exit code, and error are identical for
+	// every caller.
 	return emitNotImplemented({
 		command: parsed.command,
 		resultKind,
@@ -287,6 +343,7 @@ async function executeCommand(input: {
 		stdout: input.stdout,
 		stderr: input.stderr,
 		runId: input.runId,
+		caller,
 		durationMs: input.durationMs(),
 	});
 }
@@ -370,6 +427,57 @@ function emitMockFailure(input: {
 	return BINDING_FAIL_CLOSED_EXIT_CODE;
 }
 
+// Project the code-owned Task Intent catalog (platform plan U1). Rows carry
+// the preferred registered lane when one exists; a missing preferred adapter
+// is honest typed unavailability (KTD12), and lane registration is derived
+// from the live adapter registry, never asserted.
+function emitTaskIntents(input: {
+	outputMode: OutputMode;
+	stdout: CliWriter;
+	runId: string;
+	caller: BrowserUseCallerMetadata;
+	durationMs: number;
+}): number {
+	const rows = BROWSER_USE_TASK_INTENT_DEFINITIONS.map((definition) => ({
+		task_intent: definition.task_intent,
+		summary: definition.summary,
+		...(definition.preferred_adapter !== undefined
+			? { preferred_adapter: definition.preferred_adapter }
+			: {}),
+		lane_registered:
+			definition.preferred_adapter !== undefined &&
+			(BROWSER_USE_LIVE_ADAPTERS as readonly string[]).includes(
+				definition.preferred_adapter,
+			),
+	}));
+	if (input.outputMode === "plain") {
+		input.stdout.write(
+			`contract=${BROWSER_USE_TASK_INTENTS_CONTRACT_ID} schema=${BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION} caller=${input.caller.label ?? "none"}\n`,
+		);
+		for (const row of rows) {
+			input.stdout.write(
+				`${row.task_intent} lane=${row.preferred_adapter ?? "unregistered"} registered=${row.lane_registered} ${row.summary}\n`,
+			);
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
+				schema_version: BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
+				task_intent_count: rows.length,
+				task_intents: rows,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return 0;
+}
+
 function emitNotImplemented(input: {
 	command: BrowserUseCommand;
 	resultKind: ResultKind;
@@ -377,11 +485,11 @@ function emitNotImplemented(input: {
 	stdout: CliWriter;
 	stderr: CliWriter;
 	runId: string;
+	caller: BrowserUseCallerMetadata;
 	durationMs: number;
 }): number {
 	const code = "browser_use_not_implemented";
-	const message =
-		"Live browser-use logic is not implemented yet; rerun with --dry-run for the mock envelope.";
+	const message = "Live browser-use logic for this command is not implemented yet.";
 	if (input.outputMode === "plain") {
 		input.stderr.write(
 			`browser_use ${code}: ${message} (run_id=${input.runId})\n`,
@@ -393,7 +501,11 @@ function emitNotImplemented(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: NOT_IMPLEMENTED_EXIT_CODE,
-			data: { command: input.command, result_kind: input.resultKind },
+			data: {
+				command: input.command,
+				result_kind: input.resultKind,
+				caller: input.caller,
+			},
 			error: createCliRuntimeError({
 				run_id: input.runId,
 				code,

@@ -337,20 +337,9 @@ export function evaluateRoute(
 				reportByAdapter,
 			});
 		}
-		const fallbackAllowed = envelope.policy.fallback_allowed === true;
-		if (fallbackAllowed && selectable.length > 0) {
-			const winner = rankSelectable(selectable, envelope);
-			return buildSuccess({
-				envelope,
-				evaluationDate,
-				mode,
-				requested,
-				selected: winner.adapter_id,
-				requiredCapabilities,
-				decisions,
-				reportByAdapter,
-			});
-		}
+		// Fallback authority removed (platform plan 2026-07-21-002 U1): a
+		// preferred adapter that is not selectable fails closed. No policy field
+		// can authorize routing another adapter in its place.
 		return buildFailureFromDecision({
 			envelope,
 			evaluationDate,

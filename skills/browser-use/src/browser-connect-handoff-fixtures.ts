@@ -21,7 +21,11 @@
 //   fixture-connect-failure` spawn that failed closed (exit 20), captured
 //   2026-07-16.
 //
-// Both captured against browser-connect schema_version 1. The
+// Both were captured against browser-connect schema_version 1 and then
+// updated shape-for-shape to schema_version 2 (platform plan 2026-07-21-002
+// U1, KTD13): `data.schema_version` became "2" and `data.environment` gained
+// the named logical `profile` the producer now emits — the exact two-field
+// delta of that schema rev; every other byte is the capture's own. The
 // process-boundary test (browser-connect-process-boundary.test.ts) re-proves
 // the failure shape against the live CLI on every run, so drift between these
 // captures and the real binary cannot go unnoticed.
@@ -33,7 +37,8 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
   "data": {
     "outcome": "verified",
     "environment": {
-      "name": "agent-chrome"
+      "name": "agent-chrome",
+      "profile": "default"
     },
     "browser_entry_mode": "explicit-cdp",
     "attachment": {
@@ -54,7 +59,7 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
       "route_evidence": "verified-live"
     },
     "contract_id": "browser-connect.verified-handoff",
-    "schema_version": "1"
+    "schema_version": "2"
   },
   "runtime_actions": [
     {
@@ -80,14 +85,15 @@ export const REAL_CONNECT_FAILURE_ENVELOPE = `{
     "failure_class": "foreign-listener",
     "next_action_id": "inspect_listener",
     "environment": {
-      "name": "agent-chrome"
+      "name": "agent-chrome",
+      "profile": "default"
     },
     "launch": {
       "launched": false
     },
     "detail": "Stop and inspect the foreign listener before adapter work.",
     "contract_id": "browser-connect.verified-handoff",
-    "schema_version": "1"
+    "schema_version": "2"
   },
   "error": {
     "run_id": "fixture-connect-failure",

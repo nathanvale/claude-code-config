@@ -62,6 +62,14 @@ _Avoid_: route-bound, route artifact, proof-bound
 A scoped browser objective that `browser-use` can pursue while its assumptions remain valid. It is narrower than a whole user request and broader than a single element action.
 _Avoid_: browser task, action window, runbook step, whole request
 
+**Shared Browser Use Run**:
+The one durable run record the platform owns for browser work (owner: `skills/browser-use/src/browser-use-run-model.ts`). It carries exactly one run state, a compare-and-swap revision, environment/profile identity, the opaque versioned auth fragment slot, and exactly one next safe action when blocked. Platform code is its only writer; authentication reaches it only through the run integration Port and never writes run state directly. Caller metadata on a run is audit-only and never authority.
+_Avoid_: auth-owned run, second run lifecycle, task log, caller-scoped run
+
+**Task Intent**:
+A code-owned name for the outcome class a browser request wants (owner: `skills/browser-use/src/browser-use-run-model.ts`; projected by `browser-use task list`). Prose interprets language into a Task Intent; code proves lane capability. Runbook execution, trace inspection, and HTTP replay are distinct intents, and a Lighthouse audit is not performance profiling. An intent whose preferred lane is unregistered stays typed-unavailable, never silently rerouted.
+_Avoid_: task type guess, adapter name, freeform intent string, capability claim
+
 **Browser Adapter**:
 Within `browser-use`, a consumer of a verified attachment: a mechanism `browser-use` operates against a proven browser once browser-connect has attached it — `chrome-devtools-mcp`, `agent-browser`, or `playwright-cdp` (keyed on the envelope's `attachment.adapter_id` verbatim; every live invocation derives its binary and endpoint from the Verified Handoff Envelope, never from user-level mcporter config). Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge, and they never find Chrome themselves. `puppeteer-core` is deterministic replay detail, not public adapter name. The canonical environment-agnostic definition (a tool that attaches to a proven browser environment via a declared route) is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter

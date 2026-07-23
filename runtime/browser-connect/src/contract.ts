@@ -42,11 +42,17 @@ export type BrowserConnectRouteEvidenceStatus =
 	| "candidate";
 
 /**
- * Environment identity (R2): whose browser this is. v1 names exactly one
- * Agent Chrome; future multi-identity distinguishes instances here.
+ * Environment identity (R2, platform plan 2026-07-21-002 KTD13): whose browser
+ * this is, and which logical profile it runs. Schema 2 adds `profile` — the
+ * LOGICAL profile id the handoff binds to. Warm Chrome keeps physical profile
+ * directories and browser-managed session bytes; consumers store this logical
+ * reference only and never a filesystem path. v1 names exactly one Agent
+ * Chrome instance; future multi-identity distinguishes instances by
+ * environment/profile identity here, never by new environment names.
  */
 export type BrowserConnectEnvironmentIdentity = {
 	name: BrowserConnectEnvironmentName;
+	profile: string;
 };
 
 /**
