@@ -105,7 +105,9 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 				}`,
 			);
 			expect(line).toContain(`integrity=${String(row.integrity_state)}`);
+			expect(line).toContain("connection=unproven");
 			expect(line).toContain("task=unproven");
+			expect(line).toContain("auth=unproven");
 			expect(line).toContain("auth_methods=none");
 		}
 	});
@@ -119,9 +121,37 @@ describe("lanes show — fail-closed lane resolution (AE1)", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
-		expect((data.lane as Record<string, unknown>).lane_id).toBe(
-			"chrome-devtools-mcp",
+		expect(data.contract).toBe(BROWSER_USE_ADAPTER_LANES_CONTRACT_ID);
+		expect(data.schema_version).toBe("1");
+		const lane = data.lane as Record<string, unknown>;
+		expect(lane.lane_id).toBe("chrome-devtools-mcp");
+		expect(lane.handoff).toMatchObject({
+			contract_id: "browser-connect.verified-handoff",
+			schema_version: "2",
+		});
+		expect(lane.native_implementation).toMatchObject({
+			implemented: true,
+			execution_interface: "mcporter-envelope-call",
+		});
+		expect(lane.proven_task_claims).toEqual([]);
+		expect(lane.advertised_auth_methods).toEqual([]);
+	});
+
+	test("lanes show --plain projects the resolved lane line", async () => {
+		const result = await runForTest(
+			["lanes", "show", "--adapter", "chrome-devtools-mcp", "--plain"],
+			makeRuntime(),
 		);
+		expect(result.exitCode).toBe(0);
+		const lines = result.stdout.trim().split("\n");
+		expect(lines[0]).toBe(
+			`contract=${BROWSER_USE_ADAPTER_LANES_CONTRACT_ID} schema=1 caller=none`,
+		);
+		expect(lines[1]).toContain("chrome-devtools-mcp");
+		expect(lines[1]).toContain("implementation=mcporter-envelope-call");
+		expect(lines[1]).toContain("integrity=consistent");
+		expect(lines[1]).toContain("task=unproven");
+		expect(lines[1]).toContain("auth_methods=none");
 	});
 
 	test("a mismatched or unknown adapter id fails before any evidence or secret work", async () => {
@@ -132,7 +162,28 @@ describe("lanes show — fail-closed lane resolution (AE1)", () => {
 		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
 		expect(json.error).toMatchObject({ code: "browser_lane_unknown" });
+		// Machine-readable recovery (R27): the envelope names the valid ids and
+		// exactly one next safe action; no prose parsing required.
+		const data = json.data as Record<string, unknown>;
+		expect(data.valid_lane_ids).toEqual([...BROWSER_USE_ADAPTER_LANE_IDS]);
+		expect(json.continuation).toMatchObject({
+			next_action_id: "list_adapter_lanes",
+		});
 	});
+
+	test.each(["toString", "constructor", "__proto__"])(
+		"prototype-chain id %s fails as unknown through the public surface",
+		async (id) => {
+			const result = await runForTest(
+				["lanes", "show", "--adapter", id, "--json"],
+				makeRuntime(),
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "browser_lane_unknown",
+			});
+		},
+	);
 
 	test.each(Object.keys(BROWSER_USE_REJECTED_LANE_ALIASES))(
 		"identity alias %s is rejected with the exact-id rule, never silently mapped",

@@ -156,6 +156,18 @@ describe("lane identity (R3)", () => {
 			}
 		},
 	);
+
+	test.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+		"prototype-chain id %s resolves as unknown, not an inherited alias",
+		(id) => {
+			const registry = registryOf([]);
+			const resolved = resolveAdapterLane(registry, id);
+			expect(resolved.ok).toBe(false);
+			if (!resolved.ok) {
+				expect(resolved.failure.code).toBe("lane_unknown");
+			}
+		},
+	);
 });
 
 describe("evidence composition (R3/R4)", () => {
@@ -191,6 +203,22 @@ describe("evidence composition (R3/R4)", () => {
 			evidenceRef({ integrity: { ...INTEGRITY, content_digest: "sha256:other" } }),
 		]);
 		expect(c.composed_digest).not.toBe(a.composed_digest);
+	});
+
+	test("digests bind the composed view: identical evidence fresh vs stale differs", () => {
+		const reference = evidenceRef();
+		const fresh = createAdapterLaneRegistry({
+			evidence: [reference],
+			at_epoch_ms: NOW,
+		});
+		const stale = createAdapterLaneRegistry({
+			evidence: [reference],
+			at_epoch_ms: NOW + FRESH_MS + 1,
+		});
+		if (!fresh.ok || !stale.ok) throw new Error("expected registries");
+		expect(fresh.registry.composed_digest).not.toBe(
+			stale.registry.composed_digest,
+		);
 	});
 
 	test("stale evidence fails closed (R4)", () => {
@@ -310,8 +338,10 @@ describe("integrity binding (R4)", () => {
 	});
 
 	test.each([
+		["executable_realpath", "/opt/side-quest/other-bin"],
 		["dependency_lock_identity", "lock:changed"],
 		["protocol_fingerprint", "protocol:changed"],
+		["platform", "linux-x64"],
 		["security_policy_revision", "policy-changed"],
 	] as const)("%s drift also drifts the lane", (field, value) => {
 		const registry = registryOf([
@@ -355,6 +385,50 @@ describe("integrity binding (R4)", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.rejection.code).toBe("lane_evidence_schema_extended");
+		}
+	});
+
+	test("a producer cannot smuggle fields through the nested integrity object", () => {
+		const base = evidenceRef();
+		const smuggled = {
+			...base,
+			integrity: { ...base.integrity, smuggled_field: "outside-the-digest" },
+		};
+		const result = createAdapterLaneRegistry({
+			evidence: [smuggled as unknown as BrowserUseLaneEvidenceReference],
+			at_epoch_ms: NOW,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("lane_evidence_schema_extended");
+		}
+	});
+
+	test.each([
+		["future-dated probe", { probed_at_epoch_ms: NOW + 1 }],
+		["NaN probe time", { probed_at_epoch_ms: Number.NaN }],
+		["Infinity staleness window", { stale_after_ms: Number.POSITIVE_INFINITY }],
+		["NaN staleness window", { stale_after_ms: Number.NaN }],
+		["zero staleness window", { stale_after_ms: 0 }],
+		["negative staleness window", { stale_after_ms: -1 }],
+	] as const)("%s is rejected at admission, never pinned proven", (_label, overrides) => {
+		const base = evidenceRef();
+		const pathological = {
+			...base,
+			...overrides,
+		} as BrowserUseLaneEvidenceReference;
+		const result = createAdapterLaneRegistry({
+			evidence: [
+				{
+					...pathological,
+					evidence_digest: laneEvidenceDigestOf(pathological),
+				},
+			],
+			at_epoch_ms: NOW,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("lane_evidence_freshness_invalid");
 		}
 	});
 

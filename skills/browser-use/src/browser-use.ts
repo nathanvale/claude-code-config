@@ -41,6 +41,7 @@ import {
 	BROWSER_USE_TRANSPORT_ADAPTERS,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
+	browserUseAdapterLanesFailureActions,
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
 } from "./command-contract";
@@ -705,6 +706,7 @@ function emitAdapterLaneShow(input: {
 			);
 			return BINDING_FAIL_CLOSED_EXIT_CODE;
 		}
+		const failureAction = browserUseAdapterLanesFailureActions[0];
 		writeJsonEnvelope(
 			input.stdout,
 			createCliRuntimeErrorEnvelope({
@@ -713,6 +715,9 @@ function emitAdapterLaneShow(input: {
 				data: {
 					contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 					schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+					// Machine-readable recovery (R27): the exact ids a retry may use,
+					// so an agent repairs from this envelope without prose parsing.
+					valid_lane_ids: registry.lanes.map((lane) => lane.lane_id),
 					caller: input.caller,
 				},
 				error: createCliRuntimeError({
@@ -725,6 +730,14 @@ function emitAdapterLaneShow(input: {
 					retryable: false,
 					failure_domain: "browser_use",
 				}),
+				runtime_actions: [
+					{
+						id: failureAction.id,
+						summary: failureAction.summary,
+						side_effects: [...failureAction.sideEffects],
+					},
+				],
+				continuation: { next_action_id: failureAction.id },
 			}),
 			{ runId: input.runId, durationMs: input.durationMs() },
 		);

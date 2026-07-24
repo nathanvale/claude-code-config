@@ -1146,6 +1146,27 @@ const browserUseAdapterLanesResultContract = {
 	schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+// Lane resolution failures always route back to the registry listing: the
+// error data carries valid_lane_ids and this action names the recovery
+// command class, so an agent repairs from the envelope alone (R27).
+export const browserUseAdapterLanesFailureActions = [
+	{
+		id: "list_adapter_lanes",
+		summary:
+			"List the registered adapter lanes and retry with an exact lane id from the listing.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseAdapterLanesSuccessActions = [
+	{
+		id: "inspect_adapter_lane",
+		summary:
+			"Inspect one lane's evidence status and next repair action before relying on its claims.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 // `lanes show --adapter` takes the exact handoff attachment.adapter_id; a
 // rejected identity alias or unknown id fails closed (auth plan U1, R3).
 const browserUseLanesShowFlags = {
@@ -1372,6 +1393,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformEnvVars,
 			resultContract: browserUseAdapterLanesResultContract,
+			actionAffordances: {
+				success: browserUseAdapterLanesSuccessActions,
+				failure: browserUseAdapterLanesFailureActions,
+			},
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -1389,6 +1414,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformEnvVars,
 			resultContract: browserUseAdapterLanesResultContract,
+			actionAffordances: {
+				success: browserUseAdapterLanesSuccessActions,
+				failure: browserUseAdapterLanesFailureActions,
+			},
 			flags: browserUseLanesShowFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},

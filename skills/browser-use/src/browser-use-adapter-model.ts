@@ -182,15 +182,17 @@ export const BROWSER_USE_LANE_EVIDENCE_REFERENCE_KEYS = [
 	"evidence_digest",
 ] as const;
 
-/**
- * Deterministic content digest of one evidence reference (R3): canonical
- * JSON array over every producer-supplied field in fixed order, sha256,
- * 32 hex chars — the same no-clock no-randomness discipline as the handoff
- * evidence id.
- *
- * @param reference - Evidence reference fields, minus the digest itself
- * @returns 32-hex-char content digest
- */
+/** The exact key set of the integrity identity — a nested field outside this
+ * set is a schema extension and fails admission, same as a top-level one. */
+export const BROWSER_USE_LANE_INTEGRITY_KEYS = [
+	"executable_realpath",
+	"content_digest",
+	"dependency_lock_identity",
+	"protocol_fingerprint",
+	"platform",
+	"security_policy_revision",
+] as const satisfies readonly (keyof BrowserUseLaneImplementationIntegrity)[];
+
 /**
  * The transport-eligible adapter ids derived from the lane table (R5): exactly
  * the lanes with an implemented registered execution Interface. Consumed by
@@ -205,6 +207,32 @@ export function transportAdapterIdsFromLaneTable(): BrowserUseAdapterLaneId[] {
 	);
 }
 
+/**
+ * Canonical serialization of one Implementation integrity identity. The ONE
+ * field-order owner shared by the evidence digest and the registry's drift
+ * comparison, so a field added to the integrity type can never be covered by
+ * one and silently missed by the other.
+ *
+ * @param integrity - Implementation integrity identity
+ * @returns Canonical JSON array string over the integrity key set
+ */
+export function integrityKeyOf(
+	integrity: BrowserUseLaneImplementationIntegrity,
+): string {
+	return JSON.stringify(
+		BROWSER_USE_LANE_INTEGRITY_KEYS.map((key) => integrity[key]),
+	);
+}
+
+/**
+ * Deterministic content digest of one evidence reference (R3): canonical
+ * JSON array over every producer-supplied field in fixed order, sha256,
+ * 32 hex chars — the same no-clock no-randomness discipline as the handoff
+ * evidence id.
+ *
+ * @param reference - Evidence reference fields, minus the digest itself
+ * @returns 32-hex-char content digest
+ */
 export function laneEvidenceDigestOf(
 	reference: Omit<BrowserUseLaneEvidenceReference, "evidence_digest">,
 ): string {
@@ -213,14 +241,7 @@ export function laneEvidenceDigestOf(
 		reference.evidence_class,
 		reference.producer,
 		[...reference.claims],
-		[
-			reference.integrity.executable_realpath,
-			reference.integrity.content_digest,
-			reference.integrity.dependency_lock_identity,
-			reference.integrity.protocol_fingerprint,
-			reference.integrity.platform,
-			reference.integrity.security_policy_revision,
-		],
+		integrityKeyOf(reference.integrity),
 		reference.probed_at_epoch_ms,
 		reference.stale_after_ms,
 	]);

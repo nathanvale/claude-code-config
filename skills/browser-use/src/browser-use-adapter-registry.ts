@@ -24,7 +24,9 @@ import {
 	BROWSER_USE_LANE_EVIDENCE_CLASSES,
 	BROWSER_USE_LANE_EVIDENCE_PRODUCERS,
 	BROWSER_USE_LANE_EVIDENCE_REFERENCE_KEYS,
+	BROWSER_USE_LANE_INTEGRITY_KEYS,
 	BROWSER_USE_REJECTED_LANE_ALIASES,
+	integrityKeyOf,
 	laneEvidenceDigestOf,
 } from "./browser-use-adapter-model";
 import { sanitizeUsageValue } from "./browser-use-core";
@@ -81,6 +83,7 @@ export type BrowserUseLaneEvidenceRejectionCode =
 	| "lane_evidence_lane_unknown"
 	| "lane_evidence_producer_mismatch"
 	| "lane_evidence_claim_unknown"
+	| "lane_evidence_freshness_invalid"
 	| "lane_evidence_digest_invalid"
 	| "lane_evidence_duplicate_producer";
 
@@ -105,6 +108,7 @@ export type BrowserUseLaneResolution =
 // --- Registry construction -----------------------------------------------------
 
 const REFERENCE_KEY_SET = new Set<string>(BROWSER_USE_LANE_EVIDENCE_REFERENCE_KEYS);
+const INTEGRITY_KEY_SET = new Set<string>(BROWSER_USE_LANE_INTEGRITY_KEYS);
 
 const REPAIR_STALE =
 	"Re-run the lane conformance probe against the pinned adapter build; stale evidence never advertises capability.";
@@ -144,7 +148,11 @@ export function createAdapterLaneRegistry(input: {
 }): BrowserUseLaneRegistryResult {
 	const admitted = new Map<string, BrowserUseLaneEvidenceReference>();
 	for (const reference of input.evidence) {
-		const rejection = admitEvidenceReference(reference, admitted);
+		const rejection = admitEvidenceReference(
+			reference,
+			admitted,
+			input.at_epoch_ms,
+		);
 		if (rejection) return { ok: false, rejection };
 		admitted.set(
 			`${reference.lane_id}\0${reference.evidence_class}`,
@@ -164,6 +172,7 @@ export function createAdapterLaneRegistry(input: {
 function admitEvidenceReference(
 	reference: BrowserUseLaneEvidenceReference,
 	admitted: ReadonlyMap<string, BrowserUseLaneEvidenceReference>,
+	atEpochMs: number,
 ): BrowserUseLaneEvidenceRejection | undefined {
 	for (const key of Object.keys(reference)) {
 		if (!REFERENCE_KEY_SET.has(key)) {
@@ -172,6 +181,33 @@ function admitEvidenceReference(
 				message: `evidence field ${sanitizeUsageValue(key)} is not part of the stable producer Interface; producers never extend the registry schema.`,
 			};
 		}
+	}
+	// The nested integrity object is part of the same stable Interface: an
+	// extra field there would ride outside the digest's canonical field set,
+	// so it is a schema extension exactly like a top-level one.
+	for (const key of Object.keys(reference.integrity)) {
+		if (!INTEGRITY_KEY_SET.has(key)) {
+			return {
+				code: "lane_evidence_schema_extended",
+				message: `integrity field ${sanitizeUsageValue(key)} is not part of the stable producer Interface; producers never extend the registry schema.`,
+			};
+		}
+	}
+	// Freshness sanity (R4): a non-finite window or a probe claiming to come
+	// from the future would read as proven forever (NaN comparisons are false
+	// and JSON canonicalization folds Infinity/NaN to null on both digest
+	// sides), so the window itself is admission-checked.
+	if (
+		!Number.isFinite(reference.probed_at_epoch_ms) ||
+		!Number.isFinite(reference.stale_after_ms) ||
+		reference.stale_after_ms <= 0 ||
+		reference.probed_at_epoch_ms > atEpochMs
+	) {
+		return {
+			code: "lane_evidence_freshness_invalid",
+			message:
+				"evidence freshness is invalid: probe time and staleness window must be finite, the window positive, and the probe not in the future.",
+		};
 	}
 	if (
 		!(BROWSER_USE_ADAPTER_LANE_IDS as readonly string[]).includes(
@@ -234,18 +270,10 @@ function composeLaneView(
 	// Integrity binding (R4): every evidence reference for one lane must
 	// describe one Implementation identity. A same-version replacement changes
 	// the identity, so agreement is on the full identity tuple, never the
-	// version string.
+	// version string. integrityKeyOf is the shared field-order owner with the
+	// evidence digest, so drift comparison and digest coverage cannot diverge.
 	const identities = new Set(
-		references.map((reference) =>
-			JSON.stringify([
-				reference.integrity.executable_realpath,
-				reference.integrity.content_digest,
-				reference.integrity.dependency_lock_identity,
-				reference.integrity.protocol_fingerprint,
-				reference.integrity.platform,
-				reference.integrity.security_policy_revision,
-			]),
-		),
+		references.map((reference) => integrityKeyOf(reference.integrity)),
 	);
 	const drifted = identities.size > 1;
 	let anyStale = false;
@@ -276,13 +304,20 @@ function composeLaneView(
 		const reference = admitted.get(`${laneId}\0${evidenceClass}`);
 		return reference ? [...reference.claims] : [];
 	};
+	// Lane digest binds the composed VIEW, not just the evidence set: the same
+	// references evaluated fresh vs stale advertise different claims, so status
+	// and integrity state participate in the hash. A consumer fencing on this
+	// digest (or the registry composed_digest) therefore never treats two
+	// materially different capability views as identical.
 	const laneDigest = createHash("sha256")
 		.update(
 			JSON.stringify([
 				laneId,
-				BROWSER_USE_LANE_EVIDENCE_CLASSES.map(
-					(evidenceClass) => evidence[evidenceClass].evidence_digest ?? null,
-				),
+				BROWSER_USE_LANE_EVIDENCE_CLASSES.map((evidenceClass) => [
+					evidence[evidenceClass].evidence_digest ?? null,
+					evidence[evidenceClass].status,
+				]),
+				drifted ? "drifted" : "consistent",
 			]),
 		)
 		.digest("hex")
@@ -322,7 +357,11 @@ export function resolveAdapterLane(
 ): BrowserUseLaneResolution {
 	const lane = registry.lanes.find((entry) => entry.lane_id === requestedId);
 	if (lane) return { ok: true, lane };
-	const aliasTarget = BROWSER_USE_REJECTED_LANE_ALIASES[requestedId];
+	// Own-key lookup only: a prototype-chain id ("toString", "constructor",
+	// "__proto__") must resolve as unknown, not as an inherited alias hit.
+	const aliasTarget = Object.hasOwn(BROWSER_USE_REJECTED_LANE_ALIASES, requestedId)
+		? BROWSER_USE_REJECTED_LANE_ALIASES[requestedId]
+		: undefined;
 	if (aliasTarget) {
 		return {
 			ok: false,
