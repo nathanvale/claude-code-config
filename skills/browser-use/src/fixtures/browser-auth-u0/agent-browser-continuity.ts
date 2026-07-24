@@ -66,10 +66,11 @@ const agentEnvironment = {
 	XDG_STATE_HOME: process.env.XDG_STATE_HOME,
 };
 
-async function runAgent(args: string[]): Promise<{
+async function runAgent(args: string[], timeoutMs?: number): Promise<{
 	exitCode: number;
 	stdout: string;
 	stderr: string;
+	timedOut: boolean;
 }> {
 	const child = Bun.spawn(
 		["agent-browser", "--cdp", cdpPort, "--session", session, ...args],
@@ -79,12 +80,32 @@ async function runAgent(args: string[]): Promise<{
 			stderr: "pipe",
 		},
 	);
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { exitCode, stdout, stderr };
+	let timedOut = false;
+	const timeout =
+		timeoutMs === undefined
+			? undefined
+			: setTimeout(() => {
+					timedOut = true;
+					child.kill();
+				}, timeoutMs);
+	try {
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		return { exitCode, stdout, stderr, timedOut };
+	} finally {
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+		}
+	}
+}
+
+function extractSignInRef(snapshot: string): string | undefined {
+	return snapshot.match(
+		/\bbutton\s+"Sign in"[^\r\n]*\[ref=([A-Za-z0-9_-]+)\]/,
+	)?.[1];
 }
 
 async function readTargets(): Promise<CdpTarget[]> {
@@ -138,6 +159,10 @@ try {
 	}
 	const beforeUrl = await runAgent(["get", "url"]);
 	const beforeSnapshot = await runAgent(["snapshot"]);
+	const staleRef = extractSignInRef(beforeSnapshot.stdout);
+	if (beforeSnapshot.exitCode !== 0 || beforeSnapshot.timedOut || !staleRef) {
+		throw new Error("Agent Browser snapshot did not expose the sign-in ref");
+	}
 	const beforeTargets = await readTargets();
 	const target = beforeTargets.find((candidate) => candidate.url === fixtureUrl);
 	if (!target) {
@@ -163,6 +188,20 @@ try {
 		})()`,
 	);
 
+	const staleRefProbe = await runAgent(["click", `@${staleRef}`], 5_000);
+	const staleRefProbeOutput = [
+		staleRefProbe.stdout,
+		staleRefProbe.stderr,
+	].join("\n");
+	if (staleRefProbe.timedOut) {
+		throw new Error("Agent Browser stale-ref probe timed out");
+	}
+	const staleRefRejected = /\bUnknown ref\b/i.test(staleRefProbeOutput);
+	if (staleRefProbe.exitCode !== 0 && !staleRefRejected) {
+		throw new Error("Agent Browser stale-ref probe failed without a verdict");
+	}
+	const staleRefReused = !staleRefRejected && staleRefProbe.exitCode === 0;
+
 	const afterUrl = await runAgent(["get", "url"]);
 	const afterSnapshot = await runAgent(["snapshot"]);
 	const afterTargets = await readTargets();
@@ -183,6 +222,8 @@ try {
 		beforeUrl.stderr,
 		beforeSnapshot.stdout,
 		beforeSnapshot.stderr,
+		staleRefProbe.stdout,
+		staleRefProbe.stderr,
 		afterUrl.stdout,
 		afterUrl.stderr,
 		afterSnapshot.stdout,
@@ -217,7 +258,7 @@ try {
 				beforeSnapshot.exitCode === 0 &&
 				afterSnapshot.exitCode === 0 &&
 				afterSnapshot.stdout.includes("delivered"),
-			stale_ref_reused: false,
+			stale_ref_reused: staleRefReused,
 			adapter_sentinel_clean: !allAdapterOutput.includes(sentinel),
 		})}\n`,
 	);

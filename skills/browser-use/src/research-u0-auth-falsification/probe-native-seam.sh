@@ -25,7 +25,6 @@ else
 	emit native-toolchain "full-xcode-available" "xcodebuild ABSENT (CommandLineTools only)" "env-blocked"
 fi
 
-IDENTITIES=$(security find-identity -v -p codesigning 2>/dev/null | grep -c 'valid identities' || true)
 VALID=$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '[0-9]+ valid identities' | grep -oE '^[0-9]+' || echo 0)
 if [ "${VALID:-0}" -gt 0 ]; then
 	emit native-signing-identity "provisioned-identity-available" "$VALID valid identities" "env-ok"

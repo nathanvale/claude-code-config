@@ -57,8 +57,11 @@ int main(void) {
 		struct sockaddr_in addr;
 		memset(&addr, 0, sizeof(addr));
 		addr.sin_family = AF_INET;
-		addr.sin_port = htons(80);
-		inet_pton(AF_INET, "93.184.216.34", &addr.sin_addr); // example.net range
+		// Port 1 on loopback is expected to refuse immediately when the socket
+		// layer is reachable. This avoids external traffic and an unbounded
+		// connect while preserving EPERM/EACCES as the sandbox-denial signal.
+		addr.sin_port = htons(1);
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		int rc = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
 		if (rc == 0) {
 			emit("new_network_connect", "ALLOWED"); // containment failure signal
