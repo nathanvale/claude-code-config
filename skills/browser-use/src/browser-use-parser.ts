@@ -165,6 +165,12 @@ export function parseBrowserUseArgv(
 			throw usageError(`${command.replace("-", " ")} requires --run <id>.`);
 		}
 	}
+	if (command === "lanes-show") {
+		const adapterId = stringField(flagValues["--adapter"]);
+		if (!adapterId || adapterId.startsWith("--")) {
+			throw usageError("lanes show requires --adapter <id>.");
+		}
+	}
 	// Derive from parsed flags, not token scans: a value-bearing flag can
 	// legitimately consume a token that looks like "--dry-run" or "--json"
 	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread

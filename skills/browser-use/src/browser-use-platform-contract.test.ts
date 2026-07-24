@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { projectCommandDiscoveryTree } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
@@ -72,6 +73,8 @@ describe("platform family help and discovery", () => {
 		);
 		const expectedContractIds = {
 			"task-list": BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
+			"lanes-list": BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+			"lanes-show": BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 			"run-status": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"run-resume": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"run-cancel": BROWSER_USE_SHARED_RUN_CONTRACT_ID,

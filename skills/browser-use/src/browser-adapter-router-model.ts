@@ -15,8 +15,12 @@ import type { AdapterCapability } from "./discovery-model";
 
 // Capability names stay shared with the live discovery model (migration U2,
 // KTD4; one-way dormant->live edge). The adapter-id axis diverged in migration
-// U4: the live BrowserAdapterId re-pointed to envelope ids, so the dormant
-// Router cluster keeps its own alias onto the Router-era registry ids.
+// U4: the live BrowserAdapterId re-pointed to envelope ids (now owned by the
+// Adapter Lane Registry model, auth plan U1 R3), so the dormant Router cluster
+// keeps its own alias onto the Router-era registry ids. The Router-era bare
+// ids are rejected identity aliases on the live lane surface
+// (BROWSER_USE_REJECTED_LANE_ALIASES); nothing here may leak into a live
+// contract, action, or help string.
 export type BrowserAdapterId = BrowserAdapterRouterAdapter;
 export type { AdapterCapability };
 

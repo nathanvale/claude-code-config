@@ -1,12 +1,17 @@
 // ---------------------------------------------------------------------------
-// Capability policy (migration U2, KTD4).
+// Capability policy (migration U2, KTD4; boundary re-pointed in auth plan U1).
 //
 // Owns Browser Operation class authorization: which routed capability each
 // operation class requires, and whether a binding's authorized capability set
 // authorizes a class. Hoisted out of the dormant Browser Adapter Router engine
 // so live code carries no import edge into the dormant router cluster; the
 // dormant engine re-imports OPERATION_CLASS_CAPABILITY from here (one-way
-// dormant->live).
+// dormant->live). The per-adapter capability sets a binding may carry are
+// owned by the Adapter Lane Registry's lane table
+// (browser-use-adapter-model.ts) and projected through command-contract's
+// BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES — this module stays the
+// class-authorization policy only and never grows lane identity or evidence
+// state.
 // ---------------------------------------------------------------------------
 
 import type { AdapterCapability } from "./discovery-model";

@@ -1,6 +1,13 @@
 // ---------------------------------------------------------------------------
 // Shared mcporter transport (plan U4) + the envelope-derived adapter call (U3).
 //
+// Lane boundary (auth plan U1, R5/KTD2): this module implements the
+// "mcporter-envelope-call" execution Interface the Adapter Lane Registry
+// registers for the chrome-devtools-mcp lane ONLY. Other lanes register their
+// own execution Interfaces in the lane table; this transport never becomes a
+// universal adapter or auth abstraction, and no auth or secret value may pass
+// through it.
+//
 // Browser Operation execution runs mcporter subcommands through the same
 // transport Browser Adapter Proof used. This wrapper resolves and prefixes the
 // command vector via the shared core, then maps the neutral failure reasons

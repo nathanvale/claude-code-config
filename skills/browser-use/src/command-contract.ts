@@ -2,6 +2,7 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
+import { BROWSER_USE_ADAPTER_LANE_TABLE } from "./browser-use-adapter-model";
 import {
 	type AdapterCapability,
 	type BrowserAdapterId,
@@ -16,8 +17,11 @@ import {
 // The Browser Adapter Proof, Browser Adapter Map, and Browser Adapter Router
 // command surfaces were deleted by the browser-use migration cleanup (U3):
 // browser-connect's Verified Handoff Envelope replaced their evidence chain.
-// This registry names the adapters with an implemented browser-use
-// discovery/operation transport.
+// This literal names the adapters with an implemented browser-use
+// discovery/operation transport. It is a pinned tripwire, drift-gated in the
+// Adapter Lane Registry tests against transportAdapterIdsFromLaneTable()
+// (auth plan U1, R5): the lane table owns which lanes have a registered
+// execution Interface; this pin fails the gate if the two ever disagree.
 export const BROWSER_USE_TRANSPORT_ADAPTERS = ["chrome-devtools-mcp"] as const;
 
 // ---------------------------------------------------------------------------
@@ -285,6 +289,11 @@ const BROWSER_USE_ARTIFACT_MANIFEST_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_REPAIR_STATUS_CONTRACT_ID =
 	"browser-use.repair-status" as const;
 const BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION = "1" as const;
+// Adapter Lane Registry projection (auth plan 2026-07-21-003 U1, R27):
+// JSON-first lane discovery over the code-owned registry composition.
+export const BROWSER_USE_ADAPTER_LANES_CONTRACT_ID =
+	"browser-use.adapter-lanes" as const;
+export const BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION = "1" as const;
 
 // ---------------------------------------------------------------------------
 // browser-connect Verified Handoff Envelope — consumer-side pin (KTD1).
@@ -309,18 +318,20 @@ export const BROWSER_CONNECT_ENVIRONMENT_PROFILE = "default" as const;
 
 // Operation capabilities browser-use's transport can honor per adapter, keyed
 // on the envelope's attachment adapter id verbatim (U4, R4/R5: one adapter
-// vocabulary across the seam). The Verified Handoff Envelope authorizes an
+// vocabulary across the seam). Derived from the Adapter Lane Registry's
+// code-owned lane table (auth plan U1, R3) — the lane table owns per-lane
+// capability vocabulary; this projection just pins it to the public
+// AdapterCapability union. The Verified Handoff Envelope authorizes an
 // attachment, not capabilities; capability policy stays browser-use-owned and
 // is enforced through capability-policy.ts's authorizesOperationClass.
 // Adapters without an implemented operation transport authorize nothing.
 export const BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES = {
-	"chrome-devtools-mcp": [
-		"snapshot_refs",
-		"screenshot_media",
-		"viewport_emulation",
-	],
-	"agent-browser": [],
-	"playwright-cdp": [],
+	"chrome-devtools-mcp":
+		BROWSER_USE_ADAPTER_LANE_TABLE["chrome-devtools-mcp"].operation_capabilities,
+	"agent-browser":
+		BROWSER_USE_ADAPTER_LANE_TABLE["agent-browser"].operation_capabilities,
+	"playwright-cdp":
+		BROWSER_USE_ADAPTER_LANE_TABLE["playwright-cdp"].operation_capabilities,
 } as const satisfies Record<BrowserAdapterId, readonly AdapterCapability[]>;
 
 // Command families and their subcommands. Public surface is `browser-use
@@ -351,6 +362,13 @@ const BROWSER_USE_TASK_SUBCOMMANDS = ["list"] as const;
 export type BrowserUseTaskSubcommand =
 	(typeof BROWSER_USE_TASK_SUBCOMMANDS)[number];
 
+// `lanes list`/`lanes show` are live from auth plan U1: projections of the
+// Adapter Lane Registry composition (identity, native Implementation,
+// evidence status, honest unproven auth methods).
+const BROWSER_USE_LANES_SUBCOMMANDS = ["list", "show"] as const;
+export type BrowserUseLanesSubcommand =
+	(typeof BROWSER_USE_LANES_SUBCOMMANDS)[number];
+
 const BROWSER_USE_RUN_SUBCOMMANDS = [
 	"status",
 	"resume",
@@ -379,6 +397,7 @@ export const BROWSER_USE_FAMILIES = [
 	"targets",
 	"operate",
 	"task",
+	"lanes",
 	"run",
 	"runbook",
 	"migration",
@@ -393,6 +412,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 	targets: BROWSER_USE_TARGETS_SUBCOMMANDS,
 	operate: BROWSER_USE_OPERATE_SUBCOMMANDS,
 	task: BROWSER_USE_TASK_SUBCOMMANDS,
+	lanes: BROWSER_USE_LANES_SUBCOMMANDS,
 	run: BROWSER_USE_RUN_SUBCOMMANDS,
 	runbook: BROWSER_USE_RUNBOOK_SUBCOMMANDS,
 	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
@@ -405,6 +425,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	targets: "Browser Target Discovery, Selection, and status.",
 	operate: "Browser Operations: snapshot, screenshot, emulate.",
 	task: "Code-owned Task Intent catalog.",
+	lanes: "Browser Use Adapter Lane Registry discovery.",
 	run: "Shared Browser Use run status, resume, and cancel.",
 	runbook: "Browser Runbook catalog.",
 	migration: "Legacy corpus migration status.",
@@ -431,6 +452,8 @@ export type BrowserUseCommand =
 	| "operate-screenshot"
 	| "operate-emulate"
 	| "task-list"
+	| "lanes-list"
+	| "lanes-show"
 	| "run-status"
 	| "run-resume"
 	| "run-cancel"
@@ -447,6 +470,11 @@ export type BrowserUseCommand =
 export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_use_not_implemented",
 	"browser_use_mock_failure",
+	// Adapter Lane Registry resolution failures (auth plan U1, R3/AE1): an
+	// unknown lane id and a rejected identity alias each fail closed before any
+	// evidence or secret work, with distinct recoveries.
+	"browser_lane_unknown",
+	"browser_lane_alias_rejected",
 	"browser_operation_dependency_missing",
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
@@ -1112,6 +1140,23 @@ const browserUseTaskIntentsResultContract = {
 	schema_version: BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseAdapterLanesResultContract = {
+	id: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+	kind: "Browser Use Adapter Lane Registry projection.",
+	schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+// `lanes show --adapter` takes the exact handoff attachment.adapter_id; a
+// rejected identity alias or unknown id fails closed (auth plan U1, R3).
+const browserUseLanesShowFlags = {
+	"--adapter": {
+		type: "string",
+		description:
+			"Exact adapter lane id as the Verified Handoff Envelope's attachment.adapter_id spells it.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 const browserUseSharedRunResultContract = {
 	id: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	kind: "Shared Browser Use run projection.",
@@ -1311,6 +1356,40 @@ export const browserUseContracts = defineCommandFacadeContract(
 			envVars: browserUsePlatformEnvVars,
 			resultContract: browserUseTaskIntentsResultContract,
 			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"lanes-list": {
+			script: "browser-use",
+			summary:
+				"List every Browser Use Adapter Lane: exact handoff id, native Implementation, evidence status, and honest unproven auth methods.",
+			usage: ["lanes list [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseAdapterLanesResultContract,
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"lanes-show": {
+			script: "browser-use",
+			summary:
+				"Show one Browser Use Adapter Lane by its exact handoff adapter id. Unknown ids and rejected identity aliases fail closed.",
+			usage: ["lanes show --adapter <id> [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseAdapterLanesResultContract,
+			flags: browserUseLanesShowFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"run-status": {

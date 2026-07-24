@@ -278,6 +278,49 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 	);
 
 	test(
+		"lanes list projects the Adapter Lane Registry through the real process boundary",
+		async () => {
+			const result = await spawnBrowserUse(["lanes", "list", "--json"]);
+			expect(result.exitCode).toBe(0);
+			const envelope = parse(result.stdout);
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.contract).toBe("browser-use.adapter-lanes");
+			const lanes = data.lanes as Array<Record<string, unknown>>;
+			expect(lanes.map((lane) => lane.lane_id)).toEqual([
+				"chrome-devtools-mcp",
+				"agent-browser",
+				"playwright-cdp",
+			]);
+			// The neutral process advertises nothing it cannot prove: no auth
+			// method and no task claim without registered evidence (auth plan U1).
+			for (const lane of lanes) {
+				expect(lane.advertised_auth_methods).toEqual([]);
+				expect(lane.proven_task_claims).toEqual([]);
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"lanes show fails closed on a rejected identity alias at the process boundary",
+		async () => {
+			const result = await spawnBrowserUse([
+				"lanes",
+				"show",
+				"--adapter",
+				"playwright-cli",
+				"--json",
+			]);
+			expect(result.exitCode).toBe(20);
+			const envelope = parse(result.stdout);
+			expect((envelope.error as Record<string, unknown>).code).toBe(
+				"browser_lane_alias_rejected",
+			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"repair status projects roots, the warned runtime fallback, and one next action",
 		async () => {
 			const result = await spawnBrowserUse(["repair", "status", "--json"]);

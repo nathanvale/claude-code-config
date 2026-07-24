@@ -39,6 +39,7 @@ export type ResultKind =
 	| "browser_targets"
 	| "browser_operation"
 	| "task_intents"
+	| "adapter_lanes"
 	| "shared_run"
 	| "runbook_catalog"
 	| "migration_status"

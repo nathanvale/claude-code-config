@@ -31,6 +31,8 @@ import {
 import {
 	BROWSER_CONNECT_ENVIRONMENT_NAME,
 	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
+	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+	BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
@@ -42,6 +44,11 @@ import {
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
 } from "./command-contract";
+import {
+	type BrowserUseAdapterLaneView,
+	createAdapterLaneRegistry,
+	resolveAdapterLane,
+} from "./browser-use-adapter-registry";
 import {
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
@@ -251,6 +258,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	targets: "browser_targets",
 	operate: "browser_operation",
 	task: "task_intents",
+	lanes: "adapter_lanes",
 	run: "shared_run",
 	runbook: "runbook_catalog",
 	migration: "migration_status",
@@ -342,6 +350,32 @@ async function executeCommand(input: {
 			runId: input.runId,
 			caller,
 			durationMs: input.durationMs(),
+		});
+	}
+
+	// Adapter Lane Registry projections (auth plan U1): live compositions of
+	// the code-owned lane table. No evidence producer registers through the CLI
+	// yet, so every evidence slot projects honest unproven — never a guess.
+	if (parsed.command === "lanes-list" && !parsed.dryRun) {
+		return emitAdapterLanes({
+			outputMode: parsed.outputMode,
+			stdout: input.stdout,
+			runId: input.runId,
+			caller,
+			atEpochMs: runtime.now(),
+			durationMs: input.durationMs(),
+		});
+	}
+	if (parsed.command === "lanes-show" && !parsed.dryRun) {
+		return emitAdapterLaneShow({
+			outputMode: parsed.outputMode,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			requestedAdapterId: stringField(parsed.flagValues["--adapter"]) ?? "",
+			atEpochMs: runtime.now(),
+			durationMs: input.durationMs,
 		});
 	}
 
@@ -561,6 +595,160 @@ function emitTaskIntents(input: {
 			},
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return 0;
+}
+
+// Project one composed lane view into the envelope row shape shared by
+// `lanes list` and `lanes show` (auth plan U1, R27: human output projects the
+// same state as JSON, never a second vocabulary).
+function laneRow(lane: BrowserUseAdapterLaneView) {
+	return {
+		lane_id: lane.lane_id,
+		handoff: lane.handoff,
+		native_implementation: lane.native_implementation,
+		integrity_state: lane.integrity_state,
+		evidence: lane.evidence,
+		proven_task_claims: lane.proven_task_claims,
+		advertised_auth_methods: lane.advertised_auth_methods,
+		lane_evidence_digest: lane.lane_evidence_digest,
+		...(lane.next_repair_action
+			? { next_repair_action: lane.next_repair_action }
+			: {}),
+	};
+}
+
+function laneLine(lane: BrowserUseAdapterLaneView): string {
+	const implementation = lane.native_implementation.implemented
+		? lane.native_implementation.execution_interface
+		: "unavailable";
+	return `${lane.lane_id} implementation=${implementation} integrity=${lane.integrity_state} connection=${lane.evidence.connection.status} task=${lane.evidence.task.status} auth=${lane.evidence["auth-conformance"].status} auth_methods=${lane.advertised_auth_methods.join(",") || "none"}\n`;
+}
+
+// Compose the baseline registry the CLI projects (auth plan U1). Evidence
+// producers register through the library Interface, not the CLI, so this
+// composition carries no evidence yet; a composition failure here is a
+// programming error, not a user state.
+function composedLaneRegistry(atEpochMs: number) {
+	const result = createAdapterLaneRegistry({
+		evidence: [],
+		at_epoch_ms: atEpochMs,
+	});
+	if (!result.ok) {
+		throw new Error(
+			`adapter lane registry composition failed: ${result.rejection.code}`,
+		);
+	}
+	return result.registry;
+}
+
+// Project the Adapter Lane Registry (auth plan U1, R27, AE1).
+function emitAdapterLanes(input: {
+	outputMode: OutputMode;
+	stdout: CliWriter;
+	runId: string;
+	caller: BrowserUseCallerMetadata;
+	atEpochMs: number;
+	durationMs: number;
+}): number {
+	const registry = composedLaneRegistry(input.atEpochMs);
+	if (input.outputMode === "plain") {
+		input.stdout.write(
+			`contract=${BROWSER_USE_ADAPTER_LANES_CONTRACT_ID} schema=${BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION} caller=${input.caller.label ?? "none"}\n`,
+		);
+		for (const lane of registry.lanes) {
+			input.stdout.write(laneLine(lane));
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+				schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+				lane_count: registry.lanes.length,
+				lanes: registry.lanes.map(laneRow),
+				composed_digest: registry.composed_digest,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs },
+	);
+	return 0;
+}
+
+// Resolve one lane by exact handoff adapter id (auth plan U1, R3/AE1): a
+// mismatched or unknown adapter id fails closed before any evidence or secret
+// work, and a rejected identity alias is named as such, never silently mapped.
+function emitAdapterLaneShow(input: {
+	outputMode: OutputMode;
+	stdout: CliWriter;
+	stderr: CliWriter;
+	runId: string;
+	caller: BrowserUseCallerMetadata;
+	requestedAdapterId: string;
+	atEpochMs: number;
+	durationMs: () => number;
+}): number {
+	const registry = composedLaneRegistry(input.atEpochMs);
+	const resolved = resolveAdapterLane(registry, input.requestedAdapterId);
+	if (!resolved.ok) {
+		const code =
+			resolved.failure.code === "lane_alias_rejected"
+				? "browser_lane_alias_rejected"
+				: "browser_lane_unknown";
+		if (input.outputMode === "plain") {
+			input.stderr.write(
+				`browser_use ${code}: ${resolved.failure.message} (run_id=${input.runId})\n`,
+			);
+			return BINDING_FAIL_CLOSED_EXIT_CODE;
+		}
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeErrorEnvelope({
+				run_id: input.runId,
+				process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				data: {
+					contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+					schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+					caller: input.caller,
+				},
+				error: createCliRuntimeError({
+					run_id: input.runId,
+					code,
+					message: resolved.failure.message,
+					exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+					severity: "error",
+					recoverability: "change_input",
+					retryable: false,
+					failure_domain: "browser_use",
+				}),
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	if (input.outputMode === "plain") {
+		input.stdout.write(
+			`contract=${BROWSER_USE_ADAPTER_LANES_CONTRACT_ID} schema=${BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION} caller=${input.caller.label ?? "none"}\n`,
+		);
+		input.stdout.write(laneLine(resolved.lane));
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+				schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+				lane: laneRow(resolved.lane),
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
 	);
 	return 0;
 }
