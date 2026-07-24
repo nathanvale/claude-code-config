@@ -1,0 +1,39 @@
+{
+	"record": "shared-run",
+	"schema_version": "2",
+	"payload": {
+		"run_id": "run-fixture-1",
+		"revision": 4,
+		"state": "awaiting-auth",
+		"task_intent": "routine-automation",
+		"environment_profile": {
+			"environment": "agent-chrome",
+			"profile": "default"
+		},
+		"adapter_id": "agent-browser",
+		"handoff_evidence_id": "evidence-fixture-1",
+		"auth_fragment": {
+			"schema_version": "1",
+			"fragment": {
+				"opaque": "auth-owned-fixture"
+			}
+		},
+		"mutation_dispatched": false,
+		"artifacts": [
+			{
+				"artifact_id": "artifact-fixture-1",
+				"sensitivity": "high",
+				"retention": "failure-evidence"
+			}
+		],
+		"continuation": {
+			"next_action_id": "prepare_auth_binding",
+			"summary": "Prepare the credential binding, then resume this run."
+		},
+		"caller": {
+			"label": "fixture-agent"
+		},
+		"created_at_epoch_ms": 1000,
+		"updated_at_epoch_ms": 2000
+	}
+}

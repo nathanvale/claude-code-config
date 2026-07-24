@@ -40,6 +40,8 @@ type EnvelopeCandidate = {
 const FIXTURE_ENVELOPE = JSON.parse(REAL_VERIFIED_HANDOFF_ENVELOPE);
 const FIXTURE_EVIDENCE_ID = handoffEvidenceIdOf({
 	runId: FIXTURE_ENVELOPE.run_id,
+	environmentName: FIXTURE_ENVELOPE.data.environment.name,
+	environmentProfile: FIXTURE_ENVELOPE.data.environment.profile,
 	attachmentAdapterId: FIXTURE_ENVELOPE.data.attachment.adapter_id,
 	route: FIXTURE_ENVELOPE.data.attachment.route,
 	endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http,
@@ -58,9 +60,17 @@ describe("handoff evidence id — golden fixed vector", () => {
 		// if it fails, the identity derivation changed and every persisted
 		// binding/state hash breaks — that is a contract rev, not a fixture
 		// refresh. Never regenerate this value to make the test pass.
+		//
+		// Contract rev history: platform plan 2026-07-21-002 U1 (KTD13) added
+		// environmentName/environmentProfile to the identity input, revving the
+		// golden value from ef208426bf7c7dc5f8722f732d8c0976 alongside the
+		// handoff schema 1 -> 2 bump. Run-scoped state does not survive that
+		// rev; no persisted binding predates it.
 		expect(
 			handoffEvidenceIdOf({
 				runId: "golden-run",
+				environmentName: "agent-chrome",
+				environmentProfile: "default",
 				attachmentAdapterId: "chrome-devtools",
 				route: "cdp",
 				endpointHttp: "http://127.0.0.1:53412",
@@ -68,7 +78,7 @@ describe("handoff evidence id — golden fixed vector", () => {
 				proofContractId: "warm-chrome.environment",
 				proofSchemaVersion: "1",
 			}),
-		).toBe("ef208426bf7c7dc5f8722f732d8c0976");
+		).toBe("327cf72d57b3ed0162db33eba62c56fa");
 	});
 });
 

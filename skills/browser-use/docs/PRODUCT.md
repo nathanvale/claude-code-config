@@ -1,6 +1,13 @@
 # Product — what is our core product
 
-Status: living definition · 2026-06-13 · grounded in the session's live N=5 proof
+Status: **superseded as roadmap authority** · historical evidence only.
+`docs/plans/2026-07-21-002-feat-browser-use-task-router-runbook-platform-plan.md`
+and `docs/plans/2026-07-21-003-feat-browser-use-cross-adapter-authentication-plan.md`
+own Browser Use product direction. The N-engine consensus/quorum/fallback
+concept below is explicitly rejected by that plan (dormant fallback/quorum
+authority removed, platform U1); do not implement from this document.
+
+Original status line: living definition · 2026-06-13 · grounded in the session's live N=5 proof
 (`docs/research/2026-06-12-*` and `2026-06-13-*`).
 
 ---

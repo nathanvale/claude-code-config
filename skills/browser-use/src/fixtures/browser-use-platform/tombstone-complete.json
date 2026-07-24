@@ -1,0 +1,12 @@
+{
+	"record": "tombstone",
+	"schema_version": "1",
+	"payload": {
+		"artifact_id": "artifact-fixture-2",
+		"run_id": "run-fixture-1",
+		"retention": "ephemeral",
+		"reason": "explicit-delete",
+		"phase": "complete",
+		"deleted_at_epoch_ms": 4000
+	}
+}

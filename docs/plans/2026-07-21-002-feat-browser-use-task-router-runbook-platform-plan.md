@@ -5,7 +5,7 @@ date: 2026-07-21
 deepened: 2026-07-22
 topic: browser-use-task-router-xdg-runbook-platform
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: decision-ready
+artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
 ---
@@ -276,10 +276,14 @@ $XDG_STATE_HOME/browser-use/
   runs/<run-id>/
   outcomes/<service-id>/<flow-id>/
   artifacts/<run-id>/
-  migrations/<migration-id>/
-    source-snapshot.yaml
-    archive/
-  active-corpus.yaml
+  generations/<generation-id>/
+  generations/<generation-id>.json
+  leases/<key-hash>.json
+  activation-epoch.json
+  runtime-fallback/          # warned R11 fallback when XDG_RUNTIME_DIR is unset (the macOS default)
+  migrations/snapshots/<snapshot-id>.json
+  migrations/<migration-id>/archive/
+  active-corpus.yaml         # U7 Corpus Generation Manifest; final name/format still to be decided
 
 $XDG_STATE_HOME/warm-chrome/
   profiles/<environment-id>/
@@ -294,7 +298,7 @@ $XDG_RUNTIME_DIR/browser-use/
   sockets/
 ```
 
-This is an ownership sketch. Code-owned contracts/schemas remain deterministic authority.
+This is an ownership sketch. Code-owned contracts/schemas remain deterministic authority. All U2 state records are JSON durable-record envelopes (`record`/`schema_version`/`payload`); the `.yaml` names above are pre-U2 config/manifest projections whose format U3/U7 confirm.
 
 ### Open Questions
 
@@ -313,6 +317,8 @@ This is an ownership sketch. Code-owned contracts/schemas remain deterministic a
 - Which Playwright CLI task capabilities remain green over lower-fidelity CDP attachment.
 - Which Chrome CLI functions remain in its experimental generated subset at the pinned release.
 - Which migrated scripts deserve repo-owned ports versus reviewed hash-bound promotion.
+- **Export approval gate for high-sensitivity artifacts.** U2 ships the export ownership-transfer surface (bytes leave default retention; no deletion route survives), but the human-continuation gate, destination admission (private mode, user-owned, not version-controlled), and export receipt binding destination digest to approver identity are a policy decision spanning U4 (run-level authorization) and U6 (evidence-lane sensitivity/retention/approval rules). U6 owns the gate; U2's export surface must not be advertised for authenticated-portal artifacts until it lands.
+- **Run-record and lease-record retention (R10).** U2 implements deletion only for artifacts; run records are never deleted and lease records are permanent by design. R10's retention/deletion route over the whole state root needs a named owner for runs before `run status`'s all-terminal-runs projection or listing latency forces an unplanned retention design onto a live store.
 
 ### Deferred Work Log: Scheduling Platform
 
@@ -398,6 +404,15 @@ This is an ownership sketch. Code-owned contracts/schemas remain deterministic a
 - **Approach:** centralize XDG resolution, defaults, ancestor/symlink validation, safe-directory checks, permissions, same-filesystem durable writes, locks, immutable generations, activation epochs, snapshots, retention tombstones, deletion, JSON/plain inspection, and fenced leases. Store auth only as opaque binding/outcome references. Non-secret locks/sockets may use the warned runtime fallback; any auth-plan secret transport must pass its separate Secure Runtime Root admission.
 - **Test scenarios:** default/override/relative/unwritable roots; symlinked ancestor; loose permissions; crash before/after file or directory flush; cross-device target; two writers; same-profile contention; distinct-profile concurrency; auth-held lease; expired holder resumes after fenced takeover; process spans activation epoch; restart/resume; idempotent deletion; deleted versus missing artifact; export ownership transfer; runtime fallback; redacted receipts.
 - **Verification:** expected modes; power-loss fixtures preserve the prior manifest; stale fencing tokens/epochs cannot write; neutral-CWD process inspects/resumes from JSON; no secret-bearing fixture enters durable state.
+- **Implementation notes (as-built, post-review):**
+  - **Durable barrier:** durable FILE writes issue `fcntl(F_FULLFSYNC)` on darwin (the deployment platform), not plain `fsync`, because macOS `fsync` does not flush the drive write cache; other platforms and directory syncs keep `fsync`. The volatile-overlay crash fake models sync as a full barrier, so power-loss durability rests on this real-adapter behavior, not a fixture. R13/AE12 fencing-token and manifest CAS monotonicity inherit it.
+  - **Write-time redaction admission (R13):** every durable shared-run record write runs the mechanical redaction walk and refuses a violation with a typed `run_record_invalid` before writing, so the guarantee is "no secret-bearing *value* enters durable state," not only "no secret-bearing fixture." The walk is a denylist safety net (op://, ws(s)://, sensitive key names, absolute paths), not the privacy mechanism; the opaque `auth_fragment` subtree is skipped by design.
+  - **Ownership admission (R12):** admission also refuses a pre-existing root not owned by the invoking user (`xdg_root_wrong_owner`), closing the attacker-owned-`0700`-root gap that the mode/symlink checks alone miss.
+  - **Export-owned deletion (R29):** `deleteArtifact` refuses an export-class artifact on its fresh manifest read (`export_destination_unsafe`); the sweep skips typed delete failures, so an export completing between a sweep's read and the delete is re-observed, never destroyed.
+  - **Lease-key granularity (R27):** the initial serialization key is the environment/profile pair only (distinct profiles independent; everything within a profile serialized, satisfying AE9). Auth context, target, and runbook are recorded as inspection-only lease-scope facets; splitting the key on them is a U4+ decision, so a U4 implementer must not assume same-profile runs on distinct targets proceed concurrently.
+  - **Version-control admission (R12) is fail-closed in the shipped CLI:** `openBrowserUsePaths` accepts an injectable `checkIgnored` seam (library-only), but the CLI entry does not pass a default `git check-ignore` adapter, so a root under a git-ignored directory refuses with `xdg_root_version_controlled` and the "prove it git-ignored" repair path is unreachable. Wiring a default adapter into `createDefaultBrowserUseRuntime` is a named follow-on; until then, fail-closed-on-version-control is the CLI contract.
+  - **Runtime fallback is the macOS default, not an exception (R11):** macOS never sets `XDG_RUNTIME_DIR`, so the warned `<state>/runtime-fallback` path is the unconditional production configuration on the deployment platform. A set-but-inadmissible runtime root is currently downgraded to the same fallback rather than refused; distinguishing "unset default" from "set-but-unsafe" so the warning keeps signal is a follow-on.
+  - **Preview element (R13) deferred:** U2's only durable-mutating public command (`run cancel`) ships without a `--dry-run` preview; the R13 preview obligation lands on U4's mutating command surfaces.
 
 ### U3. Build the clean-break migration engine and staged corpus
 

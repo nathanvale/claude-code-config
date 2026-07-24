@@ -28,9 +28,14 @@ import type {
 /**
  * The single environment browser-connect v1 proves (R10): Agent Chrome, the
  * warm-chrome convention profile. Never silently substituted.
+ *
+ * `profile` is the LOGICAL profile id (schema 2, KTD13): "default" names the
+ * one warm-chrome convention profile. Physical profile directories stay owned
+ * by warm-chrome; this identity never carries a filesystem path.
  */
 export const AGENT_CHROME_IDENTITY: BrowserConnectEnvironmentIdentity = {
 	name: "agent-chrome",
+	profile: "default",
 };
 
 /**

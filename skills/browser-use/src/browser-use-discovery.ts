@@ -19,6 +19,8 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_TRANSPORT_ADAPTERS,
+	BROWSER_CONNECT_ENVIRONMENT_NAME,
+	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
 	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
@@ -113,6 +115,12 @@ export type HandoffFacts = {
 	adapter: BrowserAdapterId;
 	// Outer envelope run id (facade-owned, caller-suppliable via --run-id).
 	runId: string;
+	// Named logical environment/profile identity (schema 2, KTD13). Logical ids
+	// only — Warm Chrome owns physical profile directories; a filesystem path
+	// never appears here. Runs bind to this identity; a profile change is an
+	// identity change, never a silent substitution.
+	environmentName: string;
+	environmentProfile: string;
 	// host:port of the verified endpoint, derived from endpoint.http.
 	verifiedEndpointIdentity: string;
 	// Pinned adapter binary path (attachment.probe_executable, verbatim; the
@@ -344,6 +352,7 @@ function contractField<Shape>(
 
 type HandoffAttachment = BrowserConnectHandoffPayload["attachment"];
 type HandoffEndpoint = BrowserConnectHandoffPayload["endpoint"];
+type HandoffEnvironment = BrowserConnectHandoffPayload["environment"];
 type HandoffProof = BrowserConnectHandoffPayload["proof"];
 
 export type HandoffParse =
@@ -401,6 +410,34 @@ export async function readHandoffFacts(
 	// is a contradiction (hand-assembled or tampered), never authorization.
 	if (value.status !== "ok") {
 		return invalid("outcome is verified but envelope status is not ok");
+	}
+	// Named environment/profile identity (schema 2, KTD13): both fields are
+	// required binding facts. A missing name or profile fails closed — an
+	// envelope that cannot say whose browser and which logical profile it
+	// proved must never authorize discovery or operations.
+	const environmentValue = contractField<BrowserConnectHandoffPayload>(
+		data,
+		"environment",
+	);
+	const environmentIdentity = isJsonObject(environmentValue)
+		? environmentValue
+		: undefined;
+	if (!environmentIdentity) return invalid("environment identity missing");
+	const environmentName = stringField(
+		contractField<HandoffEnvironment>(environmentIdentity, "name"),
+	);
+	if (!environmentName) return invalid("environment name missing");
+	const environmentProfile = stringField(
+		contractField<HandoffEnvironment>(environmentIdentity, "profile"),
+	);
+	if (!environmentProfile) return invalid("environment profile missing");
+	if (
+		environmentName !== BROWSER_CONNECT_ENVIRONMENT_NAME ||
+		environmentProfile !== BROWSER_CONNECT_ENVIRONMENT_PROFILE
+	) {
+		return invalid(
+			`environment identity ${environmentName}/${environmentProfile} is not the pinned ${BROWSER_CONNECT_ENVIRONMENT_NAME}/${BROWSER_CONNECT_ENVIRONMENT_PROFILE} identity`,
+		);
 	}
 	const attachmentValue = contractField<BrowserConnectHandoffPayload>(
 		data,
@@ -490,11 +527,15 @@ export async function readHandoffFacts(
 		facts: {
 			adapter,
 			runId,
+			environmentName,
+			environmentProfile,
 			verifiedEndpointIdentity: endpointUrl.host,
 			probeExecutable,
 			endpointHttp,
 			handoffEvidenceId: handoffEvidenceIdOf({
 				runId,
+				environmentName,
+				environmentProfile,
 				// The envelope adapter id, verbatim — the hash INPUT SHAPE is
 				// unchanged by the U4 field collapse (same string as before).
 				attachmentAdapterId: adapter,

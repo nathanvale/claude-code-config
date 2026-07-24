@@ -1615,11 +1615,11 @@ describe("cause-to-repair matrix drives the projected envelope (U4 R18)", () => 
 				expect(parts.continuation.next_action_id).not.toBe(compatibilityOnly);
 			}
 
-			// Legacy compatibility data (R16/R30): required, schema-1 shaped.
+			// Legacy compatibility data (R16/R30): required, released-schema shaped.
 			const data = parts.data as unknown as Record<string, unknown>;
 			expect(data.next_action_id).toBe(row.expected.legacy);
 			expect(data.failure_class).toBe(row.context.failure_class);
-			expect(data.schema_version).toBe("1");
+			expect(data.schema_version).toBe("2");
 		});
 	}
 });

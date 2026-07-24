@@ -5,7 +5,7 @@ date: 2026-07-21
 deepened: 2026-07-22
 topic: browser-use-cross-adapter-authentication
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: decision-ready
+artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
 ---

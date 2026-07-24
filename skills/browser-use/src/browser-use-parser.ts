@@ -17,8 +17,8 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_FAMILIES,
-	BROWSER_USE_OPERATE_SUBCOMMANDS,
-	BROWSER_USE_TARGETS_SUBCOMMANDS,
+	BROWSER_USE_FAMILY_SUBCOMMANDS,
+	BROWSER_USE_FAMILY_SUMMARIES,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
@@ -125,7 +125,9 @@ export function parseBrowserUseArgv(
 
 	if (!family) {
 		if (helpRequested) return { kind: "help" };
-		throw usageError("missing command family: expected targets or operate.");
+		throw usageError(
+			`missing command family: expected ${BROWSER_USE_FAMILIES.join(", ")}.`,
+		);
 	}
 
 	const subcommandToken = positionals[1];
@@ -157,6 +159,12 @@ export function parseBrowserUseArgv(
 	const flags = browserUseContracts[command].flags ?? {};
 	rejectUnknownFlags(rest, flags);
 	const flagValues = collectFlagValues(rest, flags);
+	if (command === "run-resume" || command === "run-cancel") {
+		const runId = stringField(flagValues["--run"]);
+		if (!runId || runId.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --run <id>.`);
+		}
+	}
 	// Derive from parsed flags, not token scans: a value-bearing flag can
 	// legitimately consume a token that looks like "--dry-run" or "--json"
 	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread
@@ -212,9 +220,7 @@ function isFamily(value: string | undefined): value is BrowserUseFamily {
 }
 
 function subcommandsFor(family: BrowserUseFamily): readonly string[] {
-	return family === "targets"
-		? BROWSER_USE_TARGETS_SUBCOMMANDS
-		: BROWSER_USE_OPERATE_SUBCOMMANDS;
+	return BROWSER_USE_FAMILY_SUBCOMMANDS[family];
 }
 
 function toCommand(
@@ -248,8 +254,10 @@ function rejectUnknownFlags(
 	}
 }
 
-// Output mode keys on the resolved command, then explicit flags. status is a
-// human projection (plain default); every other command is machine-first JSON.
+// Output mode keys on the resolved command, then explicit flags. Operator-
+// audience commands (the status projections) default to plain; every other
+// command is machine-first JSON. The default derives from the declared
+// contract audience, so a new command cannot silently pick the wrong default.
 // Keying on the command (not an argv token scan) keeps a flag VALUE of "status"
 // from flipping output mode.
 function outputModeFor(
@@ -258,7 +266,7 @@ function outputModeFor(
 ): OutputMode {
 	if (flagValues["--plain"] !== undefined) return "plain";
 	if (flagValues["--json"] !== undefined) return "json";
-	return command === "targets-status" ? "plain" : "json";
+	return browserUseContracts[command].audience === "operator" ? "plain" : "json";
 }
 
 // Output mode for pre-parse error paths (diagnostic-parse or command-parse
@@ -348,24 +356,27 @@ function renderFamilyHelp(family: BrowserUseFamily): string {
 		const contract = browserUseContracts[toCommand(family, sub)];
 		return `  ${sub.padEnd(10)} ${contract.summary}`;
 	});
+	// Contract-driven prerequisite: only families with a --handoff-consuming
+	// command point at the connection prerequisite (platform families do not
+	// consume the envelope directly).
+	const familyConsumesHandoff = subcommandsFor(family).some((sub) => {
+		const flags: Readonly<Record<string, FlagSpec>> =
+			browserUseContracts[toCommand(family, sub)].flags ?? {};
+		return flags["--handoff"] !== undefined;
+	});
 	return [
 		`Usage: browser-use ${family} <subcommand> [flags]`,
 		"",
 		"Subcommands:",
 		...subLines,
-		"",
-		ROUTE_PREREQUISITE_POINTER,
+		...(familyConsumesHandoff ? ["", ROUTE_PREREQUISITE_POINTER] : []),
 		"",
 	].join("\n");
 }
 
 function renderRootHelp(): string {
 	const familyLines = BROWSER_USE_FAMILIES.map((family) => {
-		const summary =
-			family === "targets"
-				? "Browser Target Discovery, Selection, and status."
-				: "Browser Operations: snapshot, screenshot, emulate.";
-		return `  ${family.padEnd(8)} ${summary}`;
+		return `  ${family.padEnd(10)} ${BROWSER_USE_FAMILY_SUMMARIES[family]}`;
 	});
 	return [
 		"Usage: browser-use <family> <subcommand> [flags]",
@@ -380,8 +391,7 @@ function renderRootHelp(): string {
 		"  --debug         Emit debug diagnostics to stderr.",
 		"  --version       Print version.",
 		"",
-		ROUTE_PREREQUISITE_POINTER,
+		`Browser attachment commands accepting --handoff require:\n  ${ROUTE_PREREQUISITE_POINTER}`,
 		"",
 	].join("\n");
 }
-

@@ -2,8 +2,12 @@
 
 ## Roadmap
 
-Browser entry roadmap pitches live in `runtime/browser-connect/TASKS.md`
-`## Roadmap` (KTD7) — including the re-scoped #136–#146 cluster.
+Browser Use product direction is owned by
+`docs/plans/2026-07-21-002-feat-browser-use-task-router-runbook-platform-plan.md`
+and `docs/plans/2026-07-21-003-feat-browser-use-cross-adapter-authentication-plan.md`.
+Browser entry (connection-only) roadmap pitches live in
+`runtime/browser-connect/TASKS.md` `## Roadmap` (KTD7) — including the
+re-scoped #136–#146 cluster.
 
 ## Source Of Truth
 

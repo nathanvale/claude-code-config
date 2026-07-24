@@ -11,6 +11,10 @@
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import {
+	type BrowserUsePlatformFs,
+	createDefaultPlatformFs,
+} from "./browser-use-paths";
+import {
 	type McporterCommandInput,
 	type McporterCommandResult,
 	spawnMcporterCommand,
@@ -42,6 +46,9 @@ export type BrowserUseRuntime = {
 	// mirroring the Router envelope seam. Returns "" when nothing is piped; the
 	// inline env var is the fallback the CLI driver applies when this is empty.
 	readStdin: () => Promise<string>;
+	/** Platform store filesystem (U2). Default binds node:fs/promises; tests
+	 *  inject temp-rooted real fs or the volatile-overlay fake. */
+	platformFs: BrowserUsePlatformFs;
 };
 
 export function createDefaultBrowserUseRuntime(
@@ -58,6 +65,7 @@ export function createDefaultBrowserUseRuntime(
 			await mkdir(path, { recursive: true, mode: 0o700 });
 		},
 		readStdin: () => readAllStdin(),
+		platformFs: createDefaultPlatformFs(),
 		...overrides,
 	};
 }

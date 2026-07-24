@@ -678,8 +678,9 @@ describe("browser-connect environment gateway", () => {
 			expect(BROWSER_CONNECT_CONTRACT_ID).toBe(
 				"browser-connect.verified-handoff",
 			);
-			expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("1");
+			expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("2");
 			expect(result.environment.name).toBe("agent-chrome");
+			expect(result.environment.profile).toBe("default");
 			expect(result.proof.route_evidence).toBe("verified-live");
 		});
 	});

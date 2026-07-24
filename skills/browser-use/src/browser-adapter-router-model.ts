@@ -98,12 +98,14 @@ export type RoutePreconditionEvidence = {
 	};
 };
 
+// Fallback authority removed (platform plan 2026-07-21-002 U1): a preferred
+// adapter that is not selectable fails closed; no policy field can authorize
+// silently routing another adapter. allow_degraded was never routed in V1 and
+// retired with it.
 export type RoutePolicy = {
 	mode: BrowserAdapterRouterMode;
 	adapter_id?: BrowserAdapterId;
 	minimum_support?: BrowserAdapterRouterSupportState;
-	fallback_allowed?: boolean;
-	allow_degraded?: boolean;
 };
 
 export type RouteTask = {

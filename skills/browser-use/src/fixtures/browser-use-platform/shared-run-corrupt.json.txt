@@ -1,0 +1,18 @@
+{
+	"record": "shared-run",
+	"schema_version": "1",
+	"payload": {
+		"run_id": "run-fixture-1",
+		"revision": 4,
+		"state": "awaiting-auth",
+		"task_intent": "routine-automation",
+		"environment_profile": {
+			"environment": "agent-chrome",
+			"profile": "default"
+		},
+		"adapter_id": "agent-browser",
+		"handoff_evidence_id": "evidence-fixture-1",
+		"auth_fragment": {
+			"schema_version": "1",
+			"fragment": {
+				"opaque": "auth-owned-f

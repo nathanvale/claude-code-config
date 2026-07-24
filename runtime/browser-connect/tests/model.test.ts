@@ -53,7 +53,7 @@ const wsUrlFixture = fixture("browser-debugger-url");
 function verifiedHandoffPayload(): BrowserConnectHandoffPayload {
 	return {
 		outcome: "verified",
-		environment: { name: "agent-chrome" },
+		environment: { name: "agent-chrome", profile: "default" },
 		browser_entry_mode: "explicit-cdp",
 		attachment: {
 			adapter_id: "chrome-devtools-mcp",
@@ -81,7 +81,7 @@ function failurePayload(
 		outcome: "failed",
 		failure_class: failureClass,
 		next_action_id: BROWSER_CONNECT_NEXT_ACTION_BY_FAILURE_CLASS[failureClass],
-		environment: { name: "agent-chrome" },
+		environment: { name: "agent-chrome", profile: "default" },
 		launch: { launched: false },
 		...(detail === undefined ? {} : { detail }),
 	};
@@ -91,7 +91,7 @@ describe("browser-connect model vocabulary", () => {
 	test("contract constants are stable package-owned literals", () => {
 		expect(BROWSER_CONNECT_CLI_NAME).toBe("browser-connect");
 		expect(BROWSER_CONNECT_CONTRACT_ID).toBe("browser-connect.verified-handoff");
-		expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("1");
+		expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("2");
 		expect(BROWSER_CONNECT_RESULT_CONTRACT.id).toBe(
 			BROWSER_CONNECT_CONTRACT_ID,
 		);

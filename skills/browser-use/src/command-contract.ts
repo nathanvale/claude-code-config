@@ -264,6 +264,28 @@ export const BROWSER_USE_OPERATION_CONTRACT_ID =
 // Verified Handoff Envelope.
 export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "2" as const;
 
+// Platform result contracts (platform plan 2026-07-21-002 U1). One contract
+// id per new family; the shared-run projection is the one schema auth and
+// platform both consume (R6/R24) — no second run vocabulary exists.
+export const BROWSER_USE_TASK_INTENTS_CONTRACT_ID =
+	"browser-use.task-intents" as const;
+export const BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_SHARED_RUN_CONTRACT_ID =
+	"browser-use.shared-run" as const;
+const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID =
+	"browser-use.runbook-catalog" as const;
+const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
+	"browser-use.migration-status" as const;
+const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID =
+	"browser-use.artifact-manifest" as const;
+const BROWSER_USE_ARTIFACT_MANIFEST_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_REPAIR_STATUS_CONTRACT_ID =
+	"browser-use.repair-status" as const;
+const BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION = "1" as const;
+
 // ---------------------------------------------------------------------------
 // browser-connect Verified Handoff Envelope — consumer-side pin (KTD1).
 //
@@ -276,7 +298,14 @@ export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "2" as const;
 
 export const BROWSER_CONNECT_HANDOFF_CONTRACT_ID =
 	"browser-connect.verified-handoff" as const;
-export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "1" as const;
+// v2 (platform plan 2026-07-21-002 U1, KTD13): the envelope's environment
+// identity carries the named logical profile. This pin bumps atomically with
+// browser-connect's schema constant; a v1 envelope now fails closed here.
+export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "2" as const;
+/** Exact logical environment identity Browser Connect schema 2 can prove. */
+export const BROWSER_CONNECT_ENVIRONMENT_NAME = "agent-chrome" as const;
+/** Exact logical profile identity Browser Connect schema 2 can prove. */
+export const BROWSER_CONNECT_ENVIRONMENT_PROFILE = "default" as const;
 
 // Operation capabilities browser-use's transport can honor per adapter, keyed
 // on the envelope's attachment adapter id verbatim (U4, R4/R5: one adapter
@@ -312,8 +341,76 @@ export const BROWSER_USE_OPERATE_SUBCOMMANDS = [
 export type BrowserUseOperateSubcommand =
 	(typeof BROWSER_USE_OPERATE_SUBCOMMANDS)[number];
 
-export const BROWSER_USE_FAMILIES = ["targets", "operate"] as const;
+// Platform command families (platform plan 2026-07-21-002 U1). `targets` and
+// `operate` are the retained live surfaces; the task/run/runbook/migration/
+// artifact/repair families are declared contract shells — help, parser
+// acceptance, discovery metadata, and result contracts ship now, live bodies
+// land with U2-U7. `task list` is live from U1 (a pure projection of the
+// code-owned Task Intent catalog).
+const BROWSER_USE_TASK_SUBCOMMANDS = ["list"] as const;
+export type BrowserUseTaskSubcommand =
+	(typeof BROWSER_USE_TASK_SUBCOMMANDS)[number];
+
+const BROWSER_USE_RUN_SUBCOMMANDS = [
+	"status",
+	"resume",
+	"cancel",
+] as const;
+export type BrowserUseRunSubcommand =
+	(typeof BROWSER_USE_RUN_SUBCOMMANDS)[number];
+
+const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list"] as const;
+export type BrowserUseRunbookSubcommand =
+	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
+
+const BROWSER_USE_MIGRATION_SUBCOMMANDS = ["status"] as const;
+export type BrowserUseMigrationSubcommand =
+	(typeof BROWSER_USE_MIGRATION_SUBCOMMANDS)[number];
+
+const BROWSER_USE_ARTIFACT_SUBCOMMANDS = ["list"] as const;
+export type BrowserUseArtifactSubcommand =
+	(typeof BROWSER_USE_ARTIFACT_SUBCOMMANDS)[number];
+
+const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
+export type BrowserUseRepairSubcommand =
+	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_FAMILIES = [
+	"targets",
+	"operate",
+	"task",
+	"run",
+	"runbook",
+	"migration",
+	"artifact",
+	"repair",
+] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
+
+// One family -> subcommand table (the parser and help render from this; no
+// second copy of the family tree exists anywhere).
+export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
+	targets: BROWSER_USE_TARGETS_SUBCOMMANDS,
+	operate: BROWSER_USE_OPERATE_SUBCOMMANDS,
+	task: BROWSER_USE_TASK_SUBCOMMANDS,
+	run: BROWSER_USE_RUN_SUBCOMMANDS,
+	runbook: BROWSER_USE_RUNBOOK_SUBCOMMANDS,
+	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
+	artifact: BROWSER_USE_ARTIFACT_SUBCOMMANDS,
+	repair: BROWSER_USE_REPAIR_SUBCOMMANDS,
+} as const satisfies Record<BrowserUseFamily, readonly string[]>;
+
+// One family -> root-help summary table (rendered by the parser's root help).
+export const BROWSER_USE_FAMILY_SUMMARIES = {
+	targets: "Browser Target Discovery, Selection, and status.",
+	operate: "Browser Operations: snapshot, screenshot, emulate.",
+	task: "Code-owned Task Intent catalog.",
+	run: "Shared Browser Use run status, resume, and cancel.",
+	runbook: "Browser Runbook catalog.",
+	migration: "Legacy corpus migration status.",
+	artifact: "Run artifact manifest.",
+	repair: "Platform repair status and bounded repair execution.",
+} as const satisfies Record<BrowserUseFamily, string>;
 
 // Browser Target Discovery modes (migration U1, KTD2). handoff-bound replaced
 // route-bound: the mode's evidence is a browser-connect Verified Handoff
@@ -332,7 +429,16 @@ export type BrowserUseCommand =
 	| "targets-status"
 	| "operate-snapshot"
 	| "operate-screenshot"
-	| "operate-emulate";
+	| "operate-emulate"
+	| "task-list"
+	| "run-status"
+	| "run-resume"
+	| "run-cancel"
+	| "runbook-list"
+	| "migration-status"
+	| "artifact-list"
+	| "repair-status"
+	| "repair-apply";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -392,6 +498,40 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"target_state_stale",
 	"target_state_mismatch",
 	"target_state_cross_run",
+	// Platform XDG store + shared-run substrate (platform plan U2).
+	"xdg_root_relative",
+	"xdg_root_unwritable",
+	"xdg_root_symlink_ancestor",
+	"xdg_root_wrong_owner",
+	"xdg_root_permissions_loose",
+	"xdg_root_version_controlled",
+	"store_cross_device",
+	"store_flush_failed",
+	"store_lock_contended",
+	"store_record_conflict",
+	"store_record_corrupt",
+	"store_record_missing",
+	"store_read_failed",
+	"lease_held",
+	"lease_fencing_stale",
+	"lease_epoch_stale",
+	"lease_expired",
+	"lease_missing",
+	"lease_store_failed",
+	"epoch_store_failed",
+	"usage_error",
+	"runtime_error",
+	"run_not_found",
+	"run_record_invalid",
+	"run_record_corrupt",
+	"run_resume_execution_unavailable",
+	"run_terminal_truth",
+	"retention_collision",
+	"artifact_missing",
+	"artifact_corrupt",
+	"export_destination_unsafe",
+	"export_verify_failed",
+	"epoch_conflict",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -588,6 +728,76 @@ export const browserUseOperationSuccessActions = [
 	},
 ] as const;
 
+// Platform XDG store runtime action ids (platform plan U2). The stable
+// continuation.next_action_id vocabulary the store-backed run/artifact/repair
+// commands emit. repair_xdg_root is the single AE4 refusal continuation;
+// wait_for_lease / refresh_run_revision cover R27 serialization and CAS
+// staleness; supply_run_id / inspect_repair_status / change_export_destination
+// cover the load, corruption, and export refusal classes.
+export const browserUsePlatformStoreFailureActions = [
+	{
+		id: "repair_xdg_root",
+		summary:
+			"Fix the named XDG environment variable, ownership, or permissions, then re-run.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "wait_for_lease",
+		summary:
+			"Wait for the named lease holder to finish or expire, then re-run; repair status shows the holder.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_run_revision",
+		summary: "Re-read the shared run and retry against its current revision.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "supply_run_id",
+		summary:
+			"Pass an existing shared run id via --run; run status lists known runs.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_repair_status",
+		summary:
+			"Run browser-use repair status and follow its next safe repair action.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_corrupt_store_record",
+		summary:
+			"Inspect or restore the named corrupt durable record; bounded repair apply does not rewrite corrupt records.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_export_destination",
+		summary:
+			"Pass an absolute export destination outside every browser-use root.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUsePlatformStoreSuccessActions = [
+	{
+		id: "apply_repair",
+		summary:
+			"Apply the bounded repair plan with browser-use repair apply, then inspect repair status again.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "inspect_shared_run",
+		summary: "Read the shared run projection and follow its continuation.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "resume_shared_run",
+		summary:
+			"Resume the blocked shared run with browser-use run resume --run <id>.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 type BrowserUseAudience = "agent" | "operator";
 type BrowserUseMutation = "check" | "browser";
 type BrowserUseCommandContract = CommandFacadeContract<
@@ -724,8 +934,24 @@ const browserUseEmulateFlags = {
 	...browserUseOperateCommonFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseRunIdEnvVar = {
+	name: "BROWSER_USE_RUN_ID",
+	description: "Optional run correlation id.",
+} as const;
+
+const browserUseCallerEnvVar = {
+	// Non-authoritative caller metadata (platform plan U1, R35): recorded
+	// for audit only. Claude Code, Codex, human shells, and external
+	// schedulers share one contract; caller identity never changes command
+	// semantics, authority, or output schema.
+	name: "BROWSER_USE_CALLER",
+	description:
+		"Optional caller metadata label (e.g. claude-code, codex, launchd) recorded for audit only; never grants authority or changes command semantics.",
+} as const;
+
 const browserUseEnvVars = [
-	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
+	browserUseRunIdEnvVar,
+	browserUseCallerEnvVar,
 	{
 		name: "BROWSER_USE_MOCK_OUTCOME",
 		description:
@@ -736,6 +962,50 @@ const browserUseEnvVars = [
 		description:
 			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). No shell strings, no package-runner fallback.",
 	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+const browserUsePlatformEnvVars = [
+	browserUseRunIdEnvVar,
+	browserUseCallerEnvVar,
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+// XDG env vars the store-backed platform commands consume (platform plan U2,
+// R7/R11). Declared once; browser-use-paths.ts is the one resolution owner —
+// this table only names the consumed vars for discovery/help.
+const browserUseXdgEnvVars = [
+	{
+		name: "XDG_CONFIG_HOME",
+		description:
+			"Absolute Browser Use config base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_DATA_HOME",
+		description:
+			"Absolute Browser Use data base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_STATE_HOME",
+		description:
+			"Absolute Browser Use run/artifact state base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		name: "XDG_CACHE_HOME",
+		description:
+			"Absolute Browser Use cache base; XDG 0.8 default when empty. Relative values are refused.",
+	},
+	{
+		// "non-secret locks/sockets" is the R11 wording, but the facade's
+		// env-var validator refuses credential-class words in descriptions, so
+		// the sensitivity qualifier lives in the paths module docs instead.
+		name: "XDG_RUNTIME_DIR",
+		description:
+			"Absolute runtime dir for lock and socket files; a private warned state fallback applies when absent.",
+	},
+] as const;
+
+const browserUsePlatformStoreEnvVars = [
+	...browserUsePlatformEnvVars,
+	...browserUseXdgEnvVars,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
 // Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
@@ -793,6 +1063,83 @@ const browserUseOperationResultContract = {
 	id: BROWSER_USE_OPERATION_CONTRACT_ID,
 	kind: "Normalized Browser Operation result.",
 	schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+// ---------------------------------------------------------------------------
+// Platform families (platform plan 2026-07-21-002 U1): shared flags, exit
+// codes, and result contracts for task/run/runbook/migration/artifact/repair.
+// ---------------------------------------------------------------------------
+
+// --caller mirrors BROWSER_USE_CALLER (flag wins): audit-only caller metadata,
+// declared once and shared by every platform-family command.
+const browserUsePlatformFlags = {
+	"--caller": {
+		type: "string",
+		description:
+			"Caller metadata label recorded for audit only; never grants authority or changes command semantics.",
+	},
+	...browserUseOutputFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunFlags = {
+	"--run": {
+		type: "string",
+		description: "Shared Browser Use run id to inspect, resume, or cancel.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// `artifact list --run` narrows the projection to one shared run (platform
+// plan U2, R35 "artifacts, retention").
+const browserUseArtifactFlags = {
+	"--run": {
+		type: "string",
+		description: "Filter artifacts to one shared run id.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUsePlatformExitCodes = {
+	"0": "Command completed.",
+	"1": "Runtime dependency failed or live logic is not implemented.",
+	"2": "Usage error.",
+	"20": "Run, binding, or evidence state failed closed.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
+
+const browserUseTaskIntentsResultContract = {
+	id: BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
+	kind: "Code-owned Task Intent catalog.",
+	schema_version: BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseSharedRunResultContract = {
+	id: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+	kind: "Shared Browser Use run projection.",
+	schema_version: BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseRunbookCatalogResultContract = {
+	id: BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	kind: "Browser Runbook catalog projection.",
+	schema_version: BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseMigrationStatusResultContract = {
+	id: BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+	kind: "Legacy corpus migration status projection.",
+	schema_version: BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseArtifactManifestResultContract = {
+	id: BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
+	kind: "Run artifact manifest projection.",
+	schema_version: BROWSER_USE_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseRepairStatusResultContract = {
+	id: BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	kind: "Platform repair status projection.",
+	schema_version: BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
 export const browserUseContracts = defineCommandFacadeContract(
@@ -948,6 +1295,193 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			flags: browserUseEmulateFlags,
 			exitCodes: browserUseExitCodes,
+		},
+		"task-list": {
+			script: "browser-use",
+			summary:
+				"List the code-owned Task Intents with their preferred adapter lanes and lane registration status.",
+			usage: ["task list [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseTaskIntentsResultContract,
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"run-status": {
+			script: "browser-use",
+			summary:
+				"Show a shared Browser Use run: state, revision, environment/profile, auth readiness reference, and next safe action.",
+			usage: ["run status [--run <id>] [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"run-resume": {
+			script: "browser-use",
+			summary:
+				"Resume a blocked shared Browser Use run on the same adapter lane after auth, approval, or restart.",
+			usage: ["run resume --run <id> [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Resume continues the durable shared run in live browser state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"run-cancel": {
+			script: "browser-use",
+			summary:
+				"Cancel a shared Browser Use run and report the last proven external-effect classification; never claims rollback after dispatch.",
+			usage: ["run cancel --run <id> [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Cancel records run state and reports external-effect truth.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-list": {
+			script: "browser-use",
+			summary:
+				"List discovered Browser Runbooks with service/workflow ids and health status.",
+			usage: ["runbook list [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseRunbookCatalogResultContract,
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-status": {
+			script: "browser-use",
+			summary:
+				"Show legacy corpus migration status: snapshot, dispositions, staged generations, and activation state.",
+			usage: ["migration status [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"artifact-list": {
+			script: "browser-use",
+			summary:
+				"List run artifacts with sensitivity, retention class, and outcome references.",
+			usage: ["artifact list [--run <id>] [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseArtifactManifestResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseArtifactFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"repair-status": {
+			script: "browser-use",
+			summary:
+				"Show platform repair state: unsafe stores, stale leases, and the next safe repair action.",
+			usage: ["repair status [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRepairStatusResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"repair-apply": {
+			script: "browser-use",
+			summary:
+				"Apply pending artifact tombstones and remove recognized orphan temp files; refuses while a live lease exists.",
+			usage: ["repair apply [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Repair status is the read-only preview; apply executes only its bounded repair classes.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRepairStatusResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
 		},
 	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,
 	{
