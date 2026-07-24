@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { BrowserConnectVerifiedEndpoint } from "../src/model.ts";
+import { collectAuthShapedKeyPaths } from "./connection-only-helpers.ts";
 import { browserConnectRepairDocsUrl } from "../src/repair-path.ts";
 import {
 	AGENT_BROWSER_CDP_FLAG,
@@ -108,6 +109,18 @@ describe("registry", () => {
 				expect(definition.id).not.toContain(route.route);
 			}
 		}
+	});
+
+	test("Adapter Definitions stay connection-only: no auth-shaped field on any path (R2)", () => {
+		// Producer-owned drift gate (auth plan U1): an Adapter Definition may
+		// never grow into a credential transport. This walks the AUTHORITATIVE
+		// definitions, not a captured consumer fixture, so a new auth-shaped
+		// field fails here at its producer before any consumer sees it.
+		const offenders: string[] = [];
+		for (const definition of listAdapterDefinitions()) {
+			collectAuthShapedKeyPaths(definition, definition.id, offenders);
+		}
+		expect(offenders).toEqual([]);
 	});
 });
 

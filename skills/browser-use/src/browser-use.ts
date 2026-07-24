@@ -602,8 +602,12 @@ function emitTaskIntents(input: {
 
 // Project one composed lane view into the envelope row shape shared by
 // `lanes list` and `lanes show` (auth plan U1, R27: human output projects the
-// same state as JSON, never a second vocabulary).
-function laneRow(lane: BrowserUseAdapterLaneView) {
+// same state as JSON, never a second vocabulary). The return type anchors the
+// row to the complete view: a field dropped from this projection is a compile
+// error, so plain-parity tests always compare against the full lane state.
+export function adapterLaneRow(
+	lane: BrowserUseAdapterLaneView,
+): BrowserUseAdapterLaneView {
 	return {
 		lane_id: lane.lane_id,
 		handoff: lane.handoff,
@@ -619,11 +623,42 @@ function laneRow(lane: BrowserUseAdapterLaneView) {
 	};
 }
 
-function laneLine(lane: BrowserUseAdapterLaneView): string {
+/**
+ * Render one lane's plain projection (R27, finding #7): every safe material
+ * field of the JSON row on one `key=value` line — handoff pin, native
+ * Implementation (with unavailability reason and repair), integrity state,
+ * per-class evidence status/digest/probe time, derived claims, lane digest,
+ * and lane repair. Free-text values are JSON-quoted so the line stays
+ * machine-splittable; a human and an agent repair from the same state.
+ */
+export function renderAdapterLaneLine(lane: BrowserUseAdapterLaneView): string {
+	const evidenceField = (slot: BrowserUseAdapterLaneView["evidence"]["task"]) =>
+		slot.evidence_digest !== undefined
+			? `${slot.status}@${slot.evidence_digest}@${slot.probed_at_epoch_ms}`
+			: slot.status;
 	const implementation = lane.native_implementation.implemented
-		? lane.native_implementation.execution_interface
-		: "unavailable";
-	return `${lane.lane_id} implementation=${implementation} integrity=${lane.integrity_state} connection=${lane.evidence.connection.status} task=${lane.evidence.task.status} auth=${lane.evidence["auth-conformance"].status} auth_methods=${lane.advertised_auth_methods.join(",") || "none"}\n`;
+		? [`implementation=${lane.native_implementation.execution_interface}`]
+		: [
+				"implementation=unavailable",
+				`unavailable_reason=${JSON.stringify(lane.native_implementation.unavailable_reason)}`,
+				`implementation_repair=${JSON.stringify(lane.native_implementation.next_repair_action)}`,
+			];
+	const fields = [
+		lane.lane_id,
+		`handoff=${lane.handoff.contract_id}@${lane.handoff.schema_version}`,
+		...implementation,
+		`integrity=${lane.integrity_state}`,
+		`connection=${evidenceField(lane.evidence.connection)}`,
+		`task=${evidenceField(lane.evidence.task)}`,
+		`auth=${evidenceField(lane.evidence["auth-conformance"])}`,
+		`task_claims=${lane.proven_task_claims.join(",") || "none"}`,
+		`auth_methods=${lane.advertised_auth_methods.join(",") || "none"}`,
+		`digest=${lane.lane_evidence_digest}`,
+		...(lane.next_repair_action
+			? [`repair=${JSON.stringify(lane.next_repair_action)}`]
+			: []),
+	];
+	return `${fields.join(" ")}\n`;
 }
 
 // Compose the baseline registry the CLI projects (auth plan U1). Evidence
@@ -658,7 +693,7 @@ function emitAdapterLanes(input: {
 			`contract=${BROWSER_USE_ADAPTER_LANES_CONTRACT_ID} schema=${BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION} caller=${input.caller.label ?? "none"}\n`,
 		);
 		for (const lane of registry.lanes) {
-			input.stdout.write(laneLine(lane));
+			input.stdout.write(renderAdapterLaneLine(lane));
 		}
 		return 0;
 	}
@@ -670,7 +705,7 @@ function emitAdapterLanes(input: {
 				contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 				schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 				lane_count: registry.lanes.length,
-				lanes: registry.lanes.map(laneRow),
+				lanes: registry.lanes.map(adapterLaneRow),
 				composed_digest: registry.composed_digest,
 				caller: input.caller,
 			},
@@ -747,7 +782,7 @@ function emitAdapterLaneShow(input: {
 		input.stdout.write(
 			`contract=${BROWSER_USE_ADAPTER_LANES_CONTRACT_ID} schema=${BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION} caller=${input.caller.label ?? "none"}\n`,
 		);
-		input.stdout.write(laneLine(resolved.lane));
+		input.stdout.write(renderAdapterLaneLine(resolved.lane));
 		return 0;
 	}
 	writeJsonEnvelope(
@@ -757,7 +792,7 @@ function emitAdapterLaneShow(input: {
 			data: {
 				contract: BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 				schema_version: BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
-				lane: laneRow(resolved.lane),
+				lane: adapterLaneRow(resolved.lane),
 				caller: input.caller,
 			},
 		}),
