@@ -25,6 +25,9 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"operate-emulate",
 	// Platform families (platform plan 2026-07-21-002 U1).
 	"task-list",
+	// Adapter Lane Registry discovery (auth plan 2026-07-21-003 U1).
+	"lanes-list",
+	"lanes-show",
 	"run-status",
 	"run-resume",
 	"run-cancel",

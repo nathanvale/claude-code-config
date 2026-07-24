@@ -3,6 +3,10 @@ import {
 	assertNoRuntimeContractFixtureLeaks,
 	RUNTIME_CONTRACT_REDACTION_FIXTURES,
 } from "@side-quest/cli-command-facade/testing";
+import {
+	AUTH_SHAPED_KEY,
+	collectAuthShapedKeyPaths,
+} from "./connection-only-helpers.ts";
 
 import {
 	BROWSER_CONNECT_ADAPTER_REPAIR_CAUSES,
@@ -27,12 +31,17 @@ import {
 	createBrowserConnectEnvelopeData,
 	redactBrowserConnectText,
 	sanitizeBrowserConnectUsageMessage,
+	type BrowserConnectAuthorizedAttachment,
 	type BrowserConnectEnvelopePayload,
+	type BrowserConnectEnvironmentIdentity,
 	type BrowserConnectFailureActionId,
 	type BrowserConnectFailureClass,
 	type BrowserConnectFailurePayload,
 	type BrowserConnectHandoffPayload,
+	type BrowserConnectLaunchProvenance,
+	type BrowserConnectProofEvidence,
 	type BrowserConnectRepairContext,
+	type BrowserConnectVerifiedEndpoint,
 } from "../src/model.ts";
 
 function fixture(label: string): string {
@@ -318,6 +327,111 @@ describe("browser-connect envelope data (R2/R3/R16)", () => {
 		expect(() => createBrowserConnectEnvelopeData(withSchemaVersion)).toThrow(
 			/schema_version/,
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Connection-only producer boundary (R2, auth plan U1): the authoritative
+// Verified Handoff payload may never grow auth or credential vocabulary. The
+// key manifests below are compile-checked exhaustive in BOTH directions
+// against the contract types — including RECURSIVELY, so a nested key inside
+// any new field (required or optional) must be declared here and pass the
+// auth-shape gate. The browser-use consumer's captured-envelope sweep stays
+// as compatibility coverage only.
+// ---------------------------------------------------------------------------
+
+type ExactKeys<T, K extends readonly (keyof T)[]> = Exclude<
+	keyof T,
+	K[number]
+> extends never
+	? true
+	: never;
+
+// Every key name reachable anywhere in a type, including through arrays and
+// optional fields — the recursive completeness axis of the manifest proof.
+type NestedKeyNames<T> = T extends readonly (infer U)[]
+	? NestedKeyNames<U>
+	: T extends object
+		? {
+				[K in keyof T]-?: (K & string) | NestedKeyNames<NonNullable<T[K]>>;
+			}[keyof T]
+		: never;
+
+const HANDOFF_PAYLOAD_KEYS = [
+	"outcome",
+	"environment",
+	"browser_entry_mode",
+	"attachment",
+	"endpoint",
+	"launch",
+	"proof",
+] as const;
+const HANDOFF_ENVIRONMENT_KEYS = ["name", "profile"] as const;
+const HANDOFF_ATTACHMENT_KEYS = [
+	"adapter_id",
+	"route",
+	"probe_executable",
+] as const;
+const HANDOFF_ENDPOINT_KEYS = ["http", "ws"] as const;
+const HANDOFF_LAUNCH_KEYS = ["launched"] as const;
+const HANDOFF_PROOF_KEYS = [
+	"environment_contract_id",
+	"environment_schema_version",
+	"route_evidence",
+] as const;
+
+const handoffManifestsExact: [
+	ExactKeys<BrowserConnectHandoffPayload, typeof HANDOFF_PAYLOAD_KEYS>,
+	ExactKeys<BrowserConnectEnvironmentIdentity, typeof HANDOFF_ENVIRONMENT_KEYS>,
+	ExactKeys<BrowserConnectAuthorizedAttachment, typeof HANDOFF_ATTACHMENT_KEYS>,
+	ExactKeys<BrowserConnectVerifiedEndpoint, typeof HANDOFF_ENDPOINT_KEYS>,
+	ExactKeys<BrowserConnectLaunchProvenance, typeof HANDOFF_LAUNCH_KEYS>,
+	ExactKeys<BrowserConnectProofEvidence, typeof HANDOFF_PROOF_KEYS>,
+] = [true, true, true, true, true, true];
+
+const ALL_DECLARED_HANDOFF_KEYS = [
+	...HANDOFF_PAYLOAD_KEYS,
+	...HANDOFF_ENVIRONMENT_KEYS,
+	...HANDOFF_ATTACHMENT_KEYS,
+	...HANDOFF_ENDPOINT_KEYS,
+	...HANDOFF_LAUNCH_KEYS,
+	...HANDOFF_PROOF_KEYS,
+] as const;
+
+// Recursive completeness: EVERY key name reachable anywhere in the payload
+// type — including inside a future optional nested object the fixture never
+// populates — must appear in the declared manifest union, so no schema growth
+// can bypass the runtime auth-shape gate below.
+const handoffKeysRecursivelyDeclared: Exclude<
+	NestedKeyNames<BrowserConnectHandoffPayload>,
+	(typeof ALL_DECLARED_HANDOFF_KEYS)[number]
+> extends never
+	? true
+	: never = true;
+
+describe("connection-only producer boundary (R2)", () => {
+	test("the complete declared handoff payload schema carries no auth-shaped field", () => {
+		// The tuple and the recursive-declaration constant are the compile-time
+		// proof the manifests are exhaustive; a schema field added without a
+		// manifest entry fails to typecheck.
+		expect(handoffManifestsExact.every(Boolean)).toBe(true);
+		expect(handoffKeysRecursivelyDeclared).toBe(true);
+		expect(
+			[...ALL_DECLARED_HANDOFF_KEYS].filter((key) =>
+				AUTH_SHAPED_KEY.test(key),
+			),
+		).toEqual([]);
+	});
+
+	test("the emitted authoritative envelope carries no auth-shaped key on any path", () => {
+		const data = createBrowserConnectEnvelopeData(verifiedHandoffPayload());
+		const offenders: string[] = [];
+		collectAuthShapedKeyPaths(
+			JSON.parse(JSON.stringify(data)),
+			"envelope",
+			offenders,
+		);
+		expect(offenders).toEqual([]);
 	});
 });
 
