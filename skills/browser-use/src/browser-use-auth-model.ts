@@ -853,11 +853,12 @@ export function validateAuthFragmentShape(
 			message: "terminal status and terminal outcome must appear together.",
 		});
 	}
-	if (sound.status === "terminal" && sound.phase !== "terminal") {
+	if ((sound.status === "terminal") !== (sound.phase === "terminal")) {
 		issues.push({
 			code: "fragment_invariant_violated",
 			path: "fragment.phase",
-			message: "a terminal fragment must rest in the terminal phase.",
+			message:
+				"terminal phase and terminal status must appear together; neither admits the other's absence.",
 		});
 	}
 	if (sound.terminal_outcome === "authenticated") {

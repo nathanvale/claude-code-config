@@ -277,6 +277,13 @@ describe("fragment invariants (R6/R19/R21)", () => {
 		).toEqual([]);
 	});
 
+	test("a terminal phase with a non-terminal status fails admission (reverse invariant)", () => {
+		const issues = validateAuthFragmentShape(
+			baseFragment({ phase: "terminal", status: "active", method_step: null }),
+		);
+		expect(issues[0]?.code).toBe("fragment_invariant_violated");
+	});
+
 	test("an authenticated outcome requires an attestation and exactly one identity basis", () => {
 		const issues = validateAuthFragmentShape(
 			baseFragment({

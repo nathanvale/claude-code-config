@@ -654,4 +654,17 @@ describe("illegal-event property sweep (verification contract)", () => {
 		const resumed = resumeAuthTransactionAfterRestart(corrupted);
 		expect(resumed.ok).toBe(false);
 	});
+
+	test("a terminal-phase fragment with a non-terminal status rejects typed, never crashes", () => {
+		const crafted = {
+			...begun(),
+			phase: "terminal",
+			status: "active",
+		} as BrowserUseAuthTransactionFragment;
+		for (const event of ALL_EVENTS) {
+			expectRejection(crafted, event, "auth_fragment_invalid");
+		}
+		const resumed = resumeAuthTransactionAfterRestart(crafted);
+		expect(resumed.ok).toBe(false);
+	});
 });

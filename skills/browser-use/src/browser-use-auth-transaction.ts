@@ -379,6 +379,15 @@ export function applyAuthTransition(
 	}
 
 	const phase = fragment.phase as Exclude<BrowserUseAuthPhase, "terminal">;
+	// Defense in depth behind the admission invariant (terminal phase ⟺
+	// terminal status): an unknown or terminal phase key must reject typed,
+	// never throw on an undefined legality row.
+	if (EVENTS_BY_PHASE[phase] === undefined) {
+		return reject(
+			"auth_phase_illegal",
+			`event ${event.type} is illegal in phase ${fragment.phase}.`,
+		);
+	}
 	if (!EVENTS_BY_PHASE[phase].includes(event.type)) {
 		return reject(
 			"auth_phase_illegal",
