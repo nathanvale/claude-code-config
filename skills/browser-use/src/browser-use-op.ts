@@ -579,7 +579,7 @@ export type BrowserUseVaultScopeProof =
 /**
  * Prove the exactly-one-vault grant (R8) before any item discovery; the
  * provider enforces the ordering. Zero or multiple visible vaults block with
- * the existing repair-vault-scope continuation — no second approval system.
+ * the existing repair-vault-grant continuation — no second approval system.
  */
 export function proveVaultScope(
 	vaults: readonly BrowserUseOpVaultRef[],

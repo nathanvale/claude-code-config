@@ -367,10 +367,10 @@ describe("phase vocabulary", () => {
 });
 
 describe("bounded attestation digest (R30)", () => {
-	test("the digest is deterministic: same record, same 32-hex digest", () => {
+	test("the digest is deterministic: same record, same full 64-hex digest", () => {
 		const digest = authAttestationDigestOf(baseAttestation());
 		expect(digest).toBe(authAttestationDigestOf(baseAttestation()));
-		expect(digest).toMatch(/^[0-9a-f]{32}$/);
+		expect(digest).toMatch(/^[0-9a-f]{64}$/);
 	});
 
 	test("editing any attestation field changes the digest", () => {

@@ -71,6 +71,7 @@ import type {
 } from "./browser-use-run-model";
 import {
 	type RunStoreDeps,
+	BrowserUseAuthCommitInfrastructureError,
 	createRunIntegrationPort,
 	leaseKeyForRun,
 	loadSharedRun,
@@ -608,14 +609,20 @@ export function createBrowserUseAuthProvider(
 					error instanceof Error
 						? error.message
 						: "auth commit failed for an unclassified reason.";
-				// Classify on the raw message; embed only a screened one — a
-				// secret-shaped store detail is withheld entirely, mirroring the
-				// op module's sanitizedFailureMessage posture.
+				// Embed only a screened message — a secret-shaped store detail is
+				// withheld entirely, mirroring the op module's
+				// sanitizedFailureMessage posture.
 				const message =
 					raw.length === 0 || secretShapeFindingOf(raw) !== undefined
 						? "auth commit failure detail withheld; the reported detail was secret-shaped."
 						: raw;
-				if (raw.startsWith("auth commit lease rejected")) {
+				// Typed classification (the #259 coded-error debt): the Port's
+				// infrastructure error carries its machine `kind`; wording is
+				// display data. Anything else that throws is a store fault.
+				if (
+					error instanceof BrowserUseAuthCommitInfrastructureError &&
+					error.kind === "lease-rejected"
+				) {
 					return {
 						ok: false,
 						rejection: { code: "auth_commit_lease_rejected", message },

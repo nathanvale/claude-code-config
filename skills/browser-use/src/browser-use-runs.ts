@@ -46,6 +46,7 @@ import {
 	validateSharedRun,
 } from "./browser-use-run-model";
 import {
+	type BrowserUseAuthAttestationPayload,
 	type BrowserUseRunReceiptPayload,
 	type BrowserUseSharedRunPayload,
 	encodeDurableRecord,
@@ -455,29 +456,194 @@ export async function casUpdateSharedRun(
 	return outcome;
 }
 
+// --- Auth attestation custody (R30, auth plan U3a) ------------------------------
+//
+// The platform is CUSTODIAN of durable attestation records, never their
+// verifier: the caller supplies the content digest (auth-owned
+// `authAttestationDigestOf`), the store files the record under it, and
+// `createBrowserUseAuthContract` re-proves digest, binding, and freshness on
+// every consult. A record filed under a lying digest is found by that digest
+// and refused by the auth-owned verifier, so custody needs no digest math.
+
+/** Typed attestation-record read outcome. */
+export type AuthAttestationRecordRead =
+	| { status: "present"; record: BrowserUseAuthAttestationPayload }
+	| { status: "missing" }
+	| { status: "corrupt"; message: string };
+
+async function ensureAttestationDirs(
+	deps: RunStoreDeps,
+): Promise<{ ok: true } | RunFailure> {
+	try {
+		await deps.fs.mkdir(deps.paths.state.attestationsDir, {
+			recursive: true,
+			mode: PRIVATE_DIR_MODE,
+		});
+	} catch (error) {
+		return runFailure(
+			"attestation_store_failed",
+			`attestation directory could not be created (${errorCode(error)}).`,
+		);
+	}
+	return { ok: true };
+}
+
+/**
+ * Durably persist one bounded auth attestation record under its own content
+ * digest (R30; auth plan U3a "the write lands before commit returns ready").
+ * Content-addressed custody: rewriting the same digest is idempotent by
+ * construction. The same redaction backstop that gates run records gates
+ * attestation records; a violation refuses the write and NOTHING is
+ * persisted.
+ *
+ * @param deps - Injected fs, admitted paths, clock
+ * @param input - Auth-computed full 64-hex content digest plus the record
+ * @returns Ok, or one typed store refusal
+ */
+export async function writeAuthAttestationRecord(
+	deps: RunStoreDeps,
+	input: { digest: string; record: BrowserUseAuthAttestationPayload },
+): Promise<{ ok: true } | RunFailure> {
+	const dirs = await ensureAttestationDirs(deps);
+	if (!dirs.ok) return dirs;
+	const violations = findRedactionViolations(input.record);
+	const first = violations[0];
+	if (first !== undefined) {
+		return runFailure(
+			"attestation_record_invalid",
+			`attestation record carries a redaction violation (${first.reason}) at ${first.path}; refusing to persist.`,
+		);
+	}
+	const written = await writeDurableFile(deps.fs, {
+		path: deps.paths.state.attestationFile(input.digest),
+		contents: encodeDurableRecord("auth-attestation", input.record),
+	});
+	if (!written.ok) {
+		return runFailure(written.failure.code, written.failure.message);
+	}
+	return { ok: true };
+}
+
+/**
+ * Read one durable attestation record by its content digest.
+ *
+ * @param deps - Injected fs, admitted paths, clock
+ * @param digest - Full 64-hex content digest (the file name)
+ * @returns Present with the parsed record, missing, or corrupt
+ */
+export async function readAuthAttestationRecord(
+	deps: RunStoreDeps,
+	digest: string,
+): Promise<AuthAttestationRecordRead> {
+	const read = await readDurableFile(
+		deps.fs,
+		deps.paths.state.attestationFile(digest),
+	);
+	if (read.status === "missing") return { status: "missing" };
+	if (read.status === "unreadable") {
+		return { status: "corrupt", message: read.message };
+	}
+	const parsed = parseDurableRecord(read.raw, "auth-attestation");
+	if (!parsed.ok) {
+		return {
+			status: "corrupt",
+			message: redactUnsafeText(`attestation record is corrupt (${parsed.code}).`),
+		};
+	}
+	return { status: "present", record: parsed.payload };
+}
+
+/**
+ * The production `attestationByDigest` source for
+ * `createBrowserUseAuthContract` (auth plan U3a): a store-backed async lookup
+ * over the durable attestation records. Missing, corrupt, and digest-shape-
+ * invalid lookups all resolve `undefined` — the auth-owned verifier turns
+ * absence into refusal; custody never throws on a bad digest.
+ *
+ * @param deps - Injected fs, admitted paths, clock
+ * @returns Async digest lookup for `BrowserUseAuthContractDeps`
+ */
+export function attestationByDigestFrom(
+	deps: RunStoreDeps,
+): (digest: string) => Promise<BrowserUseAuthAttestationPayload | undefined> {
+	return async (digest) => {
+		let read: AuthAttestationRecordRead;
+		try {
+			read = await readAuthAttestationRecord(deps, digest);
+		} catch {
+			// attestationFile refuses non-64-hex names with a TypeError; an
+			// unknown digest shape is an absent record, not a crash.
+			return undefined;
+		}
+		return read.status === "present" ? read.record : undefined;
+	};
+}
+
 // --- Auth integration Port (R6, AE7 substrate) ---------------------------------
+
+/**
+ * Typed infrastructure failure raised by `commitAuthOutcome` (auth plan U3a,
+ * the #259 coded-error debt): the provider classifies on `kind`, never on
+ * message wording. `lease-rejected` names the fenced write gate refusing the
+ * presented claim; every other infrastructure fault is `store-faulted`.
+ * `detail_code` carries the machine cause (gate code, store failure code, or
+ * errno-class code) already embedded in the redacted message.
+ */
+export class BrowserUseAuthCommitInfrastructureError extends Error {
+	readonly kind: "lease-rejected" | "store-faulted";
+	readonly detail_code: string;
+
+	constructor(input: {
+		kind: "lease-rejected" | "store-faulted";
+		detail_code: string;
+		message: string;
+	}) {
+		super(redactUnsafeText(input.message));
+		this.name = "BrowserUseAuthCommitInfrastructureError";
+		this.kind = input.kind;
+		this.detail_code = input.detail_code;
+	}
+}
+
+function storeFaulted(
+	detailCode: string,
+	message: string,
+): BrowserUseAuthCommitInfrastructureError {
+	return new BrowserUseAuthCommitInfrastructureError({
+		kind: "store-faulted",
+		detail_code: detailCode,
+		message,
+	});
+}
 
 /**
  * The U1 integration Port made durable (spec §E). Under the activation barrier
  * and per-run lock it validates the presented lease, then applies the auth
- * reducer and durably writes its next run. Every reducer rejection is returned
- * verbatim and writes nothing. The Port's result vocabulary is auth-domain-only,
- * so infrastructure faults throw with a redacted message.
+ * reducer, re-proves a ready summary's bounded attestation through the
+ * auth-owned verifier (U3a: no durable attestation record, no ready run), and
+ * durably writes the next run. Every reducer rejection is returned verbatim
+ * and writes nothing. The Port's result vocabulary is auth-domain-only, so
+ * infrastructure faults throw {@link BrowserUseAuthCommitInfrastructureError}
+ * with a redacted message and a machine `kind`/`detail_code`.
  *
  * @param deps - Injected fs, admitted paths, clock
- * @param authContract - Auth-owned runtime fragment admission
+ * @param authContract - Auth-owned fragment admission plus attestation verification
+ * @param lease - Presented fenced write claim
  * @returns The Port the auth plan calls
  */
 export function createRunIntegrationPort(
 	deps: RunStoreDeps,
-	authContract: Pick<BrowserUseAuthContractPort, "validateSecretFreeFragment">,
+	authContract: Pick<
+		BrowserUseAuthContractPort,
+		"validateSecretFreeFragment" | "verifyAttestation"
+	>,
 	lease: LeaseWriteClaim,
 ): BrowserUseRunIntegrationPort {
 	return {
 		async commitAuthOutcome(input): Promise<BrowserUseAuthCommitResult> {
 			const path = deps.paths.state.runFile(input.run_id);
 			const dirs = await ensureRunDirs(deps, input.run_id);
-			if (!dirs.ok) throw new Error(dirs.message);
+			if (!dirs.ok) throw storeFaulted(dirs.code, dirs.message);
 			const commitUnderRunLock = async () =>
 				await withExclusiveFileLock<BrowserUseAuthCommitResult>(
 					deps.fs,
@@ -490,10 +656,9 @@ export function createRunIntegrationPort(
 					async () => {
 						const loaded = await loadSharedRun(deps, input.run_id);
 						if (!loaded.ok) {
-							throw new Error(
-								redactUnsafeText(
-									`auth commit could not load the run (${loaded.code}).`,
-								),
+							throw storeFaulted(
+								loaded.code,
+								`auth commit could not load the run (${loaded.code}).`,
 							);
 						}
 						const gate = await validateStoredLeaseForWrite(deps, {
@@ -501,11 +666,14 @@ export function createRunIntegrationPort(
 							presented: lease,
 						});
 						if (!gate.ok) {
-							throw new Error(
-								redactUnsafeText(
-									`auth commit lease rejected (${gate.code}).`,
-								),
-							);
+							throw new BrowserUseAuthCommitInfrastructureError({
+								kind:
+									gate.code === "lease_store_failed"
+										? "store-faulted"
+										: "lease-rejected",
+								detail_code: gate.code,
+								message: `auth commit lease rejected (${gate.code}).`,
+							});
 						}
 						const result = applyAuthCommit(
 							loaded.run,
@@ -517,22 +685,51 @@ export function createRunIntegrationPort(
 							authContract,
 						);
 						if (!result.ok) return result;
+						// U3a ready gate: the durable attestation record must exist
+						// and re-prove digest, binding, and freshness BEFORE the run
+						// record can turn ready. Absence, drift, or a run without a
+						// bound lane/handoff identity refuses the commit; nothing is
+						// written.
+						if (result.run.state === "ready") {
+							const reference = result.run.auth_attestation;
+							const verified =
+								reference !== undefined &&
+								result.run.adapter_id !== undefined &&
+								result.run.handoff_evidence_id !== undefined &&
+								(await authContract.verifyAttestation({
+									reference,
+									run_id: result.run.run_id,
+									environment_profile: result.run.environment_profile,
+									adapter_id: result.run.adapter_id,
+									handoff_evidence_id: result.run.handoff_evidence_id,
+									at_epoch_ms: deps.clock(),
+								}));
+							if (!verified) {
+								return {
+									ok: false,
+									rejection: {
+										code: "run_ready_attestation_unverified",
+										message:
+											"the auth-owned verifier could not re-prove the bounded attestation against a durable record; the run was not persisted.",
+									},
+								};
+							}
+						}
 						const payload: BrowserUseSharedRunPayload = {
 							...result.run,
 							created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
 							updated_at_epoch_ms: deps.clock(),
 						};
 						const admitted = admitRedactionClean(payload);
-						if (!admitted.ok) throw new Error(admitted.message);
+						if (!admitted.ok) throw storeFaulted(admitted.code, admitted.message);
 						const written = await writeDurableFile(deps.fs, {
 							path,
 							contents: encodeDurableRecord("shared-run", payload),
 						});
 						if (!written.ok) {
-							throw new Error(
-								redactUnsafeText(
-									`auth commit could not persist the run (${written.failure.code}).`,
-								),
+							throw storeFaulted(
+								written.failure.code,
+								`auth commit could not persist the run (${written.failure.code}).`,
 							);
 						}
 						return result;
@@ -544,15 +741,15 @@ export function createRunIntegrationPort(
 				commitUnderRunLock,
 			);
 			if (isLockFailure(outcome)) {
-				throw new Error(
-					redactUnsafeText(
-						`auth commit lock unavailable (${outcome.failure.code}).`,
-					),
+				throw storeFaulted(
+					outcome.failure.code,
+					`auth commit lock unavailable (${outcome.failure.code}).`,
 				);
 			}
 			if (!outcome.ok && "code" in outcome) {
-				throw new Error(
-					redactUnsafeText(`auth commit epoch barrier unavailable (${outcome.code}).`),
+				throw storeFaulted(
+					outcome.code,
+					`auth commit epoch barrier unavailable (${outcome.code}).`,
 				);
 			}
 			return outcome;

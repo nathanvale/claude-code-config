@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import type { BrowserUseTokenRetrievalPort } from "./browser-use-op";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
@@ -49,6 +50,14 @@ export type BrowserUseRuntime = {
 	/** Platform store filesystem (U2). Default binds node:fs/promises; tests
 	 *  inject temp-rooted real fs or the volatile-overlay fake. */
 	platformFs: BrowserUsePlatformFs;
+	/**
+	 * Prompt-free token retrieval custody (auth plan U3a, R7). ABSENT by
+	 * default: production custody belongs to the signed Token Retrieval
+	 * Launcher (ADR 0028 U3b), which does not exist on an unenrolled machine —
+	 * a legal typed state the auth commands report, never a crash. Tests and
+	 * the future U3b wiring inject a port.
+	 */
+	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 };
 
 export function createDefaultBrowserUseRuntime(

@@ -36,6 +36,11 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"artifact-list",
 	"repair-status",
 	"repair-apply",
+	// R27 auth repair surface (auth plan 2026-07-21-003 U3a).
+	"auth-enroll-browser-automation-token",
+	"auth-repair-vault-grant",
+	"auth-repair-item-binding",
+	"auth-request-binding-selection-grant",
 ];
 
 function discoveryTree() {

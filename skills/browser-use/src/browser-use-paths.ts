@@ -627,6 +627,10 @@ export type BrowserUseAdmittedPaths = {
 		generationsDir: string;
 		/** <state>/leases — durable fenced lease records. */
 		leasesDir: string;
+		/** <state>/attestations — durable bounded auth attestation records. */
+		attestationsDir: string;
+		/** <state>/attestations/<full-64-hex-digest>.json */
+		attestationFile(digest: string): string;
 		/** <state>/activation-epoch.json */
 		epochFile: string;
 	};
@@ -653,12 +657,26 @@ function assertSafePathSegment(id: string): void {
 	}
 }
 
+// The attestation file name IS the record's own content digest
+// (authAttestationDigestOf, full 64-hex sha256): content-addressed custody, so
+// a digest-shaped name that is not exactly 64 lowercase hex is a caller bug.
+const AUTH_ATTESTATION_DIGEST_SHAPE = /^[0-9a-f]{64}$/;
+
+function assertAttestationDigestShape(digest: string): void {
+	if (!AUTH_ATTESTATION_DIGEST_SHAPE.test(digest)) {
+		throw new TypeError(
+			"attestation digest is not a full 64-hex content digest",
+		);
+	}
+}
+
 function deriveAdmittedPaths(
 	resolution: BrowserUsePathsResolution,
 ): BrowserUseAdmittedPaths {
 	const { roots } = resolution;
 	const runsDir = join(roots.state, "runs");
 	const artifactsDir = join(roots.state, "artifacts");
+	const attestationsDir = join(roots.state, "attestations");
 	return {
 		resolution,
 		state: {
@@ -676,6 +694,11 @@ function deriveAdmittedPaths(
 			migrationsDir: join(roots.state, "migrations"),
 			generationsDir: join(roots.state, "generations"),
 			leasesDir: join(roots.state, "leases"),
+			attestationsDir,
+			attestationFile(digest: string): string {
+				assertAttestationDigestShape(digest);
+				return join(attestationsDir, `${digest}.json`);
+			},
 			epochFile: join(roots.state, "activation-epoch.json"),
 		},
 		cache: {

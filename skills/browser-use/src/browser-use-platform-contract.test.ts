@@ -3,6 +3,7 @@ import { projectCommandDiscoveryTree } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
+	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
@@ -83,6 +84,12 @@ describe("platform family help and discovery", () => {
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 			"repair-apply": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+			"auth-enroll-browser-automation-token":
+				BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-repair-vault-grant": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-repair-item-binding": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-request-binding-selection-grant":
+				BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 		} as const;
 		// Store-backed commands (platform plan U2) additionally declare the XDG
 		// env vars the one path owner consumes; the pure/shell commands keep the
@@ -103,6 +110,12 @@ describe("platform family help and discovery", () => {
 			"artifact-list",
 			"repair-status",
 			"repair-apply",
+			// R27 auth repair commands read the run store when --run binds the
+			// evaluation to a blocked run (auth plan U3a).
+			"auth-enroll-browser-automation-token",
+			"auth-repair-vault-grant",
+			"auth-repair-item-binding",
+			"auth-request-binding-selection-grant",
 		]);
 		for (const [command, contractId] of Object.entries(expectedContractIds)) {
 			const discovered = tree.commands[command];

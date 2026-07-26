@@ -33,6 +33,10 @@ import {
 	BROWSER_USE_TASK_INTENTS,
 	validateSharedRun,
 } from "./browser-use-run-model";
+import {
+	type BrowserUseAuthAttestation,
+	BROWSER_USE_AUTH_IDENTITY_BASES,
+} from "./browser-use-auth-model";
 import type { BrowserAdapterId } from "./discovery-model";
 
 // --- Record envelope (R10) ---------------------------------------------------
@@ -50,6 +54,7 @@ export const BROWSER_USE_DURABLE_RECORD_KINDS = [
 	"artifact-manifest",
 	"tombstone",
 	"run-receipt",
+	"auth-attestation",
 ] as const;
 
 /** Durable record kind union. */
@@ -170,6 +175,15 @@ export type BrowserUseRunReceiptPayload = BrowserUseRunReceipt & {
 	receipt_digest: string;
 };
 
+/**
+ * Persisted bounded auth attestation (R30, auth plan U3a). The payload IS the
+ * auth-owned attestation value — one type, so the durable form can never
+ * drift from `authAttestationDigestOf`'s canonical key set. The file name is
+ * the record's own full 64-hex content digest; verification stays auth-owned
+ * (`createBrowserUseAuthContract`), the platform only stores and retrieves.
+ */
+export type BrowserUseAuthAttestationPayload = BrowserUseAuthAttestation;
+
 /** Payload type carried by each durable record kind. */
 type BrowserUseDurablePayloadMap = {
 	"shared-run": BrowserUseSharedRunPayload;
@@ -180,6 +194,7 @@ type BrowserUseDurablePayloadMap = {
 	"artifact-manifest": BrowserUseArtifactManifestPayload;
 	tombstone: BrowserUseTombstonePayload;
 	"run-receipt": BrowserUseRunReceiptPayload;
+	"auth-attestation": BrowserUseAuthAttestationPayload;
 };
 
 /** Payload type for one durable record kind. */
@@ -355,6 +370,7 @@ export const BROWSER_USE_OPAQUE_AUTH_REFERENCE_KEYS = [
 	"auth_fragment",
 	"auth_attestation",
 	"auth_context_ref",
+	"auth_context",
 ] as const;
 
 // A string value carrying an op:// reference or a raw ws(s):// endpoint is
@@ -504,6 +520,7 @@ const PAYLOAD_PROBLEMS: Record<
 	"artifact-manifest": manifestProblem,
 	tombstone: tombstoneProblem,
 	"run-receipt": receiptProblem,
+	"auth-attestation": authAttestationRecordProblem,
 };
 
 function sharedRunProblem(value: unknown): string | undefined {
@@ -798,6 +815,56 @@ function receiptProblem(value: unknown): string | undefined {
 	}
 	if (stringField(value.receipt_digest) === undefined) {
 		return "payload.receipt_digest must be a non-empty string.";
+	}
+	return undefined;
+}
+
+// Every attestation field the canonical digest covers is required; a record
+// missing one could never re-prove its own file name. Ordering of the two
+// instants is a shape invariant: a bound that expires before it was observed
+// is nonsense no verifier should ever consult.
+const AUTH_ATTESTATION_STRING_FIELDS = [
+	"run_id",
+	"handoff_evidence_id",
+	"lane_id",
+	"implementation_integrity_key",
+	"environment",
+	"profile",
+	"target_id",
+	"page_id",
+	"frame_id",
+	"service_id",
+	"auth_context",
+	"subject_reference",
+	"account_reference",
+	"tenant_reference",
+	"identity_basis_digest",
+] as const;
+
+function authAttestationRecordProblem(value: unknown): string | undefined {
+	if (!isJsonObject(value)) {
+		return "auth-attestation payload must be a JSON object.";
+	}
+	for (const field of AUTH_ATTESTATION_STRING_FIELDS) {
+		if (stringField(value[field]) === undefined) {
+			return `payload.${field} must be a non-empty string.`;
+		}
+	}
+	if (
+		!(BROWSER_USE_AUTH_IDENTITY_BASES as readonly unknown[]).includes(
+			value.identity_basis,
+		)
+	) {
+		return "payload.identity_basis must be exactly one identity basis.";
+	}
+	if (!isNonNegativeNumber(value.observed_at_epoch_ms)) {
+		return "payload.observed_at_epoch_ms must be a non-negative number.";
+	}
+	if (!isNonNegativeNumber(value.fresh_until_epoch_ms)) {
+		return "payload.fresh_until_epoch_ms must be a non-negative number.";
+	}
+	if (value.fresh_until_epoch_ms < value.observed_at_epoch_ms) {
+		return "payload.fresh_until_epoch_ms must not precede payload.observed_at_epoch_ms.";
 	}
 	return undefined;
 }
