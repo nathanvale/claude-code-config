@@ -504,6 +504,17 @@ export async function writeAuthAttestationRecord(
 	deps: RunStoreDeps,
 	input: { digest: string; record: BrowserUseAuthAttestationPayload },
 ): Promise<{ ok: true } | RunFailure> {
+	// attestationFile throws on a non-64-hex name; this helper declares a
+	// total result type, so a bad digest is a typed refusal at the seam.
+	let path: string;
+	try {
+		path = deps.paths.state.attestationFile(input.digest);
+	} catch {
+		return runFailure(
+			"attestation_record_invalid",
+			"attestation digest is not a full 64-hex content digest; refusing to persist.",
+		);
+	}
 	const dirs = await ensureAttestationDirs(deps);
 	if (!dirs.ok) return dirs;
 	const violations = findRedactionViolations(input.record);
@@ -515,7 +526,7 @@ export async function writeAuthAttestationRecord(
 		);
 	}
 	const written = await writeDurableFile(deps.fs, {
-		path: deps.paths.state.attestationFile(input.digest),
+		path,
 		contents: encodeDurableRecord("auth-attestation", input.record),
 	});
 	if (!written.ok) {
@@ -535,10 +546,15 @@ export async function readAuthAttestationRecord(
 	deps: RunStoreDeps,
 	digest: string,
 ): Promise<AuthAttestationRecordRead> {
-	const read = await readDurableFile(
-		deps.fs,
-		deps.paths.state.attestationFile(digest),
-	);
+	// A digest that cannot name an attestation file is an absent record, not
+	// a crash — mirrors the write path's typed seam.
+	let path: string;
+	try {
+		path = deps.paths.state.attestationFile(digest);
+	} catch {
+		return { status: "missing" };
+	}
+	const read = await readDurableFile(deps.fs, path);
 	if (read.status === "missing") return { status: "missing" };
 	if (read.status === "unreadable") {
 		return { status: "corrupt", message: read.message };
@@ -567,14 +583,9 @@ export function attestationByDigestFrom(
 	deps: RunStoreDeps,
 ): (digest: string) => Promise<BrowserUseAuthAttestationPayload | undefined> {
 	return async (digest) => {
-		let read: AuthAttestationRecordRead;
-		try {
-			read = await readAuthAttestationRecord(deps, digest);
-		} catch {
-			// attestationFile refuses non-64-hex names with a TypeError; an
-			// unknown digest shape is an absent record, not a crash.
-			return undefined;
-		}
+		// readAuthAttestationRecord classifies a digest-shape-invalid lookup
+		// as missing, so absence is the only non-present outcome here.
+		const read = await readAuthAttestationRecord(deps, digest);
 		return read.status === "present" ? read.record : undefined;
 	};
 }

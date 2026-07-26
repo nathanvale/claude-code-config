@@ -88,11 +88,10 @@ function evidenceItem(
 	};
 }
 
-function rejection(code: string): BrowserUseTokenRetrievalRejection {
-	return {
-		code: code as BrowserUseTokenRetrievalRejection["code"],
-		message: `retrieval rejected (${code}).`,
-	};
+function rejection(
+	code: BrowserUseTokenRetrievalRejection["code"],
+): BrowserUseTokenRetrievalRejection {
+	return { code, message: `retrieval rejected (${code}).` };
 }
 
 // A fake port whose every method answers from canned values; unset methods
@@ -346,6 +345,10 @@ describe("repair-item-binding over an injected port (R11 targeted read)", () => 
 			},
 		});
 		expect(envelope.continuation.next_action_id).toBe("inspect-auth-readiness");
+		// Redaction: the evidence's origins and login paths never reach the
+		// envelope — only ids, state, and methods project.
+		expect(result.stdout).not.toContain("portal.example.test");
+		expect(result.stdout).not.toContain("/login");
 	});
 
 	test("a missing item is the revoked-binding cause with the self continuation", async () => {
@@ -394,7 +397,9 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 			authTokenRetrieval: fakePort({
 				listLoginItems: async () => ({
 					ok: true,
-					items: [evidenceItem("item-1"), evidenceItem("item-2", { state: "active" })],
+					// A stale second candidate proves per-item state projects
+					// faithfully, not just the default.
+					items: [evidenceItem("item-1"), evidenceItem("item-2", { state: "moved" })],
 				}),
 			}),
 		});
@@ -411,7 +416,7 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 				candidate_count: 2,
 				candidates: [
 					{ ordinal: 1, item_id: "item-1", item_state: "active" },
-					{ ordinal: 2, item_id: "item-2", item_state: "active" },
+					{ ordinal: 2, item_id: "item-2", item_state: "moved" },
 				],
 			},
 		});

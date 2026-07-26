@@ -1321,6 +1321,54 @@ describe("U3a: attestation custody (content-addressed durable records)", () => {
 		});
 		expect(await attestationByDigestFrom(deps)(digest)).toBeUndefined();
 	});
+
+	test("a digest-shape-invalid name is a typed refusal at the custody seam, never a throw", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-bad-digest");
+		const written = await writeAuthAttestationRecord(deps, {
+			digest: "not-a-digest",
+			record,
+		});
+		expect(written).toMatchObject({ ok: false, code: "attestation_record_invalid" });
+		expect(await readAuthAttestationRecord(deps, "not-a-digest")).toEqual({
+			status: "missing",
+		});
+	});
+
+	test("a valid record filed under a lying digest is refused by the auth-owned verifier", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-lying-digest");
+		const lyingDigest = "cd".repeat(32);
+		expect(lyingDigest).not.toBe(authAttestationDigestOf(record));
+		expect(
+			await writeAuthAttestationRecord(deps, { digest: lyingDigest, record }),
+		).toEqual({ ok: true });
+		// Custody serves the record by its lying name...
+		expect(await attestationByDigestFrom(deps)(lyingDigest)).toEqual(record);
+		// ...and the verifier refuses it: every run fact matches the record,
+		// so the ONLY failing proof is the digest recomputation.
+		const contract = createBrowserUseAuthContract({
+			attestationByDigest: attestationByDigestFrom(deps),
+		});
+		expect(
+			await contract.verifyAttestation({
+				reference: {
+					attestation_digest: lyingDigest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+				run_id: record.run_id,
+				environment_profile: {
+					environment: record.environment,
+					profile: record.profile,
+				},
+				adapter_id: "agent-browser",
+				handoff_evidence_id: record.handoff_evidence_id,
+				at_epoch_ms: 1_000,
+			}),
+		).toBe(false);
+	});
 });
 
 describe("U3a: the commit ready gate (no durable attestation, no ready run)", () => {

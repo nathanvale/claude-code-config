@@ -51,6 +51,7 @@ import {
 	browserUsePlatformStoreSuccessActions,
 } from "./command-contract";
 import {
+	type BrowserUseTokenRetrievalRejection,
 	blockOfRetrievalRejection,
 	proveVaultScope,
 } from "./browser-use-op";
@@ -1813,13 +1814,10 @@ const NATIVE_CAPABILITY_ABSENT: AuthReadinessEvaluation = {
 
 // Retrieval blocked before the evaluation could answer: report the block's
 // cause and chain to its discharging command.
-function retrievalBlockedEvaluation(rejection: {
-	code: string;
-	message: string;
-}): AuthReadinessEvaluation {
-	const block = blockOfRetrievalRejection(
-		rejection as Parameters<typeof blockOfRetrievalRejection>[0],
-	);
+function retrievalBlockedEvaluation(
+	rejection: BrowserUseTokenRetrievalRejection,
+): AuthReadinessEvaluation {
+	const block = blockOfRetrievalRejection(rejection);
 	return {
 		status: "retrieval-rejected",
 		blocked_cause: block.blocked_cause,
@@ -1948,6 +1946,9 @@ function emitAuthContinuationMismatch(
 			data: {
 				command: input.parsed.command,
 				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				// The shared run the caller asked about — distinct from the
+				// envelope's own run_id (the CLI invocation id).
+				requested_run_id: runId,
 				persisted_continuation_id: persistedActionId ?? null,
 				caller: input.caller,
 			},
