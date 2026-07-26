@@ -116,8 +116,16 @@ Human-readable stable slug for a repeated browser intent, such as `submit-timesh
 _Avoid_: opaque id, URL slug, page slug
 
 **Auth Pointer**:
-A safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, approved origins, optional login paths, and login context needed for browser auth. Origins authorize credential use; paths only rank or disambiguate within an approved origin. Browser Use may create it automatically from one deterministic Vault-scoped discovery match; ambiguity requires human selection. It points to secrets and never contains secret values.
-_Avoid_: password note, secret mapping, auth tape, login recording
+The legacy-era name for what is now the Item Binding: a safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, approved origins, optional login paths, and login context needed for browser auth. Surviving legacy pointers are Import Candidates — they propose and never bind. Use Item Binding for new work.
+_Avoid_: password note, secret mapping, auth tape, login recording, live binding authority
+
+**Item Binding**:
+The approved live link between one service-and-auth-context pair and exactly one Login item in the token-scoped vault, created by one deterministic discovery match or a signed one-use human selection. It carries the approved origins and method policy for that service only; two services sharing one Login item hold two independent bindings. A moved, revoked, or out-of-scope binding returns typed repair and never rescans for a substitute. Successor to the Auth Pointer.
+_Avoid_: auth pointer (new work), credential mapping, vault allowlist, second permission system, shared binding, auto-rebind
+
+**Import Candidate**:
+A legacy-derived proposal handed to the candidate-import Interface during platform migration. It re-runs the same match/selection policy as fresh discovery: live vault evidence binds, the candidate only proposes. Its item and vault hints rank selection lists and appear as redacted provenance; legacy-only origins require explicit re-approval; a secret-positive candidate is refused per candidate, never salvaged in place.
+_Avoid_: trusted import, binding transplant, legacy authority, bulk bind, migrated credential
 
 **Browser Runbook**:
 The one active durable path for a known browser flow. It may retain prior versions for rollback, but only one current runbook is active. It may include login selectors and login choreography, and may reference an Auth Pointer for the secret fields. It must not contain secret values or 1Password item details. Prose mode may read it; Runbook mode consumes it mechanically; Deterministic mode uses its paired Recorder JSON when available.
