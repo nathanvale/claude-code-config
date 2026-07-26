@@ -12,7 +12,7 @@ The Browser Adapter Router chain (Router CLI with prepare/route/report, Browser 
 
 ### Browser entry and adapters
 **browser-use**:
-The browser-work capability. It owns browser operational policy and Durable Browser Knowledge, including Auth Pointers, Browser Runbooks, capture, and playback. It delegates proven connection to `browser-connect` and generic secret-access safety to `one-password`.
+The browser-work capability. It owns browser operational policy and Durable Browser Knowledge, including Item Bindings, Browser Runbooks, capture, and playback. It delegates proven connection to `browser-connect` and generic secret-access safety to `one-password`.
 _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill, owns all browser entry
 
 **Warm Chrome**:
@@ -104,7 +104,7 @@ Redacted browser-run source material selectively retained when a run teaches som
 _Avoid_: recording, trace, tape, replay file, raw history, durable instruction
 
 **Durable Browser Knowledge**:
-Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes Auth Pointers, Browser Runbooks, optional Recorder JSON for deterministic-ready flows, Browser Gotchas, and other model-readable notes.
+Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes Item Bindings (surviving legacy Auth Pointers are Import Candidates), Browser Runbooks, optional Recorder JSON for deterministic-ready flows, Browser Gotchas, and other model-readable notes.
 _Avoid_: scratch, trace archive, replay library, browser automation store
 
 **Browser Domain Key**:
@@ -128,7 +128,7 @@ A legacy-derived proposal handed to the candidate-import Interface during platfo
 _Avoid_: trusted import, binding transplant, legacy authority, bulk bind, migrated credential
 
 **Browser Runbook**:
-The one active durable path for a known browser flow. It may retain prior versions for rollback, but only one current runbook is active. It may include login selectors and login choreography, and may reference an Auth Pointer for the secret fields. It must not contain secret values or 1Password item details. Prose mode may read it; Runbook mode consumes it mechanically; Deterministic mode uses its paired Recorder JSON when available.
+The one active durable path for a known browser flow. It may retain prior versions for rollback, but only one current runbook is active. It may include login selectors and login choreography, and may reference an Item Binding (legacy runbooks may still name an Auth Pointer) for the secret fields. It must not contain secret values or 1Password item details. Prose mode may read it; Runbook mode consumes it mechanically; Deterministic mode uses its paired Recorder JSON when available.
 _Avoid_: automation script, CI fixture, raw trace
 
 **Recorder JSON**:
@@ -145,7 +145,7 @@ The playback mode where code reads a Browser Runbook and drives Warm Chrome thro
 _Avoid_: prose mode, puppeteer replay, LLM replay
 
 **Deterministic mode**:
-The playback mode where a Browser Runbook's Recorder JSON replays against Warm Chrome through a Browser Adapter — fast, zero reasoning rounds, secret-value-free, and repaired through the heal/recapture loop when drift breaks playback. Recorder JSON may include login selectors/choreography, but secret field values come from live `one-password` resolution via the Auth Pointer. The fast opt-in. Config value `replayMode=deterministic`.
+The playback mode where a Browser Runbook's Recorder JSON replays against Warm Chrome through a Browser Adapter — fast, zero reasoning rounds, secret-value-free, and repaired through the heal/recapture loop when drift breaks playback. Recorder JSON may include login selectors/choreography, but secret field values come from live 1Password resolution via the Item Binding. The fast opt-in. Config value `replayMode=deterministic`.
 _Avoid_: machine-play, tape execution, CI replay
 
 **Run Outcome**:
@@ -196,16 +196,16 @@ Dev: "Is the Chrome Recorder-shaped JSON a recording?"
 Domain expert: "Not by itself. Recorder-shaped Scratch Evidence may be retained as source evidence, but only verified Recorder JSON is durable replay material."
 
 Dev: "What does browser capture create?"
-Domain expert: "Durable Browser Knowledge: curated auth pointers, runbooks, gotchas, and notes future `browser-use` runs can trust."
+Domain expert: "Durable Browser Knowledge: curated runbooks, gotchas, and notes future `browser-use` runs can trust. Item Bindings arrive through the auth discovery and selection policy, not through capture."
 
 Dev: "Do we need a generic browser note type?"
-Domain expert: "No. In v1 Durable Browser Knowledge has Auth Pointers, Browser Runbooks, and Browser Gotchas. Broaden Browser Gotcha for non-obvious useful facts."
+Domain expert: "No. Durable Browser Knowledge has Item Bindings, Browser Runbooks, and Browser Gotchas. Broaden Browser Gotcha for non-obvious useful facts."
 
 Dev: "Where does the 1Password item path for a portal live?"
-Domain expert: "As an Auth Pointer in Durable Browser Knowledge. `one-password` owns safe access mechanics, not the domain-specific item choice."
+Domain expert: "As an Item Binding in Durable Browser Knowledge; a surviving legacy Auth Pointer only proposes as an Import Candidate. `one-password` owns safe access mechanics, not the domain-specific item choice."
 
 Dev: "Should a Browser Runbook repeat the login steps?"
-Domain expert: "It may include login choreography and selectors. Secret source details and secret values stay in the Auth Pointer and live `one-password` resolution."
+Domain expert: "It may include login choreography and selectors. Secret source details stay in the Item Binding; secret values come only from live 1Password resolution."
 
 Dev: "Can a runbook click through the site next time?"
 Domain expert: "Yes, in Runbook mode. Code reads the Browser Runbook and drives a Browser Adapter step-by-step. Deterministic mode replays Recorder JSON through a Browser Adapter. Prose mode keeps the agent in the loop and uses memory to avoid rediscovery."
