@@ -157,7 +157,7 @@ function canonicalValueOf(value: unknown): unknown {
 
 function digestOfCanonicalArray(values: readonly unknown[]): string {
 	const canonical = JSON.stringify(values.map(canonicalValueOf));
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+	return createHash("sha256").update(canonical).digest("hex");
 }
 
 export function approvalBoundFactsDigestOf(

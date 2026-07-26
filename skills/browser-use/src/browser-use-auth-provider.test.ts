@@ -637,6 +637,36 @@ describe("prepareSecretFree gate order", () => {
 		expect(calls.listLoginItems).toBe(0);
 	});
 
+	test("a binding naming a vault outside the proven scope blocks revoked-binding with zero item reads", async () => {
+		// Gate 3 proves vault-1 is the ONLY visible vault; a binding pointing
+		// anywhere else must fail closed on the repair path BEFORE any op read
+		// escapes the proven scope.
+		const { provider, calls } = await makeProvider();
+		const outcome = expectPreparationBlocked(
+			await provider.prepareSecretFree(
+				basePreparationInput({
+					binding: baseBinding({ vault_id: "vault-elsewhere" }),
+					candidate_hint: { hint_item_id: null, legacy_vault_name: "Old Vault" },
+				}),
+			),
+		);
+		expect(outcome.event).toEqual({ type: "blocked", cause: "revoked-binding" });
+		expect(outcome.continuation).toEqual(
+			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["revoked-binding"].continuation,
+		);
+		if (outcome.detail.kind !== "binding-repair") {
+			throw new Error("expected a binding-repair detail");
+		}
+		expect(outcome.detail.stale_state).toBe("moved");
+		expect(outcome.detail.repair_hint).toEqual({ legacy_vault_name: "Old Vault" });
+		// The scope proof ran, but NO item read or rescan ever left the
+		// proven vault: the mismatch blocks before the Port is consulted.
+		expect(calls.listVaults).toBe(1);
+		expect(calls.getLoginItem).toBe(0);
+		expect(calls.listLoginItems).toBe(0);
+		expect(calls.fetchCredentialField).toBe(0);
+	});
+
 	test("a usable existing binding completes preparation via the exact read", async () => {
 		const { provider, calls } = await makeProvider({
 			getLoginItem: { ok: true, item: baseEvidence() },
@@ -735,6 +765,9 @@ describe("prepareSecretFree gate order", () => {
 	});
 
 	test("an ambient OP_SERVICE_ACCOUNT_TOKEN is inert (R7/R16)", async () => {
+		// Mutates process-global env with a finally-restore: safe only while
+		// this file's tests run serially (bun:test default). A concurrent
+		// runner would leak the sentinel across tests.
 		const sentinel = "ambient-op-token-sentinel-9f2c";
 		const script: TokenPortScript = {
 			listVaults: {
@@ -980,7 +1013,7 @@ describe("retrieveCredentialField (phase-aware, D6)", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
 		expect(result.event).toEqual({ type: "blocked", cause: "capability-loss" });
-		expect(result.rejection.code).toBe("output-shape-invalid");
+		expect(result.rejection.code).toBe("binding-shape-invalid");
 		expect(JSON.stringify(result)).not.toContain("op://");
 		expect(total()).toBe(0);
 	});

@@ -189,19 +189,19 @@ describe("R20 approval vocabularies", () => {
 });
 
 describe("approval digests", () => {
-	test("digests are 32 hex chars, deterministic, and field-sensitive", () => {
+	test("digests are full 64-hex sha256, deterministic, and field-sensitive", () => {
 		const facts = baseFacts();
 		const digest = approvalBoundFactsDigestOf(facts);
-		expect(digest).toMatch(/^[0-9a-f]{32}$/);
+		expect(digest).toMatch(/^[0-9a-f]{64}$/);
 		expect(approvalBoundFactsDigestOf(baseFacts())).toBe(digest);
 		expect(
 			approvalBoundFactsDigestOf(baseFacts({ environment: "other-env" })),
 		).not.toBe(digest);
 
 		const { signature: _p, ...unsignedPolicy } = signedPolicy();
-		expect(standingPolicyDigestOf(unsignedPolicy)).toMatch(/^[0-9a-f]{32}$/);
+		expect(standingPolicyDigestOf(unsignedPolicy)).toMatch(/^[0-9a-f]{64}$/);
 		const { signature: _g, ...unsignedGrant } = signedGrant();
-		expect(oneUseGrantDigestOf(unsignedGrant)).toMatch(/^[0-9a-f]{32}$/);
+		expect(oneUseGrantDigestOf(unsignedGrant)).toMatch(/^[0-9a-f]{64}$/);
 		expect(
 			oneUseGrantDigestOf({ ...unsignedGrant, grant_id: "grant-2" }),
 		).not.toBe(oneUseGrantDigestOf(unsignedGrant));

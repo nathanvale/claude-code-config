@@ -600,11 +600,17 @@ export function proveVaultScope(
 
 // --- TokenRetrievalPort (declared here; spec D1) --------------------------------
 
-/** Rejection codes: op failures plus the port's own custody refusals. */
+/**
+ * Rejection codes: op failures plus the port's own custody refusals.
+ * "binding-shape-invalid" is minted by the PROVIDER's binding-admission gate,
+ * never by the port: it names an injected binding that failed shape admission,
+ * distinct from "output-shape-invalid" which names malformed op OUTPUT.
+ */
 export type BrowserUseTokenRetrievalRejectionCode =
 	| BrowserUseOpFailureCode
 	| "secret-egress-refused"
 	| "output-shape-invalid"
+	| "binding-shape-invalid"
 	| "field-not-permitted";
 
 /** Typed retrieval rejection; the message is always secret-free. */
@@ -846,6 +852,7 @@ const BLOCK_CAUSE_BY_REJECTION: Readonly<
 	"io-failure": "capability-loss",
 	"secret-egress-refused": "capability-loss",
 	"output-shape-invalid": "capability-loss",
+	"binding-shape-invalid": "capability-loss",
 };
 
 /**

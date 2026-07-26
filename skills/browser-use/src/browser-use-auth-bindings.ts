@@ -58,7 +58,7 @@ export const BROWSER_USE_SECRET_SHAPE_MAX_STRING_LENGTH = 256;
 const SECRET_REFERENCE_PATTERN = /op:\/\//i;
 const LIVE_ENDPOINT_PATTERN = /wss?:\/\//i;
 const OTPAUTH_PATTERN = /otpauth:\/\//i;
-const BASE32_RUN_PATTERN = /\b[A-Z2-7]{32,}\b/;
+const BASE32_RUN_PATTERN = /\b[A-Z2-7]{32,}\b/i;
 
 /**
  * Mirror-plus-superset of the auth model's private fragment patterns: the
@@ -553,7 +553,21 @@ export function validateVaultItemEvidenceShape(
 	const issues: BrowserUseBindingIssue[] = [];
 	for (const field of ["item_id", "vault_id"] as const) {
 		const issue = stringIssueAt(`evidence.${field}`, value[field], EVIDENCE_CODES);
-		if (issue !== undefined) issues.push(issue);
+		if (issue !== undefined) {
+			issues.push(issue);
+			continue;
+		}
+		// matchItemBinding copies evidence ids verbatim into minted bindings,
+		// which feed op argv positions; a leading '-' would let tampered
+		// evidence reshape the op invocation. Fail closed (same guard as
+		// validateItemBindingShape).
+		if ((value[field] as string).startsWith("-")) {
+			issues.push({
+				code: "evidence_field_invalid",
+				path: `evidence.${field}`,
+				message: "id must not be flag-shaped (leading '-').",
+			});
+		}
 	}
 	issues.push(
 		...stringArrayIssues("evidence.origins", value.origins, EVIDENCE_CODES),
@@ -603,26 +617,35 @@ function candidateIdOf(value: unknown): string | null {
 	return id;
 }
 
-// Independent secret sweep over every own string value (and array-of-string
-// entry) of the raw candidate, so key-set short-circuiting in the shape
-// validator can never mask a secret-shaped value (SD3 escalation contract).
-function hasSecretShapedOwnValue(value: Record<string, unknown>): boolean {
-	for (const entry of Object.values(value)) {
-		if (typeof entry === "string" && secretShapeFindingOf(entry) !== undefined) {
-			return true;
-		}
-		if (Array.isArray(entry)) {
-			for (const inner of entry) {
-				if (
-					typeof inner === "string" &&
-					secretShapeFindingOf(inner) !== undefined
-				) {
-					return true;
-				}
-			}
-		}
+// Beyond this depth the sweep cannot prove the candidate clean; unbounded
+// nesting is inadmissible, so the walk fails closed as secret-positive.
+const SECRET_SWEEP_MAX_DEPTH = 8;
+
+function hasSecretShapedValueAt(value: unknown, depth: number): boolean {
+	if (depth > SECRET_SWEEP_MAX_DEPTH) return true;
+	if (typeof value === "string") {
+		return secretShapeFindingOf(value) !== undefined;
+	}
+	if (Array.isArray(value)) {
+		return value.some((entry) => hasSecretShapedValueAt(entry, depth + 1));
+	}
+	if (isPlainObject(value)) {
+		return Object.entries(value).some(
+			([key, entry]) =>
+				BROWSER_USE_SECRET_KEY_NAME_PATTERN.test(key) ||
+				hasSecretShapedValueAt(entry, depth + 1),
+		);
 	}
 	return false;
+}
+
+// Independent secret sweep over the raw candidate's own values — recursing
+// through nested arrays/objects (bounded) so a buried secret surfaces as
+// contamination — so key-set short-circuiting in the shape validator can
+// never mask a secret-shaped value (SD3 escalation contract). Top-level key
+// names are screened separately against the expected key set by the caller.
+function hasSecretShapedOwnValue(value: Record<string, unknown>): boolean {
+	return Object.values(value).some((entry) => hasSecretShapedValueAt(entry, 1));
 }
 
 /**
@@ -935,7 +958,11 @@ export type BrowserUseCandidateImportResult =
 			candidate_id: string | null;
 			ok: false;
 			rejection: {
-				code: "secret-positive-candidate" | "candidate-shape-invalid";
+				code:
+					| "secret-positive-candidate"
+					| "candidate-shape-invalid"
+					/** The batch input was invalid; the candidate was never evaluated. */
+					| "import-input-invalid";
 				candidate_id: string | null;
 				message: string;
 			};
@@ -955,6 +982,23 @@ export function importCandidates(input: {
 	vault_id: string;
 	items: readonly BrowserUseVaultItemEvidence[];
 }): readonly BrowserUseCandidateImportResult[] {
+	// An invalid batch vault_id would make matchItemBinding refuse every
+	// candidate as match_input_invalid and misblame candidate shape; name the
+	// batch input as the cause instead of evaluating anything.
+	if (typeof input.vault_id !== "string" || input.vault_id.length === 0) {
+		return input.candidates.map((raw): BrowserUseCandidateImportResult => {
+			const candidateId = candidateIdOf(raw);
+			return {
+				candidate_id: candidateId,
+				ok: false,
+				rejection: {
+					code: "import-input-invalid",
+					candidate_id: candidateId,
+					message: "import input invalid (vault_id); no candidate was evaluated.",
+				},
+			};
+		});
+	}
 	return input.candidates.map((raw): BrowserUseCandidateImportResult => {
 		const screened = screenImportCandidate(raw);
 		if (!screened.ok) {
@@ -1065,8 +1109,8 @@ function staleUsability(
 
 /**
  * Assess one binding against a live exact-item read (R11): null item is
- * deleted, a vault mismatch is moved, a non-active state is that state.
- * Never proposes a replacement — repair is a human continuation.
+ * deleted, an item-id or vault mismatch is moved, a non-active state is that
+ * state. Never proposes a replacement — repair is a human continuation.
  *
  * @param binding - The approved Item Binding
  * @param live - The exact live read for binding.item_id
@@ -1077,6 +1121,9 @@ export function assessBindingUsability(
 	live: BrowserUseLiveItemFact,
 ): BrowserUseBindingUsability {
 	if (live.item === null) return staleUsability("deleted");
+	// The read must be for the bound item itself; a different active item that
+	// happens to share origins never substitutes for it (R11).
+	if (live.item.item_id !== binding.item_id) return staleUsability("moved");
 	if (live.item.vault_id !== binding.vault_id) return staleUsability("moved");
 	if (live.item.state !== "active") return staleUsability(live.item.state);
 	// KTD11/SD2 derivation check: every cached allowed_origin must re-derive

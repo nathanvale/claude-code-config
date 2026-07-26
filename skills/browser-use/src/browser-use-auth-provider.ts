@@ -418,6 +418,19 @@ export function createBrowserUseAuthProvider(
 		}
 
 		if (input.binding !== null) {
+			// Gate 4 pre-check — Gate 3 proved exactly ONE visible vault, and
+			// that proof is the only authority an op read may act under: a
+			// binding naming any other vault is stale against the proven grant
+			// (mirrors assessBindingUsability's vault-mismatch => "moved") and
+			// fails closed on the repair path WITHOUT issuing a Port read
+			// outside the proven scope.
+			if (input.binding.vault_id !== scope.vault_id) {
+				return preparationBlock(
+					"revoked-binding",
+					continuationOf("revoked-binding"),
+					{ kind: "binding-repair", repair_hint: repairHint, stale_state: "moved" },
+				);
+			}
 			// Gate 4 — exact bound-item read (R11): never a rescan, never an
 			// auto-selected replacement.
 			const read = await deps.tokenRetrieval.getLoginItem({
@@ -539,7 +552,7 @@ export function createBrowserUseAuthProvider(
 					ok: false,
 					event: { type: "blocked", cause: "capability-loss" },
 					continuation: continuationOf("capability-loss"),
-					rejection: { code: "output-shape-invalid", message: refusal },
+					rejection: { code: "binding-shape-invalid", message: refusal },
 				};
 			}
 			const fetched = await deps.tokenRetrieval.fetchCredentialField(input);

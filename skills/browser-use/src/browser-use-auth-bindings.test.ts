@@ -127,11 +127,26 @@ describe("secret-shape guard (D3)", () => {
 		expect(secretShapeFindingOf("JBSWY3DPEHPK3PXP".repeat(2))).toEqual({
 			reason: "totp-seed-shaped",
 		});
+		expect(secretShapeFindingOf("jbswy3dpehpk3pxp".repeat(2))).toEqual({
+			reason: "totp-seed-shaped",
+		});
 		expect(secretShapeFindingOf("a".repeat(257))).toEqual({
 			reason: "exceeds-bounded-length",
 		});
 		expect(secretShapeFindingOf(PORTAL_ORIGIN)).toBeUndefined();
 		expect(secretShapeFindingOf("item-1")).toBeUndefined();
+	});
+
+	test("boundary negatives: at the length bound and one under the base32 run", () => {
+		// Exactly 256 chars (no base32-length letter run) is within the bound.
+		expect(secretShapeFindingOf("a-".repeat(128))).toBeUndefined();
+		// A 31-char base32 run is one under the flagged run length, either case.
+		expect(
+			secretShapeFindingOf("JBSWY3DPEHPK3PXP".repeat(2).slice(0, 31)),
+		).toBeUndefined();
+		expect(
+			secretShapeFindingOf("jbswy3dpehpk3pxp".repeat(2).slice(0, 31)),
+		).toBeUndefined();
 	});
 });
 
@@ -202,6 +217,19 @@ describe("shape validators (fail-closed Issue[])", () => {
 		expect(JSON.stringify(issues)).not.toContain("op://");
 	});
 
+	test("flag-shaped evidence ids never admit; evidence ids reach op argv via minted bindings", () => {
+		const flagged = validateVaultItemEvidenceShape(
+			baseEvidence({ item_id: "--reveal" }),
+		);
+		expect(flagged.some((i) => i.code === "evidence_field_invalid")).toBe(true);
+		const flaggedVault = validateVaultItemEvidenceShape(
+			baseEvidence({ vault_id: "-vault" }),
+		);
+		expect(flaggedVault.some((i) => i.code === "evidence_field_invalid")).toBe(
+			true,
+		);
+	});
+
 	test("evidence with an unknown state or key fails closed", () => {
 		const badState = validateVaultItemEvidenceShape(
 			baseEvidence({ state: "paused" as BrowserUseVaultItemEvidence["state"] }),
@@ -252,6 +280,52 @@ describe("candidate screening (SD3, SD5)", () => {
 			expect(result.rejection.code).toBe("secret-positive-candidate");
 			expect(result.rejection.candidate_id).toBe("cand-1");
 			expect(JSON.stringify(result.rejection)).not.toContain("op://");
+		}
+	});
+
+	test("a secret-shaped candidate_id refuses with a null id and zero secret bytes", () => {
+		const result = screenImportCandidate(
+			baseCandidate({ candidate_id: "op://Private/GitHub/password" }),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("secret-positive-candidate");
+			expect(result.rejection.candidate_id).toBeNull();
+		}
+		expect(JSON.stringify(result)).not.toContain("op://");
+	});
+
+	test("a nested secret escalates to secret-positive, never a shape downgrade (SD3)", () => {
+		// Buried under a clean-named nested key: the value sweep must recurse.
+		const nestedValue = screenImportCandidate({
+			...baseCandidate(),
+			meta: { note: "op://Private/GitHub/password" },
+		});
+		expect(nestedValue.ok).toBe(false);
+		if (!nestedValue.ok) {
+			expect(nestedValue.rejection.code).toBe("secret-positive-candidate");
+		}
+		expect(JSON.stringify(nestedValue)).not.toContain("op://");
+
+		// A secret-named nested key contaminates even with a clean value.
+		const nestedKey = screenImportCandidate({
+			...baseCandidate(),
+			meta: { password: "hunter2-sentinel" },
+		});
+		expect(nestedKey.ok).toBe(false);
+		if (!nestedKey.ok) {
+			expect(nestedKey.rejection.code).toBe("secret-positive-candidate");
+		}
+		expect(JSON.stringify(nestedKey)).not.toContain("hunter2-sentinel");
+	});
+
+	test("nesting past the sweep depth bound is inadmissible, never assumed clean", () => {
+		let nested: unknown = "clean";
+		for (let level = 0; level < 10; level += 1) nested = { level: nested };
+		const result = screenImportCandidate({ ...baseCandidate(), meta: nested });
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("secret-positive-candidate");
 		}
 	});
 
@@ -525,8 +599,11 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 		});
 		const result = results[0];
 		expect(result?.ok).toBe(true);
-		if (result?.ok && result.disposition.kind === "bound") {
-			expect(result.disposition.origin_proposals).toEqual([]);
+		if (result?.ok) {
+			expect(result.disposition.kind).toBe("bound");
+			if (result.disposition.kind === "bound") {
+				expect(result.disposition.origin_proposals).toEqual([]);
+			}
 		}
 	});
 
@@ -570,6 +647,25 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 			expect(rejected.rejection.code).toBe("secret-positive-candidate");
 		}
 		expect(JSON.stringify(results)).not.toContain("op://");
+	});
+
+	test("an invalid batch vault_id names the batch input, never candidate shape", () => {
+		const results = importCandidates({
+			candidates: [baseCandidate(), baseCandidate({ candidate_id: "cand-2" })],
+			vault_id: "",
+			items: [baseEvidence()],
+		});
+		expect(results).toHaveLength(2);
+		expect(results.map((r) => r.candidate_id)).toEqual(["cand-1", "cand-2"]);
+		for (const result of results) {
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.rejection.code).toBe("import-input-invalid");
+				expect(result.rejection.message).toBe(
+					"import input invalid (vault_id); no candidate was evaluated.",
+				);
+			}
+		}
 	});
 
 	test("independent bindings share an item without linking (SD4)", () => {
@@ -650,6 +746,19 @@ describe("binding liveness + method admission (R11, R13)", () => {
 		expect(result.usable).toBe(false);
 		if (!result.usable) {
 			expect(result.stale_state).toBe("out-of-scope");
+			expect(result.blocked_cause).toBe("revoked-binding");
+		}
+	});
+
+	test("a live read for a different item never keeps the binding usable (R11)", () => {
+		// A different active item sharing the vault and origins is a
+		// substitution, not liveness proof for the bound item.
+		const result = assessBindingUsability(baseBinding(), {
+			item: baseEvidence({ item_id: "item-other" }),
+		});
+		expect(result.usable).toBe(false);
+		if (!result.usable) {
+			expect(result.stale_state).toBe("moved");
 			expect(result.blocked_cause).toBe("revoked-binding");
 		}
 	});

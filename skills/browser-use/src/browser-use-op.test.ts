@@ -583,6 +583,7 @@ describe("blocked-cause mapping (existing causes only; ADR 0028)", () => {
 			"io-failure",
 			"secret-egress-refused",
 			"output-shape-invalid",
+			"binding-shape-invalid",
 		];
 		for (const code of infraCodes) {
 			const block = blockOfRetrievalRejection({ code, message: "refused." });
