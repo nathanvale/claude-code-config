@@ -29,8 +29,12 @@ A stable shell context reused for an interactive 1Password task so sign-in, veri
 _Avoid_: tmux-only rule, fresh shell per `op` command, scattered sign-in
 
 **Direct service-account read**:
-A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It may run outside a persistent shell session when the capability supplies the exact vault, item, field, and expected shape.
-_Avoid_: ambient read, probing read, service-account enumeration
+A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It runs as a plain single command when the capability supplies the exact vault, item, field, and expected shape; unattended reads never route through tmux or a persistent PTY, which exist only to preserve interactive sign-in state.
+_Avoid_: ambient read, probing read, service-account enumeration, tmux-wrapped unattended read
+
+**Per-command token injection**:
+The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed or 1Password-backed wrapper, or an owning runtime's helper. The token is never parked in profile files, shell rc, `.env` files, exported ambient env, or tmux/PTY environment.
+_Avoid_: profile-exported token, ambient token, session-wide export, token in shell history
 
 **Targeted metadata check**:
 A 1Password metadata command against an exact account, vault, item, or field already declared by an owning capability. It may prove existence or shape, but must not discover candidates by listing broad accounts, vaults, or items.
@@ -62,7 +66,10 @@ Dev: "Does `one-password` literally require tmux in Codex desktop?"
 Domain expert: "No. It requires a persistent shell session for interactive 1Password work. Tmux is the common CLI implementation, but a persistent Codex PTY can satisfy the same session-state boundary."
 
 Dev: "Can a service-account read run outside tmux?"
-Domain expert: "Yes, when it is a direct service-account read for a declared vault, item, field, and shape. Interactive fallback still needs a persistent shell session."
+Domain expert: "It must. Unattended service-account reads never route through tmux or a persistent PTY; those sessions exist only to preserve interactive desktop sign-in state."
+
+Dev: "Can the agent export the service-account token from `~/.profile`?"
+Domain expert: "No. Per-command token injection is the custody rule: a managed source supplies the token for the one command that needs it, and it never lives in profile files or ambient env."
 
 Dev: "Can an agent list vaults to find the right one?"
 Domain expert: "It cannot enumerate the whole account. A capability may use Vault-scoped discovery inside the service account's granted vault and automatically bind one deterministic match; ambiguity requires human selection."
