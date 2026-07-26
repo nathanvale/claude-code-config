@@ -196,6 +196,11 @@ export type BrowserUseAuthAttestationReference = {
  */
 export type BrowserUseAuthContractPort = {
 	validateSecretFreeFragment(fragment: BrowserUseAuthFragmentSlot): boolean;
+	/**
+	 * Async because the production attestation source is the durable store
+	 * (auth plan U3a): the verifier looks the record up by digest before it
+	 * can re-prove binding and freshness.
+	 */
 	verifyAttestation(input: {
 		reference: BrowserUseAuthAttestationReference;
 		run_id: string;
@@ -203,7 +208,7 @@ export type BrowserUseAuthContractPort = {
 		adapter_id: BrowserAdapterId;
 		handoff_evidence_id: string;
 		at_epoch_ms: number;
-	}): boolean;
+	}): Promise<boolean>;
 };
 
 /**
@@ -417,6 +422,10 @@ export type BrowserUseAuthCommitRejectionCode =
 	| "run_blocked_without_continuation"
 	| "run_blocked_with_attestation"
 	| "auth_fragment_unsafe"
+	// A ready summary whose bounded attestation the auth-owned verifier could
+	// not re-prove against a durable record (U3a: no durable attestation, no
+	// ready run).
+	| "run_ready_attestation_unverified"
 	| "run_terminal";
 
 /** Typed auth-commit rejection. */
@@ -577,12 +586,15 @@ export type BrowserUseAttestationRevalidation =
  * (R6/R30). Freshness expiry, an adapter (lane) change, or a handoff change
  * invalidates it; a stale auth outcome never authorizes mutation.
  *
+ * Async because the auth-owned verifier consults the durable attestation
+ * store (U3a).
+ *
  * @param run - Shared run holding the attestation reference
  * @param observed - Current instant and the identities observed right now
  * @param authContract - Auth-owned full-binding and integrity verifier
  * @returns Valid, or one typed invalidation
  */
-export function revalidateAuthAttestation(
+export async function revalidateAuthAttestation(
 	run: BrowserUseSharedRun,
 	observed: {
 		at_epoch_ms: number;
@@ -590,7 +602,7 @@ export function revalidateAuthAttestation(
 		handoff_evidence_id: string | undefined;
 	},
 	authContract: Pick<BrowserUseAuthContractPort, "verifyAttestation">,
-): BrowserUseAttestationRevalidation {
+): Promise<BrowserUseAttestationRevalidation> {
 	const reference = run.auth_attestation;
 	if (reference === undefined) {
 		return {
@@ -633,7 +645,7 @@ export function revalidateAuthAttestation(
 	}
 	let bindingValid = false;
 	try {
-		bindingValid = authContract.verifyAttestation({
+		bindingValid = await authContract.verifyAttestation({
 			reference,
 			run_id: run.run_id,
 			environment_profile: run.environment_profile,

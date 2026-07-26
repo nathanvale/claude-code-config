@@ -346,7 +346,7 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		if (!held.ok) throw new Error("unreachable");
 		const port = createRunIntegrationPort(
 			store.deps,
-			{ validateSecretFreeFragment: () => true },
+			{ validateSecretFreeFragment: () => true, verifyAttestation: async () => true },
 			{
 				fencing_token: held.lease.fencing_token,
 				activation_epoch: held.lease.activation_epoch,

@@ -184,7 +184,7 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 	"invalid-vault-scope": {
 		run_state: "awaiting-auth",
 		continuation: {
-			next_action_id: "repair-vault-scope",
+			next_action_id: "repair-vault-grant",
 			summary: "Repair the token's vault grant to exactly one visible vault.",
 		},
 	},
@@ -969,13 +969,14 @@ export const BROWSER_USE_AUTH_ATTESTATION_KEYS = [
 
 /**
  * Deterministic digest of one bounded auth attestation (R30): canonical JSON
- * array over the exact key set in fixed order, sha256, 32 hex chars — the
- * same no-clock no-randomness discipline as the lane evidence digest. The
- * key-set constant drives the canonical array, so a field added to the
- * attestation type can never be silently missed by the digest.
+ * array over the exact key set in fixed order, full 64-hex sha256 — the
+ * same no-clock no-randomness discipline as the lane evidence digest and the
+ * same untruncated form the approval module signs over. The key-set constant
+ * drives the canonical array, so a field added to the attestation type can
+ * never be silently missed by the digest.
  *
  * @param attestation - Complete attestation record
- * @returns 32-hex-char content digest
+ * @returns Full 64-hex-char content digest
  */
 export function authAttestationDigestOf(
 	attestation: BrowserUseAuthAttestation,
@@ -983,5 +984,5 @@ export function authAttestationDigestOf(
 	const canonical = JSON.stringify(
 		BROWSER_USE_AUTH_ATTESTATION_KEYS.map((key) => attestation[key]),
 	);
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+	return createHash("sha256").update(canonical).digest("hex");
 }

@@ -171,6 +171,26 @@ export function parseBrowserUseArgv(
 			throw usageError("lanes show requires --adapter <id>.");
 		}
 	}
+	// R11: binding repair and selection projection are targeted reads of exact
+	// coordinates, never scans, so their coordinates are hard-required.
+	if (command === "auth-repair-item-binding") {
+		for (const flag of ["--vault-id", "--item-id"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (!value || value.startsWith("--")) {
+				throw usageError(
+					`auth repair-item-binding requires ${flag} <id>.`,
+				);
+			}
+		}
+	}
+	if (command === "auth-request-binding-selection-grant") {
+		const vaultId = stringField(flagValues["--vault-id"]);
+		if (!vaultId || vaultId.startsWith("--")) {
+			throw usageError(
+				"auth request-binding-selection-grant requires --vault-id <id>.",
+			);
+		}
+	}
 	// Derive from parsed flags, not token scans: a value-bearing flag can
 	// legitimately consume a token that looks like "--dry-run" or "--json"
 	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread

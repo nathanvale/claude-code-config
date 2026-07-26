@@ -34,17 +34,27 @@ import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
+	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 	BROWSER_USE_TRANSPORT_ADAPTERS,
+	type BrowserUseAuthSubcommand,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseAdapterLanesFailureActions,
+	browserUseAuthRepairActions,
+	browserUseAuthRepairFailureActions,
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
 } from "./command-contract";
+import {
+	type BrowserUseTokenRetrievalRejection,
+	blockOfRetrievalRejection,
+	proveVaultScope,
+} from "./browser-use-op";
 import {
 	type BrowserUseAdapterLaneView,
 	createAdapterLaneRegistry,
@@ -265,6 +275,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	migration: "migration_status",
 	artifact: "artifact_manifest",
 	repair: "repair_status",
+	auth: "auth_readiness",
 };
 
 // Non-authoritative caller metadata (platform plan U1, R35): --caller wins
@@ -409,6 +420,21 @@ async function executeCommand(input: {
 		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
 		if (parsed.command === "repair-status") return runRepairStatus(platformInput);
 		return runRepairApply(platformInput);
+	}
+
+	// R27 auth repair surface (auth plan U3a): the blocked-cause continuations
+	// as live check commands. Native custody absence is a typed evaluation,
+	// never a crash; dry-run keeps the mock envelope below.
+	if (parsed.family === "auth" && !parsed.dryRun) {
+		return runAuthReadiness({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		});
 	}
 
 	if (parsed.family === "operate" && !parsed.dryRun) {
@@ -1723,6 +1749,305 @@ async function runRepairApply(input: PlatformCommandInput): Promise<number> {
 			},
 			runtime_actions: [platformStoreAction(nextActionId)],
 			continuation: { next_action_id: nextActionId },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+// ---------------------------------------------------------------------------
+// R27 auth repair surface (auth plan U3a; ADR 0028).
+//
+// Each subcommand IS a blocked-cause continuation id: an agent holding a
+// blocked run's continuation dispatches it verbatim. U3a bodies are pure
+// check evaluations over the injected TokenRetrievalPort; the port is ABSENT
+// on an unenrolled machine (native custody ships with U3b), and that absence
+// is the typed acquire-native-capability state — never a crash, never a stub.
+// Blocked evaluations CHAIN: a scope repair blocked on the token names
+// enroll-browser-automation-token as its continuation, exactly as the
+// blocked-cause table would.
+// ---------------------------------------------------------------------------
+
+const authRepairActionList = [
+	...browserUseAuthRepairActions,
+	...browserUseAuthRepairFailureActions,
+] as const;
+const authActionById = new Map<string, (typeof authRepairActionList)[number]>(
+	authRepairActionList.map((action) => [action.id, action]),
+);
+type AuthActionId = (typeof authRepairActionList)[number]["id"];
+
+function authAction(id: AuthActionId): RuntimeActionGuidance {
+	return actionFor(authActionById, id, "auth repair");
+}
+
+/** One typed evaluation: status facts plus exactly one next safe action. */
+type AuthReadinessEvaluation = {
+	status: string;
+	blocked_cause?: string;
+	detail?: Record<string, unknown>;
+	continuationId: AuthActionId;
+};
+
+// Map a retrieval block back onto the ONE repair command that discharges it;
+// causes outside the four dispatchable continuations route to inspection.
+function authContinuationForCause(cause: string): AuthActionId {
+	switch (cause) {
+		case "missing-token":
+			return "enroll-browser-automation-token";
+		case "invalid-vault-scope":
+			return "repair-vault-grant";
+		case "revoked-binding":
+			return "repair-item-binding";
+		case "ambiguous-binding-selection":
+			return "request-binding-selection-grant";
+		default:
+			return "inspect-auth-readiness";
+	}
+}
+
+const NATIVE_CAPABILITY_ABSENT: AuthReadinessEvaluation = {
+	status: "native-capability-absent",
+	blocked_cause: "missing-token",
+	continuationId: "acquire-native-capability",
+};
+
+// Retrieval blocked before the evaluation could answer: report the block's
+// cause and chain to its discharging command.
+function retrievalBlockedEvaluation(
+	rejection: BrowserUseTokenRetrievalRejection,
+): AuthReadinessEvaluation {
+	const block = blockOfRetrievalRejection(rejection);
+	return {
+		status: "retrieval-rejected",
+		blocked_cause: block.blocked_cause,
+		detail: { rejection_code: rejection.code },
+		continuationId: authContinuationForCause(block.blocked_cause),
+	};
+}
+
+async function evaluateAuthReadiness(
+	subcommand: BrowserUseAuthSubcommand,
+	input: PlatformCommandInput,
+): Promise<AuthReadinessEvaluation> {
+	const port = input.runtime.authTokenRetrieval;
+	if (port === undefined) return NATIVE_CAPABILITY_ABSENT;
+	switch (subcommand) {
+		case "enroll-browser-automation-token": {
+			const vaults = await port.listVaults();
+			if (!vaults.ok) {
+				// Every token-lifecycle failure is the legal missing-token state;
+				// re-enrollment is native custody, so the honest next action is
+				// the U3b gate, not this command again.
+				const block = blockOfRetrievalRejection(vaults.rejection);
+				return {
+					status: "token-rejected",
+					blocked_cause: block.blocked_cause,
+					detail: { rejection_code: vaults.rejection.code },
+					continuationId: "acquire-native-capability",
+				};
+			}
+			return {
+				status: "token-operational",
+				continuationId: "inspect-auth-readiness",
+			};
+		}
+		case "repair-vault-grant": {
+			const vaults = await port.listVaults();
+			if (!vaults.ok) return retrievalBlockedEvaluation(vaults.rejection);
+			const proof = proveVaultScope(vaults.vaults);
+			if (proof.ok) {
+				return {
+					status: "scope-proven",
+					detail: { vault_id: proof.vault_id },
+					continuationId: "inspect-auth-readiness",
+				};
+			}
+			// Zero or multiple visible vaults: the grant itself needs the human
+			// repair the cause table names; the command stays the continuation.
+			return {
+				status: "invalid-vault-scope",
+				blocked_cause: proof.blocked_cause,
+				detail: { visible_count: proof.visible_count },
+				continuationId: "repair-vault-grant",
+			};
+		}
+		case "repair-item-binding": {
+			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+			const itemId = stringField(input.parsed.flagValues["--item-id"]) ?? "";
+			const item = await port.getLoginItem({
+				vault_id: vaultId,
+				item_id: itemId,
+			});
+			if (!item.ok) {
+				const block = blockOfRetrievalRejection(item.rejection);
+				return {
+					status: "binding-unusable",
+					blocked_cause: block.blocked_cause,
+					detail: { rejection_code: item.rejection.code },
+					continuationId: authContinuationForCause(block.blocked_cause),
+				};
+			}
+			return {
+				status: "binding-live",
+				detail: {
+					vault_id: item.item.vault_id,
+					item_id: item.item.item_id,
+					item_state: item.item.state,
+					supported_methods: item.item.supported_methods,
+				},
+				continuationId: "inspect-auth-readiness",
+			};
+		}
+		case "request-binding-selection-grant": {
+			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+			const items = await port.listLoginItems({ vault_id: vaultId });
+			if (!items.ok) return retrievalBlockedEvaluation(items.rejection);
+			// The selection set the signed one-use grant must bind (R20).
+			// Signing needs the native Approval Broker — absent until U3b — so
+			// the projection is honest about what remains.
+			return {
+				status: "selection-candidates-projected",
+				detail: {
+					vault_id: vaultId,
+					candidate_count: items.items.length,
+					candidates: items.items.map((item, index) => ({
+						ordinal: index + 1,
+						item_id: item.item_id,
+						item_state: item.state,
+					})),
+				},
+				continuationId: "acquire-native-capability",
+			};
+		}
+	}
+}
+
+function emitAuthContinuationMismatch(
+	input: PlatformCommandInput,
+	runId: string,
+	persistedActionId: string | undefined,
+): number {
+	const persisted = persistedActionId ?? "none";
+	const message = redactUnsafeText(
+		`run ${runId} does not name ${input.parsed.subcommand} as its next safe action (persisted continuation: ${persisted}).`,
+	);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use auth_continuation_mismatch: ${message} action=follow_run_continuation (run_id=${input.runId})\n`,
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				// The shared run the caller asked about — distinct from the
+				// envelope's own run_id (the CLI invocation id).
+				requested_run_id: runId,
+				persisted_continuation_id: persistedActionId ?? null,
+				caller: input.caller,
+			},
+			runtime_actions: [authAction("follow_run_continuation")],
+			continuation: { next_action_id: "follow_run_continuation" },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: "auth_continuation_mismatch",
+				message,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("change_input"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+/**
+ * The four `auth <continuation-id>` commands (R27). With `--run`: the run's
+ * own persisted continuation must name this command — the run stays the one
+ * truth about its next safe action — then the evaluation runs and the
+ * envelope carries both the run binding and the typed evaluation. Without
+ * `--run`: a standalone readiness evaluation.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
+	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const runFlag = stringField(input.parsed.flagValues["--run"]);
+	let runBinding:
+		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
+		| undefined;
+	if (runFlag !== undefined) {
+		const store = await openPlatformStore(input);
+		if (!store.ok) return store.exitCode;
+		const loaded = await loadSharedRun(store.deps, runFlag);
+		if (!loaded.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(loaded.code, loaded.message),
+			);
+		}
+		const persisted = loaded.run.continuation?.next_action_id;
+		if (persisted !== subcommand) {
+			return emitAuthContinuationMismatch(input, runFlag, persisted);
+		}
+		runBinding = {
+			run_id: loaded.run.run_id,
+			state: loaded.run.state,
+			continuation_id: persisted,
+		};
+	}
+	const evaluation = await evaluateAuthReadiness(subcommand, input);
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller, [
+				`action=${subcommand}`,
+				`continuation=${evaluation.continuationId}`,
+			]),
+		);
+		input.stdout.write(
+			[
+				`status=${evaluation.status}`,
+				...(evaluation.blocked_cause !== undefined
+					? [`blocked_cause=${evaluation.blocked_cause}`]
+					: []),
+				...(runBinding !== undefined
+					? [`run_id=${runBinding.run_id}`, `run_state=${runBinding.state}`]
+					: []),
+			].join(" ") + "\n",
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+				schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+				action: subcommand,
+				evaluation: {
+					status: evaluation.status,
+					...(evaluation.blocked_cause !== undefined
+						? { blocked_cause: evaluation.blocked_cause }
+						: {}),
+					...(evaluation.detail !== undefined
+						? { detail: evaluation.detail }
+						: {}),
+				},
+				...(runBinding !== undefined ? { run: runBinding } : {}),
+				caller: input.caller,
+			},
+			runtime_actions: [authAction(evaluation.continuationId)],
+			continuation: { next_action_id: evaluation.continuationId },
 		}),
 		{ runId: input.runId, durationMs: input.durationMs() },
 	);

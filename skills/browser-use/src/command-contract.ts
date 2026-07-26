@@ -289,6 +289,12 @@ const BROWSER_USE_ARTIFACT_MANIFEST_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_REPAIR_STATUS_CONTRACT_ID =
 	"browser-use.repair-status" as const;
 const BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION = "1" as const;
+// R27 auth repair surface (auth plan U3a): one readiness contract for all
+// four continuation commands — each envelope names the dispatched action id,
+// its typed evaluation, and exactly one next safe action.
+export const BROWSER_USE_AUTH_READINESS_CONTRACT_ID =
+	"browser-use.auth-readiness" as const;
+export const BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION = "1" as const;
 // Adapter Lane Registry projection (auth plan 2026-07-21-003 U1, R27):
 // JSON-first lane discovery over the code-owned registry composition.
 export const BROWSER_USE_ADAPTER_LANES_CONTRACT_ID =
@@ -393,6 +399,22 @@ const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
 export type BrowserUseRepairSubcommand =
 	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
 
+// R27 auth repair surface (auth plan U3a; ADR 0028). Each subcommand name IS
+// the blocked-cause continuation id from BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE
+// (browser-use-auth-model.ts), so an agent holding a blocked run's
+// continuation dispatches it verbatim — no mapping table to drift. U3a
+// bodies are check-stance evaluations: native custody (token launcher,
+// approval broker) is legally absent until U3b, and that absence is a typed
+// state, never a crash or a stub.
+export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+	"enroll-browser-automation-token",
+	"repair-vault-grant",
+	"repair-item-binding",
+	"request-binding-selection-grant",
+] as const;
+export type BrowserUseAuthSubcommand =
+	(typeof BROWSER_USE_AUTH_SUBCOMMANDS)[number];
+
 export const BROWSER_USE_FAMILIES = [
 	"targets",
 	"operate",
@@ -403,6 +425,7 @@ export const BROWSER_USE_FAMILIES = [
 	"migration",
 	"artifact",
 	"repair",
+	"auth",
 ] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
 
@@ -418,6 +441,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
 	artifact: BROWSER_USE_ARTIFACT_SUBCOMMANDS,
 	repair: BROWSER_USE_REPAIR_SUBCOMMANDS,
+	auth: BROWSER_USE_AUTH_SUBCOMMANDS,
 } as const satisfies Record<BrowserUseFamily, readonly string[]>;
 
 // One family -> root-help summary table (rendered by the parser's root help).
@@ -431,6 +455,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
+	auth: "Auth readiness checks: the blocked-cause repair continuations as commands.",
 } as const satisfies Record<BrowserUseFamily, string>;
 
 // Browser Target Discovery modes (migration U1, KTD2). handoff-bound replaced
@@ -461,7 +486,11 @@ export type BrowserUseCommand =
 	| "migration-status"
 	| "artifact-list"
 	| "repair-status"
-	| "repair-apply";
+	| "repair-apply"
+	| "auth-enroll-browser-automation-token"
+	| "auth-repair-vault-grant"
+	| "auth-repair-item-binding"
+	| "auth-request-binding-selection-grant";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -560,6 +589,10 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"export_destination_unsafe",
 	"export_verify_failed",
 	"epoch_conflict",
+	// R27 auth repair surface (auth plan U3a): dispatching a repair command
+	// against a run whose persisted continuation names a DIFFERENT next safe
+	// action fails closed — the run's own continuation stays the one truth.
+	"auth_continuation_mismatch",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -1208,6 +1241,97 @@ const browserUseRepairStatusResultContract = {
 	schema_version: BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseAuthReadinessResultContract = {
+	id: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	kind: "Auth readiness evaluation for one repair continuation.",
+	schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+// R27 auth runtime action ids (auth plan U3a). The four continuation ids
+// double as subcommand names AND runtime actions, so a chained repair (scope
+// repair blocked on a missing token) names the exact next command verbatim.
+// acquire-native-capability is the honest U3b gate: token enrollment and
+// grant signing are native custody this machine does not hold yet (ADR 0028).
+export const browserUseAuthRepairActions = [
+	{
+		id: "inspect-auth-readiness",
+		summary:
+			"The evaluation passed; inspect run status and follow its continuation.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "acquire-native-capability",
+		summary:
+			"Native auth custody is absent until the signed Browser Use Security product ships (ADR 0028); complete its entry gate, then re-run.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "enroll-browser-automation-token",
+		summary: "Enroll or repair the Browser Automation service-account token.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-vault-grant",
+		summary: "Repair the token's vault grant to exactly one visible vault.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-item-binding",
+		summary: "Repair the revoked or moved item binding; never rescan silently.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "request-binding-selection-grant",
+		summary: "Request a signed one-use grant to select one login item.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+// Failures reuse the platform store vocabulary (the store is the only
+// failure surface these check commands share) plus the continuation-mismatch
+// refusal that routes back to the run's own persisted next safe action.
+export const browserUseAuthRepairFailureActions = [
+	...browserUsePlatformStoreFailureActions,
+	{
+		id: "follow_run_continuation",
+		summary:
+			"Read the run's own persisted continuation with run status and dispatch that action instead.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+const browserUseAuthFlags = {
+	"--run": {
+		type: "string",
+		description:
+			"Blocked shared run id to bind this evaluation to; the run's persisted continuation must name this command.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// R11: binding repair is a targeted read of one exact item — never a scan —
+// so both coordinates are required.
+const browserUseAuthBindingFlags = {
+	"--vault-id": {
+		type: "string",
+		description: "Exact vault id the binding names.",
+	},
+	"--item-id": {
+		type: "string",
+		description: "Exact login item id the binding names.",
+	},
+	...browserUseAuthFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthSelectionFlags = {
+	"--vault-id": {
+		type: "string",
+		description:
+			"Exact vault id whose login items form the selection candidate set.",
+	},
+	...browserUseAuthFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 export const browserUseContracts = defineCommandFacadeContract(
 	{
 		"targets-list": {
@@ -1589,6 +1713,98 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUsePlatformStoreFailureActions,
 			},
 			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-enroll-browser-automation-token": {
+			script: "browser-use",
+			summary:
+				"Evaluate Browser Automation token custody: operational, broken, or the typed native-capability-absent state (ADR 0028).",
+			usage: [
+				"auth enroll-browser-automation-token [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-repair-vault-grant": {
+			script: "browser-use",
+			summary:
+				"Prove the token's exactly-one-vault grant (R8) or report the typed repair path; chains to token enrollment when retrieval is unavailable.",
+			usage: [
+				"auth repair-vault-grant [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-repair-item-binding": {
+			script: "browser-use",
+			summary:
+				"Re-prove one exact item binding by targeted read (R11) — present, moved, or forbidden — never an unbound scan.",
+			usage: [
+				"auth repair-item-binding --vault-id <id> --item-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthBindingFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-request-binding-selection-grant": {
+			script: "browser-use",
+			summary:
+				"Project the ambiguous-binding candidate set a signed one-use selection grant must bind (R20); signing stays with the native Approval Broker.",
+			usage: [
+				"auth request-binding-selection-grant --vault-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthSelectionFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,

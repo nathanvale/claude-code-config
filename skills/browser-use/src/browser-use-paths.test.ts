@@ -452,6 +452,12 @@ describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
 				join(stateRoot, "generations"),
 			);
 			expect(opened.paths.state.leasesDir).toBe(join(stateRoot, "leases"));
+			expect(opened.paths.state.attestationsDir).toBe(
+				join(stateRoot, "attestations"),
+			);
+			expect(opened.paths.state.attestationFile("ab".repeat(32))).toBe(
+				join(stateRoot, "attestations", `${"ab".repeat(32)}.json`),
+			);
 			expect(opened.paths.state.epochFile).toBe(
 				join(stateRoot, "activation-epoch.json"),
 			);
@@ -477,6 +483,23 @@ describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
 			expect(() => opened.paths.state.runFile("../escape")).toThrow(TypeError);
 			expect(() => opened.paths.state.artifactDir("a/b")).toThrow(TypeError);
 			expect(() => opened.paths.state.runFile("")).toThrow(TypeError);
+		} finally {
+			scoped.dispose();
+		}
+	});
+
+	test("attestation file derivation accepts only a full 64-hex content digest", async () => {
+		const scoped = makeTempXdgEnv();
+		try {
+			const opened = await openBrowserUsePaths(realFs, scoped.env);
+			expect(opened.ok).toBe(true);
+			if (!opened.ok) throw new Error("unreachable");
+			const file = opened.paths.state.attestationFile;
+			expect(() => file("")).toThrow(TypeError);
+			expect(() => file("ab".repeat(16))).toThrow(TypeError); // truncated 32-hex
+			expect(() => file("AB".repeat(32))).toThrow(TypeError); // uppercase hex
+			expect(() => file(`../${"ab".repeat(32)}`)).toThrow(TypeError);
+			expect(() => file(`${"ab".repeat(32)}x`)).toThrow(TypeError);
 		} finally {
 			scoped.dispose();
 		}

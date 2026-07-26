@@ -30,7 +30,7 @@ const FRAGMENT: BrowserUseAuthFragmentSlot = {
 const AUTH_CONTRACT = {
 	validateSecretFreeFragment: (fragment: BrowserUseAuthFragmentSlot) =>
 		fragment === FRAGMENT,
-	verifyAttestation: () => true,
+	verifyAttestation: async () => true,
 };
 
 function baseRun(overrides: Partial<BrowserUseSharedRun> = {}): BrowserUseSharedRun {
@@ -317,17 +317,17 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		handoff_evidence_id: "evidence-1",
 	};
 
-	test("a fresh attestation on the same lane and handoff is valid", () => {
+	test("a fresh attestation on the same lane and handoff is valid", async () => {
 		expect(
-			revalidateAuthAttestation(attested, observedNow, AUTH_CONTRACT),
+			await revalidateAuthAttestation(attested, observedNow, AUTH_CONTRACT),
 		).toEqual({
 			valid: true,
 		});
 	});
 
-	test("a missing attestation is typed, never waved through", () => {
+	test("a missing attestation is typed, never waved through", async () => {
 		expect(
-			revalidateAuthAttestation(baseRun(), observedNow, AUTH_CONTRACT),
+			await revalidateAuthAttestation(baseRun(), observedNow, AUTH_CONTRACT),
 		).toEqual({
 			valid: false,
 			code: "attestation_missing",
@@ -335,9 +335,9 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		});
 	});
 
-	test("freshness expiry invalidates the attestation (stale auth outcome)", () => {
+	test("freshness expiry invalidates the attestation (stale auth outcome)", async () => {
 		expect(
-			revalidateAuthAttestation(
+			await revalidateAuthAttestation(
 				attested,
 				{ ...observedNow, at_epoch_ms: 10_001 },
 				AUTH_CONTRACT,
@@ -349,9 +349,9 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		});
 	});
 
-	test("an adapter lane change invalidates the attestation", () => {
+	test("an adapter lane change invalidates the attestation", async () => {
 		expect(
-			revalidateAuthAttestation(attested, {
+			await revalidateAuthAttestation(attested, {
 				...observedNow,
 				adapter_id: "playwright-cdp",
 			}, AUTH_CONTRACT),
@@ -362,9 +362,9 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		});
 	});
 
-	test("a handoff change invalidates the attestation", () => {
+	test("a handoff change invalidates the attestation", async () => {
 		expect(
-			revalidateAuthAttestation(attested, {
+			await revalidateAuthAttestation(attested, {
 				...observedNow,
 				handoff_evidence_id: "evidence-2",
 			}, AUTH_CONTRACT),
@@ -375,9 +375,9 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		});
 	});
 
-	test("a blocked run cannot authorize mutation with an old attestation", () => {
+	test("a blocked run cannot authorize mutation with an old attestation", async () => {
 		expect(
-			revalidateAuthAttestation(
+			await revalidateAuthAttestation(
 				{
 					...attested,
 					state: "awaiting-auth",
@@ -396,16 +396,16 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		});
 	});
 
-	test("missing run lane and handoff bindings fail closed", () => {
+	test("missing run lane and handoff bindings fail closed", async () => {
 		expect(
-			revalidateAuthAttestation(
+			await revalidateAuthAttestation(
 				{ ...attested, adapter_id: undefined },
 				observedNow,
 				AUTH_CONTRACT,
 			),
 		).toMatchObject({ valid: false, code: "attestation_lane_changed" });
 		expect(
-			revalidateAuthAttestation(
+			await revalidateAuthAttestation(
 				{ ...attested, handoff_evidence_id: undefined },
 				observedNow,
 				AUTH_CONTRACT,
@@ -413,10 +413,10 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 		).toMatchObject({ valid: false, code: "attestation_handoff_changed" });
 	});
 
-	test("the auth-owned verifier rejects forged or drifted bindings", () => {
+	test("the auth-owned verifier rejects forged or drifted bindings", async () => {
 		expect(
-			revalidateAuthAttestation(attested, observedNow, {
-				verifyAttestation: () => false,
+			await revalidateAuthAttestation(attested, observedNow, {
+				verifyAttestation: async () => false,
 			}),
 		).toEqual({
 			valid: false,
@@ -429,7 +429,7 @@ describe("attestation revalidation before mutation (R6/R30)", () => {
 describe("same-lane resume (R28)", () => {
 	const profile = { environment: "agent-chrome", profile: "default" };
 
-	test("resume on the original lane and profile is allowed", () => {
+	test("resume on the original lane and profile is allowed", async () => {
 		expect(
 			checkSameLaneResume(baseRun(), {
 				adapter_id: "agent-browser",

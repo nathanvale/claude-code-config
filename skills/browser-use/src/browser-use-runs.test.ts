@@ -18,22 +18,31 @@ import type {
 	BrowserUseSharedRun,
 } from "./browser-use-run-model";
 import {
+	attestationByDigestFrom,
+	BrowserUseAuthCommitInfrastructureError,
 	casUpdateSharedRun,
 	createRunIntegrationPort,
 	createSharedRun,
 	leaseKeyForRun,
 	listSharedRunReceipts,
 	loadSharedRun,
+	readAuthAttestationRecord,
 	resumeSharedRun,
+	writeAuthAttestationRecord,
 	type RunStoreDeps,
 } from "./browser-use-runs";
+import { createBrowserUseAuthContract } from "./browser-use-auth";
+import {
+	type BrowserUseAuthAttestation,
+	authAttestationDigestOf,
+} from "./browser-use-auth-model";
 import {
 	type BrowserUseSharedRunPayload,
 	encodeDurableRecord,
 	findRedactionViolations,
 	parseDurableRecord,
 } from "./browser-use-schemas";
-import { readDurableFile } from "./browser-use-store";
+import { readDurableFile, writeDurableFile } from "./browser-use-store";
 
 // =========================================================================
 // Shared-run persistence proof (platform plan 2026-07-21-002 U2).
@@ -97,6 +106,10 @@ function blockedRun(
 		state: "awaiting-auth",
 		task_intent: "runbook-execution",
 		environment_profile: { environment: "agent-chrome", profile: "default" },
+		// U3a: a run can only turn ready with a verifiable lane/handoff-bound
+		// attestation, so the base fixture is lane-bound.
+		adapter_id: "agent-browser",
+		handoff_evidence_id: "evidence-1",
 		mutation_dispatched: false,
 		artifacts: [],
 		continuation: CONTINUATION,
@@ -789,8 +802,12 @@ const ATTESTATION = {
 	fresh_until_epoch_ms: 999_999,
 };
 
+// Accepting fakes: fragment admission and attestation verification both pass.
+// The U3a durable-attestation enforcement path has its own tests with the
+// real verifier below.
 const ACCEPTING_AUTH_CONTRACT = {
 	validateSecretFreeFragment: () => true,
+	verifyAttestation: async () => true,
 };
 
 async function createReadyRun(
@@ -919,7 +936,7 @@ describe("commitAuthOutcome round-trip (R6, AE7 substrate)", () => {
 		const before = await rawRecordOf(deps, "run-auth-rejected");
 		const port = createRunIntegrationPort(
 			deps,
-			{ validateSecretFreeFragment: () => false },
+			{ validateSecretFreeFragment: () => false, verifyAttestation: async () => true },
 			await acquireClaim(deps, run),
 		);
 		const committed = await port.commitAuthOutcome({
@@ -1195,5 +1212,365 @@ describe("listSharedRunReceipts (R35, AE15 substrate)", () => {
 		expect(
 			(await listSharedRunReceipts(faultingDeps)).map((receipt) => receipt.run_id),
 		).toEqual(["run-valid-entry"]);
+	});
+});
+
+// =========================================================================
+// U3a: durable attestation custody and the commit ready gate (R30; auth
+// plan 2026-07-21-003 "attestation persistence"). The write lands before
+// commit returns ready — enforced mechanically: the Port refuses a ready
+// summary whose bounded attestation the auth-owned verifier cannot re-prove
+// against a durable record.
+// =========================================================================
+
+function attestationFor(
+	runId: string,
+	overrides: Partial<BrowserUseAuthAttestation> = {},
+): BrowserUseAuthAttestation {
+	return {
+		run_id: runId,
+		handoff_evidence_id: "evidence-1",
+		lane_id: "agent-browser",
+		implementation_integrity_key: "agent-browser@1.0.0",
+		environment: "agent-chrome",
+		profile: "default",
+		target_id: "target-1",
+		page_id: "page-1",
+		frame_id: "frame-root",
+		service_id: "service-1",
+		auth_context: "auth-context-1",
+		subject_reference: "subject-ref-1",
+		account_reference: "account-ref-1",
+		tenant_reference: "tenant-ref-1",
+		identity_basis: "session-identity-proof",
+		identity_basis_digest: "0".repeat(64),
+		observed_at_epoch_ms: 1_000,
+		fresh_until_epoch_ms: 999_999,
+		...overrides,
+	};
+}
+
+// The ready gate under test is attestation verification; fragment admission
+// has its own proof in browser-use-auth.test.ts, so the U2 test fragment is
+// waved through while verifyAttestation is the REAL store-backed verifier.
+function storeBackedContract(deps: RunStoreDeps) {
+	const real = createBrowserUseAuthContract({
+		attestationByDigest: attestationByDigestFrom(deps),
+	});
+	return {
+		validateSecretFreeFragment: () => true,
+		verifyAttestation: real.verifyAttestation,
+	};
+}
+
+describe("U3a: attestation custody (content-addressed durable records)", () => {
+	test("an attestation record round-trips through content-addressed custody", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-roundtrip");
+		const digest = authAttestationDigestOf(record);
+		expect(digest).toMatch(/^[0-9a-f]{64}$/);
+		const written = await writeAuthAttestationRecord(deps, { digest, record });
+		expect(written).toEqual({ ok: true });
+		// Idempotent by construction: same digest, same content.
+		expect(await writeAuthAttestationRecord(deps, { digest, record })).toEqual({
+			ok: true,
+		});
+		expect(await readAuthAttestationRecord(deps, digest)).toEqual({
+			status: "present",
+			record,
+		});
+		const byDigest = attestationByDigestFrom(deps);
+		expect(await byDigest(digest)).toEqual(record);
+		expect(await byDigest("0".repeat(64))).toBeUndefined();
+		// A digest-shape-invalid lookup is an absent record, never a crash.
+		expect(await byDigest("not-a-digest")).toBeUndefined();
+	});
+
+	test("a redaction-violating record refuses custody and writes nothing", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-redaction", {
+			subject_reference: "op://vault/item/field",
+		});
+		const digest = authAttestationDigestOf(record);
+		const written = await writeAuthAttestationRecord(deps, { digest, record });
+		expect(written).toMatchObject({ ok: false, code: "attestation_record_invalid" });
+		expect(await readAuthAttestationRecord(deps, digest)).toEqual({
+			status: "missing",
+		});
+	});
+
+	test("a corrupt record reads corrupt and resolves undefined by digest", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const digest = "ab".repeat(32);
+		// Land a valid record first so the attestations dir exists, then
+		// corrupt the durable bytes in place.
+		const record = attestationFor("run-att-corrupt");
+		await writeAuthAttestationRecord(deps, {
+			digest,
+			record,
+		});
+		await writeDurableFile(deps.fs, {
+			path: deps.paths.state.attestationFile(digest),
+			contents: "not-a-durable-record\n",
+		});
+		expect(await readAuthAttestationRecord(deps, digest)).toMatchObject({
+			status: "corrupt",
+		});
+		expect(await attestationByDigestFrom(deps)(digest)).toBeUndefined();
+	});
+
+	test("a digest-shape-invalid name is a typed refusal at the custody seam, never a throw", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-bad-digest");
+		const written = await writeAuthAttestationRecord(deps, {
+			digest: "not-a-digest",
+			record,
+		});
+		expect(written).toMatchObject({ ok: false, code: "attestation_record_invalid" });
+		expect(await readAuthAttestationRecord(deps, "not-a-digest")).toEqual({
+			status: "missing",
+		});
+	});
+
+	test("a valid record filed under a lying digest is refused by the auth-owned verifier", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const record = attestationFor("run-att-lying-digest");
+		const lyingDigest = "cd".repeat(32);
+		expect(lyingDigest).not.toBe(authAttestationDigestOf(record));
+		expect(
+			await writeAuthAttestationRecord(deps, { digest: lyingDigest, record }),
+		).toEqual({ ok: true });
+		// Custody serves the record by its lying name...
+		expect(await attestationByDigestFrom(deps)(lyingDigest)).toEqual(record);
+		// ...and the verifier refuses it: every run fact matches the record,
+		// so the ONLY failing proof is the digest recomputation.
+		const contract = createBrowserUseAuthContract({
+			attestationByDigest: attestationByDigestFrom(deps),
+		});
+		expect(
+			await contract.verifyAttestation({
+				reference: {
+					attestation_digest: lyingDigest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+				run_id: record.run_id,
+				environment_profile: {
+					environment: record.environment,
+					profile: record.profile,
+				},
+				adapter_id: "agent-browser",
+				handoff_evidence_id: record.handoff_evidence_id,
+				at_epoch_ms: 1_000,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("U3a: the commit ready gate (no durable attestation, no ready run)", () => {
+	test("commit turns ready only over a durable, binding-true attestation record", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-att-ready"));
+		const record = attestationFor("run-att-ready");
+		const digest = authAttestationDigestOf(record);
+		expect(await writeAuthAttestationRecord(deps, { digest, record })).toEqual({
+			ok: true,
+		});
+		const port = createRunIntegrationPort(
+			deps,
+			storeBackedContract(deps),
+			await acquireClaim(deps, run),
+		);
+		const committed = await port.commitAuthOutcome({
+			run_id: "run-att-ready",
+			expected_revision: 1,
+			fragment: FRAGMENT,
+			summary: {
+				state: "ready",
+				attestation: {
+					attestation_digest: digest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+			},
+		});
+		expect(committed).toMatchObject({ ok: true, run: { state: "ready", revision: 2 } });
+		const loaded = await loadOk(deps, "run-att-ready");
+		expect(loaded.run.auth_attestation).toEqual({
+			attestation_digest: digest,
+			fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+		});
+	});
+
+	test("a ready commit without a durable record is a typed rejection and writes nothing", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-att-absent"));
+		const before = await rawRecordOf(deps, "run-att-absent");
+		const record = attestationFor("run-att-absent");
+		const digest = authAttestationDigestOf(record);
+		const port = createRunIntegrationPort(
+			deps,
+			storeBackedContract(deps),
+			await acquireClaim(deps, run),
+		);
+		const committed = await port.commitAuthOutcome({
+			run_id: "run-att-absent",
+			expected_revision: 1,
+			fragment: FRAGMENT,
+			summary: {
+				state: "ready",
+				attestation: {
+					attestation_digest: digest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+			},
+		});
+		expect(committed).toEqual({
+			ok: false,
+			rejection: {
+				code: "run_ready_attestation_unverified",
+				message: expect.any(String),
+			},
+		});
+		expect(await rawRecordOf(deps, "run-att-absent")).toBe(before);
+	});
+
+	test("a ready commit on a lane-unbound run refuses verification", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-att-unbound", {
+				adapter_id: undefined,
+				handoff_evidence_id: undefined,
+			}),
+		);
+		const record = attestationFor("run-att-unbound");
+		const digest = authAttestationDigestOf(record);
+		await writeAuthAttestationRecord(deps, { digest, record });
+		const port = createRunIntegrationPort(
+			deps,
+			storeBackedContract(deps),
+			await acquireClaim(deps, run),
+		);
+		const committed = await port.commitAuthOutcome({
+			run_id: "run-att-unbound",
+			expected_revision: 1,
+			fragment: FRAGMENT,
+			summary: {
+				state: "ready",
+				attestation: {
+					attestation_digest: digest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+			},
+		});
+		expect(committed).toMatchObject({
+			ok: false,
+			rejection: { code: "run_ready_attestation_unverified" },
+		});
+	});
+
+	test("a record bound to a different run refuses ready (binding drift)", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-att-drift"));
+		const record = attestationFor("run-att-other");
+		const digest = authAttestationDigestOf(record);
+		await writeAuthAttestationRecord(deps, { digest, record });
+		const port = createRunIntegrationPort(
+			deps,
+			storeBackedContract(deps),
+			await acquireClaim(deps, run),
+		);
+		const committed = await port.commitAuthOutcome({
+			run_id: "run-att-drift",
+			expected_revision: 1,
+			fragment: FRAGMENT,
+			summary: {
+				state: "ready",
+				attestation: {
+					attestation_digest: digest,
+					fresh_until_epoch_ms: record.fresh_until_epoch_ms,
+				},
+			},
+		});
+		expect(committed).toMatchObject({
+			ok: false,
+			rejection: { code: "run_ready_attestation_unverified" },
+		});
+	});
+});
+
+describe("U3a: typed commit infrastructure errors (the #259 coded-error debt)", () => {
+	test("a stale lease claim throws the typed lease-rejected kind", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-att-lease"));
+		const claim = await acquireClaim(deps, run);
+		const port = createRunIntegrationPort(deps, storeBackedContract(deps), claim);
+		// Advance the activation epoch out from under the held claim: the
+		// fenced write gate must refuse it inside the critical section.
+		const advanced = await advanceActivationEpoch(deps, { expectedEpoch: 1 });
+		expect(advanced.ok).toBe(true);
+		let thrown: unknown;
+		try {
+			await port.commitAuthOutcome({
+				run_id: "run-att-lease",
+				expected_revision: 1,
+				fragment: FRAGMENT,
+				summary: {
+					state: "needs-human",
+					continuation: {
+						next_action_id: "inspect-adapter-crash",
+						summary: "Inspect the crashed lane before resuming.",
+					},
+				},
+			});
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(BrowserUseAuthCommitInfrastructureError);
+		const typed = thrown as BrowserUseAuthCommitInfrastructureError;
+		expect(typed.kind).toBe("lease-rejected");
+		expect(typed.detail_code).toBe("lease_epoch_stale");
+		expect(typed.message.startsWith("auth commit lease rejected")).toBe(true);
+	});
+
+	test("a missing run throws the typed store-faulted kind", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const run = await createOk(deps, blockedRun("run-att-fault-anchor"));
+		const port = createRunIntegrationPort(
+			deps,
+			storeBackedContract(deps),
+			await acquireClaim(deps, run),
+		);
+		let thrown: unknown;
+		try {
+			await port.commitAuthOutcome({
+				run_id: "run-att-missing",
+				expected_revision: 1,
+				fragment: FRAGMENT,
+				summary: {
+					state: "needs-human",
+					continuation: {
+						next_action_id: "inspect-adapter-crash",
+						summary: "Inspect the crashed lane before resuming.",
+					},
+				},
+			});
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(BrowserUseAuthCommitInfrastructureError);
+		const typed = thrown as BrowserUseAuthCommitInfrastructureError;
+		expect(typed.kind).toBe("store-faulted");
+		expect(typed.detail_code).toBe("run_not_found");
 	});
 });

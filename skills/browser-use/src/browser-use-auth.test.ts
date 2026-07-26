@@ -164,32 +164,32 @@ describe("validateSecretFreeFragment (R6)", () => {
 });
 
 describe("verifyAttestation (R30, AE11)", () => {
-	test("a fresh, binding-exact attestation verifies", () => {
+	test("a fresh, binding-exact attestation verifies", async () => {
 		const record = baseAttestation();
-		expect(contractFor(record).verifyAttestation(verifyInput(record))).toBe(true);
+		expect(await contractFor(record).verifyAttestation(verifyInput(record))).toBe(true);
 	});
 
-	test("a missing record refuses", () => {
+	test("a missing record refuses", async () => {
 		const record = baseAttestation();
-		expect(contractFor(undefined).verifyAttestation(verifyInput(record))).toBe(
+		expect(await contractFor(undefined).verifyAttestation(verifyInput(record))).toBe(
 			false,
 		);
 	});
 
-	test("freshness expiry refuses (stale attestation after expiry, AE11)", () => {
+	test("freshness expiry refuses (stale attestation after expiry, AE11)", async () => {
 		const record = baseAttestation();
 		expect(
-			contractFor(record).verifyAttestation({
+			await contractFor(record).verifyAttestation({
 				...verifyInput(record),
 				at_epoch_ms: 2_001,
 			}),
 		).toBe(false);
 	});
 
-	test("a reference freshness bound that disagrees with the record refuses", () => {
+	test("a reference freshness bound that disagrees with the record refuses", async () => {
 		const record = baseAttestation();
 		expect(
-			contractFor(record).verifyAttestation({
+			await contractFor(record).verifyAttestation({
 				...verifyInput(record),
 				reference: {
 					attestation_digest: authAttestationDigestOf(record),
@@ -199,33 +199,33 @@ describe("verifyAttestation (R30, AE11)", () => {
 		).toBe(false);
 	});
 
-	test("lane, handoff, run, or profile drift refuses (AE11)", () => {
+	test("lane, handoff, run, or profile drift refuses (AE11)", async () => {
 		const record = baseAttestation();
 		const input = verifyInput(record);
 		expect(
-			contractFor(record).verifyAttestation({
+			await contractFor(record).verifyAttestation({
 				...input,
 				adapter_id: "playwright-cdp",
 			}),
 		).toBe(false);
 		expect(
-			contractFor(record).verifyAttestation({
+			await contractFor(record).verifyAttestation({
 				...input,
 				handoff_evidence_id: "evidence-2",
 			}),
 		).toBe(false);
 		expect(
-			contractFor(record).verifyAttestation({ ...input, run_id: "run-2" }),
+			await contractFor(record).verifyAttestation({ ...input, run_id: "run-2" }),
 		).toBe(false);
 		expect(
-			contractFor(record).verifyAttestation({
+			await contractFor(record).verifyAttestation({
 				...input,
 				environment_profile: { environment: "agent-chrome", profile: "other" },
 			}),
 		).toBe(false);
 	});
 
-	test("an edited record fails the digest recomputation", () => {
+	test("an edited record fails the digest recomputation", async () => {
 		const record = baseAttestation();
 		const reference = {
 			attestation_digest: authAttestationDigestOf(record),
@@ -236,7 +236,7 @@ describe("verifyAttestation (R30, AE11)", () => {
 			attestationByDigest: () => edited,
 		});
 		expect(
-			contract.verifyAttestation({ ...verifyInput(record), reference }),
+			await contract.verifyAttestation({ ...verifyInput(record), reference }),
 		).toBe(false);
 	});
 });

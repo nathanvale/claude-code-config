@@ -44,7 +44,8 @@ export type ResultKind =
 	| "runbook_catalog"
 	| "migration_status"
 	| "artifact_manifest"
-	| "repair_status";
+	| "repair_status"
+	| "auth_readiness";
 
 // Generic structured failure carried by every region surface. Each surface
 // narrows the action-id type parameter to its own union.

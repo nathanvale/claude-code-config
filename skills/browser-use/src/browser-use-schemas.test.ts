@@ -129,10 +129,30 @@ const SAMPLE_PAYLOADS: { [K in BrowserUseDurableRecordKind]: PayloadOf<K> } = {
 		summary: "routine-automation run is confirmed.",
 		receipt_digest: "f".repeat(64),
 	},
+	"auth-attestation": {
+		run_id: "run-1",
+		handoff_evidence_id: "handoff-evidence-1",
+		lane_id: "agent-browser",
+		implementation_integrity_key: "agent-browser@1.0.0",
+		environment: "development",
+		profile: "default",
+		target_id: "target-1",
+		page_id: "page-1",
+		frame_id: "frame-root",
+		service_id: "service-1",
+		auth_context: "auth-context-1",
+		subject_reference: "subject-ref-1",
+		account_reference: "account-ref-1",
+		tenant_reference: "tenant-ref-1",
+		identity_basis: "session-identity-proof",
+		identity_basis_digest: "0".repeat(64),
+		observed_at_epoch_ms: 5_000,
+		fresh_until_epoch_ms: 65_000,
+	},
 };
 
 describe("durable record envelope (R10)", () => {
-	test("the kind vocabulary carries the eight durable record kinds", () => {
+	test("the kind vocabulary carries the nine durable record kinds", () => {
 		expect(BROWSER_USE_DURABLE_RECORD_KINDS).toEqual([
 			"shared-run",
 			"run-lease",
@@ -142,6 +162,7 @@ describe("durable record envelope (R10)", () => {
 			"artifact-manifest",
 			"tombstone",
 			"run-receipt",
+			"auth-attestation",
 		]);
 	});
 
@@ -309,6 +330,27 @@ describe("per-kind payload invariants", () => {
 				p.revision = 0;
 			},
 			label: "a zero receipt revision",
+		},
+		{
+			kind: "auth-attestation",
+			mutate: (p) => {
+				p.identity_basis = "both";
+			},
+			label: "an identity basis outside the two-value vocabulary",
+		},
+		{
+			kind: "auth-attestation",
+			mutate: (p) => {
+				p.subject_reference = "";
+			},
+			label: "an empty redacted subject reference",
+		},
+		{
+			kind: "auth-attestation",
+			mutate: (p) => {
+				p.fresh_until_epoch_ms = 4_999;
+			},
+			label: "a freshness bound preceding the observation instant",
 		},
 	];
 

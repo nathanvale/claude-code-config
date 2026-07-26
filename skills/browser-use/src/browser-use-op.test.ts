@@ -247,7 +247,7 @@ describe("vault-scope proof (R8/AE2)", () => {
 		if (proof.ok) return;
 		expect(proof.blocked_cause).toBe("invalid-vault-scope");
 		expect(proof.visible_count).toBe(2);
-		expect(proof.continuation.next_action_id).toBe("repair-vault-scope");
+		expect(proof.continuation.next_action_id).toBe("repair-vault-grant");
 	});
 
 	test("exactly one vault proves scope with no second approval", () => {
@@ -262,7 +262,7 @@ describe("vault-scope proof (R8/AE2)", () => {
 		expect(
 			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["invalid-vault-scope"].continuation
 				.next_action_id,
-		).toBe("repair-vault-scope");
+		).toBe("repair-vault-grant");
 	});
 });
 

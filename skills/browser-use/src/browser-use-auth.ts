@@ -30,11 +30,17 @@ import {
 
 // --- The auth contract Port implementation (R6, R30) ------------------------------
 
-/** Injected attestation lookup: platform code owns where records live. */
+/** Injected attestation lookup: platform code owns where records live. The
+ * production source is the durable store (`attestationByDigestFrom` in
+ * `browser-use-runs.ts`), so the lookup may be async; a sync in-memory map
+ * remains legal for tests. */
 export type BrowserUseAuthContractDeps = {
 	attestationByDigest: (
 		digest: string,
-	) => BrowserUseAuthAttestation | undefined;
+	) =>
+		| BrowserUseAuthAttestation
+		| undefined
+		| Promise<BrowserUseAuthAttestation | undefined>;
 };
 
 /**
@@ -66,8 +72,8 @@ export function createBrowserUseAuthContract(
 			}
 			return validateAuthFragmentShape(slot.fragment).length === 0;
 		},
-		verifyAttestation(input): boolean {
-			const record = deps.attestationByDigest(
+		async verifyAttestation(input): Promise<boolean> {
+			const record = await deps.attestationByDigest(
 				input.reference.attestation_digest,
 			);
 			if (record === undefined) return false;
