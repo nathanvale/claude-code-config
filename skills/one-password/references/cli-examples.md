@@ -68,9 +68,15 @@ op item get "$ITEM_TITLE" --account "<account>" --format json |
   TOKEN="$TOKEN" FIELD_NAME="$FIELD_NAME" node -e '
 let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
   const item=JSON.parse(s);
-  const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_NAME);
-  if (f) { f.value=process.env.TOKEN; }
-  else { (item.fields??=[]).push({ label: process.env.FIELD_NAME, type: "CONCEALED", value: process.env.TOKEN }); }
+  const matches=(item.fields||[]).filter(x=>x.label===process.env.FIELD_NAME);
+  if (matches.length===0) {
+    (item.fields??=[]).push({ label: process.env.FIELD_NAME, type: "CONCEALED", value: process.env.TOKEN });
+  } else if (matches.length===1 && matches[0].type==="CONCEALED") {
+    matches[0].value=process.env.TOKEN;
+  } else {
+    console.error("refusing: label must match exactly one CONCEALED field, found " + matches.length + " match(es)");
+    process.exit(2);
+  }
   process.stdout.write(JSON.stringify(item));
 });' | op item edit "$ITEM_TITLE" --account "<account>" >/dev/null
 op item get "$ITEM_TITLE" --account "<account>" --fields "label=$FIELD_NAME" >/dev/null
