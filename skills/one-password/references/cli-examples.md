@@ -35,7 +35,7 @@
 
 ## Item create/edit without printing secrets
 
-`op item create` category values may be the human category name. For API tokens, use `"API Credential"`.
+Never pass a secret as an `op` assignment argument (`field[password]=$TOKEN`) — argv is visible to other processes. Feed a JSON template through stdin instead; the secret travels env → JSON → pipe, never argv. In JSON templates the category is the enum form (`API_CREDENTIAL`), not the human name.
 
 ```bash
 ITEM_TITLE="Service API Tokens"
@@ -45,9 +45,16 @@ TOKEN="$(pbpaste)"
 if [ -n "$EXPECTED_PREFIX" ]; then
   case "$TOKEN" in "$EXPECTED_PREFIX"*) ;; *) echo "clipboard value does not match expected prefix" >&2; exit 2;; esac
 fi
-op item create --account "<account>" --category "API Credential" --title "$ITEM_TITLE" "$FIELD_NAME[password]=$TOKEN" >/dev/null
+TOKEN="$TOKEN" ITEM_TITLE="$ITEM_TITLE" FIELD_NAME="$FIELD_NAME" node -e '
+process.stdout.write(JSON.stringify({
+  title: process.env.ITEM_TITLE,
+  category: "API_CREDENTIAL",
+  fields: [{ label: process.env.FIELD_NAME, type: "CONCEALED", value: process.env.TOKEN }],
+}));' | op item create --account "<account>" - >/dev/null
 op item get "$ITEM_TITLE" --account "<account>" --fields "label=$FIELD_NAME" >/dev/null
 ```
+
+Edit an existing item the same way: pipe the updated item JSON into `op item edit` rather than assigning the new value in argv.
 
 ```bash
 ITEM_TITLE="Service API Tokens"
@@ -57,7 +64,15 @@ TOKEN="$(pbpaste)"
 if [ -n "$EXPECTED_PREFIX" ]; then
   case "$TOKEN" in "$EXPECTED_PREFIX"*) ;; *) echo "clipboard value does not match expected prefix" >&2; exit 2;; esac
 fi
-op item edit "$ITEM_TITLE" --account "<account>" "$FIELD_NAME[password]=$TOKEN" >/dev/null
+op item get "$ITEM_TITLE" --account "<account>" --format json |
+  TOKEN="$TOKEN" FIELD_NAME="$FIELD_NAME" node -e '
+let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
+  const item=JSON.parse(s);
+  const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_NAME);
+  if (f) { f.value=process.env.TOKEN; }
+  else { (item.fields??=[]).push({ label: process.env.FIELD_NAME, type: "CONCEALED", value: process.env.TOKEN }); }
+  process.stdout.write(JSON.stringify(item));
+});' | op item edit "$ITEM_TITLE" --account "<account>" >/dev/null
 op item get "$ITEM_TITLE" --account "<account>" --fields "label=$FIELD_NAME" >/dev/null
 ```
 
@@ -72,8 +87,9 @@ set +x
 ITEM_TITLE="<known item>"
 FIELD_LABEL="<field label>"
 VAULT="<token-scoped vault>"
+TOKEN_WRAPPER="<managed wrapper that injects OP_SERVICE_ACCOUNT_TOKEN for one command>"
 value="$(
-  op item get "$ITEM_TITLE" --vault "$VAULT" --format json |
+  "$TOKEN_WRAPPER" op item get "$ITEM_TITLE" --vault "$VAULT" --format json |
     FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_LABEL); if(!f?.value) process.exit(2); process.stdout.write(f.value);})'
 )"
 echo "field_len:${#value}"

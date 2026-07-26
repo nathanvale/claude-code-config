@@ -25,7 +25,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 
 1. Get the owning capability's declared mapping: account, vault, item, field, expected shape. Missing mapping: stop and ask; never enumerate to discover.
 2. Choose the access path above.
-3. Service-account read: one non-interactive command, e.g. `op item get "<item>" --vault "<vault>" --format json`, extracting the exact labeled field (`references/cli-examples.md`).
+3. Service-account read: one non-interactive command run through the managed token source, e.g. `<token-wrapper> op item get "<item>" --vault "<vault>" --format json`, where `<token-wrapper>` injects `OP_SERVICE_ACCOUNT_TOKEN` for that command only — never a bare `op` call against ambient auth. Extract the exact labeled field (`references/cli-examples.md`).
 4. Interactive fallback: `op signin` then `op whoami` in the persistent session; keep every follow-up command, retry, and verification in that same session — never start a second one.
 5. Verify shape only: length, expected prefix, newline count. Never print values.
 
