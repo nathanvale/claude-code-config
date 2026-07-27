@@ -10,7 +10,8 @@ import {
 	makeTempXdgEnv,
 } from "./browser-use-platform-test-helpers";
 import type { RunStoreDeps } from "./browser-use-runs";
-import { loadSharedRun } from "./browser-use-runs";
+import { createSharedRun, loadSharedRun } from "./browser-use-runs";
+import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import { runbooksRoot } from "./browser-use-runbook";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
 import { runForTest } from "./browser-use";
@@ -232,7 +233,7 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		);
 	});
 
-	test("a non-integer --tab is refused before any chrome call", async () => {
+	test("a non-integer --tab is refused before any chrome call AND before any run is created", async () => {
 		const store = await makeStore();
 		const handoffPath = writeHandoff(store.base, "chrome-devtools-mcp", "run-chrome-2");
 		const { runtime, calls } = scriptedRuntime(store.env, []);
@@ -252,6 +253,33 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 			code: "task_run_lane_refused",
 		});
 		expect(calls).toHaveLength(0);
+		// The usage error must NOT have persisted a run keyed on the handoff's run
+		// id: a stray `running` run here would poison the handoff, turning every
+		// corrected retry into a store_record_conflict.
+		const orphan = await loadSharedRun(store.deps, "run-chrome-2");
+		expect(orphan.ok).toBe(false);
+		// A corrected retry with the SAME handoff proceeds cleanly (no conflict).
+		const retryRuntime = scriptedRuntime(store.env, [
+			{ stdout: chromePagesListing() },
+			{ stdout: chromeConsole() },
+			{ stdout: chromeNetwork() },
+		]);
+		const retried = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--handoff", handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			retryRuntime.runtime,
+		);
+		expect(retried.exitCode).toBe(0);
+		const retriedRun = (parseJson(retried.stdout).data as Record<string, unknown>)
+			.run as Record<string, unknown>;
+		expect(retriedRun.run_id).toBe("run-chrome-2");
+		expect(retriedRun.state).toBe("confirmed");
 	});
 
 	test("a performance-profile intent compiles to a trace and persists an artifact reference", async () => {
@@ -420,6 +448,107 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "task_run_handoff_lane_mismatch",
 		});
+	});
+
+	test("a blocked runbook run persists the runbook-resume cursor, not a bare resume id (F7 writer)", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const handoffPath = writeHandoff(store.base, "agent-browser", "run-runbook-blocked");
+		// Attach never stabilises: three tab-list attempts fail with a CDP
+		// connection signal (liveness probes between attempts), so the executor
+		// blocks needs-human before any step executed.
+		const cdpFailure = JSON.stringify({
+			error: "CDP WebSocket connect failed: Connection refused (os error 61)",
+			success: false,
+		});
+		const { runtime } = scriptedRuntime(store.env, [
+			{ stdout: cdpFailure },
+			{ stdout: agentSuccess({}) },
+			{ stdout: cdpFailure },
+			{ stdout: agentSuccess({}) },
+			{ stdout: cdpFailure },
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_connection_unstable",
+		});
+		// The durable run carries the runbook-resume:<index> cursor the F7 resume
+		// reader (runbookResumeCursorOf) decodes — 0 confirmed steps here, so the
+		// cursor is 0. Without this writer the run would carry resume_shared_run
+		// and a resume would silently fall back to step 0 even after confirmed
+		// steps (a double-apply for a mutating runbook).
+		const loaded = await loadSharedRun(store.deps, "run-runbook-blocked");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.state).toBe("needs-human");
+			expect(loaded.run.continuation?.next_action_id).toBe("runbook-resume:0");
+		}
+	});
+
+	test("a resumed runbook run starts at the persisted cursor, never replaying confirmed steps (F7)", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const handoffPath = writeHandoff(store.base, "agent-browser", "run-runbook-cursor");
+		// Seed a blocked run whose cursor says step 0 (the open) is already
+		// confirmed: resume must execute ONLY step 1 (the snapshot).
+		const seed: Omit<BrowserUseSharedRun, "revision"> = {
+			run_id: "run-runbook-cursor",
+			state: "needs-human",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed-evidence",
+			mutation_dispatched: false,
+			artifacts: [],
+			continuation: {
+				next_action_id: "runbook-resume:1",
+				summary: "connection dropped after the confirmed open step; resume from step 1.",
+			},
+		};
+		const created = await createSharedRun(store.deps, seed);
+		expect(created.ok).toBe(true);
+		// Executor sequence for the single remaining snapshot step: tab list, tab
+		// select, snapshot — no open, no open-postcondition get-url.
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [{ tabId: "t1", active: true, type: "page", url: "https://example.test/" }],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--run", "run-runbook-cursor",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const run = (parseJson(result.stdout).data as Record<string, unknown>)
+			.run as Record<string, unknown>;
+		expect(run.state).toBe("confirmed");
+		// The confirmed open step was NOT replayed: no `open` dispatch reached the
+		// adapter, only attach (tab list/select) plus the remaining snapshot.
+		expect(calls).toHaveLength(3);
+		expect(calls.some((c) => c.includes("open"))).toBe(false);
 	});
 
 	test("runbook run without --service is a usage error", async () => {

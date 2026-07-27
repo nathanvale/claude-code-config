@@ -325,6 +325,86 @@ describe("root admission (R12; S4-S6)", () => {
 		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
 	});
 
+	test("S5: NESTED symlink ancestors re-root onto the resolved chain — a foreign-owned real root still refuses", async () => {
+		// Chain: <base>/nested-outer-link -> nested-outer-target, whose child
+		// "hop" is itself a symlink -> nested-inner-target. Both links and both
+		// targets are operator-owned, so each hop admits. The REAL root
+		// (nested-inner-target/browser-use) exists but is foreign-owned. A walk
+		// that recomputed the tail from the ORIGINAL path after the second
+		// re-root would wander onto a non-existent chain, report "missing", and
+		// skip this ownership check entirely.
+		const outerTarget = join(xdg.base, "nested-outer-target");
+		mkdirSync(outerTarget, { recursive: true, mode: 0o700 });
+		const outerLink = join(xdg.base, "nested-outer-link");
+		symlinkSync(outerTarget, outerLink);
+		const innerTarget = join(xdg.base, "nested-inner-target");
+		mkdirSync(innerTarget, { recursive: true, mode: 0o700 });
+		symlinkSync(innerTarget, join(outerTarget, "hop"));
+		const realRoot = join(innerTarget, "browser-use");
+		mkdirSync(realRoot, { recursive: true, mode: 0o700 });
+		const foreignUid = (process.getuid?.() ?? 0) + 1;
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			lstat: async (path) => {
+				const stat = await realFs.lstat(path);
+				if (path === realRoot && stat !== undefined) {
+					return { ...stat, uid: foreignUid };
+				}
+				return stat;
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
+			kind: "data",
+			path: join(outerLink, "hop", "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		// The walk reached the REAL root through both re-roots and refused on
+		// ownership — not xdg_root_symlink_ancestor, and never ok:true.
+		expect(admitted.refusal.code).toBe("xdg_root_wrong_owner");
+	});
+
+	test("S5: a realpath failure (ELOOP/EACCES throw) is the typed symlink refusal, never an uncaught throw", async () => {
+		const target = join(xdg.base, "eloop-link-target");
+		mkdirSync(target, { recursive: true, mode: 0o700 });
+		const link = join(xdg.base, "eloop-symlinked-parent");
+		symlinkSync(target, link);
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			realpath: async (path) => {
+				if (path === link) {
+					throw Object.assign(new Error("too many symbolic links"), {
+						code: "ELOOP",
+					});
+				}
+				return await realFs.realpath(path);
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
+			kind: "state",
+			path: join(link, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
+	});
+
+	test("S5: a real symlink CYCLE ancestor refuses through the default adapter (fs.realpath ELOOP)", async () => {
+		// Two links pointing at each other: the real filesystem realpath throws
+		// ELOOP; the default adapter maps it to undefined -> typed refusal.
+		const cycleA = join(xdg.base, "cycle-a");
+		const cycleB = join(xdg.base, "cycle-b");
+		symlinkSync(cycleB, cycleA);
+		symlinkSync(cycleA, cycleB);
+		const admitted = await admitBrowserUseRoot(realFs, {
+			kind: "cache",
+			path: join(cycleA, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
+	});
+
 	test("S6: an existing root with group/other bits refuses with xdg_root_permissions_loose", async () => {
 		const root = join(xdg.base, "loose-root");
 		mkdirSync(root, { recursive: true });

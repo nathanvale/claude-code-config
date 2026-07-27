@@ -3,6 +3,7 @@ import {
 	BROWSER_USE_ADAPTER_LANE_IDS,
 	BROWSER_USE_ADAPTER_LANE_TABLE,
 	BROWSER_USE_LANE_AUTH_METHODS,
+	type BrowserUseAdapterLaneId,
 	type BrowserUseLaneImplementationIntegrity,
 } from "./browser-use-adapter-model";
 import {
@@ -207,6 +208,117 @@ describe("conformance matrix — evidence binding", () => {
 			);
 		} else {
 			throw new Error("expected conformant restart-resume cells");
+		}
+	});
+});
+
+describe("conformance matrix — per-lane verdict integrity", () => {
+	// Regression for the fabrication where every lane's safety verdict was
+	// really agent-browser's: the contract check hardcoded
+	// driveChoreography("agent-browser", ...), so a second implemented lane's
+	// cell borrowed agent-browser's result while carrying its OWN integrity
+	// digest. Each cell must now be derived from THAT lane's binding.
+	const provableLanes = BROWSER_USE_ADAPTER_LANE_IDS.filter(
+		(laneId) =>
+			BROWSER_USE_ADAPTER_LANE_TABLE[laneId].native_implementation.implemented,
+	);
+	const otherProvableLanes = provableLanes.filter(
+		(laneId) => laneId !== "agent-browser",
+	);
+
+	function integrityFor(
+		laneId: BrowserUseAdapterLaneId,
+	): BrowserUseLaneImplementationIntegrity {
+		return {
+			executable_realpath: `/live/${laneId}`,
+			content_digest: `content-${laneId}`,
+			dependency_lock_identity: `lock-${laneId}`,
+			protocol_fingerprint: `proto-${laneId}`,
+			platform: "darwin",
+			security_policy_revision: `policy-${laneId}`,
+		};
+	}
+
+	test("there is at least one implemented lane other than agent-browser to guard", () => {
+		// If this ever fails the regression guard below is vacuous; the matrix
+		// would only ever have exercised agent-browser and the bug could not be
+		// observed. chrome-devtools-mcp is that second implemented lane today.
+		expect(otherProvableLanes.length).toBeGreaterThan(0);
+		expect(otherProvableLanes).toContain("chrome-devtools-mcp");
+	});
+
+	test("each provable lane's decided cell binds to ITS OWN integrity digest, not agent-browser's", () => {
+		const integrity_by_lane = Object.fromEntries(
+			provableLanes.map((laneId) => [laneId, integrityFor(laneId)]),
+		);
+		const matrix = runAuthConformanceMatrix({
+			at_epoch_ms: AT,
+			integrity_by_lane,
+		});
+		// Every lane's own restart-resume digest is the hash of its own integrity;
+		// two distinct-integrity lanes therefore carry distinct digests. A cell
+		// silently reusing agent-browser's result would still carry its own digest
+		// (evidence is stamped per cell), so the stronger guard is below — this
+		// one proves the digests are genuinely lane-specific.
+		const digests = new Map<string, string>();
+		for (const laneId of provableLanes) {
+			const cell = cellFor(matrix.cells, laneId, "restart-resume");
+			expect(cell.verdict).toBe("conformant");
+			if (cell.verdict === "conformant") {
+				digests.set(laneId, cell.evidence.implementation_integrity_digest);
+			}
+		}
+		const unique = new Set(digests.values());
+		expect(unique.size).toBe(provableLanes.length);
+	});
+
+	test("a non-agent-browser lane's safety cells are conformant AND digest-bound to that lane", () => {
+		// Load-bearing guard against the fabrication. The FSM is shared, so a
+		// per-lane run and a borrowed-agent-browser run both yield a conformant
+		// verdict CLASS — verdict alone cannot distinguish them. What distinguishes
+		// them is identity: a genuinely per-lane cell binds to the lane-under-test's
+		// OWN integrity digest, computed from that lane's own integrity input.
+		// Feed each implemented lane a DISTINCT integrity, then assert the
+		// non-agent-browser lane's safety cells (a) are conformant and (b) carry a
+		// digest equal to that lane's own integrity hash and NOT agent-browser's.
+		const integrity_by_lane = Object.fromEntries(
+			provableLanes.map((laneId) => [laneId, integrityFor(laneId)]),
+		);
+		const matrix = runAuthConformanceMatrix({
+			at_epoch_ms: AT,
+			integrity_by_lane,
+		});
+		const agentBrowserDigests = new Map<string, string>();
+		for (const dimension of [
+			"restart-resume",
+			"cleanup",
+			"revocation",
+			"lane-resume",
+		] as const) {
+			const cell = cellFor(matrix.cells, "agent-browser", dimension);
+			if (cell.verdict === "conformant") {
+				agentBrowserDigests.set(
+					dimension,
+					cell.evidence.implementation_integrity_digest,
+				);
+			}
+		}
+		for (const laneId of otherProvableLanes) {
+			for (const dimension of [
+				"restart-resume",
+				"cleanup",
+				"revocation",
+				"lane-resume",
+			] as const) {
+				const own = cellFor(matrix.cells, laneId, dimension);
+				expect(own.verdict).toBe("conformant");
+				if (own.verdict === "conformant") {
+					// The cell binds to THIS lane's integrity, never agent-browser's.
+					expect(own.evidence.implementation_integrity_digest).not.toBe(
+						agentBrowserDigests.get(dimension),
+					);
+				}
+			}
 		}
 	});
 });

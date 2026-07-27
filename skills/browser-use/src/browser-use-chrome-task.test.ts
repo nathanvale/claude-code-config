@@ -311,6 +311,48 @@ describe("Chrome DevTools MCP task lane", () => {
 		expect(runtime.writes.get(artifactPath)).toContain("phase details");
 	});
 
+	test("refuses a lighthouse insight name that is not a bounded safe identifier (path traversal)", async () => {
+		for (const insightName of ["../../etc/evil", "nested/insight"]) {
+			const runtime = runtimeFor([
+				{ stdout: pagesListing() },
+				{ stdout: mcpText("## Insight\nshould never analyze") },
+			]);
+			const result = await executeChromeTask(
+				runtime,
+				baseTask({
+					artifact_dir: "/runs/a",
+					operations: [{ kind: "lighthouse-insight", insight_name: insightName }],
+				}),
+			);
+			expect(result).toMatchObject({
+				ok: false,
+				code: "chrome_task_invalid",
+				outcome: "not-achieved",
+			});
+			// Refused BEFORE the insight tool ran and before any write: only the
+			// list_pages call happened and nothing landed on disk.
+			expect(runtime.calls).toHaveLength(1);
+			expect([...runtime.writes.keys()]).toEqual([]);
+		}
+	});
+
+	test("a normal lighthouse insight name still writes native evidence to the derived path", async () => {
+		const runtime = runtimeFor([
+			{ stdout: pagesListing() },
+			{ stdout: mcpText("## Insight: LCP\nphase details") },
+		]);
+		const artifactPath = "/runs/a/run-chrome-1-lighthouse-LCPBreakdown.json";
+		const result = await executeChromeTask(
+			runtime,
+			baseTask({
+				artifact_dir: "/runs/a",
+				operations: [{ kind: "lighthouse-insight", insight_name: "LCPBreakdown" }],
+			}),
+		);
+		expect(result.ok).toBe(true);
+		expect(runtime.writes.has(artifactPath)).toBe(true);
+	});
+
 	test("a semantic tool error mid-task is not-achieved, never unknown (reads are side-effect free)", async () => {
 		const runtime = runtimeFor([
 			{ stdout: pagesListing() },

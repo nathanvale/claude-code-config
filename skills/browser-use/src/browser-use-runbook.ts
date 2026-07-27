@@ -22,7 +22,8 @@
 // Date.now, no Math.random, no process.cwd().
 // ---------------------------------------------------------------------------
 
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type AgentBrowserExecutionResult,
@@ -67,24 +68,81 @@ export function runbooksRoot(dataRoot: string): string {
 }
 
 /**
- * The code-owned SHIPPED runbooks root: `<skill>/runbooks`, one level up from
- * this module's `src/` directory. Production runbooks ship here so `runbook
- * list` discovers them at runtime without any XDG seeding step (wave-4
- * `catalog_count=0` fix). Discovery scans this root IN ADDITION to the XDG
- * store; an operator-authored runbook under the data root with the same
- * service/flow id overrides the shipped one (store wins), mirroring the
- * asset-promotion precedent where user-owned data supersedes shipped defaults.
+ * The two legitimate layouts this compiled/source module can run from, and the
+ * shipped-runbooks candidate under each:
+ *
+ * - REPO / test / `path bin`: module at `<skill>/src/browser-use-runbook.ts`,
+ *   catalog at `<skill>/runbooks` — one level UP from the module dir.
+ * - PACKAGED bin: module at `<install>/dist/browser-use.js`, catalog copied to
+ *   `<install>/dist/runbooks` (build-dist.ts) — SAME dir as the module. The
+ *   published tarball ships only `dist/` (package.json `files`), so no sibling
+ *   `<install>/runbooks` exists; the dist-adjacent copy is the only catalog
+ *   that travels with the bin.
+ *
+ * Both candidates are probed; the first that exists on disk wins. The order
+ * puts the dist-adjacent copy first so a packaged bin never accidentally
+ * resolves to a stray `../runbooks` above the install root.
+ *
+ * @returns The ordered shipped-runbooks candidate roots, most-specific first
+ */
+function shippedRunbooksRootCandidates(): readonly [string, string] {
+	const moduleDir = dirname(fileURLToPath(import.meta.url));
+	return [
+		// Packaged layout: dist/browser-use.js -> dist/runbooks
+		join(moduleDir, "runbooks"),
+		// Repo/src layout: src/browser-use-runbook.ts -> <skill>/runbooks
+		join(moduleDir, "..", "runbooks"),
+	];
+}
+
+/**
+ * The code-owned SHIPPED runbooks root. Resolves correctly in BOTH the
+ * repo-local `src/` layout (`<skill>/runbooks`) and the packaged `dist/` layout
+ * (`<install>/dist/runbooks`) — see `shippedRunbooksRootCandidates()`.
+ * Production runbooks ship here so `runbook list` discovers them at runtime
+ * without any XDG seeding step (wave-4 `catalog_count=0` fix). Discovery scans
+ * this root IN ADDITION to the XDG store; an operator-authored runbook under
+ * the data root with the same service/flow id overrides the shipped one (store
+ * wins), mirroring the asset-promotion precedent where user-owned data
+ * supersedes shipped defaults.
+ *
+ * Returns the first candidate that exists on disk; when neither exists it
+ * returns the packaged-layout candidate so callers still resolve a concrete,
+ * inspectable path (the missing directory then surfaces as a typed health
+ * condition in `listRunbooks` rather than a silent empty catalog).
  *
  * Read-only: the engine never writes here. The directory is versioned in the
- * repo, so its runbooks travel with the code, not the machine.
+ * repo and copied into `dist/` at build time, so its runbooks travel with the
+ * code, not the machine.
  *
  * @returns Absolute shipped-runbooks root
  */
 export function shippedRunbooksRoot(): string {
-	return join(fileURLToPath(new URL(".", import.meta.url)), "..", "runbooks");
+	const candidates = shippedRunbooksRootCandidates();
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
 // --- Typed refusals ----------------------------------------------------------
+
+/**
+ * Typed packaging diagnostic: the code-owned shipped runbooks root does not
+ * exist on disk in any legitimate layout. Thrown by `listRunbooks` so a
+ * packaged bin that dropped `dist/runbooks/` fails LOUD with a repair pointer
+ * instead of silently reporting `runbook_count=0`. Carries a `code` tag so the
+ * CLI/driver can render it as a typed health condition rather than a generic
+ * crash.
+ */
+export class BrowserUseShippedRunbooksMissingError extends Error {
+	readonly code = "runbook_shipped_root_missing" as const;
+	readonly shippedRoot: string;
+	constructor(shippedRoot: string) {
+		super(
+			`shipped runbook catalog missing at ${shippedRoot}; the packaged build must copy runbooks/ into dist (see build-dist.ts).`,
+		);
+		this.name = "BrowserUseShippedRunbooksMissingError";
+		this.shippedRoot = shippedRoot;
+	}
+}
 
 /** Typed discovery/show refusal. */
 export type BrowserUseRunbookDiscoveryFailure = {
@@ -244,7 +302,16 @@ export async function listRunbooks(
 	fs: BrowserUsePlatformFs,
 	dataRoot: string,
 ): Promise<readonly BrowserUseRunbookCatalogRow[]> {
-	const shipped = await scanRunbooksRoot(fs, shippedRunbooksRoot());
+	// Fail closed if the shipped catalog directory is missing: a packaged bin
+	// that dropped `dist/runbooks/` must surface a typed diagnostic, never a
+	// silent empty catalog (the wave-5 packaging gap). A present-but-empty
+	// shipped root is a legitimate empty scan and does not trip this.
+	const shippedRoot = shippedRunbooksRoot();
+	const shippedStat = await fs.lstat(shippedRoot);
+	if (shippedStat === undefined || shippedStat.kind !== "directory") {
+		throw new BrowserUseShippedRunbooksMissingError(shippedRoot);
+	}
+	const shipped = await scanRunbooksRoot(fs, shippedRoot);
 	const store = await scanRunbooksRoot(fs, runbooksRoot(dataRoot));
 	// Store overrides shipped on id collision.
 	const merged = new Map(shipped);

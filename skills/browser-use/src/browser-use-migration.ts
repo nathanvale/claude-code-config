@@ -453,10 +453,22 @@ export async function planBrowserUseMigration(
 	}
 	const dispositions: BrowserUseMigrationDisposition[] = [];
 	for (const entry of inventoried.entries) {
-		const contents =
-			entry.type === "file"
-				? await deps.fs.readTextFile(join(normalizedRoot, entry.relative_path))
-				: undefined;
+		let contents: string | undefined;
+		if (entry.type === "file") {
+			try {
+				contents = await deps.fs.readTextFile(
+					join(normalizedRoot, entry.relative_path),
+				);
+			} catch {
+				// A source file readable at snapshot time became unreadable
+				// (ENOENT/EACCES/EISDIR) before this loop: return the typed drift
+				// refusal instead of letting the throw escape the contract.
+				return migrationFailure(
+					"migration_source_drift",
+					"a source file became unreadable after the frozen snapshot.",
+				);
+			}
+		}
 		const classified = dispositionFor(entry, contents);
 		if (!classified.ok) return classified;
 		dispositions.push(classified.disposition);
@@ -586,9 +598,20 @@ export async function applyBrowserUseMigration(
 	const files: Array<{ relPath: string; contents: string }> = [];
 	for (const disposition of standing.state.dispositions) {
 		if (disposition.disposition !== "stage") continue;
-		const contents = await deps.fs.readTextFile(
-			join(frozen.root, disposition.source_relative_path),
-		);
+		let contents: string;
+		try {
+			contents = await deps.fs.readTextFile(
+				join(frozen.root, disposition.source_relative_path),
+			);
+		} catch {
+			// A staged source file readable at snapshot time became unreadable
+			// (ENOENT/EACCES/EISDIR) before this loop: return the typed drift
+			// refusal instead of letting the throw escape the contract.
+			return migrationFailure(
+				"migration_source_drift",
+				"a source file became unreadable after the frozen snapshot.",
+			);
+		}
 		if (sha256(contents) !== disposition.expected_hash) {
 			return migrationFailure(
 				"migration_source_drift",

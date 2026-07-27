@@ -268,7 +268,7 @@ describe("delivery-hook failure (R18/R19)", () => {
 		expect(result.blocked.fields_cleared).toBe(true);
 	});
 
-	test("helper-observed target drift blocks target-proof-invalid, no possible effect", async () => {
+	test("helper-observed target drift blocks target-proof-invalid; effect is possible (write-ahead honesty)", async () => {
 		const result = await deliverConfidentialFields({
 			binding: BINDING,
 			target: TARGET,
@@ -284,6 +284,46 @@ describe("delivery-hook failure (R18/R19)", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.blocked.blocked_cause).toBe("target-proof-invalid");
+		// Any failure other than helper-unavailable cannot rule out a landed write.
+		expect(result.blocked.external_effect_possible).toBe(true);
+	});
+
+	test("a mid-action helper crash reports possible effect (unknown-outcome, R19)", async () => {
+		const result = await deliverConfidentialFields({
+			binding: BINDING,
+			target: TARGET,
+			fields: ["password"],
+			tokenRetrieval: fakePort(),
+			deliver: async () => ({
+				ok: false,
+				reason: "helper-crash",
+				field_cleared: false,
+			}),
+			reproveTarget: reproveOk,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.blocked.blocked_cause).toBe("capability-loss");
+		// A crash mid-action cannot rule out that the bounded write landed.
+		expect(result.blocked.external_effect_possible).toBe(true);
+	});
+
+	test("a helper that never started (helper-unavailable) honestly claims no external effect", async () => {
+		const result = await deliverConfidentialFields({
+			binding: BINDING,
+			target: TARGET,
+			fields: ["password"],
+			tokenRetrieval: fakePort(),
+			deliver: async () => ({
+				ok: false,
+				reason: "helper-unavailable",
+				field_cleared: false,
+			}),
+			reproveTarget: reproveOk,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.blocked.blocked_cause).toBe("capability-loss");
 		expect(result.blocked.external_effect_possible).toBe(false);
 	});
 });

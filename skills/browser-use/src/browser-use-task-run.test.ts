@@ -520,4 +520,53 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			code: "task_run_handoff_lane_mismatch",
 		});
 	});
+
+	test("a missing --allowed-origin is refused BEFORE any run is created; a corrected retry proceeds", async () => {
+		const store = await makeStore();
+		const first = await runForTest(
+			[
+				"task", "run",
+				"--intent", "routine-automation",
+				"--handoff", store.handoffPath,
+				"--tab", "t7",
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+		expect(first.exitCode).toBe(2);
+		expect(parseJson(first.stdout).error).toMatchObject({
+			code: "task_run_lane_refused",
+		});
+		// The usage error must NOT have persisted a run keyed on the handoff's run
+		// id: an orphaned `running` run here would make every corrected retry with
+		// the same handoff a store_record_conflict.
+		const orphan = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(orphan.ok).toBe(false);
+		// Corrected retry with the SAME handoff: creates the run cleanly.
+		const { runtime } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [{ tabId: "t7", active: true, type: "page", url: "https://example.test/" }],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
+		]);
+		const retried = await runForTest(
+			[
+				"task", "run",
+				"--intent", "routine-automation",
+				"--handoff", store.handoffPath,
+				"--tab", "t7",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+		expect(retried.exitCode).toBe(0);
+		const run = (parseJson(retried.stdout).data as Record<string, unknown>)
+			.run as Record<string, unknown>;
+		expect(run.run_id).toBe("run-task-run-1");
+		expect(run.state).toBe("confirmed");
+	});
 });

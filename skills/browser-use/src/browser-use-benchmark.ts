@@ -13,10 +13,15 @@
 // labels the cheapest axis after the fact.
 //
 // The live driver (runBenchmarkTask / main) shells the real
-// `browser-use task run` front door once per eligible lane against a supplied
+// `browser-use task run` front door once per eligible lane against its OWN
 // Verified Handoff Envelope, so the numbers come from the same code-owned
-// contract a caller uses. When no proof-passing Warm Chrome handoff is
-// available, the driver records the gate rather than fabricating a lane result.
+// contract a caller uses. A single verified handoff attaches exactly one adapter
+// (R11), so a genuine two-lane AE12/R26 comparison needs one handoff per lane
+// (repeatable `--handoff`); each lane runs against the handoff whose attachment
+// matches it. When no proof-passing Warm Chrome handoff is available for a lane,
+// the driver records the gate rather than fabricating a lane result. One handoff
+// is the degenerate case: exactly one lane is measured, the rest are gated, and
+// no cross-lane comparison is licensed.
 //
 // Model-visible token proxy: the AE12 contract measures "model-visible tokens".
 // A caller (Codex or Claude Code) only ever reads the CLI's JSON result
@@ -292,43 +297,75 @@ export function handoffAdapterId(handoffPath: string): string | undefined {
 	}
 }
 
+/** One verified handoff supplied to the driver: its file path and the adapter
+ *  its attachment binds (R11 — one handoff attaches exactly one adapter). */
+export type BenchmarkHandoff = {
+	handoffPath: string;
+	attachedAdapter: string | undefined;
+};
+
+/** A supplied handoff whose attached adapter matches no eligible lane, reported
+ *  (not measured) so an out-of-scope handoff is visible rather than silent. */
+export type SkippedHandoff = {
+	handoffPath: string;
+	attachedAdapter: string;
+	reason: string;
+};
+
+/** The driver result: the neutral comparison plus any supplied handoffs that
+ *  matched no eligible lane and were therefore skipped. */
+export type BenchmarkDriveResult = {
+	comparison: BenchmarkComparison;
+	skipped_handoffs: readonly SkippedHandoff[];
+};
+
 /**
- * Drive the AE12 benchmark over the eligible lanes against ONE verified handoff.
- * Runs only the lane whose id matches the handoff's attachment.adapter_id (R11);
- * every other eligible lane is gated on its own matching handoff and is never
- * shelled — so a handoff_lane_mismatch refusal can never be recorded as a lane
- * cost. The task runner is injected so the gating decision is unit-testable
- * without a live browser.
+ * Drive the AE12 benchmark over the eligible lanes against a per-lane set of
+ * verified handoffs. Each lane runs against the handoff whose
+ * attachment.adapter_id matches it (R11); a lane with no matching handoff stays
+ * gated (never shelled, so a handoff_lane_mismatch refusal is never recorded as
+ * a lane cost). A supplied handoff whose adapter matches no eligible lane is
+ * reported in `skipped_handoffs`, not measured as another lane. Two lanes, each
+ * with its own matching handoff, produce two real measurements and license the
+ * cross-lane comparison. The task runner is injected so the routing is
+ * unit-testable without a live browser.
  */
 export function driveBenchmark(input: {
-	handoffPath: string;
+	handoffs: readonly BenchmarkHandoff[];
 	taskLabel: string;
 	browserUseEntry: string;
-	attachedAdapter: string | undefined;
 	runTask: (args: {
 		browserUseEntry: string;
 		handoffPath: string;
 		lane_id: string;
 		intent: string;
 	}) => LiveTaskRunResult;
-}): BenchmarkComparison {
+}): BenchmarkDriveResult {
 	const samples: BenchmarkSample[] = [];
 	const gatedLanes: { lane_id: string; intent: string; reason: string }[] = [];
+	const matchedHandoffPaths = new Set<string>();
+
 	for (const lane of AE12_ELIGIBLE_LANES) {
-		if (lane.lane_id !== input.attachedAdapter) {
+		const match = input.handoffs.find(
+			(handoff) => handoff.attachedAdapter === lane.lane_id,
+		);
+		if (match === undefined) {
+			const anyReadable = input.handoffs.some(
+				(handoff) => handoff.attachedAdapter !== undefined,
+			);
 			gatedLanes.push({
 				lane_id: lane.lane_id,
 				intent: lane.intent,
-				reason:
-					input.attachedAdapter === undefined
-						? "the supplied --handoff has no readable attachment.adapter_id; supply a verified handoff for this lane"
-						: `the supplied --handoff attaches ${input.attachedAdapter}; this lane needs its own matching handoff (browser-use never substitutes a lane)`,
+				reason: anyReadable
+					? `no supplied --handoff attaches ${lane.lane_id}; this lane needs its own matching handoff (browser-use never substitutes a lane)`
+					: "no supplied --handoff has a readable attachment.adapter_id; supply a verified handoff for this lane",
 			});
 			continue;
 		}
+		matchedHandoffPaths.add(match.handoffPath);
 		const live = input.runTask({
 			browserUseEntry: input.browserUseEntry,
-			handoffPath: input.handoffPath,
+			handoffPath: match.handoffPath,
 			lane_id: lane.lane_id,
 			intent: lane.intent,
 		});
@@ -343,26 +380,64 @@ export function driveBenchmark(input: {
 			...(receipt.run_state !== undefined ? { run_state: receipt.run_state } : {}),
 		});
 	}
-	return compareBenchmark(input.taskLabel, samples, gatedLanes);
+
+	const eligibleLaneIds = new Set(AE12_ELIGIBLE_LANES.map((l) => l.lane_id));
+	const skippedHandoffs: SkippedHandoff[] = [];
+	for (const handoff of input.handoffs) {
+		if (matchedHandoffPaths.has(handoff.handoffPath)) continue;
+		if (handoff.attachedAdapter === undefined) continue;
+		if (eligibleLaneIds.has(handoff.attachedAdapter)) continue;
+		skippedHandoffs.push({
+			handoffPath: handoff.handoffPath,
+			attachedAdapter: handoff.attachedAdapter,
+			reason: `attaches ${handoff.attachedAdapter}, which is not an AE12 eligible lane; skipped (not measured)`,
+		});
+	}
+
+	return {
+		comparison: compareBenchmark(input.taskLabel, samples, gatedLanes),
+		skipped_handoffs: skippedHandoffs,
+	};
 }
 
 // --- CLI entrypoint ---------------------------------------------------------
 
+/** Collect every `--handoff <path>` occurrence from argv (repeatable, one per
+ *  lane). Skips a trailing `--handoff` with no following value. */
+export function collectHandoffPaths(args: readonly string[]): string[] {
+	const paths: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] !== "--handoff") continue;
+		const value = args[i + 1];
+		if (value === undefined || value.startsWith("--")) continue;
+		paths.push(value);
+		i++;
+	}
+	return paths;
+}
+
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
-	const handoffIndex = args.indexOf("--handoff");
+	const handoffPaths = collectHandoffPaths(args);
 	const browserUseEntry =
 		new URL("./browser-use.ts", import.meta.url).pathname;
 
-	if (args.includes("--help") || handoffIndex === -1) {
+	if (args.includes("--help") || handoffPaths.length === 0) {
 		process.stdout.write(
 			[
 				"AE12 token-efficiency benchmark (release contract R26).",
 				"",
 				"Usage:",
-				"  bun browser-use-benchmark.ts --handoff <verified-handoff.json> [--task-label <label>]",
+				"  bun browser-use-benchmark.ts --handoff <verified-handoff.json> [--handoff <another.json> ...] [--task-label <label>]",
 				"",
-				"Prerequisite: mint a Verified Handoff Envelope for the lane under test with",
+				"Repeat --handoff once per lane: a single verified handoff attaches exactly",
+				"one adapter (R11), so a genuine two-lane comparison needs one handoff per",
+				"lane. Each lane runs against the handoff whose attachment.adapter_id matches",
+				"it; a lane with no matching handoff stays gated, and a handoff matching no",
+				"eligible lane is reported and skipped. One handoff is the degenerate case:",
+				"one lane measured, the rest gated, no cross-lane comparison licensed.",
+				"",
+				"Prerequisite: mint a Verified Handoff Envelope for each lane under test with",
 				"  browser-connect connect <adapter> --json",
 				"against a proof-passing Warm Chrome. Without one, task run cannot execute and",
 				"this harness records the gate instead of fabricating a lane result.",
@@ -374,25 +449,30 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	const handoffPath = args[handoffIndex + 1] as string;
 	const labelIndex = args.indexOf("--task-label");
 	const taskLabel =
 		labelIndex === -1
 			? "bounded read-only localhost snapshot/console-read"
 			: (args[labelIndex + 1] as string);
 
-	// R11: a single verified handoff attaches exactly one adapter, and the
-	// task-run router refuses any lane whose id != that adapter (handoff_lane_
-	// mismatch). driveBenchmark runs only the matching lane and gates the rest, so
-	// a refusal envelope is never recorded as a measured lane cost.
-	const comparison = driveBenchmark({
+	// R11: each verified handoff attaches exactly one adapter, and the task-run
+	// router refuses any lane whose id != that adapter (handoff_lane_mismatch).
+	// driveBenchmark runs each lane against its own matching handoff and gates the
+	// rest, so a refusal envelope is never recorded as a measured lane cost. Two
+	// matching handoffs yield two real measurements and license the comparison.
+	const handoffs: BenchmarkHandoff[] = handoffPaths.map((handoffPath) => ({
 		handoffPath,
+		attachedAdapter: handoffAdapterId(handoffPath),
+	}));
+	const { comparison, skipped_handoffs } = driveBenchmark({
+		handoffs,
 		taskLabel,
 		browserUseEntry,
-		attachedAdapter: handoffAdapterId(handoffPath),
 		runTask: runBenchmarkTask,
 	});
-	process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
+	process.stdout.write(
+		`${JSON.stringify({ ...comparison, skipped_handoffs }, null, 2)}\n`,
+	);
 	process.stdout.write(`\n${renderComparisonTable(comparison)}\n`);
 }
 

@@ -459,17 +459,22 @@ function cleanupChoreographyEvents(): BrowserUseAuthTransactionEvent[] {
 
 /**
  * Prove the FSM choreography for one delivery dimension holds at contract
- * level. Returns whether every step was legal AND (for terminal choreographies)
- * the transaction reached the expected terminal shape. A failure here is a
- * `choreography-illegal-transition` nonconformance, not a gate.
+ * level for the lane under test — the transaction is driven through the shared
+ * U2 FSM under THIS lane's binding, so the verdict belongs to `laneId`, not a
+ * borrowed one. Returns whether every step was legal AND (for terminal
+ * choreographies) the transaction reached the expected terminal shape. A
+ * failure here is a `choreography-illegal-transition` nonconformance, not a gate.
  */
-function checkChoreography(dimension: BrowserUseConformanceDimension): {
+function checkChoreography(
+	laneId: BrowserUseAdapterLaneId,
+	dimension: BrowserUseConformanceDimension,
+): {
 	passed: boolean;
 } {
 	switch (dimension) {
 		case "password-delivery": {
 			const result = driveChoreography(
-				"agent-browser",
+				laneId,
 				"password",
 				passwordChoreographyEvents(),
 			);
@@ -482,7 +487,7 @@ function checkChoreography(dimension: BrowserUseConformanceDimension): {
 		}
 		case "current-otp-delivery": {
 			const result = driveChoreography(
-				"agent-browser",
+				laneId,
 				"otp",
 				otpChoreographyEvents(),
 			);
@@ -495,7 +500,7 @@ function checkChoreography(dimension: BrowserUseConformanceDimension): {
 		}
 		case "session-reuse": {
 			const result = driveChoreography(
-				"agent-browser",
+				laneId,
 				"session-reuse",
 				sessionReuseChoreographyEvents(),
 			);
@@ -508,7 +513,7 @@ function checkChoreography(dimension: BrowserUseConformanceDimension): {
 		}
 		case "human-continuation": {
 			const result = driveChoreography(
-				"agent-browser",
+				laneId,
 				"user-presence",
 				humanContinuationEvents(),
 			);
@@ -522,7 +527,7 @@ function checkChoreography(dimension: BrowserUseConformanceDimension): {
 		}
 		case "cleanup": {
 			const result = driveChoreography(
-				"agent-browser",
+				laneId,
 				"password",
 				cleanupChoreographyEvents(),
 			);
@@ -569,14 +574,17 @@ function checkContainment(): { passed: boolean } {
 }
 
 /**
- * Prove the restart/resume rule (R19/AE11): an in-flight write-ahead fragment
- * resumes as unknown-post-submit-state (the consumed attempt stays consumed); a
- * clean active fragment resumes at pre-auth proof; a blocked fragment is
- * preserved verbatim. All three arms run.
+ * Prove the restart/resume rule (R19/AE11) for the lane under test: an in-flight
+ * write-ahead fragment resumes as unknown-post-submit-state (the consumed
+ * attempt stays consumed); a clean active fragment resumes at pre-auth proof; a
+ * blocked fragment is preserved verbatim. All three arms run under THIS lane's
+ * binding, so the verdict belongs to `laneId`.
  */
-function checkRestartResume(): { passed: boolean } {
+function checkRestartResume(laneId: BrowserUseAdapterLaneId): {
+	passed: boolean;
+} {
 	// In-flight arm: drive to a dispatched submission, then resume.
-	const inFlight = driveChoreography("agent-browser", "password", [
+	const inFlight = driveChoreography(laneId, "password", [
 		{ type: "pre-auth-proved" },
 		{ type: "preparation-complete" },
 		{ type: "lease-granted" },
@@ -596,7 +604,7 @@ function checkRestartResume(): { passed: boolean } {
 		return { passed: false };
 	}
 	// Clean active arm: a fragment before any submission restarts at pre-auth.
-	const cleanActive = driveChoreography("agent-browser", "password", [
+	const cleanActive = driveChoreography(laneId, "password", [
 		{ type: "pre-auth-proved" },
 		{ type: "preparation-complete" },
 	]);
@@ -610,7 +618,7 @@ function checkRestartResume(): { passed: boolean } {
 		return { passed: false };
 	}
 	// Blocked arm: a blocked fragment is preserved verbatim on resume.
-	const blocked = driveChoreography("agent-browser", "password", [
+	const blocked = driveChoreography(laneId, "password", [
 		{ type: "blocked", cause: "target-proof-invalid" },
 	]);
 	if (!blocked.ok) return { passed: false };
@@ -627,15 +635,19 @@ function checkRestartResume(): { passed: boolean } {
  * Prove transaction invalidation at contract level (R14 revocation / lane
  * resume safety): a revoked binding blocks in preparation and cannot proceed to
  * delivery, and a target-proof loss forces a re-prove restart rather than a
- * silent resume into a stale sensitive interval. This is the contract-provable
+ * silent resume into a stale sensitive interval. Driven under THIS lane's
+ * binding, so the verdict belongs to `laneId`. This is the contract-provable
  * half of revocation and lane-resume; the live half stays gated.
  */
-function checkInvalidation(dimension: BrowserUseConformanceDimension): {
+function checkInvalidation(
+	laneId: BrowserUseAdapterLaneId,
+	dimension: BrowserUseConformanceDimension,
+): {
 	passed: boolean;
 } {
 	if (dimension === "revocation") {
 		// A revoked binding raised in preparation must block, never deliver.
-		const result = driveChoreography("agent-browser", "password", [
+		const result = driveChoreography(laneId, "password", [
 			{ type: "pre-auth-proved" },
 			{ type: "blocked", cause: "revoked-binding" },
 		]);
@@ -648,7 +660,7 @@ function checkInvalidation(dimension: BrowserUseConformanceDimension): {
 	}
 	// lane-resume: a target-proof loss inside the sensitive interval blocks, and
 	// its resolution restarts at pre-auth (never resumes into a stale interval).
-	const blocked = driveChoreography("agent-browser", "password", [
+	const blocked = driveChoreography(laneId, "password", [
 		{ type: "pre-auth-proved" },
 		{ type: "preparation-complete" },
 		{ type: "lease-granted" },
@@ -720,20 +732,27 @@ function integrityDigestFor(
 }
 
 /**
- * Run the contract-level check for one dimension. `containment` and
- * `restart-resume` are lane-independent transaction properties; the delivery
- * and invalidation dimensions run their own owner. Returns pass/fail; the
- * caller decides conformant vs nonconformant.
+ * Run the contract-level check for one lane × dimension. Every proof drives the
+ * shared U2 FSM under THIS lane's binding, so the pass/fail is the lane's own
+ * verdict — no cell borrows another lane's result. The containment sweep is a
+ * transaction-guard property with no lane-specific binding, so cleanup composes
+ * it as a second gate. Returns pass/fail; the caller decides conformant vs
+ * nonconformant.
  */
-function runContractCheck(dimension: BrowserUseConformanceDimension): {
+function runContractCheck(
+	laneId: BrowserUseAdapterLaneId,
+	dimension: BrowserUseConformanceDimension,
+): {
 	passed: boolean;
 } {
 	const proofKind = DIMENSION_PROOF_KIND[dimension];
-	if (proofKind === "restart-resume-rule") return checkRestartResume();
-	if (proofKind === "transaction-invalidation") return checkInvalidation(dimension);
+	if (proofKind === "restart-resume-rule") return checkRestartResume(laneId);
+	if (proofKind === "transaction-invalidation") {
+		return checkInvalidation(laneId, dimension);
+	}
 	// choreography — cleanup shares the containment sweep as a second gate so a
 	// conformant cleanup also proves no sentinel escaped the cleared field.
-	const choreography = checkChoreography(dimension);
+	const choreography = checkChoreography(laneId, dimension);
 	if (dimension === "cleanup") {
 		const containment = checkContainment();
 		return { passed: choreography.passed && containment.passed };
@@ -806,11 +825,11 @@ function decideCell(
 		// The choreography must still hold at contract level; a lane whose FSM
 		// shape is broken is nonconformant, not merely unproven. Only a passing
 		// shape earns the honest "proven-shape, unproven-live" gate.
-		const check = runContractCheck(dimension);
+		const check = runContractCheck(laneId, dimension);
 		if (!check.passed) return decidedCell(laneId, dimension, false, input);
 		return unprovenCell(laneId, dimension, deliveryGate);
 	}
-	const check = runContractCheck(dimension);
+	const check = runContractCheck(laneId, dimension);
 	return decidedCell(laneId, dimension, check.passed, input);
 }
 

@@ -248,10 +248,12 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 		async realpath(path) {
 			try {
 				return await fsRealpath(path);
-			} catch (error) {
-				const code = (error as { code?: string }).code;
-				if (code === "ENOENT" || code === "ENOTDIR") return undefined;
-				throw error;
+			} catch {
+				// ENOENT/ENOTDIR (dangling), ELOOP (symlink cycle), EACCES
+				// (unreadable ancestor), and every other resolution failure mean the
+				// link target cannot be proven safe; undefined maps to the typed
+				// symlink refusal upstream instead of escaping as an uncaught throw.
+				return undefined;
 			}
 		},
 		async mkdir(path, options) {
@@ -497,7 +499,15 @@ async function admitSymlinkAncestor(
 	if (processUid !== undefined && linkStat.uid !== processUid) {
 		return symlinkRefusal;
 	}
-	const resolved = await fs.realpath(linkPrefix);
+	// Any realpath failure (dangling target, ELOOP cycle, EACCES) is the typed
+	// refusal, never an uncaught throw — injected adapters may still throw
+	// where the default adapter maps failures to undefined.
+	let resolved: string | undefined;
+	try {
+		resolved = await fs.realpath(linkPrefix);
+	} catch {
+		resolved = undefined;
+	}
 	if (resolved === undefined) return symlinkRefusal;
 	const targetStat = await fs.lstat(resolved);
 	// The resolved target must exist and be owned by the invoking user; a
@@ -540,9 +550,13 @@ async function validateExistingBrowserUseRoot(
 				processUid,
 			);
 			if (!admitted.ok) return admitted;
-			// Segments still to walk are everything below the symlink; re-root
-			// them under the resolved target.
-			const remaining = componentPrefixes(path)
+			// Segments still to walk are everything below the symlink in the
+			// CURRENT prefix list (already anchored at the last resolved base) —
+			// never recomputed from the original path. After a re-root the
+			// original path's indices no longer line up; walking that wrong chain
+			// would wander onto non-existent paths and skip the owner/0700 checks
+			// on the real root.
+			const remaining = prefixes
 				.slice(index + 1)
 				.map((full) => full.split(sep).slice(-1)[0] as string);
 			const rebuilt: string[] = [admitted.resolved];

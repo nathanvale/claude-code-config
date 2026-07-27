@@ -1,14 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import type { AgentBrowserExecutionRuntime } from "./browser-use-agent-browser";
-import { createDefaultPlatformFs } from "./browser-use-paths";
+import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-use-paths";
 import {
+	BrowserUseShippedRunbooksMissingError,
 	listRunbooks,
 	runRunbook,
 	runbooksRoot,
+	shippedRunbooksRoot,
 	showRunbook,
 } from "./browser-use-runbook";
 import {
@@ -570,6 +580,54 @@ describe("runbook discovery over the XDG data root", () => {
 			expect(shown.ok).toBe(false);
 			if (shown.ok) return;
 			expect(shown.failure.code).toBe("runbook_record_corrupt");
+		}),
+	);
+});
+
+// --- Shipped catalog resolution (packaging invariant) ------------------------
+
+describe("shipped runbooks root resolution", () => {
+	test("resolves to an existing directory containing the seed runbook", () => {
+		const root = shippedRunbooksRoot();
+		expect(existsSync(root)).toBe(true);
+		expect(statSync(root).isDirectory()).toBe(true);
+		const seed = join(
+			root,
+			"oncore",
+			"timesheet-snapshot-verify",
+			"runbook.json",
+		);
+		expect(existsSync(seed)).toBe(true);
+		const parsed = JSON.parse(readFileSync(seed, "utf8")) as {
+			service_id: string;
+			flow_id: string;
+		};
+		expect(parsed.service_id).toBe("oncore");
+		expect(parsed.flow_id).toBe("timesheet-snapshot-verify");
+	});
+
+	test(
+		"list throws a typed diagnostic when the shipped root is missing",
+		withDataRoot(async (dataRoot) => {
+			const real = createDefaultPlatformFs();
+			const shippedRoot = shippedRunbooksRoot();
+			// Simulate a packaged bin whose dist/runbooks/ was dropped: the shipped
+			// root reports absent, everything else behaves normally.
+			const fs: BrowserUsePlatformFs = {
+				...real,
+				lstat: async (path) =>
+					path === shippedRoot ? undefined : real.lstat(path),
+			};
+			await expect(listRunbooks(fs, dataRoot)).rejects.toBeInstanceOf(
+				BrowserUseShippedRunbooksMissingError,
+			);
+			try {
+				await listRunbooks(fs, dataRoot);
+			} catch (error) {
+				expect(
+					(error as BrowserUseShippedRunbooksMissingError).code,
+				).toBe("runbook_shipped_root_missing");
+			}
 		}),
 	);
 });

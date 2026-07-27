@@ -319,12 +319,15 @@ export async function deliverConfidentialFields(
 			target: input.target,
 		});
 		if (!action.ok) {
-			// (6) Honest external-effect + cleared-field truth (R18/R19). A write
-			// that may have landed is external_effect_possible; the helper reports
-			// whether it cleared the field. Target drift observed inside the helper
-			// is target-proof-invalid; every other helper failure is capability
-			// loss with an honest possible-effect flag.
-			const possible = action.reason === "field-write-failed";
+			// (6) Honest external-effect + cleared-field truth (R18/R19). Any
+			// unknown-outcome failure is reported as possibly-landed: a
+			// field-write-failed or a mid-action helper-crash cannot rule out that
+			// the bounded write reached the field. Only helper-unavailable (the
+			// helper never started) can honestly claim no external effect. The
+			// helper reports whether it cleared the field. Target drift observed
+			// inside the helper is target-proof-invalid; every other helper failure
+			// is capability loss with an honest possible-effect flag.
+			const possible = action.reason !== "helper-unavailable";
 			const cause: BrowserUseAuthBlockedCause =
 				action.reason === "target-drift" ? "target-proof-invalid" : "capability-loss";
 			return blockedOf(cause, possible, action.field_cleared);

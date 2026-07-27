@@ -1,11 +1,26 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
+	type AgentBrowserAuthDeliveryContext,
 	type AgentBrowserExecutionRuntime,
 	type AgentBrowserVerifiedHandoff,
 	executeAgentBrowserTask,
 } from "./browser-use-agent-browser";
 import { commitAuthTransaction } from "./browser-use-auth";
+import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
+import { createBrowserUseAuthProvider } from "./browser-use-auth-provider";
+import { __confidentialDeliveryDriverForTest } from "./browser-use";
+import type {
+	BrowserUseDeliveryHook,
+	BrowserUseTargetReproof,
+	BrowserUseVerifiedTarget,
+} from "./browser-use-confidential-field-delivery";
+import type {
+	BrowserUseOpCredentialField,
+	BrowserUseSecretHandle,
+	BrowserUseTokenRetrievalPort,
+} from "./browser-use-op";
+import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 import {
 	type BrowserUseAuthTransactionEvent,
 	applyAuthTransition,
@@ -297,6 +312,114 @@ function noopHelper(): DeliveryHelperFake {
 	};
 }
 
+// --- Real failed-delivery crash fixtures ------------------------------------
+// The crash path is driven THROUGH the code under test: a sentinel-bearing
+// field is delivered, then a later field's delivery hook returns a TYPED
+// helper-crash outcome (browser-use-confidential-field-delivery.ts models a
+// helper crash as `ok: false, reason: "helper-crash"`, never a JS throw). The
+// executor's failure branch carries the prior delivery evidence so the run
+// still turns sensitive, and the SUT emits a real blocked failure envelope.
+const {
+	runScopedSentinelNonce,
+	markGuardForDeliveryOutcome,
+	collectRunGovernedSurfaces,
+} = __confidentialDeliveryDriverForTest;
+
+const CRASH_BINDING: BrowserUseItemBinding = {
+	service_id: "oncore",
+	auth_context: "interactive-login",
+	allowed_origins: ["https://oncore.test"],
+	allowed_login_paths: [],
+	vault_id: "vault-1",
+	item_id: "item-1",
+	allowed_auth_methods: ["password", "otp"],
+	binding_revision: 1,
+};
+
+function crashVerifiedTarget(runId: string): BrowserUseVerifiedTarget {
+	return {
+		lane_id: "agent-browser",
+		run_id: runId,
+		top_level_origin: "https://oncore.test",
+		frame_origin: "https://oncore.test",
+		target_id: "target-1",
+		page_id: "page-1",
+		frame_id: "frame-1",
+		account_ref: "acct-ref-redacted",
+		target_proof_digest: "d".repeat(32),
+	};
+}
+
+const crashReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
+	proven: true,
+	observed_digest: target.target_proof_digest,
+});
+
+// An opaque-handle-only TokenRetrievalPort (never bytes).
+const crashPort: BrowserUseTokenRetrievalPort = {
+	listVaults: async () => ({ ok: true, vaults: [] }),
+	listLoginItems: async () => ({ ok: true, items: [] }),
+	getLoginItem: async () => ({
+		ok: false,
+		rejection: { code: "item-missing", message: "n/a" },
+	}),
+	fetchCredentialField: async (
+		input,
+	): Promise<{ ok: true; handle: BrowserUseSecretHandle }> => ({
+		ok: true,
+		handle: {
+			handle_id: `handle-${input.field}`,
+			field: input.field,
+			expires_at_epoch_ms: 9_999_999,
+		},
+	}),
+};
+
+// A delivery hook that delivers the FIRST field with its sentinel value, then
+// returns a TYPED helper-crash outcome for the OTP field — the real mid-delivery
+// failure the production choreography models. `observed` records the bytes the
+// disposable helper touched, exactly as the real helper's process boundary would.
+function crashHelper(
+	sentinelValue: Readonly<Record<BrowserUseOpCredentialField, string>>,
+): { hook: BrowserUseDeliveryHook; observed: string[] } {
+	const observed: string[] = [];
+	const hook: BrowserUseDeliveryHook = async (input) => {
+		const value = sentinelValue[input.field];
+		observed.push(value);
+		if (input.field === "otp-current") {
+			// Helper crashed mid-action AFTER touching the field: field cleared,
+			// external effect possible. Typed outcome, not a JS throw.
+			return { ok: false, reason: "helper-crash", field_cleared: true };
+		}
+		return { ok: true, shape: { field: input.field, byte_length: value.length } };
+	};
+	return { hook, observed };
+}
+
+function buildCrashContext(
+	deps: RunStoreDeps,
+	runId: string,
+	hook: BrowserUseDeliveryHook,
+): AgentBrowserAuthDeliveryContext {
+	const provider = createBrowserUseAuthProvider({
+		store: deps,
+		tokenRetrieval: crashPort,
+		attestationByDigest: () => undefined,
+	});
+	return provider.buildAgentBrowserDeliveryContext({
+		binding: CRASH_BINDING,
+		target: crashVerifiedTarget(runId),
+		deliver: hook,
+		reproveTarget: crashReproveOk,
+		field_by_ref: { "@e2": "password", "@e3": "otp-current" },
+		in_sensitive_interval: true,
+	});
+}
+
+function crashAdapterSuccess(data: unknown): string {
+	return JSON.stringify({ success: true, data, error: null });
+}
+
 describe("value-aware leak harness (AE5)", () => {
 	test("a full sensitive flow leaves every governed surface sentinel-free", async () => {
 		const clock = fixedClock();
@@ -358,84 +481,162 @@ describe("value-aware leak harness (AE5)", () => {
 		}
 	});
 
-	test("a step that throws mid-delivery still leaves surfaces clean (crash path)", async () => {
+	test("a REAL mid-delivery helper crash still leaves every SUT-produced surface clean (crash path)", async () => {
+		// The crash is driven THROUGH the code under test, not hand-thrown. A
+		// sentinel-bearing password field is delivered, then the OTP field's
+		// delivery hook returns the TYPED helper-crash outcome the production
+		// choreography models. deliverConfidentialFields blocks capability-loss;
+		// executeAgentBrowserTask returns a REAL agent_browser_confidential_delivery_
+		// blocked failure whose `delivery` slot carries the prior password shape, so
+		// the run still turns sensitive. Every surface swept below is bytes the SUT
+		// produced on that real failure — the returned failure envelope and the run.json
+		// read back off the real temp-XDG store — never a test literal.
+		const RUN = "run-leak-harness-crash";
 		const clock = fixedClock();
 		const deps = await makeDeps(clock.now);
-		const helper = noopHelper();
 
-		// Drive the flow up to and including the sentinel password fill, then a
-		// crash strikes during submission. The transaction FSM records the
-		// write-ahead marker; nothing secret is ever persisted.
-		let fragment: BrowserUseAuthTransactionFragment;
-		let crashText: string;
-		try {
-			fragment = runRepresentativeAuthFlow(helper, [
-				{ type: "pre-auth-proved" },
-				{ type: "preparation-complete" },
-				{ type: "lease-granted" },
-				{ type: "method-step-complete", step: "identify-auth-state" },
-				{ type: "method-step-complete", step: "fill-username" },
-				{ type: "method-step-complete", step: "submit-username" },
-				{ type: "method-step-complete", step: "reprove-target" },
-				{ type: "method-step-complete", step: "fill-password" },
-				{ type: "submission-dispatched" },
-			]);
-			// Simulate the delivery step throwing AFTER the helper touched the
-			// password: the thrown error must NOT carry the raw value.
-			throw new Error(
-				`confidential field delivery failed mid-action for run run-leak-harness (field cleared, attempt consumed)`,
-			);
-		} catch (error) {
-			// The crash surface is whatever text the crash produced. A correct
-			// implementation never interpolates the raw value into it.
-			crashText = error instanceof Error ? error.message : String(error);
-			// Recompute the fragment WITHOUT the throw so we can also sweep the
-			// persisted (write-ahead) fragment bytes.
-			fragment = runRepresentativeAuthFlow(noopHelper(), [
-				{ type: "pre-auth-proved" },
-				{ type: "preparation-complete" },
-				{ type: "lease-granted" },
-				{ type: "method-step-complete", step: "identify-auth-state" },
-				{ type: "method-step-complete", step: "fill-username" },
-				{ type: "method-step-complete", step: "submit-username" },
-				{ type: "method-step-complete", step: "reprove-target" },
-				{ type: "method-step-complete", step: "fill-password" },
-				{ type: "submission-dispatched" },
-			]);
-		}
+		// Conformance sentinels under the DRIVER'S own run-scoped nonce, so the
+		// delivered password value equals the marker the driver's sweep derives from
+		// the SUT-produced delivered_shapes. A clean sweep is therefore meaningful.
+		const runNonce = runScopedSentinelNonce(RUN);
+		const PASS = deriveConformanceSentinel("password", runNonce);
+		const OTP = deriveConformanceSentinel("otp-current", runNonce);
+		expect(PASS.ok && OTP.ok).toBe(true);
+		if (!(PASS.ok && OTP.ok)) return;
+		const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+			username: PASS.value,
+			password: PASS.value,
+			"otp-current": OTP.value,
+		};
 
-		expect(helper.observed).toContain(SENTINELS.password);
-		expect(fragment.submission_started).toBe(true);
+		const { hook, observed } = crashHelper(sentinelValue);
+		// tab list, tab select, snapshot(@e2/@e3), then the password fill's
+		// post-auth-proof postcondition check. The OTP fill crashes inside the
+		// helper before any post-auth proof, so no further runtime call is needed.
+		let index = 0;
+		const responses = [
+			crashAdapterSuccess({
+				tabs: [
+					{ tabId: "t1", active: true, type: "page", url: "https://oncore.test/login" },
+				],
+			}),
+			crashAdapterSuccess({}),
+			crashAdapterSuccess({
+				snapshot: "@e2 textbox password @e3 textbox otp",
+				refs: { e2: {}, e3: {} },
+			}),
+			// post-auth proof for the delivered password fill (value-equals):
+			crashAdapterSuccess({ value: "•••" }),
+			// fresh snapshot required before the OTP fill (refs discarded post-delivery):
+			crashAdapterSuccess({
+				snapshot: "@e3 textbox otp",
+				refs: { e3: {} },
+			}),
+		];
+		const runtime: AgentBrowserExecutionRuntime = {
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: responses[index++] ?? crashAdapterSuccess({}),
+				stderr: "",
+			}),
+		};
 
-		const storeBytes = await persistAndReadStoreBytes(
-			deps,
-			"run-leak-harness-crash",
-			fragment,
-		);
-
-		const guard = beginSensitiveRunGuard("run-leak-harness-crash");
-		if (!guard.ok) throw new Error("guard begin");
-		const marked = markRunSensitive(guard.guard, {
-			trigger: "confidential-field-delivery",
-			sentinels: ALL_SENTINELS,
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: RUN,
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: buildCrashContext(deps, RUN, hook),
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+				// A confidential delivery discards stale refs (R22), so a fresh
+				// task-local snapshot is required before the OTP fill.
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e3",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=otp]",
+						value: "•••",
+					},
+				},
+			],
 		});
-		if (!marked.ok) throw new Error("guard mark");
 
+		// The SUT produced a REAL failed-delivery result on the helper crash. The
+		// delivery hook (the disposable-helper stand-in) is the ONLY thing that saw
+		// sentinel bytes; the executor never observed a value.
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.code).toBe("agent_browser_confidential_delivery_blocked");
+		expect(observed).toContain(sentinelValue.password);
+		expect(observed).toContain(sentinelValue["otp-current"]);
+		// The prior password delivery rides the failure so the run turns sensitive.
+		expect(result.delivery?.delivered_shapes).toEqual([
+			{ field: "password", byte_length: sentinelValue.password.length },
+		]);
+
+		// Mark the run sensitive through the DRIVER'S own seam over the SUT-produced
+		// delivery evidence — the exact path a real crashed delivery follows.
+		const baseGuard = beginSensitiveRunGuard(RUN);
+		if (!baseGuard.ok) throw new Error("guard begin");
+		const markedOutcome = markGuardForDeliveryOutcome(baseGuard.guard, result);
+		expect(markedOutcome.ok).toBe(true);
+		if (!markedOutcome.ok) return;
+		const sensitiveGuard = markedOutcome.guard;
+		expect(sensitiveGuard?.sensitive).toBe(true);
+		expect(sensitiveGuard?.trigger).toBe("confidential-field-delivery");
+		if (sensitiveGuard === undefined) return;
+
+		// Persist a run through the real store so there are real on-disk bytes to
+		// read back (the same real integration port the other cases exercise).
+		const fragment = runRepresentativeAuthFlow(noopHelper(), [
+			{ type: "pre-auth-proved" },
+			{ type: "preparation-complete" },
+			{ type: "lease-granted" },
+			{ type: "method-step-complete", step: "identify-auth-state" },
+			{ type: "method-step-complete", step: "fill-username" },
+			{ type: "method-step-complete", step: "submit-username" },
+			{ type: "method-step-complete", step: "reprove-target" },
+			{ type: "method-step-complete", step: "fill-password" },
+			{ type: "submission-dispatched" },
+		]);
+		await persistAndReadStoreBytes(deps, RUN, fragment);
+
+		// Sweep bytes the SUT emitted on the real failure: the returned failure
+		// envelope and the run.json read back off disk through the driver's own
+		// surface collector.
+		const failureEnvelope = JSON.stringify(result);
 		const surfaces: BrowserUseGovernedSurface[] = [
-			{ kind: "crash-surface", label: "delivery-error", content: crashText },
-			{ kind: "run-store-file", label: "run.json", content: storeBytes },
 			{
 				kind: "crash-surface",
-				label: "serialized-fragment-on-crash",
-				content: JSON.stringify(fragment),
+				label: "confidential-delivery-blocked-envelope",
+				content: failureEnvelope,
 			},
+			...(await collectRunGovernedSurfaces(deps, RUN)),
 		];
+		expect(surfaces.some((s) => s.kind === "run-store-file")).toBe(true);
 
-		const gate = assertContainmentBeforeRelease(marked.guard, surfaces);
+		const gate = assertContainmentBeforeRelease(sensitiveGuard, surfaces);
 		expect(gate.release).toBe(true);
-		for (const sentinel of ALL_SENTINELS) {
-			expect(crashText).not.toContain(sentinel);
-			expect(storeBytes).not.toContain(sentinel);
+		// Belt-and-braces: every SUT-produced surface is sentinel-free.
+		for (const surface of surfaces) {
+			expect(surface.content).not.toContain(sentinelValue.password);
+			expect(surface.content).not.toContain(sentinelValue["otp-current"]);
 		}
 	});
 

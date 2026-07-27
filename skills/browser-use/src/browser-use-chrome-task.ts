@@ -46,6 +46,7 @@ import type { BrowserUseRuntime } from "./browser-use-runtime";
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
 const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const SAFE_INSIGHT_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * Bounded reconnect budget for the connection-establishment phase only (R23,
@@ -809,6 +810,20 @@ async function runOperation(
 					"chrome_task_artifact_dir_required",
 					"not-achieved",
 					"A Lighthouse-capable insight analysis produces a native artifact and requires an artifact directory; the driver must create one before dispatch.",
+					executedSoFar,
+				),
+			};
+		}
+		// insight_name is caller-supplied and lands verbatim in the artifact path
+		// below; a value with `/` or `..` would escape the run artifact directory.
+		// Bound it to a safe identifier BEFORE it reaches the path.
+		if (!SAFE_INSIGHT_NAME.test(op.insight_name)) {
+			return {
+				kind: "failure",
+				failure: failure(
+					"chrome_task_invalid",
+					"not-achieved",
+					"The requested insight name is not a bounded safe identifier.",
 					executedSoFar,
 				),
 			};

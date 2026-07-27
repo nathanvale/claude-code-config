@@ -2191,6 +2191,42 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	}
 	const route = routed.route;
 
+	// Validate lane inputs BEFORE binding the durable run. A usage error must
+	// never create (or poison) a shared run keyed on the handoff's run id: the
+	// caller corrects the flag and retries with the SAME handoff, so a run
+	// persisted here would make every retry a store_record_conflict and orphan a
+	// stray `running` run in the store.
+	//
+	// An intent requiring an allowed origin cannot dispatch without one; the
+	// baseline snapshot task needs an origin to bound the executor (R6).
+	if (allowedOrigin === undefined) {
+		return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+			code: "task_run_lane_refused",
+			message:
+				"the selected lane task requires --allowed-origin <origin> to bound execution to one exact HTTP(S) origin.",
+			actionId: "change_task_run_input",
+			exitCode: USAGE_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	// A numeric page id is required on the chrome lane: chrome-devtools-mcp keys
+	// pages by the numeric ordering from list_pages, not a string tab id. --tab
+	// must parse to a non-negative integer; default 0 (the first/selected page).
+	let chromePageId: number | undefined;
+	if (route.lane_id === "chrome-devtools-mcp") {
+		chromePageId = parseTabPageId(stringField(flags["--tab"]));
+		if (chromePageId === undefined) {
+			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+				code: "task_run_lane_refused",
+				message:
+					"the chrome-devtools-mcp lane addresses pages by numeric id from list_pages; pass --tab <non-negative integer> (default 0).",
+				actionId: "change_task_run_input",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+	}
+
 	// Bind the run: resume the existing one (proving same-lane, same-profile,
 	// R28/R11) or create a fresh one now that routing admitted the lane (R23).
 	let run: BrowserUseSharedRun;
@@ -2242,19 +2278,6 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		? guardResult.guard
 		: undefined;
 
-	// An intent requiring an allowed origin cannot dispatch without one; the
-	// baseline snapshot task needs an origin to bound the executor (R6).
-	if (allowedOrigin === undefined) {
-		return emitTaskRunFailure(input, run.run_id, {
-			code: "task_run_lane_refused",
-			message:
-				"the selected lane task requires --allowed-origin <origin> to bound execution to one exact HTTP(S) origin.",
-			actionId: "change_task_run_input",
-			exitCode: USAGE_EXIT_CODE,
-			recoverability: "change_input",
-		});
-	}
-
 	// Dispatch to the selected lane's execution interface. agent-browser runs a
 	// read-only snapshot baseline; chrome-devtools-mcp runs a read-only
 	// debugging/performance baseline through its envelope-derived executor.
@@ -2300,20 +2323,10 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	}
 
 	if (route.lane_id === "chrome-devtools-mcp") {
-		// A numeric page id is required: chrome-devtools-mcp keys pages by the
-		// numeric ordering from list_pages, not a string tab id. --tab must parse to
-		// a non-negative integer; default 0 (the first/selected page).
-		const pageId = parseTabPageId(stringField(flags["--tab"]));
-		if (pageId === undefined) {
-			return emitTaskRunFailure(input, run.run_id, {
-				code: "task_run_lane_refused",
-				message:
-					"the chrome-devtools-mcp lane addresses pages by numeric id from list_pages; pass --tab <non-negative integer> (default 0).",
-				actionId: "change_task_run_input",
-				exitCode: USAGE_EXIT_CODE,
-				recoverability: "change_input",
-			});
-		}
+		// The page id was validated before the run was bound; the ?? 0 default can
+		// never engage (parseTabPageId returned a number or the command already
+		// refused), it only spares a non-null assertion.
+		const pageId = chromePageId ?? 0;
 		// Artifact-producing intents (performance-profile/lighthouse-audit) need a
 		// run-scoped artifact directory created before dispatch (R21); the baseline
 		// console-read intent produces no artifact and needs none.
@@ -2918,12 +2931,33 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			sentinelRegistrationWithheldFailure(dispatchGuard.reason),
 		);
 	}
+	// F7 resume-cursor writer: a blocked runbook run persists the
+	// `runbook-resume:<nextIndex>` continuation runbookResumeCursorOf reads back,
+	// where nextIndex = the plan's resume base + the steps the executor confirmed
+	// before blocking. Without this writer a resume would silently replay from
+	// step 0 — idempotent for the read-only seed runbook, a double-apply the
+	// moment a mutating runbook ships. The emitted failure envelope keeps
+	// `resume_shared_run` as its next action (the registered repair action);
+	// only the run's durable continuation carries the cursor.
+	const mapping = mapAgentBrowserOutcome(outcome.result);
+	const recordedMapping: AgentBrowserDispatchMapping =
+		mapping.kind === "blocked"
+			? {
+					...mapping,
+					continuation: {
+						next_action_id: `runbook-resume:${
+							outcome.plan.resume_from_step + outcome.result.executed_steps
+						}`,
+						summary: mapping.continuation.summary,
+					},
+				}
+			: mapping;
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,
 		run,
 		{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
-		mapAgentBrowserOutcome(outcome.result),
+		recordedMapping,
 		{
 			...(dispatchGuard.guard !== undefined
 				? { guard: dispatchGuard.guard }

@@ -330,6 +330,89 @@ describe("clean-break migration public commands", () => {
 		});
 	});
 
+	test("plan returns a typed drift refusal when a source file becomes unreadable after the frozen snapshot", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const source = join(xdg.base, "unreadable-plan-source");
+		mkdirSync(source, { recursive: true, mode: 0o700 });
+		const targetPath = join(source, "service.yml");
+		writeFileSync(targetPath, "service_id: frozen\n");
+		// Real fs freezes the snapshot; a wrapping fs then throws on the source
+		// read so the hash-preserving digest check still passes and the guarded
+		// readTextFile is exercised — not the inventory walk.
+		const realFs = createDefaultPlatformFs();
+		const inventoried = await runForTest(
+			["migration", "inventory", "--source", source, "--json"],
+			makeRuntime({ env: xdg.env, platformFs: realFs }),
+		);
+		expect(inventoried.exitCode).toBe(0);
+		const throwingFs = {
+			...realFs,
+			async readTextFile(path: string) {
+				if (path === targetPath) {
+					const error = new Error(`EACCES: permission denied, open '${path}'`);
+					(error as Error & { code: string }).code = "EACCES";
+					throw error;
+				}
+				return realFs.readTextFile(path);
+			},
+		};
+		const planned = await runForTest(
+			["migration", "plan", "--source", source, "--json"],
+			makeRuntime({ env: xdg.env, platformFs: throwingFs }),
+		);
+		expect(planned.exitCode).toBe(20);
+		expect(parseJson(planned.stdout).error).toMatchObject({
+			code: "migration_source_drift",
+		});
+	});
+
+	test("apply returns a typed drift refusal when a staged source file becomes unreadable after the frozen snapshot", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const source = join(xdg.base, "unreadable-apply-source");
+		mkdirSync(source, { recursive: true, mode: 0o700 });
+		const targetPath = join(source, "note.txt");
+		writeFileSync(targetPath, "safe text\n");
+		const realFs = createDefaultPlatformFs();
+		const realRuntime = makeRuntime({ env: xdg.env, platformFs: realFs });
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", source, "--json"],
+					realRuntime,
+				)
+			).exitCode,
+		).toBe(0);
+		expect(
+			(
+				await runForTest(
+					["migration", "plan", "--source", source, "--json"],
+					realRuntime,
+				)
+			).exitCode,
+		).toBe(0);
+		const throwingFs = {
+			...realFs,
+			async readTextFile(path: string) {
+				if (path === targetPath) {
+					const error = new Error(`EACCES: permission denied, open '${path}'`);
+					(error as Error & { code: string }).code = "EACCES";
+					throw error;
+				}
+				return realFs.readTextFile(path);
+			},
+		};
+		const applied = await runForTest(
+			["migration", "apply", "--source", source, "--json"],
+			makeRuntime({ env: xdg.env, platformFs: throwingFs }),
+		);
+		expect(applied.exitCode).toBe(20);
+		expect(parseJson(applied.stdout).error).toMatchObject({
+			code: "migration_source_drift",
+		});
+	});
+
 	test("apply refuses an existing deterministic generation with different content", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);

@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
 	AE12_ELIGIBLE_LANES,
 	type BenchmarkSample,
+	collectHandoffPaths,
 	compareBenchmark,
 	driveBenchmark,
 	handoffAdapterId,
@@ -275,7 +276,7 @@ describe("handoffAdapterId reads the verified handoff's attachment adapter", () 
 	});
 });
 
-describe("driveBenchmark runs only the lane the single handoff attaches (R11)", () => {
+describe("driveBenchmark runs each lane against its own matching handoff (R11)", () => {
 	// A fake runner records which lanes were shelled and returns a confirmed
 	// envelope for whichever lane it is asked to run. A refusal/mismatch lane is
 	// never passed here — driveBenchmark must gate it before shelling.
@@ -297,26 +298,139 @@ describe("driveBenchmark runs only the lane the single handoff attaches (R11)", 
 		};
 	}
 
-	test("one handoff measures only the matching lane; the other is gated, comparison unlicensed", () => {
+	test("two matching handoffs (one per lane) produce two real measurements and license the comparison", () => {
 		const shelled: string[] = [];
-		const comparison = driveBenchmark({
-			handoffPath: "/verified-agent-browser.json",
+		const { comparison, skipped_handoffs } = driveBenchmark({
+			handoffs: [
+				{
+					handoffPath: "/verified-agent-browser.json",
+					attachedAdapter: "agent-browser",
+				},
+				{
+					handoffPath: "/verified-chrome-devtools.json",
+					attachedAdapter: "chrome-devtools-mcp",
+				},
+			],
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
-			attachedAdapter: "agent-browser",
 			runTask: fakeRunner(shelled),
 		});
-		// Only the matching lane was ever shelled — the mismatched lane never runs,
+		// Each lane was shelled against its OWN matching handoff.
+		expect(shelled.sort()).toEqual(["agent-browser", "chrome-devtools-mcp"]);
+		expect(comparison.measurements.map((m) => m.lane_id).sort()).toEqual([
+			"agent-browser",
+			"chrome-devtools-mcp",
+		]);
+		expect(comparison.gated_lanes).toEqual([]);
+		expect(skipped_handoffs).toEqual([]);
+		// Two real measurements license the cross-lane comparison.
+		expect(comparison.comparison_licensed).toBe(true);
+	});
+
+	test("each lane runs against the handoff whose attachment matches it (paths not swapped)", () => {
+		const seen: { lane_id: string; handoffPath: string }[] = [];
+		const runTask = (args: {
+			lane_id: string;
+			intent: string;
+			handoffPath: string;
+		}): LiveTaskRunResult => {
+			seen.push({ lane_id: args.lane_id, handoffPath: args.handoffPath });
+			return {
+				lane_id: args.lane_id,
+				intent: args.intent,
+				exit_code: 0,
+				result_json: fakeTaskRunEnvelope({
+					intent: args.intent,
+					adapter_id: args.lane_id,
+					state: "confirmed",
+					artifacts: [],
+				}),
+				wall_ms: 100,
+			};
+		};
+		driveBenchmark({
+			handoffs: [
+				{
+					handoffPath: "/chrome-devtools.json",
+					attachedAdapter: "chrome-devtools-mcp",
+				},
+				{
+					handoffPath: "/agent-browser.json",
+					attachedAdapter: "agent-browser",
+				},
+			],
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			runTask,
+		});
+		expect(
+			seen.find((s) => s.lane_id === "agent-browser")?.handoffPath,
+		).toBe("/agent-browser.json");
+		expect(
+			seen.find((s) => s.lane_id === "chrome-devtools-mcp")?.handoffPath,
+		).toBe("/chrome-devtools.json");
+	});
+
+	test("a handoff whose adapter matches no eligible lane is skipped (reported, not measured)", () => {
+		const shelled: string[] = [];
+		const { comparison, skipped_handoffs } = driveBenchmark({
+			handoffs: [
+				{
+					handoffPath: "/verified-agent-browser.json",
+					attachedAdapter: "agent-browser",
+				},
+				{
+					handoffPath: "/verified-playwright.json",
+					attachedAdapter: "playwright-cdp",
+				},
+			],
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			runTask: fakeRunner(shelled),
+		});
+		// Only the eligible lane's handoff was shelled; the out-of-scope one was not.
+		expect(shelled).toEqual(["agent-browser"]);
+		expect(comparison.measurements.map((m) => m.lane_id)).toEqual([
+			"agent-browser",
+		]);
+		// The out-of-scope handoff is reported, not measured as another lane.
+		expect(skipped_handoffs.map((s) => s.attachedAdapter)).toEqual([
+			"playwright-cdp",
+		]);
+		expect(skipped_handoffs[0]?.handoffPath).toBe("/verified-playwright.json");
+		// chrome-devtools-mcp has no matching handoff -> gated.
+		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
+			"chrome-devtools-mcp",
+		]);
+		// Only one real lane sample -> no cross-lane comparison licensed.
+		expect(comparison.comparison_licensed).toBe(false);
+	});
+
+	test("degenerate single handoff measures only the matching lane; the other is gated, comparison unlicensed", () => {
+		const shelled: string[] = [];
+		const { comparison, skipped_handoffs } = driveBenchmark({
+			handoffs: [
+				{
+					handoffPath: "/verified-agent-browser.json",
+					attachedAdapter: "agent-browser",
+				},
+			],
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			runTask: fakeRunner(shelled),
+		});
+		// Only the matching lane was ever shelled — the unmatched lane never runs,
 		// so a handoff_lane_mismatch refusal cannot be recorded as a lane cost.
 		expect(shelled).toEqual(["agent-browser"]);
 		expect(comparison.measurements.map((m) => m.lane_id)).toEqual([
 			"agent-browser",
 		]);
+		expect(skipped_handoffs).toEqual([]);
 		// The other eligible lane is recorded as gated, not measured.
 		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
 			"chrome-devtools-mcp",
 		]);
-		expect(comparison.gated_lanes[0]?.reason).toContain("agent-browser");
+		expect(comparison.gated_lanes[0]?.reason).toContain("chrome-devtools-mcp");
 		// A single real lane sample licenses no cross-lane comparison.
 		expect(comparison.comparison_licensed).toBe(false);
 		expect(comparison.cheapest_by_axis.model_visible_bytes).toBeNull();
@@ -325,11 +439,15 @@ describe("driveBenchmark runs only the lane the single handoff attaches (R11)", 
 
 	test("a handoff whose adapter matches no eligible lane measures nothing and licenses nothing", () => {
 		const shelled: string[] = [];
-		const comparison = driveBenchmark({
-			handoffPath: "/verified-playwright.json",
+		const { comparison, skipped_handoffs } = driveBenchmark({
+			handoffs: [
+				{
+					handoffPath: "/verified-playwright.json",
+					attachedAdapter: "playwright-cdp",
+				},
+			],
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
-			attachedAdapter: "playwright-cdp",
 			runTask: fakeRunner(shelled),
 		});
 		expect(shelled).toEqual([]);
@@ -337,24 +455,65 @@ describe("driveBenchmark runs only the lane the single handoff attaches (R11)", 
 		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual(
 			AE12_ELIGIBLE_LANES.map((l) => l.lane_id),
 		);
+		expect(skipped_handoffs.map((s) => s.attachedAdapter)).toEqual([
+			"playwright-cdp",
+		]);
 		expect(comparison.comparison_licensed).toBe(false);
 	});
 
 	test("an unreadable handoff (no adapter) gates every lane rather than fabricating a sample", () => {
 		const shelled: string[] = [];
-		const comparison = driveBenchmark({
-			handoffPath: "/missing.json",
+		const { comparison, skipped_handoffs } = driveBenchmark({
+			handoffs: [{ handoffPath: "/missing.json", attachedAdapter: undefined }],
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
-			attachedAdapter: undefined,
 			runTask: fakeRunner(shelled),
 		});
 		expect(shelled).toEqual([]);
 		expect(comparison.measurements).toEqual([]);
 		expect(comparison.gated_lanes).toHaveLength(AE12_ELIGIBLE_LANES.length);
 		expect(comparison.gated_lanes[0]?.reason).toContain(
-			"no readable attachment.adapter_id",
+			"readable attachment.adapter_id",
 		);
+		// An unreadable handoff carries no adapter, so it is not a "skipped" match.
+		expect(skipped_handoffs).toEqual([]);
 		expect(comparison.comparison_licensed).toBe(false);
+	});
+
+	test("no handoffs at all gates every lane", () => {
+		const shelled: string[] = [];
+		const { comparison } = driveBenchmark({
+			handoffs: [],
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			runTask: fakeRunner(shelled),
+		});
+		expect(shelled).toEqual([]);
+		expect(comparison.gated_lanes).toHaveLength(AE12_ELIGIBLE_LANES.length);
+		expect(comparison.comparison_licensed).toBe(false);
+	});
+});
+
+describe("collectHandoffPaths gathers repeatable --handoff occurrences", () => {
+	test("collects every --handoff value in order", () => {
+		expect(
+			collectHandoffPaths([
+				"--handoff",
+				"/a.json",
+				"--task-label",
+				"x",
+				"--handoff",
+				"/b.json",
+			]),
+		).toEqual(["/a.json", "/b.json"]);
+	});
+
+	test("returns empty when no --handoff present", () => {
+		expect(collectHandoffPaths(["--task-label", "x"])).toEqual([]);
+	});
+
+	test("skips a trailing --handoff with no following value", () => {
+		expect(collectHandoffPaths(["--handoff"])).toEqual([]);
+		expect(collectHandoffPaths(["--handoff", "--task-label"])).toEqual([]);
 	});
 });
