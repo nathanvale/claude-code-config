@@ -54,15 +54,20 @@ remaining PARTIALs share two named front-door capability gaps — Browser Target
 Discovery unimplemented on the agent-browser lane, so handoff-bound `targets
 list` emits no candidates even with `--adapter` (D01/D26/D27; re-verified live
 2026-07-28 per PR #263 review — task-run auto-mint works, targets-list discovery
-returns target_discovery_transport_failed), and read-only baseline with no
-mutating intent (D06/D09/D12/D13). Lifecycle scope is now deliberate:
-operator-owned stop setup, one fixed `agent-chrome/default` identity, and no
-remote-debugging-off product mode.
+returns target_discovery_transport_failed). The read-only-baseline gap is now
+closed: the 2026-07-28 live mutating-intent wave (port 9231, agent-browser
+0.31.2, real Chrome 150, loopback fixture) flipped D06/D09/D12/D13 PARTIAL->PASS
+— observe-mutate-verify confirms from fresh structure (D06), an unresolved
+semantic target refuses before mutation (D09), verification-unavailable becomes
+external_effect unknown with retryable false (D12), and a false named
+postcondition is not overridden by ambient success text (D13). Lifecycle scope
+is now deliberate: operator-owned stop setup, one fixed `agent-chrome/default`
+identity, and no remote-debugging-off product mode.
 
 | Verdict | Count |
 | --- | ---: |
-| PASS | 50 |
-| PARTIAL | 62 |
+| PASS | 54 |
+| PARTIAL | 58 |
 | FAIL | 27 |
 | BLOCKED | 5 |
 | UNASSESSED | 79 |
@@ -167,14 +172,14 @@ remote-debugging-off product mode.
 | DDA-D03 | Snapshot observes the selected target. | C,L | PASS | U6-ET3 and PAC evidence. |
 | DDA-D04 | Screenshot writes a bounded run artifact. | C,L | PASS | U6-ET4 live evidence. |
 | DDA-D05 | Viewport emulation applies only on a capable lane. | C,L | PARTIAL | Unit operation tests exist; live evidence missing. |
-| DDA-D06 | Agent Browser observe-mutate-verify confirms fresh structure. | L | PARTIAL | Hermetic 2026-07-27: public `routine-automation` resolves exactly one current semantic target, persists mutation dispatch before the adapter call, clicks once, and confirms only from a fresh named structural postcondition. Zero/multiple matches, semantic drift, origin drift, and invalid selectors refuse before mutation. Live rerun with `WARM_CHROME_CDP_PORT=9231` is blocked by the absent pinned `agent-browser` adapter. |
+| DDA-D06 | Agent Browser observe-mutate-verify confirms fresh structure. | L | PASS | Live 2026-07-28 (WARM_CHROME_CDP_PORT=9231, agent-browser 0.31.2, real Chrome 150, loopback fixture 127.0.0.1:8912): `browser-use task run --intent routine-automation --click-role button --click-name Save --postcondition-id saved --expect-visible "[data-persisted='true']" --tab t1 --allowed-origin http://127.0.0.1:8912 --json` -> status ok, selected_lane agent-browser, run confirmed, mutation_dispatched true, executed_steps 2 (snapshot+click), external_effect none, postcondition saved confirmed from fresh `[data-persisted='true']` visibility, handoff_evidence_id aa347b34d6c30bda… (auto-minted, no browser-connect). Backed by the hermetic front-door proof (exactly-one resolution, write-ahead dispatch, refuse-before-mutation on zero/multiple/drift/invalid-selector). |
 | DDA-D07 | Chrome DevTools observe-mutate-verify confirms fresh structure. | L | BLOCKED | Live 2026-07-27: typed fail-closed refusal adapter_not_installed — chrome-devtools-mcp 1.2.0 cached vs pinned 1.5.0, install is operator-gated (requires_operator, no_pin_policy_change). Joins the B17/J03/J09 operator gate. |
 | DDA-D08 | Playwright observe-mutate-verify confirms fresh structure. | L | FAIL | Read-only snapshot execution now exists; mutation plus fresh-structure live proof remains. |
-| DDA-D09 | Agent Browser stale refs cannot prove a mutation. | L | PARTIAL | Hermetic 2026-07-27: public `routine-automation` resolves semantics from the current task-local snapshot, requires exactly one match, and refuses a ref whose current semantics differ before dispatch. Mutation clears refs and verifies with fresh structure. Live rerun is adapter-blocked. |
+| DDA-D09 | Agent Browser stale refs cannot prove a mutation. | L | PASS | Live 2026-07-28 (port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912 with Save/Cancel buttons): a semantic target absent from the current snapshot (`--click-role button --click-name Submit`) refuses before any click -> exit 20, lane_outcome agent_browser_ref_invalid, "The semantic click target did not resolve to exactly one ref in the current task-local snapshot", external_effect none, no mutation dispatched. The exactly-one rule holds: a ref whose current semantics differ cannot cross the mutation boundary. Backed by the hermetic snapshot-local resolution + fresh-structure verify proof. |
 | DDA-D10 | Chrome DevTools stale refs cannot prove a mutation. | L | BLOCKED | Live 2026-07-27: chrome-devtools-mcp lane cannot execute under the version pin (1.2.0 vs pinned 1.5.0, operator-gated install); additionally the front-door baseline is read-only with a fresh handoff per run, so no stale ref crosses a front-door boundary. |
 | DDA-D11 | Playwright stale locators cannot prove a mutation. | L | FAIL | Read-only snapshot execution now exists; stale-locator mutation refusal needs live proof. |
-| DDA-D12 | Ambiguous external effect becomes `unknown` and is not repeated. | H,L | PARTIAL | Hermetic 2026-07-27: verification loss after a dispatched semantic click records `state: unknown` and `external_effect: unknown`; retry returns the terminal run without a second click. CAS-persisted mutation dispatch survives the crash window. Live rerun is adapter-blocked. |
-| DDA-D13 | Conflicting ambient text cannot override the named postcondition. | H,L | PARTIAL | Hermetic 2026-07-27: ambient success text cannot override a false named structural postcondition; the run records not-achieved with unknown external effect after one dispatch. Live rerun is adapter-blocked. |
+| DDA-D12 | Ambiguous external effect becomes `unknown` and is not repeated. | H,L | PASS | Live 2026-07-28 (port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912): a dispatched Save click whose postcondition selector cannot be freshly proven (`--expect-visible "#does-not-exist-at-all"`) -> exit 20, lane_outcome agent_browser_mutation_effect_unknown, external_effect unknown, error task_run_effect_unknown, retryable false, next_action inspect_task_run_result (never retry) — run_id 2616f9f4…. The no-repeat property holds structurally (retryable false + terminal unknown; hermetic proof asserts exactly one click and terminal-truth resume refusal, CAS-persisted dispatch across the crash window). |
+| DDA-D13 | Conflicting ambient text cannot override the named postcondition. | H,L | PASS | Live 2026-07-28 (port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912 whose DOM contains the ambient text "Saved successfully" plus a present-but-hidden `[data-decoy='true']`): a Save click with a false named postcondition (`--expect-visible "[data-decoy='true']"`, an element that exists but stays hidden) -> exit 20, lane_outcome agent_browser_postcondition_not_achieved, "Fresh structure did not satisfy the declared mutation postcondition", external_effect unknown (conservative post-dispatch truth), run_id bf527282…. The ambient "Saved successfully" text never reached stdout (leak count 0): only the named structural postcondition governs success. |
 | DDA-D14 | Closing the active tab during a run yields typed recovery. | H,L | UNASSESSED | Journey missing. |
 | DDA-D15 | Popup and new-tab flows bind refs to the correct tab. | H,L | UNASSESSED | Journey missing. |
 | DDA-D16 | Iframe interaction preserves ref and origin boundaries. | H,L | UNASSESSED | Journey missing. |
