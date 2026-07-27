@@ -13,9 +13,11 @@ environment proof.
 
 Slice one complete: the explicit-CDP door to Agent Chrome. `check`,
 `connect`, bare-no-arg `dashboard`, and `run <adapter> -- <cmd>` are
-implemented and proven through the 19-station Branch Station catalog. Slice
-two (Human Chrome via UI-consent) and slice three (extension door) are
-deferred per the plan.
+implemented and proven through the 19-station Branch Station catalog. Three
+Adapter Definitions ship: `chrome-devtools-mcp`, `agent-browser`, and
+`playwright-cdp` (the public Playwright CLI lane, explicit-CDP named-session
+attach/detach). Slice two (Human Chrome via UI-consent) and slice three
+(extension door) are deferred per the plan.
 
 ## Start Here
 

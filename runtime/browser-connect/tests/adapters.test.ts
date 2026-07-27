@@ -17,6 +17,11 @@ import {
 	chromeDevtoolsMcpDefinition,
 } from "../src/adapters/chrome-devtools-mcp.ts";
 import {
+	PLAYWRIGHT_CDP_EXECUTABLE,
+	PLAYWRIGHT_CDP_PINNED_VERSION,
+	playwrightCdpDefinition,
+} from "../src/adapters/playwright-cdp.ts";
+import {
 	type AdapterCommandInput,
 	type AdapterCommandResult,
 	type AdapterExecutableResolution,
@@ -84,10 +89,11 @@ const versionResponder =
 	};
 
 describe("registry", () => {
-	test("ships exactly the two slice-one adapters, chrome-devtools-mcp first", () => {
+	test("ships the three adapters, chrome-devtools-mcp first, Playwright CLI lane last", () => {
 		expect(listAdapterDefinitions().map((d) => d.id)).toEqual([
 			"chrome-devtools-mcp",
 			"agent-browser",
+			"playwright-cdp",
 		]);
 	});
 
@@ -96,9 +102,12 @@ describe("registry", () => {
 			"chrome-devtools-mcp",
 		);
 		expect(findAdapterDefinition("agent-browser")?.id).toBe("agent-browser");
+		expect(findAdapterDefinition("playwright-cdp")?.id).toBe("playwright-cdp");
 	});
 
 	test("unknown adapter → undefined (caller maps to adapter-unknown usage rejection)", () => {
+		// `playwright-mcp` is a plausible-but-wrong id: the registered Playwright
+		// lane is `playwright-cdp`. A near-miss must not resolve.
 		expect(findAdapterDefinition("playwright-mcp")).toBeUndefined();
 		expect(findAdapterDefinition("")).toBeUndefined();
 	});
@@ -361,6 +370,45 @@ describe("agent-browser definition (non-MCP seam)", () => {
 	});
 });
 
+describe("playwright-cdp definition (Playwright CLI lane, named-session seam)", () => {
+	test("declares explicit-cdp verified-live only", () => {
+		expect(playwrightCdpDefinition.routes).toEqual([
+			{ route: "explicit-cdp", evidence: "verified-live", implemented: true },
+		]);
+	});
+
+	test("id is stable and does not encode its route (R6)", () => {
+		expect(playwrightCdpDefinition.id).toBe("playwright-cdp");
+		expect(playwrightCdpDefinition.executable).toBe(PLAYWRIGHT_CDP_EXECUTABLE);
+		expect(playwrightCdpDefinition.pinnedVersion).toBe(
+			PLAYWRIGHT_CDP_PINNED_VERSION,
+		);
+	});
+
+	test("installed + version match → provenance installed", async () => {
+		const { runtime } = fakeRuntime({
+			respond: versionResponder(PLAYWRIGHT_CDP_PINNED_VERSION),
+		});
+		const result = await playwrightCdpDefinition.checkProvenance(runtime);
+		expect(result).toEqual({
+			installed: true,
+			executablePath: RESOLVED_PATH,
+			version: PLAYWRIGHT_CDP_PINNED_VERSION,
+		});
+	});
+
+	test("unresolvable path → adapter-not-installed, NEVER a probe", async () => {
+		const { runtime, log } = fakeRuntime({ resolution: { resolved: false } });
+		const result = await playwrightCdpDefinition.checkProvenance(runtime);
+		expect(result).toMatchObject({
+			installed: false,
+			failureClass: "adapter-not-installed",
+			cause: "executable_absent",
+		});
+		expect(log.commands.length).toBe(0);
+	});
+});
+
 // ===========================================================================
 // U5: registry-owned install policy (KTD13/R21/R28/R29/R34). Definitions OWN
 // package identity, canonical registry, isolated recipe, integrity source,
@@ -377,7 +425,7 @@ function policyOf(definitionId: string): AdapterPackagePolicy {
 }
 
 describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
-	test("both definitions declare complete package identity and isolation policy", () => {
+	test("every definition declares complete package identity and isolation policy", () => {
 		for (const definition of listAdapterDefinitions()) {
 			const policy = definition.installPolicy;
 			expect(policy.packageName.length).toBeGreaterThan(0);
@@ -413,11 +461,15 @@ describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
 		}
 	});
 
-	test("chrome-devtools-mcp is lifecycle-script free; agent-browser requires lifecycle scripts (R29)", () => {
+	test("chrome-devtools-mcp is lifecycle-script free; agent-browser and playwright-cdp require lifecycle scripts (R29)", () => {
 		expect(policyOf("chrome-devtools-mcp").lifecycleScriptsRequired).toBe(false);
 		// agent-browser 0.31.2 ships a postinstall native-binary step
 		// (hasInstallScript in its genuine lock entry): operator-owned.
 		expect(policyOf("agent-browser").lifecycleScriptsRequired).toBe(true);
+		// playwright-cdp's exact lock carries optional fsevents with an install
+		// script, so its full graph cannot install with scripts disabled:
+		// operator-owned package automation (R29).
+		expect(policyOf("playwright-cdp").lifecycleScriptsRequired).toBe(true);
 	});
 
 	test("safe upgrade transitions are an exact allowlist, never semver inference (R21/R22)", () => {
@@ -428,6 +480,9 @@ describe("Adapter Definitions own installer policy (U5 KTD13)", () => {
 		expect(policyOf("agent-browser").safeUpgradeTransitions).toEqual([
 			{ from: "0.26.0", to: AGENT_BROWSER_PINNED_VERSION },
 		]);
+		// playwright-cdp has no prior proven release, so no observed version may
+		// auto-move to the pin: an empty allowlist, never semver inference.
+		expect(policyOf("playwright-cdp").safeUpgradeTransitions).toEqual([]);
 		// Exact matches only.
 		expect(
 			isAllowlistedAdapterUpgrade(chrome, "1.4.0", CHROME_DEVTOOLS_MCP_PINNED_VERSION),
@@ -474,6 +529,14 @@ describe("validateAdapterLockPackages (U5 R34)", () => {
 			await readFile(agentPolicy.integritySource.lockfilePath, "utf8"),
 		) as unknown;
 		expect(validateAdapterLockPackages(agentPolicy, lock)).toEqual([]);
+	});
+
+	test("the committed playwright-cdp lockfile has canonical origins and full integrity", async () => {
+		const playwrightPolicy = policyOf("playwright-cdp");
+		const lock = JSON.parse(
+			await readFile(playwrightPolicy.integritySource.lockfilePath, "utf8"),
+		) as unknown;
+		expect(validateAdapterLockPackages(playwrightPolicy, lock)).toEqual([]);
 	});
 
 	const violationRows: ReadonlyArray<{
@@ -604,6 +667,21 @@ describe("assessAdapterInstallPolicy (U5 R28/R29 evidence)", () => {
 
 	test("agent-browser fails only the lifecycle gate with the committed files (R29)", async () => {
 		const assessment = await assessAdapterInstallPolicy(agentBrowserDefinition, realFs);
+		expect(assessment.evidence.recipe_complete).toBe(true);
+		expect(assessment.evidence.lock_origins_canonical).toBe(true);
+		expect(assessment.evidence.dependency_integrity_complete).toBe(true);
+		expect(assessment.evidence.lifecycle_scripts_disabled).toBe(false);
+		expect(assessment.stop_causes).toContain("lifecycle_scripts_required");
+	});
+
+	test("playwright-cdp fails only the lifecycle gate with the committed files (R29)", async () => {
+		// The exact @playwright/cli lock pulls optional fsevents, whose lock entry
+		// carries hasInstallScript: the full graph cannot install with scripts
+		// disabled, so the recipe is complete and canonical but operator-owned.
+		const assessment = await assessAdapterInstallPolicy(
+			playwrightCdpDefinition,
+			realFs,
+		);
 		expect(assessment.evidence.recipe_complete).toBe(true);
 		expect(assessment.evidence.lock_origins_canonical).toBe(true);
 		expect(assessment.evidence.dependency_integrity_complete).toBe(true);

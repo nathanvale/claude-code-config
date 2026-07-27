@@ -36,3 +36,16 @@ this file when history matters.
 - 2026-07-14 fix: `parseWarmChromeEnvelope` now parses warm-chrome's
   multi-line pretty JSON (was last-line only); surfaced by U8's process
   boundary proof.
+- 2026-07-27 Platform U5 third adapter closed (closeout plan R2/R8/AE3):
+  `playwright-cdp`, the public Playwright CLI lane, added to the registry
+  (`src/adapters/playwright-cdp.ts`, `src/adapters/registry.ts`). Explicit-CDP
+  named-session attach/snapshot/detach; probe pins the `attach`/`detach`
+  `--help` contract (fail-closed on upstream CLI drift, no implicit browser
+  launch, no Chrome for Testing, no `open`/`install-browser`); isolated-install
+  policy operator-owned (exact lock pulls optional fsevents install script,
+  R29). Committed integrity source in `adapter-install/playwright-cdp/`
+  (git-tracked KTD17 guard). Proofs: `tests/playwright-cdp.test.ts` (unit,
+  fake runtime) and `tests/playwright-cdp.integration.test.ts` (process
+  boundary — real transport + real fake-CLI subprocess through
+  `spawnAdapterCommand`, fixture Warm Chrome, browser left alive). Full suite
+  green (549 tests), tsc clean.
