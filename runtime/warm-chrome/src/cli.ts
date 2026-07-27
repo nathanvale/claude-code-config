@@ -43,6 +43,7 @@ import {
 	WARM_CHROME_CLI_NAME,
 	WARM_CHROME_COMMANDS,
 	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
@@ -67,7 +68,7 @@ import {
 } from "./runtime.ts";
 
 const VERSION = "0.1.0";
-const DEFAULT_PORT = "9222";
+const DEFAULT_PORT = WARM_CHROME_DEFAULT_CDP_PORT;
 const CHROME_REMOTE_DEBUGGING_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
 const RUNTIME_FAILURE_EXIT_CODE = 1;
@@ -543,7 +544,7 @@ function renderHelp(command?: WarmChromeCommand): string {
 		"  --version       Print version.",
 		"",
 		"Environment:",
-		"  WARM_CHROME_CDP_PORT      Default CDP port when --port/--endpoint is absent.",
+		`  WARM_CHROME_CDP_PORT      CDP port when --port/--endpoint is absent (default ${WARM_CHROME_DEFAULT_CDP_PORT}).`,
 		`  WARM_CHROME_PROFILE_DIR   Default profile input; launch/repair fallback is ${WARM_CHROME_DEFAULT_PROFILE_DIR}.`,
 		"  WARM_CHROME_RUN_ID        Default run correlation id.",
 		"  CHROME_BIN                Launch binary override for launch.",

@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, readlink, realpath, rm, symlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { SetupDomainResult, SetupFinding } from "./model.ts";
@@ -174,20 +174,8 @@ export async function inspectBinTopology(
 		findings.push({ id: "unsafe_root", owner: "setup.bins", path: unsafe, summary: "Bin destination parent escapes the selected home.", repair: "human_repair" });
 		return plan({ operations: [], preserved: manifest.declarations.map((declaration) => join(binDir, declaration.name)) });
 	}
-	if (!(await isDirectory(binDir))) {
-		if (manifest.declarations.length > 0) {
-			advisories.push({
-				id: "bin_dir_unavailable",
-				owner: "setup.bins",
-				path: binDir,
-				summary: "Bin destination directory is missing; PATH bins were not planned.",
-				why: "Install Bun or create the directory so setup sync can deliver PATH bins.",
-				repair: "human_repair",
-			});
-		}
-		return plan({ operations: [] });
-	}
-	if (manifest.declarations.length > 0 && !(await binDirOnPath(binDir, options.pathEnv ?? process.env.PATH ?? ""))) {
+	const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
+	if (manifest.declarations.length > 0 && !(await binDirOnPath(binDir, pathEnv))) {
 		advisories.push({
 			id: "bin_dir_not_on_path",
 			owner: "setup.bins",
@@ -197,6 +185,7 @@ export async function inspectBinTopology(
 			repair: "human_repair",
 		});
 	}
+	advisories.push(...(await detectShadowingBins(manifest.declarations, binDir, pathEnv)));
 	const declaredNames = new Set(manifest.declarations.map((declaration) => declaration.name));
 	for (const declaration of manifest.declarations) {
 		const destination = join(binDir, declaration.name);
@@ -243,6 +232,40 @@ export async function applyBinTopology(
 	const applied: string[] = [];
 	const failed: string[] = [];
 	const deferred: string[] = [];
+	if (plan.operations.length > 0 && !(await isDirectory(plan.binDir))) {
+		try {
+			if (await unsafeExistingParent(plan.homeRoot, join(plan.binDir, "probe"))) {
+				return {
+					domain: "bins",
+					planned: plan.operations.map((operation) => operation.destination),
+					applied,
+					deferred: plan.operations.map((operation) => operation.destination),
+					preserved: plan.preserved,
+					failed,
+				};
+			}
+			await mkdir(plan.binDir, { recursive: true });
+			if (await unsafeExistingParent(plan.homeRoot, join(plan.binDir, "probe")) || !(await isDirectory(plan.binDir))) {
+				return {
+					domain: "bins",
+					planned: plan.operations.map((operation) => operation.destination),
+					applied,
+					deferred: plan.operations.map((operation) => operation.destination),
+					preserved: plan.preserved,
+					failed,
+				};
+			}
+		} catch {
+			return {
+				domain: "bins",
+				planned: plan.operations.map((operation) => operation.destination),
+				applied,
+				deferred,
+				preserved: plan.preserved,
+				failed: plan.operations.map((operation) => operation.destination),
+			};
+		}
+	}
 	for (const operation of plan.operations) {
 		try {
 			if (!(await operationStillProven(plan, operation))) {
@@ -352,6 +375,50 @@ async function resolvedLinkTarget(path: string): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Detect a same-named executable that resolves EARLIER on PATH than the
+ * setup-owned bin dir and does NOT resolve to the declared entry — the daily
+ * driver hazard where a stale global `browser-use` shadows the setup-owned bin
+ * (DDA-A22). Advisory only; names both the shadow path and the owned
+ * destination it precedes. A same-named entry AT or AFTER binDir on PATH is
+ * not a shadow (the owned bin wins resolution), and a link that resolves to
+ * the same declared entry is an alias, not a shadow.
+ */
+async function detectShadowingBins(
+	declarations: readonly BinDeclaration[],
+	binDir: string,
+	pathEnv: string,
+): Promise<SetupFinding[]> {
+	if (declarations.length === 0) return [];
+	const canonicalBinDir = await canonicalPath(binDir);
+	const earlierDirs: string[] = [];
+	for (const entry of pathEnv.split(delimiter)) {
+		if (!entry) continue;
+		if (resolve(entry) === resolve(binDir)) break;
+		if ((await canonicalPath(entry)) === canonicalBinDir) break;
+		earlierDirs.push(entry);
+	}
+	const findings: SetupFinding[] = [];
+	for (const declaration of declarations) {
+		const ownedDestination = join(binDir, declaration.name);
+		for (const dir of earlierDirs) {
+			const candidate = join(dir, declaration.name);
+			if ((await pathShape(candidate)) === "missing") continue;
+			if ((await resolvedLinkTarget(candidate)) === declaration.entry) continue;
+			findings.push({
+				id: "bin_shadowed",
+				owner: "external",
+				path: (await resolvedLinkTarget(candidate)) ?? candidate,
+				summary: `An executable named '${declaration.name}' earlier on PATH shadows the setup-owned bin.`,
+				why: `A same-named executable precedes the setup-owned bin ${ownedDestination} on PATH and will resolve instead; remove it or reorder PATH so ${ownedDestination} wins.`,
+				repair: "human_repair",
+			});
+			break;
+		}
+	}
+	return findings;
 }
 
 async function binDirOnPath(binDir: string, pathEnv: string): Promise<boolean> {

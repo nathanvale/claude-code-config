@@ -36,6 +36,23 @@ export function makeRuntime(
 		// I/O. Store tests pass explicit temp XDG env + real fs, or the
 		// volatile-overlay fake.
 		platformFs: createDefaultPlatformFs(),
+		// Internal mint seam (D4): the production default imports browser-connect
+		// and can PROVE-OR-LAUNCH a real browser — never acceptable from a unit
+		// test. Default to a typed fail-closed stub; mint tests inject their own
+		// fixture-backed fake.
+		mintHandoff: async () => ({
+			exitCode: 20,
+			stdout: JSON.stringify({
+				status: "error",
+				data: { outcome: "failed", failure_class: "environment-unavailable" },
+				error: {
+					code: "mint_not_faked",
+					message:
+						"mintHandoff was not faked in this test; inject a fixture-backed mint or pass --handoff.",
+				},
+			}),
+			stderr: "",
+		}),
 		...overrides,
 	});
 }

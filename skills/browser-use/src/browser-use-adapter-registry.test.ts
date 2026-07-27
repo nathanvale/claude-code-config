@@ -116,7 +116,7 @@ describe("lane identity (R3)", () => {
 		}
 	});
 
-	test("lane-specific execution Interfaces: chrome-devtools-mcp and agent-browser each register their own native call", () => {
+	test("every lane registers its own native execution Interface", () => {
 		const registry = registryOf([]);
 		const implemented = registry.lanes.filter(
 			(lane) => lane.native_implementation.implemented,
@@ -124,6 +124,7 @@ describe("lane identity (R3)", () => {
 		expect(implemented.map((lane) => lane.lane_id)).toEqual([
 			"chrome-devtools-mcp",
 			"agent-browser",
+			"playwright-cdp",
 		]);
 		const chrome = laneOf(registry, "chrome-devtools-mcp");
 		expect(
@@ -135,6 +136,11 @@ describe("lane identity (R3)", () => {
 			agentBrowser.native_implementation.implemented &&
 				agentBrowser.native_implementation.execution_interface,
 		).toBe("agent-browser-native-call");
+		const playwright = laneOf(registry, "playwright-cdp");
+		expect(
+			playwright.native_implementation.implemented &&
+				playwright.native_implementation.execution_interface,
+		).toBe("playwright-cli-native-call");
 	});
 
 	test("the public transport table derives from the lane table — no second copy", () => {
@@ -814,7 +820,7 @@ describe("rejection repair actions (R27, finding #5)", () => {
 });
 
 describe("auth methods gate on a usable lane (R5, finding #1)", () => {
-	test("proven conformance on an unimplemented lane advertises nothing", () => {
+	test("proven conformance on the implemented Playwright lane advertises only its proven methods", () => {
 		const registry = registryOf([
 			evidenceRef({
 				lane_id: "playwright-cdp",
@@ -824,10 +830,9 @@ describe("auth methods gate on a usable lane (R5, finding #1)", () => {
 			}),
 		]);
 		const lane = laneOf(registry, "playwright-cdp");
-		// Evidence stays honest proven; the ADVERTISED capability is what gates.
 		expect(lane.evidence["auth-conformance"].status).toBe("proven");
-		expect(lane.native_implementation.implemented).toBe(false);
-		expect(lane.advertised_auth_methods).toEqual([]);
+		expect(lane.native_implementation.implemented).toBe(true);
+		expect(lane.advertised_auth_methods).toEqual(["password", "otp"]);
 	});
 
 	test("the same proven conformance on an implemented lane advertises its methods", () => {

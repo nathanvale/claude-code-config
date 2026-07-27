@@ -82,7 +82,7 @@ function discoveryRuntime(input: {
 }
 
 describe("U1 target discovery — handoff-bound mode", () => {
-	test("requires --mode and --handoff", async () => {
+	test("requires --mode and either --adapter or --handoff", async () => {
 		const noMode = await runForTest(["targets", "list", "--json"], makeRuntime());
 		expect(noMode.exitCode).not.toBe(0);
 		expect(parseJson(noMode.stdout).error).toMatchObject({
@@ -93,12 +93,58 @@ describe("U1 target discovery — handoff-bound mode", () => {
 			["targets", "list", "--mode", "handoff-bound", "--json"],
 			makeRuntime(),
 		);
-		expect(noHandoff.exitCode).toBe(20);
+		expect(noHandoff.exitCode).toBe(2);
 		const json = parseJson(noHandoff.stdout);
-		expect(json.error).toMatchObject({ code: "target_discovery_handoff_invalid" });
+		expect(json.error).toMatchObject({ code: "target_discovery_input_invalid" });
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"supply_verified_handoff",
+			"change_target_discovery_input",
 		);
+	});
+
+	test("auto-mints a fresh handoff through the public front door", async () => {
+		const mintCalls: Array<{ adapterId: string; runId: string }> = [];
+		const runtime = makeRuntime({
+			mintHandoff: async (input) => {
+				mintCalls.push({
+					adapterId: input.adapterId,
+					runId: input.runId ?? "",
+				});
+				return {
+					exitCode: 0,
+					stdout: REAL_VERIFIED_HANDOFF_ENVELOPE,
+					stderr: "",
+				};
+			},
+			runCommand: async () =>
+				okCommand(
+					listPagesStdout([
+						{ id: "P1", url: "https://example.com/app", title: "App" },
+					]),
+				),
+		});
+
+		const result = await runForTest(
+			[
+				"targets",
+				"list",
+				"--mode",
+				"handoff-bound",
+				"--adapter",
+				"chrome-devtools-mcp",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(mintCalls).toEqual([
+			{ adapterId: "chrome-devtools-mcp", runId: expect.any(String) },
+		]);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			mode: "handoff-bound",
+			operation_ready: true,
+			requested_adapter: "chrome-devtools-mcp",
+		});
 	});
 
 	test("a verified envelope authorizes handoff-bound listing and inherits its run id", async () => {
@@ -553,7 +599,7 @@ describe("U1 target discovery — recovery mode", () => {
 			"connect_verified_browser",
 		);
 		const action = (json.runtime_actions as Record<string, unknown>[])[0];
-		expect(action.summary).toContain("browser-connect connect");
+		expect(action.summary).toContain("targets list --mode handoff-bound");
 	});
 
 	// R1/R3 behavior change (U3): the verified envelope is the ONLY invocation

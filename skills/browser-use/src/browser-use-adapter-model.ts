@@ -71,6 +71,7 @@ export type BrowserUseLaneAuthMethod =
 export const BROWSER_USE_LANE_EXECUTION_INTERFACES = [
 	"mcporter-envelope-call",
 	"agent-browser-native-call",
+	"playwright-cli-native-call",
 ] as const;
 export type BrowserUseLaneExecutionInterface =
 	(typeof BROWSER_USE_LANE_EXECUTION_INTERFACES)[number];
@@ -134,13 +135,15 @@ export const BROWSER_USE_ADAPTER_LANE_TABLE = {
 		},
 	},
 	"playwright-cdp": {
-		operation_capabilities: [],
+		// First operational slice: the official Playwright CLI attaches to the
+		// verified CDP endpoint, selects an exact tab, captures accessibility
+		// snapshot/locator evidence, and detaches without closing Agent Chrome.
+		// Trace and archive replay remain absent until their artifact/input
+		// contracts land.
+		operation_capabilities: ["selector_actions"],
 		native_implementation: {
-			implemented: false,
-			unavailable_reason:
-				"No lane-specific execution Interface is registered for this lane yet.",
-			next_repair_action:
-				"Register the Playwright lane Implementation through the platform plan's connection-lane unit before advertising task capability.",
+			implemented: true,
+			execution_interface: "playwright-cli-native-call",
 		},
 	},
 } as const satisfies Record<

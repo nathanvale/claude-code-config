@@ -112,6 +112,7 @@ const packageRoots = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome"),
 	browserConnect: join(repoRoot, "runtime/browser-connect"),
+	browserUse: join(repoRoot, "skills/browser-use"),
 	setup: join(repoRoot, "runtime/setup"),
 } as const;
 
@@ -123,6 +124,7 @@ const sourceEntries = {
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
 	warmChrome: join(repoRoot, "runtime/warm-chrome/src/cli.ts"),
 	browserConnect: join(repoRoot, "runtime/browser-connect/src/cli.ts"),
+	browserUse: join(repoRoot, "skills/browser-use/src/browser-use.ts"),
 	setup: join(repoRoot, "runtime/setup/src/cli.ts"),
 } as const;
 
@@ -411,6 +413,21 @@ function runBrowserConnectSource(
 	);
 }
 
+function runBrowserUseSource(
+	args: readonly string[],
+	label: string,
+	cwd?: string,
+): Promise<RunResult> {
+	return runCommand(
+		runners.source({
+			sourcePath: sourceEntries.browserUse,
+			args,
+			label,
+			cwd,
+		}),
+	);
+}
+
 function runSetupPackage(args: readonly string[], label: string): Promise<RunResult> {
 	return runCommand(runners.packageCwd({
 		packageRoot: packageRoots.setup,
@@ -667,6 +684,7 @@ const warmChromePackageScripts = readPackageScripts(packageRoots.warmChrome);
 const browserConnectPackageScripts = readPackageScripts(
 	packageRoots.browserConnect,
 );
+const browserUsePackageScripts = readPackageScripts(packageRoots.browserUse);
 const setupPackageScripts = readPackageScripts(packageRoots.setup);
 /**
  * First rendered usage line for a contract.
@@ -756,13 +774,14 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("package scripts expose the worktree, agent-worktree, warm-chrome, browser-connect, and setup entrypoint scripts", async () => {
+	test("package scripts expose the worktree, agent-worktree, warm-chrome, browser-connect, browser-use, and setup entrypoint scripts", async () => {
 		expect(Object.keys(wtPackageScripts)).toContain("worktree");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
 		expect(Object.keys(warmChromePackageScripts)).toContain("warm-chrome");
 		expect(Object.keys(browserConnectPackageScripts)).toContain(
 			"browser-connect",
 		);
+		expect(Object.keys(browserUsePackageScripts)).toContain("browser-use");
 		expect(Object.keys(setupPackageScripts)).toContain("setup");
 	});
 });
@@ -1403,6 +1422,7 @@ describe("command entrypoint integration: help contracts", () => {
 			).toEqual([
 				"choose_registered_adapter:chrome-devtools-mcp",
 				"choose_registered_adapter:agent-browser",
+				"choose_registered_adapter:playwright-cdp",
 			]);
 			expect(
 				(adapterUnknownContinuation?.constraints ?? []).length,
@@ -1459,6 +1479,132 @@ describe("command entrypoint integration: help contracts", () => {
 				(runEnvelope.error as Record<string, unknown> | undefined)?.code,
 				describeRun(missingSeparator),
 			).toBe("missing_separator");
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"browser-use source entry launches and discovers work from an unrelated repository",
+		async () => {
+			await withTempRepo("browser-use-discovery", async (repo) => {
+				const expectBrowserUseData = (
+					result: RunResult,
+					contract: string,
+				): Record<string, unknown> => {
+					const envelope = parseEnvelope(result);
+					expect(envelope.status, describeRun(result)).toBe("ok");
+					const data = envelopeData(envelope, result);
+					expect(data.contract, describeRun(result)).toBe(contract);
+					return data;
+				};
+
+				const launcher = await runBrowserUseSource(
+					[],
+					"browser-use source launcher from unrelated repo",
+					repo,
+				);
+				expect(launcher.exitCode, describeRun(launcher)).toBe(0);
+				expect(launcher.stdout, describeRun(launcher)).toContain(
+					"browser-use - orchestrate browser tasks",
+				);
+				expect(launcher.stderr, describeRun(launcher)).toBe("");
+
+				const help = await runBrowserUseSource(
+					["--help"],
+					"browser-use source help from unrelated repo",
+					repo,
+				);
+				expect(help.exitCode, describeRun(help)).toBe(0);
+				expect(help.stderr, describeRun(help)).toBe("");
+				expect(help.stdout, describeRun(help)).toContain(
+					"Start here (for AI agents)",
+				);
+				for (const topic of ["core", "recovery", "auth", "lanes"]) {
+					const guide = await runBrowserUseSource(
+						["guide", "--topic", topic, "--json", "--quiet"],
+						`browser-use source ${topic} guide from unrelated repo`,
+						repo,
+					);
+					const guideEnvelope = parseEnvelope(guide);
+					expect(guide.exitCode, describeRun(guide)).toBe(0);
+					expect(guide.stderr, describeRun(guide)).toBe("");
+					expect(guideEnvelope.status, describeRun(guide)).toBe("ok");
+					expect(
+						envelopeData(guideEnvelope, guide).topic,
+						describeRun(guide),
+					).toBe(topic);
+				}
+
+				const taskList = await runBrowserUseSource(
+					["task", "list", "--json", "--quiet"],
+					"browser-use source task list from unrelated repo",
+					repo,
+				);
+				const taskData = expectBrowserUseData(
+					taskList,
+					"browser-use.task-intents",
+				);
+				expect(taskData.task_intent_count, describeRun(taskList)).toBe(10);
+
+				const laneList = await runBrowserUseSource(
+					["lanes", "list", "--json", "--quiet"],
+					"browser-use source lanes list from unrelated repo",
+					repo,
+				);
+				const laneData = expectBrowserUseData(
+					laneList,
+					"browser-use.adapter-lanes",
+				);
+				expect(laneData.lane_count, describeRun(laneList)).toBe(3);
+
+				const runbookList = await runBrowserUseSource(
+					["runbook", "list", "--json", "--quiet"],
+					"browser-use source runbook list from unrelated repo",
+					repo,
+				);
+				const runbookData = expectBrowserUseData(
+					runbookList,
+					"browser-use.runbook-catalog",
+				);
+				expect(runbookData.runbook_count, describeRun(runbookList)).toBe(1);
+
+				const invalid = await runBrowserUseSource(
+					["not-a-family", "--json", "--quiet"],
+					"browser-use source invalid family from unrelated repo",
+					repo,
+				);
+				expect(invalid.exitCode, describeRun(invalid)).toBe(2);
+				expect(invalid.stderr, describeRun(invalid)).toBe("");
+				const invalidEnvelope = parseEnvelope(invalid);
+				expect(invalidEnvelope.status, describeRun(invalid)).toBe("error");
+				expect(
+					(invalidEnvelope.error as Record<string, unknown> | undefined)
+						?.code,
+					describeRun(invalid),
+				).toBe("usage_error");
+				expect(
+					(invalidEnvelope.error as Record<string, unknown> | undefined)
+						?.message,
+					describeRun(invalid),
+				).toContain("not-a-family");
+
+				const invalidLeaf = await runBrowserUseSource(
+					["task", "not-a-leaf", "--json", "--quiet"],
+					"browser-use source invalid leaf from unrelated repo",
+					repo,
+				);
+				expect(invalidLeaf.exitCode, describeRun(invalidLeaf)).toBe(2);
+				expect(invalidLeaf.stderr, describeRun(invalidLeaf)).toBe("");
+				const invalidLeafEnvelope = parseEnvelope(invalidLeaf);
+				expect(invalidLeafEnvelope.status, describeRun(invalidLeaf)).toBe(
+					"error",
+				);
+				expect(
+					(invalidLeafEnvelope.error as Record<string, unknown> | undefined)
+						?.message,
+					describeRun(invalidLeaf),
+				).toContain("not-a-leaf");
+			});
 		},
 		TEST_TIMEOUT_MS,
 	);

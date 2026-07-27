@@ -3,6 +3,11 @@
 Purpose: prove the migrated chain — browser-connect connection → browser-use
 targets/operate.
 
+Current release-readiness ledger:
+[`docs/plans/2026-07-27-daily-driver-acceptance-ledger.md`](docs/plans/2026-07-27-daily-driver-acceptance-ledger.md).
+The ledger owns the full Daily Driver Acceptance Proof. This file retains
+detailed live receipts and historical matrices referenced by that ledger.
+
 Convention:
 
 - Envelope source: `browser-connect connect <adapter> --json` (repo-local: `bun run runtime/browser-connect/src/cli.ts connect <adapter> --json`).
@@ -17,6 +22,44 @@ Convention:
 | AE2 | Recovery discovery from envelope only | `targets list --mode recovery --adapter <id> --handoff <envelope> --json` with only the browser-connect envelope as evidence | Evidence-gathering candidates listed; `continuation.next_action_id` names an existing command. | live smoke | PASS (2026-07-16, run id `ae2-recovery-live`: 1 evidence-gathering candidate; continuation `connect_verified_browser`.) |
 | AE3 | No dangling deleted-command references | `bun --filter browser-use-scripts test` → `src/command-contract-no-dangle.test.ts` | Zero references to deleted commands (`browser-adapter-router`, `preflight-browser-adapter`, `browser-adapter-map`) in surviving contracts, runtime action vocabulary, and rendered help. | permanent test | PASS |
 | AE4 | Fail-closed connection entry | Agent Chrome stopped → `browser-connect connect <adapter> --json` | Exit `20`; failure envelope carries exactly one Repair Path with a live `runtime/browser-connect/REPAIR.md` anchor; no surviving browser-use path falls back to a cold browser. | live smoke | PASS (2026-07-16, run id `ae4-fail-closed-live`, exercised via an operator-owned foreign listener on the convention port: exit `20`, `foreign_listener`, exactly one Repair Path `use_suggested_port` → live anchor `REPAIR.md:553`; constraints included `no_adapter_fallback` + `no_process_destruction`; no launch, no fallback.) |
+
+## Front-Door L-Tier Refresh (2026-07-27)
+
+Serialized live journeys against Agent Chrome. Task execution used ONLY the
+installed `browser-use` CLI (front-door driver rule; the historical receipts
+above that drove `browser-connect`/adapters directly no longer count toward
+tier L). Out-of-band controls remained operator-owned, not public product
+surfaces: C01 setup/cleanup; C05 fault injection/cleanup; D26 fault
+injection/cleanup; D27 setup/cleanup; H21 fault injection/cleanup. Workflow
+`wf_89eb70b9-746`, three agents in sequence: connection (C01-C06),
+operations (D01, D06-D13 subset), edge (D26, D27, H21). Environment facts:
+the human default-profile Chrome squatted the explicit legacy override port
+9222. The Warm Chrome default CDP port is 9242; 9222 is only an explicit
+`WARM_CHROME_CDP_PORT`
+override (empty `/json/version` — correctly refused as `foreign_listener`
+throughout); every journey routed to Agent Chrome via `WARM_CHROME_CDP_PORT`.
+Pinned agent-browser 0.31.2 (cached) was exposed on PATH;
+chrome-devtools-mcp stayed at the
+operator gate (1.2.0 cached vs pinned 1.5.0).
+
+| Row | Verdict | Live receipt |
+| --- | --- | --- |
+| DDA-C01 | PASS | 2026-07-27 18:30 AEST / out-of-band stop: kill 7149 (SIGTERM to agent PID on 9223), verified 9223 listener gone + no agent-warm-profile process; then WARM_CHROME_CDP_PORT=9231 browser-use task run --intent debug --tab 0 --allowed-origin http://127.0.0.1:8912 --json. stderr: warm-chrome check command-start port=9231 -> endpoint_unreachable -> cold launch -> new PID 52160 --remote-debugging-port=9231 --user-data-dir=/Users/nathanvale/.agent-warm-profile, lsof 52160 LISTEN 9231. Before: agent-warm-profile PIDs NONE. Exactly one launch. Decision browser-use-front-door-003 classifies stop and fixture teardown as operator-owned, not a public product surface. |
+| DDA-C02 | PASS | 2026-07-27 18:29 AEST / WARM_CHROME_CDP_PORT=9223 browser-use task run --intent debug --tab 2 --allowed-origin http://127.0.0.1:8912 --json run twice: RUN1 ok run_id 136681a0 state=confirmed adapter=chrome-devtools-mcp handoff_evidence_id=50ed4882 dur 3139ms; RUN2 ok state=confirmed handoff_evidence_id=e79283ce dur 3160ms. Explicit reuse flag via scrape probe envelope: launch.launched=false, environment.name=agent-chrome. Corroboration: warm PID 7149 stable before/after; Chrome main count stable 2->2; no new PID. |
+| DDA-C03 | PASS | 2026-07-27 18:31 AEST / human Chrome PID 12118 LISTEN 127.0.0.1:9222 (bare Google Chrome, no debug flag, empty /json/version) live alongside agent Chrome PID 52160 on 9231. WARM_CHROME_CDP_PORT=9231 browser-use task run --intent debug --tab 2 --allowed-origin http://127.0.0.1:8912 --json -> ok, run.environment_profile={environment:agent-chrome,profile:default}, adapter chrome-devtools-mcp, state confirmed, handoff_evidence_id 74fdd3f0. Every envelope reported environment agent-chrome; 9222 human listener only ever refused (foreign_listener), never selected. |
+| DDA-C04 | N/A | Decision browser-use-front-door-004: v1 has one Browser Connect identity, agent-chrome/default; Warm Chrome owns its physical profile path, so a public wrong-profile request is outside the product model. Adjacent live safety receipt, 2026-07-27 18:31 AEST: WARM_CHROME_CDP_PORT=9222 task run against the human-profile listener -> exit 20 foreign_listener before adapter, launch.launched=false, no selected lane, no_adapter_fallback. |
+| DDA-C05 | PASS | 2026-07-27 18:32 AEST / bun dummy listener 127.0.0.1:9232 (200 not a CDP endpoint). WARM_CHROME_CDP_PORT=9232 browser-use task run --intent debug --tab 0 --allowed-origin http://127.0.0.1:8912 --json -> exit 20 code=foreign_listener, retryable=false, next_action_id=use_suggested_port, constraints[no_adapter_fallback,no_internal_port_switch,no_unverified_listener_connection,no_process_destruction], dur 104ms. Attempts: command-start=1, foreign_listener=1 (no storm). Killed dummy 53322; WARM_CHROME_CDP_PORT=9231 ... --tab 2 -> ok/confirmed/agent-chrome (recovery proven). |
+| DDA-C06 | N/A | Decision browser-use-front-door-005: Agent Chrome is defined by a verified CDP endpoint; remote-debugging-off removes the product capability and stays an external fault fixture. Adjacent live receipt, 2026-07-27 18:32 AEST: unavailable requested endpoint -> exit 20 launch_failed, requires_operator, inspect_diagnostics, one launch attempt, no storm, no orphan. |
+| DDA-D01 | PARTIAL | 2026-07-28 AEST / `WARM_CHROME_CDP_PORT=9231 browser-use targets list --mode handoff-bound --adapter agent-browser --json` auto-minted a handoff and passed handoff validation without browser-connect, then exited 20 with `target_discovery_transport_failed`: `Browser Target Discovery is not implemented for adapter agent-browser yet.` Continuation `change_target_discovery_input`; duration `287ms`. Auto-minting is proven. Remaining gap: implement the agent-browser target discovery transport; target listing did not succeed. |
+| DDA-D06 | PASS | 2026-07-28 AEST / WARM_CHROME_CDP_PORT=9231, agent-browser 0.31.2, real Chrome 150, loopback fixture 127.0.0.1:8912 (Save button reveals `[data-persisted='true']`). `browser-use task run --intent routine-automation --click-role button --click-name Save --postcondition-id saved --expect-visible "[data-persisted='true']" --tab t1 --allowed-origin http://127.0.0.1:8912 --json` -> status ok, selected_lane agent-browser, lane_source intent-preferred, run confirmed, mutation_dispatched true, executed_steps 2 (snapshot+click), external_effect none, postcondition {id:saved} confirmed from fresh visibility, handoff_evidence_id aa347b34d6c30bda… (auto-minted, no browser-connect). Hermetic proof (exactly-one, write-ahead dispatch, refuse-before-mutation on zero/multiple/drift/invalid-selector) backs it. |
+| DDA-D07 | BLOCKED | 2026-07-27 18:45 AEST / WARM_CHROME_CDP_PORT=9231, chrome-devtools-mcp 1.2.0 on PATH / `browser-use task run --intent debug --tab 0 --allowed-origin http://127.0.0.1:54159 --json` -> status error, exit 20, error.code adapter_not_installed, detail 'chrome-devtools-mcp version 1.2.0 does not match pinned 1.5.0.', continuation requires_operator true, constraint no_pin_policy_change, choice install_registered_adapter_manually. Cached: only ~/.bun/install/cache/chrome-devtools-mcp@1.2.0; pin CHROME_DEVTOOLS_MCP_PINNED_VERSION=1.5.0. Compounded by the same no-front-door-mutation gap as D06. |
+| DDA-D09 | PASS | 2026-07-28 AEST / port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912 (Save + Cancel buttons). A target absent from the current snapshot: `browser-use task run --intent routine-automation --click-role button --click-name Submit --postcondition-id saved --expect-visible "[data-persisted='true']" --tab t1 --allowed-origin http://127.0.0.1:8912 --json` -> exit 20, task_run_lane_refused, lane_outcome agent_browser_ref_invalid, "The semantic click target did not resolve to exactly one ref in the current task-local snapshot", external_effect none, no click dispatched. The exactly-one rule holds live; a ref whose current semantics differ cannot cross the mutation boundary. |
+| DDA-D10 | BLOCKED | 2026-07-27 18:45 AEST / same chrome-devtools-mcp pin block as D07: `task run --intent debug` -> exit 20 adapter_not_installed 'version 1.2.0 does not match pinned 1.5.0', no_pin_policy_change, requires_operator. No chrome-devtools mutation path reachable; stale-ref refusal path (chrome baseline is read-only console+network, browser-use-chrome-task.ts) never constructed via `task run`. |
+| DDA-D12 | PASS | 2026-07-28 AEST / port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912. A dispatched Save click whose postcondition selector can never be proven: `... --click-name Save --postcondition-id vanish --expect-visible "#does-not-exist-at-all" ...` -> exit 20, lane_outcome agent_browser_mutation_effect_unknown, external_effect unknown, error task_run_effect_unknown, retryable false, continuation inspect_task_run_result (never retry), run_id 2616f9f4…. No-repeat holds structurally (retryable false + terminal unknown; hermetic proof asserts exactly one click + terminal-truth resume refusal, CAS-persisted dispatch across the crash window). |
+| DDA-D13 | PASS | 2026-07-28 AEST / port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912 whose DOM carries ambient "Saved successfully" text plus a present-but-hidden `[data-decoy='true']`. Save click with a false named postcondition: `... --click-name Save --postcondition-id decoyfalse --expect-visible "[data-decoy='true']" ...` -> exit 20, lane_outcome agent_browser_postcondition_not_achieved, "Fresh structure did not satisfy the declared mutation postcondition", external_effect unknown (conservative post-dispatch truth), run_id bf527282…. The ambient "Saved successfully" text never reached stdout (leak count 0): only the named structural postcondition governs success. |
+| DDA-D26 | PARTIAL | 2026-07-27 18:58 AEST. Reduced Agent Chrome to zero page targets via out-of-band CDP close (json/close cascade); CDP still alive on 9231, /json/list page targets=0, target types []. Front-door `WARM_CHROME_CDP_PORT=9231 browser-use task run --intent debug --tab 0 --allowed-origin http://127.0.0.1:8971 --json` -> exit 20, typed task_run_not_achieved / lane_outcome chrome_task_target_unavailable, stderr empty (0 lines, no stack trace) = never a crash. GAP: the named oracle code target_discovery_no_candidates + continuation open_browser_target belongs to `targets list`; front-door `targets list --mode recovery --adapter chrome-devtools-mcp --json` against zero pages -> target_discovery_transport_failed / supply_verified_handoff (needs forbidden browser-connect mint). Agent Chrome restored to 2 tabs, final green run confirmed (tab 1, state confirmed). |
+| DDA-D27 | PARTIAL | 2026-07-27 18:57 AEST. Opened 50 new fixture tabs (one carrying needle-unique-report) via out-of-band CDP against 9231 -> 52 total page targets, needle_present=true (loopback fixture on 127.0.0.1:8971). Front door stayed bounded with 52 tabs: `WARM_CHROME_CDP_PORT=9231 browser-use task run --intent debug --tab 1 --allowed-origin http://127.0.0.1:8971 --json` -> status ok, state confirmed, 2 steps, 2969ms; `--tab 2` -> typed task_run_lane_refused chrome_task_target_origin_refused (origin bounding works live); no crash, no budget blowup. GAP: `browser-use targets list --mode recovery --adapter chrome-devtools-mcp --show-url --json` -> exit 20 target_discovery_transport_failed, continuation supply_verified_handoff — the candidate-list/ordinal/redaction surface hard-requires `browser-connect connect --handoff` (forbidden by driver rule); `task run` --debug stderr carries zero candidate/ordinal projection. All 51 fixture tabs closed afterward. |
+| DDA-H21 | PASS | 2026-07-27 18:56 AEST. Located real durable store: $HOME/.local/state/browser-use/leases/4752fffbf37d52deee5f9de3839bfe6c.json (sha256 of 'agent-chrome\0default', first 32 hex; confirmed via `browser-use repair status --json`). Backed up current lease, then surgically seeded ONE lease entry: holder=task-run-CRASHED-FAKE-H21-9f3c1a, fencing_token=50, expired (expires_at 1785100000050, far past). `browser-use repair status --json` read it: holder task-run-CRASHED-FAKE-H21-9f3c1a token 50 live=False. Live front-door run `WARM_CHROME_CDP_PORT=9231 browser-use task run --intent debug --tab 1 --allowed-origin http://127.0.0.1:8971 --json` -> status ok, state confirmed, adapter chrome-devtools-mcp, run 90bc9ccf. Lease after: new holder task-run-90bc9ccf..., fencing_token=51 (monotonic 50->51), recovered_from={fencing_token:50, holder_id:'task-run-CRASHED-FAKE-H21-9f3c1a', observed_expired_at_epoch_ms:1785142577881}. Post-recovery `repair status`: status ok, orphan_temp_files [], pending_tombstones [], leases healthy. Matches hermetic oracle (browser-use-process-hygiene.test.ts fenced-takeover + recovered_from). Distinct fake holder id used; store left healthy. |
 
 ## Envelope-Derived Transport Matrix (refactor U1 proof)
 
@@ -296,22 +339,26 @@ cleanup:
 ### BAP-C5 Playwright-CDP attach
 
 case_id: `bap-playwright-cdp-attach`
-kind: future live smoke
+kind: live pairwise journey
 status: pending
 run_id: `bap-playwright-cdp-attach`
 adapter: `playwright-cdp`
 side_effects: check, network
-requires: Playwright runtime available; Warm Chrome healthy on `9222`
+requires: pinned Playwright CLI installed through Browser Connect's operator gate; Agent Chrome healthy; anonymous fixture page
 
 run:
-- [ ] Future proof CLI: verify Playwright `connectOverCDP` attaches to `http://127.0.0.1:9222` after the adapter contract accepts `playwright-cdp`.
+- [ ] Invoke only `browser-use task run --intent frontend-test --tab <index> --allowed-origin <origin> --json`.
 
 expect:
-- [ ] Playwright `connectOverCDP` attaches to verified endpoint.
-- [ ] No launch API called.
+- [ ] Internal Browser Connect mint selects `playwright-cdp`.
+- [ ] Run reports `selected_lane=playwright-cdp` and `state=confirmed`.
+- [ ] Playwright attaches only to the verified CDP endpoint.
+- [ ] Requested tab index and fresh snapshot origin match the fixture.
+- [ ] No browser launch, navigation, or mutation command runs.
 
 cleanup:
-- [ ] Close Playwright connection only; keep Warm Chrome running.
+- [ ] Named Playwright session detaches.
+- [ ] Agent Chrome and the fixture tab remain running.
 
 ### BAP-C6 Playwright launch rejected
 

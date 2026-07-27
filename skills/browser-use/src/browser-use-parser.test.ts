@@ -18,12 +18,16 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("operate");
 	});
 
-	// Scenario 8: root help points back to the connection prerequisite.
-	test("--help points back to browser-connect connect", async () => {
+	// Scenario 8 (rewritten for the single front door, design brief D2): root
+	// help is agent-first and never teaches a secondary CLI. The envelope
+	// prerequisite pointer moved to the advanced leaf/family help of the
+	// commands that consume --handoff (asserted in the platform contract tests).
+	test("--help is the single agent-first front door", async () => {
 		const result = await runForTest(["--help"], makeRuntime());
-		expect(result.stdout).toContain("browser-connect connect");
-		expect(result.stdout).toContain("--handoff");
-		// Does not copy the envelope schema, only a pointer.
+		expect(result.stdout).toContain("Start here (for AI agents)");
+		expect(result.stdout).toContain("browser-use guide");
+		expect(result.stdout).not.toContain("browser-connect");
+		// Does not copy the envelope schema, only pointers.
 		expect(result.stdout).not.toContain("browser_entry_mode");
 		expect(result.stdout).not.toContain("probe_executable");
 		// R4: no dangling references to the deleted Router chain.
@@ -90,6 +94,9 @@ describe("U3 help and version", () => {
 			// state and carries no connection prerequisite).
 			if (command === "targets-status") {
 				expect(result.stdout).not.toContain("Prerequisite:");
+			} else if (command === "targets-list") {
+				expect(result.stdout).toContain("attaches automatically");
+				expect(result.stdout).not.toContain("browser-connect connect");
 			} else {
 				expect(result.stdout).toContain("browser-connect");
 			}
@@ -102,10 +109,15 @@ describe("U3 help and version", () => {
 // =========================================================================
 
 describe("U3 parser", () => {
-	test("missing family is a usage error", async () => {
-		const result = await runForTest([], makeRuntime());
+	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
+	// door smoke tests). A PRESENT but unregistered family token stays a usage
+	// error naming the invalid value (D6).
+	test("unknown family is a usage error naming the token", async () => {
+		const result = await runForTest(["not-a-family"], makeRuntime());
 		expect(result.exitCode).toBe(2);
-		expect(`${result.stdout}\n${result.stderr}`).toContain("missing command family");
+		expect(`${result.stdout}\n${result.stderr}`).toContain(
+			"unknown command family: not-a-family",
+		);
 	});
 
 	test("family without subcommand is a usage error", async () => {

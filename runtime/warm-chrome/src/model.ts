@@ -34,6 +34,22 @@ export const WARM_CHROME_CLI_NAME = "warm-chrome" as const;
 export const WARM_CHROME_DEFAULT_PROFILE_DIR = "~/.agent-warm-profile" as const;
 
 /**
+ * Default CDP port when neither `--port`/`--endpoint` nor `WARM_CHROME_CDP_PORT`
+ * is supplied.
+ *
+ * Deliberately NOT 9222: the 9222 DevTools convention is the most collision-prone
+ * port on a developer machine (real Chrome, Chrome for Testing, and stale
+ * sessions all gravitate to it), so a 9222 default makes the agent path refuse
+ * `foreign_listener` whenever anything else holds it. This dedicated port sits in
+ * the agent suggested-port window (`WARM_CHROME_SUGGESTED_PORT_WINDOW`, 9223-9299)
+ * and pairs with the dedicated `WARM_CHROME_DEFAULT_PROFILE_DIR`. Explicit
+ * `--port 9222` / `WARM_CHROME_CDP_PORT=9222` still works for anyone who wants it.
+ *
+ * @defaultValue "9242"
+ */
+export const WARM_CHROME_DEFAULT_CDP_PORT = "9242" as const;
+
+/**
  * Public v1 command ids (plan U2 R2).
  *
  * `check` is the agent proof surface (JSON default); `status` is its

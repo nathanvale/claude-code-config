@@ -178,14 +178,29 @@ export async function runTargetsList(input: {
 	let handoff: HandoffFacts | undefined;
 	if (mode === "handoff-bound") {
 		const handoffPath = flags["--handoff"];
-		if (!handoffPath) {
-			return fail(
-				handoffInvalidFailure(
-					"handoff-bound targets list requires --handoff <path>",
-				),
-			);
+		let parse: HandoffParse;
+		if (handoffPath) {
+			parse = await readHandoffFacts(runtime, handoffPath);
+		} else {
+			const adapter = flags["--adapter"];
+			if (!isKnownAdapterId(adapter)) {
+				return fail(
+					usageDiscoveryFailure(
+						"handoff-bound targets list requires --adapter <id> when --handoff is absent.",
+					),
+				);
+			}
+			const minted = await runtime.mintHandoff({
+				adapterId: adapter,
+				runId,
+			});
+			if (minted.exitCode !== 0) {
+				if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
+				if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
+				return minted.exitCode;
+			}
+			parse = parseHandoffFacts(minted.stdout);
 		}
-		const parse = await readHandoffFacts(runtime, handoffPath);
 		if (!parse.ok) return fail(parse.failure);
 		if (parse.kind === "failed") {
 			return fail(
@@ -282,9 +297,15 @@ export async function runTargetsList(input: {
 	// Keep only navigable http(s) Browser Targets. Non-navigable surfaces (ws://
 	// debugger, devtools://, chrome://) are not public targets; dropping them
 	// before ordinal assignment keeps ordinals dense and transport handles out of
-	// the candidate set entirely (R32).
-	const navigablePages = discovery.pages.filter((page) =>
-		parseUrlSafe(page.url),
+	// the candidate set entirely (R32). Scheme alone is not sufficient: a CDP
+	// `/json/list` service_worker or extension background page can carry an
+	// http(s) url, so any listing that declares a target `type` must also be a
+	// `page` — a non-`page` type is never operation-ready (DDA-D28). An absent
+	// type (chrome-devtools-mcp text envelope) is treated as a navigable page.
+	const navigablePages = discovery.pages.filter(
+		(page) =>
+			parseUrlSafe(page.url) !== undefined &&
+			(page.type === undefined || page.type === "page"),
 	);
 	const candidates = navigablePages.map((page, index) =>
 		toCandidate(page, index, targetEnvelopeId, showUrl),
@@ -381,6 +402,14 @@ export async function readHandoffFacts(
 			failure: handoffInvalidFailure("the --handoff file could not be read"),
 		};
 	}
+	return parseHandoffFacts(raw);
+}
+
+// Content-level entry for the one envelope parser: the internal mint (D4)
+// holds the envelope bytes in memory and must flow through the SAME
+// validation as a caller-supplied --handoff file — one parser, one contract,
+// no second trust path.
+export function parseHandoffFacts(raw: string): HandoffParse {
 	const invalid = (detail: string): HandoffParse => ({
 		ok: false,
 		failure: handoffInvalidFailure(
@@ -506,6 +535,22 @@ export async function readHandoffFacts(
 	) {
 		return invalid("endpoint ws form is not a ws(s) URL with a host");
 	}
+	// Warm Chrome is a LOCAL browser environment: browser-connect proves a
+	// loopback CDP endpoint (DDA-C17). A LAN, link-local, or public host in the
+	// envelope means the endpoint was tampered or the proof came from the wrong
+	// place; refuse before any adapter dispatch so no subprocess is ever spawned
+	// against a non-local address. Both endpoint forms must be loopback — a mixed
+	// pair (loopback http, remote ws) is a contradiction and also refused.
+	if (!isLoopbackHost(endpointUrl.hostname)) {
+		return invalid(
+			`endpoint http host ${endpointUrl.hostname} is not loopback; the verified endpoint must be a local browser`,
+		);
+	}
+	if (!isLoopbackHost(endpointWsUrl.hostname)) {
+		return invalid(
+			`endpoint ws host ${endpointWsUrl.hostname} is not loopback; the verified endpoint must be a local browser`,
+		);
+	}
 	const proofValue = contractField<BrowserConnectHandoffPayload>(data, "proof");
 	const proof = isJsonObject(proofValue) ? proofValue : undefined;
 	const proofContractId = proof
@@ -566,6 +611,24 @@ function safeUrl(value: string): URL | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+// A CDP endpoint host is loopback iff it is the localhost name, an IPv4 address
+// in 127.0.0.0/8, or IPv6 ::1. URL.hostname lowercases names and strips the
+// [brackets] from an IPv6 literal, so a direct compare/regex is sufficient; a
+// LAN address (192.168/10./169.254), a public host, or anything else is not
+// loopback and must never authorize an adapter spawn (DDA-C17).
+function isLoopbackHost(hostname: string): boolean {
+	if (hostname === "localhost") return true;
+	if (hostname === "::1") return true;
+	// IPv4 dotted quad: loopback is the whole 127.0.0.0/8 block.
+	const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+	if (ipv4) {
+		const octets = ipv4.slice(1, 5).map((part) => Number(part));
+		if (octets.some((octet) => octet > 255)) return false;
+		return octets[0] === 127;
+	}
+	return false;
 }
 
 // --- Live target listing through the attached adapter -----------------------
@@ -658,6 +721,7 @@ function extractRawPages(value: unknown): RawPage[] {
 				...(typeof object.id === "string" ? { id: object.id } : {}),
 				...(typeof object.title === "string" ? { title: object.title } : {}),
 				...(typeof object.url === "string" ? { url: object.url } : {}),
+				...(typeof object.type === "string" ? { type: object.type } : {}),
 			},
 		];
 	});

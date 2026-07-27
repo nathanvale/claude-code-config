@@ -967,6 +967,7 @@ async function assessRepairAdapter(
 
 /** Safe projected fields shared by every repair envelope (no paths, R11). */
 function repairProvenanceFields(repair: RepairAssessment): Record<string, unknown> {
+	const policy = repair.definition.installPolicy;
 	return {
 		adapter_id: repair.definition.id,
 		install_state: repair.installState,
@@ -974,7 +975,19 @@ function repairProvenanceFields(repair: RepairAssessment): Record<string, unknow
 		BROWSER_CONNECT_SAFE_VERSION_PATTERN.test(repair.observedVersion)
 			? { observed_version: repair.observedVersion }
 			: {}),
+		// Retain the top-level pin for existing consumers. The nested copy keeps
+		// the complete binary handoff self-contained; both derive from the same
+		// definition and contract tests pin their equality.
 		pinned_version: repair.definition.pinnedVersion,
+		required_binary: {
+			executable: repair.definition.executable,
+			package_name: policy.packageName,
+			pinned_version: repair.definition.pinnedVersion,
+			install_scope: policy.installScope,
+			lifecycle_scripts_required: policy.lifecycleScriptsRequired,
+			package_owner: policy.operatorChoice.packageOwner,
+			docs_url: policy.operatorChoice.docsUrl,
+		},
 	};
 }
 
@@ -1369,8 +1382,9 @@ function writeRepairPreview(
 		schema_version: BROWSER_CONNECT_SCHEMA_VERSION,
 	};
 	if (outputMode === "plain") {
+		const binary = repair.definition.installPolicy;
 		deps.stdout.write(
-			`repair_preview adapter=${repair.definition.id} state=${repair.installState} posture=${posture} run_id=${run.runId} duration_ms=${run.durationMs}\n`,
+			`repair_preview adapter=${repair.definition.id} state=${repair.installState} posture=${posture} run_id=${run.runId} duration_ms=${run.durationMs} package=${binary.packageName} pin=${repair.definition.pinnedVersion} scope=${binary.installScope} lifecycle_scripts=${binary.lifecycleScriptsRequired ? "required" : "disabled"}\n`,
 		);
 		return;
 	}
@@ -2811,8 +2825,12 @@ export function createProductionAdapterRuntime(): AdapterRuntime {
  * Default production dependencies: the real warm-chrome `main`, the real
  * adapter runtime (PATH + published-tree resolution, no-shell spawn), and the
  * real registry.
+ *
+ * Exported for in-process embedding (browser-use's internal envelope mint,
+ * design brief D4): the embedder passes these deps to `main` with captured
+ * writers so the one production wiring lives here, never copied.
  */
-async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
+export async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
 	const { main: warmChromeMain } = await import("@side-quest/warm-chrome/cli");
 	return { warmChromeMain, adapterRuntime: createProductionAdapterRuntime() };
 }

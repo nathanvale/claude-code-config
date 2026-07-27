@@ -4,6 +4,7 @@ import {
 	browserUseContracts,
 } from "./command-contract";
 import {
+	BROWSER_USE_TASK_INTENT_DEFINITIONS,
 	BROWSER_USE_TASK_INTENTS,
 	type BrowserUseSharedRun,
 } from "./browser-use-run-model";
@@ -34,9 +35,8 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 // CLI-level tests over the REAL driver via runForTest against a real temp XDG
 // store, plus pure routing-engine tests. Fakes match the real envelope shapes
 // proven in wave 1 (browser-use-agent-browser.test.ts). Cases: successful
-// agent-browser dispatch, inadmissible override refusal, playwright not-installed
-// typed repair, resume of an existing run, unknown-effect terminal, and the
-// intent-enum drift pin.
+// agent-browser and Playwright dispatch, inadmissible override refusal, resume
+// of an existing run, unknown-effect terminal, and the intent-enum drift pin.
 // =========================================================================
 
 const disposables: { dispose(): void }[] = [];
@@ -125,6 +125,7 @@ async function makeStore(): Promise<{
 function taskRunRuntime(
 	env: Record<string, string | undefined>,
 	responses: readonly { stdout?: string; exitCode?: number; timedOut?: boolean }[],
+	onCall?: (call: readonly string[]) => Promise<void>,
 ) {
 	let index = 0;
 	const calls: Array<readonly string[]> = [];
@@ -139,7 +140,9 @@ function taskRunRuntime(
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
 			runCommand: async (input) => {
-				calls.push([input.command, ...input.args]);
+				const call = [input.command, ...input.args];
+				calls.push(call);
+				await onCall?.(call);
 				const response = responses[index++] ?? {};
 				return {
 					exitCode: response.exitCode ?? 0,
@@ -180,10 +183,28 @@ describe("task run contract + parser (R27)", () => {
 		expect(Object.keys(contract.flags ?? {})).toContain("--lane");
 	});
 
-	test("task run without --handoff is a usage error", async () => {
+	// Rewritten for the internal mint (design brief D4): a fresh --intent run
+	// without --handoff engages the runtime's mintHandoff seam instead of
+	// erroring; the fail-closed mint stub surfaces its connect failure verbatim.
+	// The RESUME path still hard-requires the caller-managed envelope.
+	test("task run --intent without --handoff engages the internal mint", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
 			["task", "run", "--intent", "scrape", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		// makeRuntime's mint stub fails closed with exit 20 — proof the mint path
+		// ran (a parser rejection would have exited 2 before any mint).
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "mint_not_faked",
+		});
+	});
+
+	test("task run --run without --handoff is a usage error", async () => {
+		const store = await makeStore();
+		const result = await runForTest(
+			["task", "run", "--run", "run-1", "--json"],
 			makeRuntime({ env: store.env }),
 		);
 		expect(result.exitCode).toBe(2);
@@ -206,6 +227,55 @@ describe("task run contract + parser (R27)", () => {
 // =========================================================================
 
 describe("task run routing engine (R6, R10, R11)", () => {
+	test("every advertised intent selects its declared lane or reports that exact lane unavailable", () => {
+		const registry = baselineRegistry();
+
+		for (const definition of BROWSER_USE_TASK_INTENT_DEFINITIONS) {
+			const preferred = definition.preferred_adapter;
+			if (preferred === undefined) {
+				throw new Error(`advertised intent ${definition.task_intent} has no preferred adapter`);
+			}
+			const routed = routeTaskRun({
+				intent: definition.task_intent,
+				registry,
+				handoffAdapter: preferred,
+				capabilityCovers: laneCapabilityCovers,
+			});
+
+			if (
+				definition.task_intent === "trace-inspection" ||
+				definition.task_intent === "http-replay"
+			) {
+				// R22: Browser Use does not own these intents' specialist artifact /
+				// archive-input contract yet, so they are honest typed unavailability
+				// (intent_unrouted) naming the missing contract — NOT a misleading
+				// "re-probe stale lane evidence" refusal (that could never add a
+				// contract that does not exist).
+				expect(routed).toMatchObject({
+					ok: false,
+					refusal: { code: "intent_unrouted" },
+				});
+				if (!routed.ok) {
+					expect(routed.refusal.message).toContain("contract");
+				}
+				continue;
+			}
+
+			expect(routed).toMatchObject({
+				ok: true,
+				route: {
+					intent: definition.task_intent,
+					lane_id: preferred,
+					source: "intent-preferred",
+					required_capability:
+						BROWSER_USE_TASK_INTENT_REQUIRED_CAPABILITY[
+							definition.task_intent
+						],
+				},
+			});
+		}
+	});
+
 	test("the required-capability policy only names registered live-lane capabilities", () => {
 		for (const [intent, capability] of Object.entries(
 			BROWSER_USE_TASK_INTENT_REQUIRED_CAPABILITY,
@@ -260,7 +330,7 @@ describe("task run routing engine (R6, R10, R11)", () => {
 		if (!routed.ok) expect(routed.refusal.code).toBe("handoff_lane_mismatch");
 	});
 
-	test("an explicit override to a not-installed lane fails closed (R10, AE3)", () => {
+	test("an explicit override to a lane lacking the intent capability fails closed", () => {
 		const routed = routeTaskRun({
 			intent: "routine-automation",
 			registry: baselineRegistry(),
@@ -269,7 +339,9 @@ describe("task run routing engine (R6, R10, R11)", () => {
 			capabilityCovers: laneCapabilityCovers,
 		});
 		expect(routed.ok).toBe(false);
-		if (!routed.ok) expect(routed.refusal.code).toBe("lane_not_installed");
+		if (!routed.ok) {
+			expect(routed.refusal.code).toBe("lane_override_inadmissible");
+		}
 	});
 
 	test("a rejected identity alias override fails closed, never mapped (R10)", () => {
@@ -339,6 +411,612 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(calls[0]?.join(" ")).toContain("tab list");
 	});
 
+	test("routine automation resolves one current semantic target, clicks, and verifies its named postcondition", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ visible: true }) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		const run = data.run as Record<string, unknown>;
+		expect(run).toMatchObject({
+			state: "confirmed",
+			task_intent: "routine-automation",
+			postcondition: {
+				id: "saved",
+				summary: "The declared element is visible after mutation.",
+			},
+			mutation_dispatched: true,
+		});
+		expect(data.executed_steps).toBe(2);
+		expect(calls.map((call) => call.slice(-3))).toContainEqual([
+			"click",
+			"@e1",
+			"--json",
+		]);
+		expect(calls.at(-1)?.slice(-4)).toEqual([
+			"is",
+			"visible",
+			"[data-persisted='true']",
+			"--json",
+		]);
+	});
+
+	test("the shared run records mutation dispatch before the adapter receives the click", async () => {
+		const store = await makeStore();
+		let markerObservedBeforeClick = false;
+		const { runtime } = taskRunRuntime(
+			store.env,
+			[
+				{
+					stdout: adapterSuccess({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: adapterSuccess({}) },
+				{
+					stdout: adapterSuccess({
+						snapshot: "@e1 button Save",
+						refs: { e1: { role: "button", name: "Save" } },
+					}),
+				},
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+				{ stdout: adapterSuccess({ visible: true }) },
+			],
+			async (call) => {
+				if (!call.includes("click")) return;
+				const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+				markerObservedBeforeClick =
+					loaded.ok && loaded.run.mutation_dispatched;
+			},
+		);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(markerObservedBeforeClick).toBe(true);
+	});
+
+	test("a whitespace-only visible selector is refused before mutation", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"   ",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(2);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_lane_refused",
+		});
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(false);
+	});
+
+	test("a stale ref reassigned to different semantics cannot dispatch the click", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 link Cancel",
+					refs: { e1: { role: "link", name: "Cancel" } },
+				}),
+			},
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_ref_invalid",
+			external_effect: "none",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: false,
+			});
+		}
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+	});
+
+	test("zero and duplicate semantic matches preserve exact no-effect truth", async () => {
+		for (const refs of [
+			{},
+			{
+				e1: { role: "button", name: "Save" },
+				e2: { role: "button", name: "Save" },
+			},
+		]) {
+			const store = await makeStore();
+			const { runtime, calls } = taskRunRuntime(store.env, [
+				{
+					stdout: adapterSuccess({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ snapshot: "", refs }) },
+			]);
+
+			const result = await runForTest(
+				[
+					"task",
+					"run",
+					"--intent",
+					"routine-automation",
+					"--handoff",
+					store.handoffPath,
+					"--tab",
+					"t7",
+					"--allowed-origin",
+					"https://example.test",
+					"--click-role",
+					"button",
+					"--click-name",
+					"Save",
+					"--postcondition-id",
+					"saved",
+					"--expect-visible",
+					"[data-persisted='true']",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			const json = parseJson(result.stdout);
+			expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+			expect(json.data).toMatchObject({
+				lane_outcome: "agent_browser_ref_invalid",
+				external_effect: "none",
+			});
+			const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+			expect(loaded.ok).toBe(true);
+			if (loaded.ok) {
+				expect(loaded.run).toMatchObject({
+					state: "not-achieved",
+					mutation_dispatched: false,
+				});
+			}
+			expect(calls.some((call) => call.includes("click"))).toBe(false);
+		}
+	});
+
+	test("verification loss after semantic click records unknown and never repeats the mutation", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Submit",
+					refs: { e1: { role: "button", name: "Submit" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterCdpFailure(), exitCode: 1, timedOut: true },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Submit",
+				"--postcondition-id",
+				"submitted",
+				"--expect-visible",
+				"[data-submitted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_effect_unknown" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_mutation_effect_unknown",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "unknown",
+				mutation_dispatched: true,
+				postcondition: { id: "submitted" },
+			});
+		}
+		expect(calls.filter((call) => call.includes("click"))).toHaveLength(1);
+		expect(
+			(json.continuation as Record<string, unknown>).next_action_id,
+		).toBe("inspect_task_run_result");
+	});
+
+	test("ambient success text cannot override a false named structural postcondition", async () => {
+		const store = await makeStore();
+		const { runtime } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "Saved successfully\n@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ message: "Saved successfully" }) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ visible: false }) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"persisted",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_not_achieved" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_postcondition_not_achieved",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: true,
+				postcondition: { id: "persisted" },
+			});
+		}
+		expect(result.stdout).not.toContain("Saved successfully");
+	});
+
+	test("successful Playwright dispatch selects the intended tab and returns snapshot evidence", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{
+				stdout:
+					"### Page\n- Page URL: https://example.test/account\n### Snapshot\n- heading \"Account\"\n",
+			},
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.selected_lane).toBe("playwright-cdp");
+		expect((data.run as Record<string, unknown>).state).toBe("confirmed");
+		expect(calls.map((call) => call.slice(1))).toEqual([
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright",
+			],
+			["--session=browser-use-run-playwright", "tab-select", "1"],
+			["--session=browser-use-run-playwright", "snapshot"],
+			["--session=browser-use-run-playwright", "detach"],
+		]);
+	});
+
+	test("Playwright connection failure blocks the same run without adapter fallback", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-connect")),
+			"utf-8",
+		);
+		const { runtime } = taskRunRuntime(store.env, [
+			{ stdout: "", exitCode: 1 },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({
+			code: "task_run_connection_unstable",
+		});
+		expect((json.data as Record<string, unknown>).selected_lane).toBe(
+			"playwright-cdp",
+		);
+		expect(
+			(json.continuation as Record<string, unknown>).next_action_id,
+		).toBe("resume_shared_run");
+		expect(JSON.stringify(json)).not.toContain("agent-browser");
+	});
+
+	test("Playwright origin mismatch records not achieved and never switches lanes", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-origin")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{ stdout: "### Page\n- Page URL: https://other.test/account\n" },
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "locator-aria-assertion",
+				"--handoff", store.handoffPath,
+				"--tab", "2",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+		expect((json.data as Record<string, unknown>).lane_outcome).toBe(
+			"playwright_task_origin_refused",
+		);
+		expect(calls.at(-1)?.at(-1)).toBe("detach");
+		expect(JSON.stringify(json)).not.toContain("agent-browser");
+	});
+
 	// An unregistered --lane value (e.g. playwright-cli, not a registered adapter)
 	// is refused at the PARSER as a usage error before the live/dry-run split —
 	// the contract declares --lane as an enum of BROWSER_USE_LIVE_ADAPTERS, so a
@@ -364,7 +1042,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(`${result.stdout}\n${result.stderr}`).toContain("--lane must be one of:");
 	});
 
-	test("routing to the not-installed playwright lane returns the adapter-install continuation (R10)", async () => {
+	test("an override cannot route an intent through a Playwright lane lacking its capability", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
 			[
@@ -379,9 +1057,11 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		);
 		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
-		expect(json.error).toMatchObject({ code: "task_run_lane_not_installed" });
+		expect(json.error).toMatchObject({
+			code: "task_run_lane_override_inadmissible",
+		});
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"install_lane_adapter",
+			"choose_admissible_lane",
 		);
 		// No lane was substituted.
 		expect(JSON.stringify(json)).not.toContain("agent-browser");

@@ -34,3 +34,11 @@ entry front door: `runtime/browser-connect`.
 - browser-use owns operational policy after the handoff: adapter capability policy, targets, operate.
 - Auth/login walls are app steps after browser entry succeeds.
 - Historical findings and rationale live in `skills/browser-use/PROVENANCE.md`.
+
+## Research
+
+- Chrome for Testing capability, authentication, profile, and lifecycle
+  trade-offs:
+  `skills/browser-use/docs/research/2026-07-28-chrome-for-testing-browser-use-tradeoffs.md`.
+- The research challenges the rationale for a binary-specific ban but does not
+  change the current Warm Chrome invariant.

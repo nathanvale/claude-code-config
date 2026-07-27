@@ -58,6 +58,19 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/**
+	 * Internal Verified Handoff Envelope mint (design brief D4): prove the
+	 * connection and mint the envelope in-process through browser-connect's
+	 * exported `main` — the everyday `task run --intent` path needs no caller-
+	 * managed `--handoff`. Returns browser-connect's exact stdout/stderr and
+	 * exit code so a connect failure (exit 20, one Repair Path) surfaces
+	 * verbatim. Envelope contract ownership stays with browser-connect; this
+	 * seam only carries bytes. Tests inject a fixture-backed fake.
+	 */
+	mintHandoff: (input: {
+		adapterId: string;
+		runId?: string;
+	}) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 };
 
 export function createDefaultBrowserUseRuntime(
@@ -75,8 +88,71 @@ export function createDefaultBrowserUseRuntime(
 		},
 		readStdin: () => readAllStdin(),
 		platformFs: createDefaultPlatformFs(),
+		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
 	};
+}
+
+// In-process envelope mint (D4). Imports browser-connect's CLI lazily so the
+// module cost lands only on the mint path, captures its writers, and returns
+// the raw envelope bytes: browser-use never re-implements connect semantics
+// and never re-declares the envelope schema. A missing browser-connect module
+// (published-package edge) degrades to a typed failure shape the task-run
+// driver maps to `supply_matching_handoff` — never a crash.
+async function mintHandoffInProcess(input: {
+	adapterId: string;
+	runId?: string;
+}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	let cli: typeof import("@side-quest/browser-connect/cli");
+	try {
+		cli = await import("@side-quest/browser-connect/cli");
+	} catch {
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr:
+				"browser-connect is not importable in this installation; pass --handoff <path> with a pre-minted Verified Handoff Envelope.",
+		};
+	}
+	const capture = () => {
+		const chunks: string[] = [];
+		return {
+			writer: {
+				write: (text: string) => {
+					chunks.push(text);
+					return true;
+				},
+			},
+			text: () => chunks.join(""),
+		};
+	};
+	const stdout = capture();
+	const stderr = capture();
+	// The whole embedded interaction stays inside the guard, not just the
+	// import above: createProductionDeps() lazily imports warm-chrome and
+	// main() can throw before it owns the process exit — either would
+	// otherwise crash the mint path instead of returning the documented typed
+	// failure. The thrown message names a module/stage, never a secret.
+	try {
+		const deps = await cli.createProductionDeps();
+		const exitCode = await cli.main(
+			[
+				"connect",
+				input.adapterId,
+				"--json",
+				...(input.runId === undefined ? [] : ["--run-id", input.runId]),
+			],
+			{ ...deps, stdout: stdout.writer, stderr: stderr.writer },
+		);
+		return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr: `browser-connect could not mint the handoff in this installation (${detail}); pass --handoff <path> with a pre-minted Verified Handoff Envelope.`,
+		};
+	}
 }
 
 // Read all of stdin as UTF-8. An interactive terminal has no piped envelope, so

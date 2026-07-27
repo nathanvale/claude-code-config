@@ -27,6 +27,7 @@ import {
 import {
 	WARM_CHROME_CHECK_REASONS,
 	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
 	type WarmChromeCheckErrorCode,
@@ -49,7 +50,7 @@ import {
 const HOME = "/Users/warm";
 const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
-const BROWSER_WS = "ws://127.0.0.1:9222/devtools/browser/warm-chrome-token";
+const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
@@ -57,7 +58,10 @@ const HEADED_UA =
 function chromeCommand(
 	overrides: { port?: string | null; profile?: string | null; extraArgs?: string } = {},
 ): string {
-	const port = overrides.port === null ? "" : ` --remote-debugging-port=${overrides.port ?? "9222"}`;
+	const port =
+		overrides.port === null
+			? ""
+			: ` --remote-debugging-port=${overrides.port ?? WARM_CHROME_DEFAULT_CDP_PORT}`;
 	const profile =
 		overrides.profile === null
 			? ""
@@ -127,7 +131,7 @@ type VersionStep = Record<string, unknown> | Error | "hang";
 type FixtureOptions = {
 	/** Per-port listener answers. Arrays play per call; the last entry repeats. */
 	listeners?: Record<string, ListenerProcess | null | ReadonlyArray<ListenerProcess | null>>;
-	/** Raw error thrown by findListener for the named port (default 9222). */
+	/** Raw error thrown by findListener for the named port (default resolved). */
 	findListenerError?: Error;
 	findListenerErrorPort?: string;
 	/** /json/version script. Arrays play per call; the last entry repeats. */
@@ -172,13 +176,15 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 		? options.version
 		: [options.version ?? healthyVersion()];
 	let versionCursor = 0;
-	const listeners = options.listeners ?? { "9222": chromeListener() };
+	const listeners = options.listeners ?? {
+		[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener(),
+	};
 	const listenerCursor = new Map<string, number>();
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
 	};
 	const cdp = options.cdp ?? healthyCdp();
-	const errorPort = options.findListenerErrorPort ?? "9222";
+	const errorPort = options.findListenerErrorPort ?? WARM_CHROME_DEFAULT_CDP_PORT;
 
 	const runtime = createDefaultRuntime({
 		env: { HOME },
@@ -345,7 +351,7 @@ const failureScenarios: readonly FailureScenario[] = [
 			warmChromeFixture({
 				version: CONNECTION_REFUSED(),
 				listeners: {
-					"9222": {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
 						pid: 4242,
 						command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-pipe --user-data-dir=${DEDICATED_PROFILE}`,
 					},
@@ -359,7 +365,7 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				version: CONNECTION_REFUSED(),
-				listeners: { "9222": chromeListener() },
+				listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener() },
 			}),
 		code: "invalid_cdp",
 		reason: "roundtrip_failed",
@@ -393,7 +399,7 @@ const failureScenarios: readonly FailureScenario[] = [
 			abort.name = "AbortError";
 			return warmChromeFixture({
 				version: abort,
-				listeners: { "9222": chromeListener() },
+				listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener() },
 			});
 		},
 		code: "endpoint_unreachable",
@@ -497,7 +503,10 @@ const failureScenarios: readonly FailureScenario[] = [
 			warmChromeFixture({
 				version: CONNECTION_REFUSED(),
 				listeners: {
-					"9222": { pid: 6001, command: "/usr/local/bin/node /srv/dev-server.js" },
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 6001,
+						command: "/usr/local/bin/node /srv/dev-server.js",
+					},
 				},
 			}),
 		code: "port_occupied_foreign",
@@ -507,7 +516,9 @@ const failureScenarios: readonly FailureScenario[] = [
 		label: "/json/version answers while pointed at the default profile (R6c)",
 		fixture: () =>
 			warmChromeFixture({
-				listeners: { "9222": chromeListener({ profile: DEFAULT_PROFILE_ROOT }) },
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ profile: DEFAULT_PROFILE_ROOT }),
+				},
 			}),
 		code: "port_occupied_foreign",
 		reason: "json_answers_on_default_profile",
@@ -535,9 +546,9 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
 						pid: 4242,
-						command: `"/Users/warm/.cache/puppeteer/chrome/mac-138/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE}`,
+						command: `"/Users/warm/.cache/puppeteer/chrome/mac-138/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE}`,
 					},
 				},
 			}),
@@ -549,9 +560,9 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
 						pid: 4242,
-						command: `/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE}`,
+						command: `/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE}`,
 					},
 				},
 			}),
@@ -563,9 +574,9 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
 						pid: 4242,
-						command: `/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE}`,
+						command: `/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE}`,
 					},
 				},
 			}),
@@ -613,7 +624,7 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": chromeListener({ profile: "relative-warm-profile" }),
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ profile: "relative-warm-profile" }),
 				},
 			}),
 		code: "unsafe_profile",
@@ -623,7 +634,9 @@ const failureScenarios: readonly FailureScenario[] = [
 		label: "throwaway temporary listener profile",
 		fixture: () =>
 			warmChromeFixture({
-				listeners: { "9222": chromeListener({ profile: "/tmp/warm-profile" }) },
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ profile: "/tmp/warm-profile" }),
+				},
 				profiles: { "/tmp/warm-profile": profileStat("/tmp/warm-profile") },
 				version: healthyVersion({
 					webSocketDebuggerUrl: BROWSER_WS,
@@ -654,7 +667,7 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": chromeListener({ extraArgs: "--profile-directory=Work" }),
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ extraArgs: "--profile-directory=Work" }),
 				},
 				profiles: {
 					[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
@@ -669,7 +682,9 @@ const failureScenarios: readonly FailureScenario[] = [
 	{
 		label: "listener argv uses a different CDP port than requested",
 		fixture: () =>
-			warmChromeFixture({ listeners: { "9222": chromeListener({ port: "9333" }) } }),
+			warmChromeFixture({
+				listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ port: "9333" }) },
+			}),
 		code: "listener_mismatch",
 		reason: "port_mismatch",
 	},
@@ -689,7 +704,9 @@ const failureScenarios: readonly FailureScenario[] = [
 	{
 		label: "listener disappears during verification",
 		fixture: () =>
-			warmChromeFixture({ listeners: { "9222": [chromeListener(), null] } }),
+			warmChromeFixture({
+				listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: [chromeListener(), null] },
+			}),
 		code: "listener_mismatch",
 		reason: "listener_missing",
 	},
@@ -698,7 +715,10 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					"9222": [chromeListener({ pid: 4242 }), chromeListener({ pid: 999 })],
+					[WARM_CHROME_DEFAULT_CDP_PORT]: [
+							chromeListener({ pid: 4242 }),
+							chromeListener({ pid: 999 }),
+						],
 				},
 			}),
 		code: "listener_mismatch",
@@ -768,13 +788,17 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		});
 		expect(envelope.data?.browser).toBe(OBSERVED_BUILD);
 		expect(envelope.data?.web_socket_debugger_url).toBe(BROWSER_WS);
-		expect(envelope.data?.endpoint).toBe("http://127.0.0.1:9222");
+		expect(envelope.data?.endpoint).toBe(
+			`http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
+		);
 		expect(envelope.data?.browser_pid).toBe(4242);
 		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
 		const action = envelope.runtime_actions?.[0];
 		expect(action?.id).toBe("use_verified_endpoint");
 		// R8: guidance carries the ACTUAL endpoint, never the 9222 convention.
-		expect(action?.summary).toContain("http://127.0.0.1:9222");
+		expect(action?.summary).toContain(
+			`http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
+		);
 		expect(envelope.continuation?.next_action_id).toBe("use_verified_endpoint");
 	});
 
@@ -783,9 +807,9 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 			"/private/var/folders/_b/0fxx/X/com.google.Chrome.code_sign_clone/code_sign_clone.H5bJ4j/Google Chrome.app.bundle/Contents/MacOS/Google Chrome";
 		const fixture = warmChromeFixture({
 			listeners: {
-				"9222": {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: {
 					pid: 4242,
-					command: `${cloneBinary} --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE} --no-first-run`,
+					command: `${cloneBinary} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --no-first-run`,
 				},
 			},
 		});
@@ -981,11 +1005,14 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 });
 
 describe("warm-chrome suggested explicit port (U5 R7)", () => {
-	test("foreign listener on 9222 suggests the first verifiably free window port without allocating", async () => {
+	test("foreign listener on the default port suggests the first verifiably free window port without allocating", async () => {
 		const fixture = warmChromeFixture({
 			version: CONNECTION_REFUSED(),
 			listeners: {
-				"9222": { pid: 6001, command: "/usr/local/bin/node /srv/dev-server.js" },
+				[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 6001,
+						command: "/usr/local/bin/node /srv/dev-server.js",
+					},
 			},
 		});
 		const run = await runWarmChrome(["check"], fixture);
@@ -1018,7 +1045,10 @@ describe("warm-chrome suggested explicit port (U5 R7)", () => {
 
 	test("scan-window exhaustion omits the field", async () => {
 		const occupied: Record<string, ListenerProcess> = {
-			"9222": { pid: 6001, command: "/usr/local/bin/node /srv/dev-server.js" },
+			[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 6001,
+						command: "/usr/local/bin/node /srv/dev-server.js",
+					},
 		};
 		for (
 			let port = WARM_CHROME_SUGGESTED_PORT_WINDOW.start;
@@ -1065,7 +1095,7 @@ describe("warm-chrome check redaction boundary (U5 R13)", () => {
 		const fixture = warmChromeFixture({
 			version: CONNECTION_REFUSED(),
 			listeners: {
-				"9222": {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: {
 					pid: 6001,
 					command: `/opt/tools/proxy-server --password=${secrets[0]} --state ${secrets[5]} --upstream ${secrets[9]}`,
 				},
@@ -1142,9 +1172,11 @@ describe("warm-chrome status context parity (U5)", () => {
 		expect(plainRun.exitCode).toBe(0);
 		expect(plainRun.stdout).toContain("browser_ready");
 		expect(plainRun.stdout).toContain("command=status");
-		expect(plainRun.stdout).toContain("port=9222");
+		expect(plainRun.stdout).toContain(`port=${WARM_CHROME_DEFAULT_CDP_PORT}`);
 		expect(plainRun.stdout).toContain(`browser=${OBSERVED_BUILD}`);
-		expect(plainRun.stdout).toContain("endpoint=http://127.0.0.1:9222");
+		expect(plainRun.stdout).toContain(
+			`endpoint=http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
+		);
 	});
 
 	test("status surfaces the same station verdict as check for a failure", async () => {
@@ -1152,7 +1184,10 @@ describe("warm-chrome status context parity (U5)", () => {
 			warmChromeFixture({
 				version: CONNECTION_REFUSED(),
 				listeners: {
-					"9222": { pid: 6001, command: "/usr/local/bin/node /srv/dev-server.js" },
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 6001,
+						command: "/usr/local/bin/node /srv/dev-server.js",
+					},
 				},
 			});
 		const jsonRun = await runWarmChrome(["check"], makeFixture());
@@ -1245,7 +1280,10 @@ describe("warm-chrome check station evidence (U5)", () => {
 				fixture: warmChromeFixture({
 					version: CONNECTION_REFUSED(),
 					listeners: {
-						"9222": { pid: 6001, command: "/usr/local/bin/node /srv/dev-server.js" },
+						[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 6001,
+						command: "/usr/local/bin/node /srv/dev-server.js",
+					},
 					},
 				}),
 			},
@@ -1254,9 +1292,9 @@ describe("warm-chrome check station evidence (U5)", () => {
 				argv: ["check"],
 				fixture: warmChromeFixture({
 					listeners: {
-						"9222": {
+						[WARM_CHROME_DEFAULT_CDP_PORT]: {
 							pid: 4242,
-							command: `/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9222 --user-data-dir=${DEDICATED_PROFILE}`,
+							command: `/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE}`,
 						},
 					},
 				}),

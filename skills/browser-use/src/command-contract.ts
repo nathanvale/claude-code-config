@@ -26,6 +26,7 @@ import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
 export const BROWSER_USE_TRANSPORT_ADAPTERS = [
 	"chrome-devtools-mcp",
 	"agent-browser",
+	"playwright-cdp",
 ] as const;
 
 // Adapters with an implemented Browser Target Discovery page-listing transport
@@ -446,7 +447,27 @@ export const BROWSER_USE_AUTH_SUBCOMMANDS = [
 export type BrowserUseAuthSubcommand =
 	(typeof BROWSER_USE_AUTH_SUBCOMMANDS)[number];
 
+// Version-matched bundled guidance (agent-first front door, design brief D3:
+// docs/plans/2026-07-27-agent-first-front-door-brief.md). The guide ships
+// inside the CLI beside the contract it describes — the agent-browser
+// `skills get core` pattern — so external skill prose can stay a thin router.
+// Bare `browser-use guide` resolves to `guide show` in the parser (the one
+// family-default affordance; the root help advertises the bare form).
+const BROWSER_USE_GUIDE_SUBCOMMANDS = ["show"] as const;
+export type BrowserUseGuideSubcommand =
+	(typeof BROWSER_USE_GUIDE_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_GUIDE_TOPICS = [
+	"core",
+	"recovery",
+	"auth",
+	"lanes",
+	"setup",
+] as const;
+export type BrowserUseGuideTopic = (typeof BROWSER_USE_GUIDE_TOPICS)[number];
+
 export const BROWSER_USE_FAMILIES = [
+	"guide",
 	"targets",
 	"operate",
 	"task",
@@ -463,6 +484,7 @@ export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
 // One family -> subcommand table (the parser and help render from this; no
 // second copy of the family tree exists anywhere).
 export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
+	guide: BROWSER_USE_GUIDE_SUBCOMMANDS,
 	targets: BROWSER_USE_TARGETS_SUBCOMMANDS,
 	operate: BROWSER_USE_OPERATE_SUBCOMMANDS,
 	task: BROWSER_USE_TASK_SUBCOMMANDS,
@@ -477,6 +499,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 
 // One family -> root-help summary table (rendered by the parser's root help).
 export const BROWSER_USE_FAMILY_SUMMARIES = {
+	guide: "Version-matched workflow guidance for AI agents (start here).",
 	targets: "Browser Target Discovery, Selection, and status.",
 	operate: "Browser Operations: snapshot, screenshot, emulate.",
 	task: "Code-owned Task Intent catalog.",
@@ -501,6 +524,7 @@ export type BrowserUseTargetDiscoveryMode =
 	(typeof BROWSER_USE_TARGET_DISCOVERY_MODES)[number];
 
 export type BrowserUseCommand =
+	| "guide-show"
 	| "targets-list"
 	| "targets-select"
 	| "targets-status"
@@ -661,8 +685,8 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// The selected lane cannot consume the verified Browser Connect handoff
 	// (R3/R10/R11, AE3): browser-use refuses rather than discover or substitute.
 	"task_run_handoff_lane_mismatch",
-	// A registered lane whose native execution Interface is not implemented on
-	// this host (playwright-cdp): adapter-not-installed repair continuation (R10).
+	// A registered lane whose native execution Interface is not implemented:
+	// adapter-not-installed repair continuation (R10).
 	"task_run_lane_not_installed",
 	// The lane's execution interface is registered but browser-use has no
 	// dispatch binding for it yet (a lane implemented in the registry table but
@@ -693,13 +717,13 @@ export const browserUseTargetDiscoveryFailureActions = [
 	{
 		id: "supply_verified_handoff",
 		summary:
-			"Run browser-connect connect <adapter> --json and pass the Verified Handoff Envelope to targets list --handoff.",
+			"Re-run handoff-bound targets list with --adapter <id> to attach automatically, or provide a pre-minted Verified Handoff Envelope with --handoff.",
 		sideEffects: ["check"],
 	},
 	{
 		id: "refresh_verified_handoff",
 		summary:
-			"Re-run browser-connect connect for the requested adapter; the supplied handoff envelope does not match it.",
+			"Re-run handoff-bound targets list with the requested --adapter to attach automatically, or provide a matching pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -737,7 +761,7 @@ export const browserUseTargetDiscoverySuccessActions = [
 	{
 		id: "connect_verified_browser",
 		summary:
-			"Mint a Verified Handoff Envelope with browser-connect connect <adapter> --json, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -774,7 +798,7 @@ export const browserUseTargetSelectionFailureActions = [
 		// recovery prose strings.
 		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically, or supply a fresh pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -816,7 +840,7 @@ export const browserUseOperationFailureActions = [
 	{
 		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically, or supply a fresh pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1036,7 +1060,7 @@ const browserUseHandoffFlags = {
 	"--handoff": {
 		type: "path",
 		description:
-			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect <adapter> --json, or the run wrapper's stderr envelope).",
+			"Pre-minted Verified Handoff Envelope JSON file; advanced override for callers already holding connection evidence.",
 	},
 	"--dry-run": {
 		type: "boolean",
@@ -1055,7 +1079,8 @@ const browserUseTargetsListFlags = {
 	"--adapter": {
 		type: "enum",
 		values: BROWSER_USE_LIVE_ADAPTERS,
-		description: "Requested Browser Adapter id for recovery-mode discovery.",
+		description:
+			"Browser Adapter id to attach automatically in handoff-bound mode, or request in recovery mode.",
 	},
 	"--show-url": {
 		type: "boolean",
@@ -1341,10 +1366,30 @@ const browserUseTaskRunFlags = {
 		description:
 			"Exact HTTP(S) origin the lane task is bounded to (scheme + host + port).",
 	},
+	"--click-role": {
+		type: "string",
+		description:
+			"Exact accessible role to resolve from the current task-local snapshot for one routine-automation click.",
+	},
+	"--click-name": {
+		type: "string",
+		description:
+			"Exact accessible name paired with --click-role; zero or multiple current matches refuse before mutation.",
+	},
+	"--postcondition-id": {
+		type: "string",
+		description:
+			"Bounded stable name for the structural postcondition declared before mutation.",
+	},
+	"--expect-visible": {
+		type: "string",
+		description:
+			"CSS selector that must be freshly observed visible after the semantic click.",
+	},
 	"--handoff": {
 		type: "path",
 		description:
-			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect <adapter> --json). The only attachment route (R3).",
+			"Pre-minted Verified Handoff Envelope JSON file (advanced; required to resume with --run). Omitted on a fresh --intent run: the connection attaches automatically (D4). The envelope stays the only attachment route (R3).",
 	},
 	"--dry-run": {
 		type: "boolean",
@@ -1482,7 +1527,7 @@ const browserUseRunbookRunFlags = {
 	"--handoff": {
 		type: "path",
 		description:
-			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect agent-browser --json). The only attachment route (R3).",
+			"Pre-minted Verified Handoff Envelope JSON file for the agent-browser lane (advanced). Omitted: the connection attaches automatically (D4). The envelope stays the only attachment route (R3).",
 	},
 	"--tab": {
 		type: "string",
@@ -1608,12 +1653,49 @@ const browserUseAuthSelectionFlags = {
 
 export const browserUseContracts = defineCommandFacadeContract(
 	{
+		// Version-matched bundled guidance (design brief D3). Pure render of the
+		// bundled guide content module — no browser, no state, no side effects.
+		// Bare `browser-use guide` resolves here (parser family-default).
+		"guide-show": {
+			script: "browser-use",
+			summary:
+				"Show version-matched workflow guidance for AI agents: the everyday task loop, recovery, auth boundary, lanes, and adapter setup.",
+			usage: [
+				"guide [show] [--topic core|recovery|auth|lanes|setup] [--full] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["plain", "json"],
+			interactivity: "none",
+			flags: {
+				"--topic": {
+					type: "enum",
+					values: BROWSER_USE_GUIDE_TOPICS,
+					description:
+						"Guide topic: core (default), recovery, auth, lanes, or setup.",
+				},
+				"--full": {
+					type: "boolean",
+					description:
+						"Include the full page-action lifecycle and advanced targets/operate path.",
+				},
+				...browserUseOutputFlags,
+			},
+			exitCodes: {
+				"0": "Guide rendered.",
+				"1": "Runtime failure.",
+				"2": "Usage error.",
+			},
+		},
 		"targets-list": {
 			script: "browser-use",
 			summary:
-				"List handoff-bound or recovery Browser Target Candidates. Get the Verified Handoff Envelope from browser-connect connect <adapter> --json.",
+				"List handoff-bound or recovery Browser Target Candidates. Handoff-bound mode attaches automatically when --handoff is absent.",
 			usage: [
-				"targets list --mode handoff-bound --handoff <path> [--show-url] [--json|--plain]",
+				"targets list --mode handoff-bound --adapter <id> [--handoff <path>] [--show-url] [--json|--plain]",
 				"targets list --mode recovery --adapter <id> [--handoff <path>] [--show-url] [--json|--plain]",
 			],
 			json: true,
@@ -1782,7 +1864,8 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Route one Task Intent to an admissible lane, attach through the verified Browser Connect handoff, execute, and return the shared run, observed external-effect state, selected lane, and next safe action.",
 			usage: [
-				"task run --intent <intent> --handoff <path> [--lane <id>] [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--dry-run] [--json|--plain]",
+				"task run --intent routine-automation --click-role <role> --click-name <name> --postcondition-id <id> --expect-visible <selector> [--handoff <path>] [--tab <id>] --allowed-origin <origin> [--json|--plain]",
+				"task run --intent <intent> [--lane <id>] [--handoff <path>] [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--dry-run] [--json|--plain]",
 				"task run --run <id> --handoff <path> [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
@@ -1957,7 +2040,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Compile one Browser Runbook and dispatch it through the agent-browser lane against a verified handoff; returns the shared run, external-effect state, and next safe action.",
 			usage: [
-				"runbook run --service <id> --flow <id> --handoff <path> [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
+				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",

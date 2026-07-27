@@ -13,6 +13,7 @@ import {
 import { warmChromeContracts } from "../src/command-contract.ts";
 import {
 	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
 } from "../src/model.ts";
@@ -302,11 +303,11 @@ describe("warm-chrome dispatch (U4)", () => {
 		};
 		expect(envelope.status).toBe("ok");
 		expect(envelope.run_id).toBe("check-run");
-		expect(envelope.data.port).toBe("9222");
+		expect(envelope.data.port).toBe(WARM_CHROME_DEFAULT_CDP_PORT);
 		expect(seen[0]?.command).toBe("check");
 		expect(seen[0]?.displayCommand).toBe("check");
 		expect(seen[0]?.outputMode).toBe("json");
-		expect(seen[0]?.endpoint).toBe("http://127.0.0.1:9222");
+		expect(seen[0]?.endpoint).toBe(`http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`);
 	});
 
 	test("status resolves as the plain presentation alias of check", async () => {
@@ -325,7 +326,9 @@ describe("warm-chrome dispatch (U4)", () => {
 		expect(seen[0]?.command).toBe("check");
 		expect(seen[0]?.displayCommand).toBe("status");
 		expect(seen[0]?.outputMode).toBe("plain");
-		expect(result.stdout).toContain("browser_ready command=status port=9222");
+		expect(result.stdout).toContain(
+			`browser_ready command=status port=${WARM_CHROME_DEFAULT_CDP_PORT}`,
+		);
 		expect(result.stdout).toContain("run_id=status-run");
 	});
 

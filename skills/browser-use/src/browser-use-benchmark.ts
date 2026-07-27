@@ -192,15 +192,15 @@ export function renderComparisonTable(comparison: BenchmarkComparison): string {
 // --- Live driver -----------------------------------------------------------
 
 /** Eligible lanes for the AE12 bounded read-only task and the intent that
- *  routes to each. Playwright is intentionally absent: it is registered but not
- *  installed on this host (an operator gate), so it cannot produce a live
- *  sample and the harness records that rather than inventing one. */
+ *  routes to each. A lane without a matching verified handoff remains gated;
+ *  the harness never converts local adapter absence into a fabricated sample. */
 export const AE12_ELIGIBLE_LANES: ReadonlyArray<{
 	lane_id: string;
 	intent: string;
 }> = [
 	{ lane_id: "agent-browser", intent: "scrape" },
 	{ lane_id: "chrome-devtools-mcp", intent: "debug" },
+	{ lane_id: "playwright-cdp", intent: "frontend-test" },
 ];
 
 /** One live task-run result plus the wall time the driver measured. */
@@ -471,7 +471,6 @@ export const BENCHMARK_USAGE =
 		"this harness records the gate instead of fabricating a lane result.",
 		"",
 		`Eligible lanes: ${AE12_ELIGIBLE_LANES.map((l) => `${l.lane_id}(${l.intent})`).join(", ")}`,
-		"playwright-cdp is registered-but-not-installed (operator gate) and is skipped.",
 	].join("\n") + "\n";
 
 /** Parsed, validated CLI request. One of:
