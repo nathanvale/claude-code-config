@@ -812,8 +812,11 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		// returning {success:true, data:{tabs:[{tabId, url, active, title?}]}}.
 		// Discovery must spawn THAT shape (not the chrome-devtools list_pages
 		// call) and map tabId -> candidate id.
-		const wsEndpoint =
-			"ws://127.0.0.1:9222/devtools/browser/4f5a2b1c-8d3e-4a6f-9b0c-1e2d3c4b5a69";
+		// Derive the expected ws endpoint and session run id from the fixture
+		// (the FIXTURE_PROBE_EXECUTABLE / FIXTURE_ENDPOINT_HTTP pattern) so a
+		// regenerated fixture can never silently diverge from these literals.
+		const wsEndpoint = FIXTURE_ENVELOPE.data.endpoint.ws as string;
+		const fixtureRunId = FIXTURE_ENVELOPE.run_id as string;
 		const { runtime, calls } = discoveryRuntime({
 			files: {
 				"/h.json": verifiedHandoffEnvelope((envelope) => {
@@ -858,7 +861,7 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 			"--cdp",
 			wsEndpoint,
 			"--session",
-			"browser-use-fixture-run",
+			`browser-use-${fixtureRunId}`,
 			"tab",
 			"list",
 			"--json",

@@ -88,6 +88,22 @@ mcporter call streamdeck-author.streamdeck_read_page \
 - Verify with `streamdeck_read_page`.
 - Hand off to `skills/stream-deck-use/SKILL.md` for exposed-action verification.
 
+## Home Assistant Gotchas
+
+- Hue room entities do not necessarily expand into member lights. Read the
+  room's `entity_id` attribute, expand those ids, and verify the result contains
+  physical lights rather than the room entity.
+- Hue scene state can trail activation by more than one second. Before capturing
+  currently-on lights for a dial action, wait for member states to settle; a
+  300 ms Stream Deck tick bucket is not enough.
+- Prove active-light dimming with an off member: activate the scene, turn the
+  dial, then verify that the off member stayed off and the active members
+  changed brightness.
+- A physical Stream Deck profile can restore cached actions after an MCP write
+  and app restart. Wait for launch, re-read the page, and compare the rendered
+  deck; if the app restores stale actions, edit through the Stream Deck UI and
+  verify the manifest after the app-owned save.
+
 ## Safety
 
 - Never write Codex, Claude Code, OpenCode, VS Code, or `.mcp.json` Stream Deck
