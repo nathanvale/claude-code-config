@@ -243,13 +243,18 @@ describe("task run routing engine (R6, R10, R11)", () => {
 				definition.task_intent === "trace-inspection" ||
 				definition.task_intent === "http-replay"
 			) {
+				// R22: Browser Use does not own these intents' specialist artifact /
+				// archive-input contract yet, so they are honest typed unavailability
+				// (intent_unrouted) naming the missing contract — NOT a misleading
+				// "re-probe stale lane evidence" refusal (that could never add a
+				// contract that does not exist).
 				expect(routed).toMatchObject({
 					ok: false,
-					refusal: {
-						code: "no_admissible_lane",
-						lane_id: "playwright-cdp",
-					},
+					refusal: { code: "intent_unrouted" },
 				});
+				if (!routed.ok) {
+					expect(routed.refusal.message).toContain("contract");
+				}
 				continue;
 			}
 

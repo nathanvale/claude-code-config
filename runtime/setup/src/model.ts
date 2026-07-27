@@ -69,6 +69,7 @@ export const SETUP_FINDING_IDS = [
 	"bin_orphan",
 	"bin_dir_unavailable",
 	"bin_dir_not_on_path",
+	"bin_shadowed",
 ] as const;
 
 export type SetupFindingId = (typeof SETUP_FINDING_IDS)[number];
@@ -78,6 +79,7 @@ export const SETUP_ADVISORY_FINDING_IDS = [
 	"bin_orphan",
 	"bin_dir_unavailable",
 	"bin_dir_not_on_path",
+	"bin_shadowed",
 ] as const satisfies readonly SetupFindingId[];
 
 /** Stable discovery and runtime continuation action ids. */

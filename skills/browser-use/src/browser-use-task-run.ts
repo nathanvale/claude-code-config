@@ -53,6 +53,29 @@ export const BROWSER_USE_TASK_INTENT_REQUIRED_CAPABILITY: Readonly<
 	"lighthouse-audit": "devtools_performance_insight",
 };
 
+// --- Intent-level contract availability (R22) --------------------------------
+
+/**
+ * Task Intents whose SPECIALIST contract Browser Use does not own yet, mapped
+ * to the exact missing contract the front door must name (R22). trace-inspection
+ * needs a trace ARTIFACT contract; http-replay needs an HTTP ARCHIVE-INPUT
+ * contract. The playwright-cdp executor deliberately refuses both (its first
+ * slice is snapshot/locator evidence only), so routing to that lane and then
+ * blaming its capability evidence would be a MISLEADING refusal ("re-probe
+ * stale evidence" can never add a contract that does not exist). Naming the
+ * missing contract here keeps the unavailability honest and its continuation
+ * actionable — this is intent-level truth, so an explicit --lane override
+ * cannot bypass it (you cannot force a lane to execute a contract nobody owns).
+ */
+export const BROWSER_USE_TASK_INTENT_MISSING_CONTRACT: Readonly<
+	Partial<Record<BrowserUseTaskIntent, string>>
+> = {
+	"trace-inspection":
+		"intent trace-inspection has no registered lane yet: Browser Use does not own its trace artifact contract, so no lane can execute it.",
+	"http-replay":
+		"intent http-replay has no registered lane yet: Browser Use does not own its HTTP archive-input contract, so no lane can execute it.",
+};
+
 // --- Typed refusals ----------------------------------------------------------
 
 /** Stable routing refusal codes (release contract R6-R11). Each maps to one
@@ -137,6 +160,22 @@ export function routeTaskRun(input: {
 			refusal: {
 				code: "intent_unknown",
 				message: `intent ${intent} is not a code-owned Task Intent.`,
+			},
+		};
+	}
+	// Intent-level contract availability (R22): an intent whose specialist
+	// artifact/archive-input contract Browser Use does not own yet is honest typed
+	// unavailability, named with its exact missing contract. Checked before lane
+	// resolution so an explicit --lane override cannot force a lane to execute a
+	// contract nobody owns; it reuses the intent_unrouted class (await_intent_lane
+	// continuation) so the envelope shape matches every other honest-unavailability.
+	const missingContract = BROWSER_USE_TASK_INTENT_MISSING_CONTRACT[intent];
+	if (missingContract !== undefined) {
+		return {
+			ok: false,
+			refusal: {
+				code: "intent_unrouted",
+				message: missingContract,
 			},
 		};
 	}

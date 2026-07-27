@@ -42,15 +42,20 @@ Rules:
 Current status includes the 2026-07-27 process, clean-home installation, and
 deterministic-routing harvest, plus the 2026-07-27 ledger gap audit: verdict
 corrections (front-door driver rule, blocked-vs-fail integrity), 52 admitted
-candidate rows (UNASSESSED), and an appendix of deferred candidates.
+candidate rows (UNASSESSED), and an appendix of deferred candidates. The
+2026-07-27 convergence fan-out (steps 1-3, 5, 6) harvested 33 rows, and the
+follow-up E-tier spawn wave closed the 11 process-boundary gaps with additive
+spawned-CLI tests: net 28 PASS, 4 PARTIAL (L-tier live halves or the A21
+delivery decision), 1 FAIL (G17 exit-code classification, owner decision
+open).
 
 | Verdict | Count |
 | --- | ---: |
-| PASS | 17 |
-| PARTIAL | 66 |
-| FAIL | 26 |
+| PASS | 45 |
+| PARTIAL | 70 |
+| FAIL | 27 |
 | BLOCKED | 3 |
-| UNASSESSED | 112 |
+| UNASSESSED | 79 |
 
 | Status | Meaning |
 | --- | --- |
@@ -83,10 +88,10 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-A16 | Paths containing spaces do not break invocation or artifacts. | E,H | UNASSESSED | Fixture journey missing. |
 | DDA-A17 | Read-only current directories do not break read-only discovery. | E,H | UNASSESSED | Fixture journey missing. |
 | DDA-A18 | Symlinked repository and worktree paths preserve command identity. | E,H | UNASSESSED | Fixture journey missing. |
-| DDA-A19 | Unknown flag on a valid leaf fails with a typed usage error naming the flag. | C,E | UNASSESSED | Oracle: `browser-use task list --bogus` exits 2 and the error names `--bogus`. |
-| DDA-A20 | Every command string printed by the guide is accepted by the parser. | C | UNASSESSED | Oracle: contract test extracts guide command lines, feeds the parser, zero rejects. |
-| DDA-A21 | Missing or wrong-version Bun runtime yields actionable guidance, not a raw exec error. | E,H | UNASSESSED | Oracle: PATH without `bun` — installed entry fails with a named remedy. |
-| DDA-A22 | Duplicate or shadowing `browser-use` binaries on PATH are detected by `setup status`. | E,H | UNASSESSED | Oracle: fixture shadow bin earlier on PATH — status names both paths. |
+| DDA-A19 | Unknown flag on a valid leaf fails with a typed usage error naming the flag. | C,E | PASS | browser-use-anti-drift.test.ts: parser throws naming --bogus (C); in-process and spawned `task list --bogus` both exit 2 usage_error naming the flag (E). |
+| DDA-A20 | Every command string printed by the guide is accepted by the parser. | C | PASS | browser-use-anti-drift.test.ts: every guide-printed command line (all topics plus --full, placeholders substituted) parses with zero rejects. |
+| DDA-A21 | Missing or wrong-version Bun runtime yields actionable guidance, not a raw exec error. | E,H | PARTIAL | browser-use-bun-preflight.test.ts: the launcher shim under a bun-stripped PATH emits a named remedy at exit 2 vs the raw env exit-127 baseline, and execs bun faithfully when present. Gap: the installed bin still symlinks the .ts entry directly — wiring the shim changes the A14 delivery contract. |
+| DDA-A22 | Duplicate or shadowing `browser-use` binaries on PATH are detected by `setup status`. | E,H | PASS | runtime/setup/tests/bin-shadow.test.ts: inspectBinTopology emits `bin_shadowed` naming shadow path and owned destination (H); spawned real `setup status --json` with a fixture shadow earlier on PATH surfaces the advisory naming both paths, later-on-PATH stays silent (E). Src: detectShadowingBins. |
 | DDA-A25 | Non-TTY and NO_COLOR stdout contains zero ANSI escapes in JSON and plain modes. | C,E | UNASSESSED | Oracle: piped process capture, byte-scan for ESC. IDs A23-A24 reserved for appendix candidates. |
 
 ## B. Task Intent routing and lane admission
@@ -113,10 +118,10 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-B18 | Adapter swaps preserve the intended Warm Chrome environment and tab. | H,L,G | UNASSESSED | Pairwise live journey missing; add a mock-transport swap fixture at H before the operator gate opens. |
 | DDA-B19 | A terminal `unknown` outcome blocks retry and adapter switching. | C,H | PARTIAL | Run-model proof exists; public journey missing. |
 | DDA-B20 | Lane conformance evidence can move from unproven to proven mechanically. | C,H,L | FAIL | All lanes currently expose unproven evidence; production probe path absent from acceptance. Prerequisite: a front-door conformance producer command — not exercisable through `browser-use` alone today. |
-| DDA-B21 | Test-seam env vars are inert outside their declared scope. | C,E | UNASSESSED | Oracle: set `BROWSER_USE_MOCK_OUTCOME` without `--dry-run` and `BROWSER_USE_TARGETS_ENVELOPE_JSON` outside `targets select`; envelope and exit identical to the unset run. |
-| DDA-B23 | `trace-inspection` returns typed-unavailable naming the missing artifact contract. | C,E | UNASSESSED | Oracle: process run — failure envelope names the exact gap and continuation. |
-| DDA-B24 | `http-replay` returns typed-unavailable naming the archive-input contract. | C,E | UNASSESSED | Oracle: same shape as DDA-B23. |
-| DDA-B25 | A hanging adapter is bounded by the command timeout and leaves no orphan process or session. | H | UNASSESSED | Oracle: sleep-forever fixture binary — typed failure within timeout plus 2 s; process tree clean. |
+| DDA-B21 | Test-seam env vars are inert outside their declared scope. | C,E | PASS | browser-use-sec-seams.test.ts: in-process byte-identical proof (C) plus spawned real-CLI pairs for task/lanes list with seams set vs unset — identical normalized stdout/stderr and exit at the process boundary (E). |
+| DDA-B23 | `trace-inspection` returns typed-unavailable naming the missing artifact contract. | C,E | PASS | browser-use-typed-unavailable-intents.test.ts: trace-inspection refuses `intent_unrouted` naming the trace artifact contract with await_intent_lane continuation and zero lane dispatch, in-process (C) and spawned with a verified-handoff fixture (E). Src: intent short-circuit in browser-use-task-run.ts. |
+| DDA-B24 | `http-replay` returns typed-unavailable naming the archive-input contract. | C,E | PASS | browser-use-typed-unavailable-intents.test.ts: http-replay names the archive-input contract with the identical typed-unavailable class to DDA-B23, in-process (C) and spawned (E). |
+| DDA-B25 | A hanging adapter is bounded by the command timeout and leaves no orphan process or session. | H | PASS | browser-use-process-hygiene.test.ts: a real sleep-forever binary is bounded by the transport timeout plus the 2 s kill grace with an empty process tree; a scripted-timeout driver journey exits 20 `task_run_connection_unstable` with terminal run state. |
 
 ## C. Browser entry and connection
 
@@ -137,9 +142,9 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-C13 | Connection failure preserves Browser Connect exit and Repair Path verbatim. | C,E,H | PARTIAL | Mint seam tests exist; process proof missing. |
 | DDA-C14 | Internal mint and caller-managed handoff use one validation path. | C,H | PARTIAL | Unit coverage exists; fixture journey missing. |
 | DDA-C15 | Fresh task execution auto-mints; run resume requires its original handoff. | C,E,H | PARTIAL | Parser and mint tests exist; process journey missing. |
-| DDA-C16 | Unknown envelope contract id or schema version is refused with typed upgrade guidance. | C,H | UNASSESSED | Oracle: fixture with `schema_version: "3"` — refusal names expected and found versions. |
-| DDA-C17 | An envelope whose endpoint host is not loopback is refused before any adapter dispatch. | C,H | UNASSESSED | Oracle: fixture envelope with a LAN endpoint — typed refusal, zero subprocesses spawned. |
-| DDA-C18 | A tampered envelope fails validation closed. | C,H | UNASSESSED | Oracle: byte-mutation sweep over a valid fixture envelope — every mutant refused with one typed code. |
+| DDA-C16 | Unknown envelope contract id or schema version is refused with typed upgrade guidance. | C,H | PASS | browser-use-sec-seams.test.ts: schema_version '3' handoff refused exit 20 `target_discovery_handoff_invalid` naming found 3 and pinned 2; zero spawns. |
+| DDA-C17 | An envelope whose endpoint host is not loopback is refused before any adapter dispatch. | C,H | PASS | browser-use-sec-seams.test.ts: LAN, public, and link-local endpoints refused pre-dispatch with zero spawns; loopback controls still spawn. Guard: isLoopbackHost in readHandoffFacts. |
+| DDA-C18 | A tampered envelope fails validation closed. | C,H | PASS | browser-use-sec-seams.test.ts: deterministic stride-3 byte sweep plus 19-case field battery; every invariant-changing mutant refused with the one code `target_discovery_handoff_invalid`. |
 | DDA-C19 | TTL decisions are clock-jump safe; ambiguous clock fails closed. | C,H | UNASSESSED | Oracle: fixture state with future mtime or jumped clock — refusal or re-mint, never acceptance. |
 
 ## D. Targets, operations, and continuity
@@ -171,13 +176,13 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-D23 | Output truncation and content boundaries prevent context flooding. | C,H,L | UNASSESSED | Agent Browser supports knobs; Browser Use journey missing. |
 | DDA-D24 | Prompt-shaped page content remains untrusted data. | H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
 | DDA-D25 | Action confirmation policy gates externally visible mutation. | H,L,G | UNASSESSED | End-to-end journey missing. |
-| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | UNASSESSED | Oracle: fixture `/json/list` empty — ok envelope with a named next action. |
-| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | UNASSESSED | Oracle: 300-target fixture — output within budget; `--url-contains` selects one. |
-| DDA-D28 | Service workers, extension pages, devtools, and `chrome://` targets never appear operation-ready. | C,H | UNASSESSED | Oracle: mixed-type fixture — candidates contain only page targets. |
-| DDA-D29 | Page-controlled strings are sanitized; control chars and ANSI escapes never reach stdout raw. | C,H | UNASSESSED | Oracle: fixture target titled with ESC/BEL bytes — stdout byte-scan clean. |
-| DDA-D30 | IDN and punycode hosts render unambiguously; origin checks compare canonical forms. | C,H | UNASSESSED | Oracle: `xn--` fixture vs unicode display form — one canonical compare result. |
-| DDA-D31 | `file://`, `about:`, and `chrome://` schemes in allowed origins are admitted or refused by explicit rule. | C,H | UNASSESSED | Oracle: table-driven contract test over scheme and policy. |
-| DDA-D33 | Rate-limit and captive-portal interstitials produce typed not-achieved, never retry storms. | H | UNASSESSED | Oracle: fixture server returns 429 — exactly one attempt, typed outcome. ID D32 reserved for the DDA-D20 download sub-oracle. |
+| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PARTIAL | browser-use-target-realism.test.ts: empty loopback /json/list yields a parseable typed recovery envelope (exit 20 `target_discovery_no_candidates`, continuation open_browser_target), one attempt, no crash. Gaps: L-tier live empty-browser run; oracle says 'ok envelope' but the established discovery contract emits typed recovery — wording decision open. |
+| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PARTIAL | browser-use-target-realism.test.ts: 300 fixture targets project dense ordinals within the redaction budget and `--url-contains` resolves exactly one. Gap: L-tier live many-tab run. |
+| DDA-D28 | Service workers, extension pages, devtools, and `chrome://` targets never appear operation-ready. | C,H | PASS | browser-use-target-realism.test.ts: mixed CDP listing admits only http(s) page targets; fixed a real defect (service_worker with an https url was admitted) via RawPage.type preservation and a type filter in discovery. |
+| DDA-D29 | Page-controlled strings are sanitized; control chars and ANSI escapes never reach stdout raw. | C,H | PASS | browser-use-sec-seams.test.ts: ESC/CSI/BEL/DEL/0x9b title leaves zero raw control bytes on stdout; stripControlChars wired into redactTitle (browser-use-core.ts). |
+| DDA-D30 | IDN and punycode hosts render unambiguously; origin checks compare canonical forms. | C,H | PASS | browser-use-target-realism.test.ts: unicode and xn-- forms project to one canonical ascii origin and origin hints in either spelling compare equal. |
+| DDA-D31 | `file://`, `about:`, and `chrome://` schemes in allowed origins are admitted or refused by explicit rule. | C,H | PASS | browser-use-target-realism.test.ts: 10-case scheme table plus an end-to-end listing prove http(s)-only admission over file/about/chrome/devtools/extension/ws/data/javascript. |
+| DDA-D33 | Rate-limit and captive-portal interstitials produce typed not-achieved, never retry storms. | H | PASS | browser-use-target-realism.test.ts: loopback 429 yields typed `target_discovery_transport_failed` with exactly one request and one adapter invocation — no retry storm. |
 | DDA-D34 | Proxy env vars never reroute loopback CDP traffic. | C,H | UNASSESSED | Oracle: `HTTPS_PROXY` at a black hole — live-path fixture still connects direct. |
 
 ## E. Browser Runbook and Durable Browser Knowledge lifecycle
@@ -230,9 +235,9 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-F18 | Confidential delivery interruption leaves no secret-bearing durable state. | C,H,L | PARTIAL | Process-boundary kill journey missing. |
 | DDA-F19 | Prompt injection cannot grant auth, origin, or mutation authority. | C,H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
 | DDA-F20 | Caller metadata remains audit-only and never changes authority. | C,H | PARTIAL | Model tests exist; public differential journey missing. |
-| DDA-F23 | Any unhandled exception becomes a typed internal-error envelope with no raw stack or absolute path on stdout. | C,E | UNASSESSED | Oracle: fault-injection fixture — stdout parses as a failure envelope; stack only on stderr at debug. IDs F21-F22 reserved for appendix candidates. |
-| DDA-F24 | `--debug` diagnostics pass the secret scan. | C,H | UNASSESSED | Oracle: leak harness rerun with `--debug` — zero findings. |
-| DDA-F25 | Hostile run ids are rejected by every consumer, including via `BROWSER_USE_RUN_ID`. | C,E | UNASSESSED | Oracle: `BROWSER_USE_RUN_ID='../../x'` — exit 2 typed; no state path created outside the base dir. |
+| DDA-F23 | Any unhandled exception becomes a typed internal-error envelope with no raw stack or absolute path on stdout. | C,E | PASS | browser-use-sec-seams.test.ts: injected fault yields a typed error envelope with no stack marker or absolute path on stdout; spawned-CLI companion proves the process boundary. |
+| DDA-F24 | `--debug` diagnostics pass the secret scan. | C,H | PASS | browser-use-runtime-env.test.ts: the leak-harness sweep over the captured --debug diagnostic trail through the real redactor pipeline finds zero sentinels; a negative control proves the sweep fails closed. |
+| DDA-F25 | Hostile run ids are rejected by every consumer, including via `BROWSER_USE_RUN_ID`. | C,E | PASS | browser-use-sec-seams.test.ts spawns the real CLI: `BROWSER_USE_RUN_ID='../../x'` and slash-bearing `--run-id` both exit 2 typed; no state path escapes the base dir. |
 
 ## G. Repository, worktree, state, and concurrency isolation
 
@@ -253,8 +258,8 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-G13 | Concurrent runs cannot overwrite active runbook or artifact state. | C,H,G | UNASSESSED | Lease tests exist; integrated journey missing. |
 | DDA-G14 | Cleanup removes only state owned by the completed run. | H,L,G | UNASSESSED | Cross-run cleanup journey missing. |
 | DDA-G15 | Case-insensitive filesystems cannot collide run ids differing only by case. | C,H | UNASSESSED | Oracle: `R1` and `r1` on an APFS fixture — distinct or refused, never shared state. |
-| DDA-G16 | Missing or read-only HOME with unset XDG falls back per contract with a typed warning. | E,H | UNASSESSED | Oracle: sandboxed HOME fixture — declared fallback used; filesystem diff confined. |
-| DDA-G17 | Relative XDG values are refused with a typed usage error at the process tier. | C,E | UNASSESSED | Oracle: `XDG_STATE_HOME=./x` — exit 2 typed. |
+| DDA-G16 | Missing or read-only HOME with unset XDG falls back per contract with a typed warning. | E,H | PASS | browser-use-sandboxed-home.test.ts: declared runtime fallback with typed reason `runtime_dir_unset`, roots confined to the sandbox, read-only HOME admits, missing HOME refuses typed — in-process (H) and via spawned `repair status` projecting runtime_fallback at the boundary (E). |
+| DDA-G17 | Relative XDG values are refused with a typed usage error at the process tier. | C,E | FAIL | browser-use-anti-drift-g17.test.ts (skip-marked red) documents the gap: the refusal is typed `xdg_root_relative` naming XDG_STATE_HOME but exits 20 via emitXdgRefusal, not the oracle's exit 2; reclassifying collides with the AE4 identical-refusal-shape invariant and three sibling exit-20 tests — owner decision open. |
 | DDA-G18 | Nested invocation inheriting run env vars cannot corrupt the parent run. | C,H | UNASSESSED | Oracle: child process with inherited `BROWSER_USE_RUN_ID` mutates — parent revision conflict typed. |
 | DDA-G20 | Store version skew fails typed in both directions without corruption. | C,H | UNASSESSED | Oracle: store fixtures at versions N-1 and N+1 — typed outcomes; store hashes unchanged on refusal. ID G19 reserved for an appendix candidate. |
 
@@ -281,11 +286,11 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 | DDA-H17 | Recovery command succeeds from the returned continuation alone. | H,L,G | UNASSESSED | Continuation-following journey missing. |
 | DDA-H18 | Completed journeys leave no orphan tabs, adapters, leases, or temp artifacts. | H,L,G | PARTIAL | PAC cleanup noted; systematic proof missing. |
 | DDA-H19 | SIGTERM and parent death behave like SIGINT: bounded cleanup, honest external-effect state. | H | UNASSESSED | Oracle: kill harness — same typed state as DDA-H15. |
-| DDA-H21 | A leftover named adapter session from a crashed prior run does not block the next run. | H,L | UNASSESSED | Oracle: pre-created colliding session — next run detects and recovers typed. ID H20 reserved for an appendix candidate. |
-| DDA-H22 | No background daemon or keepalive persists after any command exits. | E,H | UNASSESSED | Oracle: process-tree diff before and after every E-tier journey is empty. Regression-guards the mcporter keepalive gotcha. |
-| DDA-H23 | `repair status` reports only real repairs; `repair apply` executes only declared bounded actions and reports each. | C,E,H | UNASSESSED | Oracle: fixture broken state — status lists it; apply fixes exactly it; filesystem diff shows nothing else touched. |
-| DDA-H24 | `artifact list` projects the run-scoped manifest; a missing manifest yields a typed empty result. | C,E | UNASSESSED | Oracle: runs with and without artifacts — correct listing; absent manifest returns an ok empty envelope. |
-| DDA-H25 | `targets status` truthfully reflects fresh, stale, and absent run-scoped selected state. | C,E | UNASSESSED | Oracle: three state fixtures — three distinct typed projections. |
+| DDA-H21 | A leftover named adapter session from a crashed prior run does not block the next run. | H,L | PARTIAL | browser-use-process-hygiene.test.ts: an expired leftover lease is recovered via fenced takeover carrying a recovered_from proof; a live-held lease yields typed `lease_held` bounded wait. Gap: L-tier live crashed-session run. |
+| DDA-H22 | No background daemon or keepalive persists after any command exits. | E,H | PASS | browser-use-process-hygiene.test.ts: real spawned task/lanes list journeys exit clean with zero surviving descendants (pgrep); every envelope adapter spawn carries MCPORTER_NO_KEEPALIVE (keepalive-gotcha regression pin). |
+| DDA-H23 | `repair status` reports only real repairs; `repair apply` executes only declared bounded actions and reports each. | C,E,H | PASS | browser-use-status-families.test.ts: whole-store fingerprint proves repair status lists exactly the seeded breakage and apply fixes exactly it, in-process (C,H) and via spawned real-CLI journeys with the same store diff (E). |
+| DDA-H24 | `artifact list` projects the run-scoped manifest; a missing manifest yields a typed empty result. | C,E | PASS | browser-use-status-families.test.ts: absent manifest yields exit 0 ok-empty artifact-manifest envelope and a seeded run projects its row, in-process (C) and spawned (E). |
+| DDA-H25 | `targets status` truthfully reflects fresh, stale, and absent run-scoped selected state. | C,E | PASS | browser-use-status-families.test.ts: fresh, stale, and absent selected state yield three mutually distinct typed projections, in-process (C) and spawned with wall-clock-anchored expiries (E). |
 
 ## I. Performance, observability, and sustained use
 
@@ -330,11 +335,11 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates.
 
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
-| DDA-K01 | `migration status` truthfully reports corpus state from the installed CLI. | C,E | UNASSESSED | Oracle: fixture corpora (empty, legacy-present, migrated) — status matches each. |
-| DDA-K02 | `migration inventory` and `migration plan` are strictly read-only. | C,E,H | UNASSESSED | Oracle: filesystem snapshot diff before and after is empty. |
-| DDA-K03 | `migration apply` is idempotent and resumable after interruption. | C,H | UNASSESSED | Oracle: kill mid-apply, rerun — same terminal state; double apply reports no-op. |
-| DDA-K04 | Legacy source is never modified or deleted until `migration verify` passes. | C,H | UNASSESSED | Oracle: legacy corpus hash unchanged until verify is green. |
-| DDA-K05 | Secret-positive Import Candidates are refused per candidate and reported, never salvaged. | C,H | UNASSESSED | Oracle: fixture candidate with an embedded secret — refusal names the candidate; others proceed. |
+| DDA-K01 | `migration status` truthfully reports corpus state from the installed CLI. | C,E | PASS | browser-use-migration-corpus.test.ts: in-process lifecycle proof (C) plus a spawned six-subprocess journey over one durable store transitioning empty->inventoried->planned->verified with a well-formed staged_generation (E). |
+| DDA-K02 | `migration inventory` and `migration plan` are strictly read-only. | C,E,H | PASS | browser-use-migration-corpus.test.ts: sha256 tree snapshot byte-identical before and after inventory and plan, proven in-process (C,H) and via spawned real-CLI subprocesses (E). |
+| DDA-K03 | `migration apply` is idempotent and resumable after interruption. | C,H | PASS | browser-use-migration-corpus.test.ts: crash on the generation-record fsync, rerun converges to staged, third apply reports verified no-op (volatile-overlay fs idiom). |
+| DDA-K04 | Legacy source is never modified or deleted until `migration verify` passes. | C,H | PASS | browser-use-migration-corpus.test.ts: source tree hash frozen across inventory/plan/apply/verify; apply stages an inactive copy only. |
+| DDA-K05 | Secret-positive Import Candidates are refused per candidate and reported, never salvaged. | C,H | PASS | browser-use-migration-corpus.test.ts: credentials.txt and client-secret.env each quarantine-secret with null destination while service.yml stages; per-candidate refusal. |
 
 ## M. Human collaboration and takeover
 

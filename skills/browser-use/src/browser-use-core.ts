@@ -120,8 +120,22 @@ export function hasSensitiveOptionName(value: string): boolean {
 // (R32) the way url path_shape is already protected.
 export function redactTitle(title: string | undefined): string | undefined {
 	if (!title) return undefined;
-	const stripped = title.replace(/[?#]\S*/g, "").trim();
+	// A page title is fully page-controlled, so it can carry terminal-injection
+	// bytes: C0 controls incl. ESC (0x1b) that begin ANSI sequences, BEL (0x07),
+	// DEL (0x7f), and the C1 range 0x80-0x9f incl. the single-byte CSI (0x9b).
+	// JSON.stringify escapes C0 but passes DEL and C1 through raw, so a naive
+	// length-bound leaks them onto stdout (DDA-D29). Strip every control byte
+	// before any other processing; keep only display-safe text.
+	const controlStripped = stripControlChars(title);
+	const stripped = controlStripped.replace(/[?#]\S*/g, "").trim();
 	return stripped === "" ? undefined : truncateText(stripped, 80);
+}
+
+// Remove C0 (0x00-0x1f), DEL (0x7f), and C1 (0x80-0x9f) control bytes so no raw
+// control char or ANSI escape reaches stdout through a page-controlled string.
+export function stripControlChars(value: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional control-byte strip
+	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
 // Only http(s) Browser Targets are navigable pages. Other schemes — ws:// (the
@@ -198,7 +212,13 @@ export function truncateText(value: string, maxLength: number): string {
 
 // --- Raw page projection ----------------------------------------------------
 
-export type RawPage = { id?: string; title?: string; url?: string };
+// `type` is the CDP target kind from a `/json/list`-shaped listing (page /
+// service_worker / background_page / iframe / other). A service worker or
+// extension background page can carry an http(s) `url`, so scheme-filtering
+// alone would wrongly admit it; the discovery filter drops any non-`page` type
+// (R32, DDA-D28). Absent on the chrome-devtools-mcp text envelope and the older
+// `{pages:[…]}` fakes, so an absent type is treated as a navigable page.
+export type RawPage = { id?: string; title?: string; url?: string; type?: string };
 
 // Project one raw adapter page into a display-safe Browser Target Candidate. The
 // raw id is used only to derive a per-envelope candidate id (hashed, never
