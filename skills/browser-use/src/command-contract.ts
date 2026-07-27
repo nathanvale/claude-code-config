@@ -29,17 +29,20 @@ export const BROWSER_USE_TRANSPORT_ADAPTERS = [
 	"playwright-cdp",
 ] as const;
 
-// Adapters with an implemented Browser Target Discovery page-listing transport
-// (the mcporter `list_pages` envelope call). This is a NARROWER concern than a
-// lane's native operation execution: agent-browser has a native operation
-// Implementation (agent-browser-native-call) but no chrome-devtools-mcp-shaped
-// page-listing transport, so a verified agent-browser handoff must still fail
-// closed at the discovery gate rather than be spawned through the
-// chrome-devtools-mcp call shape. Kept separate from
-// BROWSER_USE_TRANSPORT_ADAPTERS (native operation execution / lane-table
-// drift pin) so the two transports never conflate.
+// Adapters with an implemented Browser Target Discovery page-listing transport.
+// This is a NARROWER concern than a lane's native operation execution, and the
+// two members reach their tab listing through DIFFERENT transports:
+//   - chrome-devtools-mcp: the mcporter `list_pages` envelope tool-call.
+//   - agent-browser: a CLI-subcommand spawn (`<probe> --cdp <ws> --session
+//     browser-use-<runId> tab list --json`), NOT the mcporter list_pages call.
+// discoverPages branches on the adapter id so an agent-browser handoff is
+// spawned through its own CLI-subcommand shape, never the chrome-devtools-mcp
+// tool-call shape. playwright-cdp still has no discovery transport and fails
+// closed here. Kept separate from BROWSER_USE_TRANSPORT_ADAPTERS (native
+// operation execution / lane-table drift pin) so the transports never conflate.
 export const BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS = [
 	"chrome-devtools-mcp",
+	"agent-browser",
 ] as const;
 
 // ---------------------------------------------------------------------------

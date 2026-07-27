@@ -130,6 +130,10 @@ export type HandoffFacts = {
 	// Verified endpoint http form, verbatim (R2: injected into the adapter
 	// spawn unchanged). Never re-emitted in output.
 	endpointHttp: string;
+	// Verified endpoint ws form, verbatim (already loopback-validated in
+	// parseHandoffFacts). The agent-browser CLI-subcommand discovery invocation
+	// slot: `<probe> --cdp <endpointWs> ...`. Never re-emitted in output.
+	endpointWs: string;
 	// browser-use's content hash over the envelope's binding-relevant fields.
 	handoffEvidenceId: string;
 	// Operation capabilities browser-use authorizes for the mapped adapter.
@@ -577,6 +581,7 @@ export function parseHandoffFacts(raw: string): HandoffParse {
 			verifiedEndpointIdentity: endpointUrl.host,
 			probeExecutable,
 			endpointHttp,
+			endpointWs,
 			handoffEvidenceId: handoffEvidenceIdOf({
 				runId,
 				environmentName,
@@ -642,8 +647,17 @@ type DiscoverResult =
 // verified endpoint verbatim. HandoffFacts satisfies this structurally.
 export type EnvelopeTransportFacts = Pick<
 	HandoffFacts,
-	"adapter" | "probeExecutable" | "endpointHttp"
+	"adapter" | "probeExecutable" | "endpointHttp" | "runId" | "endpointWs"
 >;
+
+// agent-browser sessions are named `browser-use-<runId>`; the run id lands in
+// the spawn argv, so it must pass the same safe-id guard the native executor
+// enforces (mirror of SAFE_RUN_ID in browser-use-agent-browser.ts).
+const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+// agent-browser tab-list command duration bound (mirror of COMMAND_TIMEOUT_MS
+// in the native executor; discovery only lists, but the CLI is the same).
+const AGENT_BROWSER_DISCOVERY_TIMEOUT_MS = 30_000;
 
 export async function discoverPages(
 	runtime: BrowserUseRuntime,
@@ -669,6 +683,14 @@ export async function discoverPages(
 				recoverability: "change_input",
 			},
 		};
+	}
+	// agent-browser is a CLI-subcommand adapter, not an mcporter tool-call
+	// adapter: its tab listing is `<probe> --cdp <ws> --session
+	// browser-use-<runId> tab list --json`, returning
+	// {success:true, data:{tabs:[{tabId, url, active, title?}]}}. Route it to
+	// that spawn instead of the chrome-devtools-mcp list_pages call shape.
+	if (facts.adapter === "agent-browser") {
+		return discoverAgentBrowserPages(runtime, facts);
 	}
 	const transport = await runEnvelopeAdapterCall(runtime, {
 		probeExecutable: facts.probeExecutable,
@@ -709,6 +731,88 @@ export async function discoverPages(
 		};
 	}
 	return { ok: true, pages: extractRawPages(parsed) };
+}
+
+// agent-browser's CLI-subcommand discovery transport (distinct from the
+// mcporter list_pages call): `<probe> --cdp <ws> --session browser-use-<runId>
+// tab list --json`. Read-only — it only lists tabs, never navigates or mutates.
+async function discoverAgentBrowserPages(
+	runtime: BrowserUseRuntime,
+	facts: EnvelopeTransportFacts,
+): Promise<DiscoverResult> {
+	const transportFailure = (message: string): DiscoverResult => ({
+		ok: false,
+		failure: {
+			code: "target_discovery_transport_failed",
+			message,
+			actionId: "inspect_target_discovery_diagnostics",
+			exitCode: TARGET_DISCOVERY_EXIT_CODE,
+			recoverability: "retry",
+		},
+	});
+	// The run id becomes the session name in the spawn argv; guard it before it
+	// reaches the subprocess, exactly as the native executor does.
+	if (!SAFE_RUN_ID.test(facts.runId)) {
+		return transportFailure(
+			"The agent-browser run id is not a safe session identifier.",
+		);
+	}
+	let result: Awaited<ReturnType<BrowserUseRuntime["runCommand"]>> | undefined;
+	try {
+		result = await runtime.runCommand({
+			command: facts.probeExecutable,
+			args: [
+				"--cdp",
+				facts.endpointWs,
+				"--session",
+				`browser-use-${facts.runId}`,
+				"tab",
+				"list",
+				"--json",
+			],
+			timeoutMs: AGENT_BROWSER_DISCOVERY_TIMEOUT_MS,
+		});
+	} catch {
+		return transportFailure("The agent-browser tab list call failed.");
+	}
+	if (result === undefined || result.exitCode !== 0 || result.timedOut === true) {
+		return transportFailure("The agent-browser tab list call failed.");
+	}
+	if (result.stdout.trim() === "") return { ok: true, pages: [] };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(result.stdout);
+	} catch {
+		return transportFailure(
+			"The agent-browser tab list call returned unparsable output.",
+		);
+	}
+	return { ok: true, pages: extractAgentBrowserPages(parsed) };
+}
+
+// Map the agent-browser tab-list envelope ({success:true, data:{tabs:[…]}})
+// onto RawPages: tabId -> id, url/title verbatim. The `active` flag is not part
+// of RawPage and is dropped. Field names differ from the chrome text parser
+// (tabId vs id), so this mapper stays separate to avoid coupling the two.
+function extractAgentBrowserPages(value: unknown): RawPage[] {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+	const envelope = value as Record<string, unknown>;
+	if (envelope.success !== true) return [];
+	const data = envelope.data;
+	if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+	const tabs = (data as Record<string, unknown>).tabs;
+	if (!Array.isArray(tabs)) return [];
+	return tabs.flatMap((entry): RawPage[] => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+		const tab = entry as Record<string, unknown>;
+		return [
+			{
+				...(typeof tab.tabId === "string" ? { id: tab.tabId } : {}),
+				...(typeof tab.title === "string" ? { title: tab.title } : {}),
+				...(typeof tab.url === "string" ? { url: tab.url } : {}),
+			},
+		];
+	});
 }
 
 function extractRawPages(value: unknown): RawPage[] {

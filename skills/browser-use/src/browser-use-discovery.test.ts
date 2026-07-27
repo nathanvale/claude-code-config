@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type BrowserUseRuntime, runForTest } from "./browser-use";
+import { discoverPages } from "./browser-use-discovery";
 import type {
 	McporterCommandInput,
 	McporterCommandResult,
@@ -803,26 +804,167 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		expect(calls).toHaveLength(0);
 	});
 
-	test("a verified envelope for a transport-less adapter fails closed at the transport gate", async () => {
-		// The discovery page-listing gate survives U3: a verified agent-browser
-		// attachment has a native operation Implementation but no chrome-devtools
-		// page-listing transport, so discovery fails closed rather than spawning
-		// it through the chrome-devtools call shape.
+	test("a verified agent-browser envelope lists tabs through its CLI-subcommand transport", async () => {
+		// agent-browser is a CLI-subcommand adapter: its tab listing is
+		// `<probe> --cdp <ws> --session browser-use-<runId> tab list --json`,
+		// returning {success:true, data:{tabs:[{tabId, url, active, title?}]}}.
+		// Discovery must spawn THAT shape (not the chrome-devtools list_pages
+		// call) and map tabId -> candidate id.
+		const wsEndpoint =
+			"ws://127.0.0.1:9222/devtools/browser/4f5a2b1c-8d3e-4a6f-9b0c-1e2d3c4b5a69";
 		const { runtime, calls } = discoveryRuntime({
 			files: {
 				"/h.json": verifiedHandoffEnvelope((envelope) => {
 					envelope.data.attachment.adapter_id = "agent-browser";
 				}),
 			},
+			runCommand: async (call) => {
+				calls.push(call);
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({
+						success: true,
+						data: {
+							tabs: [
+								{
+									tabId: "T-1",
+									url: "https://example.com/app",
+									active: true,
+									title: "Fixture",
+								},
+							],
+						},
+					}),
+					stderr: "",
+					timedOut: false,
+				};
+			},
 		});
 		const result = await runForTest(
 			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "target_discovery_transport_failed",
+		expect(result.exitCode).toBe(0);
+		const json = parseJson(result.stdout);
+		expect(json.status).toBe("ok");
+		expect(json.data).toMatchObject({ operation_ready: true });
+		// The spawn is the agent-browser tab-list subcommand argv, verbatim from
+		// the envelope's ws endpoint and inherited run id.
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+			"--cdp",
+			wsEndpoint,
+			"--session",
+			"browser-use-fixture-run",
+			"tab",
+			"list",
+			"--json",
+		]);
+	});
+});
+
+// The CLI-subcommand transport is unit-tested directly through discoverPages so
+// the argv, envelope mapping, safe-id guard, and failure branches are pinned
+// without threading the whole facade.
+describe("U1 target discovery — agent-browser CLI-subcommand transport", () => {
+	const AGENT_BROWSER_FACTS = {
+		adapter: "agent-browser" as const,
+		probeExecutable: "/opt/side-quest/adapters/agent-browser/bin/agent-browser",
+		endpointHttp: "http://127.0.0.1:8912",
+		endpointWs: "ws://127.0.0.1:8912/devtools/browser/abc",
+		runId: "run-42",
+	};
+
+	function tabListStdout(
+		tabs: Array<{ tabId: string; url: string; active?: boolean; title?: string }>,
+	): string {
+		return JSON.stringify({ success: true, data: { tabs } });
+	}
+
+	test("maps the tab-list envelope onto RawPages and builds the exact argv", async () => {
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				calls.push(call);
+				return {
+					exitCode: 0,
+					stdout: tabListStdout([
+						{ tabId: "T-1", url: "http://127.0.0.1:8912/", active: true, title: "Fixture" },
+					]),
+					stderr: "",
+					timedOut: false,
+				};
+			},
 		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		if (!discovery.ok) {
+			throw new Error(`agent-browser discovery failed: ${discovery.failure.code}`);
+		}
+		expect(discovery.pages).toEqual([
+			{ id: "T-1", url: "http://127.0.0.1:8912/", title: "Fixture" },
+		]);
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"--cdp",
+			AGENT_BROWSER_FACTS.endpointWs,
+			"--session",
+			"browser-use-run-42",
+			"tab",
+			"list",
+			"--json",
+		]);
+	});
+
+	test("an empty tab set is an empty page list, never a failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: tabListStdout([]),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery).toEqual({ ok: true, pages: [] });
+	});
+
+	test("a non-zero tab-list exit fails closed as a transport failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 3,
+				stdout: "",
+				stderr: "boom",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				recoverability: "retry",
+			});
+		}
+	});
+
+	test("an unsafe run id is rejected before any spawn", async () => {
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				calls.push(call);
+				return { exitCode: 0, stdout: tabListStdout([]), stderr: "", timedOut: false };
+			},
+		});
+		const discovery = await discoverPages(runtime, {
+			...AGENT_BROWSER_FACTS,
+			runId: "bad id/../etc",
+		});
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure.code).toBe("target_discovery_transport_failed");
+		}
 		expect(calls).toHaveLength(0);
 	});
 });
