@@ -10,6 +10,7 @@
 //   operate snapshot|screenshot|emulate — Browser Operations (shell).
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
+import { createHash } from "node:crypto";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -33,10 +34,14 @@ import {
 	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
+	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
@@ -49,6 +54,8 @@ import {
 	browserUseAuthRepairFailureActions,
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
+	browserUseTaskRunFailureActions,
+	browserUseTaskRunSuccessActions,
 } from "./command-contract";
 import {
 	type BrowserUseTokenRetrievalRejection,
@@ -61,6 +68,17 @@ import {
 	resolveAdapterLane,
 } from "./browser-use-adapter-registry";
 import {
+	type BrowserUseLaneEvidenceReference,
+	BROWSER_USE_ADAPTER_LANE_IDS,
+	BROWSER_USE_LANE_EVIDENCE_PRODUCERS,
+	laneEvidenceDigestOf,
+} from "./browser-use-adapter-model";
+import {
+	conformanceEvidenceClaims,
+	runAuthConformanceMatrix,
+} from "./browser-use-auth-conformance";
+import {
+	type BrowserAdapterId,
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
 import {
@@ -69,6 +87,7 @@ import {
 	type BrowserUseCallerMetadata,
 	type BrowserUseRunState,
 	type BrowserUseSharedRun,
+	type BrowserUseTaskIntent,
 	classifyCancellation,
 } from "./browser-use-run-model";
 import {
@@ -108,10 +127,22 @@ import {
 	listPendingTombstones,
 	readArtifactStatus,
 } from "./browser-use-retention";
+import type {
+	BrowserUseMigrationFailure,
+	BrowserUseMigrationState,
+} from "./browser-use-migration-model";
+import {
+	applyBrowserUseMigration,
+	inventoryBrowserUseMigration,
+	planBrowserUseMigration,
+	readBrowserUseMigrationStatus,
+	verifyBrowserUseMigration,
+} from "./browser-use-migration";
 import {
 	type RunResumeObservedIdentity,
 	type RunStoreDeps,
 	casUpdateSharedRun,
+	createSharedRun,
 	leaseKeyForRun,
 	listSharedRunReceipts,
 	loadSharedRun,
@@ -119,9 +150,48 @@ import {
 } from "./browser-use-runs";
 import {
 	listOrphanTempFiles,
+	readDurableFile,
 	removeOrphanTempFiles,
 } from "./browser-use-store";
-import { runTargetsList } from "./browser-use-discovery";
+import {
+	type HandoffFacts,
+	readHandoffFacts,
+	runTargetsList,
+} from "./browser-use-discovery";
+import {
+	type AgentBrowserExecutionResult,
+	type AgentBrowserTask,
+	type AgentBrowserVerifiedHandoff,
+	executeAgentBrowserTask,
+} from "./browser-use-agent-browser";
+import {
+	type ChromeTask,
+	type ChromeTaskArtifact,
+	type ChromeTaskExecutionResult,
+	type ChromeTaskIntent,
+	compileChromeOperationSet,
+	executeChromeTask,
+} from "./browser-use-chrome-task";
+import {
+	type BrowserUseRunbookExecutionResult,
+	listRunbooks,
+	runRunbook,
+	showRunbook,
+} from "./browser-use-runbook";
+import type { BrowserUseRunbookInputs } from "./browser-use-runbook-model";
+import {
+	type BrowserUseGovernedSurface,
+	type BrowserUseSensitiveRunGuard,
+	assertContainmentBeforeRelease,
+	beginSensitiveRunGuard,
+	markRunSensitive,
+} from "./browser-use-sensitive-run";
+import { deriveSentinelSet } from "./browser-use-secret-scan";
+import type { BrowserUseArtifactReference } from "./browser-use-run-model";
+import {
+	type TaskRunRoutingRefusal,
+	routeTaskRun,
+} from "./browser-use-task-run";
 import {
 	runTargetsSelect,
 	runTargetsStatus,
@@ -308,7 +378,12 @@ async function executeCommand(input: {
 	durationMs: () => number;
 }): Promise<number> {
 	const { parsed, runtime } = input;
-	const resultKind: ResultKind = RESULT_KIND_BY_FAMILY[parsed.family];
+	// `task run` and `runbook run` return the shared-run contract, not the family
+	// default catalog; every other command keys resultKind off its family.
+	const resultKind: ResultKind =
+		parsed.command === "task-run" || parsed.command === "runbook-run"
+			? "shared_run"
+			: RESULT_KIND_BY_FAMILY[parsed.family];
 	const caller = callerMetadataFrom(parsed, runtime);
 
 	// Browser Target Discovery (U5). The first live `browser-use` surface: real
@@ -365,6 +440,22 @@ async function executeCommand(input: {
 		});
 	}
 
+	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7):
+	// route -> create/resume the durable shared run -> attach through the verified
+	// handoff -> dispatch to the selected lane -> record evidence -> return
+	// result + observed external-effect state + selected lane + next safe action.
+	if (parsed.command === "task-run" && !parsed.dryRun) {
+		return runTaskRun({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		});
+	}
+
 	// Adapter Lane Registry projections (auth plan U1): live compositions of
 	// the code-owned lane table. No evidence producer registers through the CLI
 	// yet, so every evidence slot projects honest unproven — never a guess.
@@ -391,11 +482,31 @@ async function executeCommand(input: {
 		});
 	}
 
+	// Browser Runbook family (platform plan U4): list/show project the discovered
+	// runbook catalog and one validated definition; run compiles a runbook and
+	// dispatches it through the agent-browser lane via the shared run-store
+	// pipeline. Live from U4 — runbooks no longer fall through to the
+	// not-implemented shell.
+	if (parsed.family === "runbook" && !parsed.dryRun) {
+		const runbookInput: PlatformCommandInput = {
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		};
+		if (parsed.command === "runbook-list") return runRunbookList(runbookInput);
+		if (parsed.command === "runbook-show") return runRunbookShow(runbookInput);
+		return runRunbookRun(runbookInput);
+	}
+
 	// Platform store-backed commands (platform plan U2): run/artifact/repair
 	// inspection over the durable XDG substrate. Dry-run keeps its existing
 	// mock envelope below (run resume/cancel already reject --dry-run at the
-	// parser since the flag is undeclared). `runbook list` and `migration
-	// status` stay typed not-implemented shells for U3/U4.
+	// parser since the flag is undeclared). The migration family is live from U3
+	// below; the runbook family is live from U4 above.
 	if (
 		(parsed.command === "run-status" ||
 			parsed.command === "run-resume" ||
@@ -420,6 +531,22 @@ async function executeCommand(input: {
 		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
 		if (parsed.command === "repair-status") return runRepairStatus(platformInput);
 		return runRepairApply(platformInput);
+	}
+
+	// Clean-break migration commands (platform plan U3): status projects the
+	// standing migration state; inventory/plan/apply/verify drive the engine
+	// phases against one --source root over the durable store. Live from U3 —
+	// migration no longer falls through to the not-implemented shell.
+	if (parsed.family === "migration") {
+		return runMigration({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		});
 	}
 
 	// R27 auth repair surface (auth plan U3a): the blocked-cause continuations
@@ -687,13 +814,71 @@ export function renderAdapterLaneLine(lane: BrowserUseAdapterLaneView): string {
 	return `${fields.join(" ")}\n`;
 }
 
-// Compose the baseline registry the CLI projects (auth plan U1). Evidence
-// producers register through the library Interface, not the CLI, so this
-// composition carries no evidence yet; a composition failure here is a
+// Freshness window the CLI stamps onto the auth-conformance evidence it derives
+// from the matrix (well within the registry's TTL ceiling). The matrix is
+// recomputed each invocation from the same epoch, so probed_at == atEpochMs and
+// the window only bounds staleness for a persisted registry, never this
+// per-invocation projection.
+const AUTH_CONFORMANCE_EVIDENCE_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+// A stable conformance-suite Implementation-integrity identity per lane. The
+// auth-conformance producer is the suite itself (a pure contract-level engine),
+// not a live adapter binary, so its identity is a fixed suite identity — every
+// field a non-empty string as the registry's admission requires. When live
+// conformance later binds to a real adapter build, this derives from that build.
+function authConformanceSuiteIntegrity(laneId: string) {
+	return {
+		executable_realpath: "auth-conformance-suite",
+		content_digest: `auth-conformance-suite:${laneId}`,
+		dependency_lock_identity: "auth-conformance-suite",
+		protocol_fingerprint: "auth-conformance-suite",
+		platform: "conformance-harness",
+		security_policy_revision: "conformance-1",
+	};
+}
+
+// Build the auth-conformance evidence references the CLI publishes into the
+// lane registry (auth plan U9, R22; release L190). Steps per the wiring spec:
+// run the matrix, compute each lane's conformant auth-method claims, and — only
+// when a lane has at least one proven claim — construct one auth-conformance
+// evidence reference bound to a suite integrity identity with a recomputed
+// digest. Because every DELIVERY cell stays `unproven` at contract level today,
+// claims is [] for every lane, so this yields an empty array and `lanes list`
+// keeps advertising advertised_auth_methods=none honestly. The registry gates
+// auth methods on an implemented lane, so this never fabricates a method — it
+// only projects what the matrix actually proved once live conformance flips a
+// delivery cell to conformant.
+function composedLaneAuthConformanceEvidence(
+	atEpochMs: number,
+): BrowserUseLaneEvidenceReference[] {
+	const matrix = runAuthConformanceMatrix({ at_epoch_ms: atEpochMs });
+	const references: BrowserUseLaneEvidenceReference[] = [];
+	for (const laneId of BROWSER_USE_ADAPTER_LANE_IDS) {
+		const claims = conformanceEvidenceClaims(matrix, laneId);
+		if (claims.length === 0) continue;
+		const base = {
+			lane_id: laneId,
+			evidence_class: "auth-conformance" as const,
+			producer: BROWSER_USE_LANE_EVIDENCE_PRODUCERS["auth-conformance"],
+			claims,
+			integrity: authConformanceSuiteIntegrity(laneId),
+			probed_at_epoch_ms: atEpochMs,
+			stale_after_ms: AUTH_CONFORMANCE_EVIDENCE_STALE_AFTER_MS,
+		};
+		references.push({ ...base, evidence_digest: laneEvidenceDigestOf(base) });
+	}
+	return references;
+}
+
+// Compose the baseline registry the CLI projects (auth plan U1, U9). The task
+// and connection evidence producers register through the library Interface, not
+// the CLI, so those slots stay unproven here; the CLI itself owns the
+// auth-conformance publication by projecting the code-owned conformance matrix
+// (composedLaneAuthConformanceEvidence). A composition failure here is a
 // programming error, not a user state.
 function composedLaneRegistry(atEpochMs: number) {
 	const result = createAdapterLaneRegistry({
-		evidence: [],
+		evidence: composedLaneAuthConformanceEvidence(atEpochMs),
 		at_epoch_ms: atEpochMs,
 	});
 	if (!result.ok) {
@@ -1440,6 +1625,1379 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
+//
+// The driver seam of `browser-use task run`: it opens the durable store, reads
+// the Verified Handoff Envelope, resolves the intent, routes to one admissible
+// lane through the PURE routing engine (browser-use-task-run.ts), creates or
+// resumes the shared run, dispatches to the selected lane's execution
+// interface, records the terminal/blocked truth on the run, and returns the
+// shared run + observed external-effect state + selected lane + next safe
+// action. No lane is ever substituted (R10, R11); an unknown external effect is
+// terminal and blocks retry/adapter switch (R26, F7).
+// ---------------------------------------------------------------------------
+
+const taskRunActions = [
+	...browserUseTaskRunFailureActions,
+	...browserUseTaskRunSuccessActions,
+] as const;
+const taskRunActionById = new Map<string, (typeof taskRunActions)[number]>(
+	taskRunActions.map((action) => [action.id, action]),
+);
+type TaskRunActionId = (typeof taskRunActions)[number]["id"];
+
+function taskRunAction(id: TaskRunActionId): RuntimeActionGuidance {
+	return actionFor(taskRunActionById, id, "task run");
+}
+
+// One typed task-run failure: diagnostic code, redaction-safe message, the
+// exactly-one continuation, exit code, and recoverability. Failure ids are
+// always task-run failure actions so the facade continuation/actions pairing
+// holds; a refused route or unknown effect NEVER carries a retry action.
+type TaskRunFailure = {
+	code: string;
+	message: string;
+	actionId: TaskRunActionId;
+	exitCode: number;
+	recoverability: RuntimeErrorRecoverability;
+	dataExtra?: Record<string, unknown>;
+};
+
+// Map one PURE routing refusal onto the driver's typed diagnostic + continuation
+// (R27: the engine names the class, the driver owns the exit code + action id).
+function taskRunFailureOfRoutingRefusal(
+	refusal: TaskRunRoutingRefusal,
+): TaskRunFailure {
+	switch (refusal.code) {
+		case "intent_unknown":
+			return {
+				code: "task_run_intent_unknown",
+				message: refusal.message,
+				actionId: "choose_registered_intent",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			};
+		case "intent_unrouted":
+			return {
+				code: "task_run_intent_unrouted",
+				message: refusal.message,
+				actionId: "await_intent_lane",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			};
+		case "lane_override_inadmissible":
+			return {
+				code: "task_run_lane_override_inadmissible",
+				message: refusal.message,
+				actionId: "choose_admissible_lane",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			};
+		case "no_admissible_lane":
+			return {
+				code: "task_run_no_admissible_lane",
+				message: refusal.message,
+				actionId: "refresh_lane_evidence",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+		case "handoff_lane_mismatch":
+			return {
+				code: "task_run_handoff_lane_mismatch",
+				message: refusal.message,
+				actionId: "supply_matching_handoff",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			};
+		case "lane_not_installed":
+			return {
+				code: "task_run_lane_not_installed",
+				message: refusal.message,
+				actionId: "install_lane_adapter",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+	}
+}
+
+// Emit one typed task-run failure envelope (JSON) or line (plain). Mirrors the
+// platform-store failure emitter so both surfaces carry the same envelope shape.
+function emitTaskRunFailure(
+	input: PlatformCommandInput,
+	runIdForData: string | undefined,
+	failure: TaskRunFailure,
+): number {
+	const message = redactUnsafeText(failure.message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${failure.code}: ${message} action=${failure.actionId} (run_id=${input.runId})\n`,
+		);
+		return failure.exitCode;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: failure.exitCode,
+			data: {
+				command: input.parsed.command,
+				result_kind: "shared_run",
+				...(runIdForData !== undefined ? { run_id: runIdForData } : {}),
+				...(failure.dataExtra ?? {}),
+				caller: input.caller,
+			},
+			runtime_actions: [taskRunAction(failure.actionId)],
+			continuation: { next_action_id: failure.actionId },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: failure.code,
+				message,
+				exit_code: failure.exitCode,
+				severity: "error",
+				...retryabilityForRecoverability(failure.recoverability),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return failure.exitCode;
+}
+
+// Capability coverage over the code-owned per-adapter operation table (R6): the
+// pure routing engine takes this so it never imports the lane table directly.
+function laneCapabilityCovers(
+	lane: { lane_id: keyof typeof BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES },
+	capability: string,
+): boolean {
+	const capabilities = BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES[lane.lane_id];
+	return (capabilities as readonly string[]).includes(capability);
+}
+
+// The read-only baseline task the front door dispatches for a routed intent
+// (F1): one interactive snapshot of the target tab, bounded to the requested
+// allowed origin. Mutation/confidential steps and per-lane specialist tasks are
+// out of this unit's scope (GAP: runbook execution, auth transaction, per-lane
+// specialist tasks); a snapshot proves the whole route end-to-end — attach,
+// dispatch, evidence — without any external effect.
+function baselineAgentBrowserTask(input: {
+	handoff: HandoffFacts;
+	rawHandoff: unknown;
+	runId: string;
+	targetTabId: string;
+	allowedOrigin: string;
+}): AgentBrowserTask {
+	return {
+		// The executor re-validates the handoff shape itself; the driver passes the
+		// verbatim envelope payload it already parsed.
+		handoff: input.rawHandoff as AgentBrowserTask["handoff"],
+		run_id: input.runId,
+		target_tab_id: input.targetTabId,
+		allowed_origins: [input.allowedOrigin],
+		steps: [{ kind: "snapshot", interactive: true }],
+	};
+}
+
+// The read-only baseline task the front door dispatches for a routed chrome
+// intent (F6, R21, R23; AE9): the operation set is COMPILED from the routed
+// intent by browser-use-chrome-task.ts's owner (debug -> console+network,
+// performance-profile -> trace artifact, lighthouse-audit -> insight artifact)
+// rather than a hardcoded console-read. Only debug/performance-profile/
+// lighthouse-audit route to this lane (BROWSER_USE_TASK_INTENT_DEFINITIONS
+// preferred_adapter), so the `as ChromeTaskIntent` narrowing is safe — a
+// non-chrome intent never reaches here. No caller-supplied reload/insightName is
+// threaded yet, so the compiler's defaults (reload=true, insightName=LCPBreakdown)
+// apply. The executor re-validates its own schema-2 / chrome-devtools-mcp handoff
+// guard, so the driver passes the verbatim envelope payload it already parsed.
+// artifact_dir is set only for artifact-producing intents; debug compiles to
+// console+network (no artifact op) and needs none.
+function baselineChromeTask(input: {
+	rawHandoff: unknown;
+	runId: string;
+	pageId: number;
+	allowedOrigin: string;
+	intent: BrowserUseTaskIntent;
+	artifactDir?: string;
+}): ChromeTask {
+	return {
+		handoff: input.rawHandoff as ChromeTask["handoff"],
+		run_id: input.runId,
+		target_page_id: input.pageId,
+		allowed_origins: [input.allowedOrigin],
+		operations: compileChromeOperationSet(input.intent as ChromeTaskIntent),
+		...(input.artifactDir !== undefined
+			? { artifact_dir: input.artifactDir }
+			: {}),
+	};
+}
+
+// Map a chrome-devtools-mcp executor outcome onto the SHARED dispatch mapping
+// (reusing AgentBrowserDispatchMapping so both lanes flow through the one
+// recordTaskRunOutcome persistence pipeline). Every chrome operation in this
+// lane is read-only, so `outcome === "unknown"` never occurs — but it is
+// handled defensively as unknown terminal (blocking retry/adapter-switch).
+// Lane refusals (handoff/task invalid, origin refused, artifact-dir required,
+// operation unknown) map to task_run_lane_refused; target-unavailable and
+// command-failed map to task_run_not_achieved; connection instability blocks
+// with the executor's own repair continuation.
+function mapChromeOutcome(
+	result: ChromeTaskExecutionResult,
+): AgentBrowserDispatchMapping {
+	if (result.ok) {
+		return { kind: "confirmed", executedSteps: result.executed_operations };
+	}
+	if (result.code === "chrome_task_connection_unstable") {
+		const repair =
+			result.connection?.next_repair_action ??
+			"Re-mint a Verified Handoff Envelope through browser-connect connect chrome-devtools-mcp --json, then resume.";
+		return {
+			kind: "blocked",
+			state: "needs-human",
+			continuation: {
+				next_action_id: "resume_shared_run",
+				summary: repair,
+			},
+			failure: {
+				code: "task_run_connection_unstable",
+				message: result.message,
+				actionId: "resume_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "retry",
+				dataExtra: {
+					lane_outcome: result.code,
+					...(result.connection !== undefined
+						? { connection: result.connection }
+						: {}),
+				},
+			},
+		};
+	}
+	if (result.outcome === "unknown") {
+		return {
+			kind: "terminal",
+			state: "unknown",
+			failure: {
+				code: "task_run_effect_unknown",
+				message: result.message,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { lane_outcome: result.code },
+			},
+		};
+	}
+	const isRefusal =
+		result.code === "chrome_task_handoff_invalid" ||
+		result.code === "chrome_task_invalid" ||
+		result.code === "chrome_task_target_origin_refused" ||
+		result.code === "chrome_task_artifact_dir_required" ||
+		result.code === "chrome_task_operation_unknown";
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		failure: {
+			code: isRefusal ? "task_run_lane_refused" : "task_run_not_achieved",
+			message: result.message,
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "none",
+			dataExtra: { lane_outcome: result.code },
+		},
+	};
+}
+
+// Project the chrome executor's native artifact references (R21) onto the shared
+// run's artifact-reference shape: artifact_id from the path basename, sensitivity
+// verbatim, retention "export" (explicit perf/Lighthouse artifacts transfer out
+// of default retention). Only a confirmed run carries artifacts.
+function chromeArtifactReferences(
+	result: ChromeTaskExecutionResult,
+): readonly BrowserUseArtifactReference[] {
+	if (!result.ok) return [];
+	return result.artifacts.map((artifact: ChromeTaskArtifact) => ({
+		artifact_id: artifact.path.slice(artifact.path.lastIndexOf("/") + 1),
+		sensitivity: artifact.sensitivity,
+		retention: "export" as const,
+	}));
+}
+
+// Derive a bounded base36 run-scoped sentinel nonce (auth plan U4): a
+// deterministic, distinctive per-run token the sentinel owner folds into every
+// derived marker so two runs never collide on a sentinel. Only [0-9a-z] appears
+// (SAFE_NONCE in browser-use-secret-scan), and it is length-bounded — a run id
+// is already a bounded safe identifier, so hashing it to base36 and truncating
+// keeps the nonce inside the sentinel owner's accepted range.
+function runScopedSentinelNonce(runId: string): string {
+	return createHash("sha256")
+		.update(runId)
+		.digest("hex")
+		.split("")
+		.map((c) => Number.parseInt(c, 16).toString(36))
+		.join("")
+		.slice(0, 32);
+}
+
+// The guard outcome for one dispatch: `ok: true` threads the guard (sensitive
+// when delivery evidence engaged, the untouched baseline otherwise); `ok: false`
+// means confidential delivery ENGAGED but its containment sentinels could not be
+// registered — the caller must withhold release, never proceed unguarded.
+type DeliveryGuardOutcome =
+	| { ok: true; guard: BrowserUseSensitiveRunGuard | undefined }
+	| {
+			ok: false;
+			reason:
+				| "guard_unavailable"
+				| "sentinel_derivation_failed"
+				| "sensitive_mark_failed";
+	  };
+
+// When an agent-browser (or runbook) dispatch engaged confidential delivery, the
+// run turns sensitive exactly once (auth plan U4/U5, DO#2): derive the sentinel
+// set from the delivered field shapes under the run-scoped nonce and mark the
+// guard. Delivery evidence is read REGARDLESS of the task's terminal truth — a
+// delivery followed by a later failure already put the secret on the page, so
+// the failure result carries the same evidence slot. A non-delivery result
+// leaves the baseline guard untouched. A missing guard or a derivation/mark
+// rejection after a delivery is a typed `ok: false` — the call sites translate
+// it into a withheld task-run failure so a run whose sentinels could not be
+// registered is never released.
+function markGuardForDeliveryOutcome(
+	baseGuard: BrowserUseSensitiveRunGuard | undefined,
+	result: AgentBrowserExecutionResult,
+): DeliveryGuardOutcome {
+	if (result.delivery === undefined) return { ok: true, guard: baseGuard };
+	if (baseGuard === undefined) {
+		return { ok: false, reason: "guard_unavailable" };
+	}
+	const set = deriveSentinelSet(
+		result.delivery.resume.delivered_shapes,
+		runScopedSentinelNonce(baseGuard.run_id),
+	);
+	if (!set.ok) return { ok: false, reason: "sentinel_derivation_failed" };
+	const marked = markRunSensitive(baseGuard, {
+		trigger: "confidential-field-delivery",
+		sentinels: set.sentinels,
+	});
+	if (!marked.ok) return { ok: false, reason: "sensitive_mark_failed" };
+	return { ok: true, guard: marked.guard };
+}
+
+// Fail-closed translation of a `DeliveryGuardOutcome` refusal (auth plan U4):
+// confidential delivery engaged but the run's containment sentinels could not be
+// registered, so no governed surface may be released. The typed failure names
+// the cause and preserves a repair path; it carries no adapter or page text, so
+// it is secret-free by construction.
+function sentinelRegistrationWithheldFailure(
+	reason: Extract<DeliveryGuardOutcome, { ok: false }>["reason"],
+): TaskRunFailure {
+	return {
+		code: "task_run_lane_refused",
+		message: `confidential delivery engaged but containment sentinels could not be registered (${reason}); governed outputs were withheld and the run was not released.`,
+		actionId: "inspect_task_run_result",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	};
+}
+
+// Map an agent-browser executor outcome onto the shared-run terminal/blocked
+// truth plus the driver's typed failure taxonomy (F7): confirmed -> confirmed
+// terminal; connection instability -> blocked + next-safe-action carrying the
+// diagnostic; unknown effect -> unknown terminal blocking retry/adapter-switch;
+// not-achieved / lane refusal -> not-achieved terminal.
+type AgentBrowserDispatchMapping =
+	| { kind: "confirmed"; executedSteps: number }
+	| {
+			kind: "blocked";
+			state: BrowserUseRunState;
+			continuation: { next_action_id: string; summary: string };
+			failure: TaskRunFailure;
+	  }
+	| { kind: "terminal"; state: BrowserUseRunState; failure: TaskRunFailure };
+
+function mapAgentBrowserOutcome(
+	result: AgentBrowserExecutionResult,
+): AgentBrowserDispatchMapping {
+	if (result.ok) {
+		return { kind: "confirmed", executedSteps: result.executed_steps };
+	}
+	if (result.code === "agent_browser_connection_unstable") {
+		const repair =
+			result.connection?.next_repair_action ??
+			"Re-mint a Verified Handoff Envelope through browser-connect connect --json for the agent-browser lane, then resume.";
+		return {
+			kind: "blocked",
+			state: "needs-human",
+			continuation: {
+				next_action_id: "resume_shared_run",
+				summary: repair,
+			},
+			failure: {
+				code: "task_run_connection_unstable",
+				message: result.message,
+				actionId: "resume_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "retry",
+				dataExtra: {
+					lane_outcome: result.code,
+					...(result.connection !== undefined
+						? { connection: result.connection }
+						: {}),
+				},
+			},
+		};
+	}
+	if (result.outcome === "unknown") {
+		return {
+			kind: "terminal",
+			state: "unknown",
+			failure: {
+				code: "task_run_effect_unknown",
+				message: result.message,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { lane_outcome: result.code },
+			},
+		};
+	}
+	// Remaining ok:false outcomes are not-achieved: a refused task input (invalid
+	// task, refused origin, confidential input without the auth transaction) or an
+	// unmet postcondition. Both are not-achieved terminal truth.
+	const isRefusal =
+		result.code === "agent_browser_handoff_invalid" ||
+		result.code === "agent_browser_task_invalid" ||
+		result.code === "agent_browser_target_origin_refused" ||
+		result.code === "agent_browser_confidential_input_requires_auth_transaction" ||
+		result.code === "agent_browser_confidential_delivery_blocked" ||
+		result.code === "agent_browser_action_integrity_refused" ||
+		result.code === "agent_browser_action_target_refused" ||
+		result.code === "agent_browser_current_snapshot_required" ||
+		result.code === "agent_browser_ref_invalid";
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		failure: {
+			code: isRefusal ? "task_run_lane_refused" : "task_run_not_achieved",
+			message: result.message,
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "none",
+			dataExtra: { lane_outcome: result.code },
+		},
+	};
+}
+
+/**
+ * `task run` (release contract R6-R11, R23; flows F1, F7). Routes one Task
+ * Intent (or resumes an existing run) to an admissible lane, attaches through
+ * the verified Browser Connect handoff, dispatches the read-only baseline task,
+ * records the run's terminal/blocked truth, and returns the shared run plus the
+ * observed external-effect state, selected lane, and next safe action.
+ *
+ * @param input - Store-backed command input plus explicit-run-id awareness
+ * @returns Process exit code
+ */
+async function runTaskRun(input: PlatformCommandInput): Promise<number> {
+	const flags = input.parsed.flagValues;
+
+	// R3: the handoff is the only attachment route. Read + validate it first, so a
+	// bad envelope fails before any store write or routing decision.
+	const handoffPath = stringField(flags["--handoff"]) ?? "";
+	const parse = await readHandoffFacts(input.runtime, handoffPath);
+	if (!parse.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message: parse.failure.message,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	if (parse.kind !== "verified") {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message:
+				"the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running a task.",
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const handoff = parse.facts;
+	// The verbatim envelope payload the executor re-validates. readHandoffFacts
+	// already proved the file parses and binds; re-read the raw for the executor
+	// (it owns its own schema-2 guard) so the driver never reconstructs it.
+	let rawHandoffData: unknown;
+	try {
+		const raw = await input.runtime.readTextFile(handoffPath);
+		rawHandoffData = (JSON.parse(raw) as { data?: unknown }).data;
+	} catch {
+		rawHandoffData = undefined;
+	}
+
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+
+	const runFlag = stringField(flags["--run"]);
+	const targetTabId = stringField(flags["--tab"]) ?? "task-tab";
+	const allowedOrigin = stringField(flags["--allowed-origin"]);
+
+	// Resolve the run to route: an existing run to resume (R23) loads and re-proves
+	// its own intent so a lane switch across a pause is impossible (R11); a fresh
+	// run needs a supplied intent.
+	let existingRun: BrowserUseSharedRun | undefined;
+	let intent: BrowserUseTaskIntent;
+	if (runFlag !== undefined) {
+		const loaded = await loadSharedRun(store.deps, runFlag);
+		if (!loaded.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(loaded.code, loaded.message),
+			);
+		}
+		if (isTerminalRunState(loaded.run.state)) {
+			return emitTaskRunFailure(input, loaded.run.run_id, {
+				code: "task_run_effect_unknown",
+				message: `run ${loaded.run.run_id} holds terminal truth ${loaded.run.state}; terminal truth never re-enters execution.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		}
+		existingRun = loaded.run;
+		intent = loaded.run.task_intent;
+	} else {
+		intent = stringField(flags["--intent"]) as BrowserUseTaskIntent;
+	}
+
+	// Route (R6, R10, R11) through the pure engine. A resumed run re-routes on its
+	// own intent; a lane override is honored only for a fresh run (a resume stays
+	// on the run's bound lane).
+	const routed = routeTaskRun({
+		intent,
+		registry: composedLaneRegistry(input.runtime.now()),
+		handoffAdapter: handoff.adapter,
+		...(stringField(flags["--lane"]) !== undefined && existingRun === undefined
+			? { laneOverride: stringField(flags["--lane"]) }
+			: {}),
+		capabilityCovers: laneCapabilityCovers,
+	});
+	if (!routed.ok) {
+		return emitTaskRunFailure(
+			input,
+			runFlag,
+			taskRunFailureOfRoutingRefusal(routed.refusal),
+		);
+	}
+	const route = routed.route;
+
+	// Validate lane inputs BEFORE binding the durable run. A usage error must
+	// never create (or poison) a shared run keyed on the handoff's run id: the
+	// caller corrects the flag and retries with the SAME handoff, so a run
+	// persisted here would make every retry a store_record_conflict and orphan a
+	// stray `running` run in the store.
+	//
+	// An intent requiring an allowed origin cannot dispatch without one; the
+	// baseline snapshot task needs an origin to bound the executor (R6).
+	if (allowedOrigin === undefined) {
+		return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+			code: "task_run_lane_refused",
+			message:
+				"the selected lane task requires --allowed-origin <origin> to bound execution to one exact HTTP(S) origin.",
+			actionId: "change_task_run_input",
+			exitCode: USAGE_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	// A numeric page id is required on the chrome lane: chrome-devtools-mcp keys
+	// pages by the numeric ordering from list_pages, not a string tab id. --tab
+	// must parse to a non-negative integer; default 0 (the first/selected page).
+	let chromePageId: number | undefined;
+	if (route.lane_id === "chrome-devtools-mcp") {
+		chromePageId = parseTabPageId(stringField(flags["--tab"]));
+		if (chromePageId === undefined) {
+			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+				code: "task_run_lane_refused",
+				message:
+					"the chrome-devtools-mcp lane addresses pages by numeric id from list_pages; pass --tab <non-negative integer> (default 0).",
+				actionId: "change_task_run_input",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+	}
+
+	// Bind the run: resume the existing one (proving same-lane, same-profile,
+	// R28/R11) or create a fresh one now that routing admitted the lane (R23).
+	let run: BrowserUseSharedRun;
+	if (existingRun !== undefined) {
+		const check = checkSameLaneResumeForTaskRun(
+			existingRun,
+			route.lane_id,
+			handoff,
+		);
+		if (check !== undefined) {
+			return emitTaskRunFailure(input, existingRun.run_id, check);
+		}
+		run = existingRun;
+	} else {
+		// The durable shared run id is the handoff's run id — the one id that
+		// threads discovery, selection, and this run (R23), so the run correlates
+		// to the exact verified attachment. A duplicate create against the same
+		// handoff surfaces as a typed store conflict, never a silent second run.
+		const created = await createSharedRun(store.deps, {
+			run_id: handoff.runId,
+			state: "running",
+			task_intent: intent,
+			environment_profile: {
+				environment: handoff.environmentName,
+				profile: handoff.environmentProfile,
+			},
+			adapter_id: route.lane_id,
+			handoff_evidence_id: handoff.handoffEvidenceId,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		if (!created.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(created.code, created.message),
+			);
+		}
+		run = created.run;
+	}
+
+	// Sensitive Run Guard (auth plan U4): attach once per run just after the run
+	// is resolved/created. The run stays non-sensitive until confidential
+	// delivery participates (out of this unit's scope: the Confidential Field
+	// Delivery Helper calls markRunSensitive at its own seam). The guard threads
+	// through to recordTaskRunOutcome, which asserts containment before releasing
+	// any governed surface once the run has turned sensitive.
+	const guardResult = beginSensitiveRunGuard(run.run_id);
+	const taskRunGuard: BrowserUseSensitiveRunGuard | undefined = guardResult.ok
+		? guardResult.guard
+		: undefined;
+
+	// Dispatch to the selected lane's execution interface. agent-browser runs a
+	// read-only snapshot baseline; chrome-devtools-mcp runs a read-only
+	// debugging/performance baseline through its envelope-derived executor.
+	// playwright-cdp's install is out of scope and never reaches here (routing
+	// refuses it as lane_not_installed).
+	if (route.lane_id === "agent-browser") {
+		const result = await executeAgentBrowserTask(
+			input.runtime,
+			baselineAgentBrowserTask({
+				handoff,
+				rawHandoff: rawHandoffData,
+				runId: run.run_id,
+				targetTabId,
+				allowedOrigin,
+			}),
+		);
+		// If confidential delivery engaged in this dispatch, the run turns
+		// sensitive exactly once (auth plan U4/U5); the sensitive guard threads
+		// into recordTaskRunOutcome's release gate. The baseline snapshot task
+		// carries no auth-delivery context, so this is the baseline guard until a
+		// confidential runbook/task supplies one. A delivery whose sentinels could
+		// not be registered withholds release (fail closed), never runs ungated.
+		const dispatchGuard = markGuardForDeliveryOutcome(taskRunGuard, result);
+		if (!dispatchGuard.ok) {
+			return emitTaskRunFailure(
+				input,
+				run.run_id,
+				sentinelRegistrationWithheldFailure(dispatchGuard.reason),
+			);
+		}
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			route,
+			mapAgentBrowserOutcome(result),
+			{
+				...(dispatchGuard.guard !== undefined
+					? { guard: dispatchGuard.guard }
+					: {}),
+			},
+		);
+	}
+
+	if (route.lane_id === "chrome-devtools-mcp") {
+		// The page id was validated before the run was bound; the ?? 0 default can
+		// never engage (parseTabPageId returned a number or the command already
+		// refused), it only spares a non-null assertion.
+		const pageId = chromePageId ?? 0;
+		// Artifact-producing intents (performance-profile/lighthouse-audit) need a
+		// run-scoped artifact directory created before dispatch (R21); the baseline
+		// console-read intent produces no artifact and needs none.
+		const producesArtifacts =
+			route.intent === "performance-profile" ||
+			route.intent === "lighthouse-audit";
+		let artifactDir: string | undefined;
+		if (producesArtifacts) {
+			artifactDir = store.deps.paths.state.artifactDir(run.run_id);
+			await input.runtime.ensureDirectory(artifactDir);
+		}
+		const result = await executeChromeTask(
+			input.runtime,
+			baselineChromeTask({
+				rawHandoff: rawHandoffData,
+				runId: run.run_id,
+				pageId,
+				allowedOrigin,
+				intent: route.intent,
+				...(artifactDir !== undefined ? { artifactDir } : {}),
+			}),
+		);
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			route,
+			mapChromeOutcome(result),
+			{
+				artifacts: chromeArtifactReferences(result),
+				...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+			},
+		);
+	}
+
+	// playwright-cdp and any future lane with no wired task dispatch: routing
+	// already refuses an uninstalled lane, so this is a defensive typed state.
+	return emitTaskRunFailure(input, run.run_id, {
+		code: "task_run_dispatch_unavailable",
+		message: `lane ${route.lane_id} routed and admitted, but no task-run dispatch binding is wired for its execution interface yet.`,
+		actionId: "inspect_task_run_result",
+		exitCode: RUNTIME_FAILURE_EXIT_CODE,
+		recoverability: "none",
+		dataExtra: { selected_lane: route.lane_id },
+	});
+}
+
+// Parse the --tab flag as a chrome page id: a non-negative integer, or 0 by
+// default. Returns undefined for a non-integer/negative value so the caller
+// fails closed rather than defaulting a malformed id to page 0.
+function parseTabPageId(raw: string | undefined): number | undefined {
+	if (raw === undefined) return 0;
+	if (!/^\d+$/.test(raw)) return undefined;
+	const value = Number(raw);
+	return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+// Resume same-lane / same-profile gate for a task-run resume (R28, R11): the
+// loaded run must already be bound to the routed lane and the handoff's
+// environment/profile identity. A mismatch is a typed refusal, never a switch.
+function checkSameLaneResumeForTaskRun(
+	run: BrowserUseSharedRun,
+	routedLaneId: string,
+	handoff: HandoffFacts,
+): TaskRunFailure | undefined {
+	if (run.adapter_id !== undefined && run.adapter_id !== routedLaneId) {
+		return {
+			code: "task_run_handoff_lane_mismatch",
+			message: `run ${run.run_id} is bound to lane ${run.adapter_id}; resume routed to ${routedLaneId}. browser-use never switches lanes mid-task.`,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		};
+	}
+	if (
+		run.environment_profile.environment !== handoff.environmentName ||
+		run.environment_profile.profile !== handoff.environmentProfile
+	) {
+		return {
+			code: "task_run_handoff_lane_mismatch",
+			message: `run ${run.run_id} is bound to a different environment/profile identity; the supplied handoff proves a different one.`,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		};
+	}
+	return undefined;
+}
+
+// Persist the dispatch outcome onto the shared run (its terminal or blocked
+// truth) and emit the shared-run envelope + observed external-effect state +
+// selected lane + next safe action. The run write goes through the same fenced
+// lease + CAS pipeline every durable run mutation uses (R13/R27).
+async function recordTaskRunOutcome(
+	input: PlatformCommandInput,
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	route: { lane_id: BrowserAdapterId; source: string; intent: BrowserUseTaskIntent },
+	mapping: AgentBrowserDispatchMapping,
+	options: {
+		artifacts?: readonly BrowserUseArtifactReference[];
+		guard?: BrowserUseSensitiveRunGuard;
+	} = {},
+): Promise<number> {
+	const artifacts = options.artifacts ?? [];
+	const targetState: BrowserUseRunState =
+		mapping.kind === "confirmed" ? "confirmed" : mapping.state;
+	// A confirmed read-only snapshot dispatched no mutation; a not-achieved /
+	// unknown / blocked outcome after a snapshot-only task also dispatched no
+	// mutation, so external effect stays none unless the executor says unknown.
+	const mutationDispatched = targetState === "unknown";
+	const continuation =
+		mapping.kind === "blocked" ? mapping.continuation : undefined;
+
+	const acquired = await acquireLease(deps, {
+		key: leaseKeyForRun(run),
+		holderId: `task-run-${run.run_id}`,
+		ttlMs: 10_000,
+	});
+	if (!acquired.ok) {
+		const message =
+			acquired.code === "lease_held"
+				? acquired.continuation.summary
+				: acquired.message;
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(acquired.code, message),
+		);
+	}
+	const claim = {
+		fencing_token: acquired.lease.fencing_token,
+		activation_epoch: acquired.lease.activation_epoch,
+		holderId: acquired.lease.holder_id,
+	};
+	let updated: Awaited<ReturnType<typeof casUpdateSharedRun>>;
+	try {
+		updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease: claim,
+			mutate: (current) => {
+				const { continuation: _prior, ...rest } = current;
+				return {
+					...rest,
+					state: targetState,
+					mutation_dispatched: current.mutation_dispatched || mutationDispatched,
+					// Persist any native artifact references the lane produced (R21);
+					// existing references survive so a resume never drops evidence.
+					...(artifacts.length > 0
+						? { artifacts: [...current.artifacts, ...artifacts] }
+						: {}),
+					...(continuation !== undefined ? { continuation } : {}),
+				};
+			},
+		});
+	} finally {
+		await releaseLease(deps, acquired.lease);
+	}
+	if (!updated.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(updated.code, updated.message),
+		);
+	}
+
+	const externalEffect = mutationDispatched ? "unknown" : "none";
+	const dataExtra: Record<string, unknown> = {
+		selected_lane: route.lane_id,
+		lane_source: route.source,
+		external_effect: externalEffect,
+		...(mapping.kind === "confirmed"
+			? { executed_steps: mapping.executedSteps }
+			: {}),
+	};
+	const plainExtra = [
+		`selected_lane=${route.lane_id}`,
+		`lane_source=${route.source}`,
+		`external_effect=${externalEffect}`,
+	];
+
+	// The one pending stdout/stderr emission this outcome produces: the shared-run
+	// success envelope, or the typed failure envelope merging the lane + effect
+	// facts. Factored as a closure over a target writer pair so a sensitive run
+	// can render the EXACT bytes into a capture buffer, sweep them, and only then
+	// replay them onto the real streams.
+	const emitOutcome = (target: PlatformCommandInput): number => {
+		if (mapping.kind === "confirmed") {
+			return emitSharedRunSuccess({
+				command: target,
+				run: updated.run,
+				continuationId: "inspect_task_run_result",
+				dataExtra,
+				plainExtra,
+			});
+		}
+		// A blocked or terminal dispatch is a typed failure envelope carrying the
+		// run projection reference; the failure's own data extras merge in the lane
+		// + effect facts so the caller sees the selected lane and observed effect.
+		return emitTaskRunFailure(target, updated.run.run_id, {
+			...mapping.failure,
+			dataExtra: { ...dataExtra, ...(mapping.failure.dataExtra ?? {}) },
+		});
+	};
+
+	// Sensitive Run Guard release gate (auth plan U4): once the run has turned
+	// sensitive, no governed surface may be emitted until the containment sweep
+	// proves clean over the on-disk run bytes (read back after commit) PLUS the
+	// pending stdout/stderr envelope, captured byte-for-byte before release. An
+	// ordinary (non-sensitive) run skips the gate and releases normally. A failed
+	// sweep withholds every surface — including the pending envelope, which is
+	// never written — and fails closed with a repair path preserved.
+	if (options.guard !== undefined && options.guard.sensitive) {
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const exitCode = emitOutcome({
+			...input,
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+		});
+		const surfaces: BrowserUseGovernedSurface[] = [
+			...(await collectRunGovernedSurfaces(deps, updated.run.run_id)),
+			{
+				kind: "stdout-envelope",
+				label: `task-run-envelope:${updated.run.run_id}`,
+				content: stdoutChunks.join("") + stderrChunks.join(""),
+			},
+		];
+		const release = assertContainmentBeforeRelease(options.guard, surfaces);
+		if (!release.release) {
+			return emitTaskRunFailure(input, updated.run.run_id, {
+				code: "task_run_lane_refused",
+				message: `sensitive run containment failed (${release.reason}); outputs were withheld and a human repair path is preserved.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		for (const chunk of stdoutChunks) input.stdout.write(chunk);
+		for (const chunk of stderrChunks) input.stderr.write(chunk);
+		return exitCode;
+	}
+
+	return emitOutcome(input);
+}
+
+// ---------------------------------------------------------------------------
+// Browser Runbook family (platform plan 2026-07-21-002 U4, R30/R31/R35).
+//
+// list projects the discovered runbook catalog; show returns one validated
+// definition + health; run compiles a runbook and dispatches it through the
+// agent-browser lane using the SAME shared run-store pipeline task-run uses.
+// The engine (browser-use-runbook.ts) owns discovery, validation, and the
+// plan; this driver seam owns store I/O, handoff reads, and envelope emission.
+// ---------------------------------------------------------------------------
+
+/**
+ * `runbook list` (R35). Projects every discovered valid runbook as a redacted
+ * catalog row under the runbook-catalog contract. Discovery is read-only, so
+ * the store opens read access; an empty runbooks root is an empty catalog.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunbookList(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const rows = await listRunbooks(store.deps.fs, store.deps.paths.data.root);
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID, input.caller, [
+				`runbook_count=${rows.length}`,
+			]),
+		);
+		for (const row of rows) {
+			input.stdout.write(
+				`service=${row.service_id} flow=${row.flow_id} health=${row.health} ${row.summary}\n`,
+			);
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				runbook_count: rows.length,
+				runbooks: rows,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+// Map a runbook discovery/execution refusal onto the driver's typed platform
+// failure. A missing/invalid id is caller-correctable (CHANGE_INPUT); a
+// corrupt/invalid record needs a repair (RUNTIME_FAILURE with a repair
+// continuation); a confidential runbook needs the auth transaction (fail
+// closed with the auth continuation pointer).
+function runbookFailureOf(
+	code: string,
+	message: string,
+): PlatformStoreFailure {
+	switch (code) {
+		case "runbook_not_found":
+		case "runbook_id_invalid":
+		case "runbook_input_missing":
+		case "runbook_input_rejected":
+		case "runbook_resume_out_of_range":
+			return {
+				code,
+				message,
+				actionId: "supply_run_id",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			};
+		case "runbook_record_corrupt":
+		case "runbook_record_invalid":
+		case "runbook_invalid":
+			return {
+				code,
+				message,
+				actionId: "inspect_corrupt_store_record",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+		default:
+			// runbook_confidential_requires_auth_transaction and any future refusal
+			// route to the run's own persisted next safe action; the auth continuation
+			// is named in the message.
+			return {
+				code,
+				message,
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			};
+	}
+}
+
+/**
+ * `runbook show --service <id> --flow <id>` (R30/R31). Loads and validates one
+ * runbook, then emits its definition + health under the runbook-definition
+ * contract. A missing/corrupt/invalid record fails closed with a typed refusal.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input);
+	if (!store.ok) return store.exitCode;
+	const serviceId = stringField(input.parsed.flagValues["--service"]) ?? "";
+	const flowId = stringField(input.parsed.flagValues["--flow"]) ?? "";
+	const shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, {
+		serviceId,
+		flowId,
+	});
+	if (!shown.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			runbookFailureOf(shown.failure.code, shown.failure.message),
+		);
+	}
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(
+				BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+				input.caller,
+				[
+					`service=${shown.runbook.service_id}`,
+					`flow=${shown.runbook.flow_id}`,
+					`health=${shown.health}`,
+				],
+			),
+		);
+		input.stdout.write(
+			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}\n`,
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				runbook: shown.runbook,
+				health: shown.health,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+// Parse repeatable --input <id>=<value> pairs into the runbook input map. A
+// malformed pair (no `=`, or an empty id) is a usage refusal so a caller never
+// silently loses a binding.
+function parseRunbookInputs(
+	pairs: readonly string[],
+):
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; message: string } {
+	const inputs: Record<string, string> = {};
+	for (const pair of pairs) {
+		const eq = pair.indexOf("=");
+		if (eq <= 0) {
+			return {
+				ok: false,
+				message: `each --input must be <id>=<value>; received ${sanitizeInputPairForError(pair)}.`,
+			};
+		}
+		inputs[pair.slice(0, eq)] = pair.slice(eq + 1);
+	}
+	return { ok: true, inputs };
+}
+
+// Redact an --input pair for an error message: never echo the value bytes (a
+// confidential value could ride in), only the id portion.
+function sanitizeInputPairForError(pair: string): string {
+	const eq = pair.indexOf("=");
+	return eq > 0 ? `${pair.slice(0, eq)}=[redacted]` : "[redacted]";
+}
+
+/**
+ * `runbook run --service <id> --flow <id> --handoff <path>` (R30, F7). Mirrors
+ * runTaskRun's opening: reads the verified agent-browser handoff, opens the
+ * store for write, creates/resumes the shared run under the runbook-execution
+ * intent, compiles + dispatches the runbook through the agent-browser lane, and
+ * records terminal/blocked truth through the SAME recordTaskRunOutcome pipeline.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+	const flags = input.parsed.flagValues;
+	const serviceId = stringField(flags["--service"]) ?? "";
+	const flowId = stringField(flags["--flow"]) ?? "";
+
+	// R3: the handoff is the only attachment route; read + verify first.
+	const handoffPath = stringField(flags["--handoff"]) ?? "";
+	const parse = await readHandoffFacts(input.runtime, handoffPath);
+	if (!parse.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message: parse.failure.message,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	if (parse.kind !== "verified") {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message:
+				"the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running a runbook.",
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const handoff = parse.facts;
+	// Runbooks execute through the agent-browser lane; a non-agent-browser handoff
+	// is a lane mismatch, never a substitution (R11).
+	if (handoff.adapter !== "agent-browser") {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message: `runbook execution runs on the agent-browser lane; the verified handoff attached adapter ${handoff.adapter}.`,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	let rawHandoffData: unknown;
+	try {
+		const raw = await input.runtime.readTextFile(handoffPath);
+		rawHandoffData = (JSON.parse(raw) as { data?: unknown }).data;
+	} catch {
+		rawHandoffData = undefined;
+	}
+
+	const parsedInputs = parseRunbookInputs(
+		input.parsed.repeatedFlagValues["--input"] ?? [],
+	);
+	if (!parsedInputs.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: "task_run_lane_refused",
+			message: parsedInputs.message,
+			actionId: "change_task_run_input",
+			exitCode: USAGE_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+
+	const runFlag = stringField(flags["--run"]);
+	const targetTabId = stringField(flags["--tab"]) ?? "runbook-tab";
+
+	// Resolve the shared run: resume an existing one (R23) or create a fresh one
+	// under the runbook-execution intent bound to the agent-browser lane.
+	let run: BrowserUseSharedRun;
+	let resumeFromStep = 0;
+	if (runFlag !== undefined) {
+		const loaded = await loadSharedRun(store.deps, runFlag);
+		if (!loaded.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(loaded.code, loaded.message),
+			);
+		}
+		if (isTerminalRunState(loaded.run.state)) {
+			return emitTaskRunFailure(input, loaded.run.run_id, {
+				code: "task_run_effect_unknown",
+				message: `run ${loaded.run.run_id} holds terminal truth ${loaded.run.state}; terminal truth never re-enters execution.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		}
+		const check = checkSameLaneResumeForTaskRun(
+			loaded.run,
+			"agent-browser",
+			handoff,
+		);
+		if (check !== undefined) {
+			return emitTaskRunFailure(input, loaded.run.run_id, check);
+		}
+		run = loaded.run;
+		resumeFromStep = runbookResumeCursorOf(loaded.run);
+	} else {
+		const created = await createSharedRun(store.deps, {
+			run_id: handoff.runId,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: {
+				environment: handoff.environmentName,
+				profile: handoff.environmentProfile,
+			},
+			adapter_id: "agent-browser",
+			handoff_evidence_id: handoff.handoffEvidenceId,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		if (!created.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(created.code, created.message),
+			);
+		}
+		run = created.run;
+	}
+
+	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
+	// non-sensitive until confidential delivery participates; runbook run refuses
+	// confidential steps to the auth transaction (below), so it never turns
+	// sensitive in this unit — but the guard is held for the command's lifetime.
+	const guardResult = beginSensitiveRunGuard(run.run_id);
+	const guard = guardResult.ok ? guardResult.guard : undefined;
+
+	const outcome: BrowserUseRunbookExecutionResult = await runRunbook(
+		{
+			fs: store.deps.fs,
+			runtime: input.runtime,
+			dataRoot: store.deps.paths.data.root,
+		},
+		{
+			serviceId,
+			flowId,
+			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+			runId: run.run_id,
+			targetTabId,
+			inputs: parsedInputs.inputs,
+			resumeFromStep,
+		},
+	);
+	if (!outcome.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			runbookFailureOf(outcome.refusal.code, outcome.refusal.message),
+		);
+	}
+
+	// Persist the executor's structural truth through the shared pipeline. If
+	// confidential delivery engaged (a confidential runbook routed through the
+	// auth-delivery context), the run turns sensitive exactly once and the
+	// sensitive guard threads through; otherwise the baseline guard flows so
+	// recordTaskRunOutcome asserts containment over the committed on-disk run
+	// bytes before releasing any governed surface. A delivery whose sentinels
+	// could not be registered withholds release (fail closed).
+	const dispatchGuard = markGuardForDeliveryOutcome(guard, outcome.result);
+	if (!dispatchGuard.ok) {
+		return emitTaskRunFailure(
+			input,
+			run.run_id,
+			sentinelRegistrationWithheldFailure(dispatchGuard.reason),
+		);
+	}
+	// F7 resume-cursor writer: a blocked runbook run persists the
+	// `runbook-resume:<nextIndex>` continuation runbookResumeCursorOf reads back,
+	// where nextIndex = the plan's resume base + the steps the executor confirmed
+	// before blocking. Without this writer a resume would silently replay from
+	// step 0 — idempotent for the read-only seed runbook, a double-apply the
+	// moment a mutating runbook ships. The emitted failure envelope keeps
+	// `resume_shared_run` as its next action (the registered repair action);
+	// only the run's durable continuation carries the cursor.
+	const mapping = mapAgentBrowserOutcome(outcome.result);
+	const recordedMapping: AgentBrowserDispatchMapping =
+		mapping.kind === "blocked"
+			? {
+					...mapping,
+					continuation: {
+						next_action_id: `runbook-resume:${
+							outcome.plan.resume_from_step + outcome.result.executed_steps
+						}`,
+						summary: mapping.continuation.summary,
+					},
+				}
+			: mapping;
+	return await recordTaskRunOutcome(
+		input,
+		store.deps,
+		run,
+		{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
+		recordedMapping,
+		{
+			...(dispatchGuard.guard !== undefined
+				? { guard: dispatchGuard.guard }
+				: {}),
+		},
+	);
+}
+
+// The persisted runbook resume cursor (F7). The shared run has no dedicated
+// runbook resume field, so the cursor rides on the run's single continuation as
+// a `runbook-resume:<index>` next_action_id. For the read-only seed runbook (no
+// mutation, no partial), a confirmed run reaches total_steps and no cursor is
+// persisted, so a fresh resume starts at 0. This is the minimal carrier the
+// wiring spec names until the run-model gains a first-class cursor.
+function runbookResumeCursorOf(run: BrowserUseSharedRun): number {
+	const id = run.continuation?.next_action_id ?? "";
+	const match = id.match(/^runbook-resume:(\d+)$/);
+	return match ? Number(match[1]) : 0;
+}
+
+// Read back every persisted governed surface for a run so the containment sweep
+// checks the on-disk bytes, not only the in-memory projection (auth plan U4).
+// The run.json file is the durable surface; artifacts/diagnostics are added as
+// their own surfaces once confidential delivery produces them.
+async function collectRunGovernedSurfaces(
+	deps: RunStoreDeps,
+	runId: string,
+): Promise<readonly BrowserUseGovernedSurface[]> {
+	const surfaces: BrowserUseGovernedSurface[] = [];
+	const read = await readDurableFile(deps.fs, deps.paths.state.runFile(runId));
+	if (read.status === "present") {
+		surfaces.push({
+			kind: "run-store-file",
+			label: `run:${runId}`,
+			content: read.raw,
+		});
+	}
+	return surfaces;
+}
+
 // Artifact metadata record suffixes (the retention naming contract; path
 // construction stays owned by browser-use-retention's helpers).
 const ARTIFACT_MANIFEST_SUFFIX = ".manifest.json";
@@ -1756,6 +3314,155 @@ async function runRepairApply(input: PlatformCommandInput): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// Clean-break migration commands (platform plan 2026-07-21-002 U3).
+//
+// inventory/plan/apply/verify drive the migration engine phases against one
+// exact --source root; status projects the standing state. Every phase and
+// status opens the durable store through the ONE path owner (write access: the
+// phases stage frozen snapshots and inactive generations), then maps the
+// engine's typed refusal to a fail-closed exit 20 envelope, or its ok:true
+// state to the shared migration-status success envelope. RetentionDeps is
+// structurally RunStoreDeps, so openPlatformStore's deps feed the engine
+// directly. A migration engine refusal NEVER surfaces as the exit-1
+// not-implemented stub — it is a typed, recoverable binding failure (R27).
+// ---------------------------------------------------------------------------
+
+// Migration engine refusals fail closed at exit 20 (the platform binding exit
+// code); their recoverability keys on the refusal class so an agent knows
+// whether to correct input, retry, or repair the durable migration state.
+function migrationRecoverabilityOf(
+	code: BrowserUseMigrationFailure["code"],
+): RuntimeErrorRecoverability {
+	switch (code) {
+		case "migration_source_invalid":
+		case "migration_yaml_invalid":
+		case "migration_yaml_duplicate_key":
+			return "change_input";
+		case "migration_source_drift":
+		case "store_lock_contended":
+			return "retry";
+		default:
+			// State-missing, disposition-incomplete, collision, verify-mismatch, and
+			// store/retention faults all repair the durable migration state.
+			return "repair_state";
+	}
+}
+
+function emitMigrationFailure(
+	input: PlatformCommandInput,
+	failure: BrowserUseMigrationFailure,
+): number {
+	const message = redactUnsafeText(failure.message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${failure.code}: ${message} (run_id=${input.runId})\n`,
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: failure.code,
+				message,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability(
+					migrationRecoverabilityOf(failure.code),
+				),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+function emitMigrationState(
+	input: PlatformCommandInput,
+	state: BrowserUseMigrationState,
+): number {
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID, input.caller, [
+				`phase=${state.phase}`,
+				`snapshot_id=${state.snapshot_id ?? "none"}`,
+				`snapshot_digest=${state.snapshot_digest ?? "none"}`,
+				`source_entry_count=${state.source_entry_count}`,
+				`disposition_count=${state.disposition_count}`,
+				`staged_generation=${state.staged_generation ?? "none"}`,
+				`last_apply_verified_noop=${state.last_apply_verified_noop ?? "none"}`,
+				`activation_state=${state.activation_state}`,
+			]),
+		);
+		for (const disposition of state.dispositions) {
+			input.stdout.write(
+				`disposition=${disposition.source_relative_path} kind=${disposition.disposition} destination=${disposition.logical_destination_id ?? "none"}\n`,
+			);
+		}
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				...state,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+/**
+ * `migration status|inventory|plan|apply|verify` (platform plan U3). status
+ * projects the standing migration state; the four phase commands drive the
+ * engine against one exact --source root. Typed engine refusals fail closed at
+ * exit 20 with their own code and recoverability; a successful phase re-emits
+ * the shared migration-status state.
+ *
+ * @param input - Store-backed command input
+ * @returns Process exit code
+ */
+async function runMigration(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const command = input.parsed.command;
+	// RetentionDeps is structurally RunStoreDeps (fs/paths/clock); the engine
+	// consumes the same admitted-store deps every other U2 command opens.
+	const deps = store.deps;
+	let result: { ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure;
+	if (command === "migration-status") {
+		result = await readBrowserUseMigrationStatus(deps);
+	} else {
+		// The parser has already proven --source is present for the four phase
+		// commands (a bare phase without --source never reaches here).
+		const source = stringField(input.parsed.flagValues["--source"]) ?? "";
+		result =
+			command === "migration-inventory"
+				? await inventoryBrowserUseMigration(deps, source)
+				: command === "migration-plan"
+					? await planBrowserUseMigration(deps, source)
+					: command === "migration-apply"
+						? await applyBrowserUseMigration(deps, source)
+						: await verifyBrowserUseMigration(deps, source);
+	}
+	if (!result.ok) return emitMigrationFailure(input, result);
+	return emitMigrationState(input, result.state);
+}
+
+// ---------------------------------------------------------------------------
 // R27 auth repair surface (auth plan U3a; ADR 0028).
 //
 // Each subcommand IS a blocked-cause continuation id: an agent holding a
@@ -1999,6 +3706,14 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 		if (persisted !== subcommand) {
 			return emitAuthContinuationMismatch(input, runFlag, persisted);
 		}
+		// Sensitive Run Guard (auth plan U4): attach once per run just after the
+		// run is resolved. This U3a readiness check emits only a non-secret
+		// readiness projection, so the guard stays non-sensitive and the surface
+		// releases normally; the seam is wired for when native auth custody
+		// (token launcher, approval broker) lands in U3b and participates in
+		// confidential delivery.
+		const guardResult = beginSensitiveRunGuard(loaded.run.run_id);
+		void (guardResult.ok ? guardResult.guard : undefined);
 		runBinding = {
 			run_id: loaded.run.run_id,
 			state: loaded.run.state,
@@ -2146,6 +3861,21 @@ export {
 	type OperationTargetHints,
 	resolveOperationTarget,
 } from "./browser-use-selection";
+
+// Test-only seam over the confidential-delivery run-driver internals (auth
+// plan U5). Exposes the private helpers a driver test needs to prove the
+// end-to-end seam — deriving the run-scoped sentinel nonce, marking the guard
+// sensitive from a delivery outcome, translating a sentinel-registration
+// refusal into the withheld failure, and the outcome recorder whose release
+// gate sweeps the on-disk run bytes plus the pending envelope — without
+// widening the public CLI surface. Not part of any command contract.
+export const __confidentialDeliveryDriverForTest = {
+	runScopedSentinelNonce,
+	markGuardForDeliveryOutcome,
+	collectRunGovernedSurfaces,
+	sentinelRegistrationWithheldFailure,
+	recordTaskRunOutcome,
+} as const;
 
 if (import.meta.main) {
 	const exitCode = await runBrowserUseCli(Bun.argv.slice(2));

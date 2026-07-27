@@ -116,19 +116,25 @@ describe("lane identity (R3)", () => {
 		}
 	});
 
-	test("lane-specific execution Interfaces: the mcporter envelope call is registered for chrome-devtools-mcp only", () => {
+	test("lane-specific execution Interfaces: chrome-devtools-mcp and agent-browser each register their own native call", () => {
 		const registry = registryOf([]);
 		const implemented = registry.lanes.filter(
 			(lane) => lane.native_implementation.implemented,
 		);
 		expect(implemented.map((lane) => lane.lane_id)).toEqual([
 			"chrome-devtools-mcp",
+			"agent-browser",
 		]);
-		const lane = laneOf(registry, "chrome-devtools-mcp");
+		const chrome = laneOf(registry, "chrome-devtools-mcp");
 		expect(
-			lane.native_implementation.implemented &&
-				lane.native_implementation.execution_interface,
+			chrome.native_implementation.implemented &&
+				chrome.native_implementation.execution_interface,
 		).toBe("mcporter-envelope-call");
+		const agentBrowser = laneOf(registry, "agent-browser");
+		expect(
+			agentBrowser.native_implementation.implemented &&
+				agentBrowser.native_implementation.execution_interface,
+		).toBe("agent-browser-native-call");
 	});
 
 	test("the public transport table derives from the lane table — no second copy", () => {
@@ -811,13 +817,13 @@ describe("auth methods gate on a usable lane (R5, finding #1)", () => {
 	test("proven conformance on an unimplemented lane advertises nothing", () => {
 		const registry = registryOf([
 			evidenceRef({
-				lane_id: "agent-browser",
+				lane_id: "playwright-cdp",
 				evidence_class: "auth-conformance",
 				producer: BROWSER_USE_LANE_EVIDENCE_PRODUCERS["auth-conformance"],
 				claims: ["password", "otp"],
 			}),
 		]);
-		const lane = laneOf(registry, "agent-browser");
+		const lane = laneOf(registry, "playwright-cdp");
 		// Evidence stays honest proven; the ADVERTISED capability is what gates.
 		expect(lane.evidence["auth-conformance"].status).toBe("proven");
 		expect(lane.native_implementation.implemented).toBe(false);

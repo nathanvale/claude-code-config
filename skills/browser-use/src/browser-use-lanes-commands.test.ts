@@ -122,7 +122,9 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 			>;
 			if (implementation.implemented === true) {
 				expect(implementation.execution_interface).toBe(
-					"mcporter-envelope-call",
+					lane.lane_id === "agent-browser"
+						? "agent-browser-native-call"
+						: "mcporter-envelope-call",
 				);
 			} else {
 				expect(implementation.unavailable_reason).toBeDefined();
@@ -147,6 +149,7 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 		);
 		expect(implemented.map((lane) => lane.lane_id)).toEqual([
 			"chrome-devtools-mcp",
+			"agent-browser",
 		]);
 	});
 

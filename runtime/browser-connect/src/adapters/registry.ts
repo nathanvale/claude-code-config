@@ -239,17 +239,22 @@ export type AdapterDefinition = {
 
 import { agentBrowserDefinition } from "./agent-browser.ts";
 import { chromeDevtoolsMcpDefinition } from "./chrome-devtools-mcp.ts";
+import { playwrightCdpDefinition } from "./playwright-cdp.ts";
 
 /**
- * Registered adapter ids in registry order (KTD3): exactly the two slice-one
- * adapters, chrome-devtools-mcp first. Declared as string literals so the
- * registry's shape is known without touching the imported definition values —
- * this avoids the module-init cycle (adapter files import helpers from this
- * module) while keeping the list a single source of truth.
+ * Registered adapter ids in registry order (KTD3): the two slice-one adapters
+ * followed by the Playwright CLI lane, chrome-devtools-mcp first. Declared as
+ * string literals so the registry's shape is known without touching the
+ * imported definition values — this avoids the module-init cycle (adapter files
+ * import helpers from this module) while keeping the list a single source of
+ * truth. `playwright-cdp` is the public Playwright CLI lane (R2/R8): a third
+ * genuinely-different invocation model (named-session attach/detach) proving the
+ * Adapter Definition seam a third time.
  */
 export const BROWSER_CONNECT_ADAPTER_IDS = [
 	"chrome-devtools-mcp",
 	"agent-browser",
+	"playwright-cdp",
 ] as const;
 
 /**
@@ -272,14 +277,17 @@ function adapterDefinitionsById(): Record<
 	return {
 		"chrome-devtools-mcp": chromeDevtoolsMcpDefinition,
 		"agent-browser": agentBrowserDefinition,
+		"playwright-cdp": playwrightCdpDefinition,
 	};
 }
 
 /**
- * The static registry (KTD3): exactly the two slice-one Adapter Definitions,
- * no router engine, no definition-free candidate rows. chrome-devtools-mcp is
- * listed first — it proved the definition interface; agent-browser validated
- * the seam against a genuinely different (non-MCP) invocation model.
+ * The static registry (KTD3): the three Adapter Definitions, no router engine,
+ * no definition-free candidate rows. chrome-devtools-mcp is listed first — it
+ * proved the definition interface; agent-browser validated the seam against a
+ * genuinely different (non-MCP) invocation model; playwright-cdp is the public
+ * Playwright CLI lane and validated the seam a third time against a
+ * named-session attach/detach invocation model.
  *
  * @returns The registered Adapter Definitions in registry order
  */

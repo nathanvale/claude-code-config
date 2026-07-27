@@ -36,9 +36,12 @@ Use `bun --filter @side-quest/browser-connect ...` for package maintenance.
 ## Status
 
 Slice one complete: `check`, `connect`, `dashboard`, and `run` are
-implemented and proven through the 19-station Branch Station catalog. Module
-ownership is in `ARCHITECTURE.md`; closed unit detail is in
-`TASKS.archive.md`. Slice two (Human Chrome / UI-consent) is the next work.
+implemented and proven through the 19-station Branch Station catalog. Three
+Adapter Definitions ship (`chrome-devtools-mcp`, `agent-browser`,
+`playwright-cdp`); the registry list in `src/adapters/registry.ts` is the
+single source of truth that `dashboard` and `connect` read. Module ownership
+is in `ARCHITECTURE.md`; closed unit detail is in `TASKS.archive.md`. Slice
+two (Human Chrome / UI-consent) is the next work.
 
 ## Verification
 

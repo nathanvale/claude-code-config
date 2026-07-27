@@ -8,6 +8,7 @@ import {
 	type BrowserAdapterId,
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
+import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
 
 // The Warm Chrome browser-entry proof contract id + schema version are owned by
 // @side-quest/warm-chrome (WARM_CHROME_CONTRACT_ID / WARM_CHROME_SCHEMA_VERSION);
@@ -22,7 +23,23 @@ import {
 // Adapter Lane Registry tests against transportAdapterIdsFromLaneTable()
 // (auth plan U1, R5): the lane table owns which lanes have a registered
 // execution Interface; this pin fails the gate if the two ever disagree.
-export const BROWSER_USE_TRANSPORT_ADAPTERS = ["chrome-devtools-mcp"] as const;
+export const BROWSER_USE_TRANSPORT_ADAPTERS = [
+	"chrome-devtools-mcp",
+	"agent-browser",
+] as const;
+
+// Adapters with an implemented Browser Target Discovery page-listing transport
+// (the mcporter `list_pages` envelope call). This is a NARROWER concern than a
+// lane's native operation execution: agent-browser has a native operation
+// Implementation (agent-browser-native-call) but no chrome-devtools-mcp-shaped
+// page-listing transport, so a verified agent-browser handoff must still fail
+// closed at the discovery gate rather than be spawned through the
+// chrome-devtools-mcp call shape. Kept separate from
+// BROWSER_USE_TRANSPORT_ADAPTERS (native operation execution / lane-table
+// drift pin) so the two transports never conflate.
+export const BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS = [
+	"chrome-devtools-mcp",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Browser Adapter vocabulary (plan 2026-06-02-004, retained R9 cluster)
@@ -280,6 +297,12 @@ const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID =
 	"browser-use.runbook-catalog" as const;
 const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "1" as const;
+// `runbook show` returns one validated runbook definition plus its health
+// (platform plan U4, R30/R31). `runbook run` returns the shared-run projection
+// exactly like `task run`, so it reuses browserUseSharedRunResultContract.
+export const BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID =
+	"browser-use.runbook-definition" as const;
+const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
 	"browser-use.migration-status" as const;
 const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
@@ -364,7 +387,9 @@ export type BrowserUseOperateSubcommand =
 // acceptance, discovery metadata, and result contracts ship now, live bodies
 // land with U2-U7. `task list` is live from U1 (a pure projection of the
 // code-owned Task Intent catalog).
-const BROWSER_USE_TASK_SUBCOMMANDS = ["list"] as const;
+// `task run` is the Wave-2 front door (release contract R6-R11, R23; flows F1,
+// F7). `list` stays the pure Task Intent catalog projection.
+const BROWSER_USE_TASK_SUBCOMMANDS = ["list", "run"] as const;
 export type BrowserUseTaskSubcommand =
 	(typeof BROWSER_USE_TASK_SUBCOMMANDS)[number];
 
@@ -383,11 +408,17 @@ const BROWSER_USE_RUN_SUBCOMMANDS = [
 export type BrowserUseRunSubcommand =
 	(typeof BROWSER_USE_RUN_SUBCOMMANDS)[number];
 
-const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list"] as const;
+const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "run"] as const;
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
-const BROWSER_USE_MIGRATION_SUBCOMMANDS = ["status"] as const;
+const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
+	"status",
+	"inventory",
+	"plan",
+	"apply",
+	"verify",
+] as const;
 export type BrowserUseMigrationSubcommand =
 	(typeof BROWSER_USE_MIGRATION_SUBCOMMANDS)[number];
 
@@ -477,13 +508,20 @@ export type BrowserUseCommand =
 	| "operate-screenshot"
 	| "operate-emulate"
 	| "task-list"
+	| "task-run"
 	| "lanes-list"
 	| "lanes-show"
 	| "run-status"
 	| "run-resume"
 	| "run-cancel"
 	| "runbook-list"
+	| "runbook-show"
+	| "runbook-run"
 	| "migration-status"
+	| "migration-inventory"
+	| "migration-plan"
+	| "migration-apply"
+	| "migration-verify"
 	| "artifact-list"
 	| "repair-status"
 	| "repair-apply"
@@ -589,10 +627,59 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"export_destination_unsafe",
 	"export_verify_failed",
 	"epoch_conflict",
+	// Clean-break migration engine refusals (platform plan U3). Each phase
+	// (inventory/plan/apply/verify) fails closed with its own typed code so an
+	// invalid source, drift after the frozen snapshot, a duplicate YAML key, an
+	// incomplete disposition set, a deterministic-generation collision, or a
+	// verify mismatch each map to their own recovery — never a silent success.
+	"migration_source_invalid",
+	"migration_source_drift",
+	"migration_state_missing",
+	"migration_state_corrupt",
+	"migration_yaml_invalid",
+	"migration_yaml_duplicate_key",
+	"migration_disposition_incomplete",
+	"migration_collision",
+	"migration_verify_failed",
 	// R27 auth repair surface (auth plan U3a): dispatching a repair command
 	// against a run whose persisted continuation names a DIFFERENT next safe
 	// action fails closed — the run's own continuation stays the one truth.
 	"auth_continuation_mismatch",
+	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
+	// Each routing/dispatch failure class maps to its own recovery, never a
+	// silent lane substitution (R10, AE3) or an optimistic retry (R26, F7).
+	"task_run_intent_unknown",
+	// The requested intent has no registered lane (debug/performance/Lighthouse
+	// until their lane lands): honest typed unavailability, never a guessed lane.
+	"task_run_intent_unrouted",
+	// An explicit --lane override that fails capability + evidence + integrity
+	// admission (R10): refused with a repair action, never substituted.
+	"task_run_lane_override_inadmissible",
+	// The auto-selected lane fails admission for the intent (R6): capability,
+	// implementation integrity, or evidence did not satisfy the requested outcome.
+	"task_run_no_admissible_lane",
+	// The selected lane cannot consume the verified Browser Connect handoff
+	// (R3/R10/R11, AE3): browser-use refuses rather than discover or substitute.
+	"task_run_handoff_lane_mismatch",
+	// A registered lane whose native execution Interface is not implemented on
+	// this host (playwright-cdp): adapter-not-installed repair continuation (R10).
+	"task_run_lane_not_installed",
+	// The lane's execution interface is registered but browser-use has no
+	// dispatch binding for it yet (a lane implemented in the registry table but
+	// not wired into the task-run driver): typed, never a crash.
+	"task_run_dispatch_unavailable",
+	// The lane executor reported a connection-class instability (F7): blocked
+	// with a next safe action, carrying the connection diagnostic.
+	"task_run_connection_unstable",
+	// The lane executor reported an UNKNOWN external effect (R26, F7): terminal
+	// unknown truth that blocks retry and adapter switch.
+	"task_run_effect_unknown",
+	// The lane executor reported the task did not achieve its declared
+	// postcondition (not-achieved terminal truth).
+	"task_run_not_achieved",
+	// The lane refused before dispatch for a task-input reason (invalid task
+	// shape, refused origin, confidential input without the auth transaction).
+	"task_run_lane_refused",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -849,6 +936,76 @@ export const browserUsePlatformStoreSuccessActions = [
 	{
 		id: "inspect_shared_run",
 		summary: "Read the shared run projection and follow its continuation.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "resume_shared_run",
+		summary:
+			"Resume the blocked shared run with browser-use run resume --run <id>.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+// Wave-2 task run front door runtime action ids (release contract R6-R11, R23;
+// flows F1, F7). The stable continuation.next_action_id vocabulary `task run`
+// emits. Failure ids name executable recoveries; a refused route or an unknown
+// external effect NEVER emits a retry or adapter-switch action (R10, R11, R26).
+export const browserUseTaskRunFailureActions = [
+	{
+		id: "choose_registered_intent",
+		summary:
+			"Pass an --intent from browser-use task list; the requested intent is not a code-owned Task Intent.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "await_intent_lane",
+		summary:
+			"The requested intent has no registered lane yet; run browser-use task list to see which intents route, and pick one whose lane is registered.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "choose_admissible_lane",
+		summary:
+			"The requested --lane override failed capability, evidence, or integrity admission; drop --lane to auto-route, or pick a lane whose evidence satisfies the intent (browser-use lanes list).",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_lane_evidence",
+		summary:
+			"No lane admits this intent on current evidence; re-run the lane conformance probe (browser-use lanes show --adapter <id>) before retrying.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "supply_matching_handoff",
+		summary:
+			"Mint a Verified Handoff Envelope for the selected lane with browser-connect connect <adapter> --json; the supplied handoff names a different adapter (browser-use never substitutes a lane).",
+		sideEffects: ["check"],
+	},
+	{
+		id: "install_lane_adapter",
+		summary:
+			"The selected lane's native adapter is not installed on this host; install it through browser-connect's adapter-install path, re-probe evidence, then retry — browser-use never substitutes another lane.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_task_run_result",
+		summary:
+			"Stop and inspect the task run outcome before any further action; an unknown external effect blocks retry and adapter switch (inspect the shared run, then re-prove target state).",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_task_run_input",
+		summary:
+			"Correct the task run intent, lane, handoff, target, or origin arguments and retry.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseTaskRunSuccessActions = [
+	{
+		id: "inspect_task_run_result",
+		summary:
+			"Read the task run result, observed external-effect state, selected lane, and continue the task.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1150,12 +1307,72 @@ const browserUseRunFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+// Wave-2 `task run` front door flags (release contract R6-R11, R23; F1, F7).
+// --intent selects a code-owned Task Intent; --lane is the explicit override
+// that STILL passes capability + evidence admission (R10); --handoff is the
+// browser-connect Verified Handoff Envelope the selected lane attaches through
+// (R3); --tab/--allowed-origin bound the lane's execution; --run resumes an
+// existing durable shared run instead of creating one (R23). The intent enum
+// pins BROWSER_USE_TASK_INTENTS (drift-gated in the task-run tests).
+const browserUseTaskRunFlags = {
+	"--intent": {
+		type: "enum",
+		values: BROWSER_USE_TASK_INTENTS,
+		description:
+			"Code-owned Task Intent to route (see browser-use task list). Required unless --run resumes an existing run.",
+	},
+	"--lane": {
+		type: "enum",
+		values: BROWSER_USE_LIVE_ADAPTERS,
+		description:
+			"Explicit lane override; still passes capability + evidence + integrity admission and never substitutes another lane.",
+	},
+	"--run": {
+		type: "string",
+		description:
+			"Existing shared Browser Use run id to resume instead of creating a new run.",
+	},
+	"--tab": {
+		type: "string",
+		description: "Target tab id inside the verified session the lane executes against.",
+	},
+	"--allowed-origin": {
+		type: "string",
+		description:
+			"Exact HTTP(S) origin the lane task is bounded to (scheme + host + port).",
+	},
+	"--handoff": {
+		type: "path",
+		description:
+			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect <adapter> --json). The only attachment route (R3).",
+	},
+	"--dry-run": {
+		type: "boolean",
+		description: "Emit a mock envelope without any live browser call.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 // `artifact list --run` narrows the projection to one shared run (platform
 // plan U2, R35 "artifacts, retention").
 const browserUseArtifactFlags = {
 	"--run": {
 		type: "string",
 		description: "Filter artifacts to one shared run id.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// Clean-break migration phase flags (platform plan U3). --source names the
+// absolute legacy corpus root the phase freezes/validates against; it is
+// required for inventory/plan/apply/verify (the parser rejects its absence),
+// and unused by `migration status` (a pure state projection). Modeled on
+// browserUseArtifactFlags: audit-only --caller plus JSON/plain output.
+const browserUseMigrationFlags = {
+	"--source": {
+		type: "path",
+		description:
+			"Absolute legacy corpus root for the migration phase. Required for inventory, plan, apply, and verify.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -1222,6 +1439,63 @@ const browserUseRunbookCatalogResultContract = {
 	kind: "Browser Runbook catalog projection.",
 	schema_version: BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseRunbookDefinitionResultContract = {
+	id: BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+	kind: "Browser Runbook definition and health projection.",
+	schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+// `runbook show <service>/<flow>` is a targeted read of one exact runbook
+// (never a scan), so both coordinates are hard-required at the parser.
+const browserUseRunbookShowFlags = {
+	"--service": {
+		type: "string",
+		description: "Exact runbook service id (a safe lowercase slug).",
+	},
+	"--flow": {
+		type: "string",
+		description: "Exact runbook flow id (a safe lowercase slug).",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// `runbook run` compiles one runbook and dispatches it through the agent-browser
+// lane. It attaches through the verified handoff (R3), binds a durable shared
+// run (--run resumes an existing one, R23/F7), bounds execution to --tab, and
+// binds declared runbook inputs via repeatable --input <id>=<value>.
+// --allowed-origin is OPTIONAL: the runbook declares allowed_origins itself.
+const browserUseRunbookRunFlags = {
+	"--service": {
+		type: "string",
+		description: "Exact runbook service id (a safe lowercase slug).",
+	},
+	"--flow": {
+		type: "string",
+		description: "Exact runbook flow id (a safe lowercase slug).",
+	},
+	"--input": {
+		type: "string",
+		description:
+			"Runbook input binding as <id>=<value>. Repeatable; one per declared runbook input.",
+	},
+	"--handoff": {
+		type: "path",
+		description:
+			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect agent-browser --json). The only attachment route (R3).",
+	},
+	"--tab": {
+		type: "string",
+		description:
+			"Target tab id inside the verified session the runbook executes against.",
+	},
+	"--allowed-origin": {
+		type: "string",
+		description:
+			"Optional extra exact HTTP(S) origin; the runbook already declares its allowed origins.",
+	},
+	...browserUseRunFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseMigrationStatusResultContract = {
 	id: BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
@@ -1503,6 +1777,34 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
+		"task-run": {
+			script: "browser-use",
+			summary:
+				"Route one Task Intent to an admissible lane, attach through the verified Browser Connect handoff, execute, and return the shared run, observed external-effect state, selected lane, and next safe action.",
+			usage: [
+				"task run --intent <intent> --handoff <path> [--lane <id>] [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--dry-run] [--json|--plain]",
+				"task run --run <id> --handoff <path> [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Task run creates or resumes a durable shared run and dispatches live lane execution against the verified handoff.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUseTaskRunSuccessActions,
+				failure: browserUseTaskRunFailureActions,
+			},
+			flags: browserUseTaskRunFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
 		"lanes-list": {
 			script: "browser-use",
 			summary:
@@ -1626,9 +1928,55 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseRunbookCatalogResultContract,
 			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-show": {
+			script: "browser-use",
+			summary:
+				"Show one Browser Runbook definition and its health by exact service/flow id.",
+			usage: [
+				"runbook show --service <id> --flow <id> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRunbookDefinitionResultContract,
+			flags: browserUseRunbookShowFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-run": {
+			script: "browser-use",
+			summary:
+				"Compile one Browser Runbook and dispatch it through the agent-browser lane against a verified handoff; returns the shared run, external-effect state, and next safe action.",
+			usage: [
+				"runbook run --service <id> --flow <id> --handoff <path> [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Runbook run creates or resumes a durable shared run and dispatches live agent-browser execution against the verified handoff.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunbookRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"migration-status": {
@@ -1646,6 +1994,95 @@ export const browserUseContracts = defineCommandFacadeContract(
 			envVars: browserUsePlatformEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
 			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-inventory": {
+			script: "browser-use",
+			summary:
+				"Freeze the legacy corpus source tree into one immutable source snapshot before any disposition or staging.",
+			usage: [
+				"migration inventory --source <path> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Inventory writes the frozen source snapshot to the durable store.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			flags: browserUseMigrationFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-plan": {
+			script: "browser-use",
+			summary:
+				"Assign one complete disposition and provenance row to every frozen source entry; refuses drift, duplicate YAML keys, and quarantined material.",
+			usage: [
+				"migration plan --source <path> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Plan writes the disposition set to the durable migration state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			flags: browserUseMigrationFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-apply": {
+			script: "browser-use",
+			summary:
+				"Stage every planned safe output into one immutable inactive generation; never activates and refuses a colliding deterministic generation.",
+			usage: [
+				"migration apply --source <path> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Apply stages an inactive generation to the durable store without activation.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			flags: browserUseMigrationFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-verify": {
+			script: "browser-use",
+			summary:
+				"Verify the frozen source, dispositions, provenance, and staged file hashes without activation.",
+			usage: [
+				"migration verify --source <path> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Verify records the verified phase in the durable migration state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			flags: browserUseMigrationFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"artifact-list": {

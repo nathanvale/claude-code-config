@@ -70,6 +70,7 @@ export type BrowserUseLaneAuthMethod =
 // transport is one lane's Interface, never a universal abstraction.
 export const BROWSER_USE_LANE_EXECUTION_INTERFACES = [
 	"mcporter-envelope-call",
+	"agent-browser-native-call",
 ] as const;
 export type BrowserUseLaneExecutionInterface =
 	(typeof BROWSER_USE_LANE_EXECUTION_INTERFACES)[number];
@@ -98,10 +99,22 @@ export type BrowserUseLaneNativeImplementation =
  */
 export const BROWSER_USE_ADAPTER_LANE_TABLE = {
 	"chrome-devtools-mcp": {
+		// The Chrome DevTools MCP executor (browser-use-chrome-task.ts) proves a
+		// read-only debugging/performance evidence surface against the live
+		// adapter: console-read -> list_console_messages (console_debug),
+		// network-read/network-request -> list_network_requests/get_network_request
+		// (network_inspection), performance-trace -> performance_start_trace/
+		// performance_stop_trace (performance_profile), and lighthouse-insight ->
+		// performance_analyze_insight (devtools_performance_insight). memory_debug /
+		// react_vitals are NOT advertised — the executor does not prove them.
 		operation_capabilities: [
 			"snapshot_refs",
 			"screenshot_media",
 			"viewport_emulation",
+			"console_debug",
+			"network_inspection",
+			"performance_profile",
+			"devtools_performance_insight",
 		],
 		native_implementation: {
 			implemented: true,
@@ -109,13 +122,15 @@ export const BROWSER_USE_ADAPTER_LANE_TABLE = {
 		},
 	},
 	"agent-browser": {
-		operation_capabilities: [],
+		// The Agent Browser executor (browser-use-agent-browser.ts) proves a
+		// current-snapshot ref surface (snapshot -> snapshot_refs) and ref-scoped
+		// element mutation (click/fill -> element_actions). open (navigation) and
+		// evaluate (page JS) have no capability-vocabulary member, so they are not
+		// advertised here — the lane claims only what the executor proves.
+		operation_capabilities: ["snapshot_refs", "element_actions"],
 		native_implementation: {
-			implemented: false,
-			unavailable_reason:
-				"No lane-specific execution Interface is registered for this lane yet.",
-			next_repair_action:
-				"Register the Agent Browser lane Implementation through the platform plan's Agent Browser unit before advertising task capability.",
+			implemented: true,
+			execution_interface: "agent-browser-native-call",
 		},
 	},
 	"playwright-cdp": {

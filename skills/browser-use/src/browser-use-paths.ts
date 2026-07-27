@@ -32,6 +32,7 @@ import {
 	mkdir as fsMkdir,
 	readdir as fsReaddir,
 	readFile as fsReadFile,
+	realpath as fsRealpath,
 	rename as fsRename,
 	unlink as fsUnlink,
 	writeFile as fsWriteFile,
@@ -178,9 +179,17 @@ export type BrowserUsePlatformFs = {
 				mode: number;
 				uid: number;
 				dev: number;
+				/** Size in bytes (migration inventory hashes/records it). */
+				size: number;
 		  }
 		| undefined
 	>;
+	/**
+	 * Resolve `path` to its canonical absolute location following every
+	 * symlink. Returns `undefined` when a component is missing (ENOENT/ENOTDIR).
+	 * Used only by admission's operator-owned symlink-ancestor resolution.
+	 */
+	realpath(path: string): Promise<string | undefined>;
 	mkdir(path: string, options: { recursive: boolean; mode: number }): Promise<void>;
 	chmod(path: string, mode: number): Promise<void>;
 	/** Throws a `{ code: "ENOENT" }`-shaped error on a missing file. */
@@ -223,11 +232,28 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 						: stat.isSymbolicLink()
 							? "symlink"
 							: "other";
-				return { kind, mode: stat.mode & 0o777, uid: stat.uid, dev: stat.dev };
+				return {
+					kind,
+					mode: stat.mode & 0o777,
+					uid: stat.uid,
+					dev: stat.dev,
+					size: stat.size,
+				};
 			} catch (error) {
 				const code = (error as { code?: string }).code;
 				if (code === "ENOENT" || code === "ENOTDIR") return undefined;
 				throw error;
+			}
+		},
+		async realpath(path) {
+			try {
+				return await fsRealpath(path);
+			} catch {
+				// ENOENT/ENOTDIR (dangling), ELOOP (symlink cycle), EACCES
+				// (unreadable ancestor), and every other resolution failure mean the
+				// link target cannot be proven safe; undefined maps to the typed
+				// symlink refusal upstream instead of escaping as an uncaught throw.
+				return undefined;
 			}
 		},
 		async mkdir(path, options) {
@@ -444,6 +470,55 @@ function componentPrefixes(absolutePath: string): string[] {
 	return prefixes;
 }
 
+// An ancestor symlink is admitted only when the operator owns BOTH the link
+// itself and its resolved target (AE10/R24): the home-dir dotfiles pattern
+// (~/.config -> /Users/<me>/dotfiles/.config) is the operator's own deliberate
+// layout, not the attacker-planted redirect R12 refuses. A link owned by
+// another user, or one whose realpath target is foreign-owned or missing,
+// still refuses — resolving it would follow the redirect past the safety wall.
+async function admitSymlinkAncestor(
+	fs: BrowserUsePlatformFs,
+	kind: BrowserUseRootKind,
+	linkStat: { uid: number },
+	linkPrefix: string,
+	processUid: number | undefined,
+): Promise<
+	| { ok: true; resolved: string }
+	| { ok: false; refusal: BrowserUsePathRefusal }
+> {
+	const symlinkRefusal = {
+		ok: false as const,
+		refusal: pathRefusal(
+			kind,
+			"xdg_root_symlink_ancestor",
+			"a path component is a symlink not owned by the current user with an owned target; unresolved symlink traversal is refused (R12).",
+			"Point the root at a directory without symlinked ancestors, or make the symlink and its target owned by the current user",
+		),
+	};
+	// The link itself must belong to the invoking user.
+	if (processUid !== undefined && linkStat.uid !== processUid) {
+		return symlinkRefusal;
+	}
+	// Any realpath failure (dangling target, ELOOP cycle, EACCES) is the typed
+	// refusal, never an uncaught throw — injected adapters may still throw
+	// where the default adapter maps failures to undefined.
+	let resolved: string | undefined;
+	try {
+		resolved = await fs.realpath(linkPrefix);
+	} catch {
+		resolved = undefined;
+	}
+	if (resolved === undefined) return symlinkRefusal;
+	const targetStat = await fs.lstat(resolved);
+	// The resolved target must exist and be owned by the invoking user; a
+	// missing or foreign-owned target is exactly the redirect R12 guards.
+	if (targetStat === undefined) return symlinkRefusal;
+	if (processUid !== undefined && targetStat.uid !== processUid) {
+		return symlinkRefusal;
+	}
+	return { ok: true, resolved };
+}
+
 async function validateExistingBrowserUseRoot(
 	fs: BrowserUsePlatformFs,
 	input: { kind: BrowserUseRootKind; path: string },
@@ -452,22 +527,50 @@ async function validateExistingBrowserUseRoot(
 	| { ok: false; refusal: BrowserUsePathRefusal }
 > {
 	const { kind, path } = input;
+	const processUid = process.getuid?.();
 	let rootStat: Awaited<ReturnType<BrowserUsePlatformFs["lstat"]>>;
-	for (const prefix of componentPrefixes(path)) {
+	// Walk the prefixes shallow-to-deep. On an operator-owned symlink ancestor,
+	// resolve it and continue the walk over the canonical path built from the
+	// resolved base plus the still-unwalked literal tail, so downstream
+	// owner/mode checks run against real, symlink-free components. Nested
+	// symlinks in the tail re-enter this branch; realpath makes each step
+	// symlink-free at its own level, so the walk terminates.
+	let prefixes = componentPrefixes(path);
+	let index = 0;
+	while (index < prefixes.length) {
+		const prefix = prefixes[index] as string;
 		const stat = await fs.lstat(prefix);
 		if (stat === undefined) return { ok: true, exists: false };
 		if (stat.kind === "symlink") {
-			return {
-				ok: false,
-				refusal: pathRefusal(
-					kind,
-					"xdg_root_symlink_ancestor",
-					"a path component is a symlink; symlink traversal is refused (R12).",
-					"Point the root at a directory without symlinked ancestors",
-				),
-			};
+			const admitted = await admitSymlinkAncestor(
+				fs,
+				kind,
+				stat,
+				prefix,
+				processUid,
+			);
+			if (!admitted.ok) return admitted;
+			// Segments still to walk are everything below the symlink in the
+			// CURRENT prefix list (already anchored at the last resolved base) —
+			// never recomputed from the original path. After a re-root the
+			// original path's indices no longer line up; walking that wrong chain
+			// would wander onto non-existent paths and skip the owner/0700 checks
+			// on the real root.
+			const remaining = prefixes
+				.slice(index + 1)
+				.map((full) => full.split(sep).slice(-1)[0] as string);
+			const rebuilt: string[] = [admitted.resolved];
+			let cursor = admitted.resolved;
+			for (const segment of remaining) {
+				cursor = join(cursor, segment);
+				rebuilt.push(cursor);
+			}
+			prefixes = rebuilt;
+			index = 0;
+			continue;
 		}
 		rootStat = stat;
+		index += 1;
 	}
 	if (rootStat === undefined) return { ok: true, exists: false };
 	if (rootStat.kind !== "directory") {
@@ -481,7 +584,6 @@ async function validateExistingBrowserUseRoot(
 			),
 		};
 	}
-	const processUid = process.getuid?.();
 	if (processUid !== undefined && rootStat.uid !== processUid) {
 		return {
 			ok: false,

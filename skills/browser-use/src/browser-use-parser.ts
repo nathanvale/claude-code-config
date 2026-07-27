@@ -11,6 +11,7 @@
 import {
 	type CliWriter,
 	createCliRuntimeSuccessEnvelope,
+	parseEnumFlag,
 	renderCommandUsage,
 	usageError,
 	writeJsonEnvelope,
@@ -60,7 +61,13 @@ export type ParsedBrowserUseCommand =
 			dryRun: boolean;
 			// Raw declared-flag values for the resolved command. Booleans map to "";
 			// value-bearing flags map to their string value. Undefined when absent.
+			// Repeated flags keep their LAST value here (backward-compatible);
+			// `repeatedFlagValues` carries every occurrence for repeatable flags.
 			flagValues: Record<string, string>;
+			// Every occurrence of each value-bearing flag, in argv order. A caller
+			// that treats a flag as repeatable (e.g. runbook run --input) reads it
+			// here; single-value callers keep using flagValues unchanged.
+			repeatedFlagValues: Record<string, readonly string[]>;
 	  };
 
 // ---------------------------------------------------------------------------
@@ -158,7 +165,13 @@ export function parseBrowserUseArgv(
 	const rest = argv.slice(2);
 	const flags = browserUseContracts[command].flags ?? {};
 	rejectUnknownFlags(rest, flags);
-	const flagValues = collectFlagValues(rest, flags);
+	const collected = collectFlagValues(rest, flags);
+	const flagValues = collected.values;
+	const repeatedFlagValues = collected.repeated;
+	// Enum-VALUE validation runs here — before every command-specific required-
+	// flag check and the dry-run/live split — so an unregistered enum value fails
+	// closed for dry-run and live alike (R27, api-contract parity).
+	validateEnumFlagValues(flagValues, flags);
 	if (command === "run-resume" || command === "run-cancel") {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
@@ -169,6 +182,57 @@ export function parseBrowserUseArgv(
 		const adapterId = stringField(flagValues["--adapter"]);
 		if (!adapterId || adapterId.startsWith("--")) {
 			throw usageError("lanes show requires --adapter <id>.");
+		}
+	}
+	// `task run` always attaches through a Verified Handoff Envelope (R3), and
+	// needs an intent to route OR a run id to resume (R23). A dry-run mock still
+	// requires them so the contract shape an agent learns is stable.
+	if (command === "task-run") {
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("task run requires --handoff <path>.");
+		}
+		const intent = stringField(flagValues["--intent"]);
+		const runId = stringField(flagValues["--run"]);
+		if ((!intent || intent.startsWith("--")) && (!runId || runId.startsWith("--"))) {
+			throw usageError(
+				"task run requires --intent <intent> (or --run <id> to resume an existing run).",
+			);
+		}
+	}
+	// `runbook show`/`runbook run` are targeted by one exact service/flow id
+	// (never a scan), so both coordinates are hard-required (mirrors lanes show
+	// --adapter). `runbook run` also attaches through a Verified Handoff Envelope
+	// (R3); a resume still supplies --run alongside the handoff.
+	if (command === "runbook-show" || command === "runbook-run") {
+		for (const flag of ["--service", "--flow"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (!value || value.startsWith("--")) {
+				throw usageError(
+					`${command.replace("-", " ")} requires ${flag} <id>.`,
+				);
+			}
+		}
+	}
+	if (command === "runbook-run") {
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("runbook run requires --handoff <path>.");
+		}
+	}
+	// Every migration phase but `status` freezes/validates against one exact
+	// source root; a targeted phase is never an unbound scan, so --source is
+	// hard-required (mirrors lanes show --adapter). `migration status` is a pure
+	// state projection and takes no source.
+	if (
+		command === "migration-inventory" ||
+		command === "migration-plan" ||
+		command === "migration-apply" ||
+		command === "migration-verify"
+	) {
+		const source = stringField(flagValues["--source"]);
+		if (!source || source.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --source <path>.`);
 		}
 	}
 	// R11: binding repair and selection projection are targeted reads of exact
@@ -205,6 +269,7 @@ export function parseBrowserUseArgv(
 		outputMode: outputModeFor(command, flagValues),
 		dryRun,
 		flagValues,
+		repeatedFlagValues,
 	};
 }
 
@@ -216,8 +281,15 @@ export function parseBrowserUseArgv(
 function collectFlagValues(
 	argv: readonly string[],
 	flags: Readonly<Record<string, FlagSpec>>,
-): Record<string, string> {
+): { values: Record<string, string>; repeated: Record<string, string[]> } {
 	const values: Record<string, string> = {};
+	const repeated: Record<string, string[]> = {};
+	const record = (name: string, value: string): void => {
+		values[name] = value;
+		const bucket = repeated[name] ?? [];
+		bucket.push(value);
+		repeated[name] = bucket;
+	};
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (!arg.startsWith("--")) continue;
@@ -226,19 +298,19 @@ function collectFlagValues(
 		const spec = flags[name];
 		if (!spec) continue;
 		if (spec.type === "boolean") {
-			values[name] = "";
+			record(name, "");
 			continue;
 		}
 		if (hasInline) {
-			values[name] = arg.slice(arg.indexOf("=") + 1);
+			record(name, arg.slice(arg.indexOf("=") + 1));
 			continue;
 		}
 		if (index + 1 < argv.length) {
-			values[name] = argv[index + 1];
+			record(name, argv[index + 1]);
 			index += 1;
 		}
 	}
-	return values;
+	return { values, repeated };
 }
 
 function isFamily(value: string | undefined): value is BrowserUseFamily {
@@ -256,7 +328,26 @@ function toCommand(
 	return `${family}-${subcommand}` as BrowserUseCommand;
 }
 
-type FlagSpec = { type?: string };
+type FlagSpec = { type?: string; values?: readonly string[] };
+
+// Validate every enum-typed flag's supplied VALUE against the contract's
+// declared `values`, contract-derived so dry-run and live agree (R27): an
+// unregistered --intent/--lane/--mode/--adapter fails with the SAME usage error
+// the live path would raise, BEFORE the dry-run/live split short-circuits. Runs
+// after collectFlagValues, so it sees each flag's resolved value (last wins,
+// matching flagValues). Reuses the facade's parseEnumFlag — the one enum-flag
+// usage-error mechanism — never a hand-rolled message.
+function validateEnumFlagValues(
+	flagValues: Readonly<Record<string, string>>,
+	flags: Readonly<Record<string, FlagSpec>>,
+): void {
+	for (const [name, spec] of Object.entries(flags)) {
+		if (spec.type !== "enum" || !spec.values) continue;
+		const value = flagValues[name];
+		if (value === undefined) continue;
+		parseEnumFlag(name, value, spec.values);
+	}
+}
 
 function rejectUnknownFlags(
 	argv: readonly string[],

@@ -52,9 +52,10 @@ export type BrowserUseTaskIntentDefinition = {
 
 /**
  * The code-owned Task Intent catalog `browser-use task list` projects.
- * Preferred lanes follow the platform plan's product table; intents whose
- * preferred lane (Chrome DevTools CLI) is not yet a registered adapter carry
- * no `preferred_adapter`.
+ * Preferred lanes follow the platform plan's product table; the
+ * debug/performance-profile/lighthouse-audit intents route to the
+ * chrome-devtools-mcp lane now that its read-only debugging/performance
+ * executor (browser-use-chrome-task.ts) is wired into `task run`.
  */
 export const BROWSER_USE_TASK_INTENT_DEFINITIONS: readonly BrowserUseTaskIntentDefinition[] = [
 	{
@@ -95,14 +96,17 @@ export const BROWSER_USE_TASK_INTENT_DEFINITIONS: readonly BrowserUseTaskIntentD
 	{
 		task_intent: "debug",
 		summary: "Console, network, and heap debugging.",
+		preferred_adapter: "chrome-devtools-mcp",
 	},
 	{
 		task_intent: "performance-profile",
 		summary: "Performance trace profiling; distinct from a Lighthouse audit.",
+		preferred_adapter: "chrome-devtools-mcp",
 	},
 	{
 		task_intent: "lighthouse-audit",
 		summary: "Lighthouse audit; distinct from performance profiling.",
+		preferred_adapter: "chrome-devtools-mcp",
 	},
 ];
 

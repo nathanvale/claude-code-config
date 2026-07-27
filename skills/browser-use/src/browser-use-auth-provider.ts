@@ -23,11 +23,17 @@
 // ---------------------------------------------------------------------------
 
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
+import type { AgentBrowserAuthDeliveryContext } from "./browser-use-agent-browser";
 import {
 	type BrowserUseAuthContractDeps,
 	commitAuthTransaction,
 	createBrowserUseAuthContract,
 } from "./browser-use-auth";
+import type {
+	BrowserUseDeliveryHook,
+	BrowserUseTargetReproof,
+	BrowserUseVerifiedTarget,
+} from "./browser-use-confidential-field-delivery";
 import {
 	type BrowserUseAuthContext,
 	type BrowserUseBindingRepairHint,
@@ -232,6 +238,28 @@ export type BrowserUseAuthProvider = {
 			fragment: BrowserUseAuthTransactionFragment;
 		},
 	): Promise<BrowserUseProviderCommitOutcome>;
+	buildAgentBrowserDeliveryContext(
+		input: BrowserUseDeliveryContextInput,
+	): AgentBrowserAuthDeliveryContext;
+};
+
+/**
+ * Everything the auth command supplies to route a sensitive-interval delivery
+ * through the agent-browser lane (wave-4 delivery builder wiring_spec item 3):
+ * the approved binding, the freshly proven VERIFIED TARGET, the lane's delivery
+ * hook + target re-proof, and the per-ref field plan. `in_sensitive_interval`
+ * MUST be true only between lease-granted and submission-dispatched — the
+ * builder stamps it onto the context so the lane refuses a confidential fill
+ * outside the sensitive interval exactly as it would without any context.
+ */
+export type BrowserUseDeliveryContextInput = {
+	binding: BrowserUseItemBinding;
+	target: BrowserUseVerifiedTarget;
+	deliver: BrowserUseDeliveryHook;
+	reproveTarget: BrowserUseTargetReproof;
+	field_by_ref: Readonly<Record<string, BrowserUseOpCredentialField>>;
+	/** True only inside the sensitive interval (post lease-granted, pre submit). */
+	in_sensitive_interval: boolean;
 };
 
 // --- Internal helpers ---------------------------------------------------------
@@ -633,6 +661,25 @@ export function createBrowserUseAuthProvider(
 					rejection: { code: "auth_commit_store_faulted", message },
 				};
 			}
+		},
+
+		buildAgentBrowserDeliveryContext(input): AgentBrowserAuthDeliveryContext {
+			// wiring_spec item 3: the transaction supplies the VerifiedTarget and the
+			// provider supplies the TokenRetrievalPort (the injected Port is the ONLY
+			// credential capability, R7/R16). The context routes a confidential fill
+			// through deliverConfidentialFields ONLY inside the sensitive interval;
+			// outside it, in_sensitive_interval is false and the lane's typed refusal
+			// stands unchanged. No secret material flows through this context — the
+			// port yields opaque handles only.
+			return {
+				in_sensitive_interval: input.in_sensitive_interval,
+				binding: input.binding,
+				target: input.target,
+				tokenRetrieval: deps.tokenRetrieval,
+				deliver: input.deliver,
+				reproveTarget: input.reproveTarget,
+				field_by_ref: input.field_by_ref,
+			};
 		},
 	};
 }

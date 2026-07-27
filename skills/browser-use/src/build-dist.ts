@@ -1,10 +1,18 @@
 #!/usr/bin/env bun
 
-import { chmod, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 const skillRoot = join(import.meta.dir, "..");
 const distRoot = join(skillRoot, "dist");
+// The shipped runbook catalog. Published tarballs include only `dist/` (see
+// package.json `files`), and the packaged bin runs from `dist/browser-use.js`,
+// so the shipped catalog must travel INSIDE dist as `dist/runbooks/` — a
+// sibling `<skill>/runbooks/` exists only in the repo checkout, never in an
+// install. `shippedRunbooksRoot()` (browser-use-runbook.ts) probes the
+// dist-adjacent copy first, then the repo-local `../runbooks` fallback.
+const shippedRunbooksSource = join(skillRoot, "runbooks");
+const shippedRunbooksDist = join(distRoot, "runbooks");
 const entrypoints = [
 	"browser-use.ts",
 ].map((entrypoint) => join(import.meta.dir, entrypoint));
@@ -31,14 +39,33 @@ if (!build.success) {
 	process.exit(1);
 }
 
+// Copy the shipped runbook catalog into dist so it travels with the packaged
+// bin. Fail closed if the source is missing — a build that dropped the seed
+// catalog would ship a `browser-use` whose `runbook list` is silently empty.
+const shippedSourceStat = await stat(shippedRunbooksSource).catch(() => null);
+if (shippedSourceStat === null || !shippedSourceStat.isDirectory()) {
+	throw new Error(
+		`Shipped runbook catalog missing at ${relative(skillRoot, shippedRunbooksSource)}; expected a directory to copy into dist.`,
+	);
+}
+await cp(shippedRunbooksSource, shippedRunbooksDist, { recursive: true });
+
 await verifyDist();
 
 async function verifyDist(): Promise<void> {
+	// The compiled entrypoints plus the copied shipped-runbook catalog directory.
+	const SHIPPED_RUNBOOKS_DIRNAME = "runbooks";
 	const distEntries = await readdir(distRoot);
-	const unexpected = distEntries.filter((entry) => !expectedDistFiles.has(entry));
+	const unexpected = distEntries.filter(
+		(entry) =>
+			!expectedDistFiles.has(entry) && entry !== SHIPPED_RUNBOOKS_DIRNAME,
+	);
 	const missing = [...expectedDistFiles].filter(
 		(entry) => !distEntries.includes(entry),
 	);
+	if (!distEntries.includes(SHIPPED_RUNBOOKS_DIRNAME)) {
+		missing.push(SHIPPED_RUNBOOKS_DIRNAME);
+	}
 
 	if (missing.length > 0 || unexpected.length > 0) {
 		throw new Error(
@@ -46,7 +73,23 @@ async function verifyDist(): Promise<void> {
 		);
 	}
 
+	// Prove the copied catalog actually carries the shipped seed runbook, so a
+	// packaged `runbook list` finds it rather than scanning an empty directory.
+	const seedRunbook = join(
+		shippedRunbooksDist,
+		"oncore",
+		"timesheet-snapshot-verify",
+		"runbook.json",
+	);
+	const seedStat = await stat(seedRunbook).catch(() => null);
+	if (seedStat === null || !seedStat.isFile()) {
+		throw new Error(
+			`Shipped seed runbook missing from dist at ${relative(skillRoot, seedRunbook)}.`,
+		);
+	}
+
 	for (const entry of distEntries) {
+		if (entry === SHIPPED_RUNBOOKS_DIRNAME) continue;
 		const distPath = join(distRoot, entry);
 		const stats = await stat(distPath);
 

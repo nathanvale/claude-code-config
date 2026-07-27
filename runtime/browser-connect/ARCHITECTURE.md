@@ -44,8 +44,15 @@ Chrome via UI-consent) and three (extension door) are deferred per the plan.
 - `src/dashboard.ts`: stateless read-only registry projection.
 - `src/run-exec.ts`: `--` split, endpoint injection, spawn-and-wait,
   passthrough.
-- `src/adapters/`: registry plus the two Adapter Definitions
-  (`chrome-devtools-mcp`, `agent-browser`).
+- `src/adapters/`: registry plus the three Adapter Definitions
+  (`chrome-devtools-mcp`, `agent-browser`, `playwright-cdp`). Each definition
+  owns identity, executable provenance, endpoint injection, the read-only
+  attachment probe, and its isolated-install policy. `playwright-cdp` is the
+  public Playwright CLI lane: it attaches over the explicit CDP endpoint with a
+  named session, snapshots read-only, and detaches without closing the browser;
+  its probe pins the attach/detach `--help` contract so any CLI drift fails
+  closed before an implicit browser launch. Its exact lock pulls optional
+  fsevents (an install script), so package install stays operator-owned (R29).
 
 ## Safety Invariants (R11–R14)
 

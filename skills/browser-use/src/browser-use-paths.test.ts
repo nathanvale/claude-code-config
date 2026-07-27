@@ -223,12 +223,59 @@ describe("root admission (R12; S4-S6)", () => {
 		chmodSync(root, 0o700);
 	});
 
-	test("S5: a symlinked path component refuses with xdg_root_symlink_ancestor", async () => {
-		const target = join(xdg.base, "symlink-target");
+	test("S5/AE10: an operator-owned symlink ancestor resolves and admits through the target", async () => {
+		// The home-dir dotfiles pattern: ~/.config -> <owned target>. Both the
+		// link and its target are owned by the invoking user, so admission
+		// resolves the symlink instead of refusing (release contract AE10).
+		const target = join(xdg.base, "owned-symlink-target");
 		mkdirSync(target, { recursive: true, mode: 0o700 });
-		const link = join(xdg.base, "symlinked-parent");
+		const link = join(xdg.base, "owned-symlinked-parent");
 		symlinkSync(target, link);
+		const root = join(link, "browser-use");
 		const admitted = await admitBrowserUseRoot(realFs, {
+			kind: "data",
+			path: root,
+		});
+		expect(admitted).toEqual({ ok: true });
+		// After admission the root exists (created 0700) under the resolved target.
+		const resolvedRoot = join(target, "browser-use");
+		expect((await realFs.lstat(resolvedRoot))?.mode).toBe(0o700);
+	});
+
+	test("AE10: re-admission through an operator-owned symlink ancestor is idempotent", async () => {
+		const target = join(xdg.base, "idempotent-symlink-target");
+		mkdirSync(target, { recursive: true, mode: 0o700 });
+		const link = join(xdg.base, "idempotent-symlinked-parent");
+		symlinkSync(target, link);
+		const root = join(link, "browser-use");
+		expect(await admitBrowserUseRoot(realFs, { kind: "state", path: root })).toEqual({
+			ok: true,
+		});
+		// Second pass walks the now-existing resolved root and still admits.
+		expect(await admitBrowserUseRoot(realFs, { kind: "state", path: root })).toEqual({
+			ok: true,
+		});
+	});
+
+	test("S5: a symlink ancestor NOT owned by the current user refuses with xdg_root_symlink_ancestor", async () => {
+		const target = join(xdg.base, "foreign-link-target");
+		mkdirSync(target, { recursive: true, mode: 0o700 });
+		const link = join(xdg.base, "foreign-symlinked-parent");
+		symlinkSync(target, link);
+		const foreignUid = (process.getuid?.() ?? 0) + 1;
+		// The link's own lstat reports a foreign uid — an attacker-planted
+		// redirect, exactly what R12 refuses to traverse.
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			lstat: async (path) => {
+				const stat = await realFs.lstat(path);
+				if (path === link && stat !== undefined) {
+					return { ...stat, uid: foreignUid };
+				}
+				return stat;
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
 			kind: "data",
 			path: join(link, "browser-use"),
 		});
@@ -236,6 +283,126 @@ describe("root admission (R12; S4-S6)", () => {
 		if (admitted.ok) throw new Error("unreachable");
 		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
 		expect(admitted.refusal.root_kind).toBe("data");
+		expect(admitted.refusal.continuation.next_action_id).toBe("repair_xdg_root");
+	});
+
+	test("S5: an operator-owned symlink to a FOREIGN-owned target refuses", async () => {
+		const target = join(xdg.base, "foreign-target-dir");
+		mkdirSync(target, { recursive: true, mode: 0o700 });
+		const link = join(xdg.base, "owned-link-foreign-target");
+		symlinkSync(target, link);
+		const foreignUid = (process.getuid?.() ?? 0) + 1;
+		// Link owned by us, but the resolved target is foreign-owned — resolving
+		// it would follow the redirect past the ownership wall.
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			lstat: async (path) => {
+				const stat = await realFs.lstat(path);
+				if (path === target && stat !== undefined) {
+					return { ...stat, uid: foreignUid };
+				}
+				return stat;
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
+			kind: "data",
+			path: join(link, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
+	});
+
+	test("S5: an operator-owned symlink to a missing target refuses (dangling redirect)", async () => {
+		const link = join(xdg.base, "dangling-symlinked-parent");
+		symlinkSync(join(xdg.base, "does-not-exist"), link);
+		const admitted = await admitBrowserUseRoot(realFs, {
+			kind: "cache",
+			path: join(link, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
+	});
+
+	test("S5: NESTED symlink ancestors re-root onto the resolved chain — a foreign-owned real root still refuses", async () => {
+		// Chain: <base>/nested-outer-link -> nested-outer-target, whose child
+		// "hop" is itself a symlink -> nested-inner-target. Both links and both
+		// targets are operator-owned, so each hop admits. The REAL root
+		// (nested-inner-target/browser-use) exists but is foreign-owned. A walk
+		// that recomputed the tail from the ORIGINAL path after the second
+		// re-root would wander onto a non-existent chain, report "missing", and
+		// skip this ownership check entirely.
+		const outerTarget = join(xdg.base, "nested-outer-target");
+		mkdirSync(outerTarget, { recursive: true, mode: 0o700 });
+		const outerLink = join(xdg.base, "nested-outer-link");
+		symlinkSync(outerTarget, outerLink);
+		const innerTarget = join(xdg.base, "nested-inner-target");
+		mkdirSync(innerTarget, { recursive: true, mode: 0o700 });
+		symlinkSync(innerTarget, join(outerTarget, "hop"));
+		const realRoot = join(innerTarget, "browser-use");
+		mkdirSync(realRoot, { recursive: true, mode: 0o700 });
+		const foreignUid = (process.getuid?.() ?? 0) + 1;
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			lstat: async (path) => {
+				const stat = await realFs.lstat(path);
+				if (path === realRoot && stat !== undefined) {
+					return { ...stat, uid: foreignUid };
+				}
+				return stat;
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
+			kind: "data",
+			path: join(outerLink, "hop", "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		// The walk reached the REAL root through both re-roots and refused on
+		// ownership — not xdg_root_symlink_ancestor, and never ok:true.
+		expect(admitted.refusal.code).toBe("xdg_root_wrong_owner");
+	});
+
+	test("S5: a realpath failure (ELOOP/EACCES throw) is the typed symlink refusal, never an uncaught throw", async () => {
+		const target = join(xdg.base, "eloop-link-target");
+		mkdirSync(target, { recursive: true, mode: 0o700 });
+		const link = join(xdg.base, "eloop-symlinked-parent");
+		symlinkSync(target, link);
+		const stub: BrowserUsePlatformFs = {
+			...realFs,
+			realpath: async (path) => {
+				if (path === link) {
+					throw Object.assign(new Error("too many symbolic links"), {
+						code: "ELOOP",
+					});
+				}
+				return await realFs.realpath(path);
+			},
+		};
+		const admitted = await admitBrowserUseRoot(stub, {
+			kind: "state",
+			path: join(link, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
+	});
+
+	test("S5: a real symlink CYCLE ancestor refuses through the default adapter (fs.realpath ELOOP)", async () => {
+		// Two links pointing at each other: the real filesystem realpath throws
+		// ELOOP; the default adapter maps it to undefined -> typed refusal.
+		const cycleA = join(xdg.base, "cycle-a");
+		const cycleB = join(xdg.base, "cycle-b");
+		symlinkSync(cycleB, cycleA);
+		symlinkSync(cycleA, cycleB);
+		const admitted = await admitBrowserUseRoot(realFs, {
+			kind: "cache",
+			path: join(cycleA, "browser-use"),
+		});
+		expect(admitted.ok).toBe(false);
+		if (admitted.ok) throw new Error("unreachable");
+		expect(admitted.refusal.code).toBe("xdg_root_symlink_ancestor");
 	});
 
 	test("S6: an existing root with group/other bits refuses with xdg_root_permissions_loose", async () => {
@@ -295,7 +462,7 @@ describe("root admission (R12; S4-S6)", () => {
 			...realFs,
 			lstat: async (path) =>
 				path === root
-					? { kind: "directory", mode: 0o700, uid: foreignUid, dev: 1 }
+					? { kind: "directory", mode: 0o700, uid: foreignUid, dev: 1, size: 0 }
 					: realFs.lstat(path),
 		};
 		const admitted = await admitBrowserUseRoot(stub, {
@@ -392,11 +559,24 @@ describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
 	test("a runtime root failing admission falls back warned instead of refusing (R11)", async () => {
 		const scoped = makeTempXdgEnv();
 		try {
+			// A foreign-owned symlink is a genuine admission failure (operator-owned
+			// symlinks now resolve per AE10), so it exercises the R11 fallback.
 			const target = join(scoped.base, "runtime-target");
 			mkdirSync(target, { recursive: true, mode: 0o700 });
 			const link = join(scoped.base, "runtime-link");
 			symlinkSync(target, link);
-			const opened = await openBrowserUsePaths(realFs, {
+			const foreignUid = (process.getuid?.() ?? 0) + 1;
+			const stub: BrowserUsePlatformFs = {
+				...realFs,
+				lstat: async (path) => {
+					const stat = await realFs.lstat(path);
+					if (path === link && stat !== undefined) {
+						return { ...stat, uid: foreignUid };
+					}
+					return stat;
+				},
+			};
+			const opened = await openBrowserUsePaths(stub, {
 				...scoped.env,
 				XDG_RUNTIME_DIR: link,
 			});
@@ -409,6 +589,52 @@ describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
 			expect(opened.paths.resolution.roots.runtime).toBe(
 				join(scoped.env.XDG_STATE_HOME as string, "browser-use", "runtime-fallback"),
 			);
+		} finally {
+			scoped.dispose();
+		}
+	});
+
+	test("AE10: openBrowserUsePaths admits through an operator-owned symlinked XDG root and derives paths", async () => {
+		const scoped = makeTempXdgEnv();
+		try {
+			// Reproduce the live failure: an XDG root whose parent is a symlink the
+			// operator owns (macOS dotfiles pattern). Point XDG_STATE_HOME through
+			// a symlinked directory both owned by the invoking user.
+			const target = join(scoped.base, "state-target");
+			mkdirSync(target, { recursive: true, mode: 0o700 });
+			const link = join(scoped.base, "state-link");
+			symlinkSync(target, link);
+			const opened = await openBrowserUsePaths(realFs, {
+				...scoped.env,
+				XDG_STATE_HOME: link,
+			});
+			expect(opened.ok).toBe(true);
+			if (!opened.ok) throw new Error("unreachable");
+			// Execution proceeds: the admitted state root derives its full shape.
+			expect(opened.paths.state.runsDir).toBe(
+				join(link, "browser-use", "runs"),
+			);
+			// And the real directory materialized under the resolved target 0700.
+			expect((await realFs.lstat(join(target, "browser-use")))?.mode).toBe(0o700);
+		} finally {
+			scoped.dispose();
+		}
+	});
+
+	test("AE10: inspectBrowserUsePaths accepts an operator-owned symlinked root without mutating", async () => {
+		const scoped = makeTempXdgEnv();
+		try {
+			const target = join(scoped.base, "inspect-target");
+			mkdirSync(join(target, "browser-use"), { recursive: true, mode: 0o700 });
+			const link = join(scoped.base, "inspect-link");
+			symlinkSync(target, link);
+			const inspected = await inspectBrowserUsePaths(realFs, {
+				...scoped.env,
+				XDG_CONFIG_HOME: link,
+			});
+			expect(inspected.ok).toBe(true);
+			if (!inspected.ok) throw new Error("unreachable");
+			expect(inspected.paths.config.root).toBe(join(link, "browser-use"));
 		} finally {
 			scoped.dispose();
 		}

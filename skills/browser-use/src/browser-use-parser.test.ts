@@ -164,6 +164,76 @@ describe("U3 parser", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
+	// api-contract parity (finding #8): enum-typed flag VALUES are validated in
+	// the parser against the contract's declared `values`, BEFORE the dry-run/
+	// live split. An unregistered --intent/--lane/--mode/--adapter must fail
+	// closed with a usage error in dry-run exactly as it does live — dry-run must
+	// never accept an enum value the live routing path would refuse. The parser
+	// rejects the bad enum before --handoff is read, so a placeholder path is
+	// enough.
+	test("dry-run rejects unregistered enum flag values at the parser", async () => {
+		const cases: { argv: string[]; needle: string }[] = [
+			{
+				argv: [
+					"task",
+					"run",
+					"--intent",
+					"totally-fake",
+					"--handoff",
+					"/dev/null",
+					"--dry-run",
+					"--json",
+				],
+				needle: "--intent must be one of:",
+			},
+			{
+				argv: [
+					"task",
+					"run",
+					"--intent",
+					"scrape",
+					"--lane",
+					"totally-fake-lane",
+					"--handoff",
+					"/dev/null",
+					"--dry-run",
+					"--json",
+				],
+				needle: "--lane must be one of:",
+			},
+			{
+				argv: [
+					"targets",
+					"list",
+					"--mode",
+					"totally-fake-mode",
+					"--dry-run",
+					"--json",
+				],
+				needle: "--mode must be one of:",
+			},
+			{
+				argv: [
+					"targets",
+					"list",
+					"--adapter",
+					"totally-fake-adapter",
+					"--dry-run",
+					"--json",
+				],
+				needle: "--adapter must be one of:",
+			},
+		];
+		for (const { argv, needle } of cases) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).toBe(2);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "usage_error",
+			});
+			expect(`${result.stdout}\n${result.stderr}`).toContain(needle);
+		}
+	});
+
 	// Regression: --help/--version detect from STANDALONE tokens only. A token
 	// shaped like them consumed as a value-bearing flag's value must not
 	// short-circuit the command into help/version output.

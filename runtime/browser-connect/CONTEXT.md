@@ -33,11 +33,29 @@ _Avoid example_: "If Agent Chrome is down, reuse the open Chrome window."
 A tool that attaches to a proven browser environment via a declared route
 (`@playwright/mcp`, `chrome-devtools-mcp`, Playwright, Puppeteer, and peers).
 An adapter is never trusted to find Chrome itself; browser-connect injects
-the verified endpoint into the adapter's declared route.
+the verified endpoint into the adapter's declared route. Three definitions are
+registered: `chrome-devtools-mcp`, `agent-browser`, and `playwright-cdp` (the
+public Playwright CLI lane).
 _Avoid_: browser client that self-discovers, adapter with a hardcoded port
 _Developer example_: "Register the adapter with its declared endpoint route;
 browser-connect fills it from the proof."
 _Avoid example_: "The adapter defaults to `:9222`, so no route is needed."
+
+**Playwright CLI lane** (`playwright-cdp`):
+The Browser Adapter that attaches the official `@playwright/cli` to Agent
+Chrome over the explicit CDP endpoint using a named session, then detaches
+without closing the browser. Its probe pins the exact `attach`/`detach`
+`--help` lines so any upstream CLI drift fails closed before an implicit
+browser launch — connection robustness by diagnosis, never by blind retry. It
+never runs `open`, a browser installer, or a channel-name attachment that could
+discover or launch another browser. The adapter id is `playwright-cdp`; the
+public lane name is "Playwright CLI".
+_Avoid_: `playwright-mcp`, "the Playwright adapter launches Chromium"
+_Developer example_: "Route the ARIA-assertion task to the Playwright CLI
+lane; browser-connect injects the verified endpoint into `attach --cdp=<http>
+--session=<name>`."
+_Avoid example_: "Let playwright-cli pick a browser channel and connect
+itself."
 
 **Verified Handoff Envelope**:
 The success-direction result: a proven connection handed to a consumer. It
