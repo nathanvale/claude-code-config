@@ -58,7 +58,7 @@ mutating intent (D06/D09/D12/D13), and no public profile/debug-off/stop knobs
 | Verdict | Count |
 | --- | ---: |
 | PASS | 50 |
-| PARTIAL | 63 |
+| PARTIAL | 64 |
 | FAIL | 27 |
 | BLOCKED | 5 |
 | UNASSESSED | 79 |
@@ -244,6 +244,7 @@ mutating intent (D06/D09/D12/D13), and no public profile/debug-off/stop knobs
 | DDA-F23 | Any unhandled exception becomes a typed internal-error envelope with no raw stack or absolute path on stdout. | C,E | PASS | browser-use-sec-seams.test.ts: injected fault yields a typed error envelope with no stack marker or absolute path on stdout; spawned-CLI companion proves the process boundary. |
 | DDA-F24 | `--debug` diagnostics pass the secret scan. | C,H | PASS | browser-use-runtime-env.test.ts: the leak-harness sweep over the captured --debug diagnostic trail through the real redactor pipeline finds zero sentinels; a negative control proves the sweep fails closed. |
 | DDA-F25 | Hostile run ids are rejected by every consumer, including via `BROWSER_USE_RUN_ID`. | C,E | PASS | browser-use-sec-seams.test.ts spawns the real CLI: `BROWSER_USE_RUN_ID='../../x'` and slash-bearing `--run-id` both exit 2 typed; no state path escapes the base dir. |
+| DDA-F26 | Browser Use never attaches to, verifies, launches into, or repairs the user's real default Chrome profile, and never enables remote debugging on it — the automation surface is confined to the dedicated `WARM_CHROME_DEFAULT_PROFILE_DIR`. | C,H | PARTIAL | Attach/verify/launch/repair side enforced by `isDefaultChromeProfilePath` (warm-chrome proof.ts x5, launch.ts, repair.ts) and proven: check-stations.test.ts "/json/version answers while pointed at the default profile (R6c)" refuses it as a foreign instance; runtime.test.ts "default Chrome profile detection" pins the matcher incl. trailing-slash HOME. GAP (the 2026-07-27 incident): the documented `enable_n`/`enable_n_with_peekaboo` repair action toggles Chrome's PERSISTENT `devtools.remote_debugging.user-enabled` setting and has no guard binding it to the dedicated profile — running it against the default profile silently enabled remote debugging on the user's real logged-in Chrome across every restart. Needs: (a) an enable-side guard refusing the default profile with a typed refusal, and (b) a contract+hermetic proof that no browser-use/browser-connect/warm-chrome path can enable remote debugging on a default-profile target. Consider a transient `--remote-debugging-port` launch flag over the sticky user setting. |
 
 ## G. Repository, worktree, state, and concurrency isolation
 
@@ -401,11 +402,13 @@ Promote by moving a row into its owning section with its reserved ID.
 | Human collaboration absent | M01-M04 | needs-fixture | Author takeover, concurrent-action, and approval-timeout fixtures. |
 | Front-door evidence refresh | C01-C06, D01, D06-D13 | fixable-now | Re-run existing live journeys driving only `browser-use`. |
 | Runtime environment unproven | A19-A22, A25, G15-G18, G20, H19-H22, I13-I14, B25 | needs-fixture | Build PATH, HOME/XDG, signal, hang, daemon, and store-skew fixtures. |
+| Default-profile safety unguarded on the enable side | F26 | fixable-now | Attach/verify/launch/repair already refuse the default profile (`isDefaultChromeProfilePath`); add an enable-side guard so no path can turn on remote debugging for a default-profile target, and a contract+hermetic proof. Traced from the 2026-07-27 incident: an `enable_n`-style toggle enabled persistent remote debugging on the user's real Chrome. |
 
 ## Convergence order
 
 Merged 2026-07-27 gap-audit order; earlier implementation order folded in.
 
+0. Default-profile safety (F26): security-critical. Add the enable-side guard refusing remote debugging on the user's real default Chrome profile, with a contract+hermetic proof no browser-use/browser-connect/warm-chrome path can enable it. Prioritized above seam guards because a live incident exercised the gap.
 1. Security seam guards: B21, F25, C16-C18, D29, F23 (contract and hermetic tiers; cheapest severity-per-hour).
 2. Uncovered public families at contract and process tier: K01-K05, H23-H25, B23-B24.
 3. Target realism fixtures: D26-D28, D30-D31, D33.
