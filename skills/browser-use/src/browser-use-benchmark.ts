@@ -449,11 +449,12 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const DEFAULT_TASK_LABEL = "bounded read-only localhost snapshot/console-read";
 	const labelIndex = args.indexOf("--task-label");
+	// A trailing `--task-label` with no following value must not cast undefined
+	// to string; fall back to the default label when the value is absent.
 	const taskLabel =
-		labelIndex === -1
-			? "bounded read-only localhost snapshot/console-read"
-			: (args[labelIndex + 1] as string);
+		labelIndex === -1 ? DEFAULT_TASK_LABEL : (args[labelIndex + 1] ?? DEFAULT_TASK_LABEL);
 
 	// R11: each verified handoff attaches exactly one adapter, and the task-run
 	// router refuses any lane whose id != that adapter (handoff_lane_mismatch).
