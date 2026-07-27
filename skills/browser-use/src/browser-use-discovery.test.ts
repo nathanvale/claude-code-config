@@ -758,10 +758,10 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 	});
 
 	test("a verified envelope for a transport-less adapter fails closed at the transport gate", async () => {
-		// The BROWSER_USE_TRANSPORT_ADAPTERS membership gate survives U3: a
-		// verified agent-browser attachment carries invocation facts but no
-		// implemented discovery transport, so it fails closed rather than being
-		// spawned through the chrome-devtools call shape.
+		// The discovery page-listing gate survives U3: a verified agent-browser
+		// attachment has a native operation Implementation but no chrome-devtools
+		// page-listing transport, so discovery fails closed rather than spawning
+		// it through the chrome-devtools call shape.
 		const { runtime, calls } = discoveryRuntime({
 			files: {
 				"/h.json": verifiedHandoffEnvelope((envelope) => {

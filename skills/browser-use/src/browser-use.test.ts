@@ -25,6 +25,8 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"operate-emulate",
 	// Platform families (platform plan 2026-07-21-002 U1).
 	"task-list",
+	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
+	"task-run",
 	// Adapter Lane Registry discovery (auth plan 2026-07-21-003 U1).
 	"lanes-list",
 	"lanes-show",
@@ -32,7 +34,14 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"run-resume",
 	"run-cancel",
 	"runbook-list",
+	// Runbook show/run (platform plan 2026-07-21-002 U4).
+	"runbook-show",
+	"runbook-run",
 	"migration-status",
+	"migration-inventory",
+	"migration-plan",
+	"migration-apply",
+	"migration-verify",
 	"artifact-list",
 	"repair-status",
 	"repair-apply",

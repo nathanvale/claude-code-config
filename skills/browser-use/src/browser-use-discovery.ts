@@ -18,7 +18,7 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
-	BROWSER_USE_TRANSPORT_ADAPTERS,
+	BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS,
 	BROWSER_CONNECT_ENVIRONMENT_NAME,
 	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
@@ -587,12 +587,14 @@ export async function discoverPages(
 	facts: EnvelopeTransportFacts,
 ): Promise<DiscoverResult> {
 	// The page-listing transport is implemented for chrome-devtools-mcp only. A
-	// handoff can attach another registry adapter (agent-browser,
-	// playwright-cdp); fail closed rather than silently spawning its binary
-	// through the chrome-devtools-mcp call shape, until those transports land
-	// (V2).
+	// handoff can attach another registry adapter (agent-browser has a native
+	// operation Implementation but no page-listing transport; playwright-cdp has
+	// neither); fail closed rather than silently spawning its binary through the
+	// chrome-devtools-mcp call shape, until those discovery transports land (V2).
 	if (
-		!(BROWSER_USE_TRANSPORT_ADAPTERS as readonly string[]).includes(facts.adapter)
+		!(BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS as readonly string[]).includes(
+			facts.adapter,
+		)
 	) {
 		return {
 			ok: false,

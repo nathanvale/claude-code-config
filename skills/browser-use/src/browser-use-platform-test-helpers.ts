@@ -26,7 +26,7 @@ import {
 } from "node:fs";
 import { copyFile as fsCopyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, normalize } from "node:path";
+import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 
@@ -181,6 +181,15 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 		return join(backingBase, `epoch-${epoch}`, logical(path).slice(1));
 	}
 
+	// Reverse of `live`: strip the backing-epoch prefix so a resolved real path
+	// maps back into the overlay's logical namespace.
+	function fromLive(path: string): string {
+		const prefix = join(backingBase, `epoch-${epoch}`);
+		if (path === prefix) return sep;
+		if (path.startsWith(prefix + sep)) return path.slice(prefix.length);
+		return path;
+	}
+
 	// Await a hook, then abort the in-flight operation if crash() ran inside it.
 	async function runHook(
 		hook: ((path: string) => void | Promise<void>) | undefined,
@@ -223,6 +232,10 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 	const port: BrowserUsePlatformFs = {
 		async lstat(path) {
 			return await real.lstat(live(path));
+		},
+		async realpath(path) {
+			const resolved = await real.realpath(live(path));
+			return resolved === undefined ? undefined : fromLive(resolved);
 		},
 		async mkdir(path, options) {
 			const existed = (await real.lstat(live(path))) !== undefined;

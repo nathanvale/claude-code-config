@@ -189,13 +189,15 @@ describe("U7 operation gates", () => {
 	});
 
 	test("an adapter without operation capability is refused before transport (R5)", async () => {
-		// agent-browser maps to a browser-use adapter with an EMPTY authorized
+		// playwright-cdp maps to a browser-use adapter with an EMPTY authorized
 		// capability set (no operation transport yet): every operation class is
-		// refused through the surviving router engine.
+		// refused through the surviving router engine. (agent-browser now
+		// authorizes snapshot_refs/element_actions post-U3, so it no longer models
+		// the empty-capability case.)
 		const { runtime, calls } = operationRuntime({
 			files: {
 				"/h.json": verifiedHandoffEnvelope((envelope) => {
-					envelope.data.attachment.adapter_id = "agent-browser";
+					envelope.data.attachment.adapter_id = "playwright-cdp";
 				}),
 			},
 		});

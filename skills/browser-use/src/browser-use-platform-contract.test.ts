@@ -9,6 +9,7 @@ import {
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	browserUseContracts,
@@ -47,10 +48,16 @@ describe("platform family help and discovery", () => {
 		}
 	});
 
-	test("platform families do not point at the handoff prerequisite; targets/operate still do", () => {
+	test("handoff-consuming families point at the prerequisite; the rest do not", () => {
+		// targets/operate consume the handoff; `task` now does too via `task run`
+		// (release contract R3), and `runbook` does via `runbook run` (platform U4)
+		// — the prerequisite pointer is contract-driven, so a family with any
+		// --handoff subcommand shows it.
 		expect(renderHelp("targets")).toContain("Verified Handoff Envelope");
 		expect(renderHelp("operate")).toContain("Verified Handoff Envelope");
-		for (const family of ["task", "run", "runbook", "migration", "artifact", "repair"] as const) {
+		expect(renderHelp("task")).toContain("Verified Handoff Envelope");
+		expect(renderHelp("runbook")).toContain("Verified Handoff Envelope");
+		for (const family of ["run", "migration", "artifact", "repair"] as const) {
 			expect(renderHelp(family)).not.toContain("Verified Handoff Envelope");
 		}
 	});
@@ -80,6 +87,8 @@ describe("platform family help and discovery", () => {
 			"run-resume": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"run-cancel": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"runbook-list": BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+			"runbook-show": BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+			"runbook-run": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
@@ -110,6 +119,12 @@ describe("platform family help and discovery", () => {
 			"artifact-list",
 			"repair-status",
 			"repair-apply",
+			// Runbook commands (platform plan U4) read/write the XDG data root
+			// through the one path owner: list/show discover runbooks, run binds a
+			// durable shared run.
+			"runbook-list",
+			"runbook-show",
+			"runbook-run",
 			// R27 auth repair commands read the run store when --run binds the
 			// evaluation to a blocked run (auth plan U3a).
 			"auth-enroll-browser-automation-token",
@@ -142,9 +157,10 @@ describe("task list — live Task Intent projection", () => {
 		expect(rows.map((row) => row.task_intent)).toEqual([
 			...BROWSER_USE_TASK_INTENTS,
 		]);
-		// Preferred lanes are honest: registered adapters only; intents whose
-		// preferred lane is not yet registered carry no preferred_adapter and
-		// report lane_registered false (KTD12 typed unavailability).
+		// Preferred lanes are honest: a row with a preferred_adapter reports
+		// lane_registered true iff that adapter is a registered live lane; a row
+		// without one reports false (KTD12 typed unavailability). Every intent now
+		// carries a registered preferred lane (U4 wired the chrome intents).
 		for (const row of rows) {
 			if (row.preferred_adapter === undefined) {
 				expect(row.lane_registered).toBe(false);
@@ -165,31 +181,30 @@ describe("task list — live Task Intent projection", () => {
 		for (const intent of BROWSER_USE_TASK_INTENTS) {
 			expect(plain.stdout).toContain(intent);
 		}
+		// Every intent now routes to a registered live lane: routine/runbook/scrape
+		// -> agent-browser, frontend/locator/trace/http-replay -> playwright-cdp,
+		// debug/performance-profile/lighthouse-audit -> chrome-devtools-mcp (U4).
 		expect(plain.stdout).toContain("registered=true");
-		expect(plain.stdout).toContain("registered=false");
+		expect(plain.stdout).not.toContain("registered=false");
 	});
 });
 
-describe("platform shells fail closed as typed not-implemented", () => {
+describe("platform families are all live (no not-implemented shell remains)", () => {
 	// U2 made run status/resume/cancel, artifact list, and repair status live
-	// over the XDG store (their scenarios live in browser-use-run-commands
-	// .test.ts); only the U3/U4 shells remain not-implemented.
-	const SHELL_ARGV: readonly (readonly string[])[] = [
-		["runbook", "list", "--json"],
-		["migration", "status", "--json"],
-	];
-
-	for (const argv of SHELL_ARGV) {
-		test(`${argv.slice(0, 2).join(" ")} emits a structured not-implemented result`, async () => {
-			const result = await runForTest([...argv], makeRuntime());
-			expect(result.exitCode).toBe(1);
-			const json = parseJson(result.stdout);
-			expect(json.error).toMatchObject({ code: "browser_use_not_implemented" });
-			const data = json.data as Record<string, unknown>;
-			expect(data.command).toBe(`${argv[0]}-${argv[1]}`);
-			expect(JSON.stringify(json.error)).not.toContain("--dry-run");
-		});
-	}
+	// over the XDG store; U3 made the migration family live; U4 made the runbook
+	// family live (list/show/run). No family falls through to the typed
+	// not-implemented shell any more — runbook list now opens the store like the
+	// other store-backed commands, so an unresolvable XDG root fails closed the
+	// same way run status does (agent audience: JSON refusal on stdout, exit 20).
+	test("runbook list is live and fails closed on an unresolvable XDG root", async () => {
+		const result = await runForTest(["runbook", "list", "--json"], makeRuntime());
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "xdg_root_relative" });
+		expect(JSON.stringify(json.error)).not.toContain("browser_use_not_implemented");
+		const data = json.data as Record<string, unknown>;
+		expect(data.command).toBe("runbook-list");
+	});
 
 	test("unknown task subcommand is a usage rejection", async () => {
 		const result = await runForTest(["task", "explore", "--json"], makeRuntime());
@@ -218,8 +233,9 @@ describe("platform shells fail closed as typed not-implemented", () => {
 describe("caller metadata is audit-only and never authority (R35)", () => {
 	const CALLERS = ["claude-code", "codex", "launchd", undefined] as const;
 
-	// The probe command is `runbook list` (still a U3 shell) so the parity
-	// proof stays deterministic without a store; the live store-backed parity
+	// The probe command is `runbook list` with no resolvable XDG root: it fails
+	// closed at path resolution (exit 20) deterministically without needing a
+	// store, so the parity proof stays store-free. The live store-backed parity
 	// case (C ledger: run status against a temp store) lives in
 	// browser-use-run-commands.test.ts.
 	test("identical requests produce identical semantics across callers", async () => {
@@ -233,9 +249,9 @@ describe("caller metadata is audit-only and never authority (R35)", () => {
 				argv,
 				makeRuntime({ env: { BROWSER_USE_RUN_ID: "caller-parity" } }),
 			);
-			expect(result.exitCode).toBe(1);
+			expect(result.exitCode).toBe(20);
 			const json = parseJson(result.stdout);
-			expect(json.error).toMatchObject({ code: "browser_use_not_implemented" });
+			expect(json.error).toMatchObject({ code: "xdg_root_relative" });
 			const data = json.data as Record<string, unknown>;
 			// The audit echo is the ONLY caller-dependent fact in the envelope.
 			expect(data.caller).toEqual({ label: caller ?? null });
