@@ -1,18 +1,18 @@
+#!/bin/sh
+// 2>/dev/null; if ! command -v bun >/dev/null 2>&1; then printf '%s\n' 'browser-use: the Bun runtime is required but was not found on PATH.' 'Install it with: curl -fsSL https://bun.sh/install | bash' 'Then ensure '\''bun'\'' resolves on PATH and re-run browser-use.' >&2; exit 2; fi; exec bun "$0" "$@"
+
 // ---------------------------------------------------------------------------
 // Bun runtime preflight for the installed front door (DDA-A21).
 //
-// The installed `browser-use` bin is a `#!/usr/bin/env bun` entry. When bun is
-// absent from PATH the kernel/`env` emit a RAW exec error
-// (`env: bun: No such file or directory`, exit 127) with no repair path — the
-// daily-driver failure DDA-A21 forbids. This module owns the POSIX-sh launcher
-// shim that a delivered bin can front: it proves bun resolves before `exec`ing
-// the real entry, and on a missing bun prints ONE actionable, named remedy to
-// stderr and exits with a typed code — never a bare exec error.
+// Setup delivers this module as the `browser-use` path bin. Its first two lines
+// are a shell/TypeScript front door: POSIX sh proves bun resolves before
+// re-executing this module with bun; TypeScript sees the shell command as a
+// comment. A missing bun prints ONE actionable, named remedy to stderr and
+// exits with a typed code — never a bare `env: bun` error at exit 127.
 //
-// Pure string owner: no I/O, no process control. The shim body is emitted for
-// delivery and asserted at the process boundary; wiring it into setup bin
-// delivery (today a direct symlink to the entry) is the remaining integration
-// step and stays owned by runtime/setup's bin topology.
+// The exported renderer remains the contract owner for standalone launchers.
+// Process-boundary tests pin this checked-in entry to the same remedy and exit
+// taxonomy so delivery cannot drift from that contract.
 // ---------------------------------------------------------------------------
 
 /** Typed exit code the shim uses when the bun runtime is missing (input tier). */
@@ -64,4 +64,9 @@ export function bunPreflightShim(input: {
 		`exec bun '${entryLiteral}' "$@"`,
 		"",
 	].join("\n");
+}
+
+if (import.meta.main) {
+	const { runBrowserUseCli } = await import("./browser-use");
+	process.exit(await runBrowserUseCli(Bun.argv.slice(2)));
 }

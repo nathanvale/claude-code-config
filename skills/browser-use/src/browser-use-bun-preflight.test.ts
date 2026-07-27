@@ -36,6 +36,18 @@ function sandbox() {
 const BUN_LESS_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 describe("DDA-A21 bun runtime preflight on the installed entry", () => {
+	test("the checked-in self-hosted entry emits the contract remedy without bun", () => {
+		const deliveredEntry = join(import.meta.dir, "browser-use-bun-preflight.ts");
+		const result = spawnSync(deliveredEntry, ["task", "list"], {
+			env: { PATH: BUN_LESS_PATH },
+			encoding: "utf8",
+		});
+
+		expect(result.status).toBe(BUN_PREFLIGHT_MISSING_EXIT_CODE);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe(`${bunPreflightRemedy("browser-use")}\n`);
+	});
+
 	test("baseline: a raw #!/usr/bin/env bun shebang emits a bare exec error under a bun-less PATH", () => {
 		const base = sandbox();
 		const raw = join(base, "browser-use-raw");

@@ -72,6 +72,46 @@ describe("setup domain composition", () => {
 		expect(result.findings.find((finding) => finding.id === "instruction_unhealthy")).toBeUndefined();
 		const browserUse = join(home, ".bun/bin/browser-use");
 		expect(await lstat(browserUse).then((entry) => entry.isSymbolicLink())).toBe(true);
+		expect(await readlink(browserUse)).toBe(
+			await realpath(join(source, "skills/browser-use/src/browser-use-bun-preflight.ts")),
+		);
+		const bunUnavailableChild = Bun.spawn([browserUse, "task", "list"], {
+			cwd: root,
+			env: { HOME: home, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [bunUnavailableExitCode, bunUnavailableStdout, bunUnavailableStderr] = await Promise.all([
+			bunUnavailableChild.exited,
+			new Response(bunUnavailableChild.stdout).text(),
+			new Response(bunUnavailableChild.stderr).text(),
+		]);
+		expect(bunUnavailableExitCode).toBe(2);
+		expect(bunUnavailableStdout).toBe("");
+		expect(bunUnavailableStderr).toContain("browser-use: the Bun runtime is required");
+		expect(bunUnavailableStderr).toContain("curl -fsSL https://bun.sh/install | bash");
+		expect(bunUnavailableStderr).not.toContain("No such file or directory");
+		const directBrowserUse = join(source, "skills/browser-use/src/browser-use.ts");
+		const [installedHelp, directHelp] = await Promise.all(
+			[
+				[browserUse],
+				[process.execPath, directBrowserUse],
+			].map(async (command) => {
+				const child = Bun.spawn([...command, "--help"], {
+					cwd: root,
+					env: { ...process.env, HOME: home },
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				return { exitCode, stdout, stderr };
+			}),
+		);
+		expect(installedHelp).toEqual(directHelp);
 		const browserUseChild = Bun.spawn([browserUse, "task", "list", "--json", "--quiet"], {
 			cwd: root,
 			env: { ...process.env, HOME: home },

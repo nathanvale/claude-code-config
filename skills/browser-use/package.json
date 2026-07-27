@@ -20,7 +20,7 @@
 	},
 	"setup": {
 		"pathBin": {
-			"browser-use": "./src/browser-use.ts"
+			"browser-use": "./src/browser-use-bun-preflight.ts"
 		}
 	},
 	"scripts": {
