@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { McporterCommandInput } from "./mcporter-transport";
 import { runForTest } from "./browser-use";
@@ -224,18 +224,20 @@ describe("DDA-F25 hostile run ids rejected incl. via BROWSER_USE_RUN_ID", () => 
 	// is not a single safe path segment; the driver turns that into a typed usage
 	// error (exit 2). A traversal id must never mkdir/write outside the base dir.
 	test(
-		"BROWSER_USE_RUN_ID='../../x' exits 2 with no escaping state path",
+		"a traversal BROWSER_USE_RUN_ID exits 2 with no escaping state path",
 		async () => {
+			const escapedLeaf = `browser-use-escaped-${basename(neutralCwd)}`;
+			const escaped = join(neutralCwd, "..", "..", escapedLeaf);
+			expect(existsSync(escaped)).toBe(false);
 			const result = await spawnBrowserUse(
 				["run", "status", "--json"],
-				{ BROWSER_USE_RUN_ID: "../../x" },
+				{ BROWSER_USE_RUN_ID: `../../${escapedLeaf}` },
 			);
 			expect(result.exitCode).toBe(2);
 			// Nothing was created above the child's HOME/neutralCwd: the traversal
-			// target ../../x relative to any XDG base under HOME resolves outside
-			// neutralCwd; assert no such sibling directory materialized.
-			const escaped = join(neutralCwd, "..", "..", "x");
-			expect(await Bun.file(escaped).exists()).toBe(false);
+			// target relative to any XDG base under HOME resolves outside
+			// neutralCwd; assert no such file or directory materialized.
+			expect(existsSync(escaped)).toBe(false);
 		},
 		TEST_TIMEOUT_MS,
 	);

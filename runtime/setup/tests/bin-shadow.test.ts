@@ -113,6 +113,14 @@ afterAll(async () => {
 	for (const root of spawnRoots) await rm(root, { recursive: true, force: true });
 });
 
+// In-process shadowFixture roots are cleaned separately from spawnRoots so the
+// two concerns stay distinct; without this every fixture leaks a
+// setup-shadow-* tree in tmpdir().
+const fixtureRoots: string[] = [];
+afterAll(async () => {
+	for (const root of fixtureRoots) await rm(root, { recursive: true, force: true });
+});
+
 async function spawnSetupStatus(input: {
 	home: string;
 	pathEnv: string;
@@ -123,9 +131,14 @@ async function spawnSetupStatus(input: {
 		{
 			cwd: input.cwd,
 			// Only HOME + PATH: the child inherits nothing else. HOME fixes the
-			// owned bin destination (<HOME>/.bun/bin) and PATH carries the shadow
-			// earlier than that destination.
-			env: { HOME: input.home, PATH: input.pathEnv },
+			// owned bin destination (<HOME>/.bun/bin). The fixture paths retain
+			// precedence (shadow -> binDir) while the appended system PATH keeps
+			// setup's git/bash dependencies (scope.ts, instruction-health.ts)
+			// resolvable in a bare CI PATH.
+			env: {
+				HOME: input.home,
+				PATH: input.pathEnv + delimiter + (process.env.PATH ?? ""),
+			},
 			stdout: "pipe",
 			stderr: "pipe",
 		},
@@ -232,7 +245,8 @@ describe("DDA-A22 (E) spawned setup status names the shadow across the process b
 });
 
 async function shadowFixture() {
-	const root = await mkdtemp(join(tmpdir(), "setup-shadow-"));
+	const root = await realpath(await mkdtemp(join(tmpdir(), "setup-shadow-")));
+	fixtureRoots.push(root);
 	const source = join(root, "source");
 	const home = join(root, "home");
 	const binDir = join(home, ".bun/bin");

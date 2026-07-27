@@ -386,10 +386,12 @@ describe("bin topology", () => {
 	test("keeps doctor healthy when only PATH advisories are present", async () => {
 		const fixture = await binFixture();
 		await writeTool(fixture);
+		const emptyPathDir = join(fixture.root, "empty-path");
+		await mkdir(emptyPathDir);
 
 		const plan = await inspectBinTopology(fixture.source, fixture.home, {
 			...fixture.options,
-			pathEnv: "/usr/bin:/bin",
+			pathEnv: emptyPathDir,
 		});
 		expect(plan.advisories).not.toHaveLength(0);
 

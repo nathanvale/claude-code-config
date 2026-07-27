@@ -2554,9 +2554,9 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	// Dispatch to the selected lane's execution interface. agent-browser runs a
 	// fresh snapshot and may resolve one semantic click with a named structural
 	// postcondition; chrome-devtools-mcp runs a read-only debugging/performance
-	// baseline through its envelope-derived executor.
-	// playwright-cdp's install is out of scope and never reaches here (routing
-	// refuses it as lane_not_installed).
+	// baseline through its envelope-derived executor; playwright-cdp attaches to
+	// a numeric tab index, enforces the allowed origin, and runs the intent via
+	// baselinePlaywrightTask.
 	if (route.lane_id === "agent-browser") {
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;

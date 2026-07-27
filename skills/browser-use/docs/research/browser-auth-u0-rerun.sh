@@ -77,7 +77,7 @@ fi
 developer_id_count="$(
 	security find-identity -v -p codesigning 2>/dev/null |
 		awk '/Developer ID Application:/{count++} END {print count + 0}'
-)"
+)" || developer_id_count=0
 if [[ "$developer_id_count" -gt 0 ]]; then
 	emit "signing-identity" "pass" "developer-id-application-present"
 else

@@ -25,15 +25,21 @@ Convention:
 
 ## Front-Door L-Tier Refresh (2026-07-27)
 
-Serialized live journeys against Agent Chrome driving ONLY the installed
-`browser-use` CLI (front-door driver rule; the historical receipts above that
-drove `browser-connect`/adapters directly no longer count toward tier L).
-Workflow `wf_89eb70b9-746`, three agents in sequence: connection (C01-C06),
+Serialized live journeys against Agent Chrome. Task execution used ONLY the
+installed `browser-use` CLI (front-door driver rule; the historical receipts
+above that drove `browser-connect`/adapters directly no longer count toward
+tier L). Out-of-band controls remained operator-owned, not public product
+surfaces: C01 setup/cleanup; C05 fault injection/cleanup; D26 fault
+injection/cleanup; D27 setup/cleanup; H21 fault injection/cleanup. Workflow
+`wf_89eb70b9-746`, three agents in sequence: connection (C01-C06),
 operations (D01, D06-D13 subset), edge (D26, D27, H21). Environment facts:
-the human default-profile Chrome squatted the default port 9222 (empty
-`/json/version` — correctly refused as `foreign_listener` throughout); every
-journey routed to Agent Chrome via `WARM_CHROME_CDP_PORT`. agent-browser
-pinned 0.31.2 (cached) was exposed on PATH; chrome-devtools-mcp stayed at the
+the human default-profile Chrome squatted the explicit legacy override port
+9222. The Warm Chrome default CDP port is 9242; 9222 is only an explicit
+`WARM_CHROME_CDP_PORT`
+override (empty `/json/version` — correctly refused as `foreign_listener`
+throughout); every journey routed to Agent Chrome via `WARM_CHROME_CDP_PORT`.
+Pinned agent-browser 0.31.2 (cached) was exposed on PATH;
+chrome-devtools-mcp stayed at the
 operator gate (1.2.0 cached vs pinned 1.5.0).
 
 | Row | Verdict | Live receipt |

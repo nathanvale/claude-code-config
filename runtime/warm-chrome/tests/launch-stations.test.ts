@@ -71,7 +71,7 @@ function wsFor(port: string): string {
 function chromeCommand(
 	overrides: { port?: string; profile?: string; extraArgs?: string } = {},
 ): string {
-	const port = ` --remote-debugging-port=${overrides.port ?? "9222"}`;
+	const port = ` --remote-debugging-port=${overrides.port ?? WARM_CHROME_DEFAULT_CDP_PORT}`;
 	const profile = ` --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE}`;
 	const extra = overrides.extraArgs ? ` ${overrides.extraArgs}` : "";
 	return `${REAL_GOOGLE_CHROME_BINARY}${port}${profile} --no-first-run${extra}`;
@@ -576,7 +576,7 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		// The guard probes the CONVENTION port (9222), not the default: seed a
 		// healthy Warm Chrome there so --port 9250 folds back onto it.
 		const fixture = launchFixture({
-			listeners: { "9222": chromeListener() },
+			listeners: { "9222": chromeListener({ port: "9222" }) },
 			versions: { "9222": healthyVersionFor("9222") },
 		});
 		const run = await runWarmChrome(["launch", "--port", "9250"], fixture);
@@ -599,7 +599,7 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 	test("competing-instance guard honors an explicit --profile: a verified convention Chrome on another profile fails loudly, no spawn, no exit 0", async () => {
 		const otherProfile = `${HOME}/.warm-b`;
 		const fixture = launchFixture({
-			listeners: { "9222": chromeListener() },
+			listeners: { "9222": chromeListener({ port: "9222" }) },
 			versions: { "9222": healthyVersionFor("9222") },
 			profiles: {
 				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
@@ -630,7 +630,7 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		// Warm Chrome (the adapter-drift feeder the guard exists to block).
 		const missingProfile = `${HOME}/.warm-not-yet`;
 		const fixture = launchFixture({
-			listeners: { "9222": chromeListener() },
+			listeners: { "9222": chromeListener({ port: "9222" }) },
 			versions: { "9222": healthyVersionFor("9222") },
 			profiles: {
 				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
