@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import { isDefaultChromeProfilePath } from "../src/runtime.ts";
 
@@ -27,6 +28,61 @@ import { isDefaultChromeProfilePath } from "../src/runtime.ts";
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 
+type SourceFixture = {
+	file: string;
+	source: string;
+};
+
+type AllowedMutation = {
+	file: string;
+	api: string;
+	callee: string;
+	firstArgument: string;
+};
+
+type MutationPolicyViolation = {
+	file: string;
+	line: number;
+	api: string;
+	callee: string;
+	reason: "unapproved" | "allowlisted-site-missing";
+};
+
+const FILE_MUTATION_APIS = new Set([
+	"appendFile",
+	"appendFileSync",
+	"copyFile",
+	"copyFileSync",
+	"createWriteStream",
+	"rename",
+	"renameSync",
+	"truncate",
+	"truncateSync",
+	"writeFile",
+	"writeFileSync",
+	"writeTextFile",
+	"writeTextFileSync",
+]);
+
+// Every shipping file-content mutation is named here by exact call shape. This
+// is deliberately an allowlist of sites, not target-path text matching:
+// dynamic/split-line Chrome config paths and alternate/aliased write APIs still
+// surface as unapproved mutations.
+const ALLOWED_SHIPPING_MUTATIONS: readonly AllowedMutation[] = [
+	{
+		file: "repair.ts",
+		api: "writeTextFile",
+		callee: "runtime.writeTextFile",
+		firstArgument: "activePortPath",
+	},
+	{
+		file: "runtime.ts",
+		api: "writeFile",
+		callee: "writeFile",
+		firstArgument: "path",
+	},
+];
+
 async function sourceFiles(dir: string): Promise<string[]> {
 	const entries = await readdir(dir, { withFileTypes: true });
 	const files: string[] = [];
@@ -41,6 +97,155 @@ async function sourceFiles(dir: string): Promise<string[]> {
 		}
 	}
 	return files;
+}
+
+function propertyName(node: ts.Expression): string | null {
+	if (ts.isPropertyAccessExpression(node)) {
+		return node.name.text;
+	}
+	if (
+		ts.isElementAccessExpression(node) &&
+		node.argumentExpression &&
+		(ts.isStringLiteral(node.argumentExpression) ||
+			ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+	) {
+		return node.argumentExpression.text;
+	}
+	return null;
+}
+
+function findMutationPolicyViolations(
+	fixtures: readonly SourceFixture[],
+	allowlist: readonly AllowedMutation[] = [],
+): MutationPolicyViolation[] {
+	const remainingAllowed = [...allowlist];
+	const violations: MutationPolicyViolation[] = [];
+
+	for (const fixture of fixtures) {
+		const sourceFile = ts.createSourceFile(
+			fixture.file,
+			fixture.source,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS,
+		);
+		const mutationBindings = new Map<string, string>();
+
+		for (const statement of sourceFile.statements) {
+			const namedBindings = ts.isImportDeclaration(statement)
+				? statement.importClause?.namedBindings
+				: undefined;
+			if (
+				!namedBindings ||
+				!ts.isNamedImports(namedBindings)
+			) {
+				continue;
+			}
+			for (const element of namedBindings.elements) {
+				const importedName = element.propertyName?.text ?? element.name.text;
+				if (FILE_MUTATION_APIS.has(importedName)) {
+					mutationBindings.set(element.name.text, importedName);
+				}
+			}
+		}
+
+		const mutationApi = (expression: ts.Expression): string | null => {
+			if (ts.isIdentifier(expression)) {
+				return mutationBindings.get(expression.text) ?? null;
+			}
+			const name = propertyName(expression);
+			if (name && FILE_MUTATION_APIS.has(name)) {
+				return name;
+			}
+			if (
+				name === "write" &&
+				ts.isPropertyAccessExpression(expression) &&
+				ts.isIdentifier(expression.expression) &&
+				expression.expression.text === "Bun"
+			) {
+				return "Bun.write";
+			}
+			return null;
+		};
+
+		// Resolve direct aliases before inspecting calls, including destructured
+		// aliases such as `const { appendFile: persist } = fs.promises`.
+		let discoveredAlias = true;
+		while (discoveredAlias) {
+			discoveredAlias = false;
+			const visitAliases = (node: ts.Node): void => {
+				if (ts.isVariableDeclaration(node) && node.initializer) {
+					if (ts.isIdentifier(node.name)) {
+						const api = mutationApi(node.initializer);
+						if (api && mutationBindings.get(node.name.text) !== api) {
+							mutationBindings.set(node.name.text, api);
+							discoveredAlias = true;
+						}
+					} else if (ts.isObjectBindingPattern(node.name)) {
+						for (const element of node.name.elements) {
+							const name = element.propertyName?.getText(sourceFile);
+							if (
+								name &&
+								FILE_MUTATION_APIS.has(name) &&
+								ts.isIdentifier(element.name) &&
+								mutationBindings.get(element.name.text) !== name
+							) {
+								mutationBindings.set(element.name.text, name);
+								discoveredAlias = true;
+							}
+						}
+					}
+				}
+				ts.forEachChild(node, visitAliases);
+			};
+			visitAliases(sourceFile);
+		}
+
+		const visitCalls = (node: ts.Node): void => {
+			if (ts.isCallExpression(node)) {
+				const api = mutationApi(node.expression);
+				if (api) {
+					const callee = node.expression.getText(sourceFile);
+					const firstArgument = node.arguments[0]?.getText(sourceFile) ?? "";
+					const allowedIndex = remainingAllowed.findIndex(
+						(allowed) =>
+							allowed.file === fixture.file &&
+							allowed.api === api &&
+							allowed.callee === callee &&
+							allowed.firstArgument === firstArgument,
+					);
+					if (allowedIndex >= 0) {
+						remainingAllowed.splice(allowedIndex, 1);
+					} else {
+						const { line } = sourceFile.getLineAndCharacterOfPosition(
+							node.getStart(sourceFile),
+						);
+						violations.push({
+							file: fixture.file,
+							line: line + 1,
+							api,
+							callee,
+							reason: "unapproved",
+						});
+					}
+				}
+			}
+			ts.forEachChild(node, visitCalls);
+		};
+		visitCalls(sourceFile);
+	}
+
+	for (const missing of remainingAllowed) {
+		violations.push({
+			file: missing.file,
+			line: 0,
+			api: missing.api,
+			callee: missing.callee,
+			reason: "allowlisted-site-missing",
+		});
+	}
+
+	return violations;
 }
 
 describe("DDA-F26 default-profile safety: the persistent remote-debugging setting is never enabled", () => {
@@ -76,24 +281,89 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 
 	test("Local State / Preferences writes are absent from shipping source (no persistent Chrome-settings mutation)", async () => {
 		const files = await sourceFiles(SRC_DIR);
-		const offenders: Array<{ file: string; line: number }> = [];
-		for (const file of files) {
-			const lines = (await readFile(file, "utf8")).split("\n");
-			lines.forEach((text, index) => {
-				// A write to Chrome's own persisted config is the mutation vector the
-				// incident exercised. Reads (proof reads DevToolsActivePort) are fine;
-				// a write path to Local State / a profile Preferences file is not.
-				const mentionsChromeConfig =
-					text.includes("Local State") || text.includes("Preferences");
-				const mentionsWrite = /writeFile|writeFileSync|\bwriteFileDurable\b/.test(
-					text,
-				);
-				if (mentionsChromeConfig && mentionsWrite) {
-					offenders.push({ file, line: index + 1 });
-				}
-			});
-		}
-		expect(offenders).toEqual([]);
+		const fixtures = await Promise.all(
+			files.map(async (file) => ({
+				file: file.slice(SRC_DIR.length + 1),
+				source: await readFile(file, "utf8"),
+			})),
+		);
+
+		expect(
+			findMutationPolicyViolations(fixtures, ALLOWED_SHIPPING_MUTATIONS),
+		).toEqual([]);
+	});
+
+	test("the mutation scan rejects split-line and dynamic Chrome config writes through alternate APIs", () => {
+		const fixtures: SourceFixture[] = [
+			{
+				file: "split-line.ts",
+				source: `
+					import { writeFile } from "node:fs/promises";
+					const chromeConfig = join(profileDir, "Local State");
+					await writeFile(
+						chromeConfig,
+						JSON.stringify(settings),
+					);
+				`,
+			},
+			{
+				file: "aliased-dynamic.ts",
+				source: `
+					import { appendFile as persist } from "node:fs/promises";
+					const configName = ["Prefer", "ences"].join("");
+					await persist(join(profileDir, configName), payload);
+				`,
+			},
+			{
+				file: "bun-write.ts",
+				source: `
+					const configName = ["Local", " State"].join("");
+					await Bun.write(join(profileDir, configName), payload);
+				`,
+			},
+		];
+
+		expect(findMutationPolicyViolations(fixtures)).toEqual([
+			{
+				file: "split-line.ts",
+				line: 4,
+				api: "writeFile",
+				callee: "writeFile",
+				reason: "unapproved",
+			},
+			{
+				file: "aliased-dynamic.ts",
+				line: 4,
+				api: "appendFile",
+				callee: "persist",
+				reason: "unapproved",
+			},
+			{
+				file: "bun-write.ts",
+				line: 3,
+				api: "Bun.write",
+				callee: "Bun.write",
+				reason: "unapproved",
+			},
+		]);
+	});
+
+	test("the mutation scan accepts legitimate Chrome config reads", () => {
+		const fixtures: SourceFixture[] = [
+			{
+				file: "read-only.ts",
+				source: `
+					import { readFile as load } from "node:fs/promises";
+					const localState = await load(join(profileDir, "Local State"), "utf8");
+					const preferences = await load(
+						join(profileDir, "Preferences"),
+						"utf8",
+					);
+				`,
+			},
+		];
+
+		expect(findMutationPolicyViolations(fixtures)).toEqual([]);
 	});
 
 	test("the matcher confines automation to the dedicated profile: the real default profile is rejected", () => {
