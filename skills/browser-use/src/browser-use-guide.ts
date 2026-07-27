@@ -64,6 +64,10 @@ Page-action lifecycle (one adapter, one continuity):
 
   observe -> name postcondition + resolve current ref -> mutate -> verify fresh
 
+- One semantic click through the everyday front door:
+  browser-use task run --intent routine-automation --click-role <role> --click-name <accessible-name> --postcondition-id <id> --expect-visible <selector> --allowed-origin <origin>
+- Browser Use resolves role + name against the current task-local snapshot.
+  Zero or multiple matches refuse before mutation; raw refs stay private.
 - A ref is valid only inside the adapter continuity that minted it. Discard
   refs after navigation, DOM change, process/client restart, endpoint change,
   or tab change; observe again.
@@ -72,11 +76,12 @@ Page-action lifecycle (one adapter, one continuity):
 
 Advanced: explicit target discovery and operations (platform internals):
 
-  browser-use targets list --mode handoff-bound --handoff <envelope> --json
+  browser-use targets list --mode handoff-bound --adapter <id> --json
   browser-use targets list ... --json | browser-use targets select --candidate <n>
   browser-use operate snapshot|screenshot|emulate
 
-- Discovery and operations derive adapter binary + endpoint from the envelope.
+- Handoff-bound discovery attaches automatically and derives adapter binary +
+  endpoint from the fresh envelope. --handoff remains an advanced override.
 - Run correlation: pass --run-id (or BROWSER_USE_RUN_ID) plus
   BROWSER_USE_TARGET_STATE_DIR (or --state <path>) so select/status/operate
   share run-scoped target state; select fails closed without it.

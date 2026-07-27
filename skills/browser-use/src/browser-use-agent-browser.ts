@@ -19,6 +19,19 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import {
+	projectAgentBrowserSnapshotRefs,
+	resolveUniqueSemanticRef,
+	semanticClickInputIsValid,
+} from "./browser-use-agent-browser-semantics";
+import {
+	agentBrowserAllowedOriginSet,
+	agentBrowserHasExactOrigin,
+	agentBrowserOriginIsAllowed,
+	reproveAgentBrowserOrigin,
+	selectAgentBrowserTarget,
+	verifyAgentBrowserPostcondition,
+} from "./browser-use-agent-browser-target";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
@@ -37,35 +50,6 @@ const COMMAND_TIMEOUT_MS = 30_000;
 const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const SAFE_TAB_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const SAFE_REF = /^@e[1-9][0-9]*$/;
-
-/**
- * Bounded reconnect budget for the connection-establishment phase only (R23,
- * release theme "no flaky CDP connections"). This is a small code-owned ceiling,
- * never an unbounded loop: connection-class failures observed BEFORE any browser
- * effect are re-probed at most this many times with a liveness probe between
- * attempts, then reported as a typed connection failure with a repair action.
- * Post-dispatch failures are NEVER reconnected — a mutation whose effect may have
- * landed stays `unknown` so flakiness is surfaced, not masked.
- */
-const CONNECTION_ESTABLISH_ATTEMPTS = 3;
-
-/**
- * Deterministic connection-class signal substrings drawn from real
- * agent-browser CDP failure envelopes (e.g. `{"success":false,"error":"CDP
- * WebSocket connect failed: ... Connection refused"}`, exit 0). Matched
- * case-insensitively against the adapter's own error text; a semantic failure
- * (adapter connected, tab genuinely absent) carries none of these and is never
- * retried.
- */
-const CONNECTION_FAILURE_SIGNALS = [
-	"cdp websocket connect failed",
-	"cdp discovery methods failed",
-	"failed to connect to cdp",
-	"websocket connect failed",
-	"connection refused",
-	"connection reset",
-	"error sending request",
-] as const;
 
 /**
  * Verified Browser Connect payload pinned to the schema this consumer knows.
@@ -100,6 +84,15 @@ export type AgentBrowserTaskStep =
 			kind: "click";
 			ref: string;
 			postcondition: AgentBrowserPostcondition;
+	  }
+	| {
+			kind: "click-semantic";
+			role: string;
+			name: string;
+			postcondition: Extract<
+				AgentBrowserPostcondition,
+				{ kind: "element-visible" }
+			>;
 	  }
 	| {
 			kind: "fill";
@@ -172,6 +165,14 @@ export type AgentBrowserTask = {
  */
 export type AgentBrowserExecutionRuntime = {
 	runCommand(input: McporterCommandInput): Promise<McporterCommandResult>;
+	/**
+	 * Persist write-ahead mutation truth before a native mutation command.
+	 *
+	 * The executor refuses when this seam is absent or cannot record the marker.
+	 */
+	beforeMutationDispatch?(
+		input: Readonly<{ run_id: string }>,
+	): Promise<{ ok: true } | { ok: false }>;
 };
 
 /**
@@ -190,6 +191,7 @@ export type AgentBrowserExecutionFailureCode =
 	| "agent_browser_confidential_delivery_blocked"
 	| "agent_browser_action_integrity_refused"
 	| "agent_browser_action_target_refused"
+	| "agent_browser_mutation_marker_unavailable"
 	| "agent_browser_mutation_effect_unknown"
 	| "agent_browser_postcondition_not_achieved";
 
@@ -230,6 +232,7 @@ export type AgentBrowserExecutionResult =
 			outcome: "confirmed";
 			executed_steps: number;
 			target_tab_id: string;
+			mutation_dispatched: boolean;
 			/** Present only when a confidential delivery engaged in this task. */
 			delivery?: AgentBrowserDeliveryEvidence;
 	  }
@@ -239,6 +242,7 @@ export type AgentBrowserExecutionResult =
 			outcome: "not-achieved" | "unknown";
 			message: string;
 			executed_steps: number;
+			mutation_dispatched: boolean;
 			/** Present only on `agent_browser_connection_unstable`. */
 			connection?: AgentBrowserConnectionDiagnostic;
 			/**
@@ -261,6 +265,7 @@ function failure(
 	outcome: "not-achieved" | "unknown",
 	message: string,
 	executedSteps = 0,
+	mutationDispatched = false,
 ): AgentBrowserExecutionFailure {
 	return {
 		ok: false,
@@ -268,21 +273,36 @@ function failure(
 		outcome,
 		message,
 		executed_steps: executedSteps,
+		mutation_dispatched: mutationDispatched,
 	};
 }
 
-function connectionUnstable(
-	diagnostic: AgentBrowserConnectionDiagnostic,
-): AgentBrowserExecutionFailure {
-	return {
-		ok: false,
-		code: "agent_browser_connection_unstable",
-		outcome: "not-achieved",
-		message:
-			"Agent Browser could not hold a stable CDP link to the verified endpoint after a bounded reconnect; inspect the connection diagnostic before retry.",
-		executed_steps: 0,
-		connection: diagnostic,
-	};
+async function markMutationDispatch(
+	runtime: AgentBrowserExecutionRuntime,
+	task: AgentBrowserTask,
+	executedSteps: number,
+): Promise<AgentBrowserExecutionFailure | undefined> {
+	if (runtime.beforeMutationDispatch === undefined) {
+		return failure(
+			"agent_browser_mutation_marker_unavailable",
+			"not-achieved",
+			"Mutation dispatch was refused because durable write-ahead truth is unavailable.",
+			executedSteps,
+		);
+	}
+	try {
+		const marked = await runtime.beforeMutationDispatch({ run_id: task.run_id });
+		if (marked.ok) return undefined;
+	} catch {
+		// The durable owner supplies repair detail outside the executor. This lane
+		// carries only structural refusal truth.
+	}
+	return failure(
+		"agent_browser_mutation_marker_unavailable",
+		"not-achieved",
+		"Mutation dispatch was refused because durable write-ahead truth could not be recorded.",
+		executedSteps,
+	);
 }
 
 function asObject(value: unknown): JsonObject | undefined {
@@ -298,81 +318,6 @@ function parseSuccessData(stdout: string): JsonObject | undefined {
 		return asObject(envelope.data);
 	} catch {
 		return undefined;
-	}
-}
-
-/**
- * Extract the adapter's own error text from a failure envelope
- * (`{"success":false,"error":"..."}`), if present. Structural only — never the
- * data payload.
- */
-function parseErrorText(stdout: string): string | undefined {
-	try {
-		const envelope = asObject(JSON.parse(stdout));
-		if (envelope?.success === false && typeof envelope.error === "string") {
-			return envelope.error;
-		}
-		return undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * Classify a failed command as connection-class (the adapter could not hold the
- * CDP link) versus semantic (the adapter connected but the request could not be
- * satisfied). Only connection-class failures observed before any browser effect
- * are eligible for bounded reconnect; everything else fails closed immediately.
- *
- * @returns The matched connection signal, or undefined for a semantic failure
- */
-function connectionSignalOf(
-	result: McporterCommandResult | undefined,
-): string | undefined {
-	if (result === undefined) return "adapter invocation failed";
-	if (result.timedOut === true) return "cdp command timed out";
-	const errorText = parseErrorText(result.stdout);
-	if (errorText === undefined) return undefined;
-	const haystack = errorText.toLowerCase();
-	if (CONNECTION_FAILURE_SIGNALS.some((signal) => haystack.includes(signal))) {
-		return errorText;
-	}
-	return undefined;
-}
-
-function allowedOriginSet(origins: readonly string[]): Set<string> | undefined {
-	if (origins.length === 0) return undefined;
-	const admitted = new Set<string>();
-	for (const value of origins) {
-		try {
-			const url = new URL(value);
-			if (
-				(url.protocol !== "https:" && url.protocol !== "http:") ||
-				url.origin !== value
-			) {
-				return undefined;
-			}
-			admitted.add(url.origin);
-		} catch {
-			return undefined;
-		}
-	}
-	return admitted;
-}
-
-function originIsAllowed(value: string, allowed: ReadonlySet<string>): boolean {
-	try {
-		return allowed.has(new URL(value).origin);
-	} catch {
-		return false;
-	}
-}
-
-function hasExactOrigin(value: string, expectedOrigin: string): boolean {
-	try {
-		return new URL(value).origin === expectedOrigin;
-	} catch {
-		return false;
 	}
 }
 
@@ -473,7 +418,7 @@ function validateTask(
 			"Run and tab identities must be bounded safe identifiers.",
 		);
 	}
-	const allowedOrigins = allowedOriginSet(task.allowed_origins);
+	const allowedOrigins = agentBrowserAllowedOriginSet(task.allowed_origins);
 	if (allowedOrigins === undefined) {
 		return failure(
 			"agent_browser_task_invalid",
@@ -481,170 +426,24 @@ function validateTask(
 			"At least one exact HTTP(S) origin is required.",
 		);
 	}
+	if (
+		task.steps.some(
+			(step) =>
+				step.kind === "click-semantic" &&
+				!semanticClickInputIsValid({
+					role: step.role,
+					name: step.name,
+					visibleSelector: step.postcondition.selector,
+				}),
+		)
+	) {
+		return failure(
+			"agent_browser_task_invalid",
+			"not-achieved",
+			"Semantic click targets require one bounded accessible role and name.",
+		);
+	}
 	return { ok: true, allowedOrigins };
-}
-
-/**
- * Outcome of one connection-establishment attempt. `connection-unstable`
- * signals a connection-class failure that is eligible for bounded reconnect;
- * `refused` is a semantic failure (adapter connected, request unsatisfiable)
- * that fails closed immediately with no retry.
- */
-type SelectTargetOutcome =
-	| { kind: "attached" }
-	| { kind: "connection-unstable"; signal: string }
-	| { kind: "refused"; failure: AgentBrowserExecutionFailure };
-
-async function selectTargetOnce(
-	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserTask,
-	allowedOrigins: ReadonlySet<string>,
-): Promise<SelectTargetOutcome> {
-	const listed = await runNative(runtime, task, ["tab", "list", "--json"]);
-	if (!commandSucceeded(listed)) {
-		const signal = connectionSignalOf(listed);
-		if (signal !== undefined) return { kind: "connection-unstable", signal };
-		return {
-			kind: "refused",
-			failure: failure(
-				"agent_browser_target_unavailable",
-				"not-achieved",
-				"Agent Browser could not list tabs through the verified handoff.",
-			),
-		};
-	}
-	const tabs = parseSuccessData(listed?.stdout ?? "")?.tabs;
-	if (!Array.isArray(tabs)) {
-		return {
-			kind: "refused",
-			failure: failure(
-				"agent_browser_target_unavailable",
-				"not-achieved",
-				"Agent Browser returned no typed tab list.",
-			),
-		};
-	}
-	const target = tabs
-		.map((tab) => asObject(tab))
-		.find((tab) => tab?.tabId === task.target_tab_id);
-	if (target === undefined || typeof target.url !== "string") {
-		return {
-			kind: "refused",
-			failure: failure(
-				"agent_browser_target_unavailable",
-				"not-achieved",
-				"The requested tab is not present in the verified Agent Browser session.",
-			),
-		};
-	}
-	if (!originIsAllowed(target.url, allowedOrigins)) {
-		return {
-			kind: "refused",
-			failure: failure(
-				"agent_browser_target_origin_refused",
-				"not-achieved",
-				"The requested tab is outside the task's allowed origins.",
-			),
-		};
-	}
-	const selected = await runNative(runtime, task, [
-		"tab",
-		task.target_tab_id,
-		"--json",
-	]);
-	if (!commandSucceeded(selected)) {
-		const signal = connectionSignalOf(selected);
-		if (signal !== undefined) return { kind: "connection-unstable", signal };
-		return {
-			kind: "refused",
-			failure: failure(
-				"agent_browser_target_unavailable",
-				"not-achieved",
-				"Agent Browser could not explicitly select the requested tab.",
-			),
-		};
-	}
-	return { kind: "attached" };
-}
-
-/**
- * Establish the connection with a bounded reconnect (release theme "no flaky
- * CDP connections"). Retries ONLY connection-class failures, at most
- * CONNECTION_ESTABLISH_ATTEMPTS times, running a `get cdp-url` liveness probe
- * between attempts as inspectable evidence. Semantic refusals fail closed with
- * no retry; exhaustion returns a typed connection failure carrying the
- * adapter's own last signal. This phase runs before any browser effect, so a
- * retry can never double-apply a mutation.
- *
- * @returns undefined when attached; a typed failure otherwise
- */
-async function selectTarget(
-	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserTask,
-	allowedOrigins: ReadonlySet<string>,
-): Promise<AgentBrowserExecutionFailure | undefined> {
-	let attempts = 0;
-	let lastSignal = "no connection attempt completed";
-	while (attempts < CONNECTION_ESTABLISH_ATTEMPTS) {
-		attempts += 1;
-		const outcome = await selectTargetOnce(runtime, task, allowedOrigins);
-		if (outcome.kind === "attached") return undefined;
-		if (outcome.kind === "refused") return outcome.failure;
-		lastSignal = outcome.signal;
-		if (attempts < CONNECTION_ESTABLISH_ATTEMPTS) {
-			// Liveness probe between attempts: evidence of whether the CDP link
-			// recovered, never a mutation and never a success authority.
-			await runNative(runtime, task, ["get", "cdp-url", "--json"]);
-		}
-	}
-	return connectionUnstable({
-		attempts,
-		max_attempts: CONNECTION_ESTABLISH_ATTEMPTS,
-		last_signal: lastSignal,
-		next_repair_action:
-			"Re-mint a Verified Handoff Envelope through `browser-connect connect --json` for the agent-browser lane, then rerun; a persistent connection failure means Warm Chrome is unready and needs a Browser Entry Handoff.",
-	});
-}
-
-async function verifyPostcondition(
-	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserTask,
-	postcondition: AgentBrowserPostcondition,
-	allowedOrigins: ReadonlySet<string>,
-): Promise<"confirmed" | "not-achieved" | "unavailable"> {
-	let args: readonly string[];
-	if (postcondition.kind === "url-equals") {
-		if (!originIsAllowed(postcondition.url, allowedOrigins)) {
-			return "not-achieved";
-		}
-		args = ["get", "url", "--json"];
-	} else if (postcondition.kind === "value-equals") {
-		if (
-			postcondition.selector.startsWith("@") ||
-			postcondition.selector.trim() === ""
-		) {
-			return "not-achieved";
-		}
-		args = ["get", "value", postcondition.selector, "--json"];
-	} else {
-		if (
-			postcondition.selector.startsWith("@") ||
-			postcondition.selector.trim() === ""
-		) {
-			return "not-achieved";
-		}
-		args = ["is", "visible", postcondition.selector, "--json"];
-	}
-	const verified = await runNative(runtime, task, args);
-	if (!commandSucceeded(verified)) return "unavailable";
-	const data = parseSuccessData(verified?.stdout ?? "");
-	if (postcondition.kind === "url-equals") {
-		return data?.url === postcondition.url ? "confirmed" : "not-achieved";
-	}
-	if (postcondition.kind === "value-equals") {
-		return data?.value === postcondition.value ? "confirmed" : "not-achieved";
-	}
-	return data?.visible === true ? "confirmed" : "not-achieved";
 }
 
 /**
@@ -671,16 +470,20 @@ export async function executeAgentBrowserTask(
 ): Promise<AgentBrowserExecutionResult> {
 	const validation = validateTask(task);
 	if (!validation.ok) return validation;
-	const targetFailure = await selectTarget(
-		runtime,
+	const nativeCommand = (args: readonly string[]) =>
+		runNative(runtime, task, args);
+	const targetFailure = await selectAgentBrowserTarget(
+		nativeCommand,
 		task,
 		validation.allowedOrigins,
 	);
 	if (targetFailure !== undefined) return targetFailure;
 
 	let currentRefs = new Set<string>();
+	let currentRefMetadata = new Map<string, { role: string; name: string }>();
 	let hasCurrentSnapshot = false;
 	let executedSteps = 0;
+	let mutationDispatched = false;
 	// Confidential-delivery evidence accumulates across the task's confidential
 	// fills (auth plan U5): the delivered shapes feed the sentinel owner, the
 	// method-step-complete events name the FSM steps the auth transaction records,
@@ -722,26 +525,35 @@ export async function executeAgentBrowserTask(
 					executedSteps,
 				));
 			}
-			const refs = asObject(parseSuccessData(result?.stdout ?? "")?.refs);
-			currentRefs = new Set(
-				Object.keys(refs ?? {}).map((ref) => (ref.startsWith("@") ? ref : `@${ref}`)),
+			const projected = projectAgentBrowserSnapshotRefs(
+				parseSuccessData(result?.stdout ?? "")?.refs,
 			);
+			currentRefs = new Set(projected.refs);
+			currentRefMetadata = new Map(projected.metadata);
 			hasCurrentSnapshot = true;
 			executedSteps += 1;
 			continue;
 		}
 
 		if (step.kind === "open") {
-			if (!originIsAllowed(step.url, validation.allowedOrigins)) {
+				if (!agentBrowserOriginIsAllowed(step.url, validation.allowedOrigins)) {
 				return withDelivery(failure(
 					"agent_browser_target_origin_refused",
 					"not-achieved",
 					"Navigation is outside the task's allowed origins.",
 					executedSteps,
-				));
-			}
+					));
+				}
+				const markerFailure = await markMutationDispatch(
+					runtime,
+					task,
+					executedSteps,
+				);
+				if (markerFailure !== undefined) return withDelivery(markerFailure);
+				mutationDispatched = true;
 			const opened = await runNative(runtime, task, ["open", step.url, "--json"]);
 			currentRefs = new Set();
+			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(opened)) {
 				return withDelivery(failure(
@@ -749,11 +561,11 @@ export async function executeAgentBrowserTask(
 					"unknown",
 					"Navigation may have reached the browser; inspect before retry.",
 					executedSteps,
+					mutationDispatched,
 				));
 			}
-			const verified = await verifyPostcondition(
-				runtime,
-				task,
+			const verified = await verifyAgentBrowserPostcondition(
+				nativeCommand,
 				step.postcondition,
 				validation.allowedOrigins,
 			);
@@ -767,6 +579,7 @@ export async function executeAgentBrowserTask(
 						? "Navigation completed without fresh structural proof; inspect before retry."
 						: "Fresh structure did not satisfy the declared navigation postcondition.",
 					executedSteps + 1,
+					mutationDispatched,
 				));
 			}
 			executedSteps += 1;
@@ -795,7 +608,7 @@ export async function executeAgentBrowserTask(
 			if (
 				!commandSucceeded(currentUrl) ||
 				typeof observedUrl !== "string" ||
-				!hasExactOrigin(observedUrl, step.allowed_origin)
+				!agentBrowserHasExactOrigin(observedUrl, step.allowed_origin)
 			) {
 				return withDelivery(failure(
 					"agent_browser_action_target_refused",
@@ -804,6 +617,15 @@ export async function executeAgentBrowserTask(
 					executedSteps,
 				));
 			}
+				if (step.effect === "mutation") {
+					const markerFailure = await markMutationDispatch(
+						runtime,
+						task,
+						executedSteps,
+					);
+					if (markerFailure !== undefined) return withDelivery(markerFailure);
+					mutationDispatched = true;
+				}
 			const evaluated = await runNative(runtime, task, [
 				"eval",
 				"-b",
@@ -811,6 +633,7 @@ export async function executeAgentBrowserTask(
 				"--json",
 			]);
 			currentRefs = new Set();
+			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(evaluated)) {
 				return withDelivery(failure(
@@ -818,12 +641,12 @@ export async function executeAgentBrowserTask(
 					"unknown",
 					"The reviewed action may have dispatched browser effects; inspect before retry.",
 					executedSteps,
+					mutationDispatched,
 				));
 			}
 			if (step.effect === "mutation" && step.postcondition !== undefined) {
-				const verified = await verifyPostcondition(
-					runtime,
-					task,
+				const verified = await verifyAgentBrowserPostcondition(
+					nativeCommand,
 					step.postcondition,
 					validation.allowedOrigins,
 				);
@@ -837,19 +660,51 @@ export async function executeAgentBrowserTask(
 							? "Reviewed mutation completed without fresh structural proof; inspect before retry."
 							: "Fresh structure did not satisfy the reviewed action postcondition.",
 						executedSteps + 1,
+						mutationDispatched,
 					));
 				}
 			}
 			executedSteps += 1;
 			continue;
 		}
-		if (!SAFE_REF.test(step.ref) || !currentRefs.has(step.ref)) {
+		const mutationRef =
+			step.kind === "click-semantic"
+				? resolveUniqueSemanticRef(
+						{ refs: currentRefs, metadata: currentRefMetadata },
+						step,
+					)
+				: step.ref;
+		if (
+			mutationRef === undefined ||
+			!SAFE_REF.test(mutationRef) ||
+			!currentRefs.has(mutationRef)
+		) {
 			return withDelivery(failure(
 				"agent_browser_ref_invalid",
 				"not-achieved",
-				"The requested ref is absent from the current task-local snapshot.",
+				step.kind === "click-semantic"
+					? "The semantic click target did not resolve to exactly one ref in the current task-local snapshot."
+					: "The requested ref is absent from the current task-local snapshot.",
 				executedSteps,
 			));
+		}
+		if (!(step.kind === "fill" && step.sensitivity === "confidential")) {
+			const originProof = await reproveAgentBrowserOrigin(
+				nativeCommand,
+				validation.allowedOrigins,
+			);
+			if (originProof !== "allowed") {
+				return withDelivery(failure(
+					originProof === "refused"
+						? "agent_browser_target_origin_refused"
+						: "agent_browser_target_unavailable",
+					"not-achieved",
+					originProof === "refused"
+						? "The selected tab moved outside the task's allowed origins before mutation."
+						: "The selected tab's exact origin could not be freshly proven before mutation.",
+					executedSteps,
+				));
+			}
 		}
 		if (step.kind === "fill" && step.sensitivity === "confidential") {
 			const delivery = task.auth_delivery;
@@ -891,6 +746,7 @@ export async function executeAgentBrowserTask(
 			// post-auth proof (R15/R22): drop the current snapshot now so the
 			// step's postcondition re-observes fresh structure, never a stale ref.
 			currentRefs = new Set();
+			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
 			if (!outcome.ok) {
 				// A blocked delivery is a not-achieved refusal carrying the auth
@@ -901,11 +757,14 @@ export async function executeAgentBrowserTask(
 				return withDelivery({
 					ok: false,
 					code: "agent_browser_confidential_delivery_blocked",
-					outcome: "not-achieved",
-					message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
-					executed_steps: executedSteps,
-				});
-			}
+						outcome: "not-achieved",
+						message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
+						executed_steps: executedSteps,
+						mutation_dispatched:
+							mutationDispatched || outcome.blocked.external_effect_possible,
+					});
+				}
+			mutationDispatched = true;
 			for (const shape of outcome.resume.delivered_shapes) {
 				deliveredShapes.push(shape);
 				methodStepEvents.push(METHOD_STEP_BY_FIELD[shape.field]);
@@ -913,9 +772,8 @@ export async function executeAgentBrowserTask(
 			lastResume = outcome.resume;
 			// Post-auth proof: the delivered field's structural postcondition, freshly
 			// observed after the resume directive discarded stale refs.
-			const verified = await verifyPostcondition(
-				runtime,
-				task,
+			const verified = await verifyAgentBrowserPostcondition(
+				nativeCommand,
 				step.postcondition,
 				validation.allowedOrigins,
 			);
@@ -929,18 +787,27 @@ export async function executeAgentBrowserTask(
 						? "Confidential delivery completed without fresh structural proof; inspect before retry."
 						: "Fresh structure did not satisfy the confidential fill postcondition.",
 					executedSteps + 1,
+					mutationDispatched,
 				));
 			}
 			executedSteps += 1;
 			continue;
 		}
 
-		const mutationArgs =
-			step.kind === "click"
-				? ["click", step.ref, "--json"]
-				: ["fill", step.ref, step.value, "--json"];
+			const mutationArgs =
+				step.kind === "fill"
+					? ["fill", mutationRef, step.value, "--json"]
+					: ["click", mutationRef, "--json"];
+			const markerFailure = await markMutationDispatch(
+				runtime,
+				task,
+				executedSteps,
+			);
+			if (markerFailure !== undefined) return withDelivery(markerFailure);
+			mutationDispatched = true;
 		const mutated = await runNative(runtime, task, mutationArgs);
 		currentRefs = new Set();
+		currentRefMetadata = new Map();
 		hasCurrentSnapshot = false;
 		if (!commandSucceeded(mutated)) {
 			return withDelivery(failure(
@@ -948,11 +815,11 @@ export async function executeAgentBrowserTask(
 				"unknown",
 				"Agent Browser may have dispatched the mutation; inspect before retry.",
 				executedSteps,
+				mutationDispatched,
 			));
 		}
-		const verified = await verifyPostcondition(
-			runtime,
-			task,
+		const verified = await verifyAgentBrowserPostcondition(
+			nativeCommand,
 			step.postcondition,
 			validation.allowedOrigins,
 		);
@@ -966,6 +833,7 @@ export async function executeAgentBrowserTask(
 					? "Mutation completed without fresh structural proof; inspect before retry."
 					: "Fresh structure did not satisfy the declared mutation postcondition.",
 				executedSteps + 1,
+				mutationDispatched,
 			));
 		}
 		executedSteps += 1;
@@ -976,6 +844,7 @@ export async function executeAgentBrowserTask(
 		outcome: "confirmed",
 		executed_steps: executedSteps,
 		target_tab_id: task.target_tab_id,
+		mutation_dispatched: mutationDispatched,
 		...(lastResume !== undefined
 			? {
 					delivery: {

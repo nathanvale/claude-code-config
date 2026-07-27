@@ -235,6 +235,7 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 				refs: { e2: {}, e3: {} },
 			}),
 		},
+		{ stdout: adapterSuccess({ url: "https://oncore.test/login" }) },
 	];
 }
 
@@ -444,10 +445,54 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			ok: false,
 			code: "agent_browser_confidential_delivery_blocked",
 			outcome: "not-achieved",
+			mutation_dispatched: true,
 		});
 		if (result.ok === false) {
 			expect(result.message).toContain("capability-loss");
 		}
+	});
+
+	test("a delivery helper that never starts preserves no-mutation truth", async () => {
+		const store = await makeStore();
+		const runtime = runtimeFor(attachAndSnapshot());
+		const unavailableHook: BrowserUseDeliveryHook = async () => ({
+			ok: false,
+			reason: "helper-unavailable",
+			field_cleared: false,
+		});
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-cfd-seam-helper-unavailable",
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: buildContext(
+				store.deps,
+				"run-cfd-seam-helper-unavailable",
+				unavailableHook,
+				true,
+			),
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_confidential_delivery_blocked",
+			outcome: "not-achieved",
+			mutation_dispatched: false,
+		});
 	});
 
 	test("the driver's on-disk sweep catches a REGRESSION that leaks a delivered value into the run bytes", async () => {
@@ -593,6 +638,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			message:
 				"Fresh structure did not satisfy the confidential fill postcondition.",
 			executed_steps: 1,
+			mutation_dispatched: true,
 			delivery: {
 				delivered_shapes: [],
 				method_step_events: [],
@@ -759,5 +805,104 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		expect(emitted).toContain(RUN);
 		expect(emitted).not.toContain(SENTINEL);
 		expect(emitted).toContain("confirmed");
+	});
+
+	test("dispatch truth and terminal truth produce the conservative effect table", async () => {
+		const cases = [
+			{ state: "confirmed", mutationDispatched: false, effect: "none" },
+			{ state: "confirmed", mutationDispatched: true, effect: "none" },
+			{ state: "not-achieved", mutationDispatched: false, effect: "none" },
+			{ state: "not-achieved", mutationDispatched: true, effect: "unknown" },
+			{ state: "unknown", mutationDispatched: true, effect: "unknown" },
+			{ state: "needs-human", mutationDispatched: true, effect: "unknown" },
+		] as const;
+
+		for (const [index, scenario] of cases.entries()) {
+			const store = await makeStore();
+			const runId = `run-effect-table-${index}`;
+			const created = await createSharedRun(store.deps, {
+				run_id: runId,
+				state: "running",
+				task_intent: "scrape",
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "default",
+				},
+				adapter_id: "agent-browser",
+				handoff_evidence_id: "seed",
+				mutation_dispatched: false,
+				artifacts: [],
+			});
+			expect(created.ok).toBe(true);
+			if (!created.ok) continue;
+			const parsed = parseBrowserUseArgv([
+				"task",
+				"run",
+				"--handoff",
+				"handoff.json",
+				"--intent",
+				"scrape",
+				"--json",
+			]);
+			expect(parsed.kind).toBe("command");
+			if (parsed.kind !== "command") continue;
+			const stdoutChunks: string[] = [];
+			const failure = {
+				code: "task_run_not_achieved",
+				message: "effect-table fixture",
+				actionId: "inspect_task_run_result" as const,
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none" as const,
+			};
+			const mapping =
+				scenario.state === "confirmed"
+					? {
+							kind: "confirmed" as const,
+							executedSteps: 1,
+							mutationDispatched: scenario.mutationDispatched,
+						}
+					: scenario.state === "needs-human"
+						? {
+								kind: "blocked" as const,
+								state: scenario.state,
+								continuation: {
+									next_action_id: "inspect_task_run_result",
+									summary: "inspect",
+								},
+								failure,
+								mutationDispatched: scenario.mutationDispatched,
+							}
+						: {
+								kind: "terminal" as const,
+								state: scenario.state,
+								failure,
+								mutationDispatched: scenario.mutationDispatched,
+							};
+
+			await recordTaskRunOutcome(
+				{
+					parsed,
+					runtime: makeRuntime(),
+					stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+					stderr: { write: () => undefined },
+					runId: `cli-${runId}`,
+					caller: { label: null },
+					durationMs: () => 1,
+				},
+				store.deps,
+				created.run,
+				{
+					lane_id: "agent-browser",
+					source: "intent-preferred",
+					intent: "scrape",
+				},
+				mapping,
+			);
+
+			const envelope = JSON.parse(stdoutChunks.join("")) as {
+				data: { external_effect: string };
+			};
+			expect(envelope.data.external_effect).toBe(scenario.effect);
+		}
 	});
 });

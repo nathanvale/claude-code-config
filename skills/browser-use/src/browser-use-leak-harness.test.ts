@@ -525,6 +525,7 @@ describe("value-aware leak harness (AE5)", () => {
 				snapshot: "@e2 textbox password @e3 textbox otp",
 				refs: { e2: {}, e3: {} },
 			}),
+			crashAdapterSuccess({ url: "https://oncore.test/login" }),
 			// post-auth proof for the delivered password fill (value-equals):
 			crashAdapterSuccess({ value: "•••" }),
 			// fresh snapshot required before the OTP fill (refs discarded post-delivery):

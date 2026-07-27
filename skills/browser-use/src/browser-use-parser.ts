@@ -52,8 +52,9 @@ const ROUTE_PREREQUISITE_POINTER =
 // internally, so their help never teaches the secondary CLI; --handoff stays
 // documented as the advanced override.
 const AUTO_ATTACH_POINTER =
-	"Connection attaches automatically: a fresh run proves warm Agent Chrome and mints the Verified Handoff Envelope in-process. --handoff <path> supplies a pre-minted envelope instead (advanced; required to resume with --run).";
+	"Connection attaches automatically when --handoff is absent: the command proves warm Agent Chrome and mints the Verified Handoff Envelope in-process. --handoff <path> supplies a pre-minted envelope instead (advanced).";
 const AUTO_ATTACH_COMMANDS: ReadonlySet<string> = new Set([
+	"targets-list",
 	"task-run",
 	"runbook-run",
 ]);

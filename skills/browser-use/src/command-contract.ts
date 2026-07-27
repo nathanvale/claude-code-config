@@ -716,13 +716,13 @@ export const browserUseTargetDiscoveryFailureActions = [
 	{
 		id: "supply_verified_handoff",
 		summary:
-			"Run browser-connect connect <adapter> --json and pass the Verified Handoff Envelope to targets list --handoff.",
+			"Re-run handoff-bound targets list with --adapter <id> to attach automatically, or provide a pre-minted Verified Handoff Envelope with --handoff.",
 		sideEffects: ["check"],
 	},
 	{
 		id: "refresh_verified_handoff",
 		summary:
-			"Re-run browser-connect connect for the requested adapter; the supplied handoff envelope does not match it.",
+			"Re-run handoff-bound targets list with the requested --adapter to attach automatically, or provide a matching pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -760,7 +760,7 @@ export const browserUseTargetDiscoverySuccessActions = [
 	{
 		id: "connect_verified_browser",
 		summary:
-			"Mint a Verified Handoff Envelope with browser-connect connect <adapter> --json, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -797,7 +797,7 @@ export const browserUseTargetSelectionFailureActions = [
 		// recovery prose strings.
 		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically, or supply a fresh pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -839,7 +839,7 @@ export const browserUseOperationFailureActions = [
 	{
 		id: "rerun_handoff_bound_target_discovery",
 		summary:
-			"Supply a fresh browser-connect Verified Handoff Envelope, then re-run targets list --mode handoff-bound.",
+			"Re-run targets list --mode handoff-bound with --adapter <id> to attach automatically, or supply a fresh pre-minted handoff.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1059,7 +1059,7 @@ const browserUseHandoffFlags = {
 	"--handoff": {
 		type: "path",
 		description:
-			"browser-connect Verified Handoff Envelope JSON file (from browser-connect connect <adapter> --json, or the run wrapper's stderr envelope).",
+			"Pre-minted Verified Handoff Envelope JSON file; advanced override for callers already holding connection evidence.",
 	},
 	"--dry-run": {
 		type: "boolean",
@@ -1078,7 +1078,8 @@ const browserUseTargetsListFlags = {
 	"--adapter": {
 		type: "enum",
 		values: BROWSER_USE_LIVE_ADAPTERS,
-		description: "Requested Browser Adapter id for recovery-mode discovery.",
+		description:
+			"Browser Adapter id to attach automatically in handoff-bound mode, or request in recovery mode.",
 	},
 	"--show-url": {
 		type: "boolean",
@@ -1363,6 +1364,26 @@ const browserUseTaskRunFlags = {
 		type: "string",
 		description:
 			"Exact HTTP(S) origin the lane task is bounded to (scheme + host + port).",
+	},
+	"--click-role": {
+		type: "string",
+		description:
+			"Exact accessible role to resolve from the current task-local snapshot for one routine-automation click.",
+	},
+	"--click-name": {
+		type: "string",
+		description:
+			"Exact accessible name paired with --click-role; zero or multiple current matches refuse before mutation.",
+	},
+	"--postcondition-id": {
+		type: "string",
+		description:
+			"Bounded stable name for the structural postcondition declared before mutation.",
+	},
+	"--expect-visible": {
+		type: "string",
+		description:
+			"CSS selector that must be freshly observed visible after the semantic click.",
 	},
 	"--handoff": {
 		type: "path",
@@ -1671,9 +1692,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"targets-list": {
 			script: "browser-use",
 			summary:
-				"List handoff-bound or recovery Browser Target Candidates. Get the Verified Handoff Envelope from browser-connect connect <adapter> --json.",
+				"List handoff-bound or recovery Browser Target Candidates. Handoff-bound mode attaches automatically when --handoff is absent.",
 			usage: [
-				"targets list --mode handoff-bound --handoff <path> [--show-url] [--json|--plain]",
+				"targets list --mode handoff-bound --adapter <id> [--handoff <path>] [--show-url] [--json|--plain]",
 				"targets list --mode recovery --adapter <id> [--handoff <path>] [--show-url] [--json|--plain]",
 			],
 			json: true,
@@ -1842,6 +1863,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Route one Task Intent to an admissible lane, attach through the verified Browser Connect handoff, execute, and return the shared run, observed external-effect state, selected lane, and next safe action.",
 			usage: [
+				"task run --intent routine-automation --click-role <role> --click-name <name> --postcondition-id <id> --expect-visible <selector> [--handoff <path>] [--tab <id>] --allowed-origin <origin> [--json|--plain]",
 				"task run --intent <intent> [--lane <id>] [--handoff <path>] [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--dry-run] [--json|--plain]",
 				"task run --run <id> --handoff <path> [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--json|--plain]",
 			],

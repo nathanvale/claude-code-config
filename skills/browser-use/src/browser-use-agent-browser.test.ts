@@ -65,6 +65,7 @@ function runtimeFor(
 	let responseIndex = 0;
 	return {
 		calls,
+		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
 			calls.push([input.command, ...input.args]);
 			const response = responses[responseIndex++] ?? {};
@@ -97,6 +98,7 @@ describe("Agent Browser native task lane", () => {
 			},
 			{ stdout: json({}) },
 			{ stdout: json({ snapshot: "@e4 button Save", refs: { e4: {} } }) },
+			{ stdout: json({ url: "https://example.test/form" }) },
 			{ stdout: json({}) },
 			{ stdout: json({ url: "https://example.test/saved" }) },
 		]);
@@ -124,6 +126,7 @@ describe("Agent Browser native task lane", () => {
 			outcome: "confirmed",
 			executed_steps: 2,
 			target_tab_id: "t7",
+			mutation_dispatched: true,
 		});
 		expect(runtime.calls).toEqual([
 			[
@@ -162,6 +165,16 @@ describe("Agent Browser native task lane", () => {
 				HANDOFF.endpoint.ws,
 				"--session",
 				"browser-use-run-agent-browser-1",
+				"get",
+				"url",
+				"--json",
+			],
+			[
+				"/opt/browser-connect/agent-browser",
+				"--cdp",
+				HANDOFF.endpoint.ws,
+				"--session",
+				"browser-use-run-agent-browser-1",
 				"click",
 				"@e4",
 				"--json",
@@ -177,6 +190,245 @@ describe("Agent Browser native task lane", () => {
 				"--json",
 			],
 		]);
+	});
+
+	test("refuses before click when the durable mutation marker cannot be recorded", async () => {
+		const runtime = {
+			...runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/form",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ snapshot: "@e4 button Save", refs: { e4: {} } }) },
+				{ stdout: json({ url: "https://example.test/form" }) },
+			]),
+			beforeMutationDispatch: async () => ({ ok: false as const }),
+		};
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-marker-refused",
+			target_tab_id: "t7",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "click",
+					ref: "@e4",
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-saved='true']",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_mutation_marker_unavailable",
+			outcome: "not-achieved",
+			mutation_dispatched: false,
+		});
+		expect(runtime.calls.some((call) => call.includes("click"))).toBe(false);
+	});
+
+	test("refuses a whitespace-only semantic postcondition before target selection", async () => {
+		const runtime = runtimeFor([]);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-semantic-selector-refused",
+			target_tab_id: "t7",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "click-semantic",
+					role: "button",
+					name: "Save",
+					postcondition: { kind: "element-visible", selector: "   " },
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_task_invalid",
+			outcome: "not-achieved",
+			mutation_dispatched: false,
+		});
+		expect(runtime.calls).toHaveLength(0);
+	});
+
+	for (const scenario of [
+		{ name: "zero", refs: {} },
+		{
+			name: "multiple",
+			refs: {
+				e1: { role: "button", name: "Save" },
+				e2: { role: "button", name: "Save" },
+			},
+		},
+	] as const) {
+		test(`refuses ${scenario.name} semantic role/name matches before mutation`, async () => {
+			const runtime = runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/form",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ snapshot: "", refs: scenario.refs }) },
+			]);
+
+			const result = await executeAgentBrowserTask(runtime, {
+				handoff: HANDOFF,
+				run_id: `run-semantic-${scenario.name}`,
+				target_tab_id: "t7",
+				allowed_origins: ["https://example.test"],
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "click-semantic",
+						role: "button",
+						name: "Save",
+						postcondition: {
+							kind: "element-visible",
+							selector: "[data-saved='true']",
+						},
+					},
+				],
+			});
+
+			expect(result).toMatchObject({
+				ok: false,
+				code: "agent_browser_ref_invalid",
+				outcome: "not-achieved",
+				mutation_dispatched: false,
+			});
+			expect(runtime.calls.some((call) => call.includes("click"))).toBe(false);
+		});
+	}
+
+	test("refuses before click when the selected tab drifts to another origin", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/form",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+			{
+				stdout: json({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: json({ url: "https://other.test/form" }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-origin-drift-before-click",
+			target_tab_id: "t7",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "click-semantic",
+					role: "button",
+					name: "Save",
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-saved='true']",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_origin_refused",
+			outcome: "not-achieved",
+			mutation_dispatched: false,
+		});
+		expect(runtime.calls.some((call) => call.includes("click"))).toBe(false);
+	});
+
+	test("post-click origin drift blocks selector verification with unknown effect", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/form",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+			{
+				stdout: json({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: json({ url: "https://example.test/form" }) },
+			{ stdout: json({}) },
+			{ stdout: json({ url: "https://other.test/saved" }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-origin-drift-after-click",
+			target_tab_id: "t7",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "click-semantic",
+					role: "button",
+					name: "Save",
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-saved='true']",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_mutation_effect_unknown",
+			outcome: "unknown",
+			mutation_dispatched: true,
+		});
+		expect(runtime.calls.some((call) => call.includes("is"))).toBe(false);
 	});
 
 	test("refuses stale-ref mutation without a current snapshot", async () => {
@@ -237,6 +489,7 @@ describe("Agent Browser native task lane", () => {
 			},
 			{ stdout: json({}) },
 			{ stdout: json({ snapshot: "@e1 button Save", refs: { e1: {} } }) },
+			{ stdout: json({ url: "https://example.test/" }) },
 			{ exitCode: 1, timedOut: true, stderr: "timed out" },
 		]);
 
@@ -263,7 +516,7 @@ describe("Agent Browser native task lane", () => {
 			code: "agent_browser_mutation_effect_unknown",
 			outcome: "unknown",
 		});
-		expect(runtime.calls).toHaveLength(4);
+		expect(runtime.calls).toHaveLength(5);
 	});
 
 	test("refuses confidential fill before adapter argv construction", async () => {
@@ -357,6 +610,7 @@ describe("Agent Browser native task lane", () => {
 			{ stdout: json({ snapshot: "week grid", refs: {} }) },
 			{ stdout: json({ url: "https://example.test/week" }) },
 			{ stdout: json({ result: { saved: true } }) },
+			{ stdout: json({ url: "https://example.test/week" }) },
 			{ stdout: json({ visible: true }) },
 		]);
 
@@ -465,6 +719,8 @@ describe("Agent Browser connection robustness (no flaky CDP connections)", () =>
 			{ stdout: json({}) },
 			// snapshot
 			{ stdout: json({ snapshot: "@e1 button", refs: { e1: {} } }) },
+			// pre-dispatch origin proof
+			{ stdout: json({ url: "https://example.test/" }) },
 			// click
 			{ stdout: json({}) },
 			// postcondition url check
@@ -556,6 +812,7 @@ describe("Agent Browser connection robustness (no flaky CDP connections)", () =>
 			},
 			{ stdout: json({}) }, // tab select
 			{ stdout: json({ snapshot: "@e1 button", refs: { e1: {} } }) }, // snapshot
+			{ stdout: json({ url: "https://example.test/" }) }, // pre-dispatch origin
 			{ stdout: cdpConnectFailure() }, // click dispatched, then CDP drops
 		]);
 
@@ -584,7 +841,7 @@ describe("Agent Browser connection robustness (no flaky CDP connections)", () =>
 		if (result.ok === false) {
 			expect(result.connection).toBeUndefined();
 		}
-		expect(runtime.calls).toHaveLength(4);
+		expect(runtime.calls).toHaveLength(5);
 	});
 
 	// Process-boundary proof against the real dependency shape (repo rule).

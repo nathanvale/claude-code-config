@@ -94,6 +94,9 @@ describe("U3 help and version", () => {
 			// state and carries no connection prerequisite).
 			if (command === "targets-status") {
 				expect(result.stdout).not.toContain("Prerequisite:");
+			} else if (command === "targets-list") {
+				expect(result.stdout).toContain("attaches automatically");
+				expect(result.stdout).not.toContain("browser-connect connect");
 			} else {
 				expect(result.stdout).toContain("browser-connect");
 			}

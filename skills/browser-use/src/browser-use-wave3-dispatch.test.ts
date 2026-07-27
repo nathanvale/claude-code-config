@@ -619,11 +619,14 @@ describe("task run — internal envelope mint (D4)", () => {
 		const failureEnvelope = JSON.stringify({
 			status: "error",
 			data: { outcome: "failed", failure_class: "environment-unavailable" },
+			continuation: { next_action_id: "inspect_agent_chrome" },
 		});
+		const failureStderr =
+			"Repair Path: runtime/browser-connect/REPAIR.md#v1-inspect_agent_chrome\n";
 		scripted.runtime.mintHandoff = async () => ({
 			exitCode: 20,
 			stdout: failureEnvelope,
-			stderr: "",
+			stderr: failureStderr,
 		});
 		const result = await runForTest(
 			[
@@ -638,6 +641,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		expect(result.exitCode).toBe(20);
 		// Verbatim passthrough: browser-use never re-wraps the connect failure.
 		expect(result.stdout).toBe(failureEnvelope);
+		expect(result.stderr).toBe(failureStderr);
 		// Fail closed: no adapter call, no run created.
 		expect(scripted.calls).toHaveLength(0);
 	});

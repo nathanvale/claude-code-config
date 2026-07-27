@@ -178,14 +178,29 @@ export async function runTargetsList(input: {
 	let handoff: HandoffFacts | undefined;
 	if (mode === "handoff-bound") {
 		const handoffPath = flags["--handoff"];
-		if (!handoffPath) {
-			return fail(
-				handoffInvalidFailure(
-					"handoff-bound targets list requires --handoff <path>",
-				),
-			);
+		let parse: HandoffParse;
+		if (handoffPath) {
+			parse = await readHandoffFacts(runtime, handoffPath);
+		} else {
+			const adapter = flags["--adapter"];
+			if (!isKnownAdapterId(adapter)) {
+				return fail(
+					usageDiscoveryFailure(
+						"handoff-bound targets list requires --adapter <id> when --handoff is absent.",
+					),
+				);
+			}
+			const minted = await runtime.mintHandoff({
+				adapterId: adapter,
+				runId,
+			});
+			if (minted.exitCode !== 0) {
+				if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
+				if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
+				return minted.exitCode;
+			}
+			parse = parseHandoffFacts(minted.stdout);
 		}
-		const parse = await readHandoffFacts(runtime, handoffPath);
 		if (!parse.ok) return fail(parse.failure);
 		if (parse.kind === "failed") {
 			return fail(

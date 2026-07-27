@@ -138,6 +138,31 @@ export function stripControlChars(value: string): string {
 	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
+/**
+ * Validate a structural postcondition selector BEFORE any target selection or
+ * mutation (review 2026-07-27 #6). One validator shared by the public flag
+ * boundary (`--expect-visible`) and the executor's pre-dispatch task guard, so
+ * malformed proof input can never convert into a real mutation that only fails
+ * during post-click verification.
+ *
+ * @param selector - Candidate CSS selector for a structural postcondition
+ * @returns A refusal reason, or undefined when the selector is admissible
+ */
+export function postconditionSelectorIssue(
+	selector: string,
+): string | undefined {
+	const trimmed = selector.trim();
+	if (trimmed.length === 0) return "selector is empty after trimming";
+	if (selector.length > 2_048) return "selector exceeds 2048 characters";
+	if (stripControlChars(selector) !== selector) {
+		return "selector contains control characters";
+	}
+	if (trimmed.startsWith("@")) {
+		return "selector must be a CSS selector, never a snapshot ref";
+	}
+	return undefined;
+}
+
 // Only http(s) Browser Targets are navigable pages. Other schemes — ws:// (the
 // WebSocket debugger), devtools://, chrome://, file:// — are adapter transport
 // plumbing or non-navigable surfaces, never a public Browser Target. Treating

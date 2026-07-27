@@ -95,6 +95,7 @@ function runtimeFor(
 	let index = 0;
 	return {
 		calls,
+		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
 			calls.push([input.command, ...input.args]);
 			const response = responses[index++] ?? {};

@@ -129,6 +129,17 @@ describe("front door: guide family (D3)", () => {
 		);
 	});
 
+	test("guide --full teaches semantic click and auto-attached target discovery", async () => {
+		const result = await runForTest(["guide", "--full"], makeRuntime());
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("--click-role");
+		expect(result.stdout).toContain("--postcondition-id");
+		expect(result.stdout).toContain(
+			"targets list --mode handoff-bound --adapter <id>",
+		);
+		expect(result.stdout).not.toContain("--handoff <envelope>");
+	});
+
 	test("guide --json wraps the same text in the standard envelope", async () => {
 		const result = await runForTest(["guide", "--json"], makeRuntime());
 		expect(result.exitCode).toBe(0);
@@ -263,6 +274,16 @@ describe("front door: everyday task run needs no caller-managed handoff (D4)", (
 		expect(result.stdout).toContain("attaches automatically");
 		// The --handoff flag description may NAME the envelope's owning contract;
 		// what everyday help must never do is instruct running the secondary CLI.
+		expect(result.stdout).not.toContain("browser-connect connect");
+	});
+
+	test("targets list leaf help teaches auto-attach, not the secondary CLI", async () => {
+		const result = await runForTest(
+			["targets", "list", "--help"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("attaches automatically");
 		expect(result.stdout).not.toContain("browser-connect connect");
 	});
 });

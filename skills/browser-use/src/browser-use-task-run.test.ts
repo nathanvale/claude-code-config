@@ -125,6 +125,7 @@ async function makeStore(): Promise<{
 function taskRunRuntime(
 	env: Record<string, string | undefined>,
 	responses: readonly { stdout?: string; exitCode?: number; timedOut?: boolean }[],
+	onCall?: (call: readonly string[]) => Promise<void>,
 ) {
 	let index = 0;
 	const calls: Array<readonly string[]> = [];
@@ -139,7 +140,9 @@ function taskRunRuntime(
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
 			runCommand: async (input) => {
-				calls.push([input.command, ...input.args]);
+				const call = [input.command, ...input.args];
+				calls.push(call);
+				await onCall?.(call);
 				const response = responses[index++] ?? {};
 				return {
 					exitCode: response.exitCode ?? 0,
@@ -406,6 +409,494 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(continuation.next_action_id).toBe("inspect_task_run_result");
 		// The executor actually attached and snapshotted through the handoff.
 		expect(calls[0]?.join(" ")).toContain("tab list");
+	});
+
+	test("routine automation resolves one current semantic target, clicks, and verifies its named postcondition", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ visible: true }) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		const run = data.run as Record<string, unknown>;
+		expect(run).toMatchObject({
+			state: "confirmed",
+			task_intent: "routine-automation",
+			postcondition: {
+				id: "saved",
+				summary: "The declared element is visible after mutation.",
+			},
+			mutation_dispatched: true,
+		});
+		expect(data.executed_steps).toBe(2);
+		expect(calls.map((call) => call.slice(-3))).toContainEqual([
+			"click",
+			"@e1",
+			"--json",
+		]);
+		expect(calls.at(-1)?.slice(-4)).toEqual([
+			"is",
+			"visible",
+			"[data-persisted='true']",
+			"--json",
+		]);
+	});
+
+	test("the shared run records mutation dispatch before the adapter receives the click", async () => {
+		const store = await makeStore();
+		let markerObservedBeforeClick = false;
+		const { runtime } = taskRunRuntime(
+			store.env,
+			[
+				{
+					stdout: adapterSuccess({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: adapterSuccess({}) },
+				{
+					stdout: adapterSuccess({
+						snapshot: "@e1 button Save",
+						refs: { e1: { role: "button", name: "Save" } },
+					}),
+				},
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+				{ stdout: adapterSuccess({ visible: true }) },
+			],
+			async (call) => {
+				if (!call.includes("click")) return;
+				const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+				markerObservedBeforeClick =
+					loaded.ok && loaded.run.mutation_dispatched;
+			},
+		);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(markerObservedBeforeClick).toBe(true);
+	});
+
+	test("a whitespace-only visible selector is refused before mutation", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"   ",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(2);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_lane_refused",
+		});
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(false);
+	});
+
+	test("a stale ref reassigned to different semantics cannot dispatch the click", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 link Cancel",
+					refs: { e1: { role: "link", name: "Cancel" } },
+				}),
+			},
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_ref_invalid",
+			external_effect: "none",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: false,
+			});
+		}
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+	});
+
+	test("zero and duplicate semantic matches preserve exact no-effect truth", async () => {
+		for (const refs of [
+			{},
+			{
+				e1: { role: "button", name: "Save" },
+				e2: { role: "button", name: "Save" },
+			},
+		]) {
+			const store = await makeStore();
+			const { runtime, calls } = taskRunRuntime(store.env, [
+				{
+					stdout: adapterSuccess({
+						tabs: [
+							{
+								tabId: "t7",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ snapshot: "", refs }) },
+			]);
+
+			const result = await runForTest(
+				[
+					"task",
+					"run",
+					"--intent",
+					"routine-automation",
+					"--handoff",
+					store.handoffPath,
+					"--tab",
+					"t7",
+					"--allowed-origin",
+					"https://example.test",
+					"--click-role",
+					"button",
+					"--click-name",
+					"Save",
+					"--postcondition-id",
+					"saved",
+					"--expect-visible",
+					"[data-persisted='true']",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			const json = parseJson(result.stdout);
+			expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+			expect(json.data).toMatchObject({
+				lane_outcome: "agent_browser_ref_invalid",
+				external_effect: "none",
+			});
+			const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+			expect(loaded.ok).toBe(true);
+			if (loaded.ok) {
+				expect(loaded.run).toMatchObject({
+					state: "not-achieved",
+					mutation_dispatched: false,
+				});
+			}
+			expect(calls.some((call) => call.includes("click"))).toBe(false);
+		}
+	});
+
+	test("verification loss after semantic click records unknown and never repeats the mutation", async () => {
+		const store = await makeStore();
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Submit",
+					refs: { e1: { role: "button", name: "Submit" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterCdpFailure(), exitCode: 1, timedOut: true },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Submit",
+				"--postcondition-id",
+				"submitted",
+				"--expect-visible",
+				"[data-submitted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_effect_unknown" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_mutation_effect_unknown",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "unknown",
+				mutation_dispatched: true,
+				postcondition: { id: "submitted" },
+			});
+		}
+		expect(calls.filter((call) => call.includes("click"))).toHaveLength(1);
+		expect(
+			(json.continuation as Record<string, unknown>).next_action_id,
+		).toBe("inspect_task_run_result");
+	});
+
+	test("ambient success text cannot override a false named structural postcondition", async () => {
+		const store = await makeStore();
+		const { runtime } = taskRunRuntime(store.env, [
+			{
+				stdout: adapterSuccess({
+					tabs: [
+						{
+							tabId: "t7",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: adapterSuccess({}) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "Saved successfully\n@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ message: "Saved successfully" }) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ visible: false }) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"routine-automation",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"t7",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"persisted",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_not_achieved" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "agent_browser_postcondition_not_achieved",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: true,
+				postcondition: { id: "persisted" },
+			});
+		}
+		expect(result.stdout).not.toContain("Saved successfully");
 	});
 
 	test("successful Playwright dispatch selects the intended tab and returns snapshot evidence", async () => {

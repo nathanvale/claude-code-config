@@ -104,6 +104,7 @@ import {
 	USAGE_EXIT_CODE,
 	actionFor,
 	redactUnsafeText,
+	stripControlChars,
 	stringField,
 	truncateText,
 } from "./browser-use-core";
@@ -166,6 +167,7 @@ import {
 	type AgentBrowserVerifiedHandoff,
 	executeAgentBrowserTask,
 } from "./browser-use-agent-browser";
+import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
 import {
 	type ChromeTask,
 	type ChromeTaskArtifact,
@@ -1812,18 +1814,26 @@ function laneCapabilityCovers(
 	return (capabilities as readonly string[]).includes(capability);
 }
 
-// The read-only baseline task the front door dispatches for a routed intent
-// (F1): one interactive snapshot of the target tab, bounded to the requested
-// allowed origin. Mutation/confidential steps and per-lane specialist tasks are
-// out of this unit's scope (GAP: runbook execution, auth transaction, per-lane
-// specialist tasks); a snapshot proves the whole route end-to-end — attach,
-// dispatch, evidence — without any external effect.
+const SAFE_POSTCONDITION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+type TaskRunSemanticClick = {
+	role: string;
+	name: string;
+	postconditionId: string;
+	visibleSelector: string;
+};
+
+// The Agent Browser task the front door dispatches for a routed intent (F1):
+// one fresh interactive snapshot, optionally followed by one semantic click
+// resolved from that snapshot and one structural postcondition. Raw refs never
+// cross the public task-run boundary.
 function baselineAgentBrowserTask(input: {
 	handoff: HandoffFacts;
 	rawHandoff: unknown;
 	runId: string;
 	targetTabId: string;
 	allowedOrigin: string;
+	semanticClick?: TaskRunSemanticClick;
 }): AgentBrowserTask {
 	return {
 		// The executor re-validates the handoff shape itself; the driver passes the
@@ -1832,7 +1842,22 @@ function baselineAgentBrowserTask(input: {
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
 		allowed_origins: [input.allowedOrigin],
-		steps: [{ kind: "snapshot", interactive: true }],
+		steps: [
+			{ kind: "snapshot", interactive: true },
+			...(input.semanticClick === undefined
+				? []
+				: [
+						{
+							kind: "click-semantic" as const,
+							role: input.semanticClick.role,
+							name: input.semanticClick.name,
+							postcondition: {
+								kind: "element-visible" as const,
+								selector: input.semanticClick.visibleSelector,
+							},
+						},
+					]),
+		],
 	};
 }
 
@@ -2107,20 +2132,34 @@ function sentinelRegistrationWithheldFailure(
 // diagnostic; unknown effect -> unknown terminal blocking retry/adapter-switch;
 // not-achieved / lane refusal -> not-achieved terminal.
 type AgentBrowserDispatchMapping =
-	| { kind: "confirmed"; executedSteps: number }
+	| {
+			kind: "confirmed";
+			executedSteps: number;
+			mutationDispatched?: boolean;
+	  }
 	| {
 			kind: "blocked";
 			state: BrowserUseRunState;
 			continuation: { next_action_id: string; summary: string };
 			failure: TaskRunFailure;
+			mutationDispatched?: boolean;
 	  }
-	| { kind: "terminal"; state: BrowserUseRunState; failure: TaskRunFailure };
+	| {
+			kind: "terminal";
+			state: BrowserUseRunState;
+			failure: TaskRunFailure;
+			mutationDispatched?: boolean;
+	  };
 
 function mapAgentBrowserOutcome(
 	result: AgentBrowserExecutionResult,
 ): AgentBrowserDispatchMapping {
 	if (result.ok) {
-		return { kind: "confirmed", executedSteps: result.executed_steps };
+		return {
+			kind: "confirmed",
+			executedSteps: result.executed_steps,
+			mutationDispatched: result.mutation_dispatched,
+		};
 	}
 	if (result.code === "agent_browser_connection_unstable") {
 		const repair =
@@ -2133,6 +2172,7 @@ function mapAgentBrowserOutcome(
 				next_action_id: "resume_shared_run",
 				summary: repair,
 			},
+			mutationDispatched: result.mutation_dispatched,
 			failure: {
 				code: "task_run_connection_unstable",
 				message: result.message,
@@ -2152,6 +2192,7 @@ function mapAgentBrowserOutcome(
 		return {
 			kind: "terminal",
 			state: "unknown",
+			mutationDispatched: result.mutation_dispatched,
 			failure: {
 				code: "task_run_effect_unknown",
 				message: result.message,
@@ -2171,13 +2212,15 @@ function mapAgentBrowserOutcome(
 		result.code === "agent_browser_target_origin_refused" ||
 		result.code === "agent_browser_confidential_input_requires_auth_transaction" ||
 		result.code === "agent_browser_confidential_delivery_blocked" ||
-		result.code === "agent_browser_action_integrity_refused" ||
-		result.code === "agent_browser_action_target_refused" ||
-		result.code === "agent_browser_current_snapshot_required" ||
+			result.code === "agent_browser_action_integrity_refused" ||
+			result.code === "agent_browser_action_target_refused" ||
+			result.code === "agent_browser_mutation_marker_unavailable" ||
+			result.code === "agent_browser_current_snapshot_required" ||
 		result.code === "agent_browser_ref_invalid";
 	return {
 		kind: "terminal",
 		state: "not-achieved",
+		mutationDispatched: result.mutation_dispatched,
 		failure: {
 			code: isRefusal ? "task_run_lane_refused" : "task_run_not_achieved",
 			message: result.message,
@@ -2347,6 +2390,70 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	}
 	const route = routed.route;
 
+	const clickRole = stringField(flags["--click-role"]);
+	const clickName = stringField(flags["--click-name"]);
+	const postconditionId = stringField(flags["--postcondition-id"]);
+	const visibleSelector = stringField(flags["--expect-visible"]);
+	const semanticClickValues = [
+		clickRole,
+		clickName,
+		postconditionId,
+		visibleSelector,
+	];
+	const hasSemanticClick = semanticClickValues.some(
+		(value) => value !== undefined,
+	);
+	let semanticClick: TaskRunSemanticClick | undefined;
+	if (hasSemanticClick) {
+		if (semanticClickValues.some((value) => value === undefined)) {
+			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+				code: "task_run_lane_refused",
+				message:
+					"semantic click requires --click-role, --click-name, --postcondition-id, and --expect-visible together.",
+				actionId: "change_task_run_input",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+		if (
+			existingRun !== undefined ||
+			intent !== "routine-automation" ||
+			route.lane_id !== "agent-browser"
+		) {
+			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
+				code: "task_run_lane_refused",
+				message:
+					"semantic click is available only on a fresh routine-automation run routed to agent-browser.",
+				actionId: "change_task_run_input",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+		if (
+			!semanticClickInputIsValid({
+				role: clickRole ?? "",
+				name: clickName ?? "",
+				visibleSelector: visibleSelector ?? "",
+			}) ||
+			!SAFE_POSTCONDITION_ID.test(postconditionId ?? "")
+		) {
+			return emitTaskRunFailure(input, runFlag, {
+				code: "task_run_lane_refused",
+				message:
+					"semantic click role, name, postcondition id, and visible selector must be bounded safe values.",
+				actionId: "change_task_run_input",
+				exitCode: USAGE_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+		semanticClick = {
+			role: clickRole ?? "",
+			name: clickName ?? "",
+			postconditionId: postconditionId ?? "",
+			visibleSelector: visibleSelector ?? "",
+		};
+	}
+
 	// Validate lane inputs BEFORE binding the durable run. A usage error must
 	// never create (or poison) a shared run keyed on the handoff's run id: the
 	// caller corrects the flag and retries with the SAME handoff, so a run
@@ -2413,6 +2520,14 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 			},
 			adapter_id: route.lane_id,
 			handoff_evidence_id: handoff.handoffEvidenceId,
+			...(semanticClick !== undefined
+				? {
+						postcondition: {
+							id: semanticClick.postconditionId,
+							summary: "The declared element is visible after mutation.",
+						},
+					}
+				: {}),
 			mutation_dispatched: false,
 			artifacts: [],
 		});
@@ -2437,21 +2552,43 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		: undefined;
 
 	// Dispatch to the selected lane's execution interface. agent-browser runs a
-	// read-only snapshot baseline; chrome-devtools-mcp runs a read-only
-	// debugging/performance baseline through its envelope-derived executor.
+	// fresh snapshot and may resolve one semantic click with a named structural
+	// postcondition; chrome-devtools-mcp runs a read-only debugging/performance
+	// baseline through its envelope-derived executor.
 	// playwright-cdp's install is out of scope and never reaches here (routing
 	// refuses it as lane_not_installed).
 	if (route.lane_id === "agent-browser") {
+		let dispatchRun = run;
+		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		const result = await executeAgentBrowserTask(
-			input.runtime,
+			{
+				runCommand: input.runtime.runCommand,
+				beforeMutationDispatch: async ({ run_id }) => {
+					if (run_id !== dispatchRun.run_id) return { ok: false };
+					const marked = await persistTaskRunMutationDispatch(
+						store.deps,
+						dispatchRun,
+					);
+					if (!marked.ok) {
+						mutationMarkerFailure = marked.failure;
+						return { ok: false };
+					}
+					dispatchRun = marked.run;
+					return { ok: true };
+				},
+			},
 			baselineAgentBrowserTask({
 				handoff,
 				rawHandoff: rawHandoffData,
 				runId: run.run_id,
 				targetTabId,
 				allowedOrigin,
+				...(semanticClick !== undefined ? { semanticClick } : {}),
 			}),
 		);
+		if (mutationMarkerFailure !== undefined) {
+			return emitPlatformStoreFailure(input, mutationMarkerFailure);
+		}
 		// If confidential delivery engaged in this dispatch, the run turns
 		// sensitive exactly once (auth plan U4/U5); the sensitive guard threads
 		// into recordTaskRunOutcome's release gate. The baseline snapshot task
@@ -2469,7 +2606,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
-			run,
+			dispatchRun,
 			route,
 			mapAgentBrowserOutcome(result),
 			{
@@ -2596,6 +2733,55 @@ function checkSameLaneResumeForTaskRun(
 	return undefined;
 }
 
+async function persistTaskRunMutationDispatch(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	if (run.mutation_dispatched) return { ok: true, run };
+	const acquired = await acquireLease(deps, {
+		key: leaseKeyForRun(run),
+		holderId: `task-run-dispatch-${run.run_id}`,
+		ttlMs: 10_000,
+	});
+	if (!acquired.ok) {
+		return {
+			ok: false,
+			failure: platformStoreFailureOf(
+				acquired.code,
+				acquired.code === "lease_held"
+					? acquired.continuation.summary
+					: acquired.message,
+			),
+		};
+	}
+	const claim = {
+		fencing_token: acquired.lease.fencing_token,
+		activation_epoch: acquired.lease.activation_epoch,
+		holderId: acquired.lease.holder_id,
+	};
+	let updated: Awaited<ReturnType<typeof casUpdateSharedRun>>;
+	try {
+		updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease: claim,
+			mutate: (current) => ({ ...current, mutation_dispatched: true }),
+		});
+	} finally {
+		await releaseLease(deps, acquired.lease);
+	}
+	if (!updated.ok) {
+		return {
+			ok: false,
+			failure: platformStoreFailureOf(updated.code, updated.message),
+		};
+	}
+	return { ok: true, run: updated.run };
+}
+
 // Persist the dispatch outcome onto the shared run (its terminal or blocked
 // truth) and emit the shared-run envelope + observed external-effect state +
 // selected lane + next safe action. The run write goes through the same fenced
@@ -2614,10 +2800,11 @@ async function recordTaskRunOutcome(
 	const artifacts = options.artifacts ?? [];
 	const targetState: BrowserUseRunState =
 		mapping.kind === "confirmed" ? "confirmed" : mapping.state;
-	// A confirmed read-only snapshot dispatched no mutation; a not-achieved /
-	// unknown / blocked outcome after a snapshot-only task also dispatched no
-	// mutation, so external effect stays none unless the executor says unknown.
-	const mutationDispatched = targetState === "unknown";
+	// The lane reports write-ahead mutation truth separately from terminal
+	// classification. A semantic target refusal leaves this false; confirmed,
+	// unmet-postcondition, and verification-unavailable outcomes after dispatch
+	// preserve true.
+	const mutationDispatched = mapping.mutationDispatched ?? false;
 	const continuation =
 		mapping.kind === "blocked" ? mapping.continuation : undefined;
 
@@ -2672,7 +2859,8 @@ async function recordTaskRunOutcome(
 		);
 	}
 
-	const externalEffect = mutationDispatched ? "unknown" : "none";
+	const externalEffect =
+		mutationDispatched && targetState !== "confirmed" ? "unknown" : "none";
 	const dataExtra: Record<string, unknown> = {
 		selected_lane: route.lane_id,
 		lane_source: route.source,
@@ -3054,10 +3242,27 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	const guardResult = beginSensitiveRunGuard(run.run_id);
 	const guard = guardResult.ok ? guardResult.guard : undefined;
 
+	let dispatchRun = run;
+	let mutationMarkerFailure: PlatformStoreFailure | undefined;
 	const outcome: BrowserUseRunbookExecutionResult = await runRunbook(
 		{
 			fs: store.deps.fs,
-			runtime: input.runtime,
+			runtime: {
+				runCommand: input.runtime.runCommand,
+				beforeMutationDispatch: async ({ run_id }) => {
+					if (run_id !== dispatchRun.run_id) return { ok: false };
+					const marked = await persistTaskRunMutationDispatch(
+						store.deps,
+						dispatchRun,
+					);
+					if (!marked.ok) {
+						mutationMarkerFailure = marked.failure;
+						return { ok: false };
+					}
+					dispatchRun = marked.run;
+					return { ok: true };
+				},
+			},
 			dataRoot: store.deps.paths.data.root,
 		},
 		{
@@ -3070,6 +3275,9 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			resumeFromStep,
 		},
 	);
+	if (mutationMarkerFailure !== undefined) {
+		return emitPlatformStoreFailure(input, mutationMarkerFailure);
+	}
 	if (!outcome.ok) {
 		return emitPlatformStoreFailure(
 			input,
@@ -3116,7 +3324,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,
-		run,
+		dispatchRun,
 		{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
 		recordedMapping,
 		{
