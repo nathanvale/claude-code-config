@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { type BrowserUseRuntime, runForTest } from "./browser-use";
 import { discoverPages } from "./browser-use-discovery";
+import { BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS } from "./command-contract";
+import { BROWSER_USE_LIVE_ADAPTERS } from "./discovery-model";
 import type {
 	McporterCommandInput,
 	McporterCommandResult,
@@ -1050,6 +1052,74 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 				code: "target_discovery_transport_failed",
 				recoverability: "retry",
 			});
+		}
+	});
+});
+
+// Drift gate for BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS: the constant doubles
+// as the fail-closed discovery gate, so it must never disagree with the set of
+// adapters that actually have a discoverPages transport branch. A member added
+// without a branch (or a branch removed while the constant keeps the id) would
+// otherwise ship silently — the mirror of the BROWSER_USE_TRANSPORT_ADAPTERS
+// lane-table gate in browser-use-adapter-registry.test.ts.
+describe("U1 target discovery — transport-adapter gate has no drift", () => {
+	const NOT_IMPLEMENTED = "is not implemented for adapter";
+
+	// A runtime whose spawn/mcporter call returns benign parseable output, so a
+	// member's real branch reaches its transport rather than the gate; the point
+	// is only whether discoverPages fell through to the not-implemented refusal.
+	function benignRuntime(): BrowserUseRuntime {
+		return makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify({ success: true, data: { tabs: [] } }),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+	}
+
+	function factsFor(adapter: (typeof BROWSER_USE_LIVE_ADAPTERS)[number]) {
+		return {
+			adapter,
+			probeExecutable: "/opt/side-quest/adapters/fixture/bin/adapter",
+			endpointHttp: "http://127.0.0.1:8912",
+			endpointWs: "ws://127.0.0.1:8912/devtools/browser/abc",
+			runId: "run-42",
+		};
+	}
+
+	test("every discovery-transport member has a real branch (never the not-implemented refusal)", async () => {
+		for (const adapter of BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS) {
+			const discovery = await discoverPages(benignRuntime(), factsFor(adapter));
+			if (!discovery.ok) {
+				expect(discovery.failure.message).not.toContain(NOT_IMPLEMENTED);
+			}
+		}
+	});
+
+	test("a live adapter that is not a discovery member still fails closed at the gate", async () => {
+		const nonMembers = BROWSER_USE_LIVE_ADAPTERS.filter(
+			(adapter) =>
+				!(
+					BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS as readonly string[]
+				).includes(adapter),
+		);
+		// The gate is only meaningful if at least one registered adapter is held
+		// out of the discovery-transport set; if every live adapter becomes a
+		// member, this assertion flags that the fail-closed path is now untested.
+		expect(nonMembers.length).toBeGreaterThan(0);
+		for (const adapter of nonMembers) {
+			const discovery = await discoverPages(benignRuntime(), factsFor(adapter));
+			expect(discovery.ok).toBe(false);
+			if (!discovery.ok) {
+				expect(discovery.failure.message).toContain(NOT_IMPLEMENTED);
+				expect(discovery.failure).toMatchObject({
+					code: "target_discovery_transport_failed",
+					actionId: "change_target_discovery_input",
+					recoverability: "change_input",
+				});
+			}
 		}
 	});
 });

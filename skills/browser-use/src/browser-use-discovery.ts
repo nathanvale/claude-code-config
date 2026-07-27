@@ -62,6 +62,7 @@ import {
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 // ---------------------------------------------------------------------------
 // `browser-use targets list` discovers Browser Target Candidates in two modes:
@@ -649,11 +650,6 @@ export type EnvelopeTransportFacts = Pick<
 	HandoffFacts,
 	"adapter" | "probeExecutable" | "endpointHttp" | "runId" | "endpointWs"
 >;
-
-// agent-browser sessions are named `browser-use-<runId>`; the run id lands in
-// the spawn argv, so it must pass the same safe-id guard the native executor
-// enforces (mirror of SAFE_RUN_ID in browser-use-agent-browser.ts).
-const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 // agent-browser tab-list command duration bound (mirror of COMMAND_TIMEOUT_MS
 // in the native executor; discovery only lists, but the CLI is the same).
