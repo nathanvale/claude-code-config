@@ -175,6 +175,12 @@ import {
 	executeChromeTask,
 } from "./browser-use-chrome-task";
 import {
+	type PlaywrightTask,
+	type PlaywrightTaskIntent,
+	type PlaywrightTaskResult,
+	executePlaywrightTask,
+} from "./browser-use-playwright-task";
+import {
 	type BrowserUseRunbookExecutionResult,
 	listRunbooks,
 	runRunbook,
@@ -1863,6 +1869,70 @@ function baselineChromeTask(input: {
 	};
 }
 
+// The first Playwright CLI vertical slice: frontend and locator/ARIA intents
+// attach to the verified endpoint, select one numeric tab, capture a fresh
+// accessibility snapshot, prove its exact origin, and detach. Trace inspection
+// and HTTP replay remain outside admission until their artifact/input contracts
+// exist, so they cannot reach this narrowing.
+function baselinePlaywrightTask(input: {
+	rawHandoff: unknown;
+	runId: string;
+	tabIndex: number;
+	allowedOrigin: string;
+	intent: BrowserUseTaskIntent;
+}): PlaywrightTask {
+	return {
+		handoff: input.rawHandoff as PlaywrightTask["handoff"],
+		run_id: input.runId,
+		target_tab_index: input.tabIndex,
+		allowed_origins: [input.allowedOrigin],
+		intent: input.intent as PlaywrightTaskIntent,
+	};
+}
+
+function mapPlaywrightOutcome(
+	result: PlaywrightTaskResult,
+): AgentBrowserDispatchMapping {
+	if (result.ok) {
+		return { kind: "confirmed", executedSteps: result.executed_commands };
+	}
+	if (result.code === "playwright_task_connection_unstable") {
+		return {
+			kind: "blocked",
+			state: "needs-human",
+			continuation: {
+				next_action_id: "resume_shared_run",
+				summary:
+					"Re-mint a verified playwright-cdp handoff, then resume the same run.",
+			},
+			failure: {
+				code: "task_run_connection_unstable",
+				message: result.message,
+				actionId: "resume_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "retry",
+				dataExtra: { lane_outcome: result.code },
+			},
+		};
+	}
+	const isRefusal =
+		result.code === "playwright_task_handoff_invalid" ||
+		result.code === "playwright_task_input_invalid" ||
+		result.code === "playwright_task_origin_refused";
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		failure: {
+			code: isRefusal ? "task_run_lane_refused" : "task_run_not_achieved",
+			message: result.message,
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "none",
+			dataExtra: { lane_outcome: result.code },
+		},
+	};
+}
+
 // Map a chrome-devtools-mcp executor outcome onto the SHARED dispatch mapping
 // (reusing AgentBrowserDispatchMapping so both lanes flow through the one
 // recordTaskRunOutcome persistence pipeline). Every chrome operation in this
@@ -2298,14 +2368,16 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	// A numeric page id is required on the chrome lane: chrome-devtools-mcp keys
 	// pages by the numeric ordering from list_pages, not a string tab id. --tab
 	// must parse to a non-negative integer; default 0 (the first/selected page).
-	let chromePageId: number | undefined;
-	if (route.lane_id === "chrome-devtools-mcp") {
-		chromePageId = parseTabPageId(stringField(flags["--tab"]));
-		if (chromePageId === undefined) {
+	let numericTabIndex: number | undefined;
+	if (
+		route.lane_id === "chrome-devtools-mcp" ||
+		route.lane_id === "playwright-cdp"
+	) {
+		numericTabIndex = parseTabPageId(stringField(flags["--tab"]));
+		if (numericTabIndex === undefined) {
 			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
 				code: "task_run_lane_refused",
-				message:
-					"the chrome-devtools-mcp lane addresses pages by numeric id from list_pages; pass --tab <non-negative integer> (default 0).",
+				message: `the ${route.lane_id} lane addresses pages by numeric index; pass --tab <non-negative integer> (default 0).`,
 				actionId: "change_task_run_input",
 				exitCode: USAGE_EXIT_CODE,
 				recoverability: "change_input",
@@ -2412,7 +2484,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		// The page id was validated before the run was bound; the ?? 0 default can
 		// never engage (parseTabPageId returned a number or the command already
 		// refused), it only spares a non-null assertion.
-		const pageId = chromePageId ?? 0;
+		const pageId = numericTabIndex ?? 0;
 		// Artifact-producing intents (performance-profile/lighthouse-audit) need a
 		// run-scoped artifact directory created before dispatch (R21); the baseline
 		// console-read intent produces no artifact and needs none.
@@ -2448,8 +2520,30 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		);
 	}
 
-	// playwright-cdp and any future lane with no wired task dispatch: routing
-	// already refuses an uninstalled lane, so this is a defensive typed state.
+	if (route.lane_id === "playwright-cdp") {
+		const result = await executePlaywrightTask(
+			input.runtime,
+			baselinePlaywrightTask({
+				rawHandoff: rawHandoffData,
+				runId: run.run_id,
+				tabIndex: numericTabIndex ?? 0,
+				allowedOrigin,
+				intent: route.intent,
+			}),
+		);
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			route,
+			mapPlaywrightOutcome(result),
+			{
+				...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+			},
+		);
+	}
+
+	// Any future admitted lane without a task binding fails closed.
 	return emitTaskRunFailure(input, run.run_id, {
 		code: "task_run_dispatch_unavailable",
 		message: `lane ${route.lane_id} routed and admitted, but no task-run dispatch binding is wired for its execution interface yet.`,

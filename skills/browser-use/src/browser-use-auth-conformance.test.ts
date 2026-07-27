@@ -138,18 +138,16 @@ describe("conformance matrix — honest unproven states", () => {
 		}
 	});
 
-	test("a lane without a native Implementation is unproven on EVERY dimension", () => {
+	test("the implemented Playwright lane reaches contract checks instead of the install gate", () => {
 		const matrix = runAuthConformanceMatrix({ at_epoch_ms: AT });
-		// playwright-cdp is typed not-installed in this release (operator gate).
 		const laneId = "playwright-cdp";
 		expect(
 			BROWSER_USE_ADAPTER_LANE_TABLE[laneId].native_implementation.implemented,
-		).toBe(false);
+		).toBe(true);
 		for (const dimension of BROWSER_USE_CONFORMANCE_DIMENSIONS) {
 			const cell = cellFor(matrix.cells, laneId, dimension);
-			expect(cell.verdict).toBe("unproven");
 			if (cell.verdict === "unproven") {
-				expect(cell.gate).toBe("playwright-not-installed");
+				expect(BROWSER_USE_CONFORMANCE_GATES).toContain(cell.gate);
 			}
 		}
 	});

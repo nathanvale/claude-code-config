@@ -178,11 +178,11 @@ describe("receiptArtifactsOf parses the real shared-run receipt shape", () => {
 });
 
 describe("AE12 eligible-lane policy", () => {
-	test("playwright-cdp is intentionally excluded (registered-but-not-installed)", () => {
+	test("every implemented read-only lane is eligible", () => {
 		const laneIds = AE12_ELIGIBLE_LANES.map((lane) => lane.lane_id);
 		expect(laneIds).toContain("agent-browser");
 		expect(laneIds).toContain("chrome-devtools-mcp");
-		expect(laneIds).not.toContain("playwright-cdp");
+		expect(laneIds).toContain("playwright-cdp");
 	});
 });
 
@@ -299,7 +299,7 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		};
 	}
 
-	test("two matching handoffs (one per lane) produce two real measurements and license the comparison", () => {
+	test("three matching handoffs produce three real measurements and license the comparison", () => {
 		const shelled: string[] = [];
 		const { comparison, skipped_handoffs } = driveBenchmark({
 			handoffs: [
@@ -311,16 +311,25 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 					handoffPath: "/verified-chrome-devtools.json",
 					attachedAdapter: "chrome-devtools-mcp",
 				},
+				{
+					handoffPath: "/verified-playwright.json",
+					attachedAdapter: "playwright-cdp",
+				},
 			],
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
 			runTask: fakeRunner(shelled),
 		});
 		// Each lane was shelled against its OWN matching handoff.
-		expect(shelled.sort()).toEqual(["agent-browser", "chrome-devtools-mcp"]);
+		expect(shelled.sort()).toEqual([
+			"agent-browser",
+			"chrome-devtools-mcp",
+			"playwright-cdp",
+		]);
 		expect(comparison.measurements.map((m) => m.lane_id).sort()).toEqual([
 			"agent-browser",
 			"chrome-devtools-mcp",
+			"playwright-cdp",
 		]);
 		expect(comparison.gated_lanes).toEqual([]);
 		expect(skipped_handoffs).toEqual([]);
@@ -359,6 +368,10 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 					handoffPath: "/agent-browser.json",
 					attachedAdapter: "agent-browser",
 				},
+				{
+					handoffPath: "/playwright.json",
+					attachedAdapter: "playwright-cdp",
+				},
 			],
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
@@ -370,6 +383,9 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		expect(
 			seen.find((s) => s.lane_id === "chrome-devtools-mcp")?.handoffPath,
 		).toBe("/chrome-devtools.json");
+		expect(
+			seen.find((s) => s.lane_id === "playwright-cdp")?.handoffPath,
+		).toBe("/playwright.json");
 	});
 
 	test("a handoff whose adapter matches no eligible lane is skipped (reported, not measured)", () => {
@@ -381,8 +397,8 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 					attachedAdapter: "agent-browser",
 				},
 				{
-					handoffPath: "/verified-playwright.json",
-					attachedAdapter: "playwright-cdp",
+					handoffPath: "/verified-unknown.json",
+					attachedAdapter: "unknown-adapter",
 				},
 			],
 			taskLabel: "bounded read-only",
@@ -396,12 +412,12 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		]);
 		// The out-of-scope handoff is reported, not measured as another lane.
 		expect(skipped_handoffs.map((s) => s.attachedAdapter)).toEqual([
-			"playwright-cdp",
+			"unknown-adapter",
 		]);
-		expect(skipped_handoffs[0]?.handoffPath).toBe("/verified-playwright.json");
-		// chrome-devtools-mcp has no matching handoff -> gated.
+		expect(skipped_handoffs[0]?.handoffPath).toBe("/verified-unknown.json");
 		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
 			"chrome-devtools-mcp",
+			"playwright-cdp",
 		]);
 		// Only one real lane sample -> no cross-lane comparison licensed.
 		expect(comparison.comparison_licensed).toBe(false);
@@ -430,6 +446,7 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		// The other eligible lane is recorded as gated, not measured.
 		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
 			"chrome-devtools-mcp",
+			"playwright-cdp",
 		]);
 		expect(comparison.gated_lanes[0]?.reason).toContain("chrome-devtools-mcp");
 		// A single real lane sample licenses no cross-lane comparison.
@@ -443,8 +460,8 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		const { comparison, skipped_handoffs } = driveBenchmark({
 			handoffs: [
 				{
-					handoffPath: "/verified-playwright.json",
-					attachedAdapter: "playwright-cdp",
+					handoffPath: "/verified-unknown.json",
+					attachedAdapter: "unknown-adapter",
 				},
 			],
 			taskLabel: "bounded read-only",
@@ -457,7 +474,7 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 			AE12_ELIGIBLE_LANES.map((l) => l.lane_id),
 		);
 		expect(skipped_handoffs.map((s) => s.attachedAdapter)).toEqual([
-			"playwright-cdp",
+			"unknown-adapter",
 		]);
 		expect(comparison.comparison_licensed).toBe(false);
 	});
@@ -520,38 +537,41 @@ describe("driveBenchmark records ONLY successful terminal dispatches (R25)", () 
 		};
 	}
 
-	const bothHandoffs = [
+	const allHandoffs = [
 		{ handoffPath: "/agent-browser.json", attachedAdapter: "agent-browser" },
 		{
 			handoffPath: "/chrome-devtools.json",
 			attachedAdapter: "chrome-devtools-mcp",
 		},
+		{
+			handoffPath: "/playwright.json",
+			attachedAdapter: "playwright-cdp",
+		},
 	];
 
-	test("a matched lane with a nonzero exit_code is gated, not sampled; one real sample -> unlicensed", () => {
+	test("a matched lane with a nonzero exit_code is gated while successful peers remain measured", () => {
 		const { comparison } = driveBenchmark({
-			handoffs: bothHandoffs,
+			handoffs: allHandoffs,
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
 			runTask: outcomeRunner({
 				"chrome-devtools-mcp": { exit_code: 7, state: "confirmed" },
 			}),
 		});
-		// agent-browser confirmed -> the only sample; chrome-devtools nonzero-exit -> gated.
-		expect(comparison.measurements.map((m) => m.lane_id)).toEqual([
+		expect(comparison.measurements.map((m) => m.lane_id).sort()).toEqual([
 			"agent-browser",
+			"playwright-cdp",
 		]);
 		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
 			"chrome-devtools-mcp",
 		]);
 		expect(comparison.gated_lanes[0]?.reason).toContain("exited nonzero (7)");
-		// A failed dispatch can never license a two-lane comparison.
-		expect(comparison.comparison_licensed).toBe(false);
+		expect(comparison.comparison_licensed).toBe(true);
 	});
 
 	test("a matched lane whose run_state is a blocked/refused/non-terminal outcome is gated, not sampled", () => {
 		const { comparison } = driveBenchmark({
-			handoffs: bothHandoffs,
+			handoffs: allHandoffs,
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
 			// zero exit but a blocked resume state (needs-human) and a not-achieved
@@ -559,12 +579,14 @@ describe("driveBenchmark records ONLY successful terminal dispatches (R25)", () 
 			runTask: outcomeRunner({
 				"agent-browser": { exit_code: 0, state: "needs-human" },
 				"chrome-devtools-mcp": { exit_code: 0, state: "not-achieved" },
+				"playwright-cdp": { exit_code: 0, state: "needs-human" },
 			}),
 		});
 		expect(comparison.measurements).toEqual([]);
 		expect(comparison.gated_lanes.map((g) => g.lane_id).sort()).toEqual([
 			"agent-browser",
 			"chrome-devtools-mcp",
+			"playwright-cdp",
 		]);
 		expect(
 			comparison.gated_lanes.some((g) => g.reason.includes("needs-human")),
@@ -575,9 +597,9 @@ describe("driveBenchmark records ONLY successful terminal dispatches (R25)", () 
 		expect(comparison.comparison_licensed).toBe(false);
 	});
 
-	test("two confirmed zero-exit dispatches still produce two samples and license the comparison", () => {
+	test("three confirmed zero-exit dispatches produce three samples and license the comparison", () => {
 		const { comparison } = driveBenchmark({
-			handoffs: bothHandoffs,
+			handoffs: allHandoffs,
 			taskLabel: "bounded read-only",
 			browserUseEntry: "/entry.ts",
 			// default outcome is confirmed/zero-exit for both lanes.
@@ -586,6 +608,7 @@ describe("driveBenchmark records ONLY successful terminal dispatches (R25)", () 
 		expect(comparison.measurements.map((m) => m.lane_id).sort()).toEqual([
 			"agent-browser",
 			"chrome-devtools-mcp",
+			"playwright-cdp",
 		]);
 		expect(comparison.gated_lanes).toEqual([]);
 		expect(comparison.comparison_licensed).toBe(true);

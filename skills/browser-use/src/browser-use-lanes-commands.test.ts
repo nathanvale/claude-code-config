@@ -121,10 +121,15 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 				unknown
 			>;
 			if (implementation.implemented === true) {
+				const expectedInterface = {
+					"chrome-devtools-mcp": "mcporter-envelope-call",
+					"agent-browser": "agent-browser-native-call",
+					"playwright-cdp": "playwright-cli-native-call",
+				} as const;
 				expect(implementation.execution_interface).toBe(
-					lane.lane_id === "agent-browser"
-						? "agent-browser-native-call"
-						: "mcporter-envelope-call",
+					expectedInterface[
+						lane.lane_id as keyof typeof expectedInterface
+					],
 				);
 			} else {
 				expect(implementation.unavailable_reason).toBeDefined();
@@ -150,6 +155,7 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 		expect(implemented.map((lane) => lane.lane_id)).toEqual([
 			"chrome-devtools-mcp",
 			"agent-browser",
+			"playwright-cdp",
 		]);
 	});
 

@@ -3,6 +3,11 @@
 Purpose: prove the migrated chain — browser-connect connection → browser-use
 targets/operate.
 
+Current release-readiness ledger:
+[`docs/plans/2026-07-27-daily-driver-acceptance-ledger.md`](docs/plans/2026-07-27-daily-driver-acceptance-ledger.md).
+The ledger owns the full Daily Driver Acceptance Proof. This file retains
+detailed live receipts and historical matrices referenced by that ledger.
+
 Convention:
 
 - Envelope source: `browser-connect connect <adapter> --json` (repo-local: `bun run runtime/browser-connect/src/cli.ts connect <adapter> --json`).
@@ -296,22 +301,26 @@ cleanup:
 ### BAP-C5 Playwright-CDP attach
 
 case_id: `bap-playwright-cdp-attach`
-kind: future live smoke
+kind: live pairwise journey
 status: pending
 run_id: `bap-playwright-cdp-attach`
 adapter: `playwright-cdp`
 side_effects: check, network
-requires: Playwright runtime available; Warm Chrome healthy on `9222`
+requires: pinned Playwright CLI installed through Browser Connect's operator gate; Agent Chrome healthy; anonymous fixture page
 
 run:
-- [ ] Future proof CLI: verify Playwright `connectOverCDP` attaches to `http://127.0.0.1:9222` after the adapter contract accepts `playwright-cdp`.
+- [ ] Invoke only `browser-use task run --intent frontend-test --tab <index> --allowed-origin <origin> --json`.
 
 expect:
-- [ ] Playwright `connectOverCDP` attaches to verified endpoint.
-- [ ] No launch API called.
+- [ ] Internal Browser Connect mint selects `playwright-cdp`.
+- [ ] Run reports `selected_lane=playwright-cdp` and `state=confirmed`.
+- [ ] Playwright attaches only to the verified CDP endpoint.
+- [ ] Requested tab index and fresh snapshot origin match the fixture.
+- [ ] No browser launch, navigation, or mutation command runs.
 
 cleanup:
-- [ ] Close Playwright connection only; keep Warm Chrome running.
+- [ ] Named Playwright session detaches.
+- [ ] Agent Chrome and the fixture tab remain running.
 
 ### BAP-C6 Playwright launch rejected
 

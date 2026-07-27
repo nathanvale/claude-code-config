@@ -133,7 +133,6 @@ export type BrowserUseConformanceProofKind =
  */
 export const BROWSER_USE_CONFORMANCE_GATES = [
 	"native-port-absent",
-	"playwright-not-installed",
 	"live-portal-required",
 	"live-idp-required",
 ] as const;
@@ -154,8 +153,6 @@ export const BROWSER_USE_CONFORMANCE_GATE_TABLE: Readonly<
 > = {
 	"native-port-absent":
 		"Enroll the native Browser Use Security product (runtime/browser-use-security/) so the Confidential Field Delivery Helper and identity-proof ports exist; live-only dimensions stay unproven until then.",
-	"playwright-not-installed":
-		"Install and pin the Playwright lane Implementation, then register its native execution Interface; the lane cannot preserve same-lane execution until it is installed.",
 	"live-portal-required":
 		"Run this dimension against a live authenticated portal (Oncore/FastTrack/accommodation) under operator supervision; contract fakes cannot prove a live login outcome.",
 	"live-idp-required":
@@ -252,14 +249,9 @@ function laneContractCapability(
 	const implemented =
 		BROWSER_USE_ADAPTER_LANE_TABLE[laneId].native_implementation.implemented;
 	if (!implemented) {
-		// The only lane without a native Implementation in this release is
-		// playwright-cdp (operator-gated on install). Its gate names install.
 		return {
 			contract_provable: false,
-			live_gate:
-				laneId === "playwright-cdp"
-					? "playwright-not-installed"
-					: "native-port-absent",
+			live_gate: "native-port-absent",
 		};
 	}
 	return { contract_provable: true, live_gate: "live-idp-required" };

@@ -4,6 +4,7 @@ import {
 	browserUseContracts,
 } from "./command-contract";
 import {
+	BROWSER_USE_TASK_INTENT_DEFINITIONS,
 	BROWSER_USE_TASK_INTENTS,
 	type BrowserUseSharedRun,
 } from "./browser-use-run-model";
@@ -34,9 +35,8 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 // CLI-level tests over the REAL driver via runForTest against a real temp XDG
 // store, plus pure routing-engine tests. Fakes match the real envelope shapes
 // proven in wave 1 (browser-use-agent-browser.test.ts). Cases: successful
-// agent-browser dispatch, inadmissible override refusal, playwright not-installed
-// typed repair, resume of an existing run, unknown-effect terminal, and the
-// intent-enum drift pin.
+// agent-browser and Playwright dispatch, inadmissible override refusal, resume
+// of an existing run, unknown-effect terminal, and the intent-enum drift pin.
 // =========================================================================
 
 const disposables: { dispose(): void }[] = [];
@@ -224,6 +224,50 @@ describe("task run contract + parser (R27)", () => {
 // =========================================================================
 
 describe("task run routing engine (R6, R10, R11)", () => {
+	test("every advertised intent selects its declared lane or reports that exact lane unavailable", () => {
+		const registry = baselineRegistry();
+
+		for (const definition of BROWSER_USE_TASK_INTENT_DEFINITIONS) {
+			const preferred = definition.preferred_adapter;
+			if (preferred === undefined) {
+				throw new Error(`advertised intent ${definition.task_intent} has no preferred adapter`);
+			}
+			const routed = routeTaskRun({
+				intent: definition.task_intent,
+				registry,
+				handoffAdapter: preferred,
+				capabilityCovers: laneCapabilityCovers,
+			});
+
+			if (
+				definition.task_intent === "trace-inspection" ||
+				definition.task_intent === "http-replay"
+			) {
+				expect(routed).toMatchObject({
+					ok: false,
+					refusal: {
+						code: "no_admissible_lane",
+						lane_id: "playwright-cdp",
+					},
+				});
+				continue;
+			}
+
+			expect(routed).toMatchObject({
+				ok: true,
+				route: {
+					intent: definition.task_intent,
+					lane_id: preferred,
+					source: "intent-preferred",
+					required_capability:
+						BROWSER_USE_TASK_INTENT_REQUIRED_CAPABILITY[
+							definition.task_intent
+						],
+				},
+			});
+		}
+	});
+
 	test("the required-capability policy only names registered live-lane capabilities", () => {
 		for (const [intent, capability] of Object.entries(
 			BROWSER_USE_TASK_INTENT_REQUIRED_CAPABILITY,
@@ -278,7 +322,7 @@ describe("task run routing engine (R6, R10, R11)", () => {
 		if (!routed.ok) expect(routed.refusal.code).toBe("handoff_lane_mismatch");
 	});
 
-	test("an explicit override to a not-installed lane fails closed (R10, AE3)", () => {
+	test("an explicit override to a lane lacking the intent capability fails closed", () => {
 		const routed = routeTaskRun({
 			intent: "routine-automation",
 			registry: baselineRegistry(),
@@ -287,7 +331,9 @@ describe("task run routing engine (R6, R10, R11)", () => {
 			capabilityCovers: laneCapabilityCovers,
 		});
 		expect(routed.ok).toBe(false);
-		if (!routed.ok) expect(routed.refusal.code).toBe("lane_not_installed");
+		if (!routed.ok) {
+			expect(routed.refusal.code).toBe("lane_override_inadmissible");
+		}
 	});
 
 	test("a rejected identity alias override fails closed, never mapped (R10)", () => {
@@ -357,6 +403,124 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(calls[0]?.join(" ")).toContain("tab list");
 	});
 
+	test("successful Playwright dispatch selects the intended tab and returns snapshot evidence", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{
+				stdout:
+					"### Page\n- Page URL: https://example.test/account\n### Snapshot\n- heading \"Account\"\n",
+			},
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.selected_lane).toBe("playwright-cdp");
+		expect((data.run as Record<string, unknown>).state).toBe("confirmed");
+		expect(calls.map((call) => call.slice(1))).toEqual([
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright",
+			],
+			["--session=browser-use-run-playwright", "tab-select", "1"],
+			["--session=browser-use-run-playwright", "snapshot"],
+			["--session=browser-use-run-playwright", "detach"],
+		]);
+	});
+
+	test("Playwright connection failure blocks the same run without adapter fallback", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-connect")),
+			"utf-8",
+		);
+		const { runtime } = taskRunRuntime(store.env, [
+			{ stdout: "", exitCode: 1 },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({
+			code: "task_run_connection_unstable",
+		});
+		expect((json.data as Record<string, unknown>).selected_lane).toBe(
+			"playwright-cdp",
+		);
+		expect(
+			(json.continuation as Record<string, unknown>).next_action_id,
+		).toBe("resume_shared_run");
+		expect(JSON.stringify(json)).not.toContain("agent-browser");
+	});
+
+	test("Playwright origin mismatch records not achieved and never switches lanes", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-origin")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{ stdout: "### Page\n- Page URL: https://other.test/account\n" },
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "locator-aria-assertion",
+				"--handoff", store.handoffPath,
+				"--tab", "2",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+		expect((json.data as Record<string, unknown>).lane_outcome).toBe(
+			"playwright_task_origin_refused",
+		);
+		expect(calls.at(-1)?.at(-1)).toBe("detach");
+		expect(JSON.stringify(json)).not.toContain("agent-browser");
+	});
+
 	// An unregistered --lane value (e.g. playwright-cli, not a registered adapter)
 	// is refused at the PARSER as a usage error before the live/dry-run split —
 	// the contract declares --lane as an enum of BROWSER_USE_LIVE_ADAPTERS, so a
@@ -382,7 +546,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(`${result.stdout}\n${result.stderr}`).toContain("--lane must be one of:");
 	});
 
-	test("routing to the not-installed playwright lane returns the adapter-install continuation (R10)", async () => {
+	test("an override cannot route an intent through a Playwright lane lacking its capability", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
 			[
@@ -397,9 +561,11 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		);
 		expect(result.exitCode).toBe(20);
 		const json = parseJson(result.stdout);
-		expect(json.error).toMatchObject({ code: "task_run_lane_not_installed" });
+		expect(json.error).toMatchObject({
+			code: "task_run_lane_override_inadmissible",
+		});
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"install_lane_adapter",
+			"choose_admissible_lane",
 		);
 		// No lane was substituted.
 		expect(JSON.stringify(json)).not.toContain("agent-browser");

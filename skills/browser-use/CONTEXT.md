@@ -15,6 +15,10 @@ The Browser Adapter Router chain (Router CLI with prepare/route/report, Browser 
 The browser-work capability. It owns browser operational policy and Durable Browser Knowledge, including Item Bindings, Browser Runbooks, capture, and playback. It delegates proven connection to `browser-connect` and generic secret-access safety to `one-password`.
 _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill, owns all browser entry
 
+**Daily Driver Acceptance Proof**:
+The release-readiness claim that Browser Use can complete its intended everyday workflows through its public front door across supported repositories, Browser Adapters, authentication states, and Durable Browser Knowledge. A missing capability fails the claim; an unavailable environment records blocked evidence, never pass or skip.
+_Avoid_: smoke test, current-surface test, Command Entrypoint Integration Test, partial readiness
+
 **Warm Chrome**:
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser

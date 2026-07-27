@@ -37,7 +37,9 @@ describe("setup domain composition", () => {
 	});
 
 	test("boots a clean home through the production instruction child", async () => {
-		const root = await mkdtemp(join(tmpdir(), "setup-domains-real-child-"));
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "setup-domains-real-child-")),
+		);
 		const source = join(import.meta.dir, "../../..");
 		const home = join(root, "home");
 		const hooks = join(root, "hooks");
@@ -68,6 +70,45 @@ describe("setup domain composition", () => {
 		expect(result).toMatchObject({ state: "applied", station: "sync.applied", next_action: "setup_healthy" });
 		expect(await lstat(join(home, ".codex/AGENTS.md")).then((entry) => entry.isSymbolicLink())).toBe(true);
 		expect(result.findings.find((finding) => finding.id === "instruction_unhealthy")).toBeUndefined();
+		const browserUse = join(home, ".bun/bin/browser-use");
+		expect(await lstat(browserUse).then((entry) => entry.isSymbolicLink())).toBe(true);
+		const browserUseChild = Bun.spawn([browserUse, "task", "list", "--json", "--quiet"], {
+			cwd: root,
+			env: { ...process.env, HOME: home },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [browserUseExitCode, browserUseStdout, browserUseStderr] = await Promise.all([
+			browserUseChild.exited,
+			new Response(browserUseChild.stdout).text(),
+			new Response(browserUseChild.stderr).text(),
+		]);
+		expect(browserUseExitCode).toBe(0);
+		expect(browserUseStderr).toBe("");
+		expect(JSON.parse(browserUseStdout)).toMatchObject({
+			status: "ok",
+			data: { contract: "browser-use.task-intents" },
+		});
+		const runbookChild = Bun.spawn([browserUse, "runbook", "list", "--json", "--quiet"], {
+			cwd: root,
+			env: { ...process.env, HOME: home },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [runbookExitCode, runbookStdout, runbookStderr] = await Promise.all([
+			runbookChild.exited,
+			new Response(runbookChild.stdout).text(),
+			new Response(runbookChild.stderr).text(),
+		]);
+		expect(runbookExitCode).toBe(0);
+		expect(runbookStderr).toBe("");
+		expect(JSON.parse(runbookStdout)).toMatchObject({
+			status: "ok",
+			data: {
+				contract: "browser-use.runbook-catalog",
+				runbook_count: 1,
+			},
+		});
 	}, 30_000);
 
 	test("project scope performs zero user-domain probes", async () => {

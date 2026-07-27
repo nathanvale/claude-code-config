@@ -2,15 +2,18 @@
 	"mcpServers": {
 		"bun-runner": {
 			"command": "bunx",
-			"args": ["--bun", "@side-quest/bun-runner"]
+			"args": ["--bun", "@side-quest/bun-runner"],
+			"env": { "MCP_IDLE_EXIT_MS": "0" }
 		},
 		"biome-runner": {
 			"command": "bunx",
-			"args": ["--bun", "@side-quest/biome-runner"]
+			"args": ["--bun", "@side-quest/biome-runner"],
+			"env": { "MCP_IDLE_EXIT_MS": "0" }
 		},
 		"tsc-runner": {
 			"command": "bunx",
-			"args": ["--bun", "@side-quest/tsc-runner"]
+			"args": ["--bun", "@side-quest/tsc-runner"],
+			"env": { "MCP_IDLE_EXIT_MS": "0" }
 		},
 		"mcp-atlassian": {
 			"command": "${HOME}/code/dotfiles/bin/mcp-atlassian",

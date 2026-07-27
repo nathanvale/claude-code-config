@@ -308,15 +308,55 @@ describe("bin topology", () => {
 		expect(removable.findings).toContainEqual(expect.objectContaining({ id: "unsafe_root" }));
 	});
 
-	test("degrades a missing bin directory to a non-blocking advisory", async () => {
+	test("creates a missing safe bin directory while installing declared bins", async () => {
 		const fixture = await binFixture({ withBinDir: false });
 		await writeTool(fixture);
 
 		const plan = await inspectBinTopology(fixture.source, fixture.home, fixture.options);
 
-		expect(plan.operations).toEqual([]);
 		expect(plan.findings).toEqual([]);
-		expect(plan.advisories).toContainEqual(expect.objectContaining({ id: "bin_dir_unavailable", path: fixture.binDir }));
+		expect(plan.advisories).toEqual([]);
+		expect(plan.operations).toEqual([expect.objectContaining({
+			name: "tool",
+			destination: join(fixture.binDir, "tool"),
+			action: "create",
+		})]);
+
+		const result = await applyBinTopology(plan);
+		expect(result).toMatchObject({
+			applied: [join(fixture.binDir, "tool")],
+			deferred: [],
+			failed: [],
+		});
+		expect(await readlink(join(fixture.binDir, "tool"))).toBe(await realpath(join(fixture.source, "runtime/tool/src/cli.ts")));
+	});
+
+	test("defers every bin when the missing parent escapes home after planning", async () => {
+		const fixture = await binFixture({ withBinDir: false });
+		await writeTool(fixture);
+		const plan = await inspectBinTopology(fixture.source, fixture.home, fixture.options);
+		const outside = join(fixture.root, "outside-bun");
+		await mkdir(join(outside, "bin"), { recursive: true });
+		await symlink(outside, join(fixture.home, ".bun"));
+
+		const result = await applyBinTopology(plan);
+
+		expect(result.applied).toEqual([]);
+		expect(result.deferred).toEqual([join(fixture.binDir, "tool")]);
+		expect(await lstat(join(outside, "bin/tool")).then(() => true, () => false)).toBe(false);
+	});
+
+	test("reports every bin failed when a foreign file blocks directory creation after planning", async () => {
+		const fixture = await binFixture({ withBinDir: false });
+		await writeTool(fixture);
+		const plan = await inspectBinTopology(fixture.source, fixture.home, fixture.options);
+		await writeFile(join(fixture.home, ".bun"), "foreign\n");
+
+		const result = await applyBinTopology(plan);
+
+		expect(result.applied).toEqual([]);
+		expect(result.failed).toEqual([join(fixture.binDir, "tool")]);
+		expect(await Bun.file(join(fixture.home, ".bun")).text()).toBe("foreign\n");
 	});
 
 	test("stays quiet when nothing declares a bin and no bin dir exists", async () => {
@@ -343,11 +383,14 @@ describe("bin topology", () => {
 		expect(onPath.advisories).toEqual([]);
 	});
 
-	test("keeps doctor healthy when only bin advisories are present", async () => {
-		const fixture = await binFixture({ withBinDir: false });
+	test("keeps doctor healthy when only PATH advisories are present", async () => {
+		const fixture = await binFixture();
 		await writeTool(fixture);
 
-		const plan = await inspectBinTopology(fixture.source, fixture.home, fixture.options);
+		const plan = await inspectBinTopology(fixture.source, fixture.home, {
+			...fixture.options,
+			pathEnv: "/usr/bin:/bin",
+		});
 		expect(plan.advisories).not.toHaveLength(0);
 
 		const diagnosis = diagnoseFindings(plan.advisories);

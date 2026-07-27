@@ -26,6 +26,7 @@ import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
 export const BROWSER_USE_TRANSPORT_ADAPTERS = [
 	"chrome-devtools-mcp",
 	"agent-browser",
+	"playwright-cdp",
 ] as const;
 
 // Adapters with an implemented Browser Target Discovery page-listing transport
@@ -683,8 +684,8 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// The selected lane cannot consume the verified Browser Connect handoff
 	// (R3/R10/R11, AE3): browser-use refuses rather than discover or substitute.
 	"task_run_handoff_lane_mismatch",
-	// A registered lane whose native execution Interface is not implemented on
-	// this host (playwright-cdp): adapter-not-installed repair continuation (R10).
+	// A registered lane whose native execution Interface is not implemented:
+	// adapter-not-installed repair continuation (R10).
 	"task_run_lane_not_installed",
 	// The lane's execution interface is registered but browser-use has no
 	// dispatch binding for it yet (a lane implemented in the registry table but
