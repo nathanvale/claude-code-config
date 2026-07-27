@@ -740,6 +740,8 @@ async function discoverAgentBrowserPages(
 	runtime: BrowserUseRuntime,
 	facts: EnvelopeTransportFacts,
 ): Promise<DiscoverResult> {
+	// A parse/protocol failure the operator can only inspect: retry after reading
+	// the diagnostic, never a dependency install or a browser re-entry.
 	const transportFailure = (message: string): DiscoverResult => ({
 		ok: false,
 		failure: {
@@ -751,11 +753,20 @@ async function discoverAgentBrowserPages(
 		},
 	});
 	// The run id becomes the session name in the spawn argv; guard it before it
-	// reaches the subprocess, exactly as the native executor does.
+	// reaches the subprocess, exactly as the native executor does. An unsafe run
+	// id is a caller-input fault, not a diagnosable transport failure, so it
+	// routes to change_input like the other invalid-input discovery failures.
 	if (!SAFE_RUN_ID.test(facts.runId)) {
-		return transportFailure(
-			"The agent-browser run id is not a safe session identifier.",
-		);
+		return {
+			ok: false,
+			failure: {
+				code: "target_discovery_transport_failed",
+				message: "The agent-browser run id is not a safe session identifier.",
+				actionId: "change_target_discovery_input",
+				exitCode: TARGET_DISCOVERY_EXIT_CODE,
+				recoverability: "change_input",
+			},
+		};
 	}
 	let result: Awaited<ReturnType<BrowserUseRuntime["runCommand"]>> | undefined;
 	try {
@@ -773,9 +784,40 @@ async function discoverAgentBrowserPages(
 			timeoutMs: AGENT_BROWSER_DISCOVERY_TIMEOUT_MS,
 		});
 	} catch {
+		// A throw here is a spawn failure (e.g. the pinned probe is missing):
+		// route to dependency recovery, matching the chrome-devtools
+		// dependency_missing mapping, not a generic retry.
+		return {
+			ok: false,
+			failure: {
+				code: "target_discovery_dependency_missing",
+				message:
+					"The agent-browser adapter could not be started to list tabs; the pinned probe may be missing.",
+				actionId: "configure_target_dependency",
+				exitCode: TARGET_DISCOVERY_DEPENDENCY_EXIT_CODE,
+				recoverability: "repair_state",
+			},
+		};
+	}
+	if (result === undefined) {
 		return transportFailure("The agent-browser tab list call failed.");
 	}
-	if (result === undefined || result.exitCode !== 0 || result.timedOut === true) {
+	// A timeout has its own taxonomy so the operator can distinguish a slow
+	// endpoint from a hard failure, mirroring the chrome-devtools timeout path.
+	if (result.timedOut === true) {
+		return {
+			ok: false,
+			failure: {
+				code: "target_discovery_transport_timeout",
+				message:
+					"The agent-browser tab list call timed out before the browser targets were listed.",
+				actionId: "inspect_target_discovery_diagnostics",
+				exitCode: TARGET_DISCOVERY_EXIT_CODE,
+				recoverability: "retry",
+			},
+		};
+	}
+	if (result.exitCode !== 0) {
 		return transportFailure("The agent-browser tab list call failed.");
 	}
 	if (result.stdout.trim() === "") return { ok: true, pages: [] };
@@ -787,7 +829,26 @@ async function discoverAgentBrowserPages(
 			"The agent-browser tab list call returned unparsable output.",
 		);
 	}
+	// agent-browser reports a dead/flaky CDP link as exit 0 with
+	// {success:false} (the native lane reads the same envelope as a connection
+	// signal). That is a transport failure, NOT an empty candidate set: letting
+	// it fall through to an empty page list would tell the caller "no targets,
+	// open a tab" when the real repair is to re-mint the handoff. Fail here
+	// before the mapper collapses it to [].
+	if (!agentBrowserEnvelopeSucceeded(parsed)) {
+		return transportFailure(
+			"The agent-browser tab list call reported a failure response.",
+		);
+	}
 	return { ok: true, pages: extractAgentBrowserPages(parsed) };
+}
+
+// True only for a well-formed agent-browser envelope that reports success. A
+// non-object, a missing flag, or an explicit {success:false} is a transport
+// failure, not an empty tab set.
+function agentBrowserEnvelopeSucceeded(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	return (value as Record<string, unknown>).success === true;
 }
 
 // Map the agent-browser tab-list envelope ({success:true, data:{tabs:[…]}})

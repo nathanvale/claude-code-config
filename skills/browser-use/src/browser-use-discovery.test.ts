@@ -963,9 +963,94 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 		});
 		expect(discovery.ok).toBe(false);
 		if (!discovery.ok) {
-			expect(discovery.failure.code).toBe("target_discovery_transport_failed");
+			// An unsafe run id is a caller-input fault, not a diagnosable transport
+			// failure: it must route to change_input, not retry-after-diagnostics.
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				actionId: "change_target_discovery_input",
+				recoverability: "change_input",
+			});
 		}
 		expect(calls).toHaveLength(0);
+	});
+
+	test("a spawn failure routes to dependency recovery, not a generic retry", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => {
+				throw new Error("spawn agent-browser ENOENT");
+			},
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_dependency_missing",
+				actionId: "configure_target_dependency",
+				recoverability: "repair_state",
+			});
+		}
+	});
+
+	test("a timed-out tab-list call is a distinct transport timeout", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				timedOut: true,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_timeout",
+				recoverability: "retry",
+			});
+		}
+	});
+
+	test("unparsable tab-list output fails closed as a transport failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: "not valid json{{{",
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure.code).toBe("target_discovery_transport_failed");
+		}
+	});
+
+	test("a success:false envelope is a transport failure, never an empty tab set", async () => {
+		// agent-browser reports a dead/flaky CDP link as exit 0 with
+		// {success:false}. That must surface as a transport failure the caller
+		// can retry, not target_discovery_no_candidates ("open a tab") — even
+		// when the failure envelope still carries a populated tabs array.
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify({
+					success: false,
+					error: "cdp websocket connect failed",
+					data: { tabs: [{ tabId: "T-1", url: "http://127.0.0.1:8912/" }] },
+				}),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				recoverability: "retry",
+			});
+		}
 	});
 });
 
