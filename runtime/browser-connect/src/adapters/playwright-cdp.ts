@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
 import {
@@ -42,13 +43,39 @@ export const PLAYWRIGHT_CDP_DIST_INTEGRITY =
 	"sha512-VBw6y3p8eqOqmjKg07IkWSPGKJkpIhMRNDFI6DOYsDD6fAfcI1XYEWMLWyhSZQ0B/Oc2KN49eq4XqE64PUPHBg==" as const;
 
 /**
- * Inspectable session used only by the Browser Connect attachment probe.
+ * Fixed prefix for the inspectable session used only by the Browser Connect
+ * attachment probe, and for the default operational session injected into the
+ * Verified Handoff Envelope.
  *
- * The probe detaches this session before returning; downstream consumers create
+ * The probe derives a UNIQUE session name per invocation from this prefix (see
+ * {@link deriveProbeSessionName}) so two concurrent `connect playwright-cdp`
+ * runs never collide in Playwright CLI's named-session registry — one probe's
+ * detach can never tear down another probe's attached session. The probe
+ * detaches its derived session before returning; downstream consumers create
  * their own operation session from the Verified Handoff Envelope.
  */
-export const PLAYWRIGHT_CDP_SESSION_NAME =
+export const PLAYWRIGHT_CDP_SESSION_PREFIX =
 	"browser-connect-playwright-cdp-probe" as const;
+
+/**
+ * Derive a probe session name unique to one probe invocation.
+ *
+ * Combines {@link PLAYWRIGHT_CDP_SESSION_PREFIX} with the current process id and
+ * a short random token so concurrent probes in separate processes AND repeated
+ * probes in one process never share a named session. The prefix stays intact so
+ * the name is still recognizable and greppable.
+ */
+export function deriveProbeSessionName(): string {
+	return `${PLAYWRIGHT_CDP_SESSION_PREFIX}-${process.pid}-${randomBytes(4).toString("hex")}`;
+}
+
+/** Build the named-session CDP attach argv for a given endpoint and session. */
+function buildAttachArgv(
+	endpoint: BrowserConnectVerifiedEndpoint,
+	sessionName: string,
+): readonly string[] {
+	return ["attach", `--cdp=${endpoint.http}`, `--session=${sessionName}`];
+}
 
 /**
  * Exact attach-help lines required before Browser Connect invokes attach.
@@ -155,11 +182,12 @@ async function runProbeCommand(
 async function detachProbeSession(
 	runtime: AdapterRuntime,
 	executablePath: string,
+	sessionName: string,
 ): Promise<ProbeCommandOutcome> {
 	return runProbeCommand(
 		runtime,
 		executablePath,
-		[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "detach"],
+		[`--session=${sessionName}`, "detach"],
 		"named detach",
 	);
 }
@@ -231,13 +259,7 @@ export const playwrightCdpDefinition = {
 	},
 
 	inject(endpoint: BrowserConnectVerifiedEndpoint): AdapterInjection {
-		return {
-			argv: [
-				"attach",
-				`--cdp=${endpoint.http}`,
-				`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
-			],
-		};
+		return { argv: buildAttachArgv(endpoint, PLAYWRIGHT_CDP_SESSION_PREFIX) };
 	},
 
 	async probeAttachment(
@@ -254,6 +276,10 @@ export const playwrightCdpDefinition = {
 				detail: `${PLAYWRIGHT_CDP_EXECUTABLE} could not be resolved for the attachment probe.`,
 			};
 		}
+
+		// One session name for this whole probe invocation, unique across
+		// concurrent probes, reused by attach → snapshot → detach so they agree.
+		const sessionName = deriveProbeSessionName();
 
 		const attachHelp = await runProbeCommand(
 			runtime,
@@ -310,11 +336,11 @@ export const playwrightCdpDefinition = {
 		const attach = await runProbeCommand(
 			runtime,
 			resolution.path,
-			this.inject(endpoint).argv,
+			buildAttachArgv(endpoint, sessionName),
 			"named CDP attach",
 		);
 		if (!attach.ok) {
-			await detachProbeSession(runtime, resolution.path);
+			await detachProbeSession(runtime, resolution.path, sessionName);
 			return {
 				attached: false,
 				failureClass: "attachment-failed",
@@ -326,10 +352,10 @@ export const playwrightCdpDefinition = {
 		const snapshot = await runProbeCommand(
 			runtime,
 			resolution.path,
-			[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "snapshot"],
+			[`--session=${sessionName}`, "snapshot"],
 			"read-only snapshot",
 		);
-		const detach = await detachProbeSession(runtime, resolution.path);
+		const detach = await detachProbeSession(runtime, resolution.path, sessionName);
 		if (!snapshot.ok) {
 			return {
 				attached: false,

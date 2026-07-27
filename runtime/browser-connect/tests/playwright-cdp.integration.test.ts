@@ -11,8 +11,20 @@ import {
 } from "@side-quest/cli-test-fixtures";
 import {
 	PLAYWRIGHT_CDP_PINNED_VERSION,
-	PLAYWRIGHT_CDP_SESSION_NAME,
+	PLAYWRIGHT_CDP_SESSION_PREFIX,
 } from "../src/adapters/playwright-cdp.ts";
+
+/** Per-invocation probe session: fixed prefix + pid + short random token. */
+const PROBE_SESSION_PATTERN = new RegExp(
+	`^${PLAYWRIGHT_CDP_SESSION_PREFIX}-\\d+-[0-9a-f]{8}$`,
+);
+
+/** Extract the value of the `--session=<name>` token from a command's argv. */
+function sessionOf(args: readonly string[]): string | undefined {
+	return args
+		.find((arg) => arg.startsWith("--session="))
+		?.slice("--session=".length);
+}
 
 const CLI_PATH = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const SRC_DIR = dirname(CLI_PATH);
@@ -72,7 +84,7 @@ process.exit(exitCode);
 
 function fakePlaywrightCliSource(): string {
 	return `#!${process.execPath}
-import { appendFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const logPath = process.env.PLAYWRIGHT_FAKE_LOG;
@@ -106,7 +118,8 @@ if (args[0] === "attach") {
 }
 const session = args.find(arg => arg.startsWith("--session="))?.slice("--session=".length);
 if (args.at(-1) === "snapshot") {
-	if (!existsSync(statePath) || session !== ${JSON.stringify(PLAYWRIGHT_CDP_SESSION_NAME)})
+	// The snapshot must target the SAME named session the attach opened.
+	if (!existsSync(statePath) || session !== readFileSync(statePath, "utf8"))
 		process.exit(9);
 	console.log("snapshot ok");
 	process.exit(0);
@@ -191,18 +204,19 @@ describe("playwright-cdp process-boundary attachment", () => {
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line) as string[]);
-		expect(commands).toEqual([
-			["--version"],
-			["attach", "--help"],
-			["detach", "--help"],
-			[
-				"attach",
-				`--cdp=${endpoint}`,
-				`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
-			],
-			[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "snapshot"],
-			[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "detach"],
-		]);
+		// Command SHAPES are fixed; the session token is derived per invocation.
+		expect(commands[0]).toEqual(["--version"]);
+		expect(commands[1]).toEqual(["attach", "--help"]);
+		expect(commands[2]).toEqual(["detach", "--help"]);
+		expect(commands[3]?.slice(0, 2)).toEqual(["attach", `--cdp=${endpoint}`]);
+		expect(commands[4]?.[1]).toBe("snapshot");
+		expect(commands[5]?.[1]).toBe("detach");
+
+		// One derived session name threads through attach → snapshot → detach.
+		const attachSession = sessionOf(commands[3] ?? []);
+		expect(attachSession).toMatch(PROBE_SESSION_PATTERN);
+		expect(sessionOf(commands[4] ?? [])).toBe(attachSession);
+		expect(sessionOf(commands[5] ?? [])).toBe(attachSession);
 		expect(commands.flat()).not.toContain("open");
 		expect(commands.flat()).not.toContain("install-browser");
 

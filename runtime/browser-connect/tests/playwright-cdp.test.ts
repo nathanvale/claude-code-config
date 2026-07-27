@@ -8,7 +8,7 @@ import {
 	PLAYWRIGHT_CDP_EXECUTABLE,
 	PLAYWRIGHT_CDP_PINNED_VERSION,
 	PLAYWRIGHT_CDP_RELEASE_URL,
-	PLAYWRIGHT_CDP_SESSION_NAME,
+	PLAYWRIGHT_CDP_SESSION_PREFIX,
 	playwrightCdpDefinition,
 } from "../src/adapters/playwright-cdp.ts";
 import {
@@ -24,6 +24,18 @@ const ENDPOINT: BrowserConnectVerifiedEndpoint = {
 	ws: "ws://127.0.0.1:41337/devtools/browser/verified",
 };
 const EXECUTABLE_PATH = "/opt/adapters/bin/playwright-cli";
+
+/** Per-invocation probe session: fixed prefix + pid + short random token. */
+const PROBE_SESSION_PATTERN = new RegExp(
+	`^${PLAYWRIGHT_CDP_SESSION_PREFIX}-\\d+-[0-9a-f]{8}$`,
+);
+
+/** Extract the value of the `--session=<name>` token from a command's argv. */
+function sessionOf(args: readonly string[]): string | undefined {
+	return args
+		.find((arg) => arg.startsWith("--session="))
+		?.slice("--session=".length);
+}
 
 function runtimeWith(
 	respond: (input: AdapterCommandInput) => AdapterCommandResult,
@@ -93,7 +105,7 @@ describe("playwright-cdp Adapter Definition", () => {
 			argv: [
 				"attach",
 				`--cdp=${ENDPOINT.http}`,
-				`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
+				`--session=${PLAYWRIGHT_CDP_SESSION_PREFIX}`,
 			],
 		});
 		expect(playwrightCdpDefinition.inject(ENDPOINT).argv).not.toContain("open");
@@ -187,17 +199,23 @@ describe("playwright-cdp Adapter Definition", () => {
 			evidence:
 				"playwright-cli attached to the verified CDP endpoint, snapshotted read-only, and detached without closing the browser.",
 		});
-		expect(commands.slice(1).map((command) => command.args)).toEqual([
-			["attach", "--help"],
-			["detach", "--help"],
-			[
-				"attach",
-				`--cdp=${ENDPOINT.http}`,
-				`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
-			],
-			[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "snapshot"],
-			[`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`, "detach"],
+		const probeCommands = commands.slice(1).map((command) => command.args);
+		// The two help probes and the attach/snapshot/detach command SHAPES are
+		// fixed; the session token inside them is derived per invocation.
+		expect(probeCommands[0]).toEqual(["attach", "--help"]);
+		expect(probeCommands[1]).toEqual(["detach", "--help"]);
+		expect(probeCommands[2]?.slice(0, 2)).toEqual([
+			"attach",
+			`--cdp=${ENDPOINT.http}`,
 		]);
+		expect(probeCommands[3]?.[1]).toBe("snapshot");
+		expect(probeCommands[4]?.[1]).toBe("detach");
+
+		// Same derived session name threads through attach, snapshot, and detach.
+		const attachSession = sessionOf(probeCommands[2] ?? []);
+		expect(attachSession).toMatch(PROBE_SESSION_PATTERN);
+		expect(sessionOf(probeCommands[3] ?? [])).toBe(attachSession);
+		expect(sessionOf(probeCommands[4] ?? [])).toBe(attachSession);
 	});
 
 	test("help drift fails closed before attach or implicit browser launch", async () => {
@@ -257,10 +275,9 @@ describe("playwright-cdp Adapter Definition", () => {
 			"explicit-cdp",
 		);
 		expect(result.attached).toBe(false);
-		expect(commands.at(-1)?.args).toEqual([
-			`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
-			"detach",
-		]);
+		const detachArgs = commands.at(-1)?.args ?? [];
+		expect(detachArgs[1]).toBe("detach");
+		expect(sessionOf(detachArgs)).toMatch(PROBE_SESSION_PATTERN);
 	});
 
 	test("snapshot failure still detaches the named session", async () => {
@@ -276,10 +293,17 @@ describe("playwright-cdp Adapter Definition", () => {
 			"explicit-cdp",
 		);
 		expect(result.attached).toBe(false);
-		expect(commands.at(-1)?.args).toEqual([
-			`--session=${PLAYWRIGHT_CDP_SESSION_NAME}`,
-			"detach",
-		]);
+		const detachArgs = commands.at(-1)?.args ?? [];
+		expect(detachArgs[1]).toBe("detach");
+		// Detach reuses the SAME derived session the attach opened.
+		const attachSession = sessionOf(
+			commands.find(
+				(command) =>
+					command.args[0] === "attach" && !command.args.includes("--help"),
+			)?.args ?? [],
+		);
+		expect(attachSession).toMatch(PROBE_SESSION_PATTERN);
+		expect(sessionOf(detachArgs)).toBe(attachSession);
 	});
 
 	test("detach failure prevents a verified handoff", async () => {
