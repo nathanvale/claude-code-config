@@ -1,5 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -35,6 +41,18 @@ const malformedYamlFixtureRoot = join(
 	"fixtures",
 	"browser-use-migration",
 	"malformed-yaml",
+);
+const nonUtf8FixtureRoot = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"fixtures",
+	"browser-use-migration",
+	"non-utf8-corpus",
+);
+const blockScalarYamlFixtureRoot = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"fixtures",
+	"browser-use-migration",
+	"block-scalar-yaml",
 );
 
 afterAll(() => {
@@ -392,15 +410,18 @@ describe("clean-break migration public commands", () => {
 				)
 			).exitCode,
 		).toBe(0);
+		// A source that became unreadable after the snapshot fails apply's
+		// byte-hash drift check (apply reads source bytes via hashFile, then
+		// byte-copies), so the throw surfaces as the typed drift refusal.
 		const throwingFs = {
 			...realFs,
-			async readTextFile(path: string) {
+			async hashFile(path: string) {
 				if (path === targetPath) {
 					const error = new Error(`EACCES: permission denied, open '${path}'`);
 					(error as Error & { code: string }).code = "EACCES";
 					throw error;
 				}
-				return realFs.readTextFile(path);
+				return realFs.hashFile(path);
 			},
 		};
 		const applied = await runForTest(
@@ -451,6 +472,156 @@ describe("clean-break migration public commands", () => {
 		expect(applied.exitCode).toBe(20);
 		expect(parseJson(applied.stdout).error).toMatchObject({
 			code: "migration_collision",
+		});
+	});
+
+	test("apply stages a non-UTF-8 source without a spurious drift, and a genuine byte change still drifts", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+		// The .txt fixture holds a raw 0xFF byte, so its byte hash (expected_hash)
+		// differs from a sha256 of the UTF-8-decoded text. Hashing decoded text at
+		// apply time would report an unclearable migration_source_drift.
+		for (const phase of ["inventory", "plan"] as const) {
+			expect(
+				(
+					await runForTest(
+						["migration", phase, "--source", nonUtf8FixtureRoot, "--json"],
+						runtime,
+					)
+				).exitCode,
+			).toBe(0);
+		}
+		const applied = await runForTest(
+			["migration", "apply", "--source", nonUtf8FixtureRoot, "--json"],
+			runtime,
+		);
+		expect(applied.exitCode).toBe(0);
+		expect(parseJson(applied.stdout).data).toMatchObject({
+			phase: "staged",
+			activation_state: "unchanged",
+		});
+
+		// verify re-hashes the staged file bytes against expected_hash (raw source
+		// bytes). A UTF-8-decoded stage would have written U+FFFD bytes, so verify
+		// would refuse with an unclearable migration_verify_failed. A byte-faithful
+		// stage must verify CLEAN.
+		const verified = await runForTest(
+			["migration", "verify", "--source", nonUtf8FixtureRoot, "--json"],
+			runtime,
+		);
+		expect(verified.exitCode).toBe(0);
+		expect(parseJson(verified.stdout).data).toMatchObject({
+			phase: "verified",
+			activation_state: "unchanged",
+		});
+
+		// The staged file's bytes must equal the source bytes VERBATIM (a
+		// migration must not corrupt non-UTF-8 bytes). Locate the single staged
+		// file under the generations tree and byte-compare it to the fixture.
+		const stagedPaths = await openBrowserUsePaths(
+			createDefaultPlatformFs(),
+			xdg.env,
+		);
+		if (!stagedPaths.ok) throw new Error(stagedPaths.refusal.code);
+		const stagedFiles: string[] = [];
+		const walkStaged = (dir: string): void => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const child = join(dir, entry.name);
+				if (entry.isDirectory()) walkStaged(child);
+				else if (entry.isFile()) stagedFiles.push(child);
+			}
+		};
+		walkStaged(stagedPaths.paths.state.generationsDir);
+		const sourceBytes = readFileSync(join(nonUtf8FixtureRoot, "note.txt"));
+		expect(
+			stagedFiles.some((path) => readFileSync(path).equals(sourceBytes)),
+		).toBe(true);
+
+		// Genuine drift: a real byte change to the staged source after freeze must
+		// still refuse with migration_source_drift.
+		const driftSource = join(xdg.base, "non-utf8-drift");
+		mkdirSync(driftSource, { recursive: true, mode: 0o700 });
+		const driftTarget = join(driftSource, "note.txt");
+		writeFileSync(driftTarget, Buffer.from([0x61, 0xff, 0x0a]));
+		const driftRuntime = makeRuntime({ env: xdg.env });
+		for (const phase of ["inventory", "plan"] as const) {
+			expect(
+				(
+					await runForTest(
+						["migration", phase, "--source", driftSource, "--json"],
+						driftRuntime,
+					)
+				).exitCode,
+			).toBe(0);
+		}
+		writeFileSync(driftTarget, Buffer.from([0x62, 0xff, 0x0a]));
+		const drifted = await runForTest(
+			["migration", "apply", "--source", driftSource, "--json"],
+			driftRuntime,
+		);
+		expect(drifted.exitCode).toBe(20);
+		expect(parseJson(drifted.stdout).error).toMatchObject({
+			code: "migration_source_drift",
+		});
+	});
+
+	test("plan does not read block-scalar content lines as duplicate mapping keys", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+		// notes.yml carries a `|` block scalar whose literal content repeats
+		// `status: ok`; those are content lines, not duplicate keys.
+		expect(
+			(
+				await runForTest(
+					[
+						"migration",
+						"inventory",
+						"--source",
+						blockScalarYamlFixtureRoot,
+						"--json",
+					],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", blockScalarYamlFixtureRoot, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(0);
+		const dispositions = (
+			parseJson(planned.stdout).data as Record<string, unknown>
+		).dispositions as Array<Record<string, unknown>>;
+		expect(
+			dispositions.find((row) => row.source_relative_path === "notes.yml")
+				?.disposition,
+		).toBe("stage");
+
+		// The genuine duplicate-key fixture must still refuse.
+		const dupRuntime = makeRuntime({ env: xdg.env });
+		expect(
+			(
+				await runForTest(
+					[
+						"migration",
+						"inventory",
+						"--source",
+						duplicateYamlFixtureRoot,
+						"--json",
+					],
+					dupRuntime,
+				)
+			).exitCode,
+		).toBe(0);
+		const dupPlanned = await runForTest(
+			["migration", "plan", "--source", duplicateYamlFixtureRoot, "--json"],
+			dupRuntime,
+		);
+		expect(dupPlanned.exitCode).toBe(20);
+		expect(parseJson(dupPlanned.stdout).error).toMatchObject({
+			code: "migration_yaml_duplicate_key",
 		});
 	});
 });

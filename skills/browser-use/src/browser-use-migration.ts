@@ -242,10 +242,24 @@ export async function readBrowserUseMigrationStatus(
 	}
 }
 
+function lineIndent(rawLine: string): number {
+	return (rawLine.match(/^\s*/)?.[0]?.replaceAll("\t", "  ").length ?? 0);
+}
+
 function duplicateYamlKey(contents: string): string | undefined {
 	const scopes: Array<{ indent: number; keys: Set<string> }> = [];
+	// When a mapping value is a block scalar (`|`, `>` with optional chomping or
+	// indent indicators), every following line more indented than the key is
+	// literal content — never a nested mapping key. Track that indent so those
+	// content lines (which may themselves read as `key: value`) are skipped
+	// until indentation returns to the key's column or shallower.
+	let blockScalarIndent: number | undefined;
 	for (const rawLine of contents.split(/\r?\n/)) {
 		if (/^\s*(?:#.*)?$/.test(rawLine)) continue;
+		if (blockScalarIndent !== undefined) {
+			if (lineIndent(rawLine) > blockScalarIndent) continue;
+			blockScalarIndent = undefined;
+		}
 		const matched = rawLine.match(
 			/^(\s*)(?:-\s+)?(?:"([^"]+)"|'([^']+)'|([^:#][^:]*?))\s*:(?:\s|$)/,
 		);
@@ -268,6 +282,12 @@ function duplicateYamlKey(contents: string): string | undefined {
 		const key = (matched[2] ?? matched[3] ?? matched[4] ?? "").trim();
 		if (scope.keys.has(key)) return key;
 		scope.keys.add(key);
+		// A `|`/`>` block-scalar value opens a literal region indented deeper than
+		// this key; quoted scalars stay on the same line and open nothing.
+		const value = rawLine.slice(matched[0].length);
+		if (/^[|>][+-]?\d*[+-]?\s*(?:#.*)?$/.test(value.trim())) {
+			blockScalarIndent = effectiveIndent;
+		}
 	}
 	return undefined;
 }
@@ -595,14 +615,18 @@ export async function applyBrowserUseMigration(
 			"every frozen source entry needs one complete disposition before apply.",
 		);
 	}
-	const files: Array<{ relPath: string; contents: string }> = [];
+	const files: Array<{ relPath: string; copyFromSource: string }> = [];
 	for (const disposition of standing.state.dispositions) {
 		if (disposition.disposition !== "stage") continue;
-		let contents: string;
+		const sourcePath = join(frozen.root, disposition.source_relative_path);
+		// Drift check is byte-vs-byte: expected_hash was set at inventory time
+		// from fs.hashFile (raw bytes), so re-hash the raw bytes here. Hashing
+		// UTF-8-decoded text instead would misfire on any non-UTF-8 source, whose
+		// U+FFFD replacement chars hash differently than the bytes on disk and
+		// would report a spurious, unclearable migration_source_drift.
+		let sourceHash: string;
 		try {
-			contents = await deps.fs.readTextFile(
-				join(frozen.root, disposition.source_relative_path),
-			);
+			sourceHash = await deps.fs.hashFile(sourcePath);
 		} catch {
 			// A staged source file readable at snapshot time became unreadable
 			// (ENOENT/EACCES/EISDIR) before this loop: return the typed drift
@@ -612,15 +636,20 @@ export async function applyBrowserUseMigration(
 				"a source file became unreadable after the frozen snapshot.",
 			);
 		}
-		if (sha256(contents) !== disposition.expected_hash) {
+		if (sourceHash !== disposition.expected_hash) {
 			return migrationFailure(
 				"migration_source_drift",
 				"a staged source file no longer matches its expected hash.",
 			);
 		}
+		// Stage a BYTE-FAITHFUL copy of the source, not a UTF-8-decoded text
+		// re-write. A non-UTF-8 source (arbitrary bytes in a .txt/.json) survives
+		// verbatim, so the staged file's bytes equal expected_hash and verify's
+		// hashFile(stagedPath) === expected_hash holds. Reading text here would
+		// lossily map non-UTF-8 bytes to U+FFFD and permanently break verify.
 		files.push({
 			relPath: disposition.logical_destination_id as string,
-			contents,
+			copyFromSource: sourcePath,
 		});
 	}
 	const generationId = `generation-${standing.state.snapshot_digest?.slice(0, 16)}`;

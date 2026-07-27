@@ -1045,6 +1045,26 @@ async function exportArtifactUnderLock(
 
 // --- Immutable generation staging + snapshots (AE12 substrate) ----------------
 
+/**
+ * One file to stage into a generation. Two byte-faithful forms:
+ *
+ * - `{ relPath, contents }` — inline UTF-8 text. The staged bytes are the
+ *   UTF-8 encoding of `contents`; the manifest per-file hash is the hash of
+ *   those written bytes (identical to `hashFile` of the staged path).
+ * - `{ relPath, copyFromSource }` — byte-for-byte copy of an existing file at
+ *   absolute path `copyFromSource`. The staged bytes equal the source bytes
+ *   VERBATIM (no UTF-8 decode), so a non-UTF-8 source is preserved without
+ *   loss. Use this form when the source hash was taken over raw file bytes.
+ *
+ * Both forms hash the WRITTEN BYTES for the manifest, so retention's
+ * `content_hash` basis and a byte-based caller expectation (e.g. migration's
+ * `expected_hash` from `fs.hashFile`) agree, and `readGenerationPairs`
+ * (which re-hashes on-disk bytes) verifies clean.
+ */
+export type StageGenerationFile =
+	| { relPath: string; contents: string; copyFromSource?: undefined }
+	| { relPath: string; copyFromSource: string; contents?: undefined };
+
 async function readGenerationPairs(
 	fs: BrowserUsePlatformFs,
 	root: string,
@@ -1081,14 +1101,15 @@ async function readGenerationPairs(
  * The content hash is sha256 over the sorted (relPath, fileHash) pairs.
  *
  * @param deps - Fs port, admitted paths, injected clock
- * @param input - Generation id and its files (relPath + contents)
+ * @param input - Generation id and its files (each a StageGenerationFile:
+ *   inline `contents` text or a byte-faithful `copyFromSource` copy)
  * @returns The generation record + verified-noop flag, or one typed failure
  */
 export async function stageGeneration(
 	deps: RetentionDeps,
 	input: {
 		generationId: string;
-		files: readonly { relPath: string; contents: string }[];
+		files: readonly StageGenerationFile[];
 	},
 ): Promise<
 	| { ok: true; record: BrowserUseGenerationPayload; verified_noop: boolean }
@@ -1107,7 +1128,7 @@ async function stageGenerationUnderLock(
 	deps: RetentionDeps,
 	input: {
 		generationId: string;
-		files: readonly { relPath: string; contents: string }[];
+		files: readonly StageGenerationFile[];
 	},
 	recordPath: string,
 ): Promise<
@@ -1117,10 +1138,19 @@ async function stageGenerationUnderLock(
 	const sorted = [...input.files].sort((a, b) =>
 		a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
 	);
-	const pairs = sorted.map((file) => {
+	// The manifest per-file hash is the hash of the BYTES that will land on
+	// disk, so it equals `hashFile(stagedPath)` used by readGenerationPairs and
+	// by byte-based callers. Inline text: hash its UTF-8 encoding (matches the
+	// bytes writeFileDurable persists). Byte copy: hash the source file bytes.
+	const pairs: (readonly [string, string])[] = [];
+	for (const file of sorted) {
 		safeRelSegments(file.relPath); // throws TypeError on an unsafe relPath
-		return [file.relPath, sha256Hex(file.contents)] as const;
-	});
+		const hash =
+			file.copyFromSource === undefined
+				? sha256Hex(file.contents)
+				: await deps.fs.hashFile(file.copyFromSource);
+		pairs.push([file.relPath, hash] as const);
+	}
 	for (let index = 1; index < pairs.length; index += 1) {
 		if (pairs[index]?.[0] === pairs[index - 1]?.[0]) {
 			throw new TypeError("generation files carry a duplicate relPath");
@@ -1170,6 +1200,7 @@ async function stageGenerationUnderLock(
 			mode: 0o700,
 		});
 		const directories = new Set<string>([generationRoot]);
+		let copySequence = 0;
 		for (const file of sorted) {
 			const filePath = generationFilePath(deps.paths, input.generationId, file.relPath);
 			const fileDir = dirname(filePath);
@@ -1181,11 +1212,21 @@ async function stageGenerationUnderLock(
 				directories.add(current);
 				current = dirname(current);
 			}
-			const written = await writeDurableFile(deps.fs, {
-				path: filePath,
-				contents: file.contents,
-			});
-			if (!written.ok) return retentionFailure(written.failure.code, written.failure.message);
+			if (file.copyFromSource === undefined) {
+				const written = await writeDurableFile(deps.fs, {
+					path: filePath,
+					contents: file.contents,
+				});
+				if (!written.ok) return retentionFailure(written.failure.code, written.failure.message);
+				continue;
+			}
+			// Byte-faithful copy: durable-copy to a temp sibling, then atomic
+			// rename into place (mirrors writeDurableFile's crash-safe publish so
+			// the staged bytes equal the source bytes verbatim).
+			copySequence += 1;
+			const tempPath = `${filePath}.tmp-${process.pid}-${copySequence}`;
+			await deps.fs.copyFileDurable(file.copyFromSource, tempPath);
+			await deps.fs.rename(tempPath, filePath);
 		}
 		for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
 			await deps.fs.syncDirectory(dir);

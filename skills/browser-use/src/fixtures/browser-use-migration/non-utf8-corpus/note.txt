@@ -1,0 +1,1 @@
+synthetic non-utf8 fixture byte: ÿ end

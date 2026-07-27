@@ -14,6 +14,7 @@ import {
 	receiptArtifactsOf,
 	renderComparisonTable,
 	utf8ByteLength,
+	validateBenchmarkArgs,
 } from "./browser-use-benchmark";
 
 // A fake `browser-use task run` result envelope whose SHAPE matches the real
@@ -491,6 +492,148 @@ describe("driveBenchmark runs each lane against its own matching handoff (R11)",
 		expect(shelled).toEqual([]);
 		expect(comparison.gated_lanes).toHaveLength(AE12_ELIGIBLE_LANES.length);
 		expect(comparison.comparison_licensed).toBe(false);
+	});
+});
+
+describe("driveBenchmark records ONLY successful terminal dispatches (R25)", () => {
+	// A runner that returns a caller-supplied exit_code and run_state per lane so
+	// a failed/refused/non-terminal dispatch can be exercised. A confirmed lane
+	// returns a real shared-run envelope; a non-confirmed lane returns the given
+	// state (e.g. a needs-human blocked resume or a not-achieved terminal).
+	function outcomeRunner(
+		outcomes: Record<string, { exit_code: number; state: string }>,
+	) {
+		return (args: { lane_id: string; intent: string }): LiveTaskRunResult => {
+			const outcome = outcomes[args.lane_id] ?? { exit_code: 0, state: "confirmed" };
+			return {
+				lane_id: args.lane_id,
+				intent: args.intent,
+				exit_code: outcome.exit_code,
+				result_json: fakeTaskRunEnvelope({
+					intent: args.intent,
+					adapter_id: args.lane_id,
+					state: outcome.state,
+					artifacts: [],
+				}),
+				wall_ms: 100,
+			};
+		};
+	}
+
+	const bothHandoffs = [
+		{ handoffPath: "/agent-browser.json", attachedAdapter: "agent-browser" },
+		{
+			handoffPath: "/chrome-devtools.json",
+			attachedAdapter: "chrome-devtools-mcp",
+		},
+	];
+
+	test("a matched lane with a nonzero exit_code is gated, not sampled; one real sample -> unlicensed", () => {
+		const { comparison } = driveBenchmark({
+			handoffs: bothHandoffs,
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			runTask: outcomeRunner({
+				"chrome-devtools-mcp": { exit_code: 7, state: "confirmed" },
+			}),
+		});
+		// agent-browser confirmed -> the only sample; chrome-devtools nonzero-exit -> gated.
+		expect(comparison.measurements.map((m) => m.lane_id)).toEqual([
+			"agent-browser",
+		]);
+		expect(comparison.gated_lanes.map((g) => g.lane_id)).toEqual([
+			"chrome-devtools-mcp",
+		]);
+		expect(comparison.gated_lanes[0]?.reason).toContain("exited nonzero (7)");
+		// A failed dispatch can never license a two-lane comparison.
+		expect(comparison.comparison_licensed).toBe(false);
+	});
+
+	test("a matched lane whose run_state is a blocked/refused/non-terminal outcome is gated, not sampled", () => {
+		const { comparison } = driveBenchmark({
+			handoffs: bothHandoffs,
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			// zero exit but a blocked resume state (needs-human) and a not-achieved
+			// terminal — neither is a successful measurement.
+			runTask: outcomeRunner({
+				"agent-browser": { exit_code: 0, state: "needs-human" },
+				"chrome-devtools-mcp": { exit_code: 0, state: "not-achieved" },
+			}),
+		});
+		expect(comparison.measurements).toEqual([]);
+		expect(comparison.gated_lanes.map((g) => g.lane_id).sort()).toEqual([
+			"agent-browser",
+			"chrome-devtools-mcp",
+		]);
+		expect(
+			comparison.gated_lanes.some((g) => g.reason.includes("needs-human")),
+		).toBe(true);
+		expect(
+			comparison.gated_lanes.some((g) => g.reason.includes("not-achieved")),
+		).toBe(true);
+		expect(comparison.comparison_licensed).toBe(false);
+	});
+
+	test("two confirmed zero-exit dispatches still produce two samples and license the comparison", () => {
+		const { comparison } = driveBenchmark({
+			handoffs: bothHandoffs,
+			taskLabel: "bounded read-only",
+			browserUseEntry: "/entry.ts",
+			// default outcome is confirmed/zero-exit for both lanes.
+			runTask: outcomeRunner({}),
+		});
+		expect(comparison.measurements.map((m) => m.lane_id).sort()).toEqual([
+			"agent-browser",
+			"chrome-devtools-mcp",
+		]);
+		expect(comparison.gated_lanes).toEqual([]);
+		expect(comparison.comparison_licensed).toBe(true);
+	});
+});
+
+describe("validateBenchmarkArgs gates missing/empty --handoff with a nonzero exit", () => {
+	test("--help returns the help kind (usage to stdout, exit 0)", () => {
+		expect(validateBenchmarkArgs(["--help"])).toEqual({ kind: "help" });
+	});
+
+	test("zero --handoff is a usage error with a nonzero exit (never a zero-exit empty benchmark)", () => {
+		const parsed = validateBenchmarkArgs(["--task-label", "x"]);
+		expect(parsed.kind).toBe("error");
+		if (parsed.kind !== "error") throw new Error("expected error");
+		expect(parsed.exit_code).toBeGreaterThan(0);
+		expect(parsed.message).toContain("at least one --handoff");
+	});
+
+	test("a trailing valueless --handoff is rejected with a nonzero exit", () => {
+		const parsed = validateBenchmarkArgs(["--handoff"]);
+		expect(parsed.kind).toBe("error");
+		if (parsed.kind !== "error") throw new Error("expected error");
+		expect(parsed.exit_code).toBeGreaterThan(0);
+		// A --handoff immediately followed by another flag is likewise valueless.
+		const parsed2 = validateBenchmarkArgs(["--handoff", "--task-label", "x"]);
+		expect(parsed2.kind).toBe("error");
+	});
+
+	test("a valid --handoff resolves to a run request with the parsed task label", () => {
+		const parsed = validateBenchmarkArgs([
+			"--handoff",
+			"/a.json",
+			"--task-label",
+			"my label",
+		]);
+		expect(parsed).toEqual({
+			kind: "run",
+			handoffPaths: ["/a.json"],
+			taskLabel: "my label",
+		});
+	});
+
+	test("a trailing valueless --task-label falls back to the default rather than casting undefined", () => {
+		const parsed = validateBenchmarkArgs(["--handoff", "/a.json", "--task-label"]);
+		expect(parsed.kind).toBe("run");
+		if (parsed.kind !== "run") throw new Error("expected run");
+		expect(parsed.taskLabel.length).toBeGreaterThan(0);
 	});
 });
 

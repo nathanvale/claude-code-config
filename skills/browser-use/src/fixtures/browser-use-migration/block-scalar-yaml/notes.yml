@@ -1,0 +1,6 @@
+service_id: synthetic-block-scalar-fixture
+release_note: |
+  status: ok
+  status: ok
+  detail: repeated lines inside a literal block are content, not keys
+owner: synthetic-owner

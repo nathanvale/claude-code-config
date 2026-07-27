@@ -213,6 +213,16 @@ export type LiveTaskRunResult = {
 };
 
 /**
+ * The ONLY run_state that is a successful terminal measurement (R25). `confirmed`
+ * is evidence the bounded task achieved its postcondition; `not-achieved`/`unknown`
+ * are terminal-but-failed and the blocked states (`awaiting-*`, `needs-human`) are
+ * non-terminal refusals. A benchmark sample may be recorded ONLY from a confirmed
+ * run, so comparison_licensed (>=2 samples) can never be built from a failed or
+ * refused dispatch.
+ */
+const BENCHMARK_SUCCESS_RUN_STATE = "confirmed";
+
+/**
  * Shell the real `browser-use task run` front door once for one lane against a
  * supplied Verified Handoff Envelope path. The caller owns minting the handoff
  * (via `browser-connect connect <adapter> --json`); this driver never launches
@@ -369,7 +379,29 @@ export function driveBenchmark(input: {
 			lane_id: lane.lane_id,
 			intent: lane.intent,
 		});
+		// R25 invariant: only a successful terminal dispatch becomes a measured
+		// sample. A nonzero exit means the CLI failed/timed out/refused; gate it
+		// before parsing so a failure envelope never licenses a comparison.
+		if (live.exit_code !== 0) {
+			gatedLanes.push({
+				lane_id: lane.lane_id,
+				intent: lane.intent,
+				reason: `task run exited nonzero (${live.exit_code}); dispatch not counted as a measured sample`,
+			});
+			continue;
+		}
 		const receipt = receiptArtifactsOf(live.result_json);
+		// A zero exit still carries a run_state that may be non-terminal/refused
+		// (a blocked resume, a handoff_lane_mismatch refusal envelope, or a
+		// not-achieved/unknown terminal). Only `confirmed` is a real measurement.
+		if (receipt.run_state !== BENCHMARK_SUCCESS_RUN_STATE) {
+			gatedLanes.push({
+				lane_id: lane.lane_id,
+				intent: lane.intent,
+				reason: `task run did not confirm (run_state=${receipt.run_state ?? "absent"}); dispatch not counted as a measured sample`,
+			});
+			continue;
+		}
 		samples.push({
 			lane_id: lane.lane_id,
 			intent: lane.intent,
@@ -377,7 +409,7 @@ export function driveBenchmark(input: {
 			wall_ms: live.wall_ms,
 			command_count: 1,
 			artifacts: receipt.artifacts,
-			...(receipt.run_state !== undefined ? { run_state: receipt.run_state } : {}),
+			run_state: receipt.run_state,
 		});
 	}
 
@@ -416,58 +448,111 @@ export function collectHandoffPaths(args: readonly string[]): string[] {
 	return paths;
 }
 
-async function main(): Promise<void> {
-	const args = process.argv.slice(2);
-	const handoffPaths = collectHandoffPaths(args);
-	const browserUseEntry =
-		new URL("./browser-use.ts", import.meta.url).pathname;
+const DEFAULT_TASK_LABEL = "bounded read-only localhost snapshot/console-read";
 
-	if (args.includes("--help") || handoffPaths.length === 0) {
-		process.stdout.write(
-			[
-				"AE12 token-efficiency benchmark (release contract R26).",
-				"",
-				"Usage:",
-				"  bun browser-use-benchmark.ts --handoff <verified-handoff.json> [--handoff <another.json> ...] [--task-label <label>]",
-				"",
-				"Repeat --handoff once per lane: a single verified handoff attaches exactly",
-				"one adapter (R11), so a genuine two-lane comparison needs one handoff per",
-				"lane. Each lane runs against the handoff whose attachment.adapter_id matches",
-				"it; a lane with no matching handoff stays gated, and a handoff matching no",
-				"eligible lane is reported and skipped. One handoff is the degenerate case:",
-				"one lane measured, the rest gated, no cross-lane comparison licensed.",
-				"",
-				"Prerequisite: mint a Verified Handoff Envelope for each lane under test with",
-				"  browser-connect connect <adapter> --json",
-				"against a proof-passing Warm Chrome. Without one, task run cannot execute and",
-				"this harness records the gate instead of fabricating a lane result.",
-				"",
-				`Eligible lanes: ${AE12_ELIGIBLE_LANES.map((l) => `${l.lane_id}(${l.intent})`).join(", ")}`,
-				"playwright-cdp is registered-but-not-installed (operator gate) and is skipped.",
-			].join("\n") + "\n",
-		);
-		return;
+/** Rendered usage text (also the body of a usage error). */
+export const BENCHMARK_USAGE =
+	[
+		"AE12 token-efficiency benchmark (release contract R26).",
+		"",
+		"Usage:",
+		"  bun browser-use-benchmark.ts --handoff <verified-handoff.json> [--handoff <another.json> ...] [--task-label <label>]",
+		"",
+		"Repeat --handoff once per lane: a single verified handoff attaches exactly",
+		"one adapter (R11), so a genuine two-lane comparison needs one handoff per",
+		"lane. Each lane runs against the handoff whose attachment.adapter_id matches",
+		"it; a lane with no matching handoff stays gated, and a handoff matching no",
+		"eligible lane is reported and skipped. One handoff is the degenerate case:",
+		"one lane measured, the rest gated, no cross-lane comparison licensed.",
+		"",
+		"Prerequisite: mint a Verified Handoff Envelope for each lane under test with",
+		"  browser-connect connect <adapter> --json",
+		"against a proof-passing Warm Chrome. Without one, task run cannot execute and",
+		"this harness records the gate instead of fabricating a lane result.",
+		"",
+		`Eligible lanes: ${AE12_ELIGIBLE_LANES.map((l) => `${l.lane_id}(${l.intent})`).join(", ")}`,
+		"playwright-cdp is registered-but-not-installed (operator gate) and is skipped.",
+	].join("\n") + "\n";
+
+/** Parsed, validated CLI request. One of:
+ *  - `help`: print usage to stdout, exit 0.
+ *  - `error`: print message to stderr, exit `exit_code` (nonzero).
+ *  - `run`: resolved handoff paths + task label ready to drive. */
+export type BenchmarkArgs =
+	| { kind: "help" }
+	| { kind: "error"; message: string; exit_code: number }
+	| { kind: "run"; handoffPaths: string[]; taskLabel: string };
+
+/**
+ * Validate argv BEFORE any dispatch. Rejects a missing/empty --handoff with a
+ * usage error and a nonzero exit rather than proceeding to driveBenchmark with
+ * zero handoffs (which would silently gate every lane and emit an unlicensed
+ * comparison as if that were a normal result). A trailing --handoff with no
+ * following value is dropped by collectHandoffPaths, so it too lands here as
+ * "zero handoffs" and is rejected. --task-label is resolved with a default
+ * guard so an absent value is never cast to string.
+ */
+export function validateBenchmarkArgs(args: readonly string[]): BenchmarkArgs {
+	if (args.includes("--help")) return { kind: "help" };
+
+	const handoffPaths = collectHandoffPaths(args);
+	if (handoffPaths.length === 0) {
+		return {
+			kind: "error",
+			exit_code: 2,
+			message:
+				"error: at least one --handoff <verified-handoff.json> is required (a trailing --handoff with no path is rejected).\n\n" +
+				BENCHMARK_USAGE,
+		};
+	}
+	if (handoffPaths.some((path) => path.trim() === "")) {
+		return {
+			kind: "error",
+			exit_code: 2,
+			message:
+				"error: --handoff values must be non-empty paths.\n\n" + BENCHMARK_USAGE,
+		};
 	}
 
-	const DEFAULT_TASK_LABEL = "bounded read-only localhost snapshot/console-read";
 	const labelIndex = args.indexOf("--task-label");
 	// A trailing `--task-label` with no following value must not cast undefined
 	// to string; fall back to the default label when the value is absent.
 	const taskLabel =
-		labelIndex === -1 ? DEFAULT_TASK_LABEL : (args[labelIndex + 1] ?? DEFAULT_TASK_LABEL);
+		labelIndex === -1
+			? DEFAULT_TASK_LABEL
+			: (args[labelIndex + 1] ?? DEFAULT_TASK_LABEL);
+
+	return { kind: "run", handoffPaths, taskLabel };
+}
+
+async function main(): Promise<void> {
+	const args = process.argv.slice(2);
+	const parsed = validateBenchmarkArgs(args);
+
+	if (parsed.kind === "help") {
+		process.stdout.write(BENCHMARK_USAGE);
+		return;
+	}
+	if (parsed.kind === "error") {
+		process.stderr.write(parsed.message);
+		process.exitCode = parsed.exit_code;
+		return;
+	}
+
+	const browserUseEntry = new URL("./browser-use.ts", import.meta.url).pathname;
 
 	// R11: each verified handoff attaches exactly one adapter, and the task-run
 	// router refuses any lane whose id != that adapter (handoff_lane_mismatch).
 	// driveBenchmark runs each lane against its own matching handoff and gates the
 	// rest, so a refusal envelope is never recorded as a measured lane cost. Two
 	// matching handoffs yield two real measurements and license the comparison.
-	const handoffs: BenchmarkHandoff[] = handoffPaths.map((handoffPath) => ({
+	const handoffs: BenchmarkHandoff[] = parsed.handoffPaths.map((handoffPath) => ({
 		handoffPath,
 		attachedAdapter: handoffAdapterId(handoffPath),
 	}));
 	const { comparison, skipped_handoffs } = driveBenchmark({
 		handoffs,
-		taskLabel,
+		taskLabel: parsed.taskLabel,
 		browserUseEntry,
 		runTask: runBenchmarkTask,
 	});
