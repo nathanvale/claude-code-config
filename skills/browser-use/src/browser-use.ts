@@ -1937,30 +1937,66 @@ function runScopedSentinelNonce(runId: string): string {
 		.slice(0, 32);
 }
 
+// The guard outcome for one dispatch: `ok: true` threads the guard (sensitive
+// when delivery evidence engaged, the untouched baseline otherwise); `ok: false`
+// means confidential delivery ENGAGED but its containment sentinels could not be
+// registered — the caller must withhold release, never proceed unguarded.
+type DeliveryGuardOutcome =
+	| { ok: true; guard: BrowserUseSensitiveRunGuard | undefined }
+	| {
+			ok: false;
+			reason:
+				| "guard_unavailable"
+				| "sentinel_derivation_failed"
+				| "sensitive_mark_failed";
+	  };
+
 // When an agent-browser (or runbook) dispatch engaged confidential delivery, the
 // run turns sensitive exactly once (auth plan U4/U5, DO#2): derive the sentinel
 // set from the delivered field shapes under the run-scoped nonce and mark the
-// guard. The guard's release gate already sits in recordTaskRunOutcome, so the
-// SENSITIVE guard (not the baseline) must thread through. A non-delivery result
-// leaves the baseline guard untouched. A derivation/mark rejection fails closed
-// by withholding the sensitive guard — recordTaskRunOutcome then never releases
-// a run whose sentinels could not be registered.
+// guard. Delivery evidence is read REGARDLESS of the task's terminal truth — a
+// delivery followed by a later failure already put the secret on the page, so
+// the failure result carries the same evidence slot. A non-delivery result
+// leaves the baseline guard untouched. A missing guard or a derivation/mark
+// rejection after a delivery is a typed `ok: false` — the call sites translate
+// it into a withheld task-run failure so a run whose sentinels could not be
+// registered is never released.
 function markGuardForDeliveryOutcome(
 	baseGuard: BrowserUseSensitiveRunGuard | undefined,
 	result: AgentBrowserExecutionResult,
-): BrowserUseSensitiveRunGuard | undefined {
-	if (baseGuard === undefined) return undefined;
-	if (!result.ok || result.delivery === undefined) return baseGuard;
+): DeliveryGuardOutcome {
+	if (result.delivery === undefined) return { ok: true, guard: baseGuard };
+	if (baseGuard === undefined) {
+		return { ok: false, reason: "guard_unavailable" };
+	}
 	const set = deriveSentinelSet(
 		result.delivery.resume.delivered_shapes,
 		runScopedSentinelNonce(baseGuard.run_id),
 	);
-	if (!set.ok) return undefined;
+	if (!set.ok) return { ok: false, reason: "sentinel_derivation_failed" };
 	const marked = markRunSensitive(baseGuard, {
 		trigger: "confidential-field-delivery",
 		sentinels: set.sentinels,
 	});
-	return marked.ok ? marked.guard : undefined;
+	if (!marked.ok) return { ok: false, reason: "sensitive_mark_failed" };
+	return { ok: true, guard: marked.guard };
+}
+
+// Fail-closed translation of a `DeliveryGuardOutcome` refusal (auth plan U4):
+// confidential delivery engaged but the run's containment sentinels could not be
+// registered, so no governed surface may be released. The typed failure names
+// the cause and preserves a repair path; it carries no adapter or page text, so
+// it is secret-free by construction.
+function sentinelRegistrationWithheldFailure(
+	reason: Extract<DeliveryGuardOutcome, { ok: false }>["reason"],
+): TaskRunFailure {
+	return {
+		code: "task_run_lane_refused",
+		message: `confidential delivery engaged but containment sentinels could not be registered (${reason}); governed outputs were withheld and the run was not released.`,
+		actionId: "inspect_task_run_result",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	};
 }
 
 // Map an agent-browser executor outcome onto the shared-run terminal/blocked
@@ -2239,15 +2275,27 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		// sensitive exactly once (auth plan U4/U5); the sensitive guard threads
 		// into recordTaskRunOutcome's release gate. The baseline snapshot task
 		// carries no auth-delivery context, so this is the baseline guard until a
-		// confidential runbook/task supplies one.
+		// confidential runbook/task supplies one. A delivery whose sentinels could
+		// not be registered withholds release (fail closed), never runs ungated.
 		const dispatchGuard = markGuardForDeliveryOutcome(taskRunGuard, result);
+		if (!dispatchGuard.ok) {
+			return emitTaskRunFailure(
+				input,
+				run.run_id,
+				sentinelRegistrationWithheldFailure(dispatchGuard.reason),
+			);
+		}
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
 			run,
 			route,
 			mapAgentBrowserOutcome(result),
-			{ ...(dispatchGuard !== undefined ? { guard: dispatchGuard } : {}) },
+			{
+				...(dispatchGuard.guard !== undefined
+					? { guard: dispatchGuard.guard }
+					: {}),
+			},
 		);
 	}
 
@@ -2431,26 +2479,6 @@ async function recordTaskRunOutcome(
 		);
 	}
 
-	// Sensitive Run Guard release gate (auth plan U4): once the run has turned
-	// sensitive, no governed surface may be emitted until the containment sweep
-	// proves clean over the on-disk run bytes (read back after commit) plus the
-	// pending envelope. An ordinary (non-sensitive) run skips the gate and
-	// releases normally. A failed sweep withholds the surfaces and fails closed
-	// with a repair path preserved.
-	if (options.guard !== undefined && options.guard.sensitive) {
-		const surfaces = await collectRunGovernedSurfaces(deps, updated.run.run_id);
-		const release = assertContainmentBeforeRelease(options.guard, surfaces);
-		if (!release.release) {
-			return emitTaskRunFailure(input, updated.run.run_id, {
-				code: "task_run_lane_refused",
-				message: `sensitive run containment failed (${release.reason}); outputs were withheld and a human repair path is preserved.`,
-				actionId: "inspect_task_run_result",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "repair_state",
-			});
-		}
-	}
-
 	const externalEffect = mutationDispatched ? "unknown" : "none";
 	const dataExtra: Record<string, unknown> = {
 		selected_lane: route.lane_id,
@@ -2466,22 +2494,69 @@ async function recordTaskRunOutcome(
 		`external_effect=${externalEffect}`,
 	];
 
-	if (mapping.kind === "confirmed") {
-		return emitSharedRunSuccess({
-			command: input,
-			run: updated.run,
-			continuationId: "inspect_task_run_result",
-			dataExtra,
-			plainExtra,
+	// The one pending stdout/stderr emission this outcome produces: the shared-run
+	// success envelope, or the typed failure envelope merging the lane + effect
+	// facts. Factored as a closure over a target writer pair so a sensitive run
+	// can render the EXACT bytes into a capture buffer, sweep them, and only then
+	// replay them onto the real streams.
+	const emitOutcome = (target: PlatformCommandInput): number => {
+		if (mapping.kind === "confirmed") {
+			return emitSharedRunSuccess({
+				command: target,
+				run: updated.run,
+				continuationId: "inspect_task_run_result",
+				dataExtra,
+				plainExtra,
+			});
+		}
+		// A blocked or terminal dispatch is a typed failure envelope carrying the
+		// run projection reference; the failure's own data extras merge in the lane
+		// + effect facts so the caller sees the selected lane and observed effect.
+		return emitTaskRunFailure(target, updated.run.run_id, {
+			...mapping.failure,
+			dataExtra: { ...dataExtra, ...(mapping.failure.dataExtra ?? {}) },
 		});
+	};
+
+	// Sensitive Run Guard release gate (auth plan U4): once the run has turned
+	// sensitive, no governed surface may be emitted until the containment sweep
+	// proves clean over the on-disk run bytes (read back after commit) PLUS the
+	// pending stdout/stderr envelope, captured byte-for-byte before release. An
+	// ordinary (non-sensitive) run skips the gate and releases normally. A failed
+	// sweep withholds every surface — including the pending envelope, which is
+	// never written — and fails closed with a repair path preserved.
+	if (options.guard !== undefined && options.guard.sensitive) {
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const exitCode = emitOutcome({
+			...input,
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+		});
+		const surfaces: BrowserUseGovernedSurface[] = [
+			...(await collectRunGovernedSurfaces(deps, updated.run.run_id)),
+			{
+				kind: "stdout-envelope",
+				label: `task-run-envelope:${updated.run.run_id}`,
+				content: stdoutChunks.join("") + stderrChunks.join(""),
+			},
+		];
+		const release = assertContainmentBeforeRelease(options.guard, surfaces);
+		if (!release.release) {
+			return emitTaskRunFailure(input, updated.run.run_id, {
+				code: "task_run_lane_refused",
+				message: `sensitive run containment failed (${release.reason}); outputs were withheld and a human repair path is preserved.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		for (const chunk of stdoutChunks) input.stdout.write(chunk);
+		for (const chunk of stderrChunks) input.stderr.write(chunk);
+		return exitCode;
 	}
-	// A blocked or terminal dispatch is a typed failure envelope carrying the run
-	// projection reference; the failure's own data extras merge in the lane +
-	// effect facts so the caller sees the selected lane and observed effect.
-	return emitTaskRunFailure(input, updated.run.run_id, {
-		...mapping.failure,
-		dataExtra: { ...dataExtra, ...(mapping.failure.dataExtra ?? {}) },
-	});
+
+	return emitOutcome(input);
 }
 
 // ---------------------------------------------------------------------------
@@ -2833,15 +2908,27 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	// auth-delivery context), the run turns sensitive exactly once and the
 	// sensitive guard threads through; otherwise the baseline guard flows so
 	// recordTaskRunOutcome asserts containment over the committed on-disk run
-	// bytes before releasing any governed surface.
+	// bytes before releasing any governed surface. A delivery whose sentinels
+	// could not be registered withholds release (fail closed).
 	const dispatchGuard = markGuardForDeliveryOutcome(guard, outcome.result);
+	if (!dispatchGuard.ok) {
+		return emitTaskRunFailure(
+			input,
+			run.run_id,
+			sentinelRegistrationWithheldFailure(dispatchGuard.reason),
+		);
+	}
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,
 		run,
 		{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
 		mapAgentBrowserOutcome(outcome.result),
-		{ ...(dispatchGuard !== undefined ? { guard: dispatchGuard } : {}) },
+		{
+			...(dispatchGuard.guard !== undefined
+				? { guard: dispatchGuard.guard }
+				: {}),
+		},
 	);
 }
 
@@ -3742,14 +3829,18 @@ export {
 } from "./browser-use-selection";
 
 // Test-only seam over the confidential-delivery run-driver internals (auth
-// plan U5). Exposes the two private helpers a driver test needs to prove the
-// end-to-end seam — deriving the run-scoped sentinel nonce and marking the
-// guard sensitive from a delivery outcome — without widening the public CLI
-// surface. Not part of any command contract.
+// plan U5). Exposes the private helpers a driver test needs to prove the
+// end-to-end seam — deriving the run-scoped sentinel nonce, marking the guard
+// sensitive from a delivery outcome, translating a sentinel-registration
+// refusal into the withheld failure, and the outcome recorder whose release
+// gate sweeps the on-disk run bytes plus the pending envelope — without
+// widening the public CLI surface. Not part of any command contract.
 export const __confidentialDeliveryDriverForTest = {
 	runScopedSentinelNonce,
 	markGuardForDeliveryOutcome,
 	collectRunGovernedSurfaces,
+	sentinelRegistrationWithheldFailure,
+	recordTaskRunOutcome,
 } as const;
 
 if (import.meta.main) {

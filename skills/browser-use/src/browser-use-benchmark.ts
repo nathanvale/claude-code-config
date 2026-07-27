@@ -27,6 +27,7 @@
 // ---------------------------------------------------------------------------
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 /** One eligible lane's measured task-run outcome. */
 export type BenchmarkSample = {
@@ -89,6 +90,10 @@ export type BenchmarkComparison = {
 	/** True only when >=2 lanes were measured; otherwise the comparison is
 	 *  informational (one lane) and no cheaper/costlier claim is licensed. */
 	comparison_licensed: boolean;
+	/** Eligible lanes that were NOT measured, with the reason. A single handoff
+	 *  binds exactly one adapter (R11), so every other eligible lane is gated on
+	 *  its own matching handoff and is never recorded as a measured cost. */
+	gated_lanes: readonly { lane_id: string; intent: string; reason: string }[];
 };
 
 /** UTF-8 byte length (the token proxy denominator). */
@@ -144,6 +149,7 @@ function cheapestBy(
 export function compareBenchmark(
 	taskLabel: string,
 	samples: readonly BenchmarkSample[],
+	gatedLanes: readonly { lane_id: string; intent: string; reason: string }[] = [],
 ): BenchmarkComparison {
 	const measurements = samples.map(measureSample);
 	return {
@@ -158,6 +164,7 @@ export function compareBenchmark(
 			artifact_bytes: cheapestBy(measurements, (m) => m.artifact_bytes),
 		},
 		comparison_licensed: measurements.length >= 2,
+		gated_lanes: gatedLanes,
 	};
 }
 
@@ -171,7 +178,10 @@ export function renderComparisonTable(comparison: BenchmarkComparison): string {
 		(m) =>
 			`| ${m.lane_id} | ${m.intent} | ${m.model_visible_bytes} | ${m.approx_tokens} | ${m.wall_ms} | ${m.command_count} | ${m.artifact_count} | ${m.artifact_bytes} | ${m.run_state} |`,
 	);
-	return [header, divider, ...rows].join("\n");
+	const gated = comparison.gated_lanes.map(
+		(g) => `- gated: ${g.lane_id} (${g.intent}) — ${g.reason}`,
+	);
+	return [header, divider, ...rows, ...gated].join("\n");
 }
 
 // --- Live driver -----------------------------------------------------------
@@ -257,6 +267,85 @@ export function receiptArtifactsOf(
 	}
 }
 
+/**
+ * Read the adapter id the verified handoff attached (`data.attachment.adapter_id`).
+ * The task-run router (R11) refuses any lane whose id != this adapter, so this is
+ * the ONLY lane a single handoff can produce a real sample for. Returns undefined
+ * when the file is unreadable or the field is absent — the driver then measures no
+ * lane rather than recording a mismatch refusal as a lane cost.
+ */
+export function handoffAdapterId(handoffPath: string): string | undefined {
+	let raw: string;
+	try {
+		raw = readFileSync(handoffPath, "utf8");
+	} catch {
+		return undefined;
+	}
+	try {
+		const parsed = JSON.parse(raw) as {
+			data?: { attachment?: { adapter_id?: unknown } };
+		};
+		const adapterId = parsed.data?.attachment?.adapter_id;
+		return typeof adapterId === "string" ? adapterId : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Drive the AE12 benchmark over the eligible lanes against ONE verified handoff.
+ * Runs only the lane whose id matches the handoff's attachment.adapter_id (R11);
+ * every other eligible lane is gated on its own matching handoff and is never
+ * shelled — so a handoff_lane_mismatch refusal can never be recorded as a lane
+ * cost. The task runner is injected so the gating decision is unit-testable
+ * without a live browser.
+ */
+export function driveBenchmark(input: {
+	handoffPath: string;
+	taskLabel: string;
+	browserUseEntry: string;
+	attachedAdapter: string | undefined;
+	runTask: (args: {
+		browserUseEntry: string;
+		handoffPath: string;
+		lane_id: string;
+		intent: string;
+	}) => LiveTaskRunResult;
+}): BenchmarkComparison {
+	const samples: BenchmarkSample[] = [];
+	const gatedLanes: { lane_id: string; intent: string; reason: string }[] = [];
+	for (const lane of AE12_ELIGIBLE_LANES) {
+		if (lane.lane_id !== input.attachedAdapter) {
+			gatedLanes.push({
+				lane_id: lane.lane_id,
+				intent: lane.intent,
+				reason:
+					input.attachedAdapter === undefined
+						? "the supplied --handoff has no readable attachment.adapter_id; supply a verified handoff for this lane"
+						: `the supplied --handoff attaches ${input.attachedAdapter}; this lane needs its own matching handoff (browser-use never substitutes a lane)`,
+			});
+			continue;
+		}
+		const live = input.runTask({
+			browserUseEntry: input.browserUseEntry,
+			handoffPath: input.handoffPath,
+			lane_id: lane.lane_id,
+			intent: lane.intent,
+		});
+		const receipt = receiptArtifactsOf(live.result_json);
+		samples.push({
+			lane_id: lane.lane_id,
+			intent: lane.intent,
+			result_json: live.result_json,
+			wall_ms: live.wall_ms,
+			command_count: 1,
+			artifacts: receipt.artifacts,
+			...(receipt.run_state !== undefined ? { run_state: receipt.run_state } : {}),
+		});
+	}
+	return compareBenchmark(input.taskLabel, samples, gatedLanes);
+}
+
 // --- CLI entrypoint ---------------------------------------------------------
 
 async function main(): Promise<void> {
@@ -292,26 +381,17 @@ async function main(): Promise<void> {
 			? "bounded read-only localhost snapshot/console-read"
 			: (args[labelIndex + 1] as string);
 
-	const samples: BenchmarkSample[] = [];
-	for (const lane of AE12_ELIGIBLE_LANES) {
-		const live = runBenchmarkTask({
-			browserUseEntry,
-			handoffPath,
-			lane_id: lane.lane_id,
-			intent: lane.intent,
-		});
-		const receipt = receiptArtifactsOf(live.result_json);
-		samples.push({
-			lane_id: lane.lane_id,
-			intent: lane.intent,
-			result_json: live.result_json,
-			wall_ms: live.wall_ms,
-			command_count: 1,
-			artifacts: receipt.artifacts,
-			...(receipt.run_state !== undefined ? { run_state: receipt.run_state } : {}),
-		});
-	}
-	const comparison = compareBenchmark(taskLabel, samples);
+	// R11: a single verified handoff attaches exactly one adapter, and the
+	// task-run router refuses any lane whose id != that adapter (handoff_lane_
+	// mismatch). driveBenchmark runs only the matching lane and gates the rest, so
+	// a refusal envelope is never recorded as a measured lane cost.
+	const comparison = driveBenchmark({
+		handoffPath,
+		taskLabel,
+		browserUseEntry,
+		attachedAdapter: handoffAdapterId(handoffPath),
+		runTask: runBenchmarkTask,
+	});
 	process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
 	process.stdout.write(`\n${renderComparisonTable(comparison)}\n`);
 }

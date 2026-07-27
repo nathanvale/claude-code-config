@@ -11,6 +11,7 @@
 import {
 	type CliWriter,
 	createCliRuntimeSuccessEnvelope,
+	parseEnumFlag,
 	renderCommandUsage,
 	usageError,
 	writeJsonEnvelope,
@@ -167,6 +168,10 @@ export function parseBrowserUseArgv(
 	const collected = collectFlagValues(rest, flags);
 	const flagValues = collected.values;
 	const repeatedFlagValues = collected.repeated;
+	// Enum-VALUE validation runs here — before every command-specific required-
+	// flag check and the dry-run/live split — so an unregistered enum value fails
+	// closed for dry-run and live alike (R27, api-contract parity).
+	validateEnumFlagValues(flagValues, flags);
 	if (command === "run-resume" || command === "run-cancel") {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
@@ -323,7 +328,26 @@ function toCommand(
 	return `${family}-${subcommand}` as BrowserUseCommand;
 }
 
-type FlagSpec = { type?: string };
+type FlagSpec = { type?: string; values?: readonly string[] };
+
+// Validate every enum-typed flag's supplied VALUE against the contract's
+// declared `values`, contract-derived so dry-run and live agree (R27): an
+// unregistered --intent/--lane/--mode/--adapter fails with the SAME usage error
+// the live path would raise, BEFORE the dry-run/live split short-circuits. Runs
+// after collectFlagValues, so it sees each flag's resolved value (last wins,
+// matching flagValues). Reuses the facade's parseEnumFlag — the one enum-flag
+// usage-error mechanism — never a hand-rolled message.
+function validateEnumFlagValues(
+	flagValues: Readonly<Record<string, string>>,
+	flags: Readonly<Record<string, FlagSpec>>,
+): void {
+	for (const [name, spec] of Object.entries(flags)) {
+		if (spec.type !== "enum" || !spec.values) continue;
+		const value = flagValues[name];
+		if (value === undefined) continue;
+		parseEnumFlag(name, value, spec.values);
+	}
+}
 
 function rejectUnknownFlags(
 	argv: readonly string[],

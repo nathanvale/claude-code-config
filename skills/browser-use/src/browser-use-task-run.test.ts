@@ -339,7 +339,13 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(calls[0]?.join(" ")).toContain("tab list");
 	});
 
-	test("an inadmissible explicit override is refused with an executable repair (R10, AE3)", async () => {
+	// An unregistered --lane value (e.g. playwright-cli, not a registered adapter)
+	// is refused at the PARSER as a usage error before the live/dry-run split —
+	// the contract declares --lane as an enum of BROWSER_USE_LIVE_ADAPTERS, so a
+	// value outside it never reaches live admission (finding #8, R27). The
+	// engine's own lane_override_inadmissible branch is still covered directly at
+	// routeTaskRun ("a rejected identity alias override fails closed").
+	test("an unregistered lane override is refused at the parser (usage error, R27)", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
 			[
@@ -352,12 +358,10 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			],
 			makeRuntime({ env: store.env }),
 		);
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		const json = parseJson(result.stdout);
-		expect(json.error).toMatchObject({ code: "task_run_lane_override_inadmissible" });
-		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"choose_admissible_lane",
-		);
+		expect(json.error).toMatchObject({ code: "usage_error" });
+		expect(`${result.stdout}\n${result.stderr}`).toContain("--lane must be one of:");
 	});
 
 	test("routing to the not-installed playwright lane returns the adapter-install continuation (R10)", async () => {

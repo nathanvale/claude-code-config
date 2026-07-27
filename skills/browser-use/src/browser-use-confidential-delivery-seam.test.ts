@@ -22,6 +22,8 @@ import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
 } from "./browser-use-paths";
+import { BINDING_FAIL_CLOSED_EXIT_CODE } from "./browser-use-core";
+import { parseBrowserUseArgv } from "./browser-use-parser";
 import {
 	fixedClock,
 	makeTempXdgEnv,
@@ -31,7 +33,9 @@ import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 import {
 	assertContainmentBeforeRelease,
 	beginSensitiveRunGuard,
+	markRunSensitive,
 } from "./browser-use-sensitive-run";
+import { makeRuntime } from "./browser-use-test-helpers";
 import { __confidentialDeliveryDriverForTest } from "./browser-use";
 
 // =========================================================================
@@ -49,8 +53,13 @@ import { __confidentialDeliveryDriverForTest } from "./browser-use";
 // harness posture), so a clean on-disk sweep is meaningful, not vacuous.
 // =========================================================================
 
-const { runScopedSentinelNonce, markGuardForDeliveryOutcome, collectRunGovernedSurfaces } =
-	__confidentialDeliveryDriverForTest;
+const {
+	runScopedSentinelNonce,
+	markGuardForDeliveryOutcome,
+	collectRunGovernedSurfaces,
+	sentinelRegistrationWithheldFailure,
+	recordTaskRunOutcome,
+} = __confidentialDeliveryDriverForTest;
 
 const disposables: { dispose(): void }[] = [];
 afterAll(() => {
@@ -315,7 +324,10 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		);
 		expect(baseGuardResult.ok).toBe(true);
 		if (!baseGuardResult.ok) return;
-		const sensitiveGuard = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		const markedOutcome = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		expect(markedOutcome.ok).toBe(true);
+		if (!markedOutcome.ok) return;
+		const sensitiveGuard = markedOutcome.guard;
 		expect(sensitiveGuard?.sensitive).toBe(true);
 		expect(sensitiveGuard?.trigger).toBe("confidential-field-delivery");
 		if (sensitiveGuard === undefined) return;
@@ -480,7 +492,10 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		if (!result.ok) return;
 		const baseGuardResult = beginSensitiveRunGuard(RUN);
 		if (!baseGuardResult.ok) return;
-		const sensitiveGuard = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		const markedOutcome = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		expect(markedOutcome.ok).toBe(true);
+		if (!markedOutcome.ok) return;
+		const sensitiveGuard = markedOutcome.guard;
 		if (sensitiveGuard === undefined) return;
 
 		// Negative fixture: a surface that DID leak the delivered value must fail
@@ -495,5 +510,254 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		expect(gate.release).toBe(false);
 		if (gate.release) return;
 		expect(gate.reason).toBe("containment_failed");
+	});
+
+	test("a delivery followed by a LATER failure still carries delivery evidence and turns the run sensitive", async () => {
+		const RUN = "run-cfd-seam-late-failure";
+		const store = await makeStore();
+		const runNonce = runScopedSentinelNonce(RUN);
+		const PASS = deriveConformanceSentinel("password", runNonce);
+		expect(PASS.ok).toBe(true);
+		if (!PASS.ok) return;
+		const { hook, observed } = leakHelper({
+			username: PASS.value,
+			password: PASS.value,
+			"otp-current": PASS.value,
+		});
+		// The post-auth structural proof FAILS (fresh structure shows the wrong
+		// value), so the task terminates not-achieved AFTER the secret already
+		// reached the page.
+		const runtime = runtimeFor([
+			...attachAndSnapshot(),
+			{ stdout: adapterSuccess({ value: "wrong-value" }) },
+		]);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: RUN,
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: buildContext(store.deps, RUN, hook, true),
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+			],
+		});
+		// The task failed, but the delivery already happened: the FAILURE result
+		// carries the same delivery evidence the success branch would.
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.code).toBe("agent_browser_postcondition_not_achieved");
+		expect(observed).toContain(PASS.value);
+		expect(result.delivery?.delivered_shapes).toEqual([
+			{ field: "password", byte_length: PASS.value.length },
+		]);
+		expect(result.delivery?.method_step_events).toEqual(["fill-password"]);
+
+		// The guard seam marks the run sensitive from the FAILED result, so
+		// recordTaskRunOutcome's containment gate engages instead of being skipped.
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		const markedOutcome = markGuardForDeliveryOutcome(
+			baseGuardResult.guard,
+			result,
+		);
+		expect(markedOutcome.ok).toBe(true);
+		if (!markedOutcome.ok) return;
+		expect(markedOutcome.guard?.sensitive).toBe(true);
+		expect(markedOutcome.guard?.trigger).toBe("confidential-field-delivery");
+	});
+
+	test("sentinel derivation failure after a delivery WITHHOLDS release (fail closed), never an unguarded release", () => {
+		const RUN = "run-cfd-seam-derivation-fail";
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		// Delivery engaged, but the evidence yields NO derivable sentinels (empty
+		// delivered shapes): the sentinel owner refuses, so the guard seam must
+		// answer ok:false rather than silently dropping the guard.
+		const marked = markGuardForDeliveryOutcome(baseGuardResult.guard, {
+			ok: false,
+			code: "agent_browser_postcondition_not_achieved",
+			outcome: "not-achieved",
+			message:
+				"Fresh structure did not satisfy the confidential fill postcondition.",
+			executed_steps: 1,
+			delivery: {
+				delivered_shapes: [],
+				method_step_events: [],
+				resume: {
+					lane_id: "agent-browser",
+					run_id: RUN,
+					target_id: "target-1",
+					discard_stale_refs: true,
+					require_fresh_identity_basis: true,
+					delivered_shapes: [],
+				},
+			},
+		});
+		expect(marked).toEqual({ ok: false, reason: "sentinel_derivation_failed" });
+		if (marked.ok) return;
+		// The call sites translate ok:false into the withheld typed failure: fail
+		// closed with a repair path, never a normal release.
+		const withheld = sentinelRegistrationWithheldFailure(marked.reason);
+		expect(withheld.code).toBe("task_run_lane_refused");
+		expect(withheld.exitCode).toBe(BINDING_FAIL_CLOSED_EXIT_CODE);
+		expect(withheld.recoverability).toBe("repair_state");
+		expect(withheld.message).toContain("withheld");
+		expect(withheld.message).toContain("sentinel_derivation_failed");
+	});
+
+	test("the release gate sweeps the PENDING envelope: a sentinel present only in envelope text withholds emission", async () => {
+		const RUN = "run-cfd-seam-envelope-sweep";
+		const store = await makeStore();
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+
+		const SENTINEL = "sentinel-envelope-leak-000111";
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		const marked = markRunSensitive(baseGuardResult.guard, {
+			trigger: "confidential-field-delivery",
+			sentinels: [SENTINEL],
+		});
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+
+		const parsed = parseBrowserUseArgv([
+			"task",
+			"run",
+			"--handoff",
+			"handoff.json",
+			"--intent",
+			"scrape",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const input = {
+			parsed,
+			runtime: makeRuntime(),
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+			runId: "cli-run-envelope-sweep",
+			caller: { label: null },
+			durationMs: () => 1,
+		};
+		// The pending failure envelope carries adapter-derived text that leaked
+		// the sentinel; the on-disk run bytes stay clean, so ONLY the pending
+		// envelope sweep can catch it.
+		const exitCode = await recordTaskRunOutcome(
+			input,
+			store.deps,
+			created.run,
+			{ lane_id: "agent-browser", source: "intent-preferred", intent: "scrape" },
+			{
+				kind: "terminal",
+				state: "not-achieved",
+				failure: {
+					code: "task_run_not_achieved",
+					message: `adapter text leaked ${SENTINEL} into the envelope`,
+					actionId: "inspect_task_run_result",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "none",
+				},
+			},
+			{ guard: marked.guard },
+		);
+		expect(exitCode).toBe(BINDING_FAIL_CLOSED_EXIT_CODE);
+		const emitted = stdoutChunks.join("") + stderrChunks.join("");
+		// The leaking envelope was withheld: the sentinel never reached the real
+		// streams; what WAS emitted is the containment refusal.
+		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).toContain("containment failed");
+	});
+
+	test("a clean pending envelope releases normally through the sensitive gate", async () => {
+		const RUN = "run-cfd-seam-envelope-clean";
+		const store = await makeStore();
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+
+		const SENTINEL = "sentinel-envelope-clean-000222";
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		const marked = markRunSensitive(baseGuardResult.guard, {
+			trigger: "confidential-field-delivery",
+			sentinels: [SENTINEL],
+		});
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+
+		const parsed = parseBrowserUseArgv([
+			"task",
+			"run",
+			"--handoff",
+			"handoff.json",
+			"--intent",
+			"scrape",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const input = {
+			parsed,
+			runtime: makeRuntime(),
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+			runId: "cli-run-envelope-clean",
+			caller: { label: null },
+			durationMs: () => 1,
+		};
+		const exitCode = await recordTaskRunOutcome(
+			input,
+			store.deps,
+			created.run,
+			{ lane_id: "agent-browser", source: "intent-preferred", intent: "scrape" },
+			{ kind: "confirmed", executedSteps: 1 },
+			{ guard: marked.guard },
+		);
+		expect(exitCode).toBe(0);
+		const emitted = stdoutChunks.join("");
+		// The swept-clean envelope is released byte-for-byte onto the real stream.
+		expect(emitted).toContain(RUN);
+		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).toContain("confirmed");
 	});
 });

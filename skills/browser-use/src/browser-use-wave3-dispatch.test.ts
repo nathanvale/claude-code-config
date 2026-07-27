@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	createDefaultPlatformFs,
@@ -160,6 +160,18 @@ function scriptedRuntime(
 			platformFs: createDefaultPlatformFs(),
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
+			// Real disk write seams so the chrome executor's native-artifact write
+			// actually lands under the temp store (this is a CLI integration proof
+			// over the real driver, not a stubbed unit). ensureDirectory mirrors the
+			// default runtime's recursive 0700 mkdir; writeTextFile writes the bytes.
+			ensureDirectory: (path: string) =>
+				import("node:fs/promises").then((m) =>
+					m.mkdir(path, { recursive: true, mode: 0o700 }).then(() => undefined),
+				),
+			writeTextFile: (path: string, contents: string) =>
+				import("node:fs/promises").then((m) =>
+					m.writeFile(path, contents, { mode: 0o600 }),
+				),
 			runCommand: async (input) => {
 				calls.push([input.command, ...input.args]);
 				const response = responses[index++] ?? {};
@@ -275,8 +287,19 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 		const artifacts = run.artifacts as Array<Record<string, unknown>>;
 		expect(Array.isArray(artifacts)).toBe(true);
 		expect(artifacts).toHaveLength(1);
-		expect(artifacts[0]?.artifact_id).toContain("perf-trace");
+		const artifactId = artifacts[0]?.artifact_id as string;
+		expect(artifactId).toContain("perf-trace");
 		expect(artifacts[0]?.retention).toBe("export");
+		// The artifact reference is not just a name: the executor WROTE the native
+		// trace evidence to the derived path, so a file exists on disk carrying the
+		// captured trace summary (closes finding #2 — no advertised-but-absent
+		// evidence).
+		const artifactPath = join(
+			store.deps.paths.state.artifactDir("run-chrome-3"),
+			artifactId,
+		);
+		const bytes = readFileSync(artifactPath, "utf-8");
+		expect(bytes).toContain("trace captured");
 		// The durable run reads back with the persisted artifact reference.
 		const loaded = await loadSharedRun(store.deps, "run-chrome-3");
 		expect(loaded.ok).toBe(true);

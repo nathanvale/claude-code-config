@@ -272,11 +272,32 @@ function duplicateYamlKey(contents: string): string | undefined {
 	return undefined;
 }
 
+// File-content secret classifier. Gates `quarantine-secret`, so a false
+// positive merely over-quarantines (safe) and a false negative stages a secret
+// (the bug) — bias toward catching. This is a deliberate broadened LOCAL regex
+// list rather than a reuse of auth-bindings `secretShapeFindingOf`: that guard
+// classifies one already-extracted VALUE against auth-pointer shapes (op://,
+// wss://, otpauth://, base32 TOTP seeds), whereas migration must scan whole file
+// TEXT for `key: value` / env / JWT / PEM shapes it does not cover. Reusing it
+// would both miss these shapes and point the migration module at the auth module
+// (wrong dependency direction). Keep the two vocabularies separate.
 function hasSecretMaterial(contents: string): boolean {
 	return [
-		/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+		// PEM private key blocks.
+		/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+		// Service-account and other *_TOKEN env assignments.
 		/\bOP_SERVICE_ACCOUNT_TOKEN\s*=/i,
+		// Line-anchored `key: value` for the narrow original key list.
 		/^\s*(?:password|passwd|token|secret|cookie|authorization)\s*:\s*\S+/im,
+		// Common secret keys anywhere on a line, in `:` or `=` value form.
+		// Covers client_secret, aws_secret_access_key, aws_access_key_id,
+		// api_key / api-key / apikey, and private_key value assignments.
+		/\b(?:client_secret|aws_secret_access_key|aws_access_key_id|api[_-]?key|private_key)\s*[:=]\s*\S+/i,
+		// Bearer / Basic authorization tokens with a non-empty credential.
+		/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/i,
+		// Bounded JWT: three base64url segments separated by dots, each of a
+		// plausible length (header/payload >= 10 chars, signature >= 10).
+		/\beyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
 	].some((pattern) => pattern.test(contents));
 }
 

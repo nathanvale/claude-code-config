@@ -241,6 +241,13 @@ export type AgentBrowserExecutionResult =
 			executed_steps: number;
 			/** Present only on `agent_browser_connection_unstable`. */
 			connection?: AgentBrowserConnectionDiagnostic;
+			/**
+			 * Present only when a confidential delivery engaged in this task.
+			 * A delivery that happened before a later failure is still delivered:
+			 * the evidence rides the failure so the caller's sensitive-run guard
+			 * engages regardless of the task's terminal truth.
+			 */
+			delivery?: AgentBrowserDeliveryEvidence;
 	  };
 
 type JsonObject = Record<string, unknown>;
@@ -682,6 +689,24 @@ export async function executeAgentBrowserTask(
 	const deliveredShapes: BrowserUseDeliveredFieldShape[] = [];
 	const methodStepEvents: BrowserUseAuthMethodStep[] = [];
 	let lastResume: BrowserUseDeliveryResumeDirective | undefined;
+	// A failure AFTER at least one delivered shape must still carry the delivery
+	// evidence: the secret already reached the page, so the caller's sensitive-run
+	// guard has to engage even though the task did not confirm. Invariant:
+	// lastResume is defined whenever deliveredShapes is non-empty (both are set
+	// together on a successful delivery); the guard below enforces it structurally.
+	const withDelivery = (
+		result: AgentBrowserExecutionFailure,
+	): AgentBrowserExecutionFailure =>
+		deliveredShapes.length > 0 && lastResume !== undefined
+			? {
+					...result,
+					delivery: {
+						delivered_shapes: [...deliveredShapes],
+						method_step_events: [...methodStepEvents],
+						resume: lastResume,
+					},
+				}
+			: result;
 	for (const step of task.steps) {
 		if (step.kind === "snapshot") {
 			const result = await runNative(runtime, task, [
@@ -690,12 +715,12 @@ export async function executeAgentBrowserTask(
 				"--json",
 			]);
 			if (!commandSucceeded(result)) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_command_failed",
 					"not-achieved",
 					"Agent Browser could not observe fresh page structure.",
 					executedSteps,
-				);
+				));
 			}
 			const refs = asObject(parseSuccessData(result?.stdout ?? "")?.refs);
 			currentRefs = new Set(
@@ -708,23 +733,23 @@ export async function executeAgentBrowserTask(
 
 		if (step.kind === "open") {
 			if (!originIsAllowed(step.url, validation.allowedOrigins)) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_target_origin_refused",
 					"not-achieved",
 					"Navigation is outside the task's allowed origins.",
 					executedSteps,
-				);
+				));
 			}
 			const opened = await runNative(runtime, task, ["open", step.url, "--json"]);
 			currentRefs = new Set();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(opened)) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_mutation_effect_unknown",
 					"unknown",
 					"Navigation may have reached the browser; inspect before retry.",
 					executedSteps,
-				);
+				));
 			}
 			const verified = await verifyPostcondition(
 				runtime,
@@ -733,7 +758,7 @@ export async function executeAgentBrowserTask(
 				validation.allowedOrigins,
 			);
 			if (verified !== "confirmed") {
-				return failure(
+				return withDelivery(failure(
 					verified === "unavailable"
 						? "agent_browser_mutation_effect_unknown"
 						: "agent_browser_postcondition_not_achieved",
@@ -742,28 +767,28 @@ export async function executeAgentBrowserTask(
 						? "Navigation completed without fresh structural proof; inspect before retry."
 						: "Fresh structure did not satisfy the declared navigation postcondition.",
 					executedSteps + 1,
-				);
+				));
 			}
 			executedSteps += 1;
 			continue;
 		}
 
 		if (!hasCurrentSnapshot) {
-			return failure(
+			return withDelivery(failure(
 				"agent_browser_current_snapshot_required",
 				"not-achieved",
 				"A fresh task-local snapshot is required immediately before ref mutation.",
 				executedSteps,
-			);
+			));
 		}
 		if (step.kind === "evaluate") {
 			if (!actionIntegrityIsValid(step, validation.allowedOrigins)) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_action_integrity_refused",
 					"not-achieved",
 					"Evaluated actions require an approved hash-bound script, admitted origin, bounded input, and mutation postcondition.",
 					executedSteps,
-				);
+				));
 			}
 			const currentUrl = await runNative(runtime, task, ["get", "url", "--json"]);
 			const observedUrl = parseSuccessData(currentUrl?.stdout ?? "")?.url;
@@ -772,12 +797,12 @@ export async function executeAgentBrowserTask(
 				typeof observedUrl !== "string" ||
 				!hasExactOrigin(observedUrl, step.allowed_origin)
 			) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_action_target_refused",
 					"not-achieved",
 					"The reviewed action's exact allowed origin is not freshly proven.",
 					executedSteps,
-				);
+				));
 			}
 			const evaluated = await runNative(runtime, task, [
 				"eval",
@@ -788,12 +813,12 @@ export async function executeAgentBrowserTask(
 			currentRefs = new Set();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(evaluated)) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_mutation_effect_unknown",
 					"unknown",
 					"The reviewed action may have dispatched browser effects; inspect before retry.",
 					executedSteps,
-				);
+				));
 			}
 			if (step.effect === "mutation" && step.postcondition !== undefined) {
 				const verified = await verifyPostcondition(
@@ -803,7 +828,7 @@ export async function executeAgentBrowserTask(
 					validation.allowedOrigins,
 				);
 				if (verified !== "confirmed") {
-					return failure(
+					return withDelivery(failure(
 						verified === "unavailable"
 							? "agent_browser_mutation_effect_unknown"
 							: "agent_browser_postcondition_not_achieved",
@@ -812,19 +837,19 @@ export async function executeAgentBrowserTask(
 							? "Reviewed mutation completed without fresh structural proof; inspect before retry."
 							: "Fresh structure did not satisfy the reviewed action postcondition.",
 						executedSteps + 1,
-					);
+					));
 				}
 			}
 			executedSteps += 1;
 			continue;
 		}
 		if (!SAFE_REF.test(step.ref) || !currentRefs.has(step.ref)) {
-			return failure(
+			return withDelivery(failure(
 				"agent_browser_ref_invalid",
 				"not-achieved",
 				"The requested ref is absent from the current task-local snapshot.",
 				executedSteps,
-			);
+			));
 		}
 		if (step.kind === "fill" && step.sensitivity === "confidential") {
 			const delivery = task.auth_delivery;
@@ -833,12 +858,12 @@ export async function executeAgentBrowserTask(
 			// TokenRetrievalPort (native capability absent) means the auth wiring
 			// supplies no context, so this refusal is exactly the pre-U5 behavior.
 			if (delivery === undefined || !delivery.in_sensitive_interval) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_confidential_input_requires_auth_transaction",
 					"not-achieved",
 					"Confidential input must use the Browser Authentication Transaction.",
 					executedSteps,
-				);
+				));
 			}
 			// The context is present and we are inside the sensitive interval: route
 			// this field through the Confidential Field Delivery choreography instead
@@ -847,12 +872,12 @@ export async function executeAgentBrowserTask(
 			// disposable delivery helper — the executor never observes a value.
 			const field = delivery.field_by_ref[step.ref];
 			if (field === undefined) {
-				return failure(
+				return withDelivery(failure(
 					"agent_browser_confidential_delivery_blocked",
 					"not-achieved",
 					"The confidential fill ref has no mapped credential field in the auth-delivery context.",
 					executedSteps,
-				);
+				));
 			}
 			const outcome = await deliverConfidentialFields({
 				binding: delivery.binding,
@@ -871,13 +896,15 @@ export async function executeAgentBrowserTask(
 				// A blocked delivery is a not-achieved refusal carrying the auth
 				// choreography's own blocked cause; the executor never invents a
 				// retry — the caller inspects the blocked cause before resuming.
-				return {
+				// withDelivery: an earlier fill in this task may already have
+				// delivered, so prior evidence still rides this refusal.
+				return withDelivery({
 					ok: false,
 					code: "agent_browser_confidential_delivery_blocked",
 					outcome: "not-achieved",
 					message: `Confidential field delivery was blocked (${outcome.blocked.blocked_cause}); resolve the blocked cause through the Browser Authentication Transaction before resuming.`,
 					executed_steps: executedSteps,
-				};
+				});
 			}
 			for (const shape of outcome.resume.delivered_shapes) {
 				deliveredShapes.push(shape);
@@ -893,7 +920,7 @@ export async function executeAgentBrowserTask(
 				validation.allowedOrigins,
 			);
 			if (verified !== "confirmed") {
-				return failure(
+				return withDelivery(failure(
 					verified === "unavailable"
 						? "agent_browser_mutation_effect_unknown"
 						: "agent_browser_postcondition_not_achieved",
@@ -902,7 +929,7 @@ export async function executeAgentBrowserTask(
 						? "Confidential delivery completed without fresh structural proof; inspect before retry."
 						: "Fresh structure did not satisfy the confidential fill postcondition.",
 					executedSteps + 1,
-				);
+				));
 			}
 			executedSteps += 1;
 			continue;
@@ -916,12 +943,12 @@ export async function executeAgentBrowserTask(
 		currentRefs = new Set();
 		hasCurrentSnapshot = false;
 		if (!commandSucceeded(mutated)) {
-			return failure(
+			return withDelivery(failure(
 				"agent_browser_mutation_effect_unknown",
 				"unknown",
 				"Agent Browser may have dispatched the mutation; inspect before retry.",
 				executedSteps,
-			);
+			));
 		}
 		const verified = await verifyPostcondition(
 			runtime,
@@ -930,7 +957,7 @@ export async function executeAgentBrowserTask(
 			validation.allowedOrigins,
 		);
 		if (verified !== "confirmed") {
-			return failure(
+			return withDelivery(failure(
 				verified === "unavailable"
 					? "agent_browser_mutation_effect_unknown"
 					: "agent_browser_postcondition_not_achieved",
@@ -939,7 +966,7 @@ export async function executeAgentBrowserTask(
 					? "Mutation completed without fresh structural proof; inspect before retry."
 					: "Fresh structure did not satisfy the declared mutation postcondition.",
 				executedSteps + 1,
-			);
+			));
 		}
 		executedSteps += 1;
 	}

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -29,6 +29,12 @@ const duplicateYamlFixtureRoot = join(
 	"fixtures",
 	"browser-use-migration",
 	"duplicate-yaml",
+);
+const malformedYamlFixtureRoot = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"fixtures",
+	"browser-use-migration",
+	"malformed-yaml",
 );
 
 afterAll(() => {
@@ -75,7 +81,7 @@ describe("clean-break migration public commands", () => {
 		});
 	});
 
-	test("plan dispositions every frozen entry and quarantines backups, secrets, executables, and obsolete owners", async () => {
+	test("plan dispositions every frozen entry and quarantines backups, secrets, executables, unsupported, and obsolete owners", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const runtime = makeRuntime({ env: xdg.env });
@@ -102,8 +108,8 @@ describe("clean-break migration public commands", () => {
 		const data = parseJson(planned.stdout).data as Record<string, unknown>;
 		expect(data).toMatchObject({
 			phase: "planned",
-			source_entry_count: 5,
-			disposition_count: 5,
+			source_entry_count: 8,
+			disposition_count: 8,
 			staged_generation: null,
 			activation_state: "unchanged",
 		});
@@ -117,8 +123,16 @@ describe("clean-break migration public commands", () => {
 			),
 		).toEqual({
 			"browser-domain-memory.md": "quarantine-obsolete",
+			// Finding #3: broadened secret classifier catches client_secret in
+			// value form, not just the narrow line-anchored key list.
+			"client-secret.env": "quarantine-secret",
 			"credentials.txt": "quarantine-secret",
 			"legacy.js": "quarantine-executable",
+			// Finding #4: executable MODE bits on a non-code extension take the
+			// mode arm, distinct from legacy.js's extension arm.
+			"tool.bin": "quarantine-executable",
+			// Finding #4: unsupported extension (regular file, no exec bits).
+			"report.png": "quarantine-unsupported",
 			"service.yml": "stage",
 			"service.yml.bak": "quarantine-backup",
 		});
@@ -164,6 +178,72 @@ describe("clean-break migration public commands", () => {
 		expect(planned.exitCode).toBe(20);
 		expect(parseJson(planned.stdout).error).toMatchObject({
 			code: "migration_yaml_duplicate_key",
+		});
+		const status = await runForTest(
+			["migration", "status", "--json"],
+			runtime,
+		);
+		expect(parseJson(status.stdout).data).toMatchObject({
+			phase: "inventoried",
+			disposition_count: 0,
+		});
+	});
+
+	test("plan quarantines a non-file symlink entry as unsupported", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const source = join(xdg.base, "symlink-source");
+		mkdirSync(source, { recursive: true, mode: 0o700 });
+		writeFileSync(join(source, "service.yml"), "service_id: real\n");
+		symlinkSync("service.yml", join(source, "alias.yml"));
+		const runtime = makeRuntime({ env: xdg.env });
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", source, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", source, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(0);
+		const dispositions = (
+			parseJson(planned.stdout).data as Record<string, unknown>
+		).dispositions as Array<Record<string, unknown>>;
+		const alias = dispositions.find(
+			(row) => row.source_relative_path === "alias.yml",
+		);
+		expect(alias?.disposition).toBe("quarantine-unsupported");
+	});
+
+	test("plan rejects malformed non-duplicate YAML with migration_yaml_invalid", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+		expect(
+			(
+				await runForTest(
+					[
+						"migration",
+						"inventory",
+						"--source",
+						malformedYamlFixtureRoot,
+						"--json",
+					],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", malformedYamlFixtureRoot, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(20);
+		expect(parseJson(planned.stdout).error).toMatchObject({
+			code: "migration_yaml_invalid",
 		});
 		const status = await runForTest(
 			["migration", "status", "--json"],

@@ -76,8 +76,15 @@ function runtimeFor(
 		stderr?: string;
 		timedOut?: boolean;
 	}[],
-): BrowserUseRuntime & { calls: Array<readonly string[]> } {
+	options: { writeFails?: boolean } = {},
+): BrowserUseRuntime & {
+	calls: Array<readonly string[]>;
+	writes: Map<string, string>;
+	ensuredDirs: string[];
+} {
 	const calls: Array<readonly string[]> = [];
+	const writes = new Map<string, string>();
+	const ensuredDirs: string[] = [];
 	let index = 0;
 	const runCommand = async (
 		input: McporterCommandInput,
@@ -93,12 +100,22 @@ function runtimeFor(
 	};
 	return {
 		calls,
+		writes,
+		ensuredDirs,
 		env: {},
 		now: () => 0,
 		runCommand,
 		readTextFile: async () => "",
-		writeTextFile: async () => {},
-		ensureDirectory: async () => {},
+		// Capture artifact writes so tests can assert the bytes landed at the
+		// derived path (never a bare reference). Optionally simulate a write
+		// failure so the fail-closed path is exercisable.
+		writeTextFile: async (path: string, contents: string) => {
+			if (options.writeFails) throw new Error("simulated write failure");
+			writes.set(path, contents);
+		},
+		ensureDirectory: async (path: string) => {
+			ensuredDirs.push(path);
+		},
 		readStdin: async () => "",
 		platformFs: {} as BrowserUseRuntime["platformFs"],
 	};
@@ -194,12 +211,13 @@ describe("Chrome DevTools MCP task lane", () => {
 		expect(runtime.calls).toEqual([]);
 	});
 
-	test("performance trace produces a native artifact reference, never inlined bytes", async () => {
+	test("performance trace writes native evidence bytes to the derived artifact path, never inlined into the envelope", async () => {
 		const runtime = runtimeFor([
 			{ stdout: pagesListing() },
 			{ stdout: mcpText("Trace started") },
 			{ stdout: mcpText("## Trace summary\nLCP 2.1s") },
 		]);
+		const artifactPath = "/runs/run-chrome-1/artifacts/run-chrome-1-perf-trace.json";
 		const result = await executeChromeTask(
 			runtime,
 			baseTask({
@@ -212,7 +230,7 @@ describe("Chrome DevTools MCP task lane", () => {
 			expect(result.artifacts).toEqual([
 				{
 					kind: "performance-trace",
-					path: "/runs/run-chrome-1/artifacts/run-chrome-1-perf-trace.json",
+					path: artifactPath,
 					sensitivity: "high",
 				},
 			]);
@@ -220,6 +238,34 @@ describe("Chrome DevTools MCP task lane", () => {
 		}
 		expect(runtime.calls[1]?.join(" ")).toContain("performance_start_trace");
 		expect(runtime.calls[2]?.join(" ")).toContain("performance_stop_trace");
+		// The artifact reference points at a file that now exists: the native
+		// trace evidence was written to the derived path.
+		expect(runtime.ensuredDirs).toContain("/runs/run-chrome-1/artifacts");
+		expect(runtime.writes.has(artifactPath)).toBe(true);
+		expect(runtime.writes.get(artifactPath)).toContain("LCP 2.1s");
+	});
+
+	test("a failed artifact write fails closed as a command failure, never a dangling reference", async () => {
+		const runtime = runtimeFor(
+			[
+				{ stdout: pagesListing() },
+				{ stdout: mcpText("Trace started") },
+				{ stdout: mcpText("## Trace summary\nLCP 2.1s") },
+			],
+			{ writeFails: true },
+		);
+		const result = await executeChromeTask(
+			runtime,
+			baseTask({
+				artifact_dir: "/runs/run-chrome-1/artifacts",
+				operations: [{ kind: "performance-trace", reload: true }],
+			}),
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			code: "chrome_task_command_failed",
+			outcome: "not-achieved",
+		});
 	});
 
 	test("refuses an artifact-producing operation with no artifact directory", async () => {
@@ -236,11 +282,12 @@ describe("Chrome DevTools MCP task lane", () => {
 		expect(runtime.calls).toHaveLength(1);
 	});
 
-	test("lighthouse-insight analysis returns an artifact reference", async () => {
+	test("lighthouse-insight analysis writes native evidence bytes to the derived artifact path", async () => {
 		const runtime = runtimeFor([
 			{ stdout: pagesListing() },
 			{ stdout: mcpText("## Insight: LCP breakdown\nphase details") },
 		]);
+		const artifactPath = "/runs/a/run-chrome-1-lighthouse-LCPBreakdown.json";
 		const result = await executeChromeTask(
 			runtime,
 			baseTask({
@@ -254,10 +301,14 @@ describe("Chrome DevTools MCP task lane", () => {
 		if (result.ok) {
 			expect(result.artifacts[0]).toMatchObject({
 				kind: "lighthouse",
-				path: "/runs/a/run-chrome-1-lighthouse-LCPBreakdown.json",
+				path: artifactPath,
 			});
 		}
 		expect(runtime.calls[1]?.join(" ")).toContain("performance_analyze_insight");
+		// The reference points at a file that now exists on disk.
+		expect(runtime.ensuredDirs).toContain("/runs/a");
+		expect(runtime.writes.has(artifactPath)).toBe(true);
+		expect(runtime.writes.get(artifactPath)).toContain("phase details");
 	});
 
 	test("a semantic tool error mid-task is not-achieved, never unknown (reads are side-effect free)", async () => {

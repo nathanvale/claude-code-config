@@ -20,9 +20,11 @@
 //     Lighthouse-capable performance-insight analysis. None navigate, click, or
 //     mutate the page. F6's outcome is "records findings without changing
 //     browser identity."
-//   - Native artifacts (trace / Lighthouse output) are surfaced as run artifact
-//     REFERENCES with a path the driver persists (R21), never inlined into the
-//     model-visible result.
+//   - Native artifacts (trace / Lighthouse output) are WRITTEN to the driver's
+//     run-scoped artifact_dir by the executor (which holds the native evidence)
+//     and surfaced as run artifact REFERENCES pointing at the file on disk (R21),
+//     never inlined into the model-visible result. The written bytes are the
+//     auth-scrubbed native evidence, never raw adapter stdout or secrets.
 //
 // Secret containment (R14, AE9): captured evidence is BOUNDED and auth-scrubbed.
 // Console text, network URLs, and analysis text are truncated to a bounded
@@ -766,10 +768,11 @@ async function runOperation(
 				),
 			};
 		}
-		// start_trace + stop_trace: the trace summary lands in the envelope text
-		// (bounded evidence); the driver persists the native trace file. The
-		// artifact path is derived, not adapter-returned, so no adapter stdout is
-		// trusted for filesystem paths.
+		// start_trace + stop_trace: the trace summary lands in the envelope text.
+		// The executor holds the native trace evidence here, so it WRITES the
+		// scrubbed capture to the derived path (the artifact reference then points
+		// at a file that exists). The path is derived, not adapter-returned, so no
+		// adapter stdout is trusted for filesystem paths.
 		const started = await runTool(runtime, task, "performance_start_trace", {
 			pageId,
 			reload: op.reload,
@@ -785,12 +788,17 @@ async function runOperation(
 		if (envelope === undefined) {
 			return commandOutcome(stopped, executedSoFar, "stop the performance trace");
 		}
+		const scrubbed = scrubEvidence(envelope.text);
 		const path = `${task.artifact_dir}/${task.run_id}-perf-trace.json`;
-		return {
-			kind: "artifact",
-			evidence: { kind: "analysis", text: scrubEvidence(envelope.text) },
-			artifact: { kind: "performance-trace", path, sensitivity: "high" },
-		};
+		return persistArtifactOutcome(
+			runtime,
+			task.artifact_dir,
+			path,
+			scrubbed,
+			{ kind: "performance-trace", path, sensitivity: "high" },
+			executedSoFar,
+			"persist the performance trace",
+		);
 	}
 
 	if (op.kind === "lighthouse-insight") {
@@ -813,12 +821,17 @@ async function runOperation(
 		if (envelope === undefined) {
 			return commandOutcome(outcome, executedSoFar, "analyze a performance insight");
 		}
+		const scrubbed = scrubEvidence(envelope.text);
 		const path = `${task.artifact_dir}/${task.run_id}-lighthouse-${op.insight_name}.json`;
-		return {
-			kind: "artifact",
-			evidence: { kind: "analysis", text: scrubEvidence(envelope.text) },
-			artifact: { kind: "lighthouse", path, sensitivity: "high" },
-		};
+		return persistArtifactOutcome(
+			runtime,
+			task.artifact_dir,
+			path,
+			scrubbed,
+			{ kind: "lighthouse", path, sensitivity: "high" },
+			executedSoFar,
+			"persist the performance insight",
+		);
 	}
 
 	return {
@@ -829,6 +842,46 @@ async function runOperation(
 			"The requested operation is not a code-owned Chrome DevTools MCP operation.",
 			executedSoFar,
 		),
+	};
+}
+
+/**
+ * Persist one native artifact to disk and return the artifact outcome. The
+ * executor holds the trace/insight evidence at this point, so it owns the write:
+ * `scrubbed` is the already-auth-scrubbed native evidence (never the raw
+ * envelope, never inlined secrets), which becomes the on-disk artifact bytes so
+ * the returned artifact reference points at a file that now exists (R21). The
+ * write goes through the runtime's owner-only atomic writeTextFile; a failed
+ * write fails closed as a command failure rather than advertising a path with no
+ * file behind it.
+ */
+async function persistArtifactOutcome(
+	runtime: BrowserUseRuntime,
+	artifactDir: string,
+	path: string,
+	scrubbed: string,
+	artifact: ChromeTaskArtifact,
+	executedSoFar: number,
+	what: string,
+): Promise<OperationOutcome> {
+	try {
+		await runtime.ensureDirectory(artifactDir);
+		await runtime.writeTextFile(path, scrubbed);
+	} catch {
+		return {
+			kind: "failure",
+			failure: failure(
+				"chrome_task_command_failed",
+				"not-achieved",
+				`Chrome DevTools MCP could not ${what} to the run artifact directory.`,
+				executedSoFar,
+			),
+		};
+	}
+	return {
+		kind: "artifact",
+		evidence: { kind: "analysis", text: scrubbed },
+		artifact,
 	};
 }
 
