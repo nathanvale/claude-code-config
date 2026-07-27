@@ -536,21 +536,21 @@ export async function executeAgentBrowserTask(
 		}
 
 		if (step.kind === "open") {
-				if (!agentBrowserOriginIsAllowed(step.url, validation.allowedOrigins)) {
+			if (!agentBrowserOriginIsAllowed(step.url, validation.allowedOrigins)) {
 				return withDelivery(failure(
 					"agent_browser_target_origin_refused",
 					"not-achieved",
 					"Navigation is outside the task's allowed origins.",
 					executedSteps,
-					));
-				}
-				const markerFailure = await markMutationDispatch(
-					runtime,
-					task,
-					executedSteps,
-				);
-				if (markerFailure !== undefined) return withDelivery(markerFailure);
-				mutationDispatched = true;
+				));
+			}
+			const markerFailure = await markMutationDispatch(
+				runtime,
+				task,
+				executedSteps,
+			);
+			if (markerFailure !== undefined) return withDelivery(markerFailure);
+			mutationDispatched = true;
 			const opened = await runNative(runtime, task, ["open", step.url, "--json"]);
 			currentRefs = new Set();
 			currentRefMetadata = new Map();
@@ -617,15 +617,15 @@ export async function executeAgentBrowserTask(
 					executedSteps,
 				));
 			}
-				if (step.effect === "mutation") {
-					const markerFailure = await markMutationDispatch(
-						runtime,
-						task,
-						executedSteps,
-					);
-					if (markerFailure !== undefined) return withDelivery(markerFailure);
-					mutationDispatched = true;
-				}
+			if (step.effect === "mutation") {
+				const markerFailure = await markMutationDispatch(
+					runtime,
+					task,
+					executedSteps,
+				);
+				if (markerFailure !== undefined) return withDelivery(markerFailure);
+				mutationDispatched = true;
+			}
 			const evaluated = await runNative(runtime, task, [
 				"eval",
 				"-b",
@@ -794,17 +794,17 @@ export async function executeAgentBrowserTask(
 			continue;
 		}
 
-			const mutationArgs =
-				step.kind === "fill"
-					? ["fill", mutationRef, step.value, "--json"]
-					: ["click", mutationRef, "--json"];
-			const markerFailure = await markMutationDispatch(
-				runtime,
-				task,
-				executedSteps,
-			);
-			if (markerFailure !== undefined) return withDelivery(markerFailure);
-			mutationDispatched = true;
+		const mutationArgs =
+			step.kind === "fill"
+				? ["fill", mutationRef, step.value, "--json"]
+				: ["click", mutationRef, "--json"];
+		const markerFailure = await markMutationDispatch(
+			runtime,
+			task,
+			executedSteps,
+		);
+		if (markerFailure !== undefined) return withDelivery(markerFailure);
+		mutationDispatched = true;
 		const mutated = await runNative(runtime, task, mutationArgs);
 		currentRefs = new Set();
 		currentRefMetadata = new Map();
