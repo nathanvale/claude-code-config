@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { type BrowserUseRuntime, runForTest } from "./browser-use";
+import { discoverPages } from "./browser-use-discovery";
+import { BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS } from "./command-contract";
+import { BROWSER_USE_LIVE_ADAPTERS } from "./discovery-model";
 import type {
 	McporterCommandInput,
 	McporterCommandResult,
@@ -803,27 +806,324 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		expect(calls).toHaveLength(0);
 	});
 
-	test("a verified envelope for a transport-less adapter fails closed at the transport gate", async () => {
-		// The discovery page-listing gate survives U3: a verified agent-browser
-		// attachment has a native operation Implementation but no chrome-devtools
-		// page-listing transport, so discovery fails closed rather than spawning
-		// it through the chrome-devtools call shape.
+	test("a verified agent-browser envelope lists tabs through its CLI-subcommand transport", async () => {
+		// agent-browser is a CLI-subcommand adapter: its tab listing is
+		// `<probe> --cdp <ws> --session browser-use-<runId> tab list --json`,
+		// returning {success:true, data:{tabs:[{tabId, url, active, title?}]}}.
+		// Discovery must spawn THAT shape (not the chrome-devtools list_pages
+		// call) and map tabId -> candidate id.
+		// Derive the expected ws endpoint and session run id from the fixture
+		// (the FIXTURE_PROBE_EXECUTABLE / FIXTURE_ENDPOINT_HTTP pattern) so a
+		// regenerated fixture can never silently diverge from these literals.
+		const wsEndpoint = FIXTURE_ENVELOPE.data.endpoint.ws as string;
+		const fixtureRunId = FIXTURE_ENVELOPE.run_id as string;
 		const { runtime, calls } = discoveryRuntime({
 			files: {
 				"/h.json": verifiedHandoffEnvelope((envelope) => {
 					envelope.data.attachment.adapter_id = "agent-browser";
 				}),
 			},
+			runCommand: async (call) => {
+				calls.push(call);
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({
+						success: true,
+						data: {
+							tabs: [
+								{
+									tabId: "T-1",
+									url: "https://example.com/app",
+									active: true,
+									title: "Fixture",
+								},
+							],
+						},
+					}),
+					stderr: "",
+					timedOut: false,
+				};
+			},
 		});
 		const result = await runForTest(
 			["targets", "list", "--mode", "handoff-bound", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "target_discovery_transport_failed",
+		expect(result.exitCode).toBe(0);
+		const json = parseJson(result.stdout);
+		expect(json.status).toBe("ok");
+		expect(json.data).toMatchObject({ operation_ready: true });
+		// The spawn is the agent-browser tab-list subcommand argv, verbatim from
+		// the envelope's ws endpoint and inherited run id.
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			FIXTURE_ENVELOPE.data.attachment.probe_executable,
+			"--cdp",
+			wsEndpoint,
+			"--session",
+			`browser-use-${fixtureRunId}`,
+			"tab",
+			"list",
+			"--json",
+		]);
+	});
+});
+
+// The CLI-subcommand transport is unit-tested directly through discoverPages so
+// the argv, envelope mapping, safe-id guard, and failure branches are pinned
+// without threading the whole facade.
+describe("U1 target discovery — agent-browser CLI-subcommand transport", () => {
+	const AGENT_BROWSER_FACTS = {
+		adapter: "agent-browser" as const,
+		probeExecutable: "/opt/side-quest/adapters/agent-browser/bin/agent-browser",
+		endpointHttp: "http://127.0.0.1:8912",
+		endpointWs: "ws://127.0.0.1:8912/devtools/browser/abc",
+		runId: "run-42",
+	};
+
+	function tabListStdout(
+		tabs: Array<{ tabId: string; url: string; active?: boolean; title?: string }>,
+	): string {
+		return JSON.stringify({ success: true, data: { tabs } });
+	}
+
+	test("maps the tab-list envelope onto RawPages and builds the exact argv", async () => {
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				calls.push(call);
+				return {
+					exitCode: 0,
+					stdout: tabListStdout([
+						{ tabId: "T-1", url: "http://127.0.0.1:8912/", active: true, title: "Fixture" },
+					]),
+					stderr: "",
+					timedOut: false,
+				};
+			},
 		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		if (!discovery.ok) {
+			throw new Error(`agent-browser discovery failed: ${discovery.failure.code}`);
+		}
+		expect(discovery.pages).toEqual([
+			{ id: "T-1", url: "http://127.0.0.1:8912/", title: "Fixture" },
+		]);
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"--cdp",
+			AGENT_BROWSER_FACTS.endpointWs,
+			"--session",
+			"browser-use-run-42",
+			"tab",
+			"list",
+			"--json",
+		]);
+	});
+
+	test("an empty tab set is an empty page list, never a failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: tabListStdout([]),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery).toEqual({ ok: true, pages: [] });
+	});
+
+	test("a non-zero tab-list exit fails closed as a transport failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 3,
+				stdout: "",
+				stderr: "boom",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				recoverability: "retry",
+			});
+		}
+	});
+
+	test("an unsafe run id is rejected before any spawn", async () => {
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				calls.push(call);
+				return { exitCode: 0, stdout: tabListStdout([]), stderr: "", timedOut: false };
+			},
+		});
+		const discovery = await discoverPages(runtime, {
+			...AGENT_BROWSER_FACTS,
+			runId: "bad id/../etc",
+		});
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			// An unsafe run id is a caller-input fault, not a diagnosable transport
+			// failure: it must route to change_input, not retry-after-diagnostics.
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				actionId: "change_target_discovery_input",
+				recoverability: "change_input",
+			});
+		}
 		expect(calls).toHaveLength(0);
+	});
+
+	test("a spawn failure routes to dependency recovery, not a generic retry", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => {
+				throw new Error("spawn agent-browser ENOENT");
+			},
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_dependency_missing",
+				actionId: "configure_target_dependency",
+				recoverability: "repair_state",
+			});
+		}
+	});
+
+	test("a timed-out tab-list call is a distinct transport timeout", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				timedOut: true,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_timeout",
+				recoverability: "retry",
+			});
+		}
+	});
+
+	test("unparsable tab-list output fails closed as a transport failure", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: "not valid json{{{",
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure.code).toBe("target_discovery_transport_failed");
+		}
+	});
+
+	test("a success:false envelope is a transport failure, never an empty tab set", async () => {
+		// agent-browser reports a dead/flaky CDP link as exit 0 with
+		// {success:false}. That must surface as a transport failure the caller
+		// can retry, not target_discovery_no_candidates ("open a tab") — even
+		// when the failure envelope still carries a populated tabs array.
+		const runtime = makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify({
+					success: false,
+					error: "cdp websocket connect failed",
+					data: { tabs: [{ tabId: "T-1", url: "http://127.0.0.1:8912/" }] },
+				}),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS);
+		expect(discovery.ok).toBe(false);
+		if (!discovery.ok) {
+			expect(discovery.failure).toMatchObject({
+				code: "target_discovery_transport_failed",
+				recoverability: "retry",
+			});
+		}
+	});
+});
+
+// Drift gate for BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS: the constant doubles
+// as the fail-closed discovery gate, so it must never disagree with the set of
+// adapters that actually have a discoverPages transport branch. A member added
+// without a branch (or a branch removed while the constant keeps the id) would
+// otherwise ship silently — the mirror of the BROWSER_USE_TRANSPORT_ADAPTERS
+// lane-table gate in browser-use-adapter-registry.test.ts.
+describe("U1 target discovery — transport-adapter gate has no drift", () => {
+	const NOT_IMPLEMENTED = "is not implemented for adapter";
+
+	// A runtime whose spawn/mcporter call returns benign parseable output, so a
+	// member's real branch reaches its transport rather than the gate; the point
+	// is only whether discoverPages fell through to the not-implemented refusal.
+	function benignRuntime(): BrowserUseRuntime {
+		return makeRuntime({
+			runCommand: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify({ success: true, data: { tabs: [] } }),
+				stderr: "",
+				timedOut: false,
+			}),
+		});
+	}
+
+	function factsFor(adapter: (typeof BROWSER_USE_LIVE_ADAPTERS)[number]) {
+		return {
+			adapter,
+			probeExecutable: "/opt/side-quest/adapters/fixture/bin/adapter",
+			endpointHttp: "http://127.0.0.1:8912",
+			endpointWs: "ws://127.0.0.1:8912/devtools/browser/abc",
+			runId: "run-42",
+		};
+	}
+
+	test("every discovery-transport member has a real branch (never the not-implemented refusal)", async () => {
+		for (const adapter of BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS) {
+			const discovery = await discoverPages(benignRuntime(), factsFor(adapter));
+			if (!discovery.ok) {
+				expect(discovery.failure.message).not.toContain(NOT_IMPLEMENTED);
+			}
+		}
+	});
+
+	test("a live adapter that is not a discovery member still fails closed at the gate", async () => {
+		const nonMembers = BROWSER_USE_LIVE_ADAPTERS.filter(
+			(adapter) =>
+				!(
+					BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS as readonly string[]
+				).includes(adapter),
+		);
+		// The gate is only meaningful if at least one registered adapter is held
+		// out of the discovery-transport set; if every live adapter becomes a
+		// member, this assertion flags that the fail-closed path is now untested.
+		expect(nonMembers.length).toBeGreaterThan(0);
+		for (const adapter of nonMembers) {
+			const discovery = await discoverPages(benignRuntime(), factsFor(adapter));
+			expect(discovery.ok).toBe(false);
+			if (!discovery.ok) {
+				expect(discovery.failure.message).toContain(NOT_IMPLEMENTED);
+				expect(discovery.failure).toMatchObject({
+					code: "target_discovery_transport_failed",
+					actionId: "change_target_discovery_input",
+					recoverability: "change_input",
+				});
+			}
+		}
 	});
 });
 

@@ -320,6 +320,8 @@ describe("U1 envelope-derived transport proof against real mcporter", () => {
 			probeExecutable: FIXTURE_ENVELOPE.data.attachment
 				.probe_executable as string,
 			endpointHttp: FIXTURE_ENVELOPE.data.endpoint.http as string,
+			endpointWs: FIXTURE_ENVELOPE.data.endpoint.ws as string,
+			runId: FIXTURE_ENVELOPE.run_id as string,
 		});
 		if (!discovery.ok) {
 			throw new Error(

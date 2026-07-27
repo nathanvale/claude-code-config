@@ -32,6 +32,7 @@ import {
 	selectAgentBrowserTarget,
 	verifyAgentBrowserPostcondition,
 } from "./browser-use-agent-browser-target";
+import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
@@ -47,8 +48,6 @@ const METHOD_STEP_BY_FIELD: Readonly<
 	"otp-current": "fill-otp",
 };
 const COMMAND_TIMEOUT_MS = 30_000;
-const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
-const SAFE_TAB_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const SAFE_REF = /^@e[1-9][0-9]*$/;
 
 /**

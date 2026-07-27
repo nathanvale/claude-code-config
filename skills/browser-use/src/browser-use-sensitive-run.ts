@@ -22,6 +22,8 @@
 // receives them either — it registers the sentinels the harness sweeps for.
 // ---------------------------------------------------------------------------
 
+import { SAFE_RUN_ID } from "./browser-use-identifiers";
+
 // --- Governed output surfaces (R17-R18; release R14-R16) --------------------
 
 /**
@@ -109,7 +111,6 @@ export type BrowserUseSensitiveRunResult =
 	| { ok: true; guard: BrowserUseSensitiveRunGuard }
 	| { ok: false; rejection: BrowserUseSensitiveRunRejection };
 
-const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
 // A sentinel short enough to plausibly appear in one field is a scanner
 // weakness, not a strength: a 3-char sentinel would match ordinary tokens and
 // produce false leaks. Require a bounded, distinctive minimum so a match is

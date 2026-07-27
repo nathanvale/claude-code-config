@@ -4,11 +4,11 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
 const COMMAND_TIMEOUT_MS = 30_000;
-const SAFE_RUN_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 /**
  * Playwright intents supported by the first read-only execution slice.
