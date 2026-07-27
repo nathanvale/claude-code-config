@@ -14,8 +14,10 @@ import {
 	WARM_CHROME_FAILURE_ACTION_IDS,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
+	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_SUCCESS_ACTION_IDS,
 } from "../src/model.ts";
+import { WARM_CHROME_SUGGESTED_PORT_WINDOW } from "../src/proof.ts";
 import {
 	projectWarmChromeCommandDiscoveryTree,
 	WARM_CHROME_GLOBAL_DIAGNOSTIC_FLAGS,
@@ -101,6 +103,19 @@ describe("warm-chrome command contract (U2 R2/R3)", () => {
 			const usage = warmChromeContracts[command].usage.join("\n");
 			expect(usage).toContain("[--port <port> | --endpoint <endpoint>]");
 		}
+	});
+
+	// The 9222 DevTools convention is the most collision-prone port on a dev
+	// machine, so defaulting to it makes the agent path refuse foreign_listener
+	// whenever anything else (a real Chrome, Chrome for Testing, a stale session)
+	// holds it. The default must live in the dedicated agent suggested-port
+	// window and never be 9222; explicit --port 9222 stays available.
+	test("the default CDP port is off the 9222 convention and inside the agent window", () => {
+		expect(WARM_CHROME_DEFAULT_CDP_PORT).not.toBe("9222");
+		const port = Number(WARM_CHROME_DEFAULT_CDP_PORT);
+		expect(Number.isInteger(port)).toBe(true);
+		expect(port).toBeGreaterThanOrEqual(WARM_CHROME_SUGGESTED_PORT_WINDOW.start);
+		expect(port).toBeLessThanOrEqual(WARM_CHROME_SUGGESTED_PORT_WINDOW.end);
 	});
 });
 

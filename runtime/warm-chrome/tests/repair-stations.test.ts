@@ -24,6 +24,7 @@ import {
 import { main } from "../src/cli.ts";
 import {
 	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
 	WARM_CHROME_SCHEMA_VERSION,
 } from "../src/model.ts";
@@ -46,7 +47,7 @@ import {
 const HOME = "/Users/warm";
 const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
 const ACTIVE_PORT_PATH = `${DEDICATED_PROFILE}/DevToolsActivePort`;
-const BROWSER_WS = "ws://127.0.0.1:9222/devtools/browser/warm-chrome-token";
+const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const BROWSER_WS_PATH = "/devtools/browser/warm-chrome-token";
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
@@ -56,7 +57,7 @@ function chromeCommand(
 	overrides: { port?: string; profile?: string } = {},
 ): string {
 	return `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=${
-		overrides.port ?? "9222"
+		overrides.port ?? WARM_CHROME_DEFAULT_CDP_PORT
 	} --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE} --no-first-run`;
 }
 
@@ -112,7 +113,7 @@ type Script<T> = T | readonly T[];
 
 type RepairFixtureOptions = {
 	listeners?: Record<string, Script<ListenerProcess | null>>;
-	/** Raw error thrown by findListener for port 9222. */
+	/** Raw error thrown by findListener for the default resolved port. */
 	findListenerError?: Error;
 	/** /json/version script. Arrays play per call; the last entry repeats. */
 	version?: VersionStep | ReadonlyArray<VersionStep>;
@@ -170,7 +171,7 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		{ script: readonly (ListenerProcess | null)[]; cursor: number }
 	>();
 	for (const [port, script] of Object.entries(
-		options.listeners ?? { "9222": chromeListener() },
+		options.listeners ?? { [WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener() },
 	)) {
 		listenerScripts.set(port, { script: toScript(script), cursor: 0 });
 	}
@@ -193,7 +194,7 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		},
 		findListener: async (port) => {
 			calls.findListenerPorts.push(port);
-			if (options.findListenerError && port === "9222") {
+			if (options.findListenerError && port === WARM_CHROME_DEFAULT_CDP_PORT) {
 				throw options.findListenerError;
 			}
 			const entry = listenerScripts.get(port);
@@ -351,7 +352,7 @@ function expectRepaired(run: CliRun): ParsedEnvelope {
 	expect(envelope.runtime_actions?.[0]?.id).toBe("use_verified_endpoint");
 	// R8: guidance carries the ACTUAL verified endpoint.
 	expect(envelope.runtime_actions?.[0]?.summary).toContain(
-		"http://127.0.0.1:9222",
+		`http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
 	);
 	expect(envelope.continuation?.next_action_id).toBe("use_verified_endpoint");
 	return envelope;
@@ -448,7 +449,10 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		]);
 		// The write landed inside the profile dir with the live endpoint id.
 		expect(fixture.calls.writes).toEqual([
-			{ path: ACTIVE_PORT_PATH, content: `9222\n${BROWSER_WS_PATH}\n` },
+			{
+				path: ACTIVE_PORT_PATH,
+				content: `${WARM_CHROME_DEFAULT_CDP_PORT}\n${BROWSER_WS_PATH}\n`,
+			},
 		]);
 		// The guard consulted the no-follow probe before writing.
 		expect(fixture.calls.lstatPaths).toEqual([ACTIVE_PORT_PATH]);
@@ -482,7 +486,7 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		const otherProfile = `${HOME}/other-warm-profile`;
 		const fixture = repairFixture({
 			listeners: {
-				"9222": [
+				[WARM_CHROME_DEFAULT_CDP_PORT]: [
 					chromeListener({ profile: DEDICATED_PROFILE }),
 					chromeListener({ profile: DEDICATED_PROFILE }),
 					chromeListener({ profile: otherProfile }),
@@ -554,7 +558,7 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 describe("warm-chrome repair.unrepairable (U7): fail closed without touching unverified state", () => {
 	test("R11 negative: a foreign listener on the port is never terminated or repaired around", async () => {
 		const fixture = repairFixture({
-			listeners: { "9222": FOREIGN_LISTENER },
+			listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: FOREIGN_LISTENER },
 		});
 		const run = await runRepair(["repair", "--run-id", "foreign"], fixture);
 
@@ -706,7 +710,7 @@ describe("warm-chrome repair.unrepairable (U7): fail closed without touching unv
 
 	test("plain mode renders the unrepairable diagnostic on stderr with exit 20", async () => {
 		const fixture = repairFixture({
-			listeners: { "9222": FOREIGN_LISTENER },
+			listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: FOREIGN_LISTENER },
 		});
 		const run = await runRepair(
 			["repair", "--plain", "--run-id", "plain-unrepairable"],
@@ -787,7 +791,11 @@ const reemitScenarios: readonly ReemitScenario[] = [
 		reason: "throwaway_profile",
 		fixture: () =>
 			repairFixture({
-				listeners: { "9222": chromeListener({ profile: "/tmp/warm-profile" }) },
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
+						profile: "/tmp/warm-profile",
+					}),
+				},
 				profiles: { "/tmp/warm-profile": profileStat("/tmp/warm-profile") },
 			}),
 	},
@@ -796,7 +804,11 @@ const reemitScenarios: readonly ReemitScenario[] = [
 		checkStationId: "check.listener_mismatch",
 		reason: "port_mismatch",
 		fixture: () =>
-			repairFixture({ listeners: { "9222": chromeListener({ port: "9333" }) } }),
+			repairFixture({
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ port: "9333" }),
+				},
+			}),
 	},
 ];
 
@@ -887,7 +899,9 @@ describe("warm-chrome repair station evidence (U7)", () => {
 			{
 				stationId: "repair.unrepairable",
 				argv: ["repair"],
-				fixture: repairFixture({ listeners: { "9222": FOREIGN_LISTENER } }),
+				fixture: repairFixture({
+					listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: FOREIGN_LISTENER },
+				}),
 			},
 		];
 
