@@ -21,7 +21,7 @@ decision_metadata_format: fenced-yaml-per-decision
 
 - Lifecycle scope resolved: no public stop, profile selector, or remote-debugging-off control in v1.
 
-## Decision 1: Auto-mint and consume a fresh Verified Handoff Envelope inside handoff-bound...
+## Decision 1: Auto-mint and consume a fresh Verified Handoff Envelope inside handoff-bound targets list when --handoff is absent
 
 ```yaml
 id: browser-use-front-door-001
@@ -55,7 +55,7 @@ V2 Ideas:
 
 - Persist a reusable handoff only if a concrete multi-command workflow proves fresh per-command minting insufficient.
 
-## Decision 2: Extend routine-automation with one semantic click action resolved from the cu...
+## Decision 2: Extend routine-automation with one semantic click action resolved from the current snapshot and one named visible-element postcondition
 
 ```yaml
 id: browser-use-front-door-002
@@ -126,7 +126,7 @@ V2 Ideas:
 
 - Add a stop owner only if a concrete operator workflow supplies process provenance, lease semantics, and a no-human-browser termination proof.
 
-## Decision 4: Keep physical and logical profile selection outside the Browser Use v1 public...
+## Decision 4: Keep physical and logical profile selection outside the Browser Use v1 public surface
 
 ```yaml
 id: browser-use-front-door-004
@@ -165,7 +165,7 @@ V2 Ideas:
 
 - Add a code-owned logical profile catalog when a concrete multi-identity workflow exists.
 
-## Decision 5: Keep remote-debugging enablement outside the Browser Use public lifecycle sur...
+## Decision 5: Keep remote-debugging enablement outside the Browser Use public lifecycle surface
 
 ```yaml
 id: browser-use-front-door-005

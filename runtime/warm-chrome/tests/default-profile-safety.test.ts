@@ -183,7 +183,12 @@ function findMutationPolicyViolations(
 						}
 					} else if (ts.isObjectBindingPattern(node.name)) {
 						for (const element of node.name.elements) {
-							const name = element.propertyName?.getText(sourceFile);
+							// Renamed destructure (`{ appendFile: persist }`) keys the API off
+							// propertyName; a plain destructure (`{ appendFile }`) carries the API
+							// name in `element.name`, so fall back to it or the binding escapes.
+							const name =
+								element.propertyName?.getText(sourceFile) ??
+								(ts.isIdentifier(element.name) ? element.name.text : undefined);
 							if (
 								name &&
 								FILE_MUTATION_APIS.has(name) &&
@@ -321,6 +326,13 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 					await Bun.write(join(profileDir, configName), payload);
 				`,
 			},
+			{
+				file: "plain-destructure.ts",
+				source: `
+					const { appendFile } = fs.promises;
+					await appendFile(chromeConfigPath, payload);
+				`,
+			},
 		];
 
 		expect(findMutationPolicyViolations(fixtures)).toEqual([
@@ -343,6 +355,13 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 				line: 3,
 				api: "Bun.write",
 				callee: "Bun.write",
+				reason: "unapproved",
+			},
+			{
+				file: "plain-destructure.ts",
+				line: 3,
+				api: "appendFile",
+				callee: "appendFile",
 				reason: "unapproved",
 			},
 		]);
