@@ -47,14 +47,20 @@ candidate rows (UNASSESSED), and an appendix of deferred candidates. The
 follow-up E-tier spawn wave closed the 11 process-boundary gaps with additive
 spawned-CLI tests: net 28 PASS, 4 PARTIAL (L-tier live halves or the A21
 delivery decision), 1 FAIL (G17 exit-code classification, owner decision
-open).
+open). The 2026-07-27 tier-L live wave (serialized Agent Chrome, front-door
+driver rule enforced) refreshed 16 rows: C01/C02/C03/C05/H21 PASS live;
+D07/D10 BLOCKED behind the chrome-devtools-mcp 1.5.0 operator gate; the
+remaining PARTIALs share three named front-door capability gaps — no public
+mint path for `targets list` (D01/D26/D27), read-only baseline with no
+mutating intent (D06/D09/D12/D13), and no public profile/debug-off/stop knobs
+(C04/C06).
 
 | Verdict | Count |
 | --- | ---: |
-| PASS | 45 |
-| PARTIAL | 70 |
+| PASS | 50 |
+| PARTIAL | 63 |
 | FAIL | 27 |
-| BLOCKED | 3 |
+| BLOCKED | 5 |
 | UNASSESSED | 79 |
 
 | Status | Meaning |
@@ -127,12 +133,12 @@ open).
 
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
-| DDA-C01 | No existing Agent Chrome triggers one proven cold launch. | H,L | PARTIAL | Historical live evidence in `TEST_MATRIX.md` predates the browser-use-only driver rule; public-front-door refresh required. |
-| DDA-C02 | Healthy Agent Chrome is reused without another launch. | H,L | PARTIAL | Existing live evidence drove browser-connect directly; public-front-door refresh pending. |
-| DDA-C03 | Human Chrome is never selected as a fallback. | C,H | PARTIAL | Invariants and wrong-profile evidence exist. |
-| DDA-C04 | A wrong profile fails before adapter action. | H,L | PARTIAL | Existing live evidence in `TEST_MATRIX.md` drove browser-connect directly; front-door journey missing. |
-| DDA-C05 | A foreign listener produces one bounded Repair Path. | H,L | PARTIAL | AE4 live evidence via direct browser-connect invocation; front-door journey missing. |
-| DDA-C06 | Remote debugging disabled produces actionable blocked evidence. | H,L | PARTIAL | Existing live evidence in `TEST_MATRIX.md` drove browser-connect directly; front-door journey missing. |
+| DDA-C01 | No existing Agent Chrome triggers one proven cold launch. | H,L | PASS | Live 2026-07-27: with no Agent Chrome present, one front-door `task run` probed the port (endpoint_unreachable), performed exactly one cold launch, and produced a fresh agent-warm-profile Chrome (receipt in TEST_MATRIX). Stop step was out-of-band SIGTERM — no public stop surface exists (gap noted, guide constraint no_process_destruction). |
+| DDA-C02 | Healthy Agent Chrome is reused without another launch. | H,L | PASS | Live 2026-07-27: repeated front-door `task run` against a healthy Agent Chrome reported launch.launched=false and environment agent-chrome on every attach; Chrome PID stable, no new process. |
+| DDA-C03 | Human Chrome is never selected as a fallback. | C,H | PASS | Live 2026-07-27: with a human default-profile Chrome running simultaneously on 9222, every front-door run selected environment agent-chrome; the human listener was only ever refused (foreign_listener), never selected. |
+| DDA-C04 | A wrong profile fails before adapter action. | H,L | PARTIAL | Live 2026-07-27: pointing the endpoint at the human-profile Chrome fails closed as foreign_listener BEFORE any adapter action (launch.launched=false, no_adapter_fallback). Gap: the front door exposes no public profile/environment selector, so a true wrong-profile request is not expressible. |
+| DDA-C05 | A foreign listener produces one bounded Repair Path. | H,L | PASS | Live 2026-07-27: a dummy TCP listener on the agent CDP port yielded exactly one bounded typed Repair Path (foreign_listener, exit 20, retryable=false, next_action use_suggested_port), one attempt, no retry storm; a healthy run recovered after the listener was killed. |
+| DDA-C06 | Remote debugging disabled produces actionable blocked evidence. | H,L | PARTIAL | Live 2026-07-27: nearest honest variant (agent profile occupied, no debug endpoint at requested port) produced bounded typed launch_failed (exit 20, requires_operator, inspect_diagnostics), one attempt, no orphan. Gap: no public knob produces genuine remote-debugging-off through the front door. |
 | DDA-C07 | Missing adapter binary returns typed installation recovery. | H,L | PARTIAL | Browser Connect tests exist; public-front-door journey missing. |
 | DDA-C08 | Adapter version mismatch fails before attachment. | H,L | PARTIAL | Browser Connect tests exist; public-front-door journey missing. |
 | DDA-C09 | A stale handoff cannot authorize a task. | C,H | PARTIAL | Consumer validation tests exist; process journey missing. |
@@ -151,19 +157,19 @@ open).
 
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
-| DDA-D01 | Targets list returns operation-ready candidates only when handoff-bound. | C,L | PARTIAL | AE1 and U6-ET3 live evidence; envelope minted via direct browser-connect (advanced path) — front-door auto-mint shape unproven. |
+| DDA-D01 | Targets list returns operation-ready candidates only when handoff-bound. | C,L | PARTIAL | Live 2026-07-27: `task run --intent scrape` auto-mints the Verified Handoff Envelope in-process and executes operation-ready against a real tab (no browser-connect). Gap: no public command emits that auto-minted envelope for `targets list` — its handoff-bound mode still routes to `browser-connect connect --handoff`, unreachable under the front-door driver rule. |
 | DDA-D02 | Target selection resolves the intended tab, not adapter default state. | C,L | PASS | U6-ET3 live evidence. |
 | DDA-D03 | Snapshot observes the selected target. | C,L | PASS | U6-ET3 and PAC evidence. |
 | DDA-D04 | Screenshot writes a bounded run artifact. | C,L | PASS | U6-ET4 live evidence. |
 | DDA-D05 | Viewport emulation applies only on a capable lane. | C,L | PARTIAL | Unit operation tests exist; live evidence missing. |
-| DDA-D06 | Agent Browser observe-mutate-verify confirms fresh structure. | L | PARTIAL | PAC1 proved adapter truth by driving agent-browser directly; front-door L-tier journey missing. |
-| DDA-D07 | Chrome DevTools observe-mutate-verify confirms fresh structure. | L | PARTIAL | PAC2 drove the MCP surface directly; front-door L-tier journey missing. |
+| DDA-D06 | Agent Browser observe-mutate-verify confirms fresh structure. | L | PARTIAL | Live 2026-07-27: agent-browser lane runs live via the front door and re-observes fresh structure (distinct auto-minted handoff per run, PENDING->DONE fixture flip observed). Gap: `task run` dispatches only a read-only snapshot baseline — no public intent expresses a mutate step, so observe->mutate->verify is not front-door-expressible. |
+| DDA-D07 | Chrome DevTools observe-mutate-verify confirms fresh structure. | L | BLOCKED | Live 2026-07-27: typed fail-closed refusal adapter_not_installed — chrome-devtools-mcp 1.2.0 cached vs pinned 1.5.0, install is operator-gated (requires_operator, no_pin_policy_change). Joins the B17/J03/J09 operator gate. |
 | DDA-D08 | Playwright observe-mutate-verify confirms fresh structure. | L | FAIL | Read-only snapshot execution now exists; mutation plus fresh-structure live proof remains. |
-| DDA-D09 | Agent Browser stale refs cannot prove a mutation. | L | PARTIAL | PAC4 drove agent-browser directly; front-door L-tier journey missing. |
-| DDA-D10 | Chrome DevTools stale refs cannot prove a mutation. | L | PARTIAL | PAC3 and PAC6 drove the MCP surface directly; front-door L-tier journey missing. |
+| DDA-D09 | Agent Browser stale refs cannot prove a mutation. | L | PARTIAL | Live 2026-07-27: the stale-ref guard is real in code (fresh task-local snapshot required before ref mutation, refs discarded after every mutation) and each front-door run mints a fresh handoff with fresh observation. Gap: the guard fires only inside a multi-step mutating task the front door never constructs, so the oracle is unreachable publicly. |
+| DDA-D10 | Chrome DevTools stale refs cannot prove a mutation. | L | BLOCKED | Live 2026-07-27: chrome-devtools-mcp lane cannot execute under the version pin (1.2.0 vs pinned 1.5.0, operator-gated install); additionally the front-door baseline is read-only with a fresh handoff per run, so no stale ref crosses a front-door boundary. |
 | DDA-D11 | Playwright stale locators cannot prove a mutation. | L | FAIL | Read-only snapshot execution now exists; stale-locator mutation refusal needs live proof. |
-| DDA-D12 | Ambiguous external effect becomes `unknown` and is not repeated. | H,L | PARTIAL | PAC5 drove agent-browser directly; front-door journey missing. |
-| DDA-D13 | Conflicting ambient text cannot override the named postcondition. | H,L | PARTIAL | PAC7 drove the MCP surface directly; front-door journey missing. |
+| DDA-D12 | Ambiguous external effect becomes `unknown` and is not repeated. | H,L | PARTIAL | Live 2026-07-27: front door observed the ambiguous-effect fixture live and returned confirmed/external_effect none. Gap: no public intent dispatches an externally-effecting mutation, so the unknown-and-not-repeated classification path (present in the run model and guide doctrine) is never reached. |
+| DDA-D13 | Conflicting ambient text cannot override the named postcondition. | H,L | PARTIAL | Live 2026-07-27: front door observed the liar fixture (ambient 'Saved!' banner, data-persisted=false) live; confirmed meant only snapshot-observed. Gap: the read-only baseline evaluates no named postcondition, so the ambient-text-cannot-override oracle is not exercisable via any public intent. |
 | DDA-D14 | Closing the active tab during a run yields typed recovery. | H,L | UNASSESSED | Journey missing. |
 | DDA-D15 | Popup and new-tab flows bind refs to the correct tab. | H,L | UNASSESSED | Journey missing. |
 | DDA-D16 | Iframe interaction preserves ref and origin boundaries. | H,L | UNASSESSED | Journey missing. |
@@ -176,8 +182,8 @@ open).
 | DDA-D23 | Output truncation and content boundaries prevent context flooding. | C,H,L | UNASSESSED | Agent Browser supports knobs; Browser Use journey missing. |
 | DDA-D24 | Prompt-shaped page content remains untrusted data. | H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
 | DDA-D25 | Action confirmation policy gates externally visible mutation. | H,L,G | UNASSESSED | End-to-end journey missing. |
-| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PARTIAL | browser-use-target-realism.test.ts: empty loopback /json/list yields a parseable typed recovery envelope (exit 20 `target_discovery_no_candidates`, continuation open_browser_target), one attempt, no crash. Gaps: L-tier live empty-browser run; oracle says 'ok envelope' but the established discovery contract emits typed recovery — wording decision open. |
-| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PARTIAL | browser-use-target-realism.test.ts: 300 fixture targets project dense ordinals within the redaction budget and `--url-contains` resolves exactly one. Gap: L-tier live many-tab run. |
+| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PARTIAL | Hermetic PASS (browser-use-target-realism.test.ts) plus live 2026-07-27: Agent Chrome reduced to zero page targets, front-door `task run` handled it typed (exit 20 task_run_not_achieved / chrome_task_target_unavailable), no crash. Gap: the exact discovery continuation lives in `targets list`, unreachable without a front-door mint (see DDA-D01); oracle 'ok envelope' wording decision still open. |
+| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PARTIAL | Hermetic PASS (300-target fixture) plus live 2026-07-27: 52 real loopback tabs, front-door `task run` stayed bounded, typed, and green. Gap: the candidate-projection half (dense ordinals, --url-contains resolves one) lives in `targets list`, unreachable without a front-door mint (see DDA-D01). |
 | DDA-D28 | Service workers, extension pages, devtools, and `chrome://` targets never appear operation-ready. | C,H | PASS | browser-use-target-realism.test.ts: mixed CDP listing admits only http(s) page targets; fixed a real defect (service_worker with an https url was admitted) via RawPage.type preservation and a type filter in discovery. |
 | DDA-D29 | Page-controlled strings are sanitized; control chars and ANSI escapes never reach stdout raw. | C,H | PASS | browser-use-sec-seams.test.ts: ESC/CSI/BEL/DEL/0x9b title leaves zero raw control bytes on stdout; stripControlChars wired into redactTitle (browser-use-core.ts). |
 | DDA-D30 | IDN and punycode hosts render unambiguously; origin checks compare canonical forms. | C,H | PASS | browser-use-target-realism.test.ts: unicode and xn-- forms project to one canonical ascii origin and origin hints in either spelling compare equal. |
@@ -286,7 +292,7 @@ open).
 | DDA-H17 | Recovery command succeeds from the returned continuation alone. | H,L,G | UNASSESSED | Continuation-following journey missing. |
 | DDA-H18 | Completed journeys leave no orphan tabs, adapters, leases, or temp artifacts. | H,L,G | PARTIAL | PAC cleanup noted; systematic proof missing. |
 | DDA-H19 | SIGTERM and parent death behave like SIGINT: bounded cleanup, honest external-effect state. | H | UNASSESSED | Oracle: kill harness — same typed state as DDA-H15. |
-| DDA-H21 | A leftover named adapter session from a crashed prior run does not block the next run. | H,L | PARTIAL | browser-use-process-hygiene.test.ts: an expired leftover lease is recovered via fenced takeover carrying a recovered_from proof; a live-held lease yields typed `lease_held` bounded wait. Gap: L-tier live crashed-session run. |
+| DDA-H21 | A leftover named adapter session from a crashed prior run does not block the next run. | H,L | PASS | Hermetic (browser-use-process-hygiene.test.ts) plus live 2026-07-27: a pre-seeded crashed leftover env/profile lease in the real durable store was detected and recovered via fenced takeover — monotonic fencing token, recovered_from naming the crashed holder — then the run completed green with a clean store. |
 | DDA-H22 | No background daemon or keepalive persists after any command exits. | E,H | PASS | browser-use-process-hygiene.test.ts: real spawned task/lanes list journeys exit clean with zero surviving descendants (pgrep); every envelope adapter spawn carries MCPORTER_NO_KEEPALIVE (keepalive-gotcha regression pin). |
 | DDA-H23 | `repair status` reports only real repairs; `repair apply` executes only declared bounded actions and reports each. | C,E,H | PASS | browser-use-status-families.test.ts: whole-store fingerprint proves repair status lists exactly the seeded breakage and apply fixes exactly it, in-process (C,H) and via spawned real-CLI journeys with the same store diff (E). |
 | DDA-H24 | `artifact list` projects the run-scoped manifest; a missing manifest yields a typed empty result. | C,E | PASS | browser-use-status-families.test.ts: absent manifest yields exit 0 ok-empty artifact-manifest envelope and a seeded run projects its row, in-process (C) and spawned (E). |
