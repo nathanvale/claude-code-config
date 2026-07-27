@@ -50,8 +50,11 @@ delivery decision), 1 FAIL (G17 exit-code classification, owner decision
 open). The 2026-07-27 tier-L live wave (serialized Agent Chrome, front-door
 driver rule enforced) refreshed 16 rows: C01/C02/C03/C05/H21 PASS live;
 D07/D10 BLOCKED behind the chrome-devtools-mcp 1.5.0 operator gate; the
-remaining PARTIALs share three named front-door capability gaps — no public
-mint path for `targets list` (D01/D26/D27), read-only baseline with no
+remaining PARTIALs share two named front-door capability gaps — Browser Target
+Discovery unimplemented on the agent-browser lane, so handoff-bound `targets
+list` emits no candidates even with `--adapter` (D01/D26/D27; re-verified live
+2026-07-28 per PR #263 review — task-run auto-mint works, targets-list discovery
+returns target_discovery_transport_failed), and read-only baseline with no
 mutating intent (D06/D09/D12/D13). Lifecycle scope is now deliberate:
 operator-owned stop setup, one fixed `agent-chrome/default` identity, and no
 remote-debugging-off product mode.
@@ -159,7 +162,7 @@ remote-debugging-off product mode.
 
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
-| DDA-D01 | Targets list returns operation-ready candidates only when handoff-bound. | C,L | PARTIAL | Live 2026-07-27: `task run --intent scrape` auto-mints the Verified Handoff Envelope in-process and executes operation-ready against a real tab (no browser-connect). Gap: no public command emits that auto-minted envelope for `targets list` — its handoff-bound mode still routes to `browser-connect connect --handoff`, unreachable under the front-door driver rule. |
+| DDA-D01 | Targets list returns operation-ready candidates only when handoff-bound. | C,L | PARTIAL | Live 2026-07-28 (WARM_CHROME_CDP_PORT=9231, agent-browser 0.31.2, real Chrome 150 on 9231): `browser-use task run --intent scrape --tab t1 --allowed-origin https://example.com --json` auto-mints the Verified Handoff Envelope in-process and executes operation-ready (status ok, selected_lane agent-browser, lane_source intent-preferred, run confirmed, handoff_evidence_id cbf69b8752a0b96ecd0e6aaea1e050d1, executed_steps 1, external_effect none — no browser-connect). Gap (re-verified with `--adapter` per PR #263 review): `browser-use targets list --mode handoff-bound --adapter agent-browser --json` does NOT emit candidates either — it returns exit 20 `target_discovery_transport_failed`, "Browser Target Discovery is not implemented for adapter agent-browser yet." (run_id 6c4099e0…), continuation change_target_discovery_input. So the missing surface is not merely an auto-minting mode: Browser Target Discovery is unimplemented on the agent-browser lane, so operation-ready candidates via handoff-bound targets list are unreachable regardless of `--adapter`. |
 | DDA-D02 | Target selection resolves the intended tab, not adapter default state. | C,L | PASS | U6-ET3 live evidence. |
 | DDA-D03 | Snapshot observes the selected target. | C,L | PASS | U6-ET3 and PAC evidence. |
 | DDA-D04 | Screenshot writes a bounded run artifact. | C,L | PASS | U6-ET4 live evidence. |
@@ -184,8 +187,8 @@ remote-debugging-off product mode.
 | DDA-D23 | Output truncation and content boundaries prevent context flooding. | C,H,L | UNASSESSED | Agent Browser supports knobs; Browser Use journey missing. |
 | DDA-D24 | Prompt-shaped page content remains untrusted data. | H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
 | DDA-D25 | Action confirmation policy gates externally visible mutation. | H,L,G | UNASSESSED | End-to-end journey missing. |
-| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PARTIAL | Hermetic PASS (browser-use-target-realism.test.ts) plus live 2026-07-27: Agent Chrome reduced to zero page targets, front-door `task run` handled it typed (exit 20 task_run_not_achieved / chrome_task_target_unavailable), no crash. Gap: the exact discovery continuation lives in `targets list`, unreachable without a front-door mint (see DDA-D01); oracle 'ok envelope' wording decision still open. |
-| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PARTIAL | Hermetic PASS (300-target fixture) plus live 2026-07-27: 52 real loopback tabs, front-door `task run` stayed bounded, typed, and green. Gap: the candidate-projection half (dense ordinals, --url-contains resolves one) lives in `targets list`, unreachable without a front-door mint (see DDA-D01). |
+| DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PARTIAL | Hermetic PASS (browser-use-target-realism.test.ts) plus live 2026-07-27: Agent Chrome reduced to zero page targets, front-door `task run` handled it typed (exit 20 task_run_not_achieved / chrome_task_target_unavailable), no crash. Gap: the exact discovery continuation lives in `targets list`, unreachable because Browser Target Discovery is unimplemented on the agent-browser lane (see DDA-D01 — fails with target_discovery_transport_failed even with `--adapter`); oracle 'ok envelope' wording decision still open. |
+| DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PARTIAL | Hermetic PASS (300-target fixture) plus live 2026-07-27: 52 real loopback tabs, front-door `task run` stayed bounded, typed, and green. Gap: the candidate-projection half (dense ordinals, --url-contains resolves one) lives in `targets list`, unreachable because Browser Target Discovery is unimplemented on the agent-browser lane (see DDA-D01 — fails with target_discovery_transport_failed even with `--adapter`). |
 | DDA-D28 | Service workers, extension pages, devtools, and `chrome://` targets never appear operation-ready. | C,H | PASS | browser-use-target-realism.test.ts: mixed CDP listing admits only http(s) page targets; fixed a real defect (service_worker with an https url was admitted) via RawPage.type preservation and a type filter in discovery. |
 | DDA-D29 | Page-controlled strings are sanitized; control chars and ANSI escapes never reach stdout raw. | C,H | PASS | browser-use-sec-seams.test.ts: ESC/CSI/BEL/DEL/0x9b title leaves zero raw control bytes on stdout; stripControlChars wired into redactTitle (browser-use-core.ts). |
 | DDA-D30 | IDN and punycode hosts render unambiguously; origin checks compare canonical forms. | C,H | PASS | browser-use-target-realism.test.ts: unicode and xn-- forms project to one canonical ascii origin and origin hints in either spelling compare equal. |
