@@ -36,6 +36,7 @@ export const TARGET_SELECTION_EXIT_CODE = 20;
 export type OutputMode = "json" | "plain";
 
 export type ResultKind =
+	| "guide"
 	| "browser_targets"
 	| "browser_operation"
 	| "task_intents"

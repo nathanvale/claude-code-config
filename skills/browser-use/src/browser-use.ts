@@ -49,6 +49,7 @@ import {
 	type BrowserUseAuthSubcommand,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
+	type BrowserUseGuideTopic,
 	browserUseAdapterLanesFailureActions,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
@@ -155,6 +156,7 @@ import {
 } from "./browser-use-store";
 import {
 	type HandoffFacts,
+	parseHandoffFacts,
 	readHandoffFacts,
 	runTargetsList,
 } from "./browser-use-discovery";
@@ -204,8 +206,10 @@ import {
 	parseBrowserUseArgv,
 	parsedRunIdFlag,
 	renderHelp,
+	renderLauncher,
 	writeVersion,
 } from "./browser-use-parser";
+import { renderGuide } from "./browser-use-guide";
 
 // ---------------------------------------------------------------------------
 // CLI driver. Mirrors browser-adapter-router.ts structure.
@@ -274,6 +278,10 @@ export async function runBrowserUseCli(
 		stdout.write(renderHelp(parsed.family, parsed.command));
 		return 0;
 	}
+	if (parsed.kind === "launcher") {
+		stdout.write(renderLauncher());
+		return 0;
+	}
 	if (parsed.kind === "version") {
 		writeVersion(stdout, parsed.outputMode, {
 			runId: diagnosticArgv.options.runId,
@@ -336,6 +344,9 @@ export async function runBrowserUseCli(
 
 // One family -> result kind mapping for the mock/not-implemented envelopes.
 const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
+	// guide-show is a pure bundled-content render and never reaches the mock or
+	// not-implemented envelope paths; the entry exists for type completeness.
+	guide: "guide",
 	targets: "browser_targets",
 	operate: "browser_operation",
 	task: "task_intents",
@@ -378,6 +389,27 @@ async function executeCommand(input: {
 	durationMs: () => number;
 }): Promise<number> {
 	const { parsed, runtime } = input;
+	// Version-matched bundled guidance (D3): a pure render of the guide content
+	// module. Plain by default (prose for an agent to read); --json wraps the
+	// same text in the standard success envelope for machine consumers.
+	if (parsed.command === "guide-show") {
+		const topic = (stringField(parsed.flagValues["--topic"]) ??
+			"core") as BrowserUseGuideTopic;
+		const guide = renderGuide(topic, parsed.flagValues["--full"] !== undefined);
+		if (parsed.outputMode === "json") {
+			writeJsonEnvelope(
+				input.stdout,
+				createCliRuntimeSuccessEnvelope({
+					run_id: input.runId,
+					data: { result_kind: "guide", topic, guide },
+				}),
+				{ runId: input.runId, durationMs: input.durationMs() },
+			);
+			return 0;
+		}
+		input.stdout.write(guide);
+		return 0;
+	}
 	// `task run` and `runbook run` return the shared-run contract, not the family
 	// default catalog; every other command keys resultKind off its family.
 	const resultKind: ResultKind =
@@ -2100,10 +2132,57 @@ function mapAgentBrowserOutcome(
 async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	const flags = input.parsed.flagValues;
 
-	// R3: the handoff is the only attachment route. Read + validate it first, so a
-	// bad envelope fails before any store write or routing decision.
-	const handoffPath = stringField(flags["--handoff"]) ?? "";
-	const parse = await readHandoffFacts(input.runtime, handoffPath);
+	// R3: the handoff is the only attachment route. Acquire + validate it first,
+	// so a bad envelope fails before any store write or routing decision. Two
+	// acquisition paths, ONE validation path (parseHandoffFacts):
+	// - caller-managed --handoff <path> (advanced/back-compat), or
+	// - the internal in-process mint (design brief D4) for a fresh --intent run:
+	//   adapter = --lane override, else the intent's preferred adapter. A mint
+	//   failure IS browser-connect's failure envelope, surfaced verbatim with
+	//   its exit code — one Repair Path, no re-wrapping.
+	const handoffPath = stringField(flags["--handoff"]);
+	let handoffRaw: string;
+	if (handoffPath === undefined) {
+		const mintAdapter =
+			stringField(flags["--lane"]) ??
+			BROWSER_USE_TASK_INTENT_DEFINITIONS.find(
+				(definition) =>
+					definition.task_intent === stringField(flags["--intent"]),
+			)?.preferred_adapter;
+		if (mintAdapter === undefined) {
+			return emitTaskRunFailure(input, undefined, {
+				code: "task_run_handoff_lane_mismatch",
+				message:
+					"no adapter to attach: the intent has no registered preferred lane; pass --lane <id> or --handoff <path>.",
+				actionId: "supply_matching_handoff",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+		const minted = await input.runtime.mintHandoff({
+			adapterId: mintAdapter,
+			runId: input.runId,
+		});
+		if (minted.exitCode !== 0) {
+			if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
+			if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
+			return minted.exitCode;
+		}
+		handoffRaw = minted.stdout;
+	} else {
+		try {
+			handoffRaw = await input.runtime.readTextFile(handoffPath);
+		} catch {
+			return emitTaskRunFailure(input, undefined, {
+				code: "task_run_handoff_lane_mismatch",
+				message: "the --handoff file could not be read",
+				actionId: "supply_matching_handoff",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+	}
+	const parse = parseHandoffFacts(handoffRaw);
 	if (!parse.ok) {
 		return emitTaskRunFailure(input, undefined, {
 			code: "task_run_handoff_lane_mismatch",
@@ -2124,13 +2203,13 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		});
 	}
 	const handoff = parse.facts;
-	// The verbatim envelope payload the executor re-validates. readHandoffFacts
-	// already proved the file parses and binds; re-read the raw for the executor
-	// (it owns its own schema-2 guard) so the driver never reconstructs it.
+	// The verbatim envelope payload the executor re-validates. parseHandoffFacts
+	// already proved the bytes parse and bind; re-parse the same raw for the
+	// executor (it owns its own schema-2 guard) so the driver never
+	// reconstructs it.
 	let rawHandoffData: unknown;
 	try {
-		const raw = await input.runtime.readTextFile(handoffPath);
-		rawHandoffData = (JSON.parse(raw) as { data?: unknown }).data;
+		rawHandoffData = (JSON.parse(handoffRaw) as { data?: unknown }).data;
 	} catch {
 		rawHandoffData = undefined;
 	}
@@ -2771,9 +2850,38 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
 
-	// R3: the handoff is the only attachment route; read + verify first.
-	const handoffPath = stringField(flags["--handoff"]) ?? "";
-	const parse = await readHandoffFacts(input.runtime, handoffPath);
+	// R3: the handoff is the only attachment route; acquire + verify first. Two
+	// acquisition paths, one validation path (parseHandoffFacts), mirroring
+	// runTaskRun (design brief D4): runbooks always execute on the agent-browser
+	// lane, so an absent --handoff mints for that adapter in-process; a mint
+	// failure is browser-connect's failure envelope surfaced verbatim.
+	const handoffPath = stringField(flags["--handoff"]);
+	let handoffRaw: string;
+	if (handoffPath === undefined) {
+		const minted = await input.runtime.mintHandoff({
+			adapterId: "agent-browser",
+			runId: input.runId,
+		});
+		if (minted.exitCode !== 0) {
+			if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
+			if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
+			return minted.exitCode;
+		}
+		handoffRaw = minted.stdout;
+	} else {
+		try {
+			handoffRaw = await input.runtime.readTextFile(handoffPath);
+		} catch {
+			return emitTaskRunFailure(input, undefined, {
+				code: "task_run_handoff_lane_mismatch",
+				message: "the --handoff file could not be read",
+				actionId: "supply_matching_handoff",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+	}
+	const parse = parseHandoffFacts(handoffRaw);
 	if (!parse.ok) {
 		return emitTaskRunFailure(input, undefined, {
 			code: "task_run_handoff_lane_mismatch",
@@ -2807,8 +2915,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	}
 	let rawHandoffData: unknown;
 	try {
-		const raw = await input.runtime.readTextFile(handoffPath);
-		rawHandoffData = (JSON.parse(raw) as { data?: unknown }).data;
+		rawHandoffData = (JSON.parse(handoffRaw) as { data?: unknown }).data;
 	} catch {
 		rawHandoffData = undefined;
 	}

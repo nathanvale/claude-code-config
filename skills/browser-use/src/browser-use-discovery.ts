@@ -381,6 +381,14 @@ export async function readHandoffFacts(
 			failure: handoffInvalidFailure("the --handoff file could not be read"),
 		};
 	}
+	return parseHandoffFacts(raw);
+}
+
+// Content-level entry for the one envelope parser: the internal mint (D4)
+// holds the envelope bytes in memory and must flow through the SAME
+// validation as a caller-supplied --handoff file — one parser, one contract,
+// no second trust path.
+export function parseHandoffFacts(raw: string): HandoffParse {
 	const invalid = (detail: string): HandoffParse => ({
 		ok: false,
 		failure: handoffInvalidFailure(

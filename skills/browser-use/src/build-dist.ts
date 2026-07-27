@@ -30,6 +30,13 @@ const build = await Bun.build({
 	splitting: false,
 	minify: false,
 	sourcemap: "none",
+	// The internal envelope mint (design brief D4) reaches browser-connect
+	// through a lazy dynamic import. Keep it EXTERNAL: bundling would inline the
+	// private workspace package (and its workspace-only markers) into the public
+	// payload. Repo-local runs resolve it through the workspace; an installation
+	// without the module degrades to the typed "pass --handoff" failure the
+	// runtime seam already owns.
+	external: ["@side-quest/browser-connect/cli"],
 });
 
 if (!build.success) {

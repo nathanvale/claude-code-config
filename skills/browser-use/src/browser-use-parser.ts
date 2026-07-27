@@ -48,9 +48,22 @@ const VERSION = "0.1.0";
 // it.
 const ROUTE_PREREQUISITE_POINTER =
 	"Prerequisite: mint a Verified Handoff Envelope with `browser-connect connect <adapter> --json` (or `browser-connect run`), then pass it via --handoff.";
+// Everyday auto-attach commands (design brief D4): the envelope mints
+// internally, so their help never teaches the secondary CLI; --handoff stays
+// documented as the advanced override.
+const AUTO_ATTACH_POINTER =
+	"Connection attaches automatically: a fresh run proves warm Agent Chrome and mints the Verified Handoff Envelope in-process. --handoff <path> supplies a pre-minted envelope instead (advanced; required to resume with --run).";
+const AUTO_ATTACH_COMMANDS: ReadonlySet<string> = new Set([
+	"task-run",
+	"runbook-run",
+]);
 
 export type ParsedBrowserUseCommand =
 	| { kind: "help"; family?: BrowserUseFamily; command?: BrowserUseCommand }
+	// Bare `browser-use` with no positional tokens: a compact agent-first
+	// launcher, exit 0 (design brief D1). Distinct from an UNKNOWN family
+	// token, which stays a usage error naming the invalid value (D6).
+	| { kind: "launcher" }
 	| { kind: "version"; outputMode: OutputMode }
 	| {
 			kind: "command";
@@ -132,16 +145,28 @@ export function parseBrowserUseArgv(
 
 	if (!family) {
 		if (helpRequested) return { kind: "help" };
+		// No tokens at all -> the agent-first launcher (exit 0, D1). A present
+		// but unregistered family token -> usage error naming the value (D6).
+		if (familyToken === undefined) return { kind: "launcher" };
 		throw usageError(
-			`missing command family: expected ${BROWSER_USE_FAMILIES.join(", ")}.`,
+			`unknown command family: ${sanitizeUsageValue(familyToken)}. Expected: ${BROWSER_USE_FAMILIES.join(", ")}.`,
 		);
 	}
 
 	const subcommandToken = positionals[1];
-	const subcommand =
+	let subcommand =
 		subcommandToken && subcommandsFor(family).includes(subcommandToken)
 			? subcommandToken
 			: undefined;
+
+	// An invalid leaf token is a usage error even under --help: silently
+	// rendering family help would masquerade as valid help for a command that
+	// does not exist (handoff defect list; D6).
+	if (subcommandToken !== undefined && subcommand === undefined) {
+		throw usageError(
+			`unknown subcommand for ${family}: ${sanitizeUsageValue(subcommandToken)}. Expected: ${subcommandsFor(family).join(", ")}.`,
+		);
+	}
 
 	if (helpRequested) {
 		if (!subcommand) return { kind: "help", family };
@@ -152,6 +177,15 @@ export function parseBrowserUseArgv(
 		};
 	}
 
+	// Bare `browser-use guide` resolves to `guide show`: the start-here command
+	// the root help advertises must work exactly as printed (D3). The only
+	// family-default affordance — every other family still requires its leaf.
+	let consumedPositionals = 2;
+	if (!subcommand && family === "guide") {
+		subcommand = "show";
+		consumedPositionals = 1;
+	}
+
 	if (!subcommand) {
 		throw usageError(
 			`missing subcommand for ${family}: expected ${subcommandsFor(family).join(", ")}.`,
@@ -159,10 +193,10 @@ export function parseBrowserUseArgv(
 	}
 
 	const command = toCommand(family, subcommand);
-	// Strip exactly the two leading positional tokens, not every occurrence of
+	// Strip exactly the leading positional tokens, not every occurrence of
 	// their string value, so a flag value equal to the family/subcommand word
 	// survives into rejectUnknownFlags' value-pairing.
-	const rest = argv.slice(2);
+	const rest = argv.slice(consumedPositionals);
 	const flags = browserUseContracts[command].flags ?? {};
 	rejectUnknownFlags(rest, flags);
 	const collected = collectFlagValues(rest, flags);
@@ -185,18 +219,24 @@ export function parseBrowserUseArgv(
 		}
 	}
 	// `task run` always attaches through a Verified Handoff Envelope (R3), and
-	// needs an intent to route OR a run id to resume (R23). A dry-run mock still
-	// requires them so the contract shape an agent learns is stable.
+	// needs an intent to route OR a run id to resume (R23). A fresh --intent run
+	// mints the envelope internally when --handoff is absent (design brief D4);
+	// a resume stays bound to its original attachment, so --run still requires
+	// the caller-managed envelope. A dry-run mock still requires the same shape
+	// so the contract an agent learns is stable.
 	if (command === "task-run") {
-		const handoff = stringField(flagValues["--handoff"]);
-		if (!handoff || handoff.startsWith("--")) {
-			throw usageError("task run requires --handoff <path>.");
-		}
 		const intent = stringField(flagValues["--intent"]);
 		const runId = stringField(flagValues["--run"]);
 		if ((!intent || intent.startsWith("--")) && (!runId || runId.startsWith("--"))) {
 			throw usageError(
 				"task run requires --intent <intent> (or --run <id> to resume an existing run).",
+			);
+		}
+		const handoff = stringField(flagValues["--handoff"]);
+		const resuming = runId !== undefined && !runId.startsWith("--");
+		if (resuming && (!handoff || handoff.startsWith("--"))) {
+			throw usageError(
+				"task run --run <id> requires --handoff <path>: a resume re-attaches through the run's verified envelope.",
 			);
 		}
 	}
@@ -214,12 +254,8 @@ export function parseBrowserUseArgv(
 			}
 		}
 	}
-	if (command === "runbook-run") {
-		const handoff = stringField(flagValues["--handoff"]);
-		if (!handoff || handoff.startsWith("--")) {
-			throw usageError("runbook run requires --handoff <path>.");
-		}
-	}
+	// `runbook run` attaches through the agent-browser lane; --handoff is the
+	// advanced caller-managed override, minted internally when absent (D4).
 	// Every migration phase but `status` freezes/validates against one exact
 	// source root; a targeted phase is never an unbound scan, so --source is
 	// hard-required (mirrors lanes show --adapter). `migration status` is a pure
@@ -383,6 +419,9 @@ function outputModeFor(
 ): OutputMode {
 	if (flagValues["--plain"] !== undefined) return "plain";
 	if (flagValues["--json"] !== undefined) return "json";
+	// The guide is agent-audience but prose-first: its default output is the
+	// readable text (its contract lists plain first); --json still wraps it.
+	if (command === "guide-show") return "plain";
 	return browserUseContracts[command].audience === "operator" ? "plain" : "json";
 }
 
@@ -458,11 +497,19 @@ export function renderHelp(
 		// mint-an-envelope prerequisite (targets status reads selected state only).
 		const commandFlags: Readonly<Record<string, FlagSpec>> =
 			browserUseContracts[command].flags ?? {};
-		const prerequisite =
-			commandFlags["--handoff"] !== undefined
+		const prerequisite = AUTO_ATTACH_COMMANDS.has(command)
+			? `\n${AUTO_ATTACH_POINTER}`
+			: commandFlags["--handoff"] !== undefined
 				? `\n${ROUTE_PREREQUISITE_POINTER}`
 				: "";
-		return `${renderCommandUsage(browserUseContracts[command])}${prerequisite}\n`;
+		// Leaf usage names the executable (D5): agents copy usage lines verbatim,
+		// so `Usage: task list` without the bin name is not runnable as printed.
+		const contract = browserUseContracts[command];
+		const prefixed = {
+			...contract,
+			usage: contract.usage.map((usage) => `browser-use ${usage}`),
+		};
+		return `${renderCommandUsage(prefixed)}${prerequisite}\n`;
 	}
 	if (family) return renderFamilyHelp(family);
 	return renderRootHelp();
@@ -475,40 +522,99 @@ function renderFamilyHelp(family: BrowserUseFamily): string {
 	});
 	// Contract-driven prerequisite: only families with a --handoff-consuming
 	// command point at the connection prerequisite (platform families do not
-	// consume the envelope directly).
-	const familyConsumesHandoff = subcommandsFor(family).some((sub) => {
+	// consume the envelope directly). A family whose handoff consumers all
+	// auto-attach (task, runbook — design brief D4) gets the auto-attach line
+	// instead: everyday help never teaches the secondary CLI.
+	const handoffConsumers = subcommandsFor(family).filter((sub) => {
 		const flags: Readonly<Record<string, FlagSpec>> =
 			browserUseContracts[toCommand(family, sub)].flags ?? {};
 		return flags["--handoff"] !== undefined;
 	});
+	const pointer =
+		handoffConsumers.length === 0
+			? []
+			: handoffConsumers.every((sub) =>
+						AUTO_ATTACH_COMMANDS.has(toCommand(family, sub)),
+					)
+				? ["", AUTO_ATTACH_POINTER]
+				: ["", ROUTE_PREREQUISITE_POINTER];
 	return [
 		`Usage: browser-use ${family} <subcommand> [flags]`,
 		"",
 		"Subcommands:",
 		...subLines,
-		...(familyConsumesHandoff ? ["", ROUTE_PREREQUISITE_POINTER] : []),
+		...pointer,
 		"",
 	].join("\n");
 }
 
+// Root help is the agent-first front door (design brief D2): intent-grouped,
+// start-here first, budgeted, and free of secondary-CLI commands. The family
+// grouping below is presentation only — the parser accepts every family from
+// BROWSER_USE_FAMILY_SUBCOMMANDS regardless of group. renderRootHelp asserts
+// group completeness at render time so a new family cannot silently vanish
+// from help.
+const ROOT_HELP_GROUPS: ReadonlyArray<{
+	heading: string;
+	families: readonly BrowserUseFamily[];
+}> = [
+	{ heading: "Everyday work:", families: ["task", "run", "runbook", "artifact"] },
+	{ heading: "Recovery:", families: ["repair", "auth"] },
+	{
+		heading: "Advanced (platform internals):",
+		families: ["targets", "operate", "lanes", "migration"],
+	},
+];
+
 function renderRootHelp(): string {
-	const familyLines = BROWSER_USE_FAMILIES.map((family) => {
-		return `  ${family.padEnd(10)} ${BROWSER_USE_FAMILY_SUMMARIES[family]}`;
-	});
+	// Completeness check: every registered family except `guide` (rendered in
+	// the Start here block) must appear in exactly one group.
+	const grouped = new Set(ROOT_HELP_GROUPS.flatMap((group) => group.families));
+	for (const family of BROWSER_USE_FAMILIES) {
+		if (family !== "guide" && !grouped.has(family)) {
+			throw new Error(`root help group table is missing family: ${family}`);
+		}
+	}
+	const groupLines = ROOT_HELP_GROUPS.flatMap((group) => [
+		group.heading,
+		...group.families.map(
+			(family) =>
+				`  ${family.padEnd(10)} ${BROWSER_USE_FAMILY_SUMMARIES[family]}`,
+		),
+		"",
+	]);
 	return [
+		"browser-use - orchestrate browser tasks through one warm Chrome (for AI agents)",
+		"",
 		"Usage: browser-use <family> <subcommand> [flags]",
 		"",
-		"Command families:",
-		...familyLines,
+		"Start here (for AI agents):",
+		"  browser-use guide                Core workflow, copy-paste loop (version-matched)",
+		"  browser-use task list --json     Discover code-owned Task Intents",
+		"  browser-use runbook list --json  Discover service runbooks",
 		"",
-		"Global diagnostic flags:",
-		"  --run-id <id>   Set run correlation id.",
-		"  --quiet         Suppress diagnostics.",
-		"  --verbose       Emit info diagnostics to stderr.",
-		"  --debug         Emit debug diagnostics to stderr.",
-		"  --version       Print version.",
+		...groupLines,
+		"Global flags:",
+		"  --json | --plain   Output mode (JSON envelopes carry the next safe action).",
+		"  --run-id <id>      Set run correlation id.",
+		"  --quiet | --verbose | --debug   Diagnostic volume (stderr).",
+		"  --version          Print version.",
 		"",
-		`Browser attachment commands accepting --handoff require:\n  ${ROUTE_PREREQUISITE_POINTER}`,
+		"Every family: browser-use <family> --help. Every leaf: browser-use <family> <subcommand> --help.",
+		"",
+	].join("\n");
+}
+
+// The no-arg launcher (D1): smaller than root help, exit 0, one obvious next
+// action. Agents cold-starting on this CLI should never need to guess.
+export function renderLauncher(): string {
+	return [
+		"browser-use - orchestrate browser tasks through one warm Chrome (for AI agents)",
+		"",
+		"Start here:",
+		"  browser-use guide                Core workflow, copy-paste loop",
+		"  browser-use task list --json     Discover code-owned Task Intents",
+		"  browser-use --help               Full command families",
 		"",
 	].join("\n");
 }

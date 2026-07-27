@@ -180,10 +180,28 @@ describe("task run contract + parser (R27)", () => {
 		expect(Object.keys(contract.flags ?? {})).toContain("--lane");
 	});
 
-	test("task run without --handoff is a usage error", async () => {
+	// Rewritten for the internal mint (design brief D4): a fresh --intent run
+	// without --handoff engages the runtime's mintHandoff seam instead of
+	// erroring; the fail-closed mint stub surfaces its connect failure verbatim.
+	// The RESUME path still hard-requires the caller-managed envelope.
+	test("task run --intent without --handoff engages the internal mint", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
 			["task", "run", "--intent", "scrape", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		// makeRuntime's mint stub fails closed with exit 20 — proof the mint path
+		// ran (a parser rejection would have exited 2 before any mint).
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "mint_not_faked",
+		});
+	});
+
+	test("task run --run without --handoff is a usage error", async () => {
+		const store = await makeStore();
+		const result = await runForTest(
+			["task", "run", "--run", "run-1", "--json"],
 			makeRuntime({ env: store.env }),
 		);
 		expect(result.exitCode).toBe(2);

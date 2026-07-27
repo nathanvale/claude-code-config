@@ -2811,8 +2811,12 @@ export function createProductionAdapterRuntime(): AdapterRuntime {
  * Default production dependencies: the real warm-chrome `main`, the real
  * adapter runtime (PATH + published-tree resolution, no-shell spawn), and the
  * real registry.
+ *
+ * Exported for in-process embedding (browser-use's internal envelope mint,
+ * design brief D4): the embedder passes these deps to `main` with captured
+ * writers so the one production wiring lives here, never copied.
  */
-async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
+export async function createProductionDeps(): Promise<BrowserConnectMainDeps> {
 	const { main: warmChromeMain } = await import("@side-quest/warm-chrome/cli");
 	return { warmChromeMain, adapterRuntime: createProductionAdapterRuntime() };
 }

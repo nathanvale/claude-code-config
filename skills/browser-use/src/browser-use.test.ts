@@ -17,6 +17,8 @@ import {
 import { contractFlags } from "./browser-use-test-helpers";
 
 const ALL_COMMANDS: BrowserUseCommand[] = [
+	// Version-matched bundled guidance (agent-first front door, design brief D3).
+	"guide-show",
 	"targets-list",
 	"targets-select",
 	"targets-status",

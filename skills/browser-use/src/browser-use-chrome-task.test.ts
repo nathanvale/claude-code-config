@@ -118,6 +118,11 @@ function runtimeFor(
 		},
 		readStdin: async () => "",
 		platformFs: {} as BrowserUseRuntime["platformFs"],
+		// Chrome-task unit runtime never mints (D4): the executor receives its
+		// handoff via the task input; fail loud if a test reaches the mint seam.
+		mintHandoff: async () => {
+			throw new Error("mintHandoff must not run in chrome-task unit tests");
+		},
 	};
 }
 

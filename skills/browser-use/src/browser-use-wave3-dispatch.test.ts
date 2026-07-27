@@ -562,3 +562,148 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({ code: "usage_error" });
 	});
 });
+
+// =========================================================================
+// Internal envelope mint (design brief D4,
+// docs/plans/2026-07-27-agent-first-front-door-brief.md): a fresh
+// `task run --intent` / `runbook run` without --handoff mints the Verified
+// Handoff Envelope in-process through the runtime's mintHandoff seam and flows
+// through the SAME parseHandoffFacts validation as a caller-supplied file.
+// A mint failure is browser-connect's failure envelope surfaced VERBATIM.
+// =========================================================================
+
+describe("task run — internal envelope mint (D4)", () => {
+	test("a fresh --intent run without --handoff mints for the intent's preferred adapter and confirms", async () => {
+		const store = await makeStore();
+		const scripted = scriptedRuntime(store.env, [
+			{ stdout: chromePagesListing() },
+			{ stdout: chromeConsole() },
+			{ stdout: chromeNetwork() },
+		]);
+		const mintCalls: Array<{ adapterId: string; runId?: string }> = [];
+		scripted.runtime.mintHandoff = async (input) => {
+			mintCalls.push(input);
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify(
+					handoffEnvelope(input.adapterId, input.runId ?? "run-minted"),
+				),
+				stderr: "",
+			};
+		};
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			scripted.runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		// debug's preferred lane is chrome-devtools-mcp; the mint attached it.
+		expect(mintCalls).toHaveLength(1);
+		expect(mintCalls[0]?.adapterId).toBe("chrome-devtools-mcp");
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.selected_lane).toBe("chrome-devtools-mcp");
+		const run = data.run as Record<string, unknown>;
+		expect(run.state).toBe("confirmed");
+		// The minted envelope's run id became the durable shared run id.
+		expect(run.run_id).toBe(mintCalls[0]?.runId);
+	});
+
+	test("a mint failure surfaces browser-connect's failure envelope verbatim with its exit code", async () => {
+		const store = await makeStore();
+		const scripted = scriptedRuntime(store.env, []);
+		const failureEnvelope = JSON.stringify({
+			status: "error",
+			data: { outcome: "failed", failure_class: "environment-unavailable" },
+		});
+		scripted.runtime.mintHandoff = async () => ({
+			exitCode: 20,
+			stdout: failureEnvelope,
+			stderr: "",
+		});
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			scripted.runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		// Verbatim passthrough: browser-use never re-wraps the connect failure.
+		expect(result.stdout).toBe(failureEnvelope);
+		// Fail closed: no adapter call, no run created.
+		expect(scripted.calls).toHaveLength(0);
+	});
+
+	test("--handoff still wins over the mint (advanced caller-managed path)", async () => {
+		const store = await makeStore();
+		const handoffPath = writeHandoff(store.base, "chrome-devtools-mcp", "run-managed-1");
+		const scripted = scriptedRuntime(store.env, [
+			{ stdout: chromePagesListing() },
+			{ stdout: chromeConsole() },
+			{ stdout: chromeNetwork() },
+		]);
+		let minted = false;
+		scripted.runtime.mintHandoff = async () => {
+			minted = true;
+			throw new Error("mint must not run when --handoff is supplied");
+		};
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--handoff", handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			scripted.runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(minted).toBe(false);
+	});
+
+	test("runbook run without --handoff mints for the agent-browser lane", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const scripted = scriptedRuntime(store.env, [
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ snapshot: "- page snapshot" }) },
+		]);
+		const mintCalls: Array<{ adapterId: string; runId?: string }> = [];
+		scripted.runtime.mintHandoff = async (input) => {
+			mintCalls.push(input);
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify(
+					handoffEnvelope(input.adapterId, input.runId ?? "run-minted-rb"),
+				),
+				stderr: "",
+			};
+		};
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--json",
+			],
+			scripted.runtime,
+		);
+		expect(mintCalls).toHaveLength(1);
+		expect(mintCalls[0]?.adapterId).toBe("agent-browser");
+		// The run reached execution through the minted envelope (any terminal or
+		// blocked state proves attachment happened; a handoff failure would have
+		// exited 20 before dispatch with zero adapter calls).
+		expect(scripted.calls.length).toBeGreaterThan(0);
+		expect([0, 20]).toContain(result.exitCode);
+	});
+});

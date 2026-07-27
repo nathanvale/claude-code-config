@@ -32,11 +32,17 @@ describe("platform family help and discovery", () => {
 	test("root help lists every command family", () => {
 		const help = renderHelp();
 		for (const family of BROWSER_USE_FAMILIES) {
-			expect(help).toContain(`  ${family}`);
+			// `guide` renders inside the Start here block as a full command form;
+			// every other family renders as a grouped `  <family>  <summary>` row.
+			expect(help).toContain(
+				family === "guide" ? "browser-use guide" : `  ${family}`,
+			);
 		}
-		expect(help).toContain(
-			"Browser attachment commands accepting --handoff require:",
-		);
+		// Single front door (design brief D2): root help is agent-first and never
+		// teaches a secondary CLI; envelope-level prerequisites live on the
+		// advanced leaf help of the commands that consume --handoff.
+		expect(help).toContain("Start here (for AI agents)");
+		expect(help).not.toContain("browser-connect");
 	});
 
 	test("family help renders every declared subcommand from the contract table", () => {
