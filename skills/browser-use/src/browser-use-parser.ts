@@ -256,6 +256,18 @@ export function parseBrowserUseArgv(
 	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the
 	// advanced caller-managed override, minted internally when absent (D4).
+	// A resume stays bound to its original attachment (R3/R11) exactly like
+	// task run: --run requires the caller-managed envelope, never a fresh mint.
+	if (command === "runbook-run") {
+		const runId = stringField(flagValues["--run"]);
+		const handoff = stringField(flagValues["--handoff"]);
+		const resuming = runId !== undefined && !runId.startsWith("--");
+		if (resuming && (!handoff || handoff.startsWith("--"))) {
+			throw usageError(
+				"runbook run --run <id> requires --handoff <path>: a resume re-attaches through the run's verified envelope.",
+			);
+		}
+	}
 	// Every migration phase but `status` freezes/validates against one exact
 	// source root; a targeted phase is never an unbound scan, so --source is
 	// hard-required (mirrors lanes show --adapter). `migration status` is a pure

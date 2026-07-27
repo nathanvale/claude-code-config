@@ -128,17 +128,31 @@ async function mintHandoffInProcess(input: {
 	};
 	const stdout = capture();
 	const stderr = capture();
-	const deps = await cli.createProductionDeps();
-	const exitCode = await cli.main(
-		[
-			"connect",
-			input.adapterId,
-			"--json",
-			...(input.runId === undefined ? [] : ["--run-id", input.runId]),
-		],
-		{ ...deps, stdout: stdout.writer, stderr: stderr.writer },
-	);
-	return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
+	// The whole embedded interaction stays inside the guard, not just the
+	// import above: createProductionDeps() lazily imports warm-chrome and
+	// main() can throw before it owns the process exit — either would
+	// otherwise crash the mint path instead of returning the documented typed
+	// failure. The thrown message names a module/stage, never a secret.
+	try {
+		const deps = await cli.createProductionDeps();
+		const exitCode = await cli.main(
+			[
+				"connect",
+				input.adapterId,
+				"--json",
+				...(input.runId === undefined ? [] : ["--run-id", input.runId]),
+			],
+			{ ...deps, stdout: stdout.writer, stderr: stderr.writer },
+		);
+		return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr: `browser-connect could not mint the handoff in this installation (${detail}); pass --handoff <path> with a pre-minted Verified Handoff Envelope.`,
+		};
+	}
 }
 
 // Read all of stdin as UTF-8. An interactive terminal has no piped envelope, so

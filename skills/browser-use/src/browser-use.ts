@@ -2129,90 +2129,97 @@ function mapAgentBrowserOutcome(
  * @param input - Store-backed command input plus explicit-run-id awareness
  * @returns Process exit code
  */
-async function runTaskRun(input: PlatformCommandInput): Promise<number> {
-	const flags = input.parsed.flagValues;
-
-	// R3: the handoff is the only attachment route. Acquire + validate it first,
-	// so a bad envelope fails before any store write or routing decision. Two
-	// acquisition paths, ONE validation path (parseHandoffFacts):
-	// - caller-managed --handoff <path> (advanced/back-compat), or
-	// - the internal in-process mint (design brief D4) for a fresh --intent run:
-	//   adapter = --lane override, else the intent's preferred adapter. A mint
-	//   failure IS browser-connect's failure envelope, surfaced verbatim with
-	//   its exit code — one Repair Path, no re-wrapping.
+// R3: the handoff is the only attachment route for task and runbook execution.
+// ONE shared acquisition + validation sequence (CodeRabbit PR 263: the earlier
+// per-command copies drifted on resume semantics): caller-managed --handoff
+// (advanced/back-compat) or the internal in-process mint (design brief D4). A
+// mint failure IS browser-connect's failure envelope, surfaced verbatim with
+// its exit code — one Repair Path, no re-wrapping. Validation is the single
+// parseHandoffFacts path; the raw payload re-parses from the SAME in-memory
+// bytes for the executor's own schema-2 guard. Resume-requires-handoff is
+// enforced uniformly at the parser for both commands, so it needs no flag here.
+async function acquireVerifiedHandoff(input: {
+	command: PlatformCommandInput;
+	/** Adapter to mint for when --handoff is absent; undefined fails typed. */
+	mintAdapterId: string | undefined;
+	/** Failure-message subject: "a task" | "a runbook". */
+	subject: string;
+}): Promise<
+	| { ok: true; handoff: HandoffFacts; rawHandoffData: unknown }
+	| { ok: false; exitCode: number }
+> {
+	const command = input.command;
+	const flags = command.parsed.flagValues;
+	const fail = (message: string): { ok: false; exitCode: number } => ({
+		ok: false,
+		exitCode: emitTaskRunFailure(command, undefined, {
+			code: "task_run_handoff_lane_mismatch",
+			message,
+			actionId: "supply_matching_handoff",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		}),
+	});
 	const handoffPath = stringField(flags["--handoff"]);
 	let handoffRaw: string;
 	if (handoffPath === undefined) {
-		const mintAdapter =
-			stringField(flags["--lane"]) ??
-			BROWSER_USE_TASK_INTENT_DEFINITIONS.find(
-				(definition) =>
-					definition.task_intent === stringField(flags["--intent"]),
-			)?.preferred_adapter;
-		if (mintAdapter === undefined) {
-			return emitTaskRunFailure(input, undefined, {
-				code: "task_run_handoff_lane_mismatch",
-				message:
-					"no adapter to attach: the intent has no registered preferred lane; pass --lane <id> or --handoff <path>.",
-				actionId: "supply_matching_handoff",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "change_input",
-			});
+		if (input.mintAdapterId === undefined) {
+			return fail(
+				"no adapter to attach: the intent has no registered preferred lane; pass --lane <id> or --handoff <path>.",
+			);
 		}
-		const minted = await input.runtime.mintHandoff({
-			adapterId: mintAdapter,
-			runId: input.runId,
+		const minted = await command.runtime.mintHandoff({
+			adapterId: input.mintAdapterId,
+			runId: command.runId,
 		});
 		if (minted.exitCode !== 0) {
-			if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
-			if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
-			return minted.exitCode;
+			if (minted.stderr.length > 0) command.stderr.write(minted.stderr);
+			if (minted.stdout.length > 0) command.stdout.write(minted.stdout);
+			return { ok: false, exitCode: minted.exitCode };
 		}
 		handoffRaw = minted.stdout;
 	} else {
 		try {
-			handoffRaw = await input.runtime.readTextFile(handoffPath);
+			handoffRaw = await command.runtime.readTextFile(handoffPath);
 		} catch {
-			return emitTaskRunFailure(input, undefined, {
-				code: "task_run_handoff_lane_mismatch",
-				message: "the --handoff file could not be read",
-				actionId: "supply_matching_handoff",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "change_input",
-			});
+			return fail("the --handoff file could not be read");
 		}
 	}
 	const parse = parseHandoffFacts(handoffRaw);
-	if (!parse.ok) {
-		return emitTaskRunFailure(input, undefined, {
-			code: "task_run_handoff_lane_mismatch",
-			message: parse.failure.message,
-			actionId: "supply_matching_handoff",
-			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-			recoverability: "change_input",
-		});
-	}
+	if (!parse.ok) return fail(parse.failure.message);
 	if (parse.kind !== "verified") {
-		return emitTaskRunFailure(input, undefined, {
-			code: "task_run_handoff_lane_mismatch",
-			message:
-				"the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running a task.",
-			actionId: "supply_matching_handoff",
-			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-			recoverability: "change_input",
-		});
+		return fail(
+			`the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running ${input.subject}.`,
+		);
 	}
-	const handoff = parse.facts;
-	// The verbatim envelope payload the executor re-validates. parseHandoffFacts
-	// already proved the bytes parse and bind; re-parse the same raw for the
-	// executor (it owns its own schema-2 guard) so the driver never
-	// reconstructs it.
 	let rawHandoffData: unknown;
 	try {
 		rawHandoffData = (JSON.parse(handoffRaw) as { data?: unknown }).data;
 	} catch {
 		rawHandoffData = undefined;
 	}
+	return { ok: true, handoff: parse.facts, rawHandoffData };
+}
+
+async function runTaskRun(input: PlatformCommandInput): Promise<number> {
+	const flags = input.parsed.flagValues;
+
+	// Fresh --intent runs mint for the --lane override, else the intent's
+	// preferred adapter (D4); acquisition + validation live in the shared
+	// acquireVerifiedHandoff sequence.
+	const acquired = await acquireVerifiedHandoff({
+		command: input,
+		mintAdapterId:
+			stringField(flags["--lane"]) ??
+			BROWSER_USE_TASK_INTENT_DEFINITIONS.find(
+				(definition) =>
+					definition.task_intent === stringField(flags["--intent"]),
+			)?.preferred_adapter,
+		subject: "a task",
+	});
+	if (!acquired.ok) return acquired.exitCode;
+	const handoff = acquired.handoff;
+	const rawHandoffData = acquired.rawHandoffData;
 
 	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
@@ -2850,58 +2857,17 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
 
-	// R3: the handoff is the only attachment route; acquire + verify first. Two
-	// acquisition paths, one validation path (parseHandoffFacts), mirroring
-	// runTaskRun (design brief D4): runbooks always execute on the agent-browser
-	// lane, so an absent --handoff mints for that adapter in-process; a mint
-	// failure is browser-connect's failure envelope surfaced verbatim.
-	const handoffPath = stringField(flags["--handoff"]);
-	let handoffRaw: string;
-	if (handoffPath === undefined) {
-		const minted = await input.runtime.mintHandoff({
-			adapterId: "agent-browser",
-			runId: input.runId,
-		});
-		if (minted.exitCode !== 0) {
-			if (minted.stderr.length > 0) input.stderr.write(minted.stderr);
-			if (minted.stdout.length > 0) input.stdout.write(minted.stdout);
-			return minted.exitCode;
-		}
-		handoffRaw = minted.stdout;
-	} else {
-		try {
-			handoffRaw = await input.runtime.readTextFile(handoffPath);
-		} catch {
-			return emitTaskRunFailure(input, undefined, {
-				code: "task_run_handoff_lane_mismatch",
-				message: "the --handoff file could not be read",
-				actionId: "supply_matching_handoff",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "change_input",
-			});
-		}
-	}
-	const parse = parseHandoffFacts(handoffRaw);
-	if (!parse.ok) {
-		return emitTaskRunFailure(input, undefined, {
-			code: "task_run_handoff_lane_mismatch",
-			message: parse.failure.message,
-			actionId: "supply_matching_handoff",
-			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-			recoverability: "change_input",
-		});
-	}
-	if (parse.kind !== "verified") {
-		return emitTaskRunFailure(input, undefined, {
-			code: "task_run_handoff_lane_mismatch",
-			message:
-				"the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running a runbook.",
-			actionId: "supply_matching_handoff",
-			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-			recoverability: "change_input",
-		});
-	}
-	const handoff = parse.facts;
+	// Runbooks always execute on the agent-browser lane, so an absent --handoff
+	// mints for that adapter (D4); acquisition + validation live in the shared
+	// acquireVerifiedHandoff sequence.
+	const acquired = await acquireVerifiedHandoff({
+		command: input,
+		mintAdapterId: "agent-browser",
+		subject: "a runbook",
+	});
+	if (!acquired.ok) return acquired.exitCode;
+	const handoff = acquired.handoff;
+	const rawHandoffData = acquired.rawHandoffData;
 	// Runbooks execute through the agent-browser lane; a non-agent-browser handoff
 	// is a lane mismatch, never a substitution (R11).
 	if (handoff.adapter !== "agent-browser") {
@@ -2912,12 +2878,6 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 			recoverability: "change_input",
 		});
-	}
-	let rawHandoffData: unknown;
-	try {
-		rawHandoffData = (JSON.parse(handoffRaw) as { data?: unknown }).data;
-	} catch {
-		rawHandoffData = undefined;
 	}
 
 	const parsedInputs = parseRunbookInputs(

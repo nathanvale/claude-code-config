@@ -237,6 +237,26 @@ describe("front door: everyday task run needs no caller-managed handoff (D4)", (
 		expect(envelope.error.message).toContain("--handoff");
 	});
 
+	test("runbook run --run resume also requires the caller-managed --handoff", async () => {
+		// CodeRabbit PR 263: the guard must hold for BOTH resume surfaces — a
+		// resume must never silently re-attach through a freshly minted envelope.
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "svc",
+				"--flow", "flow",
+				"--run", "some-run",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(2);
+		const envelope = parseJson(result.stdout) as {
+			error: { message: string };
+		};
+		expect(envelope.error.message).toContain("--handoff");
+	});
+
 	test("task run leaf help teaches auto-attach, not the secondary CLI", async () => {
 		const result = await runForTest(["task", "run", "--help"], makeRuntime());
 		expect(result.exitCode).toBe(0);
