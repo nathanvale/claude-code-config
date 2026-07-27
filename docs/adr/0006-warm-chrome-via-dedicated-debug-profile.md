@@ -39,3 +39,19 @@ with classic `--remote-debugging-port` against a **dedicated persistent `--user-
   carrying separate readiness policies.
 - If agent-browser later ships working M144-toggle support (tracked upstream), revisit — attaching
   to the user's actual everyday profile would be simpler.
+
+## Amendment 2026-07-28
+
+The permanent product-level Chrome for Testing ban is retired as a future
+direction. Chrome for Testing may become an explicit Browser Use browser class
+only after it satisfies the same capability and proof boundary as Warm Chrome:
+headed mode, a dedicated persistent owner-only profile, numeric-loopback CDP,
+verified binary/profile/listener/endpoint consistency, an exact version, and an
+explicit upgrade policy.
+
+The current runtime rejection remains in force until that lane is implemented
+and passes authentication-continuity plus profile-migration acceptance evidence.
+Chrome for Testing remains forbidden as an automatic or silent fallback.
+
+Decision detail:
+`docs/decisions/2026-07-28-001-browser-use-chrome-for-testing-lane-decision-log.md`.

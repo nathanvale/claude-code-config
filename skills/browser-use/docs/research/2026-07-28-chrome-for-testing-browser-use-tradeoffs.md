@@ -136,6 +136,15 @@ The evidence does not justify saying Chrome for Testing cannot authenticate.
 It justifies saying Browser Use has not yet accepted or proven Chrome for
 Testing as a supported warm-browser class.
 
+## Accepted Direction
+
+On 2026-07-28, Nathan accepted an explicit capability-proven Chrome for Testing
+lane. The current rejection stays in force until implementation and acceptance
+proof pass. Chrome for Testing remains forbidden as an automatic fallback.
+
+Decision owner:
+`docs/decisions/2026-07-28-001-browser-use-chrome-for-testing-lane-decision-log.md`.
+
 ## Sources
 
 - Chrome for Testing official overview:
@@ -157,4 +166,3 @@ Testing as a supported warm-browser class.
   <https://github.com/GoogleChromeLabs/chrome-for-testing/issues/207>
   - Checked: 2026-07-28 with Firecrawl.
   - Use: unconfirmed extension-profile continuity risk across CfT downloads.
-
