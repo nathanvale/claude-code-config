@@ -462,6 +462,7 @@ export const BROWSER_USE_GUIDE_TOPICS = [
 	"recovery",
 	"auth",
 	"lanes",
+	"setup",
 ] as const;
 export type BrowserUseGuideTopic = (typeof BROWSER_USE_GUIDE_TOPICS)[number];
 
@@ -1658,9 +1659,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"guide-show": {
 			script: "browser-use",
 			summary:
-				"Show version-matched workflow guidance for AI agents: the everyday task loop, recovery, auth boundary, and lanes.",
+				"Show version-matched workflow guidance for AI agents: the everyday task loop, recovery, auth boundary, lanes, and adapter setup.",
 			usage: [
-				"guide [show] [--topic core|recovery|auth|lanes] [--full] [--json|--plain]",
+				"guide [show] [--topic core|recovery|auth|lanes|setup] [--full] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -1674,7 +1675,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 					type: "enum",
 					values: BROWSER_USE_GUIDE_TOPICS,
 					description:
-						"Guide topic: core (default), recovery, auth, or lanes.",
+						"Guide topic: core (default), recovery, auth, lanes, or setup.",
 				},
 				"--full": {
 					type: "boolean",

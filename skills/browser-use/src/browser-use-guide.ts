@@ -56,6 +56,7 @@ More topics:
   browser-use guide --topic recovery    # Blocked or failed runs
   browser-use guide --topic auth        # Auth boundary and readiness
   browser-use guide --topic lanes       # Adapter lane registry
+  browser-use guide --topic setup       # Required adapter binary handoff
   browser-use guide --full              # Page-action lifecycle + advanced path
 `;
 
@@ -140,6 +141,49 @@ const LANES_GUIDE = `browser-use guide — adapter lanes
 - A domain file's engine field selects the lane for that domain's work.
 `;
 
+const SETUP_GUIDE = `browser-use guide — adapter binary setup
+
+Use this only when a run reports adapter_not_installed or an acceptance proof
+needs an adapter that is not yet ready.
+
+1. Discover the registered adapter ids:
+
+  browser-use lanes list --json
+
+2. For each adapter required by the intended run, read the trusted preview:
+
+  browser-connect repair-adapter <adapter-id> --check --json
+
+Read these fields; inferring a package or substituting "latest" breaks
+exact-pin provenance and leaves the adapter unavailable:
+
+- data.install_state: installed_at_pin means ready.
+- data.required_binary: executable, package_name, pinned_version,
+  install_scope, lifecycle_scripts_required, package_owner, and docs_url.
+- data.posture: none, automatic, or operator.
+- data.eligible_action_id / data.operator_choice_ids: the allowed next step.
+
+When posture is operator, tell the human:
+
+- Install data.required_binary.package_name at exactly
+  data.required_binary.pinned_version.
+- Use the user-owned package-manager scope named by install_scope.
+- Allow lifecycle scripts only when lifecycle_scripts_required is true.
+- Use the package owner and docs URL from the same preview.
+- Do not change the registered pin, use privilege escalation, or install a
+  substitute adapter.
+
+Never run \`agent-browser install\`: it downloads Chrome for Testing. Browser
+Use attaches adapters only to Warm Chrome.
+
+After the human installs the package, rerun the same read-only preview:
+
+  browser-connect repair-adapter <adapter-id> --check --json
+
+Continue only when install_state is installed_at_pin and posture is none, then
+rerun the original browser-use command.
+`;
+
 /**
  * Render one guide topic. `full` appends the page-action lifecycle and
  * advanced platform path to the core topic (ignored for other topics).
@@ -154,5 +198,7 @@ export function renderGuide(topic: BrowserUseGuideTopic, full: boolean): string 
 			return AUTH_GUIDE;
 		case "lanes":
 			return LANES_GUIDE;
+		case "setup":
+			return SETUP_GUIDE;
 	}
 }

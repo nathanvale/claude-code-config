@@ -107,6 +107,7 @@ describe("front door: guide family (D3)", () => {
 			["auth", "Auth Pointer"],
 			["lanes", "lanes list"],
 			["recovery", "Repair Path"],
+			["setup", "required_binary"],
 		];
 		for (const [topic, marker] of topics) {
 			const result = await runForTest(
@@ -116,6 +117,23 @@ describe("front door: guide family (D3)", () => {
 			expect(result.exitCode).toBe(0);
 			expect(result.stdout).toContain(marker);
 		}
+	});
+
+	test("setup guide teaches a bounded human adapter-install handoff", async () => {
+		const result = await runForTest(
+			["guide", "show", "--topic", "setup"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("repair-adapter <adapter-id> --check --json");
+		expect(result.stdout).toContain("package_name");
+		expect(result.stdout).toContain("pinned_version");
+		expect(result.stdout).toContain("install_scope");
+		expect(result.stdout).toContain("lifecycle_scripts_required");
+		expect(result.stdout).toContain("tell the human");
+		expect(result.stdout).toContain("Never run `agent-browser install`");
+		expect(result.stdout).not.toContain("@latest");
+		expect(result.stdout).not.toContain("sudo");
 	});
 
 	test("guide --full appends the page-action lifecycle to core", async () => {

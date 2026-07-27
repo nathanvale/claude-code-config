@@ -38,6 +38,7 @@ import type {
 } from "../src/adapters/registry.ts";
 import { agentBrowserDefinition } from "../src/adapters/agent-browser.ts";
 import { chromeDevtoolsMcpDefinition } from "../src/adapters/chrome-devtools-mcp.ts";
+import { playwrightCdpDefinition } from "../src/adapters/playwright-cdp.ts";
 
 // ---------------------------------------------------------------------------
 // Characterization scaffolding — a fake warm-chrome `main` that emits the exact
@@ -802,6 +803,7 @@ function fakeAdapterRuntime(script: {
 const PINNED = {
 	"chrome-devtools-mcp": "1.5.0",
 	"agent-browser": "0.31.2",
+	"playwright-cdp": "0.1.17",
 } as const;
 
 function realRegistryAccessors(): {
@@ -2727,6 +2729,7 @@ type RepairScenario = {
  */
 async function runRepairScenario(options: {
 	mode: "--check" | "--execute";
+	outputMode?: "--json" | "--plain";
 	adapterId?: string;
 	observedVersion?: string;
 	files?: Record<string, string | null>;
@@ -2788,7 +2791,7 @@ async function runRepairScenario(options: {
 			"repair-adapter",
 			options.adapterId ?? "chrome-devtools-mcp",
 			options.mode,
-			"--json",
+			options.outputMode ?? "--json",
 			"--run-id",
 			REPAIR_RUN_ID,
 		],
@@ -2953,6 +2956,49 @@ describe("browser-connect repair-adapter: parser boundaries (U5 R33/KTD22)", () 
 	}
 });
 
+const REQUIRED_BINARY = {
+		"chrome-devtools-mcp": {
+			executable: "chrome-devtools-mcp",
+			package_name: "chrome-devtools-mcp",
+			pinned_version: PINNED["chrome-devtools-mcp"],
+			install_scope: "user",
+			lifecycle_scripts_required: false,
+			package_owner: "chrome-devtools-mcp npm package maintainers",
+			docs_url:
+				"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+		},
+		"agent-browser": {
+			executable: "agent-browser",
+			package_name: "agent-browser",
+			pinned_version: PINNED["agent-browser"],
+			install_scope: "user",
+			lifecycle_scripts_required: true,
+			package_owner: "agent-browser npm package maintainers",
+			docs_url:
+				"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+		},
+		"playwright-cdp": {
+			executable: "playwright-cli",
+			package_name: "@playwright/cli",
+			pinned_version: PINNED["playwright-cdp"],
+			install_scope: "user",
+			lifecycle_scripts_required: true,
+			package_owner: "Microsoft Playwright CLI maintainers",
+			docs_url:
+				"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+		},
+} as const;
+
+function expectRequiredBinary(
+	data: Record<string, unknown>,
+	adapterId: keyof typeof REQUIRED_BINARY,
+): void {
+	expect(data.required_binary).toEqual(REQUIRED_BINARY[adapterId]);
+	expect(
+		(data.required_binary as Record<string, unknown>).pinned_version,
+	).toBe(data.pinned_version);
+}
+
 describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22)", () => {
 	test("absent adapter with complete isolated evidence → automatic install_adapter, zero network, zero mutation", async () => {
 		const scenario = await runRepairScenario({ mode: "--check" });
@@ -2971,6 +3017,7 @@ describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22
 			dependency_integrity_complete: true,
 			lifecycle_scripts_disabled: true,
 		});
+		expectRequiredBinary(data, "chrome-devtools-mcp");
 		expect(envelope.continuation?.next_action_id).toBe("install_adapter");
 		// Zero network, zero mutation: preview never probes the registry, never
 		// spawns the installer, never records, never publishes (AE22).
@@ -2992,6 +3039,7 @@ describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22
 		expect(data.operator_choice_ids).toEqual([
 			"install_registered_adapter_manually:agent-browser",
 		]);
+		expectRequiredBinary(data, "agent-browser");
 		expect(data.stop_causes).toContain("lifecycle_scripts_required");
 		expect(envelope.continuation?.requires_operator).toBe(true);
 		// choices are error-envelope-only; the ok preview carries ids in data.
@@ -3010,7 +3058,40 @@ describe("browser-connect repair-adapter --check: read-only preview (U5 R33/AE22
 		expect(data.install_state).toBe("installed_at_pin");
 		expect(data.posture).toBe("none");
 		expect(data.eligible_action_id).toBeUndefined();
+		expectRequiredBinary(data, "chrome-devtools-mcp");
 		expect(parseStdout(scenario.run).continuation).toBeUndefined();
+	});
+
+	test("plain preview preserves legacy field order and appends binary metadata", async () => {
+		const chrome = await runRepairScenario({
+			mode: "--check",
+			outputMode: "--plain",
+		});
+		expect(chrome.run.stdout).toMatch(
+			/^repair_preview adapter=chrome-devtools-mcp state=absent posture=automatic run_id=u5-repair duration_ms=\d+ package=chrome-devtools-mcp pin=1\.5\.0 scope=user lifecycle_scripts=disabled\n$/,
+		);
+
+		const agent = await runRepairScenario({
+			mode: "--check",
+			outputMode: "--plain",
+			adapterId: "agent-browser",
+		});
+		expect(agent.run.stdout).toMatch(
+			/^repair_preview adapter=agent-browser state=absent posture=operator run_id=u5-repair duration_ms=\d+ package=agent-browser pin=0\.31\.2 scope=user lifecycle_scripts=required\n$/,
+		);
+	});
+
+	test("required binary metadata separates Playwright adapter, package, and executable identities", async () => {
+		const scenario = await runRepairScenario({
+			mode: "--check",
+			adapterId: "playwright-cdp",
+			definitions: [playwrightCdpDefinition],
+		});
+		expect(scenario.run.exitCode).toBe(0);
+		expectRequiredBinary(
+			parseStdout(scenario.run).data as Record<string, unknown>,
+			"playwright-cdp",
+		);
 	});
 
 	test("exact allowlisted transition → automatic upgrade_adapter_to_pin (R21/AE11)", async () => {
@@ -3091,6 +3172,7 @@ describe("browser-connect repair-adapter --execute: isolated installer (U5 R28/A
 		expect(data.install_state).toBe("installed_at_pin");
 		expect(data.observed_version).toBe(PINNED["chrome-devtools-mcp"]);
 		expect(data.pinned_version).toBe(PINNED["chrome-devtools-mcp"]);
+		expectRequiredBinary(data, "chrome-devtools-mcp");
 
 		// One egress-gate probe against the canonical origin only (R34).
 		expect(scenario.recorder.probeCalls).toEqual([
@@ -3156,6 +3238,7 @@ describe("browser-connect repair-adapter --execute: isolated installer (U5 R28/A
 		const data = parseStdout(scenario.run).data as Record<string, unknown>;
 		expect(data.outcome).toBe("repair_executed");
 		expect(data.performed).toBe("none");
+		expectRequiredBinary(data, "chrome-devtools-mcp");
 		expect(scenario.recorder.probeCalls).toEqual([]);
 		expect(scenario.recorder.spawnInputs).toEqual([]);
 		expect(existsSync(scenario.installRoot)).toBe(false);
@@ -3173,6 +3256,10 @@ describe("browser-connect repair-adapter --execute: fail-closed stops (U5 R29/R3
 		expect((envelope.continuation?.choices ?? []).length).toBeGreaterThan(0);
 		const data = envelope.data as Record<string, unknown>;
 		expect(data.outcome).toBe("repair_stopped");
+		expectRequiredBinary(
+			data,
+			data.adapter_id as keyof typeof REQUIRED_BINARY,
+		);
 		// Legacy compatibility stays non-mutating (R30/AE19): never a package
 		// mutation action in the legacy data field.
 		expect(data.next_action_id).not.toBe("install_adapter");
