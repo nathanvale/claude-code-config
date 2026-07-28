@@ -413,6 +413,67 @@ export async function casUpdateSharedRun(
 						"mutate changed run_id; run identity is immutable.",
 					);
 				}
+				const priorBinding = loaded.run.runbook_target_binding;
+				const nextBinding = mutated.runbook_target_binding;
+				if (
+					priorBinding !== undefined &&
+					((nextBinding !== priorBinding &&
+						JSON.stringify(nextBinding) !== JSON.stringify(priorBinding)) ||
+						mutated.adapter_id !== loaded.run.adapter_id ||
+						mutated.handoff_evidence_id !== loaded.run.handoff_evidence_id)
+				) {
+					return runFailure(
+						"runbook_target_binding_immutable",
+						"runbook target binding is immutable after it is committed.",
+					);
+				}
+				if (
+					priorBinding === undefined &&
+					nextBinding !== undefined &&
+					(loaded.run.mutation_dispatched || mutated.mutation_dispatched)
+				) {
+					return runFailure(
+						"runbook_target_binding_late",
+						"a legacy run cannot acquire a target binding after mutation dispatch.",
+					);
+				}
+				const priorProgress = loaded.run.runbook_progress;
+				const nextProgress = mutated.runbook_progress;
+				if (
+					nextProgress !== undefined &&
+					nextProgress.next_step > nextProgress.total_steps
+				) {
+					return runFailure(
+						"runbook_progress_out_of_range",
+						"runbook progress cannot move beyond total_steps.",
+					);
+				}
+				if (priorProgress !== undefined && nextProgress === undefined) {
+					return runFailure(
+						"runbook_progress_immutable",
+						"runbook progress cannot be removed after it is committed.",
+					);
+				}
+				if (priorProgress !== undefined && nextProgress !== undefined) {
+					const sameIdentity =
+						nextProgress.schema_version === priorProgress.schema_version &&
+						nextProgress.service_id === priorProgress.service_id &&
+						nextProgress.flow_id === priorProgress.flow_id &&
+						nextProgress.runbook_version === priorProgress.runbook_version &&
+						nextProgress.total_steps === priorProgress.total_steps;
+					if (!sameIdentity) {
+						return runFailure(
+							"runbook_progress_identity_immutable",
+							"runbook progress identity and total_steps are immutable.",
+						);
+					}
+					if (nextProgress.next_step < priorProgress.next_step) {
+						return runFailure(
+							"runbook_progress_regressed",
+							"runbook progress cannot move behind the first unproven step.",
+						);
+					}
+				}
 				const next: BrowserUseSharedRun = {
 					...mutated,
 					revision: loaded.run.revision + 1,

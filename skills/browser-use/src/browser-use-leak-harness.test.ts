@@ -521,6 +521,7 @@ describe("value-aware leak harness (AE5)", () => {
 				],
 			}),
 			crashAdapterSuccess({}),
+			crashAdapterSuccess({ url: "https://oncore.test/login" }),
 			crashAdapterSuccess({
 				snapshot: "@e2 textbox password @e3 textbox otp",
 				refs: { e2: {}, e3: {} },

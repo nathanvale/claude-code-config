@@ -33,6 +33,21 @@ const AUTH_CONTRACT = {
 	verifyAttestation: async () => true,
 };
 
+const RUNBOOK_TARGET_BINDING = {
+	schema_version: "1",
+	mode: "automatic",
+	binding_id: "candidate-opaque-1",
+} as const;
+
+const RUNBOOK_PROGRESS = {
+	schema_version: "1",
+	service_id: "oncore",
+	flow_id: "snapshot-verify",
+	runbook_version: "1",
+	next_step: 1,
+	total_steps: 2,
+} as const;
+
 function baseRun(overrides: Partial<BrowserUseSharedRun> = {}): BrowserUseSharedRun {
 	return {
 		run_id: "run-1",
@@ -103,6 +118,72 @@ describe("run state vocabulary (R24)", () => {
 		expect(issues).toEqual([
 			expect.objectContaining({ code: "run_adapter_unregistered" }),
 		]);
+	});
+
+	test("a private target binding requires a handoff-bound Agent Browser runbook run", () => {
+		const valid = validateSharedRun(
+			baseRun({
+				task_intent: "runbook-execution",
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: RUNBOOK_PROGRESS,
+			}),
+		);
+		expect(valid).toEqual([]);
+
+		const invalid = validateSharedRun(
+			baseRun({
+				task_intent: "runbook-execution",
+				handoff_evidence_id: undefined,
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: RUNBOOK_PROGRESS,
+			}),
+		);
+		expect(invalid).toEqual([
+			expect.objectContaining({ code: "runbook_target_binding_invalid" }),
+		]);
+	});
+
+	test("runbook progress validates identity and bounded cursor", () => {
+		expect(
+			validateSharedRun(
+				baseRun({
+					task_intent: "runbook-execution",
+					runbook_target_binding: RUNBOOK_TARGET_BINDING,
+					runbook_progress: RUNBOOK_PROGRESS,
+				}),
+			),
+		).toEqual([]);
+
+		expect(
+			validateSharedRun(
+				baseRun({
+					task_intent: "runbook-execution",
+					runbook_target_binding: RUNBOOK_TARGET_BINDING,
+					runbook_progress: {
+						...RUNBOOK_PROGRESS,
+						next_step: 3,
+					},
+				}),
+			),
+		).toEqual([expect.objectContaining({ code: "runbook_progress_invalid" })]);
+	});
+
+	test("runbook target and progress state must be committed as a pair", () => {
+		for (const privateState of [
+			{ runbook_target_binding: RUNBOOK_TARGET_BINDING },
+			{ runbook_progress: RUNBOOK_PROGRESS },
+		]) {
+			expect(
+				validateSharedRun(
+					baseRun({
+						task_intent: "runbook-execution",
+						...privateState,
+					}),
+				),
+			).toEqual([
+				expect.objectContaining({ code: "runbook_private_state_incomplete" }),
+			]);
+		}
 	});
 });
 

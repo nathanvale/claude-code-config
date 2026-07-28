@@ -10,6 +10,7 @@ import {
 	BROWSER_USE_DURABLE_RECORD_KINDS,
 	BROWSER_USE_DURABLE_SCHEMA_VERSION,
 	BROWSER_USE_OPAQUE_AUTH_REFERENCE_KEYS,
+	BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 	encodeDurableRecord,
 	findRedactionViolations,
 	parseDurableRecord,
@@ -58,6 +59,21 @@ function basePayload(
 		...overrides,
 	};
 }
+
+const RUNBOOK_TARGET_BINDING = {
+	schema_version: "1",
+	mode: "automatic",
+	binding_id: "candidate-opaque-1",
+} as const;
+
+const RUNBOOK_PROGRESS = {
+	schema_version: "1",
+	service_id: "oncore",
+	flow_id: "snapshot-verify",
+	runbook_version: "1",
+	next_step: 0,
+	total_steps: 2,
+} as const;
 
 // One valid sample per record kind: encode → parse must round-trip for all
 // eight kinds through the same envelope.
@@ -188,6 +204,133 @@ describe("durable record envelope (R10)", () => {
 		if (!parsed.ok) throw new Error("unreachable");
 		expect(encodeDurableRecord("shared-run", parsed.payload)).toBe(raw);
 	});
+
+	test("private runbook state uses shared-run v2 while legacy records remain v1", () => {
+		const payload = basePayload({
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+		});
+		const raw = encodeDurableRecord("shared-run", payload);
+		expect(JSON.parse(raw).schema_version).toBe(
+			BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+		);
+		expect(parseDurableRecord(raw, "shared-run")).toEqual({
+			ok: true,
+			payload,
+		});
+		expect(
+			JSON.parse(encodeDurableRecord("activation-epoch", { epoch: 1 }))
+				.schema_version,
+		).toBe(BROWSER_USE_DURABLE_SCHEMA_VERSION);
+	});
+
+	test("shared-run reads valid legacy v1 and bound v2 but other records reject v2", () => {
+		const legacy = JSON.parse(encodeDurableRecord("shared-run", basePayload()));
+		expect(legacy.schema_version).toBe(BROWSER_USE_DURABLE_SCHEMA_VERSION);
+		expect(parseDurableRecord(JSON.stringify(legacy), "shared-run").ok).toBe(true);
+
+		const bound = basePayload({
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+		});
+		expect(
+			parseDurableRecord(encodeDurableRecord("shared-run", bound), "shared-run")
+				.ok,
+		).toBe(true);
+
+		const epoch = JSON.parse(
+			encodeDurableRecord("activation-epoch", { epoch: 1 }),
+		);
+		epoch.schema_version = BROWSER_USE_SHARED_RUN_SCHEMA_VERSION;
+		expect(
+			parseDurableRecord(JSON.stringify(epoch), "activation-epoch"),
+		).toMatchObject({ ok: false, code: "record_version_unsupported" });
+	});
+
+	test("shared-run v1 rejects either private field and the complete private pair", () => {
+		for (const privateState of [
+			{ runbook_target_binding: RUNBOOK_TARGET_BINDING },
+			{ runbook_progress: RUNBOOK_PROGRESS },
+			{
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: RUNBOOK_PROGRESS,
+			},
+		]) {
+			const raw = JSON.stringify({
+				record: "shared-run",
+				schema_version: BROWSER_USE_DURABLE_SCHEMA_VERSION,
+				payload: basePayload({
+					task_intent: "runbook-execution",
+					...privateState,
+				}),
+			});
+			expect(parseDurableRecord(raw, "shared-run")).toMatchObject({
+				ok: false,
+				code: "record_payload_invalid",
+			});
+		}
+	});
+
+	test("shared-run v2 requires both valid private fields", () => {
+		for (const payload of [
+			basePayload({ task_intent: "runbook-execution" }),
+			basePayload({
+				task_intent: "runbook-execution",
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			}),
+			basePayload({
+				task_intent: "runbook-execution",
+				runbook_progress: RUNBOOK_PROGRESS,
+			}),
+			{
+				...basePayload({ task_intent: "runbook-execution" }),
+				runbook_target_binding: { ...RUNBOOK_TARGET_BINDING, binding_id: "" },
+				runbook_progress: RUNBOOK_PROGRESS,
+			},
+			{
+				...basePayload({ task_intent: "runbook-execution" }),
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: { ...RUNBOOK_PROGRESS, total_steps: -1 },
+			},
+		]) {
+			const raw = JSON.stringify({
+				record: "shared-run",
+				schema_version: BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+				payload,
+			});
+			expect(parseDurableRecord(raw, "shared-run")).toMatchObject({
+				ok: false,
+				code: "record_payload_invalid",
+			});
+		}
+	});
+
+	test("shared-run encoder rejects partial or explicit-undefined private state", () => {
+		for (const payload of [
+			basePayload({
+				task_intent: "runbook-execution",
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			}),
+			basePayload({
+				task_intent: "runbook-execution",
+				runbook_progress: RUNBOOK_PROGRESS,
+			}),
+			{
+				...basePayload({ task_intent: "runbook-execution" }),
+				runbook_target_binding: undefined,
+				runbook_progress: RUNBOOK_PROGRESS,
+			} as BrowserUseSharedRunPayload,
+			{
+				...basePayload({ task_intent: "runbook-execution" }),
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: undefined,
+			} as BrowserUseSharedRunPayload,
+		]) {
+			expect(() => encodeDurableRecord("shared-run", payload)).toThrow();
+		}
+	});
 });
 
 describe("schema parse matrix (owned ledger row)", () => {
@@ -228,14 +371,15 @@ describe("schema parse matrix (owned ledger row)", () => {
 		});
 	});
 
-	test("schema version 2 is record_version_unsupported", async () => {
-		const parsed = parseDurableRecord(
+	test("schema version 3 is record_version_unsupported", async () => {
+		const envelope = JSON.parse(
 			await fixtureText("shared-run-version-2.json"),
-			"shared-run",
 		);
+		envelope.schema_version = "3";
+		const parsed = parseDurableRecord(JSON.stringify(envelope), "shared-run");
 		expect(parsed).toMatchObject({ ok: false, code: "record_version_unsupported" });
 		if (parsed.ok) throw new Error("unreachable");
-		expect(parsed.message).toContain("2");
+		expect(parsed.message).toContain("3");
 	});
 
 	test("a structurally broken payload is record_payload_invalid", () => {
@@ -377,6 +521,19 @@ describe("per-kind payload invariants", () => {
 describe("shared-run payload validation (R24)", () => {
 	test("a valid persisted payload has no issues", () => {
 		expect(validateSharedRunPayload(basePayload())).toEqual([]);
+	});
+
+	test("partial private runbook state is a typed payload issue", () => {
+		expect(
+			validateSharedRunPayload(
+				basePayload({
+					task_intent: "runbook-execution",
+					runbook_progress: RUNBOOK_PROGRESS,
+				}),
+			),
+		).toEqual([
+			expect.objectContaining({ code: "runbook_private_state_incomplete" }),
+		]);
 	});
 
 	test("revision below 1 is a typed CAS-token issue", () => {

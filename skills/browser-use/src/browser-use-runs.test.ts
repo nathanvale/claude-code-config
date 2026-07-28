@@ -221,6 +221,36 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 		});
 	});
 
+	test("a bound run round-trips private target and progress state in shared-run v2", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const input = blockedRun("run-bound-roundtrip", {
+			runbook_target_binding: {
+				schema_version: "1",
+				mode: "automatic",
+				binding_id: "candidate-opaque-1",
+			},
+			runbook_progress: {
+				schema_version: "1",
+				service_id: "oncore",
+				flow_id: "snapshot-verify",
+				runbook_version: "1",
+				next_step: 0,
+				total_steps: 2,
+			},
+		});
+		const created = await createOk(deps, input);
+		const loaded = await loadOk(deps, created.run_id);
+		expect(loaded.run).toEqual(created);
+		const raw = await rawRecordOf(deps, created.run_id);
+		const durable = JSON.parse(raw);
+		expect(durable.schema_version).toBe("2");
+		expect(durable.payload.runbook_target_binding).toEqual(
+			input.runbook_target_binding,
+		);
+		expect(durable.payload).not.toHaveProperty("target_tab_id");
+	});
+
 	test("generic create refuses an auth fragment that bypassed the integration port", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
@@ -433,6 +463,194 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 		expect(loaded.run.continuation?.next_action_id).toBe("approve_run");
 		expect(loaded.payload.created_at_epoch_ms).toBe(1_000);
 		expect(loaded.payload.updated_at_epoch_ms).toBe(1_500);
+	});
+
+	test("a legacy unmutated run may bind once; committed binding is immutable", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-binding-set-once", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "binding-set-once",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "binding-writer");
+		const bound = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-1",
+				},
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "snapshot-verify",
+					runbook_version: "1",
+					next_step: 0,
+					total_steps: 3,
+				},
+			}),
+		});
+		expect(bound).toMatchObject({ ok: true, run: { revision: 2 } });
+		if (!bound.ok) throw new Error("unreachable");
+		const before = await rawRecordOf(deps, run.run_id);
+		const rebound = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: bound.run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-2",
+				},
+			}),
+		});
+		expect(rebound).toMatchObject({
+			ok: false,
+			code: "runbook_target_binding_immutable",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("a legacy run cannot persist progress without its target binding", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-progress-without-binding", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "progress-without-binding",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "partial-state-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "snapshot-verify",
+					runbook_version: "1",
+					next_step: 0,
+					total_steps: 3,
+				},
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("a mutated legacy run cannot acquire a late target binding", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-binding-late", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "binding-late",
+				},
+				mutation_dispatched: true,
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "late-binding-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-1",
+				},
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "runbook_target_binding_late",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("runbook progress identity is immutable and its cursor is monotonic", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-progress-guards", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "progress-guards",
+				},
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "snapshot-verify",
+					runbook_version: "1",
+					next_step: 1,
+					total_steps: 3,
+				},
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-1",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "progress-writer");
+		const attempt = async (
+			progress: NonNullable<BrowserUseSharedRun["runbook_progress"]>,
+		) =>
+			await casUpdateSharedRun(deps, {
+				runId: run.run_id,
+				expectedRevision: run.revision,
+				lease,
+				mutate: (current) => ({ ...current, runbook_progress: progress }),
+			});
+		const original = run.runbook_progress;
+		if (original === undefined) throw new Error("unreachable");
+
+		expect(await attempt({ ...original, next_step: 0 })).toMatchObject({
+			ok: false,
+			code: "runbook_progress_regressed",
+		});
+		expect(
+			await attempt({ ...original, flow_id: "different-flow" }),
+		).toMatchObject({
+			ok: false,
+			code: "runbook_progress_identity_immutable",
+		});
+		expect(await attempt({ ...original, next_step: 4 })).toMatchObject({
+			ok: false,
+			code: "runbook_progress_out_of_range",
+		});
+		const advanced = await attempt({ ...original, next_step: 2 });
+		expect(advanced).toMatchObject({
+			ok: true,
+			run: { revision: 2, runbook_progress: { next_step: 2 } },
+		});
 	});
 
 	test("a stale expected revision is run_revision_stale and writes nothing", async () => {

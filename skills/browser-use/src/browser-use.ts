@@ -106,6 +106,7 @@ import {
 	redactUnsafeText,
 	stripControlChars,
 	stringField,
+	targetEnvelopeIdOf,
 	truncateText,
 } from "./browser-use-core";
 import {
@@ -120,11 +121,14 @@ import {
 	openBrowserUsePaths,
 } from "./browser-use-paths";
 import {
+	type LeaseWriteClaim,
 	acquireLease,
+	heartbeatLease,
 	listLeases,
 	releaseLease,
 	withActivationEpochBarrier,
 } from "./browser-use-locks";
+import type { BrowserUseLeasePayload } from "./browser-use-schemas";
 import {
 	deleteArtifact,
 	listPendingTombstones,
@@ -169,9 +173,11 @@ import {
 } from "./browser-use-discovery";
 import {
 	type AgentBrowserExecutionResult,
+	type AgentBrowserTargetResolutionResult,
 	type AgentBrowserTask,
 	type AgentBrowserVerifiedHandoff,
 	executeAgentBrowserTask,
+	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
 import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
 import {
@@ -191,8 +197,9 @@ import {
 import {
 	type BrowserUseRunbookAuthDelivery,
 	type BrowserUseRunbookExecutionResult,
+	executePreparedRunbook,
 	listRunbooks,
-	runRunbook,
+	prepareRunbookExecution,
 	showRunbook,
 } from "./browser-use-runbook";
 import type { BrowserUseRunbookInputs } from "./browser-use-runbook-model";
@@ -1166,13 +1173,39 @@ function isTerminalRunState(state: BrowserUseRunState): boolean {
 	).includes(state);
 }
 
-// The auth_fragment is stored opaque and surfaces only through the auth Port;
-// every other run field is redaction-safe by construction (R6, S20).
+type BrowserUseSharedRunCliProjection = Omit<
+	BrowserUseSharedRun,
+	"auth_fragment" | "runbook_target_binding"
+> & {
+	runbook_target?: {
+		bound: true;
+		mode: "exact" | "automatic";
+		schema_version: "1";
+	};
+};
+
+// The auth fragment and opaque binding stay private. Public target state exposes
+// only the bounded lifecycle facts agents need to choose a safe next action.
 function projectRunForCli(
 	run: BrowserUseSharedRun,
-): Omit<BrowserUseSharedRun, "auth_fragment"> {
-	const { auth_fragment: _fragment, ...projection } = run;
-	return projection;
+): BrowserUseSharedRunCliProjection {
+	const {
+		auth_fragment: _fragment,
+		runbook_target_binding: _targetBinding,
+		...projection
+	} = run;
+	return {
+		...projection,
+		...(run.runbook_target_binding !== undefined
+			? {
+					runbook_target: {
+						bound: true as const,
+						mode: run.runbook_target_binding.mode,
+						schema_version: run.runbook_target_binding.schema_version,
+					},
+				}
+			: {}),
+	};
 }
 
 // One typed failure record per store-backed refusal: code, exit code, and the
@@ -1252,6 +1285,63 @@ function platformStoreFailureOf(
 				recoverability: "repair_state",
 			};
 	}
+}
+
+const RUNBOOK_DISPATCH_LEASE_TTL_MS = 600_000;
+const RUNBOOK_DISPATCH_HEARTBEAT_INTERVAL_MS =
+	RUNBOOK_DISPATCH_LEASE_TTL_MS / 3;
+
+function startRunbookDispatchLeaseHeartbeat(
+	deps: RunStoreDeps,
+	lease: BrowserUseLeasePayload,
+): {
+	failure: () => PlatformStoreFailure | undefined;
+	stop: () => Promise<BrowserUseLeasePayload>;
+} {
+	let currentLease = lease;
+	let failure: PlatformStoreFailure | undefined;
+	let stopRequested = false;
+	let wake: (() => void) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const completed = (async () => {
+		while (!stopRequested) {
+			await new Promise<void>((resolve) => {
+				const finishWait = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					timer = undefined;
+					wake = undefined;
+					resolve();
+				};
+				wake = finishWait;
+				timer = setTimeout(
+					finishWait,
+					RUNBOOK_DISPATCH_HEARTBEAT_INTERVAL_MS,
+				);
+			});
+			if (stopRequested) break;
+			const renewed = await heartbeatLease(deps, currentLease, {
+				ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+			});
+			if (!renewed.ok) {
+				const message =
+					"message" in renewed
+						? renewed.message
+						: renewed.continuation.summary;
+				failure = platformStoreFailureOf(renewed.code, message);
+				break;
+			}
+			currentLease = renewed.lease;
+		}
+	})();
+	return {
+		failure: () => failure,
+		stop: async () => {
+			stopRequested = true;
+			wake?.();
+			await completed;
+			return currentLease;
+		},
+	};
 }
 
 function emitPlatformStoreFailure(
@@ -1336,7 +1426,7 @@ async function openPlatformStore(
 // carries, as stable key=value lines (the emitTaskIntents pattern, R35).
 function writeRunPlain(
 	stdout: CliWriter,
-	run: Omit<BrowserUseSharedRun, "auth_fragment">,
+	run: BrowserUseSharedRunCliProjection,
 ): void {
 	stdout.write(
 		[
@@ -1348,6 +1438,13 @@ function writeRunPlain(
 			`profile=${run.environment_profile.profile}`,
 			`adapter=${run.adapter_id ?? "unbound"}`,
 			`mutation_dispatched=${run.mutation_dispatched}`,
+			...(run.runbook_target !== undefined
+				? [
+						`target_bound=${run.runbook_target.bound}`,
+						`target_mode=${run.runbook_target.mode}`,
+						`target_schema=${run.runbook_target.schema_version}`,
+					]
+				: []),
 			...(run.auth_attestation !== undefined
 				? [
 						`attestation_digest=${run.auth_attestation.attestation_digest}`,
@@ -2273,6 +2370,46 @@ function mapAgentBrowserOutcome(
 	};
 }
 
+function runbookTargetRepairMapping(
+	result: Extract<AgentBrowserTargetResolutionResult, { ok: false }>,
+): AgentBrowserDispatchMapping {
+	return {
+		kind: "blocked",
+		state: "needs-human",
+		continuation: {
+			next_action_id: "restore_bound_runbook_target",
+			summary:
+				"Restore the exact tab bound to this run, then resume with the same verified handoff; otherwise start a new run.",
+		},
+		mutationDispatched: result.mutation_dispatched,
+		failure: {
+			code: result.code,
+			message: result.message,
+			actionId: "restore_bound_runbook_target",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: {
+				lane_outcome: result.code,
+				external_effect: "none",
+			},
+		},
+	};
+}
+
+function mapRunbookAgentBrowserOutcome(
+	result: AgentBrowserExecutionResult,
+): AgentBrowserDispatchMapping {
+	if (
+		!result.ok &&
+		(result.code === "agent_browser_target_unavailable" ||
+			result.code === "agent_browser_target_ambiguous" ||
+			result.code === "agent_browser_target_moved")
+	) {
+		return runbookTargetRepairMapping(result);
+	}
+	return mapAgentBrowserOutcome(result);
+}
+
 /**
  * `task run` (release contract R6-R11, R23; flows F1, F7). Routes one Task
  * Intent (or resumes an existing run) to an admissible lane, attaches through
@@ -2803,14 +2940,48 @@ function checkSameLaneResumeForTaskRun(
 async function persistTaskRunMutationDispatch(
 	deps: RunStoreDeps,
 	run: BrowserUseSharedRun,
+	heldClaim?: LeaseWriteClaim,
 ): Promise<
 	| { ok: true; run: BrowserUseSharedRun }
 	| { ok: false; failure: PlatformStoreFailure }
 > {
 	if (run.mutation_dispatched) return { ok: true, run };
+	return persistFencedSharedRun(
+		deps,
+		run,
+		`task-run-dispatch-${run.run_id}`,
+		(current) => ({ ...current, mutation_dispatched: true }),
+		heldClaim,
+	);
+}
+
+async function persistFencedSharedRun(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	holderId: string,
+	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
+	heldClaim?: LeaseWriteClaim,
+): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	if (heldClaim !== undefined) {
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease: heldClaim,
+			mutate,
+		});
+		return updated.ok
+			? { ok: true, run: updated.run }
+			: {
+					ok: false,
+					failure: platformStoreFailureOf(updated.code, updated.message),
+				};
+	}
 	const acquired = await acquireLease(deps, {
 		key: leaseKeyForRun(run),
-		holderId: `task-run-dispatch-${run.run_id}`,
+		holderId,
 		ttlMs: 10_000,
 	});
 	if (!acquired.ok) {
@@ -2835,7 +3006,7 @@ async function persistTaskRunMutationDispatch(
 			runId: run.run_id,
 			expectedRevision: run.revision,
 			lease: claim,
-			mutate: (current) => ({ ...current, mutation_dispatched: true }),
+			mutate,
 		});
 	} finally {
 		await releaseLease(deps, acquired.lease);
@@ -2847,6 +3018,24 @@ async function persistTaskRunMutationDispatch(
 		};
 	}
 	return { ok: true, run: updated.run };
+}
+
+async function persistRunbookPrivateState(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
+	heldClaim?: LeaseWriteClaim,
+): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	return persistFencedSharedRun(
+		deps,
+		run,
+		`runbook-state-${run.run_id}`,
+		mutate,
+		heldClaim,
+	);
 }
 
 // Persist the dispatch outcome onto the shared run (its terminal or blocked
@@ -2862,6 +3051,8 @@ async function recordTaskRunOutcome(
 	options: {
 		artifacts?: readonly BrowserUseArtifactReference[];
 		guard?: BrowserUseSensitiveRunGuard;
+		runbookNextStep?: number;
+		heldClaim?: LeaseWriteClaim;
 	} = {},
 ): Promise<number> {
 	const artifacts = options.artifacts ?? [];
@@ -2875,38 +3066,25 @@ async function recordTaskRunOutcome(
 	const continuation =
 		mapping.kind === "blocked" ? mapping.continuation : undefined;
 
-	const acquired = await acquireLease(deps, {
-		key: leaseKeyForRun(run),
-		holderId: `task-run-${run.run_id}`,
-		ttlMs: 10_000,
-	});
-	if (!acquired.ok) {
-		const message =
-			acquired.code === "lease_held"
-				? acquired.continuation.summary
-				: acquired.message;
-		return emitPlatformStoreFailure(
-			input,
-			platformStoreFailureOf(acquired.code, message),
-		);
-	}
-	const claim = {
-		fencing_token: acquired.lease.fencing_token,
-		activation_epoch: acquired.lease.activation_epoch,
-		holderId: acquired.lease.holder_id,
-	};
-	let updated: Awaited<ReturnType<typeof casUpdateSharedRun>>;
-	try {
-		updated = await casUpdateSharedRun(deps, {
-			runId: run.run_id,
-			expectedRevision: run.revision,
-			lease: claim,
-			mutate: (current) => {
+	const updated = await persistFencedSharedRun(
+		deps,
+		run,
+		`task-run-${run.run_id}`,
+		(current) => {
 				const { continuation: _prior, ...rest } = current;
+				const progress =
+					current.runbook_progress !== undefined &&
+					options.runbookNextStep !== undefined
+						? {
+								...current.runbook_progress,
+								next_step: options.runbookNextStep,
+							}
+						: current.runbook_progress;
 				return {
 					...rest,
 					state: targetState,
 					mutation_dispatched: current.mutation_dispatched || mutationDispatched,
+					...(progress !== undefined ? { runbook_progress: progress } : {}),
 					// Persist any native artifact references the lane produced (R21);
 					// existing references survive so a resume never drops evidence.
 					...(artifacts.length > 0
@@ -2915,15 +3093,10 @@ async function recordTaskRunOutcome(
 					...(continuation !== undefined ? { continuation } : {}),
 				};
 			},
-		});
-	} finally {
-		await releaseLease(deps, acquired.lease);
-	}
+		options.heldClaim,
+	);
 	if (!updated.ok) {
-		return emitPlatformStoreFailure(
-			input,
-			platformStoreFailureOf(updated.code, updated.message),
-		);
+		return emitPlatformStoreFailure(input, updated.failure);
 	}
 
 	const externalEffect =
@@ -3272,11 +3445,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 
 	const runFlag = stringField(flags["--run"]);
-	const targetTabId = stringField(flags["--tab"]) ?? "runbook-tab";
+	const explicitTabId = stringField(flags["--tab"]);
 
-	// Resolve the shared run: resume an existing one (R23) or create a fresh one
-	// under the runbook-execution intent bound to the agent-browser lane.
-	let run: BrowserUseSharedRun;
+	// Load resume state before planning. Fresh runs are created only after the
+	// plan and target both resolve, so a caller-correctable failure leaves no
+	// orphan running record.
+	let run: BrowserUseSharedRun | undefined;
 	let resumeFromStep = 0;
 	if (runFlag !== undefined) {
 		const loaded = await loadSharedRun(store.deps, runFlag);
@@ -3287,6 +3461,27 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			);
 		}
 		if (isTerminalRunState(loaded.run.state)) {
+			if (loaded.run.state === "confirmed") {
+				return emitSharedRunSuccess({
+					command: input,
+					run: loaded.run,
+					continuationId: "inspect_task_run_result",
+					dataExtra: {
+						selected_lane: "agent-browser",
+						lane_source: "intent-preferred",
+						external_effect: "none",
+						executed_steps: 0,
+						resume: "confirmed-no-op",
+					},
+					plainExtra: [
+						"selected_lane=agent-browser",
+						"lane_source=intent-preferred",
+						"external_effect=none",
+						"executed_steps=0",
+						"resume=confirmed-no-op",
+					],
+				});
+			}
 			return emitTaskRunFailure(input, loaded.run.run_id, {
 				code: "task_run_effect_unknown",
 				message: `run ${loaded.run.run_id} holds terminal truth ${loaded.run.state}; terminal truth never re-enters execution.`,
@@ -3303,9 +3498,204 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		if (check !== undefined) {
 			return emitTaskRunFailure(input, loaded.run.run_id, check);
 		}
+		if (loaded.run.runbook_target_binding === undefined) {
+			return emitTaskRunFailure(input, loaded.run.run_id, {
+				code: "agent_browser_target_moved",
+				message:
+					"the existing run has no durable target binding and cannot be resumed safely; start a replacement run.",
+				actionId: "restore_bound_runbook_target",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+				dataExtra: {
+					lane_outcome: "agent_browser_target_moved",
+					external_effect: "none",
+				},
+			});
+		}
 		run = loaded.run;
 		resumeFromStep = runbookResumeCursorOf(loaded.run);
-	} else {
+	}
+
+	const prepared = await prepareRunbookExecution(
+		store.deps.fs,
+		store.deps.paths.data.root,
+		{
+			serviceId,
+			flowId,
+			inputs: parsedInputs.inputs,
+			resumeFromStep,
+		},
+	);
+	if (!prepared.ok) {
+		if (
+			prepared.refusal.code === "runbook_not_found" ||
+			prepared.refusal.code === "runbook_id_invalid" ||
+			prepared.refusal.code === "runbook_input_missing" ||
+			prepared.refusal.code === "runbook_input_rejected" ||
+			prepared.refusal.code === "runbook_resume_out_of_range"
+		) {
+			return emitTaskRunFailure(input, run?.run_id, {
+				code: prepared.refusal.code,
+				message: prepared.refusal.message,
+				actionId: "change_task_run_input",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		}
+		return emitPlatformStoreFailure(
+			input,
+			runbookFailureOf(prepared.refusal.code, prepared.refusal.message),
+		);
+	}
+	const plan = prepared.plan;
+	if (
+		run?.runbook_progress !== undefined &&
+		(run.runbook_progress.service_id !== plan.service_id ||
+			run.runbook_progress.flow_id !== plan.flow_id ||
+			run.runbook_progress.runbook_version !== plan.version ||
+			run.runbook_progress.total_steps !== plan.total_steps)
+	) {
+		return emitTaskRunFailure(input, run.run_id, {
+			code: "runbook_progress_identity_mismatch",
+			message:
+				"the resumed run is bound to a different runbook identity or version.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+
+	// A nonterminal crash residue may already have confirmed every step. Close it
+	// without resolving a browser target or entering auth again.
+	if (run !== undefined && plan.steps.length === 0) {
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			{
+				lane_id: "agent-browser",
+				source: "intent-preferred",
+				intent: "runbook-execution",
+			},
+			{
+				kind: "confirmed",
+				executedSteps: 0,
+				mutationDispatched: run.mutation_dispatched,
+			},
+			{ runbookNextStep: plan.total_steps },
+		);
+	}
+
+	const targetEnvelopeId = targetEnvelopeIdOf({
+		runId: run?.run_id ?? handoff.runId,
+		mode: "handoff-bound",
+		adapter: "agent-browser",
+		handoffEvidenceId: handoff.handoffEvidenceId,
+	});
+	const storedBinding = run?.runbook_target_binding;
+	const targetResolution = await resolveAgentBrowserTaskTarget(
+		{ runCommand: input.runtime.runCommand },
+		{
+			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+			run_id: run?.run_id ?? handoff.runId,
+			allowed_origins: plan.allowed_origins,
+			steps: plan.steps,
+			target:
+				explicitTabId !== undefined
+					? {
+							kind: "exact",
+							tab_id: explicitTabId,
+							target_envelope_id: targetEnvelopeId,
+						}
+					: {
+							kind: "auto",
+							target_envelope_id: targetEnvelopeId,
+							...(storedBinding !== undefined
+								? {
+										bound_target_candidate_id: storedBinding.binding_id,
+									}
+								: {}),
+						},
+		},
+	);
+	if (!targetResolution.ok) {
+		if (run === undefined) {
+			const actionId =
+				explicitTabId !== undefined
+					? "change_task_run_input"
+					: targetResolution.code === "agent_browser_connection_unstable"
+						? "refresh_runbook_handoff"
+						: "prepare_unique_runbook_target";
+			return emitTaskRunFailure(input, undefined, {
+				code: targetResolution.code,
+				message: targetResolution.message,
+				actionId,
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability:
+					actionId === "refresh_runbook_handoff"
+						? "repair_state"
+						: "change_input",
+				dataExtra: { external_effect: "none" },
+			});
+		}
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			{
+				lane_id: "agent-browser",
+				source: "intent-preferred",
+				intent: "runbook-execution",
+			},
+			runbookTargetRepairMapping(targetResolution),
+			{ runbookNextStep: resumeFromStep },
+		);
+	}
+	if (
+		run !== undefined &&
+		storedBinding !== undefined &&
+		storedBinding.binding_id !== targetResolution.binding.target_candidate_id
+	) {
+		const mismatchSubject =
+			explicitTabId === undefined
+				? "the automatically resolved target"
+				: "the explicit --tab target";
+		const moved: Extract<AgentBrowserTargetResolutionResult, { ok: false }> = {
+			ok: false,
+			code: "agent_browser_target_moved",
+			outcome: "not-achieved",
+			message: `${mismatchSubject} does not match the target bound to this run.`,
+			executed_steps: 0,
+			mutation_dispatched: false,
+		};
+		return await recordTaskRunOutcome(
+			input,
+			store.deps,
+			run,
+			{
+				lane_id: "agent-browser",
+				source: "intent-preferred",
+				intent: "runbook-execution",
+			},
+			runbookTargetRepairMapping(moved),
+			{ runbookNextStep: resumeFromStep },
+		);
+	}
+
+	const progress = {
+		schema_version: "1" as const,
+		service_id: plan.service_id,
+		flow_id: plan.flow_id,
+		runbook_version: plan.version,
+		next_step: resumeFromStep,
+		total_steps: plan.total_steps,
+	};
+	const durableTargetBinding = {
+		schema_version: "1",
+		mode: explicitTabId === undefined ? "automatic" : "exact",
+		binding_id: targetResolution.binding.target_candidate_id,
+	} as const;
+	if (run === undefined) {
 		const created = await createSharedRun(store.deps, {
 			run_id: handoff.runId,
 			state: "running",
@@ -3316,6 +3706,8 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			},
 			adapter_id: "agent-browser",
 			handoff_evidence_id: handoff.handoffEvidenceId,
+			runbook_target_binding: durableTargetBinding,
+			runbook_progress: progress,
 			mutation_dispatched: false,
 			artifacts: [],
 		});
@@ -3326,8 +3718,52 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			);
 		}
 		run = created.run;
+	} else if (run.runbook_progress === undefined) {
+		const upgraded = await persistRunbookPrivateState(
+			store.deps,
+			run,
+			(current) => ({
+				...current,
+				...(current.runbook_progress === undefined
+					? { runbook_progress: progress }
+					: {}),
+			}),
+		);
+		if (!upgraded.ok) {
+			return emitPlatformStoreFailure(input, upgraded.failure);
+		}
+		run = upgraded.run;
 	}
 
+	// Hold the run's fenced profile lease across reproof, auth, execution, and
+	// outcome commit. A concurrent resume may inspect the target, but it cannot
+	// dispatch a second executor while this command owns the durable truth.
+	const dispatchLease = await acquireLease(store.deps, {
+		key: leaseKeyForRun(run),
+		holderId: `runbook-dispatch-${run.run_id}`,
+		ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+	});
+	if (!dispatchLease.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(
+				dispatchLease.code,
+				dispatchLease.code === "lease_held"
+					? dispatchLease.continuation.summary
+					: dispatchLease.message,
+			),
+		);
+	}
+	const dispatchClaim: LeaseWriteClaim = {
+		fencing_token: dispatchLease.lease.fencing_token,
+		activation_epoch: dispatchLease.lease.activation_epoch,
+		holderId: dispatchLease.lease.holder_id,
+	};
+	const dispatchHeartbeat = startRunbookDispatchLeaseHeartbeat(
+		store.deps,
+		dispatchLease.lease,
+	);
+	try {
 	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
 	// non-sensitive until confidential delivery participates. A confidential
 	// runbook turns the run sensitive exactly once when the auth-delivery context
@@ -3355,9 +3791,8 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;
-	const outcome: BrowserUseRunbookExecutionResult = await runRunbook(
+	const outcome: BrowserUseRunbookExecutionResult = await executePreparedRunbook(
 		{
-			fs: store.deps.fs,
 			runtime: {
 				runCommand: input.runtime.runCommand,
 				beforeMutationDispatch: async ({ run_id }) => {
@@ -3365,6 +3800,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					const marked = await persistTaskRunMutationDispatch(
 						store.deps,
 						dispatchRun,
+						dispatchClaim,
 					);
 					if (!marked.ok) {
 						mutationMarkerFailure = marked.failure;
@@ -3374,19 +3810,35 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					return { ok: true };
 				},
 			},
-			dataRoot: store.deps.paths.data.root,
 			...(authProvider !== undefined
 				? { authDelivery: buildRunbookAuthDelivery(authProvider) }
 				: {}),
+			afterNeutralOpen: async (nextStep) => {
+				const checkpointed = await persistRunbookPrivateState(
+					store.deps,
+					dispatchRun,
+					(current) => ({
+						...current,
+						runbook_progress:
+							current.runbook_progress === undefined
+								? progress
+								: { ...current.runbook_progress, next_step: nextStep },
+					}),
+					dispatchClaim,
+				);
+				if (!checkpointed.ok) {
+					return false;
+				}
+				dispatchRun = checkpointed.run;
+				return true;
+			},
 		},
 		{
-			serviceId,
-			flowId,
+			plan,
 			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
 			runId: run.run_id,
-			targetTabId,
-			inputs: parsedInputs.inputs,
-			resumeFromStep,
+			targetTabId: targetResolution.target_tab_id,
+			expectedTargetUrl: targetResolution.target_url,
 		},
 	);
 	if (mutationMarkerFailure !== undefined) {
@@ -3397,6 +3849,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			input,
 			runbookFailureOf(outcome.refusal.code, outcome.refusal.message),
 		);
+	}
+	const heartbeatFailure = dispatchHeartbeat.failure();
+	if (heartbeatFailure !== undefined) {
+		return emitPlatformStoreFailure(input, heartbeatFailure);
 	}
 
 	// Persist the executor's structural truth through the shared pipeline. If
@@ -3414,48 +3870,37 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			sentinelRegistrationWithheldFailure(dispatchGuard.reason),
 		);
 	}
-	// F7 resume-cursor writer: a blocked runbook run persists the
-	// `runbook-resume:<nextIndex>` continuation runbookResumeCursorOf reads back,
-	// where nextIndex = the plan's resume base + the steps the executor confirmed
-	// before blocking. Without this writer a resume would silently replay from
-	// step 0 — idempotent for the read-only seed runbook, a double-apply the
-	// moment a mutating runbook ships. The emitted failure envelope keeps
-	// `resume_shared_run` as its next action (the registered repair action);
-	// only the run's durable continuation carries the cursor.
-	const mapping = mapAgentBrowserOutcome(outcome.result);
-	const recordedMapping: AgentBrowserDispatchMapping =
-		mapping.kind === "blocked"
-			? {
-					...mapping,
-					continuation: {
-						next_action_id: `runbook-resume:${
-							outcome.plan.resume_from_step + outcome.result.executed_steps
-						}`,
-						summary: mapping.continuation.summary,
-					},
-				}
-			: mapping;
+	const mapping = mapRunbookAgentBrowserOutcome(outcome.result);
+	const nextStep = Math.min(
+		outcome.plan.total_steps,
+		outcome.plan.resume_from_step + outcome.result.executed_steps,
+	);
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,
 		dispatchRun,
 		{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
-		recordedMapping,
+		mapping,
 		{
 			...(dispatchGuard.guard !== undefined
 				? { guard: dispatchGuard.guard }
 				: {}),
+			runbookNextStep: nextStep,
+			heldClaim: dispatchClaim,
 		},
 	);
+	} finally {
+		const currentDispatchLease = await dispatchHeartbeat.stop();
+		await releaseLease(store.deps, currentDispatchLease);
+	}
 }
 
-// The persisted runbook resume cursor (F7). The shared run has no dedicated
-// runbook resume field, so the cursor rides on the run's single continuation as
-// a `runbook-resume:<index>` next_action_id. For the read-only seed runbook (no
-// mutation, no partial), a confirmed run reaches total_steps and no cursor is
-// persisted, so a fresh resume starts at 0. This is the minimal carrier the
-// wiring spec names until the run-model gains a first-class cursor.
+// New runs use first-class progress. Read the legacy continuation cursor only
+// for pre-upgrade records, then persist progress before execution resumes.
 function runbookResumeCursorOf(run: BrowserUseSharedRun): number {
+	if (run.runbook_progress !== undefined) {
+		return run.runbook_progress.next_step;
+	}
 	const id = run.continuation?.next_action_id ?? "";
 	const match = id.match(/^runbook-resume:(\d+)$/);
 	return match ? Number(match[1]) : 0;

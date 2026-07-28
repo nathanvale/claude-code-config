@@ -443,6 +443,7 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_input_missing"
 		| "runbook_input_rejected"
 		| "runbook_resume_out_of_range"
+		| "runbook_neutral_checkpoint_unavailable"
 		| "runbook_confidential_native_capability_absent"
 		| "runbook_confidential_delivery_unavailable";
 	message: string;
@@ -481,84 +482,142 @@ export type BrowserUseRunbookExecutionResult =
 	| { ok: false; refusal: BrowserUseRunbookExecutionRefusal }
 	| {
 			ok: true;
-			plan: Pick<
-				BrowserUseRunbookPlan,
-				| "service_id"
-				| "flow_id"
-				| "version"
-				| "resume_from_step"
-				| "total_steps"
-				| "pending_item_bindings"
-			>;
+			plan: BrowserUseRunbookExecutionPlan;
 			result: AgentBrowserExecutionResult;
 	  };
 
+type BrowserUseRunbookExecutionPlan = Pick<
+	BrowserUseRunbookPlan,
+	| "service_id"
+	| "flow_id"
+	| "version"
+	| "resume_from_step"
+	| "total_steps"
+	| "pending_item_bindings"
+>;
+
+function executionPlanOf(
+	plan: BrowserUseRunbookPlan,
+): BrowserUseRunbookExecutionPlan {
+	return {
+		service_id: plan.service_id,
+		flow_id: plan.flow_id,
+		version: plan.version,
+		resume_from_step: plan.resume_from_step,
+		total_steps: plan.total_steps,
+		pending_item_bindings: plan.pending_item_bindings,
+	};
+}
+
+export type BrowserUsePreparedRunbookExecution =
+	| { ok: false; refusal: BrowserUseRunbookExecutionRefusal }
+	| { ok: true; plan: BrowserUseRunbookPlan };
+
 /**
- * Execute one runbook through the agent-browser lane (R30, F7). The engine
- * loads and validates the runbook, plans the bounded steps from
- * `resumeFromStep` onward (F7 restart-safe resume), then routes any confidential
- * step through the caller-injected auth-delivery seam (R30 — this engine never
- * resolves a secret; the executor owns the sensitive-interval choreography). A
- * confidential runbook with no seam injected (native capability absent) refuses
- * closed with a typed repair pointer. The compiled steps then bind to the
- * existing agent-browser executor and its structural truth returns verbatim.
- *
- * The caller (the CLI driver) owns durable shared-run state: it records the
- * executor's terminal/blocked truth through the fenced run-store pipeline, and
- * on a confirmed partial run advances the persisted resume index by
- * `resume_from_step + executed_steps` so a later resume replays only unproven
- * steps.
- *
- * @param deps - fs port, agent-browser runtime, admitted data root
- * @param input - Runbook id, verified handoff, target tab, inputs, resume index
- * @returns One typed refusal, or the executor's structural result plus plan facts
+ * Load and compile one runbook before any target, auth, or durable-run effect.
  */
-export async function runRunbook(
-	deps: {
-		fs: BrowserUsePlatformFs;
-		runtime: AgentBrowserExecutionRuntime;
-		dataRoot: string;
-		/**
-		 * Auth-delivery seam (auth plan U11). Present ONLY when the native Token
-		 * Retrieval Port exists; absence means the native auth capability is
-		 * absent, so a confidential runbook fails closed with a typed repair
-		 * pointer rather than dispatching an unauthenticated fill.
-		 */
-		authDelivery?: BrowserUseRunbookAuthDelivery;
-	},
+export async function prepareRunbookExecution(
+	fs: BrowserUsePlatformFs,
+	dataRoot: string,
 	input: {
 		serviceId: string;
 		flowId: string;
-		handoff: AgentBrowserVerifiedHandoff;
-		runId: string;
-		targetTabId: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
 	},
-): Promise<BrowserUseRunbookExecutionResult> {
-	const shown = await showRunbook(deps.fs, deps.dataRoot, {
+): Promise<BrowserUsePreparedRunbookExecution> {
+	const shown = await showRunbook(fs, dataRoot, {
 		serviceId: input.serviceId,
 		flowId: input.flowId,
 	});
-	if (!shown.ok) {
-		return { ok: false, refusal: shown.failure };
-	}
+	if (!shown.ok) return { ok: false, refusal: shown.failure };
 	const planned = planRunbookExecution(shown.runbook, {
 		inputs: input.inputs,
 		resumeFromStep: input.resumeFromStep,
 	});
-	if (!planned.ok) {
-		return { ok: false, refusal: planned.refusal };
+	return planned.ok
+		? { ok: true, plan: planned.plan }
+		: { ok: false, refusal: planned.refusal };
+}
+
+/**
+ * Execute an already-compiled plan against one exact, preflighted target.
+ */
+export async function executePreparedRunbook(
+	deps: {
+		runtime: AgentBrowserExecutionRuntime;
+		authDelivery?: BrowserUseRunbookAuthDelivery;
+		afterNeutralOpen?: (nextStep: number) => Promise<boolean>;
+	},
+	input: {
+		plan: BrowserUseRunbookPlan;
+		handoff: AgentBrowserVerifiedHandoff;
+		runId: string;
+		targetTabId: string;
+		expectedTargetUrl?: string;
+	},
+): Promise<BrowserUseRunbookExecutionResult> {
+	const plan = input.plan;
+	const neutralOpen = plan.steps[0]?.kind === "open" ? plan.steps[0] : undefined;
+	if (
+		input.expectedTargetUrl === "about:blank" &&
+		neutralOpen !== undefined &&
+		plan.pending_item_bindings.length > 0 &&
+		deps.afterNeutralOpen === undefined
+	) {
+		return {
+			ok: false,
+			refusal: {
+				code: "runbook_neutral_checkpoint_unavailable",
+				message:
+					"a confidential runbook starting from about:blank requires a durable checkpoint after its first open and before authentication.",
+			},
+		};
 	}
-	const plan = planned.plan;
-	// R30 boundary (auth plan U11): a confidential step needs the Browser
-	// Authentication Transaction. This engine never resolves a secret; it only
-	// routes the auth-delivery context the driver builds from the native Token
-	// Retrieval Port through the executor, which owns the sensitive-interval
-	// choreography. When the native capability is absent the driver injects no
-	// `authDelivery` seam, so a confidential runbook fails CLOSED with a typed
-	// repair pointer rather than dispatching an unauthenticated fill — never a
-	// public bypass. The auth continuation is named in the message.
+	let completedNeutralOpen: AgentBrowserExecutionResult | undefined;
+	if (
+		input.expectedTargetUrl === "about:blank" &&
+		neutralOpen !== undefined &&
+		plan.pending_item_bindings.length > 0 &&
+		deps.afterNeutralOpen !== undefined
+	) {
+		completedNeutralOpen = await executeAgentBrowserTask(deps.runtime, {
+			handoff: input.handoff,
+			run_id: input.runId,
+			target_tab_id: input.targetTabId,
+			allowed_origins: plan.allowed_origins,
+			steps: [neutralOpen],
+			allow_neutral_target: true,
+			...(input.expectedTargetUrl !== undefined
+				? { expected_target_url: input.expectedTargetUrl }
+				: {}),
+		});
+		if (!completedNeutralOpen.ok) {
+			return {
+				ok: true,
+				plan: executionPlanOf(plan),
+				result: completedNeutralOpen,
+			};
+		}
+		const checkpointed = await deps.afterNeutralOpen(
+			plan.resume_from_step + 1,
+		);
+		if (!checkpointed) {
+			return {
+				ok: true,
+				plan: executionPlanOf(plan),
+				result: {
+					ok: false,
+					code: "agent_browser_mutation_effect_unknown",
+					outcome: "unknown",
+					message:
+						"the neutral opening navigation confirmed, but its durable runbook checkpoint could not be recorded; inspect before retry.",
+					executed_steps: 1,
+					mutation_dispatched: true,
+				},
+			};
+		}
+	}
 	let authDelivery: AgentBrowserAuthDeliveryContext | undefined;
 	if (plan.pending_item_bindings.length > 0) {
 		if (deps.authDelivery === undefined) {
@@ -593,20 +652,124 @@ export async function runRunbook(
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
 		allowed_origins: plan.allowed_origins,
-		steps: plan.steps,
+		steps:
+			completedNeutralOpen === undefined ? plan.steps : plan.steps.slice(1),
+		allow_neutral_target:
+			completedNeutralOpen === undefined && plan.steps[0]?.kind === "open",
+		...(input.expectedTargetUrl !== undefined
+			? {
+					expected_target_url:
+						completedNeutralOpen === undefined
+							? input.expectedTargetUrl
+							: neutralOpen?.url,
+				}
+			: {}),
 		...(authDelivery !== undefined ? { auth_delivery: authDelivery } : {}),
 	};
+	if (task.steps.length === 0 && completedNeutralOpen !== undefined) {
+		return {
+			ok: true,
+			plan: executionPlanOf(plan),
+			result: completedNeutralOpen,
+		};
+	}
 	const result = await executeAgentBrowserTask(deps.runtime, task);
+	const combinedResult: AgentBrowserExecutionResult =
+		completedNeutralOpen === undefined
+			? result
+			: {
+					...result,
+					executed_steps:
+						completedNeutralOpen.executed_steps + result.executed_steps,
+					mutation_dispatched:
+						completedNeutralOpen.mutation_dispatched ||
+						result.mutation_dispatched,
+				};
 	return {
 		ok: true,
-		plan: {
-			service_id: plan.service_id,
-			flow_id: plan.flow_id,
-			version: plan.version,
-			resume_from_step: plan.resume_from_step,
-			total_steps: plan.total_steps,
-			pending_item_bindings: plan.pending_item_bindings,
-		},
-		result,
+		plan: executionPlanOf(plan),
+		result: combinedResult,
 	};
+}
+
+/**
+ * Execute one runbook through the agent-browser lane (R30, F7). The engine
+ * loads and validates the runbook, plans the bounded steps from
+ * `resumeFromStep` onward (F7 restart-safe resume), then routes any confidential
+ * step through the caller-injected auth-delivery seam (R30 — this engine never
+ * resolves a secret; the executor owns the sensitive-interval choreography). A
+ * confidential runbook with no seam injected (native capability absent) refuses
+ * closed with a typed repair pointer. The compiled steps then bind to the
+ * existing agent-browser executor and its structural truth returns verbatim.
+ *
+ * The caller (the CLI driver) owns durable shared-run state: it records the
+ * executor's terminal/blocked truth through the fenced run-store pipeline, and
+ * on a confirmed partial run advances the persisted resume index by
+ * `resume_from_step + executed_steps` so a later resume replays only unproven
+ * steps.
+ *
+ * A caller starting a confidential runbook from `about:blank` supplies both
+ * `expectedTargetUrl` and `afterNeutralOpen`. The hook must durably checkpoint
+ * the confirmed first open before authentication construction can proceed.
+ *
+ * @param deps - fs port, runtime, data root, auth and neutral checkpoint seams
+ * @param input - Runbook id, handoff, target tab and URL, inputs, resume index
+ * @returns One typed refusal, or the executor's structural result plus plan facts
+ */
+export async function runRunbook(
+	deps: {
+		fs: BrowserUsePlatformFs;
+		runtime: AgentBrowserExecutionRuntime;
+		dataRoot: string;
+		/**
+		 * Auth-delivery seam (auth plan U11). Present ONLY when the native Token
+		 * Retrieval Port exists; absence means the native auth capability is
+		 * absent, so a confidential runbook fails closed with a typed repair
+		 * pointer rather than dispatching an unauthenticated fill.
+		 */
+		authDelivery?: BrowserUseRunbookAuthDelivery;
+		/**
+		 * Durable checkpoint after a neutral first open. Required with
+		 * `expectedTargetUrl: "about:blank"` for confidential runbooks.
+		 */
+		afterNeutralOpen?: (nextStep: number) => Promise<boolean>;
+	},
+	input: {
+		serviceId: string;
+		flowId: string;
+		handoff: AgentBrowserVerifiedHandoff;
+		runId: string;
+		targetTabId: string;
+		expectedTargetUrl?: string;
+		inputs: BrowserUseRunbookInputs;
+		resumeFromStep: number;
+	},
+): Promise<BrowserUseRunbookExecutionResult> {
+	const prepared = await prepareRunbookExecution(deps.fs, deps.dataRoot, {
+		serviceId: input.serviceId,
+		flowId: input.flowId,
+		inputs: input.inputs,
+		resumeFromStep: input.resumeFromStep,
+	});
+	if (!prepared.ok) return prepared;
+	return await executePreparedRunbook(
+		{
+			runtime: deps.runtime,
+			...(deps.authDelivery !== undefined
+				? { authDelivery: deps.authDelivery }
+				: {}),
+			...(deps.afterNeutralOpen !== undefined
+				? { afterNeutralOpen: deps.afterNeutralOpen }
+				: {}),
+		},
+		{
+			plan: prepared.plan,
+			handoff: input.handoff,
+			runId: input.runId,
+			targetTabId: input.targetTabId,
+			...(input.expectedTargetUrl !== undefined
+				? { expectedTargetUrl: input.expectedTargetUrl }
+				: {}),
+		},
+	);
 }

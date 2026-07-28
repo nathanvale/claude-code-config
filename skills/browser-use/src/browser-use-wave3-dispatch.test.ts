@@ -16,6 +16,9 @@ import { runbooksRoot } from "./browser-use-runbook";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
+import { parseHandoffFacts } from "./browser-use-discovery";
+import { browserUseContracts } from "./command-contract";
 
 // =========================================================================
 // Wave-3 shared-CLI integration: chrome-devtools-mcp task-run dispatch and the
@@ -340,6 +343,20 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 // =========================================================================
 
 describe("runbook family — live (U4 wiring)", () => {
+	test("runbook run discovery advertises every target repair continuation", () => {
+		const actionIds =
+			browserUseContracts["runbook-run"].actionAffordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+		expect(actionIds).toEqual(
+			expect.arrayContaining([
+				"prepare_unique_runbook_target",
+				"refresh_runbook_handoff",
+				"restore_bound_runbook_target",
+			]),
+		);
+	});
+
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
@@ -401,7 +418,13 @@ describe("runbook family — live (U4 wiring)", () => {
 					tabs: [{ tabId: "t1", active: true, type: "page", url: "https://example.test/" }],
 				}),
 			},
+			{
+				stdout: agentSuccess({
+					tabs: [{ tabId: "t1", active: true, type: "page", url: "https://example.test/" }],
+				}),
+			},
 			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
 			{ stdout: agentSuccess({ opened: true }) },
 			{ stdout: agentSuccess({ url: "https://example.test/" }) },
 			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
@@ -450,23 +473,12 @@ describe("runbook family — live (U4 wiring)", () => {
 		});
 	});
 
-	test("a blocked runbook run persists the runbook-resume cursor, not a bare resume id (F7 writer)", async () => {
+	test("a fresh runbook target failure creates no orphan run", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
 		const handoffPath = writeHandoff(store.base, "agent-browser", "run-runbook-blocked");
-		// Attach never stabilises: three tab-list attempts fail with a CDP
-		// connection signal (liveness probes between attempts), so the executor
-		// blocks needs-human before any step executed.
-		const cdpFailure = JSON.stringify({
-			error: "CDP WebSocket connect failed: Connection refused (os error 61)",
-			success: false,
-		});
 		const { runtime } = scriptedRuntime(store.env, [
-			{ stdout: cdpFailure },
-			{ stdout: agentSuccess({}) },
-			{ stdout: cdpFailure },
-			{ stdout: agentSuccess({}) },
-			{ stdout: cdpFailure },
+			{ stdout: agentSuccess({ tabs: [] }) },
 		]);
 		const result = await runForTest(
 			[
@@ -474,34 +486,120 @@ describe("runbook family — live (U4 wiring)", () => {
 				"--service", "oncore",
 				"--flow", "snapshot-verify",
 				"--handoff", handoffPath,
-				"--tab", "t1",
 				"--json",
 			],
 			runtime,
 		);
 		expect(result.exitCode).toBe(20);
 		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "task_run_connection_unstable",
+			code: "agent_browser_target_unavailable",
 		});
-		// The durable run carries the runbook-resume:<index> cursor the F7 resume
-		// reader (runbookResumeCursorOf) decodes — 0 confirmed steps here, so the
-		// cursor is 0. Without this writer the run would carry resume_shared_run
-		// and a resume would silently fall back to step 0 even after confirmed
-		// steps (a double-apply for a mutating runbook).
+		expect(
+			(parseJson(result.stdout).continuation as Record<string, unknown>)
+				.next_action_id,
+		).toBe("prepare_unique_runbook_target");
 		const loaded = await loadSharedRun(store.deps, "run-runbook-blocked");
-		expect(loaded.ok).toBe(true);
-		if (loaded.ok) {
-			expect(loaded.run.state).toBe("needs-human");
-			expect(loaded.run.continuation?.next_action_id).toBe("runbook-resume:0");
-		}
+		expect(loaded.ok).toBe(false);
 	});
 
-	test("a resumed runbook run starts at the persisted cursor, never replaying confirmed steps (F7)", async () => {
+	test("a target-list transport failure requests a fresh handoff, not tab repair", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-runbook-transport",
+		);
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
+			{ stdout: agentSuccess({ cdpUrl: "ws://fixture" }) },
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
+			{ stdout: agentSuccess({ cdpUrl: "ws://fixture" }) },
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--handoff", handoffPath,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "agent_browser_connection_unstable" },
+			continuation: { next_action_id: "refresh_runbook_handoff" },
+			data: { external_effect: "none" },
+		});
+		expect(calls).toHaveLength(5);
+		expect(
+			(await loadSharedRun(store.deps, "run-runbook-transport")).ok,
+		).toBe(false);
+	});
+
+	test("multiple automatic runbook targets fail closed before run creation", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-runbook-ambiguous",
+		);
+		const { runtime } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{ tabId: "t1", type: "page", url: "about:blank" },
+						{ tabId: "t2", type: "page", url: "about:blank" },
+					],
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--handoff", handoffPath,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "agent_browser_target_ambiguous",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-runbook-ambiguous");
+		expect(loaded.ok).toBe(false);
+	});
+
+	test("a legacy unbound nonterminal run refuses before target resolution", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
 		const handoffPath = writeHandoff(store.base, "agent-browser", "run-runbook-cursor");
-		// Seed a blocked run whose cursor says step 0 (the open) is already
-		// confirmed: resume must execute ONLY step 1 (the snapshot).
 		const seed: Omit<BrowserUseSharedRun, "revision"> = {
 			run_id: "run-runbook-cursor",
 			state: "needs-human",
@@ -518,17 +616,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		};
 		const created = await createSharedRun(store.deps, seed);
 		expect(created.ok).toBe(true);
-		// Executor sequence for the single remaining snapshot step: tab list, tab
-		// select, snapshot — no open, no open-postcondition get-url.
-		const { runtime, calls } = scriptedRuntime(store.env, [
-			{
-				stdout: agentSuccess({
-					tabs: [{ tabId: "t1", active: true, type: "page", url: "https://example.test/" }],
-				}),
-			},
-			{ stdout: agentSuccess({ selected: true }) },
-			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
-		]);
+		const { runtime, calls } = scriptedRuntime(store.env, []);
 		const result = await runForTest(
 			[
 				"runbook", "run",
@@ -541,14 +629,291 @@ describe("runbook family — live (U4 wiring)", () => {
 			],
 			runtime,
 		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "agent_browser_target_moved" },
+			continuation: { next_action_id: "restore_bound_runbook_target" },
+			data: { external_effect: "none" },
+		});
+		expect(calls).toHaveLength(0);
+		const loaded = await loadSharedRun(store.deps, seed.run_id);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.runbook_target_binding).toBeUndefined();
+			expect(loaded.run.revision).toBe(1);
+		}
+	});
+
+	test("a bound resumed runbook starts at the persisted cursor", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const runId = "run-runbook-bound-cursor";
+		const envelope = handoffEnvelope("agent-browser", runId);
+		const handoffPath = join(store.base, "handoff-agent-browser.json");
+		writeFileSync(handoffPath, JSON.stringify(envelope), "utf-8");
+		const parsed = parseHandoffFacts(JSON.stringify(envelope));
+		expect(parsed).toMatchObject({ ok: true, kind: "verified" });
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: parsed.facts.handoffEvidenceId,
+		});
+		const seed: Omit<BrowserUseSharedRun, "revision"> = {
+			run_id: runId,
+			state: "needs-human",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: parsed.facts.handoffEvidenceId,
+			runbook_target_binding: {
+				schema_version: "1",
+				mode: "automatic",
+				binding_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"t1",
+				]),
+			},
+			runbook_progress: {
+				schema_version: "1",
+				service_id: "oncore",
+				flow_id: "snapshot-verify",
+				runbook_version: "1",
+				next_step: 1,
+				total_steps: 2,
+			},
+			continuation: {
+				next_action_id: "runbook-resume:1",
+				summary: "Resume from the first unproven step.",
+			},
+			mutation_dispatched: false,
+			artifacts: [],
+		};
+		expect((await createSharedRun(store.deps, seed)).ok).toBe(true);
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--run", runId,
+				"--handoff", handoffPath,
+				"--json",
+			],
+			runtime,
+		);
 		expect(result.exitCode).toBe(0);
-		const run = (parseJson(result.stdout).data as Record<string, unknown>)
-			.run as Record<string, unknown>;
-		expect(run.state).toBe("confirmed");
-		// The confirmed open step was NOT replayed: no `open` dispatch reached the
-		// adapter, only attach (tab list/select) plus the remaining snapshot.
-		expect(calls).toHaveLength(3);
-		expect(calls.some((c) => c.includes("open"))).toBe(false);
+		expect(calls).toHaveLength(5);
+		expect(calls.some((call) => call.includes("open"))).toBe(false);
+	});
+
+	test("concurrent bound resumes produce one executor dispatch", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const runId = "run-runbook-concurrent";
+		const envelope = handoffEnvelope("agent-browser", runId);
+		const handoffPath = join(store.base, "handoff-agent-browser-concurrent.json");
+		writeFileSync(handoffPath, JSON.stringify(envelope), "utf-8");
+		const parsed = parseHandoffFacts(JSON.stringify(envelope));
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: parsed.facts.handoffEvidenceId,
+		});
+		expect(
+			(
+				await createSharedRun(store.deps, {
+					run_id: runId,
+					state: "needs-human",
+					task_intent: "runbook-execution",
+					environment_profile: {
+						environment: "agent-chrome",
+						profile: "default",
+					},
+					adapter_id: "agent-browser",
+					handoff_evidence_id: parsed.facts.handoffEvidenceId,
+					runbook_target_binding: {
+						schema_version: "1",
+						mode: "automatic",
+						binding_id: candidateIdOf(targetEnvelopeId, [
+							"adapter_page_id",
+							"t1",
+						]),
+					},
+					runbook_progress: {
+						schema_version: "1",
+						service_id: "oncore",
+						flow_id: "snapshot-verify",
+						runbook_version: "1",
+						next_step: 1,
+						total_steps: 2,
+					},
+					continuation: {
+						next_action_id: "runbook-resume:1",
+						summary: "Resume from the first unproven step.",
+					},
+					mutation_dispatched: false,
+					artifacts: [],
+				})
+			).ok,
+		).toBe(true);
+		const calls: Array<readonly string[]> = [];
+		let signalFirstSnapshotStarted: (() => void) | undefined;
+		const firstSnapshotStarted = new Promise<void>((resolve) => {
+			signalFirstSnapshotStarted = resolve;
+		});
+		let releaseFirstSnapshot: (() => void) | undefined;
+		const firstSnapshotMayFinish = new Promise<void>((resolve) => {
+			releaseFirstSnapshot = resolve;
+		});
+		let snapshotInvocationCount = 0;
+		const runtime = makeRuntime({
+			env: store.env,
+			now: () => 1_000,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.readFile(path, "utf-8"),
+				),
+			runCommand: async (input) => {
+				const semantic = input.args.slice(4);
+				calls.push(semantic);
+				if (semantic[0] === "snapshot") {
+					snapshotInvocationCount += 1;
+					if (snapshotInvocationCount === 1) {
+						signalFirstSnapshotStarted?.();
+						await firstSnapshotMayFinish;
+					}
+					return {
+						exitCode: 0,
+						stdout: agentSuccess({ refs: {} }),
+						stderr: "",
+					};
+				}
+				const data =
+					semantic[0] === "tab" && semantic[1] === "list"
+						? {
+								tabs: [
+									{
+										tabId: "t1",
+										type: "page",
+										url: "https://example.test/",
+									},
+								],
+							}
+						: semantic[0] === "get" && semantic[1] === "url"
+							? { url: "https://example.test/" }
+							: { selected: true };
+				return { exitCode: 0, stdout: agentSuccess(data), stderr: "" };
+			},
+		});
+		const argv = [
+			"runbook", "run",
+			"--service", "oncore",
+			"--flow", "snapshot-verify",
+			"--run", runId,
+			"--handoff", handoffPath,
+			"--json",
+		] as const;
+		const firstResultPromise = runForTest(argv, runtime);
+		await firstSnapshotStarted;
+		const secondResult = await runForTest(argv, runtime);
+		releaseFirstSnapshot?.();
+		const firstResult = await firstResultPromise;
+		const results = [firstResult, secondResult];
+		expect(
+			results
+				.map((result) => result.exitCode)
+				.sort((left, right) => left - right),
+		).toEqual([0, 20]);
+		expect(calls.filter((call) => call[0] === "snapshot")).toHaveLength(1);
+		const loaded = await loadSharedRun(store.deps, runId);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+	});
+
+	test("a confirmed runbook resume is a no-op with no target or auth work", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const runId = "run-runbook-confirmed-noop";
+		const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+		expect(
+			(
+				await createSharedRun(store.deps, {
+					run_id: runId,
+					state: "confirmed",
+					task_intent: "runbook-execution",
+					environment_profile: {
+						environment: "agent-chrome",
+						profile: "default",
+					},
+					adapter_id: "agent-browser",
+					handoff_evidence_id: "legacy-confirmed-evidence",
+					mutation_dispatched: false,
+					artifacts: [],
+				})
+			).ok,
+		).toBe(true);
+		const { runtime, calls } = scriptedRuntime(store.env, []);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--run", runId,
+				"--handoff", handoffPath,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout)).toMatchObject({
+			data: {
+				run: { state: "confirmed" },
+				external_effect: "none",
+				executed_steps: 0,
+				resume: "confirmed-no-op",
+			},
+		});
+		expect(calls).toHaveLength(0);
+		const loaded = await loadSharedRun(store.deps, runId);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) expect(loaded.run.revision).toBe(1);
 	});
 
 	test("runbook run without --service is a usage error", async () => {
@@ -678,7 +1043,33 @@ describe("task run — internal envelope mint (D4)", () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
 		const scripted = scriptedRuntime(store.env, [
-			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "about:blank",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "about:blank",
+						},
+					],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "about:blank" }) },
+			{ stdout: agentSuccess({ opened: true }) },
 			{ stdout: agentSuccess({ url: "https://example.test/" }) },
 			{ stdout: agentSuccess({ snapshot: "- page snapshot" }) },
 		]);
@@ -704,10 +1095,56 @@ describe("task run — internal envelope mint (D4)", () => {
 		);
 		expect(mintCalls).toHaveLength(1);
 		expect(mintCalls[0]?.adapterId).toBe("agent-browser");
-		// The run reached execution through the minted envelope (any terminal or
-		// blocked state proves attachment happened; a handoff failure would have
-		// exited 20 before dispatch with zero adapter calls).
-		expect(scripted.calls.length).toBeGreaterThan(0);
-		expect([0, 20]).toContain(result.exitCode);
+		expect(result.exitCode).toBe(0);
+		const payload = parseJson(result.stdout) as {
+			data?: {
+				run?: {
+					state?: string;
+					runbook_target_binding?: unknown;
+					runbook_target?: {
+						bound?: boolean;
+						mode?: string;
+						schema_version?: string;
+					};
+					runbook_progress?: { next_step?: number };
+				};
+			};
+		};
+		expect(payload.data?.run?.state).toBe("confirmed");
+		expect(payload.data?.run?.runbook_target_binding).toBeUndefined();
+		expect(payload.data?.run?.runbook_target).toEqual({
+			bound: true,
+			mode: "automatic",
+			schema_version: "1",
+		});
+		expect(payload.data?.run?.runbook_progress?.next_step).toBe(2);
+		expect(result.stdout).not.toContain("target_candidate_id");
+		expect(result.stdout).not.toContain("binding_id");
+		const plain = await runForTest(
+			[
+				"run", "status",
+				"--run", mintCalls[0]?.runId ?? "",
+				"--plain",
+			],
+			makeRuntime({
+				env: store.env,
+				platformFs: createDefaultPlatformFs(),
+			}),
+		);
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout).toContain(
+			"target_bound=true target_mode=automatic target_schema=1",
+		);
+		expect(plain.stdout).not.toContain("binding_id");
+		expect(plain.stdout).not.toContain("target_candidate_id");
+		expect(scripted.calls.map((call) => call.slice(5))).toEqual([
+			["tab", "list", "--json"],
+			["tab", "list", "--json"],
+			["tab", "t1", "--json"],
+			["get", "url", "--json"],
+			["open", "https://example.test/", "--json"],
+			["get", "url", "--json"],
+			["snapshot", "-i", "--json"],
+		]);
 	});
 });

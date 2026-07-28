@@ -4,7 +4,9 @@ import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/c
 import {
 	type AgentBrowserExecutionRuntime,
 	executeAgentBrowserTask,
+	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
+import { candidateIdOf } from "./browser-use-core";
 
 const HANDOFF = {
 	outcome: "verified",
@@ -60,16 +62,33 @@ function runtimeFor(
 		stderr?: string;
 		timedOut?: boolean;
 	}[],
+	options: Readonly<{ selectedUrlProof?: string }> = {},
 ): AgentBrowserExecutionRuntime & { calls: Array<readonly string[]> } {
 	const calls: Array<readonly string[]> = [];
 	let responseIndex = 0;
+	let listedUrls = new Map<string, string>();
+	let selectedUrlProof: string | undefined;
 	return {
 		calls,
 		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
 			calls.push([input.command, ...input.args]);
+			const semanticArgs = input.args.slice(4);
+			if (
+				semanticArgs[0] === "get" &&
+				semanticArgs[1] === "url" &&
+				selectedUrlProof !== undefined
+			) {
+				const url = selectedUrlProof;
+				selectedUrlProof = undefined;
+				return {
+					exitCode: 0,
+					stdout: json({ url }),
+					stderr: "",
+				};
+			}
 			const response = responses[responseIndex++] ?? {};
-			return {
+			const result = {
 				exitCode: response.exitCode ?? 0,
 				stdout: response.stdout ?? json({}),
 				stderr: response.stderr ?? "",
@@ -77,6 +96,39 @@ function runtimeFor(
 					? {}
 					: { timedOut: response.timedOut }),
 			};
+			if (
+				semanticArgs[0] === "tab" &&
+				semanticArgs[1] === "list" &&
+				result.exitCode === 0
+			) {
+				try {
+					const parsed = JSON.parse(result.stdout) as {
+						success?: boolean;
+						data?: {
+							tabs?: Array<{ tabId?: string; url?: string }>;
+						};
+					};
+					listedUrls = new Map(
+						(parsed.data?.tabs ?? []).flatMap((tab) =>
+							typeof tab.tabId === "string" && typeof tab.url === "string"
+								? [[tab.tabId, tab.url] as const]
+								: [],
+						),
+					);
+				} catch {
+					listedUrls = new Map();
+				}
+			}
+			if (
+				semanticArgs[0] === "tab" &&
+				semanticArgs[1] !== "list" &&
+				result.exitCode === 0
+			) {
+				selectedUrlProof =
+					options.selectedUrlProof ??
+					listedUrls.get(semanticArgs[1] ?? "");
+			}
+			return result;
 		},
 	};
 }
@@ -147,6 +199,16 @@ describe("Agent Browser native task lane", () => {
 				"browser-use-run-agent-browser-1",
 				"tab",
 				"t7",
+				"--json",
+			],
+			[
+				"/opt/browser-connect/agent-browser",
+				"--cdp",
+				HANDOFF.endpoint.ws,
+				"--session",
+				"browser-use-run-agent-browser-1",
+				"get",
+				"url",
 				"--json",
 			],
 			[
@@ -470,7 +532,7 @@ describe("Agent Browser native task lane", () => {
 			code: "agent_browser_current_snapshot_required",
 			outcome: "not-achieved",
 		});
-		expect(runtime.calls).toHaveLength(2);
+		expect(runtime.calls).toHaveLength(3);
 	});
 
 	test("classifies a post-dispatch timeout as unknown and never repeats", async () => {
@@ -516,7 +578,7 @@ describe("Agent Browser native task lane", () => {
 			code: "agent_browser_mutation_effect_unknown",
 			outcome: "unknown",
 		});
-		expect(runtime.calls).toHaveLength(5);
+		expect(runtime.calls).toHaveLength(6);
 	});
 
 	test("refuses confidential fill before adapter argv construction", async () => {
@@ -564,7 +626,7 @@ describe("Agent Browser native task lane", () => {
 			outcome: "not-achieved",
 		});
 		expect(JSON.stringify(runtime.calls)).not.toContain("sentinel-secret");
-		expect(runtime.calls).toHaveLength(3);
+		expect(runtime.calls).toHaveLength(4);
 	});
 
 	test("fails closed when the handoff names another adapter or schema", async () => {
@@ -643,7 +705,7 @@ describe("Agent Browser native task lane", () => {
 			outcome: "confirmed",
 			executed_steps: 2,
 		});
-		const evaluate = runtime.calls[4] ?? [];
+		const evaluate = runtime.calls[5] ?? [];
 		expect(evaluate).toContain("eval");
 		expect(evaluate).toContain("-b");
 		expect(evaluate.join(" ")).not.toContain(script);
@@ -696,7 +758,379 @@ describe("Agent Browser native task lane", () => {
 			code: "agent_browser_action_integrity_refused",
 			outcome: "not-achieved",
 		});
+		expect(runtime.calls).toHaveLength(4);
+	});
+});
+
+describe("Agent Browser target resolution", () => {
+	const targetEnvelopeId = "a".repeat(32);
+	const openStep = {
+		kind: "open",
+		url: "https://example.test/",
+		postcondition: { kind: "url-equals", url: "https://example.test/" },
+	} as const;
+
+	test("auto-resolves one admissible tab to a deterministic opaque binding", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t1",
+							type: "page",
+							url: "https://example.test/",
+						},
+						{
+							tabId: "worker1",
+							type: "service_worker",
+							url: "https://example.test/sw.js",
+						},
+					],
+				}),
+			},
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-auto-target",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		});
+
+		expect(result).toEqual({
+			ok: true,
+			target_tab_id: "t1",
+			target_url: "https://example.test/",
+			binding: {
+				schema_version: "1",
+				target_candidate_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"t1",
+				]),
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain('"tab_id"');
+		expect(runtime.calls).toHaveLength(1);
+	});
+
+	test("returns transport failure separately from zero-candidate truth", async () => {
+		const runtime = runtimeFor([
+			{ stdout: cdpConnectFailure() },
+			{ stdout: json({ cdpUrl: HANDOFF.endpoint.ws }) },
+			{ stdout: cdpConnectFailure() },
+			{ stdout: json({ cdpUrl: HANDOFF.endpoint.ws }) },
+			{ stdout: cdpConnectFailure() },
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-target-transport",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_connection_unstable",
+			connection: {
+				attempts: 3,
+				max_attempts: 3,
+			},
+		});
+		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+			["tab", "list", "--json"],
+			["get", "cdp-url", "--json"],
+			["tab", "list", "--json"],
+			["get", "cdp-url", "--json"],
+			["tab", "list", "--json"],
+		]);
+	});
+
+	test("does not reconnect a target-list failure without a connection signal", async () => {
+		const runtime = runtimeFor([{ stdout: semanticFailure() }]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-target-list-semantic-failure",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_unavailable",
+		});
+		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+			["tab", "list", "--json"],
+		]);
+	});
+
+	test("preserves an explicit exact override when multiple tabs are admissible", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{ tabId: "t1", type: "page", url: "https://example.test/one" },
+						{ tabId: "t2", type: "page", url: "https://example.test/two" },
+					],
+				}),
+			},
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-exact-target",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: {
+				kind: "exact",
+				tab_id: "t2",
+				target_envelope_id: targetEnvelopeId,
+			},
+		});
+
+		expect(result).toMatchObject({ ok: true, target_tab_id: "t2" });
+	});
+
+	test("returns typed zero-candidate and ambiguous repair truth", async () => {
+		const zeroRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{ tabId: "t1", type: "page", url: "https://other.test/" },
+					],
+				}),
+			},
+		]);
+		const ambiguousRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{ tabId: "t1", type: "page", url: "https://example.test/one" },
+						{ tabId: "t2", type: "page", url: "https://example.test/two" },
+					],
+				}),
+			},
+		]);
+		const baseInput = {
+			handoff: HANDOFF,
+			run_id: "run-repair-target",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		} as const;
+
+		const zero = await resolveAgentBrowserTaskTarget(zeroRuntime, baseInput);
+		const ambiguous = await resolveAgentBrowserTaskTarget(
+			ambiguousRuntime,
+			baseInput,
+		);
+
+		expect(zero).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_unavailable",
+		});
+		expect(ambiguous).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_ambiguous",
+		});
+	});
+
+	test("never falls back when an opaque bound target moved", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{ tabId: "t2", type: "page", url: "https://example.test/" },
+					],
+				}),
+			},
+		]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-bound-target",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: {
+				kind: "auto",
+				target_envelope_id: targetEnvelopeId,
+				bound_target_candidate_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"t1",
+				]),
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_moved",
+		});
+	});
+
+	test("admits exact about:blank only for a first remaining open", async () => {
+		const firstOpenRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [{ tabId: "t1", type: "page", url: "about:blank" }],
+				}),
+			},
+		]);
+		const firstSnapshotRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [{ tabId: "t1", type: "page", url: "about:blank" }],
+				}),
+			},
+		]);
+		const base = {
+			handoff: HANDOFF,
+			run_id: "run-neutral-target",
+			allowed_origins: ["https://example.test"],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		} as const;
+
+		const accepted = await resolveAgentBrowserTaskTarget(firstOpenRuntime, {
+			...base,
+			steps: [openStep],
+		});
+		const refused = await resolveAgentBrowserTaskTarget(firstSnapshotRuntime, {
+			...base,
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(accepted).toMatchObject({ ok: true, target_tab_id: "t1" });
+		expect(refused).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_unavailable",
+		});
+	});
+
+	test("executes the allowed first open from an exact about:blank target", async () => {
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [{ tabId: "t1", type: "page", url: "about:blank" }],
+				}),
+			},
+			{ stdout: json({ selected: true }) },
+			{ stdout: json({ opened: true }) },
+			{ stdout: json({ url: "https://example.test/" }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-neutral-open",
+			target_tab_id: "t1",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			allow_neutral_target: true,
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			outcome: "confirmed",
+			executed_steps: 1,
+			mutation_dispatched: true,
+		});
+		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+			["tab", "list", "--json"],
+			["tab", "t1", "--json"],
+			["get", "url", "--json"],
+			["open", "https://example.test/", "--json"],
+			["get", "url", "--json"],
+		]);
+	});
+
+	test("refuses when the selected target moves before execution", async () => {
+		const runtime = runtimeFor(
+			[
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t1",
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: json({ selected: true }) },
+			],
+			{ selectedUrlProof: "https://other.test/" },
+		);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-selected-moved",
+			target_tab_id: "t1",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_moved",
+		});
 		expect(runtime.calls).toHaveLength(3);
+	});
+
+	test("refuses same-origin path drift since target resolution", async () => {
+		const resolutionRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t1",
+							type: "page",
+							url: "https://example.test/original",
+						},
+					],
+				}),
+			},
+		]);
+		const resolution = await resolveAgentBrowserTaskTarget(resolutionRuntime, {
+			handoff: HANDOFF,
+			run_id: "run-path-drift",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		});
+		if (!resolution.ok) throw new Error("target resolution failed");
+
+		const executionRuntime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t1",
+							type: "page",
+							url: "https://example.test/drifted",
+						},
+					],
+				}),
+			},
+			{ stdout: json({ selected: true }) },
+		]);
+		const result = await executeAgentBrowserTask(executionRuntime, {
+			handoff: HANDOFF,
+			run_id: "run-path-drift",
+			target_tab_id: resolution.target_tab_id,
+			expected_target_url: resolution.target_url,
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_moved",
+			outcome: "not-achieved",
+		});
+		expect(executionRuntime.calls).toHaveLength(3);
 	});
 });
 
@@ -841,7 +1275,7 @@ describe("Agent Browser connection robustness (no flaky CDP connections)", () =>
 		if (result.ok === false) {
 			expect(result.connection).toBeUndefined();
 		}
-		expect(runtime.calls).toHaveLength(5);
+		expect(runtime.calls).toHaveLength(6);
 	});
 
 	// Process-boundary proof against the real dependency shape (repo rule).

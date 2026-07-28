@@ -291,6 +291,7 @@ describe("DDA-H21 leftover session from a crashed prior run recovers typed", () 
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
 		]);
 		const result = await runForTest(
