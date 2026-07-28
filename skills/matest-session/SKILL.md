@@ -9,12 +9,16 @@ disable-model-invocation: true
 Run the named extension in MATest, prove its live page, then leave the browser and dev
 server warm. With no arguments, use the extension in the current request.
 
-## Owners
+## Dependencies
 
-- Browser connection and adapter recovery: `skills/browser-use/SKILL.md`.
-- Secret retrieval and reuse: `skills/one-password/SKILL.md`.
+- `skills/browser-use/SKILL.md`: hard dependency for browser routing, warm attach,
+  browser actions, run state, and recovery. Missing state: blocked. Next repair:
+  restore `browser-use` with `setup sync`, then verify `browser-use --help`.
+- `skills/one-password/SKILL.md`: hard dependency only for cold authentication.
+  Missing state: cold authentication is blocked; an authenticated warm session can
+  continue. Next repair: restore the skill and verify its runtime before login.
 - Startup guidance: `$HOME/code/claude-code-config/AGENTS.md` first, then the nearest
-  repo `AGENTS.md`, `CONTEXT.md`, and extension config.
+  repository agent instructions, context documentation, and extension config.
 
 Read `references/matest-runbook.md` before a cold login, deploy, new-extension
 registration, or page-route repair.
@@ -25,8 +29,10 @@ registration, or page-route repair.
    browser state.
 2. Stop the extension dev server before any build, deploy, or handback command. Run the
    requested command, then restart the dev server in the persistent secret-backed shell.
-3. Connect only through `browser-connect connect agent-browser --json` (owner:
-   `browser-use`).
+3. Hand browser work to `browser-use`. Use the shipped MATest
+   `development-snapshot-verify` runbook for the authenticated Development-page proof.
+   Preserve the returned run id for status or recovery, then hand browser state back to
+   this workflow.
 4. Reuse an authenticated MATest tab. On cold auth, select **Monash University Users**,
    then use **Google Authenticator** for MFA.
 5. Wait for a successful compile and HTTP 200 from the local `manifest.json`. Enable
