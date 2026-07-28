@@ -555,7 +555,12 @@ function resolveActionInputs(
 	const out: Record<string, unknown> = {};
 	for (const [key, token] of Object.entries(declared)) {
 		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
-		out[key] = match?.[1] !== undefined ? inputs[match[1]] : token;
+		if (match?.[1] === undefined) {
+			out[key] = token;
+			continue;
+		}
+		const resolved = inputs[match[1]];
+		if (resolved !== undefined) out[key] = resolved;
 	}
 	return out;
 }

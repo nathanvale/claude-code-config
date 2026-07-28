@@ -18,6 +18,7 @@ import {
 	applyBrowserUseMigration,
 	inventoryBrowserUseMigration,
 	planBrowserUseMigration,
+	readBrowserUseMigrationStatus,
 } from "./browser-use-migration";
 import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import {
@@ -221,6 +222,88 @@ describe("DDA-K01 migration status reports each corpus state", () => {
 			staged_generation: expect.stringMatching(/^generation-[0-9a-f]{16}$/),
 			activation_state: "unchanged",
 		});
+	});
+
+	test("malformed nested census and canonical targets refuse as corrupt state", async () => {
+		const malformedNestedValues: Array<{
+			label: string;
+			corpusCensus: unknown;
+			canonicalTargets: unknown;
+		}> = [
+			{
+				label: "negative census count",
+				corpusCensus: {
+					...KNOWN_BASELINE_CENSUS,
+					scripts: -1,
+				},
+				canonicalTargets: [],
+			},
+			{
+				label: "fractional census count",
+				corpusCensus: {
+					...KNOWN_BASELINE_CENSUS,
+					target_flows: 1.5,
+				},
+				canonicalTargets: [],
+			},
+			{
+				label: "missing census field",
+				corpusCensus: {
+					formal_artifacts: 3,
+				},
+				canonicalTargets: [],
+			},
+			{
+				label: "missing canonical target id",
+				corpusCensus: KNOWN_BASELINE_CENSUS,
+				canonicalTargets: [{ source_relative_paths: ["portal/runbook.md"] }],
+			},
+			{
+				label: "non-string canonical source path",
+				corpusCensus: KNOWN_BASELINE_CENSUS,
+				canonicalTargets: [
+					{
+						canonical_target_id: "portal/run",
+						source_relative_paths: [42],
+					},
+				],
+			},
+		];
+
+		for (const malformed of malformedNestedValues) {
+			const xdg = makeTempXdgEnv();
+			disposables.push(xdg);
+			const deps = await openDeps(xdg.env);
+			mkdirSync(deps.paths.state.migrationsDir, {
+				recursive: true,
+				mode: 0o700,
+			});
+			writeFileSync(
+				join(deps.paths.state.migrationsDir, "migration-state.json"),
+				`${JSON.stringify({
+					contract: "browser-use.migration-status",
+					schema_version: "2",
+					phase: "planned",
+					snapshot_id: "snapshot-test",
+					snapshot_digest: "digest",
+					source_root_identity: "identity",
+					source_entry_count: 1,
+					disposition_count: 1,
+					dispositions: [],
+					corpus_census: malformed.corpusCensus,
+					canonical_targets: malformed.canonicalTargets,
+					staged_generation: null,
+					last_apply_verified_noop: null,
+					activation_state: "unchanged",
+				})}\n`,
+				{ mode: 0o600 },
+			);
+
+			expect(await readBrowserUseMigrationStatus(deps), malformed.label).toMatchObject({
+				ok: false,
+				code: "migration_state_corrupt",
+			});
+		}
 	});
 });
 
@@ -638,6 +721,49 @@ describe("U1 corpus census and classification", () => {
 		expect(
 			(parseJson(planned.stdout).error as { message: string }).message,
 		).toMatch(/formal_artifacts expected 12, found 3/);
+	});
+
+	test("production CLI source symlink alias enforces the code-owned R3 census baseline", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const legacySource = join(
+			xdg.env.XDG_CONFIG_HOME as string,
+			"side-quest",
+			"browser-automation",
+			"domains",
+		);
+		mkdirSync(dirname(legacySource), { recursive: true });
+		cpSync(corpusBaseline, legacySource, { recursive: true });
+		const alias = join(xdg.env.XDG_CONFIG_HOME as string, "legacy-domains");
+		cpSync(corpusBaseline, alias, { recursive: true });
+		const platformFs = createDefaultPlatformFs();
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: {
+				...platformFs,
+				async realpath(path) {
+					if (path === alias || path === legacySource) return legacySource;
+					return await platformFs.realpath(path);
+				},
+			},
+		});
+
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", alias, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", alias, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(20);
+		expect(parseJson(planned.stdout).error).toMatchObject({
+			code: "migration_count_drift",
+		});
 	});
 
 	test("R1/KTD12: inventory and plan leave the full source tree byte-identical (pre/post hash over the fixture tree)", async () => {

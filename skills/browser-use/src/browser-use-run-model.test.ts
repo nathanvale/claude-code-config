@@ -11,6 +11,8 @@ import {
 	checkSameLaneResume,
 	classifyCancellation,
 	revalidateAuthAttestation,
+	runExecutionBindingValidationProblem,
+	runItemBatchValidationProblem,
 	validateSharedRun,
 } from "./browser-use-run-model";
 
@@ -634,7 +636,14 @@ const EXEC_BINDING = {
 describe("run execution binding validation (R38)", () => {
 	test("a well-formed binding passes", () => {
 		expect(
-			validateSharedRun(baseRun({ run_execution_binding: EXEC_BINDING })),
+			validateSharedRun(
+				baseRun({
+					task_intent: "runbook-execution",
+					runbook_target_binding: RUNBOOK_TARGET_BINDING,
+					runbook_progress: RUNBOOK_PROGRESS,
+					run_execution_binding: EXEC_BINDING,
+				}),
+			),
 		).toEqual([]);
 	});
 
@@ -658,6 +667,47 @@ describe("run execution binding validation (R38)", () => {
 		);
 		expect(issues.map((i) => i.code)).toContain("run_execution_binding_invalid");
 	});
+
+	test("private execution state requires target binding and progress", () => {
+		for (const privateState of [
+			{ run_execution_binding: EXEC_BINDING },
+			{
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [],
+				} as const,
+			},
+		]) {
+			expect(
+				validateSharedRun(
+					baseRun({
+						task_intent: "runbook-execution",
+						...privateState,
+					}),
+				),
+			).toContainEqual({
+				code: "runbook_private_state_incomplete",
+				message: expect.stringContaining("require both"),
+			});
+		}
+	});
+
+	test("unknown-safe execution-binding validator preserves custody and summary rules", () => {
+		expect(runExecutionBindingValidationProblem(null)).toContain("JSON object");
+		expect(
+			runExecutionBindingValidationProblem({
+				...EXEC_BINDING,
+				governed_input_artifact_ref: "artifact://x",
+			}),
+		).toContain("exactly one");
+		expect(
+			runExecutionBindingValidationProblem({
+				...EXEC_BINDING,
+				postcondition: { id: "saved", summary: "" },
+			}),
+		).toContain("non-empty");
+	});
 });
 
 describe("run item-batch validation (R12)", () => {
@@ -665,6 +715,9 @@ describe("run item-batch validation (R12)", () => {
 		expect(
 			validateSharedRun(
 				baseRun({
+					task_intent: "runbook-execution",
+					runbook_target_binding: RUNBOOK_TARGET_BINDING,
+					runbook_progress: RUNBOOK_PROGRESS,
 					item_batch: {
 						schema_version: "1",
 						item_keys: ["mon", "tue"],
@@ -673,6 +726,26 @@ describe("run item-batch validation (R12)", () => {
 				}),
 			),
 		).toEqual([]);
+	});
+
+	test("unknown-safe item-batch validator preserves bounds, stable keys, and ordering", () => {
+		expect(
+			runItemBatchValidationProblem({
+				schema_version: "1",
+				item_keys: ["bad key"],
+				checkpoints: [],
+			}),
+		).toContain("safe stable keys");
+		expect(
+			runItemBatchValidationProblem({
+				schema_version: "1",
+				item_keys: ["mon", "tue"],
+				checkpoints: [
+					{ item_key: "mon", outcome: "unknown" },
+					{ item_key: "tue", outcome: "confirmed" },
+				],
+			}),
+		).toContain("after the first unconfirmed");
 	});
 
 	test("a checkpoint referencing a key outside the sequence refuses", () => {

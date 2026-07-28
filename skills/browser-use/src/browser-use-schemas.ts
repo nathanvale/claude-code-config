@@ -31,6 +31,8 @@ import {
 	type BrowserUseTaskIntent,
 	BROWSER_USE_RUN_STATES,
 	BROWSER_USE_TASK_INTENTS,
+	runExecutionBindingValidationProblem,
+	runItemBatchValidationProblem,
 	validateSharedRun,
 } from "./browser-use-run-model";
 import {
@@ -642,11 +644,13 @@ function sharedRunProblem(value: unknown): string | undefined {
 		if (problem !== undefined) return problem;
 	}
 	if (value.run_execution_binding !== undefined) {
-		const problem = runExecutionBindingProblem(value.run_execution_binding);
+		const problem = runExecutionBindingValidationProblem(
+			value.run_execution_binding,
+		);
 		if (problem !== undefined) return problem;
 	}
 	if (value.item_batch !== undefined) {
-		const problem = itemBatchProblem(value.item_batch);
+		const problem = runItemBatchValidationProblem(value.item_batch);
 		if (problem !== undefined) return problem;
 	}
 	if (value.auth_fragment !== undefined) {
@@ -718,11 +722,13 @@ function sharedRunEnvelopeVersionProblem(
 		return "shared-run schema version 2 must carry both runbook_target_binding and runbook_progress.";
 	}
 	if (hasExecBinding) {
-		const problem = runExecutionBindingProblem(value.run_execution_binding);
+		const problem = runExecutionBindingValidationProblem(
+			value.run_execution_binding,
+		);
 		if (problem !== undefined) return problem;
 	}
 	if (hasItemBatch) {
-		const problem = itemBatchProblem(value.item_batch);
+		const problem = runItemBatchValidationProblem(value.item_batch);
 		if (problem !== undefined) return problem;
 	}
 	return (
@@ -754,96 +760,6 @@ function runbookProgressProblem(value: unknown): string | undefined {
 		!isNonNegativeInteger(value.total_steps)
 	) {
 		return "payload.runbook_progress must carry schema version 1, runbook identity, and non-negative integer step counts.";
-	}
-	return undefined;
-}
-
-const FULL_DIGEST_SHAPE = /^[0-9a-f]{64}$/;
-const ITEM_CHECKPOINT_OUTCOMES = [
-	"pending",
-	"confirmed",
-	"not-achieved",
-	"unknown",
-] as const;
-
-function runExecutionBindingProblem(value: unknown): string | undefined {
-	if (!isJsonObject(value)) {
-		return "payload.run_execution_binding must be a JSON object.";
-	}
-	if (value.schema_version !== "1") {
-		return "payload.run_execution_binding.schema_version must be 1.";
-	}
-	for (const field of [
-		"generation_id",
-		"service_id",
-		"flow_id",
-		"runbook_version",
-		"target_scope",
-	] as const) {
-		if (stringField(value[field]) === undefined) {
-			return `payload.run_execution_binding.${field} must be a non-empty string.`;
-		}
-	}
-	if (!isPositiveInteger(value.activation_epoch)) {
-		return "payload.run_execution_binding.activation_epoch must be an integer >= 1.";
-	}
-	for (const digestField of [
-		"runbook_digest",
-		"action_registry_digest",
-		"item_key_digest",
-	] as const) {
-		if (
-			typeof value[digestField] !== "string" ||
-			!FULL_DIGEST_SHAPE.test(value[digestField] as string)
-		) {
-			return `payload.run_execution_binding.${digestField} must be a 64-hex digest.`;
-		}
-	}
-	const hasDigest = value.normalized_input_digest !== undefined;
-	const hasGoverned = value.governed_input_artifact_ref !== undefined;
-	if (hasDigest === hasGoverned) {
-		return "payload.run_execution_binding must carry exactly one of normalized_input_digest or governed_input_artifact_ref.";
-	}
-	if (
-		hasDigest &&
-		(typeof value.normalized_input_digest !== "string" ||
-			!FULL_DIGEST_SHAPE.test(value.normalized_input_digest as string))
-	) {
-		return "payload.run_execution_binding.normalized_input_digest must be a 64-hex digest.";
-	}
-	if (hasGoverned && stringField(value.governed_input_artifact_ref) === undefined) {
-		return "payload.run_execution_binding.governed_input_artifact_ref must be a non-empty string.";
-	}
-	if (!isIdSummary(value.postcondition, "id")) {
-		return "payload.run_execution_binding.postcondition must carry id and summary strings.";
-	}
-	return undefined;
-}
-
-function itemBatchProblem(value: unknown): string | undefined {
-	if (!isJsonObject(value)) return "payload.item_batch must be a JSON object.";
-	if (value.schema_version !== "1") {
-		return "payload.item_batch.schema_version must be 1.";
-	}
-	if (
-		!Array.isArray(value.item_keys) ||
-		value.item_keys.length === 0 ||
-		value.item_keys.some((key) => stringField(key) === undefined)
-	) {
-		return "payload.item_batch.item_keys must be a non-empty string array.";
-	}
-	const keys = new Set(value.item_keys as string[]);
-	if (!Array.isArray(value.checkpoints)) {
-		return "payload.item_batch.checkpoints must be an array.";
-	}
-	for (const [index, checkpoint] of value.checkpoints.entries()) {
-		if (
-			!isJsonObject(checkpoint) ||
-			!keys.has(checkpoint.item_key as string) ||
-			!(ITEM_CHECKPOINT_OUTCOMES as readonly unknown[]).includes(checkpoint.outcome)
-		) {
-			return `payload.item_batch.checkpoints.${index} must reference a batch key with a valid outcome.`;
-		}
 	}
 	return undefined;
 }

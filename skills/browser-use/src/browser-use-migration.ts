@@ -26,6 +26,14 @@ import {
 import { readDurableFile, writeDurableFile } from "./browser-use-store";
 
 const MIGRATION_STATE_FILE = "migration-state.json";
+const CORPUS_CENSUS_FIELDS = [
+	"formal_artifacts",
+	"target_flows",
+	"scripts",
+	"auth_narratives",
+	"login_capabilities",
+	"domain_script_actions",
+] as const satisfies readonly (keyof BrowserUseCorpusCensus)[];
 
 function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
@@ -40,6 +48,39 @@ function migrationFailure(
 
 function migrationStatePath(deps: RetentionDeps): string {
 	return join(deps.paths.state.migrationsDir, MIGRATION_STATE_FILE);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		value <= Number.MAX_SAFE_INTEGER
+	);
+}
+
+function isCorpusCensus(value: unknown): value is BrowserUseCorpusCensus {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return CORPUS_CENSUS_FIELDS.every((field) =>
+		isNonNegativeSafeInteger(record[field]),
+	);
+}
+
+function isCanonicalTarget(value: unknown): value is BrowserUseCanonicalTarget {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record.canonical_target_id === "string" &&
+		record.canonical_target_id.length > 0 &&
+		Array.isArray(record.source_relative_paths) &&
+		record.source_relative_paths.length > 0 &&
+		record.source_relative_paths.every((path) => typeof path === "string")
+	);
 }
 
 async function writeMigrationState(
@@ -236,6 +277,8 @@ export async function readBrowserUseMigrationStatus(
 			!Array.isArray(state.dispositions) ||
 			!Array.isArray(state.canonical_targets) ||
 			!("corpus_census" in state) ||
+			(state.corpus_census !== null && !isCorpusCensus(state.corpus_census)) ||
+			!state.canonical_targets.every(isCanonicalTarget) ||
 			state.activation_state !== "unchanged"
 		) {
 			return migrationFailure(
@@ -391,10 +434,10 @@ function domainOf(relativePath: string): string {
 	return relativePath.split("/")[0] ?? relativePath;
 }
 
-// Extract the declared flow id from a formal artifact's parsed body (R4). A
-// playbook JSON carries `{ candidate: { flow } }` or a top-level `flow`; a
-// playbook/runbook YAML carries `name`/`flow`. Falls back to the basename so a
-// formal artifact always yields SOME stable flow identity.
+// Extract the declared flow id from a formal artifact's parsed body (R4).
+// JSON/YAML may carry `{ candidate: { flow } }` or a top-level `flow`.
+// Deliberately ignore YAML `name`: it may use a different identifier convention.
+// Fall back to the basename so every formal artifact has one stable flow identity.
 function formalFlowIdFor(
 	entry: BrowserUseSourceSnapshotPayload["entries"][number],
 	artifactClass: BrowserUseArtifactClass,

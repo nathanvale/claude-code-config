@@ -5,6 +5,7 @@ import {
 	type BrowserUseReviewedActionRecord,
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
+	ACTION_ASSET_MAX_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
 	captureStructuredResult,
@@ -263,6 +264,33 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.refusal.code).toBe("action_asset_bytes_unavailable");
+	});
+
+	test("a multibyte asset over the UTF-8 byte ceiling refuses", async () => {
+		const oversizedBytes = `${"a".repeat(ACTION_ASSET_MAX_BYTES - 1)}é`;
+		expect(oversizedBytes.length).toBe(ACTION_ASSET_MAX_BYTES);
+		expect(Buffer.byteLength(oversizedBytes, "utf-8")).toBe(ACTION_ASSET_MAX_BYTES + 1);
+		const oversizedDigest = actionAssetDigest(oversizedBytes);
+		const record = readRecord({
+			asset_id: oversizedDigest,
+			expected_digest: oversizedDigest,
+			promotion_receipt: {
+				approved_digest: oversizedDigest,
+				disposition: "approved",
+				approved_origin: ORIGIN,
+				approved_effect: "read",
+				approver_ref: "operator-1",
+			},
+		});
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: oversizedDigest,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(record, { [oversizedDigest]: oversizedBytes }),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_digest_mismatch");
 	});
 
 	test("wrong requested origin refuses", async () => {
@@ -861,6 +889,21 @@ describe("recordItemCheckpoint — confirmed advances, unknown blocks (R12)", ()
 
 const ITEM_KEYS = ["mon", "tue"] as const;
 const INPUTS = { week: 30 };
+
+describe("normalizedInputDigest — canonical own-key encoding", () => {
+	test("ignores object key order", () => {
+		expect(normalizedInputDigest({ alpha: 1, beta: 2 })).toBe(
+			normalizedInputDigest({ beta: 2, alpha: 1 }),
+		);
+	});
+
+	test("preserves distinct own __proto__ values", () => {
+		const first = JSON.parse('{"__proto__":{"marker":"first"}}') as Record<string, unknown>;
+		const second = JSON.parse('{"__proto__":{"marker":"second"}}') as Record<string, unknown>;
+		expect(normalizedInputDigest(first)).not.toBe(normalizedInputDigest(second));
+		expect(normalizedInputDigest(first)).not.toBe(normalizedInputDigest({}));
+	});
+});
 
 function binding(
 	overrides: Partial<BrowserUseRunExecutionBinding> = {},

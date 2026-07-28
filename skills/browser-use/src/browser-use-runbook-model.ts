@@ -88,6 +88,7 @@ export type BrowserUseRunbookEffectClass =
  */
 export const INPUT_SCHEMA_MAX_DEPTH = 8;
 export const INPUT_SCHEMA_MAX_WIDTH = 64;
+const INPUT_SCHEMA_MAX_PATTERN_LENGTH = 512;
 /** Bounded array length a value may carry when validated against a schema. */
 export const INPUT_VALUE_MAX_ARRAY_LENGTH = 256;
 
@@ -379,14 +380,31 @@ function validateValueSchema(
 	switch (schema.kind) {
 		case "string": {
 			if (schema.pattern !== undefined) {
-				try {
-					new RegExp(schema.pattern);
-				} catch {
+				if (schema.pattern.length > INPUT_SCHEMA_MAX_PATTERN_LENGTH) {
 					issues.push({
 						code: "runbook_input_schema_invalid",
-						message: `${at}: string schema carries an invalid pattern.`,
+						message: `${at}: string pattern exceeds the maximum length ${INPUT_SCHEMA_MAX_PATTERN_LENGTH}.`,
 					});
+				} else {
+					try {
+						new RegExp(schema.pattern);
+					} catch {
+						issues.push({
+							code: "runbook_input_schema_invalid",
+							message: `${at}: string schema carries an invalid pattern.`,
+						});
+					}
 				}
+			}
+			if (
+				schema.min_length !== undefined &&
+				schema.max_length !== undefined &&
+				schema.min_length > schema.max_length
+			) {
+				issues.push({
+					code: "runbook_input_schema_invalid",
+					message: `${at}: string schema min_length exceeds max_length.`,
+				});
 			}
 			if (schema.default !== undefined && !valueMatchesSchema(schema.default, schema)) {
 				issues.push({
@@ -458,6 +476,16 @@ function validateValueSchema(
 			return;
 		}
 		case "array": {
+			if (
+				schema.min_items !== undefined &&
+				schema.max_items !== undefined &&
+				schema.min_items > schema.max_items
+			) {
+				issues.push({
+					code: "runbook_input_schema_invalid",
+					message: `${at}: array schema min_items exceeds max_items.`,
+				});
+			}
 			validateValueSchema(schema.items, `${at}.items`, depth + 1, issues);
 			return;
 		}
@@ -518,6 +546,7 @@ export function valueMatchesSchema(
 			if (schema.min_length !== undefined && value.length < schema.min_length) return false;
 			if (schema.max_length !== undefined && value.length > schema.max_length) return false;
 			if (schema.pattern !== undefined) {
+				if (schema.pattern.length > INPUT_SCHEMA_MAX_PATTERN_LENGTH) return false;
 				let anchored: RegExp;
 				try {
 					anchored = new RegExp(`^(?:${schema.pattern})$`);

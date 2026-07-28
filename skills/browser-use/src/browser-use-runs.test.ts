@@ -327,6 +327,27 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 		expect(loaded).toMatchObject({ ok: false, code: "run_not_found" });
 	});
 
+	test("create refuses execution state without target binding and progress", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const runId = "run-create-incomplete-private-state";
+		const created = await createSharedRun(
+			deps,
+			blockedRun(runId, {
+				run_execution_binding: RUN_EXECUTION_BINDING,
+			}),
+		);
+		expect(created).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+			message: expect.stringContaining("require both"),
+		});
+		expect(await loadSharedRun(deps, runId)).toMatchObject({
+			ok: false,
+			code: "run_not_found",
+		});
+	});
+
 	test("a duplicate create is a typed store_record_conflict", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
@@ -1076,6 +1097,36 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 			code: "run_blocked_without_continuation",
 		});
 		expect(await rawRecordOf(deps, "run-update-invalid")).toBe(before);
+	});
+
+	test("update refuses item-batch state without target binding and progress", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-incomplete-private-state"),
+		);
+		const lease = await acquireClaim(deps, run, "incomplete-private-state-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [],
+				},
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+			message: expect.stringContaining("require both"),
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
 	});
 
 	test("a mutate changing run_id is a typed run_id_immutable refusal", async () => {

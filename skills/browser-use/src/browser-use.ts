@@ -4397,8 +4397,14 @@ async function runMigration(input: PlatformCommandInput): Promise<number> {
 			"browser-automation",
 			"domains",
 		);
+		const [canonicalSource, canonicalLegacyCorpusRoot] = await Promise.all([
+			deps.fs.realpath(source),
+			deps.fs.realpath(legacyCorpusRoot),
+		]);
 		const expectedCensus =
-			normalize(source) === normalize(legacyCorpusRoot)
+			canonicalSource !== undefined &&
+			canonicalLegacyCorpusRoot !== undefined &&
+			normalize(canonicalSource) === normalize(canonicalLegacyCorpusRoot)
 				? BROWSER_USE_R3_CORPUS_BASELINE
 				: undefined;
 		result =

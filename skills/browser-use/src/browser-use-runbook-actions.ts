@@ -736,7 +736,7 @@ export async function resolveReviewedAction(input: {
 			"the content-addressed action asset could not be read from the resolving generation.",
 		);
 	}
-	if (assetBytes.bytes.length > ACTION_ASSET_MAX_BYTES) {
+	if (Buffer.byteLength(assetBytes.bytes, "utf-8") > ACTION_ASSET_MAX_BYTES) {
 		return refuse(
 			"action_digest_mismatch",
 			"the resolved action asset exceeds the bounded byte ceiling.",
@@ -938,7 +938,7 @@ function canonicalJson(value: unknown): string {
 	return JSON.stringify(value, (_key, val) => {
 		if (typeof val === "object" && val !== null && !Array.isArray(val)) {
 			const record = val as Record<string, unknown>;
-			const sorted: Record<string, unknown> = {};
+			const sorted: Record<string, unknown> = Object.create(null);
 			for (const key of Object.keys(record).sort()) sorted[key] = record[key];
 			return sorted;
 		}

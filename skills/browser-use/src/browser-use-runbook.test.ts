@@ -411,6 +411,32 @@ describe("v2 typed-input value schemas (R9)", () => {
 		expect(issues.map((i) => i.code)).toContain("runbook_input_schema_invalid");
 	});
 
+	test("rejects oversized patterns and inverted string or array bounds", () => {
+		for (const schema of [
+			{ kind: "string", pattern: "a".repeat(513) },
+			{ kind: "string", min_length: 2, max_length: 1 },
+			{
+				kind: "array",
+				items: { kind: "string" },
+				min_items: 2,
+				max_items: 1,
+			},
+		] as const) {
+			const issues = validateRunbook(
+				inputSchema(schema as BrowserUseRunbookValueSchema),
+			);
+			expect(issues.map((issue) => issue.code)).toContain(
+				"runbook_input_schema_invalid",
+			);
+		}
+		expect(
+			valueMatchesSchema("a", {
+				kind: "string",
+				pattern: "a".repeat(513),
+			}),
+		).toBe(false);
+	});
+
 	test("rejects a schema nested past the maximum depth", () => {
 		let schema: BrowserUseRunbookValueSchema = { kind: "string" };
 		for (let i = 0; i < INPUT_SCHEMA_MAX_DEPTH + 2; i += 1) {
@@ -2477,6 +2503,59 @@ describe("engine reviewed-action step resolution (U3)", () => {
 				expect(evaluateStep.effect).toBe("read");
 				expect(evaluateStep.script_sha256).toBe(ACTION_READ_DIGEST);
 			}
+		}),
+	);
+
+	test(
+		"an unresolved optional action token is omitted before schema validation",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				actionRunbook({
+					inputs: [
+						{
+							id: "filter",
+							summary: "Optional filter.",
+							required: false,
+							schema: { kind: "string" },
+						},
+					],
+					steps: [
+						{
+							kind: "action",
+							action_id: "diagnose-grid",
+							expected_digest: ACTION_READ_DIGEST,
+							inputs: { filter: "{{filter}}" },
+						},
+					],
+				}),
+			);
+			const record = {
+				...approvedReadRecord(),
+				input_schema: {
+					kind: "object",
+					fields: {
+						filter: {
+							schema: { kind: "string" },
+							required: false,
+						},
+					},
+				},
+			} as const satisfies BrowserUseReviewedActionRecord;
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "diagnose",
+					inputs: {},
+					resumeFromStep: 0,
+					actionSeam: actionSeam(record, {
+						[ACTION_READ_DIGEST]: ACTION_READ_BYTES,
+					}),
+				},
+			);
+			expect(prepared.ok).toBe(true);
 		}),
 	);
 

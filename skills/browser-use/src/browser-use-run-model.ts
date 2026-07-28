@@ -464,11 +464,15 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 	}
 	const binding = run.runbook_target_binding;
 	const progress = run.runbook_progress;
-	if ((binding === undefined) !== (progress === undefined)) {
+	if (
+		(binding === undefined) !== (progress === undefined) ||
+		((run.run_execution_binding !== undefined || run.item_batch !== undefined) &&
+			(binding === undefined || progress === undefined))
+	) {
 		issues.push({
 			code: "runbook_private_state_incomplete",
 			message:
-				"runbook_target_binding and runbook_progress must be committed together or both absent.",
+				"runbook_target_binding and runbook_progress must be committed together; execution-binding and item-batch state require both.",
 		});
 	}
 	if (
@@ -511,95 +515,178 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 		});
 	}
 	const execBinding = run.run_execution_binding;
-	if (execBinding !== undefined && !runExecutionBindingValid(execBinding)) {
+	const execBindingProblem =
+		execBinding === undefined
+			? undefined
+			: runExecutionBindingValidationProblem(execBinding);
+	if (execBindingProblem !== undefined) {
 		issues.push({
 			code: "run_execution_binding_invalid",
-			message:
-				"run_execution_binding requires schema version 1, pinned generation/flow/version identity, 64-hex digests, an item-key digest, a target scope, a postcondition, and exactly one of a normalized-input digest or a governed-input artifact reference.",
+			message: execBindingProblem,
 		});
 	}
 	const itemBatch = run.item_batch;
-	if (itemBatch !== undefined && !itemBatchStateValid(itemBatch)) {
+	const itemBatchProblem =
+		itemBatch === undefined
+			? undefined
+			: runItemBatchValidationProblem(itemBatch);
+	if (itemBatchProblem !== undefined) {
 		issues.push({
 			code: "run_item_batch_invalid",
-			message:
-				"item_batch requires schema version 1, a bounded stable-key sequence, one checkpoint per key, and no advanced checkpoint after the first unconfirmed item.",
+			message: itemBatchProblem,
 		});
 	}
 	return issues;
 }
 
-function runExecutionBindingValid(
-	binding: BrowserUseRunExecutionBindingState,
-): boolean {
+/**
+ * Return the first execution-binding validation problem for untrusted input.
+ *
+ * @param value - Candidate durable execution binding
+ * @returns Undefined when every execution-binding invariant holds
+ */
+export function runExecutionBindingValidationProblem(
+	value: unknown,
+): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "run_execution_binding must be a JSON object.";
+	}
+	const binding = value as Record<string, unknown>;
+	if (binding.schema_version !== "1") {
+		return "run_execution_binding.schema_version must be 1.";
+	}
+	for (const field of [
+		"generation_id",
+		"service_id",
+		"flow_id",
+		"runbook_version",
+		"target_scope",
+	] as const) {
+		if (typeof binding[field] !== "string" || binding[field].length === 0) {
+			return `run_execution_binding.${field} must be a non-empty string.`;
+		}
+	}
+	if (
+		!Number.isInteger(binding.activation_epoch) ||
+		(binding.activation_epoch as number) < 1
+	) {
+		return "run_execution_binding.activation_epoch must be an integer >= 1.";
+	}
+	for (const digestField of [
+		"runbook_digest",
+		"action_registry_digest",
+		"item_key_digest",
+	] as const) {
+		if (
+			typeof binding[digestField] !== "string" ||
+			!FULL_DIGEST.test(binding[digestField] as string)
+		) {
+			return `run_execution_binding.${digestField} must be a 64-hex digest.`;
+		}
+	}
 	const hasDigest = binding.normalized_input_digest !== undefined;
 	const hasGoverned = binding.governed_input_artifact_ref !== undefined;
-	return (
-		binding.schema_version === "1" &&
-		typeof binding.generation_id === "string" &&
-		binding.generation_id.length > 0 &&
-		Number.isInteger(binding.activation_epoch) &&
-		binding.activation_epoch >= 1 &&
-		typeof binding.service_id === "string" &&
-		binding.service_id.length > 0 &&
-		typeof binding.flow_id === "string" &&
-		binding.flow_id.length > 0 &&
-		typeof binding.runbook_version === "string" &&
-		binding.runbook_version.length > 0 &&
-		FULL_DIGEST.test(binding.runbook_digest) &&
-		FULL_DIGEST.test(binding.action_registry_digest) &&
-		FULL_DIGEST.test(binding.item_key_digest) &&
-		typeof binding.target_scope === "string" &&
-		binding.target_scope.length > 0 &&
-		typeof binding.postcondition?.id === "string" &&
-		binding.postcondition.id.length > 0 &&
-		typeof binding.postcondition.summary === "string" &&
-		// Exactly one input-custody form (R41).
-		hasDigest !== hasGoverned &&
-		(!hasDigest || FULL_DIGEST.test(binding.normalized_input_digest as string)) &&
-		(!hasGoverned ||
-			(typeof binding.governed_input_artifact_ref === "string" &&
-				(binding.governed_input_artifact_ref as string).length > 0))
-	);
+	if (hasDigest === hasGoverned) {
+		return "run_execution_binding must carry exactly one of normalized_input_digest or governed_input_artifact_ref.";
+	}
+	if (
+		hasDigest &&
+		(typeof binding.normalized_input_digest !== "string" ||
+			!FULL_DIGEST.test(binding.normalized_input_digest))
+	) {
+		return "run_execution_binding.normalized_input_digest must be a 64-hex digest.";
+	}
+	if (
+		hasGoverned &&
+		(typeof binding.governed_input_artifact_ref !== "string" ||
+			binding.governed_input_artifact_ref.length === 0)
+	) {
+		return "run_execution_binding.governed_input_artifact_ref must be a non-empty string.";
+	}
+	const postcondition = binding.postcondition;
+	if (
+		typeof postcondition !== "object" ||
+		postcondition === null ||
+		Array.isArray(postcondition) ||
+		typeof (postcondition as Record<string, unknown>).id !== "string" ||
+		(postcondition as Record<string, unknown>).id === "" ||
+		typeof (postcondition as Record<string, unknown>).summary !== "string" ||
+		(postcondition as Record<string, unknown>).summary === ""
+	) {
+		return "run_execution_binding.postcondition must carry non-empty id and summary strings.";
+	}
+	return undefined;
 }
 
-function itemBatchStateValid(batch: BrowserUseRunItemBatchState): boolean {
+/**
+ * Return the first item-batch validation problem for untrusted input.
+ *
+ * @param value - Candidate durable item-batch state
+ * @returns Undefined when every bounded batch invariant holds
+ */
+export function runItemBatchValidationProblem(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "item_batch must be a JSON object.";
+	}
+	const batch = value as Record<string, unknown>;
 	if (
 		batch.schema_version !== "1" ||
 		!Array.isArray(batch.item_keys) ||
 		batch.item_keys.length === 0 ||
 		batch.item_keys.length > ITEM_BATCH_MAX_KEYS
 	) {
-		return false;
+		return "item_batch requires schema version 1 and between 1 and 512 stable item keys.";
 	}
 	const keys = new Set<string>();
 	for (const key of batch.item_keys) {
-		if (!SAFE_BATCH_ITEM_KEY.test(key) || keys.has(key)) return false;
+		if (
+			typeof key !== "string" ||
+			!SAFE_BATCH_ITEM_KEY.test(key) ||
+			keys.has(key)
+		) {
+			return "item_batch.item_keys must contain unique safe stable keys.";
+		}
 		keys.add(key);
+	}
+	if (!Array.isArray(batch.checkpoints)) {
+		return "item_batch.checkpoints must be an array.";
 	}
 	const outcomes = new Map<
 		string,
 		BrowserUseRunItemCheckpoint["outcome"]
 	>();
-	for (const checkpoint of batch.checkpoints) {
+	for (const candidate of batch.checkpoints) {
+		const checkpoint =
+			typeof candidate === "object" &&
+			candidate !== null &&
+			!Array.isArray(candidate)
+				? (candidate as Record<string, unknown>)
+				: undefined;
 		if (
+			checkpoint === undefined ||
+			typeof checkpoint.item_key !== "string" ||
 			!keys.has(checkpoint.item_key) ||
 			outcomes.has(checkpoint.item_key) ||
 			!["pending", "confirmed", "not-achieved", "unknown"].includes(
-				checkpoint.outcome,
+				checkpoint.outcome as string,
 			)
 		) {
-			return false;
+			return "item_batch.checkpoints must reference batch keys once with valid outcomes.";
 		}
-		outcomes.set(checkpoint.item_key, checkpoint.outcome);
+		outcomes.set(
+			checkpoint.item_key,
+			checkpoint.outcome as BrowserUseRunItemCheckpoint["outcome"],
+		);
 	}
 	let blocked = false;
 	for (const key of batch.item_keys) {
 		const outcome = outcomes.get(key) ?? "pending";
-		if (blocked && outcome !== "pending") return false;
+		if (blocked && outcome !== "pending") {
+			return "item_batch cannot advance a checkpoint after the first unconfirmed item.";
+		}
 		if (outcome !== "confirmed") blocked = true;
 	}
-	return true;
+	return undefined;
 }
 
 /**
@@ -653,7 +740,7 @@ export function checkRunItemBatchTransition(
 		nextOutcomes.set(checkpoint.item_key, checkpoint.outcome);
 	}
 
-	for (const key of next.item_keys) {
+	for (const [targetIndex, key] of next.item_keys.entries()) {
 		const before = previousOutcomes.get(key) ?? "pending";
 		const after = nextOutcomes.get(key) ?? "pending";
 		if (before === "confirmed" && after !== "confirmed") {
@@ -671,7 +758,6 @@ export function checkRunItemBatchTransition(
 			};
 		}
 		if (before === after || after === "pending") continue;
-		const targetIndex = next.item_keys.indexOf(key);
 		for (let index = 0; index < targetIndex; index += 1) {
 			const priorKey = next.item_keys[index] as string;
 			const priorOutcome = previousOutcomes.get(priorKey) ?? "pending";

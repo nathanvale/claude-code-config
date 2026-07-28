@@ -2,7 +2,11 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { hasSensitiveOptionName } from "./browser-use-core";
-import type { BrowserUseSharedRun } from "./browser-use-run-model";
+import {
+	type BrowserUseSharedRun,
+	runExecutionBindingValidationProblem,
+	runItemBatchValidationProblem,
+} from "./browser-use-run-model";
 import {
 	type BrowserUseDurableRecordKind,
 	type BrowserUseSharedRunPayload,
@@ -807,7 +811,12 @@ describe("U3 private state persistence (R38, R12)", () => {
 		raw.schema_version = "1";
 		(raw.payload as Record<string, unknown>).run_execution_binding = EXEC_BINDING;
 		const parsed = parseDurableRecord(JSON.stringify(raw), "shared-run");
-		expect(parsed.ok).toBe(false);
+		expect(parsed).toEqual({
+			ok: false,
+			code: "record_payload_invalid",
+			message:
+				"shared-run schema version 1 must not carry private runbook target, progress, execution-binding, or item-batch state.",
+		});
 	});
 
 	test("an execution binding with both input-custody forms is rejected (R41)", () => {
@@ -823,5 +832,47 @@ describe("U3 private state persistence (R38, R12)", () => {
 		expect(() => encodeDurableRecord("shared-run", payload)).toThrow(
 			/exactly one of normalized_input_digest or governed_input_artifact_ref/,
 		);
+	});
+
+	test("durable schemas use the run-model validators without rule drift", () => {
+		const invalidBinding = {
+			...EXEC_BINDING,
+			postcondition: { id: "saved", summary: "" },
+		};
+		const invalidBatch = {
+			schema_version: "1",
+			item_keys: ["mon", "tue"],
+			checkpoints: [
+				{ item_key: "mon", outcome: "unknown" },
+				{ item_key: "tue", outcome: "confirmed" },
+			],
+		};
+		for (const [field, value, expected] of [
+			[
+				"run_execution_binding",
+				invalidBinding,
+				runExecutionBindingValidationProblem(invalidBinding),
+			],
+			["item_batch", invalidBatch, runItemBatchValidationProblem(invalidBatch)],
+		] as const) {
+			const payload = basePayload({
+				task_intent: "runbook-execution",
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: RUNBOOK_PROGRESS,
+				[field]: value,
+			});
+			expect(expected).toBeDefined();
+			if (expected === undefined) throw new Error("invalid fixture validated");
+			const raw = JSON.stringify({
+				record: "shared-run",
+				schema_version: BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+				payload,
+			});
+			expect(parseDurableRecord(raw, "shared-run")).toEqual({
+				ok: false,
+				code: "record_payload_invalid",
+				message: expected,
+			});
+		}
 	});
 });
