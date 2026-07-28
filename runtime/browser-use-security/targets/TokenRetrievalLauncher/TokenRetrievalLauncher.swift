@@ -17,6 +17,7 @@
 // provisioning profile from a paid Apple Developer Program enrollment (ADR
 // 0028), so this does not build or run without full Xcode plus enrollment.
 
+import Darwin
 import Foundation
 import Security
 
@@ -29,6 +30,7 @@ enum LauncherError: Error {
     case entitlementMissing
     case opBinaryNotFound
     case opSignatureUntrusted
+    case opStagingFailed
     case execFailed(Int32)
 }
 
@@ -123,7 +125,12 @@ struct TokenRetrievalLauncher {
         "anchor apple generic and identifier \"com.1password.op\" "
         + "and certificate leaf[subject.OU] = \"2BUA8C4S2C\""
 
-    /// Verify the binary at `opPath` satisfies the pinned op designated
+    /// Filename the public op is cloned to inside the private staging directory.
+    /// The staged copy is what gets verified and exec'd, so verify-target and
+    /// exec-target are the same inode by construction.
+    static let stagedOpName = "op"
+
+    /// Verify the binary at `path` satisfies the pinned op designated
     /// requirement. Fails closed (`opSignatureUntrusted`) on any error: an
     /// unreadable static code object, a malformed requirement, or a validity
     /// check that does not pass. Only a binary that provably matches 1Password's
@@ -149,6 +156,116 @@ struct TokenRetrievalLauncher {
         }
     }
 
+    /// A verified private copy of op plus the 0700 directory holding it. The
+    /// caller execs `binaryPath` and removes `directory` after the child exits.
+    struct StagedOp {
+        let directory: String
+        let binaryPath: String
+    }
+
+    /// Stage op into a private 0700 directory, then verify the *staged copy*, and
+    /// return it for exec.
+    ///
+    /// This closes the TOCTOU window between signature verification and exec.
+    /// Verifying `opPath` and then exec'ing `opPath` are two path lookups: an
+    /// attacker who swaps `/usr/local/bin/op` between them makes the verified
+    /// inode and the exec'd inode differ, so a binary that passed the pinned
+    /// designated requirement is not necessarily the one that receives the token.
+    ///
+    /// Instead: (1) create a per-launch staging directory with 0700 perms owned
+    /// by this process, and verify its perms and ownership after creation; (2)
+    /// clone the public op into it (clonefile, copyfile fallback); (3) run the
+    /// pinned designated-requirement check against the PRIVATE COPY; (4) hand that
+    /// verified copy back for exec. Because the staging directory is 0700 and
+    /// owned by us, an attacker who can swap the public path cannot touch the
+    /// private copy — so verify-target and exec-target are the same inode by
+    /// construction, and there is no window in which they can diverge.
+    ///
+    /// Fails closed (`opStagingFailed`) on any staging error; the pinned
+    /// signature check still throws `opSignatureUntrusted`. Never falls back to
+    /// the public path unverified.
+    static func stageAndVerifyOp() throws -> StagedOp {
+        guard FileManager.default.isExecutableFile(atPath: opPath) else {
+            throw LauncherError.opBinaryNotFound
+        }
+
+        // Per-launch staging directory under the per-user Darwin temp dir (or the
+        // Foundation temporary directory if confstr yields nothing). mkdtemp
+        // creates it atomically with 0700 before returning, owned by this euid.
+        let base = darwinUserTempDir() ?? FileManager.default.temporaryDirectory.path
+        let template = (base as NSString)
+            .appendingPathComponent("op-staging-XXXXXXXX")
+        var templateBytes = Array(template.utf8CString)
+        guard mkdtemp(&templateBytes) != nil else {
+            throw LauncherError.opStagingFailed
+        }
+        let stagingDir = String(cString: templateBytes)
+
+        // Verify the directory really is 0700 and owned by us before trusting it
+        // as a private staging root — fail closed and clean up otherwise.
+        do {
+            try assertPrivateDirectory(stagingDir)
+        } catch {
+            try? FileManager.default.removeItem(atPath: stagingDir)
+            throw error
+        }
+
+        let stagedPath = (stagingDir as NSString)
+            .appendingPathComponent(stagedOpName)
+
+        // Clone the public op into the private directory. clonefile is atomic and
+        // copy-on-write; fall back to copyfile when the temp dir is on a
+        // different filesystem or the clone is unsupported.
+        let cloned = clonefile(opPath, stagedPath, 0) == 0
+        if !cloned {
+            guard copyfile(opPath, stagedPath, nil, copyfile_flags_t(COPYFILE_ALL)) == 0
+            else {
+                try? FileManager.default.removeItem(atPath: stagingDir)
+                throw LauncherError.opStagingFailed
+            }
+        }
+
+        // Verify the PRIVATE COPY, not the public path. This is the inode that
+        // will be exec'd, so passing this check binds verify-target to
+        // exec-target. Propagate opSignatureUntrusted on failure; clean up first.
+        do {
+            try verifyOpSignature(atPath: stagedPath)
+        } catch {
+            try? FileManager.default.removeItem(atPath: stagingDir)
+            throw error
+        }
+
+        return StagedOp(directory: stagingDir, binaryPath: stagedPath)
+    }
+
+    /// The per-user Darwin temp dir (`_CS_DARWIN_USER_TEMP_DIR`), a 0700
+    /// per-uid path, or nil if confstr yields nothing usable.
+    private static func darwinUserTempDir() -> String? {
+        let size = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard size > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, size) == size else {
+            return nil
+        }
+        let path = String(cString: buffer)
+        return path.isEmpty ? nil : path
+    }
+
+    /// Fail closed unless `path` is a directory with 0700 permissions owned by
+    /// this effective uid — the invariant that keeps the staged copy private.
+    private static func assertPrivateDirectory(_ path: String) throws {
+        var info = stat()
+        guard stat(path, &info) == 0 else { throw LauncherError.opStagingFailed }
+        let isDirectory = (info.st_mode & S_IFMT) == S_IFDIR
+        let permBits = info.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)
+        guard isDirectory,
+              permBits == S_IRWXU,
+              info.st_uid == geteuid()
+        else {
+            throw LauncherError.opStagingFailed
+        }
+    }
+
     /// Exec the disposable official op helper with an exact environment.
     ///
     /// The child receives ONLY the one token variable plus a minimal fixed
@@ -157,24 +274,27 @@ struct TokenRetrievalLauncher {
     /// is a short-lived trusted networked process; it gets the token but no
     /// browser endpoint (R16, R17).
     ///
-    /// The binary is authenticated before any token is assembled:
-    /// `isExecutableFile` only proves the path can execute, so a swapped binary
-    /// there would still receive the token. The pinned designated requirement is
-    /// verified from the immutable install path first, and the token env is
-    /// assembled only after that passes — never for an unverified binary.
+    /// The binary is authenticated before any token is assembled. op is staged
+    /// into a private 0700 directory and the pinned designated requirement is
+    /// verified against that private copy, which is then the inode exec'd — so no
+    /// TOCTOU window exists between the verify and the exec. The token env is
+    /// assembled only after staging + verification pass; never for an unverified
+    /// binary and never against the public install path.
     static func execDisposableOp(arguments: [String], token: Data) throws -> Never {
-        guard FileManager.default.isExecutableFile(atPath: opPath) else {
-            throw LauncherError.opBinaryNotFound
-        }
-        // Authenticate before touching the token: fail closed if the binary at
-        // the install path is not the pinned, 1Password-signed op.
-        try verifyOpSignature(atPath: opPath)
+        // Stage + verify the private copy before touching the token: fail closed
+        // if op cannot be staged or the staged copy is not the pinned,
+        // 1Password-signed op.
+        let staged = try stageAndVerifyOp()
+        // Best-effort cleanup of the private staging directory on every exit path
+        // out of this scope, including the throwing ones below.
+        defer { try? FileManager.default.removeItem(atPath: staged.directory) }
+
         guard let tokenString = String(data: token, encoding: .utf8) else {
             throw LauncherError.tokenItemMissing
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: opPath)
+        process.executableURL = URL(fileURLWithPath: staged.binaryPath)
         process.arguments = arguments
         // Exact environment: exactly the token var and a minimal PATH. Nothing
         // is inherited from the launcher, so the token never leaks upward and no
@@ -194,6 +314,9 @@ struct TokenRetrievalLauncher {
             throw LauncherError.execFailed(-1)
         }
         process.waitUntilExit()
+        // Remove the private staging directory before exiting; the deferred
+        // cleanup does not run past exit(), so do it explicitly here.
+        try? FileManager.default.removeItem(atPath: staged.directory)
         // The launcher exits with the op child's status and holds no token
         // afterward. On-demand lifetime; no daemon (ADR 0027).
         exit(process.terminationStatus)
