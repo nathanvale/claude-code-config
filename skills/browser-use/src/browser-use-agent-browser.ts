@@ -29,6 +29,7 @@ import {
 	agentBrowserHasExactOrigin,
 	agentBrowserOriginIsAllowed,
 	reproveAgentBrowserOrigin,
+	resolveAgentBrowserTarget,
 	selectAgentBrowserTarget,
 	verifyAgentBrowserPostcondition,
 } from "./browser-use-agent-browser-target";
@@ -154,10 +155,68 @@ export type AgentBrowserTask = {
 	handoff: AgentBrowserVerifiedHandoff;
 	run_id: string;
 	target_tab_id: string;
+	/**
+	 * Exact process-local URL observed when the target was resolved.
+	 *
+	 * When supplied, target selection must reprove this URL before execution.
+	 */
+	expected_target_url?: string;
 	allowed_origins: readonly string[];
 	steps: readonly AgentBrowserTaskStep[];
+	/** Admit exact about:blank only when the first remaining step is `open`. */
+	allow_neutral_target?: boolean;
 	auth_delivery?: AgentBrowserAuthDeliveryContext;
 };
+
+/**
+ * Opaque, deterministic target binding safe for durable caller state.
+ */
+export type AgentBrowserTargetBinding = {
+	schema_version: "1";
+	target_candidate_id: string;
+};
+
+/**
+ * One pre-execution target request.
+ *
+ * Exact adapter ids are input-only overrides. Automatic resumes use only the
+ * opaque candidate binding produced by a prior successful resolution.
+ */
+export type AgentBrowserTargetRequest =
+	| {
+			kind: "exact";
+			tab_id: string;
+			target_envelope_id: string;
+	  }
+	| {
+			kind: "auto";
+			target_envelope_id: string;
+			bound_target_candidate_id?: string;
+	  };
+
+/**
+ * Input for target preflight through the verified Agent Browser handoff.
+ */
+export type AgentBrowserTargetResolutionInput = {
+	handoff: AgentBrowserVerifiedHandoff;
+	run_id: string;
+	allowed_origins: readonly string[];
+	steps: readonly AgentBrowserTaskStep[];
+	target: AgentBrowserTargetRequest;
+};
+
+/**
+ * Target preflight truth. Raw tab identity is transient execution input only.
+ */
+export type AgentBrowserTargetResolutionResult =
+	| {
+			ok: true;
+			target_tab_id: string;
+			/** Process-local resolution evidence. Never persist this URL. */
+			target_url: string;
+			binding: AgentBrowserTargetBinding;
+	  }
+	| Extract<AgentBrowserExecutionResult, { ok: false }>;
 
 /**
  * Structured command seam shared with the Browser Use process runtime.
@@ -182,6 +241,8 @@ export type AgentBrowserExecutionFailureCode =
 	| "agent_browser_task_invalid"
 	| "agent_browser_connection_unstable"
 	| "agent_browser_target_unavailable"
+	| "agent_browser_target_ambiguous"
+	| "agent_browser_target_moved"
 	| "agent_browser_target_origin_refused"
 	| "agent_browser_command_failed"
 	| "agent_browser_current_snapshot_required"
@@ -354,7 +415,12 @@ function reviewedActionPayload(
 	return Buffer.from(wrapper, "utf-8").toString("base64");
 }
 
-function baseArgs(task: AgentBrowserTask): string[] {
+type AgentBrowserCommandContext = Pick<
+	AgentBrowserTask,
+	"handoff" | "run_id"
+>;
+
+function baseArgs(task: AgentBrowserCommandContext): string[] {
 	return [
 		"--cdp",
 		task.handoff.endpoint.ws,
@@ -365,7 +431,7 @@ function baseArgs(task: AgentBrowserTask): string[] {
 
 async function runNative(
 	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserTask,
+	task: AgentBrowserCommandContext,
 	args: readonly string[],
 ): Promise<McporterCommandResult | undefined> {
 	try {
@@ -388,8 +454,13 @@ function commandSucceeded(result: McporterCommandResult | undefined): boolean {
 	);
 }
 
-function validateTask(
-	task: AgentBrowserTask,
+type AgentBrowserValidationInput = Pick<
+	AgentBrowserTask,
+	"handoff" | "run_id" | "allowed_origins" | "steps"
+>;
+
+function validateExecutionContext(
+	task: AgentBrowserValidationInput,
 ):
 	| { ok: true; allowedOrigins: ReadonlySet<string> }
 	| AgentBrowserExecutionFailure {
@@ -410,11 +481,11 @@ function validateTask(
 			"Agent Browser execution requires a schema-2 verified-live Browser Connect handoff for the agent-browser lane.",
 		);
 	}
-	if (!SAFE_RUN_ID.test(task.run_id) || !SAFE_TAB_ID.test(task.target_tab_id)) {
+	if (!SAFE_RUN_ID.test(task.run_id)) {
 		return failure(
 			"agent_browser_task_invalid",
 			"not-achieved",
-			"Run and tab identities must be bounded safe identifiers.",
+			"Run identity must be a bounded safe identifier.",
 		);
 	}
 	const allowedOrigins = agentBrowserAllowedOriginSet(task.allowed_origins);
@@ -443,6 +514,82 @@ function validateTask(
 		);
 	}
 	return { ok: true, allowedOrigins };
+}
+
+function validateTask(
+	task: AgentBrowserTask,
+):
+	| { ok: true; allowedOrigins: ReadonlySet<string> }
+	| AgentBrowserExecutionFailure {
+	const validation = validateExecutionContext(task);
+	if (!validation.ok) return validation;
+	if (!SAFE_TAB_ID.test(task.target_tab_id)) {
+		return failure(
+			"agent_browser_task_invalid",
+			"not-achieved",
+			"Tab identity must be a bounded safe identifier.",
+		);
+	}
+	if (
+		task.expected_target_url !== undefined &&
+		(task.expected_target_url.length === 0 ||
+			task.expected_target_url.length > 8192 ||
+			(!agentBrowserOriginIsAllowed(
+				task.expected_target_url,
+				validation.allowedOrigins,
+			) &&
+				!(
+					task.allow_neutral_target === true &&
+					task.expected_target_url === "about:blank" &&
+					task.steps[0]?.kind === "open"
+				)))
+	) {
+		return failure(
+			"agent_browser_task_invalid",
+			"not-achieved",
+			"Expected target URL must be a bounded exact URL.",
+		);
+	}
+	return validation;
+}
+
+/**
+ * Resolve one exact execution target through a verified handoff.
+ *
+ * This wrapper owns the native argv so callers never reconstruct the Browser
+ * Connect attachment contract. Persist only `binding`; pass `target_tab_id`
+ * directly to the immediate executor call.
+ *
+ * @param runtime - Structured no-shell command runner
+ * @param input - Verified handoff, target policy, remaining steps, and request
+ * @returns One transient raw tab id plus opaque binding, or typed repair truth
+ */
+export async function resolveAgentBrowserTaskTarget(
+	runtime: AgentBrowserExecutionRuntime,
+	input: AgentBrowserTargetResolutionInput,
+): Promise<AgentBrowserTargetResolutionResult> {
+	const validation = validateExecutionContext(input);
+	if (!validation.ok) return validation;
+	if (
+		!/^[a-f0-9]{32}$/.test(input.target.target_envelope_id) ||
+		(input.target.kind === "exact" && !SAFE_TAB_ID.test(input.target.tab_id)) ||
+		(input.target.kind === "auto" &&
+			input.target.bound_target_candidate_id !== undefined &&
+			!/^[a-f0-9]{24}$/.test(input.target.bound_target_candidate_id))
+	) {
+		return failure(
+			"agent_browser_task_invalid",
+			"not-achieved",
+			"Target requests require bounded exact or opaque identities.",
+		);
+	}
+	const nativeCommand = (args: readonly string[]) =>
+		runNative(runtime, input, args);
+	return resolveAgentBrowserTarget(
+		nativeCommand,
+		input,
+		validation.allowedOrigins,
+	);
 }
 
 /**

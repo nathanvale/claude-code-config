@@ -267,6 +267,24 @@ export type BrowserUseRunContinuation = {
 	summary: string;
 };
 
+/** Private durable binding to one Agent Browser target. */
+export type BrowserUseRunbookTargetBinding = {
+	schema_version: "1";
+	mode: "exact" | "automatic";
+	/** Opaque candidate identity; never the raw adapter tab id. */
+	binding_id: string;
+};
+
+/** Durable runbook identity and first unproven step. */
+export type BrowserUseRunbookProgress = {
+	schema_version: "1";
+	service_id: string;
+	flow_id: string;
+	runbook_version: string;
+	next_step: number;
+	total_steps: number;
+};
+
 // --- The shared run ----------------------------------------------------------
 
 /**
@@ -285,6 +303,10 @@ export type BrowserUseSharedRun = {
 	adapter_id?: BrowserAdapterId;
 	/** Binding to one Verified Handoff Envelope (KTD13). */
 	handoff_evidence_id?: string;
+	/** Private Agent Browser binding. Public projections must omit it. */
+	runbook_target_binding?: BrowserUseRunbookTargetBinding;
+	/** Independent progress cursor; repair continuations cannot replace it. */
+	runbook_progress?: BrowserUseRunbookProgress;
 	/** Opaque versioned auth fragment; auth-owned content (R6). */
 	auth_fragment?: BrowserUseAuthFragmentSlot;
 	/** Bounded auth attestation reference; required before `ready` (R6). */
@@ -308,7 +330,9 @@ export type BrowserUseRunIssueCode =
 	| "run_blocked_with_attestation"
 	| "run_ready_without_attestation"
 	| "run_ready_with_continuation"
-	| "run_adapter_unregistered";
+	| "run_adapter_unregistered"
+	| "runbook_target_binding_invalid"
+	| "runbook_progress_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -368,6 +392,47 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 		issues.push({
 			code: "run_adapter_unregistered",
 			message: `adapter ${run.adapter_id} is not a registered browser-use adapter.`,
+		});
+	}
+	const binding = run.runbook_target_binding;
+	if (
+		binding !== undefined &&
+		(binding.schema_version !== "1" ||
+			(binding.mode !== "exact" && binding.mode !== "automatic") ||
+			typeof binding.binding_id !== "string" ||
+			binding.binding_id.length === 0 ||
+			run.adapter_id !== "agent-browser" ||
+			typeof run.handoff_evidence_id !== "string" ||
+			run.handoff_evidence_id.length === 0 ||
+			run.task_intent !== "runbook-execution")
+	) {
+		issues.push({
+			code: "runbook_target_binding_invalid",
+			message:
+				"runbook_target_binding requires schema version 1, an exact or automatic mode, an opaque binding id, and a handoff-bound agent-browser runbook run.",
+		});
+	}
+	const progress = run.runbook_progress;
+	if (
+		progress !== undefined &&
+		(progress.schema_version !== "1" ||
+			typeof progress.service_id !== "string" ||
+			progress.service_id.length === 0 ||
+			typeof progress.flow_id !== "string" ||
+			progress.flow_id.length === 0 ||
+			typeof progress.runbook_version !== "string" ||
+			progress.runbook_version.length === 0 ||
+			!Number.isInteger(progress.next_step) ||
+			progress.next_step < 0 ||
+			!Number.isInteger(progress.total_steps) ||
+			progress.total_steps < 0 ||
+			progress.next_step > progress.total_steps ||
+			run.task_intent !== "runbook-execution")
+	) {
+		issues.push({
+			code: "runbook_progress_invalid",
+			message:
+				"runbook_progress requires schema version 1, runbook identity, and an integer cursor between zero and total_steps.",
 		});
 	}
 	return issues;

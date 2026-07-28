@@ -1026,6 +1026,24 @@ export const browserUseTaskRunFailureActions = [
 			"Correct the task run intent, lane, handoff, target, or origin arguments and retry.",
 		sideEffects: ["check"],
 	},
+	{
+		id: "prepare_unique_runbook_target",
+		summary:
+			"Leave exactly one admissible runbook tab in the verified session, then retry the original command.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_runbook_handoff",
+		summary:
+			"Re-mint the verified Agent Browser handoff with browser-connect connect --json, then retry the original runbook command.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "restore_bound_runbook_target",
+		summary:
+			"Restore the runbook's bound tab in the verified session, or start a new run; never rebind the existing run.",
+		sideEffects: ["check"],
+	},
 ] as const;
 
 export const browserUseTaskRunSuccessActions = [
@@ -1535,7 +1553,7 @@ const browserUseRunbookRunFlags = {
 	"--tab": {
 		type: "string",
 		description:
-			"Target tab id inside the verified session the runbook executes against.",
+			"Exact target tab id. Omit to require one admissible tab in the verified session.",
 	},
 	"--allowed-origin": {
 		type: "string",

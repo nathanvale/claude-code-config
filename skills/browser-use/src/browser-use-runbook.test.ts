@@ -31,7 +31,9 @@ import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-us
 import {
 	type BrowserUseRunbookAuthDelivery,
 	BrowserUseShippedRunbooksMissingError,
+	executePreparedRunbook,
 	listRunbooks,
+	prepareRunbookExecution,
 	runRunbook,
 	runbooksRoot,
 	shippedRunbooksRoot,
@@ -705,6 +707,8 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				},
 				// selectTarget: tab select
 				{ stdout: json({ selected: true }) },
+				// selectTarget: fresh selected-url reproof
+				{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
 				// open
 				{ stdout: json({ opened: true }) },
 				// open postcondition: get url
@@ -776,6 +780,180 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				"runbook_confidential_native_capability_absent",
 			);
 			// No browser command was dispatched.
+			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
+	test(
+		"checkpoints a neutral first open before confidential auth construction",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "neutral-auth",
+					steps: [
+						{
+							kind: "open",
+							url: "https://portal.example.com/timesheets",
+							postcondition: {
+								kind: "url-equals",
+								url: "https://portal.example.com/timesheets",
+							},
+						},
+						{ kind: "snapshot", interactive: true },
+						{
+							kind: "fill",
+							ref: "@e1",
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "neutral-auth",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const base = runtimeFor([
+				{ stdout: json({ tabs: [{ tabId: "t1", url: "about:blank" }] }) },
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: "about:blank" }) },
+				{ stdout: json({ opened: true }) },
+				{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t1",
+								url: "https://portal.example.com/timesheets",
+							},
+						],
+					}),
+				},
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
+				{ stdout: json({ refs: { "@e1": {} } }) },
+			]);
+			const events: string[] = [];
+			const runtime: AgentBrowserExecutionRuntime = {
+				beforeMutationDispatch: base.beforeMutationDispatch,
+				runCommand: async (command) => {
+					events.push(command.args.slice(4, 6).join(" "));
+					return await base.runCommand(command);
+				},
+			};
+			const { hook } = confidentialLeakHelper({
+				username: "unused-u",
+				password: "unused-p",
+				"otp-current": "unused-o",
+			});
+			const { seam } = confidentialSeam("run-neutral-auth", hook, false);
+			const outcome = await executePreparedRunbook(
+				{
+					runtime,
+					authDelivery: async (input) => {
+						events.push("auth");
+						return await seam(input);
+					},
+					afterNeutralOpen: async (nextStep) => {
+						events.push(`checkpoint ${nextStep}`);
+						return true;
+					},
+				},
+				{
+					plan: prepared.plan,
+					handoff: HANDOFF,
+					runId: "run-neutral-auth",
+					targetTabId: "t1",
+					expectedTargetUrl: "about:blank",
+				},
+			);
+			expect(outcome.ok).toBe(true);
+			expect(events.indexOf("open https://portal.example.com/timesheets")).toBeLessThan(
+				events.indexOf("checkpoint 1"),
+			);
+			expect(events.indexOf("checkpoint 1")).toBeLessThan(
+				events.indexOf("auth"),
+			);
+		}),
+	);
+
+	test(
+		"refuses confidential neutral execution when no durable checkpoint hook exists",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "neutral-auth-no-checkpoint",
+					steps: [
+						{
+							kind: "open",
+							url: "https://portal.example.com/timesheets",
+							postcondition: {
+								kind: "url-equals",
+								url: "https://portal.example.com/timesheets",
+							},
+						},
+						{
+							kind: "fill",
+							ref: "@e1",
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "neutral-auth-no-checkpoint",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const runtime = runtimeFor([]);
+			let authCalls = 0;
+			const outcome = await executePreparedRunbook(
+				{
+					runtime,
+					authDelivery: async () => {
+						authCalls += 1;
+						return { ok: false, message: "must not run" };
+					},
+				},
+				{
+					plan: prepared.plan,
+					handoff: HANDOFF,
+					runId: "run-neutral-auth-no-checkpoint",
+					targetTabId: "t1",
+					expectedTargetUrl: "about:blank",
+				},
+			);
+			expect(outcome).toMatchObject({
+				ok: false,
+				refusal: { code: "runbook_neutral_checkpoint_unavailable" },
+			});
+			expect(authCalls).toBe(0);
 			expect(runtime.calls).toHaveLength(0);
 		}),
 	);
@@ -868,6 +1046,8 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				},
 				// selectTarget: tab select
 				{ stdout: json({ selected: true }) },
+				// selectTarget: fresh selected-url reproof
+				{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
 				// snapshot
 				{ stdout: json({ refs: { "@e1": {} } }) },
 			]);
@@ -1039,6 +1219,7 @@ function confidentialRuntime(): AgentBrowserExecutionRuntime & {
 			}),
 		},
 		{ stdout: json({ selected: true }) },
+		{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
 		{ stdout: json({ snapshot: "@e1 textbox password", refs: { "@e1": {} } }) },
 		// post-auth proof: reprove-origin `get url`, then the `get value` check.
 		{ stdout: json({ url: "https://portal.example.com/timesheets" }) },

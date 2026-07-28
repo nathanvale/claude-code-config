@@ -384,6 +384,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
 		]);
 		const result = await runForTest(
@@ -427,6 +428,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{
 				stdout: adapterSuccess({
 					snapshot: "@e1 button Save",
@@ -509,6 +511,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 					}),
 				},
 				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 				{
 					stdout: adapterSuccess({
 						snapshot: "@e1 button Save",
@@ -573,6 +576,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{
 				stdout: adapterSuccess({
 					snapshot: "@e1 button Save",
@@ -632,6 +636,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{
 				stdout: adapterSuccess({
 					snapshot: "@e1 link Cancel",
@@ -706,6 +711,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 					}),
 				},
 				{ stdout: adapterSuccess({}) },
+				{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 				{ stdout: adapterSuccess({ snapshot: "", refs }) },
 			]);
 
@@ -769,6 +775,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{
 				stdout: adapterSuccess({
 					snapshot: "@e1 button Submit",
@@ -843,6 +850,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{
 				stdout: adapterSuccess({
 					snapshot: "Saved successfully\n@e1 button Save",
@@ -1341,6 +1349,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{ stdout: adapterCdpFailure(), exitCode: 1, timedOut: true },
 		]);
 		const result = await runForTest(
@@ -1391,6 +1400,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
 		]);
 		const result = await runForTest(
@@ -1494,6 +1504,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 				}),
 			},
 			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
 			{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
 		]);
 		const retried = await runForTest(

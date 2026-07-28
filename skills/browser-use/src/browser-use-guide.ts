@@ -71,6 +71,8 @@ Page-action lifecycle (one adapter, one continuity):
   locator-aria-assertion runs; pass a numeric --tab index.
 - Browser Use resolves role + name against the current task-local snapshot.
   Zero or multiple matches refuse before mutation; raw refs stay private.
+- Runbook execution resolves one admissible tab when --tab is omitted.
+  Pass --tab only as an exact adapter tab-id override.
 - A ref is valid only inside the adapter continuity that minted it. Discard
   refs after navigation, DOM change, process/client restart, endpoint change,
   or tab change; observe again.

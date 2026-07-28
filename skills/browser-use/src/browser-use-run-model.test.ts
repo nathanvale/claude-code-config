@@ -104,6 +104,69 @@ describe("run state vocabulary (R24)", () => {
 			expect.objectContaining({ code: "run_adapter_unregistered" }),
 		]);
 	});
+
+	test("a private target binding requires a handoff-bound Agent Browser runbook run", () => {
+		const valid = validateSharedRun(
+			baseRun({
+				task_intent: "runbook-execution",
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-1",
+				},
+			}),
+		);
+		expect(valid).toEqual([]);
+
+		const invalid = validateSharedRun(
+			baseRun({
+				task_intent: "runbook-execution",
+				handoff_evidence_id: undefined,
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "candidate-opaque-1",
+				},
+			}),
+		);
+		expect(invalid).toEqual([
+			expect.objectContaining({ code: "runbook_target_binding_invalid" }),
+		]);
+	});
+
+	test("runbook progress validates identity and bounded cursor", () => {
+		expect(
+			validateSharedRun(
+				baseRun({
+					task_intent: "runbook-execution",
+					runbook_progress: {
+						schema_version: "1",
+						service_id: "oncore",
+						flow_id: "snapshot-verify",
+						runbook_version: "1",
+						next_step: 1,
+						total_steps: 2,
+					},
+				}),
+			),
+		).toEqual([]);
+
+		expect(
+			validateSharedRun(
+				baseRun({
+					task_intent: "runbook-execution",
+					runbook_progress: {
+						schema_version: "1",
+						service_id: "oncore",
+						flow_id: "snapshot-verify",
+						runbook_version: "1",
+						next_step: 3,
+						total_steps: 2,
+					},
+				}),
+			),
+		).toEqual([expect.objectContaining({ code: "runbook_progress_invalid" })]);
+	});
 });
 
 describe("auth integration Port semantics (R6, KTD10)", () => {

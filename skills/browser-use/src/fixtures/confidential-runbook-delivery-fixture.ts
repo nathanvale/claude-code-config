@@ -220,7 +220,7 @@ const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
 };
 
 // Deterministic index-ordered adapter responses for the command sequence:
-// tab list, tab select, interactive snapshot (yields @e1), then the post-auth
+// tab list, tab select, selected-url reproof, interactive snapshot (yields @e1), then the post-auth
 // value-equals proof (reprove-origin `get url`, then `get value`). The
 // confidential fill itself dispatches NO adapter command — the bounded write
 // lives inside the delivery hook.
@@ -231,6 +231,7 @@ const RESPONSES: readonly string[] = [
 		],
 	}),
 	adapterSuccess({ selected: true }),
+	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
 	adapterSuccess({ snapshot: "@e1 textbox password", refs: { "@e1": {} } }),
 	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
 	adapterSuccess({ value: "•••" }),

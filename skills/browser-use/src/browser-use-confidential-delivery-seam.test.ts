@@ -234,6 +234,7 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 			}),
 		},
 		{ stdout: adapterSuccess({}) },
+		{ stdout: adapterSuccess({ url: "https://oncore.test/login" }) },
 		{
 			stdout: adapterSuccess({
 				snapshot: "@e2 textbox password @e3 textbox otp",

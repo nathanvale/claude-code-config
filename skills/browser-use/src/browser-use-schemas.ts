@@ -61,13 +61,23 @@ export const BROWSER_USE_DURABLE_RECORD_KINDS = [
 export type BrowserUseDurableRecordKind =
 	(typeof BROWSER_USE_DURABLE_RECORD_KINDS)[number];
 
-/** The one durable schema version this build reads and writes. */
+/** Base envelope version for legacy shared runs and every other record kind. */
 export const BROWSER_USE_DURABLE_SCHEMA_VERSION = "1";
+
+/**
+ * Shared runs carrying private target/progress state use a new envelope
+ * version so older binaries reject rather than project unknown private keys.
+ */
+export const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "2";
 
 /** Every durable file is exactly one JSON record in this envelope. */
 export type BrowserUseDurableRecord<K extends BrowserUseDurableRecordKind, P> = {
 	record: K;
-	schema_version: typeof BROWSER_USE_DURABLE_SCHEMA_VERSION;
+	schema_version: K extends "shared-run"
+		?
+				| typeof BROWSER_USE_DURABLE_SCHEMA_VERSION
+				| typeof BROWSER_USE_SHARED_RUN_SCHEMA_VERSION
+		: typeof BROWSER_USE_DURABLE_SCHEMA_VERSION;
 	payload: P;
 };
 
@@ -260,15 +270,35 @@ export function parseDurableRecord<K extends BrowserUseDurableRecordKind>(
 			),
 		};
 	}
-	if (parsed.schema_version !== BROWSER_USE_DURABLE_SCHEMA_VERSION) {
+	const supportedVersions =
+		expected === "shared-run"
+			? [
+					BROWSER_USE_DURABLE_SCHEMA_VERSION,
+					BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+				]
+			: [BROWSER_USE_DURABLE_SCHEMA_VERSION];
+	if (!supportedVersions.includes(parsed.schema_version as "1" | "2")) {
 		const found = stringField(parsed.schema_version) ?? "no schema version";
 		return {
 			ok: false,
 			code: "record_version_unsupported",
 			message: redactUnsafeText(
-				`record kind ${expected} supports schema version ${BROWSER_USE_DURABLE_SCHEMA_VERSION} but found ${found}.`,
+				`record kind ${expected} supports schema version ${supportedVersions.join(" or ")} but found ${found}.`,
 			),
 		};
+	}
+	if (expected === "shared-run") {
+		const versionProblem = sharedRunEnvelopeVersionProblem(
+			parsed.schema_version as "1" | "2",
+			parsed.payload,
+		);
+		if (versionProblem !== undefined) {
+			return {
+				ok: false,
+				code: "record_payload_invalid",
+				message: redactUnsafeText(versionProblem),
+			};
+		}
 	}
 	const problem = PAYLOAD_PROBLEMS[expected](parsed.payload);
 	if (problem !== undefined) {
@@ -293,9 +323,30 @@ export function encodeDurableRecord<K extends BrowserUseDurableRecordKind>(
 	kind: K,
 	payload: PayloadOf<K>,
 ): string {
+	let sharedRunUsesPrivateState = false;
+	if (kind === "shared-run") {
+		const sharedRun = payload as BrowserUseSharedRunPayload;
+		const hasBinding = hasOwn(sharedRun, "runbook_target_binding");
+		const hasProgress = hasOwn(sharedRun, "runbook_progress");
+		sharedRunUsesPrivateState = hasBinding || hasProgress;
+		if (sharedRunUsesPrivateState) {
+			const privateStateProblem = sharedRunEnvelopeVersionProblem(
+				BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
+				sharedRun,
+			);
+			if (privateStateProblem !== undefined) {
+				throw new TypeError(privateStateProblem);
+			}
+		}
+	}
 	const record: BrowserUseDurableRecord<K, PayloadOf<K>> = {
 		record: kind,
-		schema_version: BROWSER_USE_DURABLE_SCHEMA_VERSION,
+		schema_version: (sharedRunUsesPrivateState
+			? BROWSER_USE_SHARED_RUN_SCHEMA_VERSION
+			: BROWSER_USE_DURABLE_SCHEMA_VERSION) as BrowserUseDurableRecord<
+			K,
+			PayloadOf<K>
+		>["schema_version"],
 		payload,
 	};
 	return `${JSON.stringify(record, null, "\t")}\n`;
@@ -566,6 +617,14 @@ function sharedRunProblem(value: unknown): string | undefined {
 	) {
 		return "payload.handoff_evidence_id must be a non-empty string.";
 	}
+	if (value.runbook_target_binding !== undefined) {
+		const problem = runbookTargetBindingProblem(value.runbook_target_binding);
+		if (problem !== undefined) return problem;
+	}
+	if (value.runbook_progress !== undefined) {
+		const problem = runbookProgressProblem(value.runbook_progress);
+		if (problem !== undefined) return problem;
+	}
 	if (value.auth_fragment !== undefined) {
 		const slot = value.auth_fragment;
 		// Opacity boundary (R6): the platform reads schema_version ONLY.
@@ -613,6 +672,58 @@ function sharedRunProblem(value: unknown): string | undefined {
 	}
 	const issues = validateSharedRunPayload(value as BrowserUseSharedRunPayload);
 	return issues.length === 0 ? undefined : issues[0]?.message;
+}
+
+function sharedRunEnvelopeVersionProblem(
+	version: "1" | "2",
+	value: unknown,
+): string | undefined {
+	if (!isJsonObject(value)) return undefined;
+	const hasBinding = hasOwn(value, "runbook_target_binding");
+	const hasProgress = hasOwn(value, "runbook_progress");
+	if (version === BROWSER_USE_DURABLE_SCHEMA_VERSION) {
+		return hasBinding || hasProgress
+			? "shared-run schema version 1 must not carry private runbook target or progress state."
+			: undefined;
+	}
+	if (!hasBinding || !hasProgress) {
+		return "shared-run schema version 2 must carry both runbook_target_binding and runbook_progress.";
+	}
+	return (
+		runbookTargetBindingProblem(value.runbook_target_binding) ??
+		runbookProgressProblem(value.runbook_progress)
+	);
+}
+
+function runbookTargetBindingProblem(value: unknown): string | undefined {
+	if (
+		!isJsonObject(value) ||
+		value.schema_version !== "1" ||
+		(value.mode !== "exact" && value.mode !== "automatic") ||
+		stringField(value.binding_id) === undefined
+	) {
+		return "payload.runbook_target_binding must carry schema version 1, mode, and an opaque binding_id.";
+	}
+	return undefined;
+}
+
+function runbookProgressProblem(value: unknown): string | undefined {
+	if (
+		!isJsonObject(value) ||
+		value.schema_version !== "1" ||
+		stringField(value.service_id) === undefined ||
+		stringField(value.flow_id) === undefined ||
+		stringField(value.runbook_version) === undefined ||
+		!isNonNegativeInteger(value.next_step) ||
+		!isNonNegativeInteger(value.total_steps)
+	) {
+		return "payload.runbook_progress must carry schema version 1, runbook identity, and non-negative integer step counts.";
+	}
+	return undefined;
+}
+
+function hasOwn(value: object, key: PropertyKey): boolean {
+	return Object.hasOwn(value, key);
 }
 
 function leaseProblem(value: unknown): string | undefined {
@@ -916,6 +1027,10 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isNonNegativeNumber(value: unknown): value is number {
 	return isFiniteNumber(value) && value >= 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isPositiveInteger(value: unknown): value is number {

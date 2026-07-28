@@ -20,7 +20,11 @@ import {
 } from "./browser-use-platform-test-helpers";
 import { writeArtifactManifest } from "./browser-use-retention";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
-import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
+import {
+	type RunStoreDeps,
+	createSharedRun,
+	loadSharedRun,
+} from "./browser-use-runs";
 
 // =========================================================================
 // U2 process-boundary proof (ledger V4, AE15): a fresh agent process in a
@@ -328,6 +332,290 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 	);
 
 	test(
+		"runbook omission resolves one neutral tab across the real process boundary",
+		async () => {
+			const dataHome = xdg.env.XDG_DATA_HOME;
+			if (dataHome === undefined) throw new Error("test data root missing");
+			const runbookDir = join(
+				dataHome,
+				"browser-use",
+				"runbooks",
+				"oncore",
+				"snapshot-verify",
+			);
+			mkdirSync(runbookDir, { recursive: true, mode: 0o700 });
+			writeFileSync(
+				join(runbookDir, "runbook.json"),
+				JSON.stringify({
+					contract: "browser-use.runbook",
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "snapshot-verify",
+					flow_name: "verify-loaded",
+					version: "1",
+					summary: "Read-only snapshot verification.",
+					allowed_origins: ["https://example.test"],
+					inputs: [],
+					steps: [
+						{
+							kind: "open",
+							url: "https://example.test/",
+							postcondition: {
+								kind: "url-equals",
+								url: "https://example.test/",
+							},
+						},
+						{ kind: "snapshot", interactive: true },
+					],
+				}),
+				"utf8",
+			);
+			const fakeAgent = join(neutralCwd, "agent-browser-fixture");
+			const callLog = join(neutralCwd, "agent-browser-calls.jsonl");
+			const pageState = join(neutralCwd, "agent-browser-page-state");
+			const handoffPath = join(neutralCwd, "agent-browser-handoff.json");
+			writeFileSync(
+				fakeAgent,
+				[
+					`#!${process.execPath}`,
+					'import { appendFileSync, existsSync, writeFileSync } from "node:fs";',
+					`const log = ${JSON.stringify(callLog)};`,
+					`const state = ${JSON.stringify(pageState)};`,
+					"const args = process.argv.slice(2);",
+					'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
+					'let data = {};',
+					'if (args.includes("tab") && args.includes("list")) data = { tabs: [{ tabId: "t1", type: "page", active: true, url: existsSync(state) ? "https://example.test/" : "about:blank" }] };',
+					'else if (args.includes("tab")) data = { selected: true };',
+					'else if (args.includes("open")) { writeFileSync(state, "opened"); data = { opened: true }; }',
+					'else if (args.includes("get") && args.includes("url")) data = { url: existsSync(state) ? "https://example.test/" : "about:blank" };',
+					'else if (args.includes("snapshot")) data = { refs: {} };',
+					'process.stdout.write(JSON.stringify({ success: true, data, error: null }));',
+				].join("\n"),
+				"utf8",
+			);
+			chmodSync(fakeAgent, 0o755);
+			writeFileSync(
+				handoffPath,
+				JSON.stringify({
+					status: "ok",
+					run_id: "run-runbook-process",
+					data: {
+						outcome: "verified",
+						environment: { name: "agent-chrome", profile: "default" },
+						browser_entry_mode: "explicit-cdp",
+						attachment: {
+							adapter_id: "agent-browser",
+							route: "explicit-cdp",
+							probe_executable: fakeAgent,
+						},
+						endpoint: {
+							http: "http://127.0.0.1:9222",
+							ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
+						},
+						launch: { launched: false },
+						proof: {
+							environment_contract_id: "warm-chrome.browser-entry",
+							environment_schema_version: "1",
+							route_evidence: "verified-live",
+						},
+						contract_id: "browser-connect.verified-handoff",
+						schema_version: "2",
+					},
+					error: null,
+				}),
+				"utf8",
+			);
+
+			const result = await spawnBrowserUse([
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--handoff",
+				handoffPath,
+				"--json",
+			]);
+
+			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+			const envelope = parse(result.stdout);
+			expect(envelope.data).toMatchObject({
+				selected_lane: "agent-browser",
+				external_effect: "none",
+				run: {
+					run_id: "run-runbook-process",
+					state: "confirmed",
+					runbook_progress: { next_step: 2, total_steps: 2 },
+				},
+			});
+			expect(JSON.stringify(envelope)).not.toContain(
+				"runbook_target_binding",
+			);
+			const calls = readFileSync(callLog, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as string[]);
+			expect(calls.map((args) => args.slice(4))).toEqual([
+				["tab", "list", "--json"],
+				["tab", "list", "--json"],
+				["tab", "t1", "--json"],
+				["get", "url", "--json"],
+				["open", "https://example.test/", "--json"],
+				["get", "url", "--json"],
+				["snapshot", "-i", "--json"],
+			]);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"runbook omission reports zero and multiple targets before run creation",
+		async () => {
+			const dataHome = xdg.env.XDG_DATA_HOME;
+			if (dataHome === undefined) throw new Error("test data root missing");
+			const deps = await seededDeps();
+			for (const scenario of [
+				{
+					name: "zero",
+					runId: "run-runbook-process-zero",
+					tabs: [],
+					code: "agent_browser_target_unavailable",
+				},
+				{
+					name: "multiple",
+					runId: "run-runbook-process-multiple",
+					tabs: [
+						{ tabId: "t1", type: "page", url: "about:blank" },
+						{ tabId: "t2", type: "page", url: "about:blank" },
+					],
+					code: "agent_browser_target_ambiguous",
+				},
+			] as const) {
+				const flowId = `snapshot-${scenario.name}`;
+				const runbookDir = join(
+					dataHome,
+					"browser-use",
+					"runbooks",
+					"oncore",
+					flowId,
+				);
+				mkdirSync(runbookDir, { recursive: true, mode: 0o700 });
+				writeFileSync(
+					join(runbookDir, "runbook.json"),
+					JSON.stringify({
+						contract: "browser-use.runbook",
+						schema_version: "1",
+						service_id: "oncore",
+						flow_id: flowId,
+						flow_name: `verify-${scenario.name}`,
+						version: "1",
+						summary: "Target cardinality process proof.",
+						allowed_origins: ["https://example.test"],
+						inputs: [],
+						steps: [
+							{
+								kind: "open",
+								url: "https://example.test/",
+								postcondition: {
+									kind: "url-equals",
+									url: "https://example.test/",
+								},
+							},
+						],
+					}),
+					"utf8",
+				);
+				const fakeAgent = join(
+					neutralCwd,
+					`agent-browser-${scenario.name}-fixture`,
+				);
+				const callLog = join(
+					neutralCwd,
+					`agent-browser-${scenario.name}-calls.jsonl`,
+				);
+				const handoffPath = join(
+					neutralCwd,
+					`agent-browser-${scenario.name}-handoff.json`,
+				);
+				writeFileSync(
+					fakeAgent,
+					[
+						`#!${process.execPath}`,
+						'import { appendFileSync } from "node:fs";',
+						`const log = ${JSON.stringify(callLog)};`,
+						"const args = process.argv.slice(2);",
+						'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
+						`const data = { tabs: ${JSON.stringify(scenario.tabs)} };`,
+						'process.stdout.write(JSON.stringify({ success: true, data, error: null }));',
+					].join("\n"),
+					"utf8",
+				);
+				chmodSync(fakeAgent, 0o755);
+				writeFileSync(
+					handoffPath,
+					JSON.stringify({
+						status: "ok",
+						run_id: scenario.runId,
+						data: {
+							outcome: "verified",
+							environment: { name: "agent-chrome", profile: "default" },
+							browser_entry_mode: "explicit-cdp",
+							attachment: {
+								adapter_id: "agent-browser",
+								route: "explicit-cdp",
+								probe_executable: fakeAgent,
+							},
+							endpoint: {
+								http: "http://127.0.0.1:9222",
+								ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
+							},
+							launch: { launched: false },
+							proof: {
+								environment_contract_id: "warm-chrome.browser-entry",
+								environment_schema_version: "1",
+								route_evidence: "verified-live",
+							},
+							contract_id: "browser-connect.verified-handoff",
+							schema_version: "2",
+						},
+						error: null,
+					}),
+					"utf8",
+				);
+				const result = await spawnBrowserUse([
+					"runbook",
+					"run",
+					"--service",
+					"oncore",
+					"--flow",
+					flowId,
+					"--handoff",
+					handoffPath,
+					"--json",
+				]);
+				expect(result.exitCode).toBe(20);
+				expect(parse(result.stdout)).toMatchObject({
+					data: { external_effect: "none" },
+					error: { code: scenario.code },
+					continuation: {
+						next_action_id: "prepare_unique_runbook_target",
+					},
+				});
+				expect(
+					readFileSync(callLog, "utf8")
+						.trim()
+						.split("\n")
+						.map((line) => JSON.parse(line) as string[])
+						.map((args) => args.slice(4)),
+				).toEqual([["tab", "list", "--json"]]);
+				expect((await loadSharedRun(deps, scenario.runId)).ok).toBe(false);
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"Playwright semantic mutation crosses the real process boundary with fresh postcondition truth",
 		async () => {
 			const fakePlaywright = join(neutralCwd, "playwright-cli-fixture");
@@ -341,7 +629,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 					`const log = ${JSON.stringify(callLog)};`,
 					"const args = process.argv.slice(2);",
 					'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
-					'if (args.at(-1) === "snapshot") process.stdout.write(\'### Page\\n- Page URL: https://example.test/account\\n### Snapshot\\n- button \"Save\" [ref=e7]\\n\');',
+					'if (args.at(-1) === "snapshot") process.stdout.write(\'### Page\\n- Page URL: https://example.test/account\\n### Snapshot\\n- button "Save" [ref=e7]\\n\');',
 					'else if (args.includes("eval")) process.stdout.write("true\\n");',
 				].join("\n"),
 				"utf8",
