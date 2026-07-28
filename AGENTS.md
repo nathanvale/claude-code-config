@@ -1,6 +1,5 @@
 # Work Style
 
-
 - Telegraph; noun-phrases ok; drop grammar; min tokens.
 - One idea per bullet.
 - Imperative voice.
@@ -105,9 +104,10 @@
 
 ## Communication
 
-- Clear visual structure.
-- Warm, concise, low-cognitive-load.
-- Outbound comms: no em/en dashes; see `$HOME/code/claude-code-config/context/comms-style.md`.
+- Chat tone: warm, concise, low-cognitive-load; plain words and short sentences for a smart, non-technical reader; no em or en dashes.
+- Reply shape: answer in one or two lines and stop when enough; otherwise use `Details` bullets, direct `What I need to do`, and brief `Also found`; skip preambles, process narration, padding, and routine offers.
+- Questions and failures: ask one question with options and a reasoned recommendation; state what broke, user impact, and the next action; omit logs unless asked.
+- Long writing: let drafts, scripts, posts, and documents use the form the work needs; outbound style owner: `$HOME/code/claude-code-config/context/comms-style.md`.
 
 ## Personal Context
 
