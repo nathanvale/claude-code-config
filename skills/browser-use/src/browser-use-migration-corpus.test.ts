@@ -1,22 +1,25 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+	cpSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { BrowserUseCorpusCensus } from "./browser-use-migration-model";
 import {
 	applyBrowserUseMigration,
 	inventoryBrowserUseMigration,
 	planBrowserUseMigration,
 } from "./browser-use-migration";
-import { openBrowserUsePaths } from "./browser-use-paths";
+import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import {
 	fixedClock,
 	makeTempXdgEnv,
@@ -57,6 +60,21 @@ const FIXTURES = join(
 );
 const safeCorpus = join(FIXTURES, "safe-corpus");
 const classificationCorpus = join(FIXTURES, "classification-corpus");
+// A hermetic scaled mirror of the dotfiles corpus shape with KNOWN counts:
+// two portals, three formal artifacts (playbooks), four scripts (two of which
+// are also domain-script actions), one auth narrative, one login capability,
+// two Target Flows, and two Oncore-style fill-timesheet candidates for one
+// canonical flow. Counts are asserted directly rather than against the live
+// corpus, which the plan documents as a moving R3 baseline.
+const corpusBaseline = join(FIXTURES, "corpus-baseline");
+const KNOWN_BASELINE_CENSUS: BrowserUseCorpusCensus = {
+	formal_artifacts: 3,
+	target_flows: 2,
+	scripts: 4,
+	auth_narratives: 1,
+	login_capabilities: 1,
+	domain_script_actions: 2,
+};
 
 afterAll(() => {
 	for (const disposable of disposables) disposable.dispose();
@@ -397,6 +415,222 @@ describe("DDA-K05 secret-positive candidates are refused per candidate", () => {
 		expect(
 			(parseJson(planned.stdout).data as Record<string, unknown>).disposition_count,
 		).toBe(dispositions.length);
+	});
+});
+
+// =========================================================================
+// U1 corpus classification, census, and canonical provenance (R1-R7,
+// AE1-AE2).
+//
+// The plan requires migration scope + provenance to be mechanically complete:
+// artifact class, formal-flow identity, canonical-target id, overlapping count
+// assertions, and count-drift refusal — all emitted through the migration
+// ledger, never encoded in prose.
+// =========================================================================
+
+// Copy a fixture tree into a mutable temp dir so a test may add/remove/rename
+// entries without touching the read-only committed fixture.
+const mutableCopies: string[] = [];
+afterAll(() => {
+	for (const dir of mutableCopies) rmSync(dir, { recursive: true, force: true });
+});
+function mutableCopyOf(fixtureRoot: string): string {
+	const dest = realpathSync(mkdtempSync(join(tmpdir(), "bu-mig-copy-")));
+	mutableCopies.push(dest);
+	cpSync(fixtureRoot, dest, { recursive: true });
+	return dest;
+}
+
+// Open real store deps over a temp XDG env so a test may call the migration
+// engine directly (the census-drift gate is an engine parameter in U1, not yet
+// a CLI flag).
+async function openDeps(
+	env: Record<string, string | undefined>,
+): Promise<RetentionDeps> {
+	const opened = await openBrowserUsePaths(createDefaultPlatformFs(), env);
+	if (!opened.ok) throw new Error(`paths refused: ${opened.refusal.code}`);
+	return {
+		fs: createDefaultPlatformFs(),
+		paths: opened.paths,
+		clock: fixedClock().now,
+	};
+}
+
+describe("U1 corpus census and classification", () => {
+	test("known baseline produces the expected overlapping census, per-class dispositions, and canonical provenance edges", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", corpusBaseline, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", corpusBaseline, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(0);
+		const data = parseJson(planned.stdout).data as Record<string, unknown>;
+
+		// R3 overlapping count assertions: a domain-script action is counted in
+		// BOTH scripts and domain_script_actions; a `### <name>` heading without
+		// the `Flow:` prefix does NOT inflate target_flows.
+		expect(data.corpus_census).toEqual(KNOWN_BASELINE_CENSUS);
+
+		// Every entry carries exactly one classified artifact class (R2).
+		const dispositions = data.dispositions as Array<Record<string, unknown>>;
+		const classByPath = Object.fromEntries(
+			dispositions.map((row) => [
+				row.source_relative_path,
+				row.artifact_class,
+			]),
+		);
+		expect(classByPath).toMatchObject({
+			"acme-portal/acme-portal.md": "domain-prose",
+			"acme-portal/capabilities/login.yaml": "login-capability",
+			"acme-portal/domain-script-actions/diagnose-grid-state.js":
+				"domain-script-action",
+			"acme-portal/domain-script-actions/fill-entry.js": "domain-script-action",
+			"acme-portal/playbooks/fill-timesheet-a-2026-01-01.json": "formal-playbook",
+			"acme-portal/playbooks/fill-timesheet-b-2026-02-02.json": "formal-playbook",
+			"acme-portal/runbook-acme-login.md": "auth-narrative",
+			"acme-portal/runs/run-1/note.txt": "run-evidence",
+			"acme-portal/scripts/fill-week.js": "script",
+			"beta-portal/beta-portal.md": "domain-prose",
+			"beta-portal/playbooks/extract-data.yaml": "formal-playbook",
+			"beta-portal/scripts/list-data.js": "script",
+		});
+
+		// AE2 / R4: the two fill-timesheet candidates resolve to ONE canonical
+		// flow whose provenance lists BOTH sources — one intent, two candidates,
+		// distinct dispositions, one canonical id.
+		const canonicalTargets = data.canonical_targets as Array<
+			Record<string, unknown>
+		>;
+		const oncore = canonicalTargets.find(
+			(row) => row.canonical_target_id === "acme-portal/fill-timesheet",
+		);
+		expect(oncore?.source_relative_paths).toEqual([
+			"acme-portal/playbooks/fill-timesheet-a-2026-01-01.json",
+			"acme-portal/playbooks/fill-timesheet-b-2026-02-02.json",
+		]);
+		// Both candidate rows still carry their own disposition + provenance edge.
+		for (const candidate of [
+			"acme-portal/playbooks/fill-timesheet-a-2026-01-01.json",
+			"acme-portal/playbooks/fill-timesheet-b-2026-02-02.json",
+		]) {
+			const row = dispositions.find(
+				(entry) => entry.source_relative_path === candidate,
+			);
+			expect(row?.canonical_target_id).toBe("acme-portal/fill-timesheet");
+			expect(row?.formal_flow_id).toBe("acme-portal/fill-timesheet");
+		}
+
+		// No executable or secret-positive entry ever stages as trusted.
+		for (const row of dispositions) {
+			if (
+				row.artifact_class === "script" ||
+				row.artifact_class === "domain-script-action"
+			) {
+				expect(row.disposition).toBe("quarantine-executable");
+			}
+		}
+	});
+
+	test("AE1: adding an unclassified/new source makes planning refuse against the recorded baseline with count drift", async () => {
+		const source = mutableCopyOf(corpusBaseline);
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+
+		// The pristine copy still matches the known baseline census.
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", source, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const clean = await planBrowserUseMigration(
+			await openDeps(xdg.env),
+			source,
+			KNOWN_BASELINE_CENSUS,
+		);
+		expect(clean).toMatchObject({ ok: true });
+
+		// Add one new formal playbook: the census now has 4 formal artifacts,
+		// so a plan gated on the frozen baseline refuses with migration_count_drift
+		// and its drifting field named — planning is blocked until the new entry
+		// is accounted for.
+		writeFileSync(
+			join(source, "acme-portal", "playbooks", "fill-timesheet-c-2026-03-03.json"),
+			`${JSON.stringify({
+				candidate: {
+					id: "acme-fill-timesheet-c",
+					domain: "acme-portal",
+					flow: "fill-timesheet",
+					lifecycleState: "local_candidate",
+					steps: [{ id: "s1", kind: "open", action: "open" }],
+				},
+			})}\n`,
+		);
+		// Re-inventory to freeze the new snapshot, then plan against the OLD
+		// baseline census.
+		const xdg2 = makeTempXdgEnv();
+		disposables.push(xdg2);
+		const runtime2 = makeRuntime({ env: xdg2.env });
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", source, "--json"],
+					runtime2,
+				)
+			).exitCode,
+		).toBe(0);
+		const drifted = await planBrowserUseMigration(
+			await openDeps(xdg2.env),
+			source,
+			KNOWN_BASELINE_CENSUS,
+		);
+		expect(drifted).toMatchObject({
+			ok: false,
+			code: "migration_count_drift",
+		});
+		if (drifted.ok) throw new Error("unreachable");
+		expect(drifted.message).toMatch(/formal_artifacts expected 3, found 4/);
+	});
+
+	test("R1/KTD12: inventory and plan leave the full source tree byte-identical (pre/post hash over the fixture tree)", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const runtime = makeRuntime({ env: xdg.env });
+
+		const before = snapshotTree(corpusBaseline);
+		expect(before.length).toBeGreaterThan(0);
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", corpusBaseline, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		expect(snapshotTree(corpusBaseline)).toEqual(before);
+		expect(
+			(
+				await runForTest(
+					["migration", "plan", "--source", corpusBaseline, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		expect(snapshotTree(corpusBaseline)).toEqual(before);
 	});
 });
 

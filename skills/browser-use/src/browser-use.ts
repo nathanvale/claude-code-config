@@ -4319,6 +4319,7 @@ function emitMigrationState(
 	state: BrowserUseMigrationState,
 ): number {
 	if (input.parsed.outputMode === "plain") {
+		const census = state.corpus_census;
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID, input.caller, [
 				`phase=${state.phase}`,
@@ -4326,6 +4327,12 @@ function emitMigrationState(
 				`snapshot_digest=${state.snapshot_digest ?? "none"}`,
 				`source_entry_count=${state.source_entry_count}`,
 				`disposition_count=${state.disposition_count}`,
+				`census=${
+					census === null
+						? "none"
+						: `formal_artifacts=${census.formal_artifacts} target_flows=${census.target_flows} scripts=${census.scripts} auth_narratives=${census.auth_narratives} login_capabilities=${census.login_capabilities} domain_script_actions=${census.domain_script_actions}`
+				}`,
+				`canonical_target_count=${state.canonical_targets.length}`,
 				`staged_generation=${state.staged_generation ?? "none"}`,
 				`last_apply_verified_noop=${state.last_apply_verified_noop ?? "none"}`,
 				`activation_state=${state.activation_state}`,
@@ -4333,7 +4340,12 @@ function emitMigrationState(
 		);
 		for (const disposition of state.dispositions) {
 			input.stdout.write(
-				`disposition=${disposition.source_relative_path} kind=${disposition.disposition} destination=${disposition.logical_destination_id ?? "none"}\n`,
+				`disposition=${disposition.source_relative_path} class=${disposition.artifact_class} kind=${disposition.disposition} flow=${disposition.formal_flow_id ?? "none"} canonical=${disposition.canonical_target_id ?? "none"} destination=${disposition.logical_destination_id ?? "none"}\n`,
+			);
+		}
+		for (const target of state.canonical_targets) {
+			input.stdout.write(
+				`canonical_target=${target.canonical_target_id} sources=${target.source_relative_paths.join(",")}\n`,
 			);
 		}
 		return 0;

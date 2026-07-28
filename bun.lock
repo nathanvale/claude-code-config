@@ -49,6 +49,14 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/browser-use-security": {
+      "name": "@side-quest/browser-use-security",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/cli-command-facade": {
       "name": "@side-quest/cli-command-facade",
       "version": "0.1.0",
@@ -112,6 +120,7 @@
       },
       "devDependencies": {
         "@side-quest/browser-connect": "0.1.0",
+        "@side-quest/browser-use-security": "0.1.0",
         "@side-quest/cli-command-facade": "0.1.0",
         "@side-quest/mcporter-transport": "0.1.0",
         "@types/bun": "catalog:",
@@ -252,6 +261,8 @@
     "@puppeteer/replay": ["@puppeteer/replay@4.0.2", "", { "peerDependencies": { "lighthouse": ">=13.0.0", "puppeteer": ">=25.0.0" }, "optionalPeers": ["lighthouse", "puppeteer"], "bin": { "replay-extension-test": "lib/extension-test.js", "replay": "lib/cli.js" } }, "sha512-EeE0THQFSTsI2RGxWI07PURCutx9JBM8QbwlFjdykfDu0MMiBrdSmXX9eXZf5Wvo9DmtvGAimWTCZnty44NYqQ=="],
 
     "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:runtime/browser-connect"],
+
+    "@side-quest/browser-use-security": ["@side-quest/browser-use-security@workspace:runtime/browser-use-security"],
 
     "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:runtime/cli-command-facade"],
 
