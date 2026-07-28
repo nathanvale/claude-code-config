@@ -450,13 +450,18 @@ describe("runbook discovery over the XDG data root", () => {
 	);
 
 	test(
-		"list discovers only the shipped seed when the store root is absent",
+		"list discovers the shipped catalog when the store root is absent",
 		withDataRoot(async (dataRoot) => {
 			const fs = createDefaultPlatformFs();
 			const rows = await listRunbooks(fs, dataRoot);
 			// Discovery scans the code-owned shipped catalog even with no store, so
 			// `runbook list` never reports catalog_count=0 out of the box.
 			expect(rows).toEqual([
+				expect.objectContaining({
+					service_id: "matest",
+					flow_id: "development-snapshot-verify",
+					health: "healthy",
+				}),
 				expect.objectContaining({
 					service_id: "oncore",
 					flow_id: "timesheet-snapshot-verify",
@@ -605,23 +610,53 @@ describe("runbook discovery over the XDG data root", () => {
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
 describe("shipped runbooks root resolution", () => {
-	test("resolves to an existing directory containing the seed runbook", () => {
+	test("resolves to an existing directory containing the shipped runbooks", () => {
 		const root = shippedRunbooksRoot();
 		expect(existsSync(root)).toBe(true);
 		expect(statSync(root).isDirectory()).toBe(true);
-		const seed = join(
+		const oncore = join(
 			root,
 			"oncore",
 			"timesheet-snapshot-verify",
 			"runbook.json",
 		);
-		expect(existsSync(seed)).toBe(true);
-		const parsed = JSON.parse(readFileSync(seed, "utf8")) as {
+		expect(existsSync(oncore)).toBe(true);
+		const parsedOncore = JSON.parse(readFileSync(oncore, "utf8")) as {
 			service_id: string;
 			flow_id: string;
 		};
-		expect(parsed.service_id).toBe("oncore");
-		expect(parsed.flow_id).toBe("timesheet-snapshot-verify");
+		expect(parsedOncore.service_id).toBe("oncore");
+		expect(parsedOncore.flow_id).toBe("timesheet-snapshot-verify");
+
+		const matest = join(
+			root,
+			"matest",
+			"development-snapshot-verify",
+			"runbook.json",
+		);
+		expect(existsSync(matest)).toBe(true);
+		const parsedMatest = JSON.parse(readFileSync(matest, "utf8")) as {
+			service_id: string;
+			flow_id: string;
+		};
+		expect(parsedMatest.service_id).toBe("matest");
+		expect(parsedMatest.flow_id).toBe("development-snapshot-verify");
+		expect(parsedMatest).toMatchObject({
+			allowed_origins: ["https://experience-test.elluciancloud.com.au"],
+			auth_context_ref: "matest-experience-session",
+			inputs: [],
+			steps: [
+				{
+					kind: "open",
+					url: "https://experience-test.elluciancloud.com.au/matest/development",
+					postcondition: {
+						kind: "url-equals",
+						url: "https://experience-test.elluciancloud.com.au/matest/development",
+					},
+				},
+				{ kind: "snapshot", interactive: true },
+			],
+		});
 	});
 
 	test(

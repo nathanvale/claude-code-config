@@ -5,7 +5,7 @@ new-extension, or page-repair branch.
 
 ## Inspect
 
-- Read the nearest extension `AGENTS.md` and `CONTEXT.md` when present.
+- Read the nearest extension agent instructions and context documentation when present.
 - Read `package.json`, `extension.js`, card `config.js`, and `webpack.config.js`.
 - Derive the package filter and live-reload port from source. Common local defaults:
   SL01 `8082`, SL02 `8083`, SL04 `8084`.
@@ -41,15 +41,17 @@ direct page URL.
 
 ## Browser Connection
 
-Follow `skills/browser-use/SKILL.md`:
+Hand browser routing and execution to `skills/browser-use/SKILL.md`. Read its live
+guide, discover the current runbook catalog, then execute the
+`matest/development-snapshot-verify` flow through the `browser-use` CLI.
 
-```bash
-browser-connect connect agent-browser --json
-browser-connect run agent-browser -- agent-browser --session <session> <command>
-```
+Preserve the returned run id. Use the run status or resume path from the live guide,
+and follow `continuation.next_action_id` under its emitted constraints. Return the
+selected lane, observed browser state, blocked condition, and next safe action to
+`matest-session`.
 
-Reuse the verified warm Chrome handoff. Never launch another Chrome process or hardcode
-a CDP port as a repair.
+Never drive `browser-connect` directly, launch another Chrome process, hardcode a CDP
+port, or substitute a cold browser.
 
 ## MATest Authentication
 
@@ -75,14 +77,12 @@ For a stale saved auth transaction, open MATest in a fresh tab and select **Mona
 University Users** again. Preserve cookies and storage so the working SSO session
 survives. Do not repair the flow by opening a direct Okta or Google Account URL.
 
-Resolve credentials through the domain's Auth Pointer at fill time, per
-`skills/browser-use/SKILL.md` (Safety) and its Auth Pointer contract in
-`skills/browser-use/CONTEXT.md`. The Auth Pointer names the 1Password account,
-vault (`API Credentials`), item, the exact `password` field, and the OTP field;
-`one-password` owns safe resolution. Never extract secret values into shell
-variables or pass them as browser-command arguments — command args are
-shell-visible, which the browser owner forbids. Never log secret values; report
-secret checks by shape only (present/absent, length, account name).
+Resolve credentials through the domain's Auth Pointer at fill time. The browser-use
+skill owns its safety and Auth Pointer context; `one-password` owns safe resolution.
+Never extract secret values into shell variables or pass them as browser-command
+arguments — command args are shell-visible, which the browser owner forbids. Never log
+secret values; report secret checks by shape only (present/absent, length, account
+name).
 
 ## Live Reload
 

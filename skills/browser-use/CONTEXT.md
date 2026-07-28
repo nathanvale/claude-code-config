@@ -39,6 +39,10 @@ _Avoid_: identity override, standing identity exception, trust-me approval
 The local security capability that establishes human authority and confines credential retrieval and delivery for Browser Use. It returns admitted security outcomes without making Browser Adapters, Browser Connect, or One Password owners of browser authorization.
 _Avoid_: auth adapter, credential manager, secret daemon, browser security process
 
+**Environment-Injected OP Lane**:
+The explicitly lower-assurance Browser Use credential path whose service-account authority is made available at process launch. Its vault authority is read-only; host-local persistence is a deployment tradeoff, never signed native admission.
+_Avoid_: env-var OP custody lane, ambient OP access, unsigned Browser Use Security lane, native fallback
+
 **Confidential Field Delivery Helper**:
 The disposable, transaction-internal process that receives one raw username, password, or current OTP value through a private inherited pipe and writes it to one pre-proven browser field through a pre-opened verified browser-channel handle. It is one of only two raw-secret processes; the other is the disposable 1Password helper. Task adapters, adapter plugins/daemons, long-lived Browser Use processes, and the approval broker never receive the value. The helper is not a Browser Adapter and never changes the selected task lane.
 _Avoid_: auth adapter, credential broker, secret daemon, Agent Browser login helper, adapter-native secret fill

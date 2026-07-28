@@ -103,6 +103,18 @@ mcporter call streamdeck-author.streamdeck_read_page \
   and app restart. Wait for launch, re-read the page, and compare the rendered
   deck; if the app restores stale actions, edit through the Stream Deck UI and
   verify the manifest after the app-owned save.
+- The Home Assistant plugin's `rotationPercent` starts from its own zero and is
+  not initialized from the displayed entity. For a dial that must respect an
+  existing percentage, send relative `ticks` to a Home Assistant adjustment
+  script and display the staged helper.
+- For rotate-to-preview and press-to-apply, keep separate staged and confirmed
+  helpers.
+- Restart a delayed rollback on every rotation.
+- On press, apply the staged value first, then copy staged to confirmed only
+  after Home Assistant reports success.
+- On failure, preserve the prior confirmed value and surface the failed apply.
+- Do not set the rotation tick bucket to zero. Plugin 3.8.4 treats zero as its
+  300 ms fallback; use 50-100 ms for responsive helper updates.
 
 ## Safety
 
