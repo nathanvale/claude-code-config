@@ -1,6 +1,6 @@
 ---
 name: path-component-parity
-description: "Measure Path-theme components against portal-ui Storybook and drive computed-style deltas to zero."
+description: "Measure Path-theme component parity against a canonical Storybook component and drive supported deltas to zero."
 ---
 
 # Path Component Parity
@@ -10,6 +10,9 @@ runtime adapter seam.
 
 ## Route
 
+- When working in another repository that contains a repo-local
+  `skills/path-component-parity/SKILL.md`, read that file first. It owns
+  project support gates, coverage contracts, and styling constraints.
 - Require the Path story id, canonical portal-ui story id, and comparable
   variant selectors.
 - Read [the workflow](references/workflow.md) after the story pair is known.
