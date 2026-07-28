@@ -45,6 +45,11 @@
 import { createHash } from "node:crypto";
 import type { AgentBrowserPostcondition, AgentBrowserTaskStep } from "./browser-use-agent-browser";
 import { redactUnsafeText } from "./browser-use-core";
+import { SAFE_BATCH_ITEM_KEY } from "./browser-use-identifiers";
+import {
+	BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH,
+	type BrowserUseRunStructuredResult,
+} from "./browser-use-run-model";
 import type { BrowserUseRunbookPostcondition } from "./browser-use-runbook-model";
 
 // --- Content addressing ------------------------------------------------------
@@ -53,14 +58,13 @@ import type { BrowserUseRunbookPostcondition } from "./browser-use-runbook-model
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
 /** Safe registry action id (a stable slug, distinct from the byte digest). */
 const SAFE_ACTION_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
-/** Safe stable item key (an iteration checkpoint key). */
-const SAFE_ITEM_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 /** Bounded action asset byte ceiling (mirrors the executor's script bound). */
 export const ACTION_ASSET_MAX_BYTES = 100_000;
 /** Bounded inline structured-result byte ceiling (R21 spillover threshold). */
 export const STRUCTURED_RESULT_MAX_INLINE_BYTES = 4_096;
 /** Bounded structured-result summary length carried on the shared-run outcome. */
-export const STRUCTURED_RESULT_SUMMARY_MAX_LENGTH = 512;
+export const STRUCTURED_RESULT_SUMMARY_MAX_LENGTH =
+	BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH;
 
 /**
  * The sha256 of one action asset's exact bytes (R16 content addressing). The
@@ -893,18 +897,10 @@ export async function resolveReviewedAction(input: {
  * only its reference rides the run. `schema_id` is the digest of the result
  * schema (stable identity), `result_digest` the digest of the validated value.
  */
-export type BrowserUseStructuredResultOutcome = {
-	schema_id: string;
-	sensitivity: "low" | "high";
-	/** A bounded, redacted, human-readable summary — never the full payload. */
-	summary: string;
-	/** sha256 of the canonical validated result value. */
-	result_digest: string;
-	/** Present when the full payload was spilled to a governed artifact (R21). */
-	governed_artifact_ref?: string;
-	/** True when the full payload stayed inline (bounded, low-sensitivity). */
-	inline: boolean;
-};
+export type BrowserUseStructuredResultOutcome = Extract<
+	BrowserUseRunStructuredResult,
+	{ ok: true }
+>["outcome"];
 
 /** Typed structured-result capture refusal. */
 export type BrowserUseStructuredResultRefusal = {
@@ -965,7 +961,6 @@ export function captureStructuredResult(input: {
 	sensitivity: "low" | "high";
 	/** Mint a governed artifact ref for the full payload; called only on spill. */
 	spillToGovernedArtifact: (canonicalPayload: string) => string;
-	summaryHint?: string;
 }): BrowserUseStructuredResultCapture {
 	if (!actionValueMatchesSchema(input.value, input.schema)) {
 		return {
@@ -991,15 +986,10 @@ export function captureStructuredResult(input: {
 		.update(canonicalJson(input.schema))
 		.digest("hex");
 	const result_digest = createHash("sha256").update(canonical).digest("hex");
-	const rawSummary =
+	const summary =
 		input.sensitivity === "high"
 			? "High-sensitivity structured result stored in a governed artifact."
-			: (input.summaryHint ?? canonical);
-	const summary = redactUnsafeText(
-		rawSummary.length > STRUCTURED_RESULT_SUMMARY_MAX_LENGTH
-			? `${rawSummary.slice(0, STRUCTURED_RESULT_SUMMARY_MAX_LENGTH - 1)}…`
-			: rawSummary,
-	);
+			: "Low-sensitivity structured result captured.";
 	const canBeInline =
 		input.sensitivity === "low" &&
 		Buffer.byteLength(canonical, "utf-8") <= STRUCTURED_RESULT_MAX_INLINE_BYTES;
@@ -1079,7 +1069,7 @@ export function itemKeysAreValid(keys: unknown): keys is readonly string[] {
 	for (const key of keys) {
 		if (
 			typeof key !== "string" ||
-			!SAFE_ITEM_KEY.test(key) ||
+			!SAFE_BATCH_ITEM_KEY.test(key) ||
 			seen.has(key)
 		) {
 			return false;

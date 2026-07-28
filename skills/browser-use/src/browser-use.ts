@@ -44,6 +44,7 @@ import {
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+	BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 	BROWSER_USE_TRANSPORT_ADAPTERS,
@@ -88,6 +89,7 @@ import {
 	BROWSER_USE_TERMINAL_RUN_STATES,
 	type BrowserUseCallerMetadata,
 	type BrowserUseRunState,
+	type BrowserUseRunStructuredResult,
 	type BrowserUseSharedRun,
 	type BrowserUseTaskIntent,
 	classifyCancellation,
@@ -1465,6 +1467,13 @@ function writeRunPlain(
 			`artifact=${artifact.artifact_id} sensitivity=${artifact.sensitivity} retention=${artifact.retention}\n`,
 		);
 	}
+	for (const result of run.structured_results ?? []) {
+		stdout.write(
+			result.ok
+				? `structured_result=${result.action_id} item=${result.item_key ?? "none"} ok=true digest=${result.outcome.result_digest}\n`
+				: `structured_result=${result.action_id} item=${result.item_key ?? "none"} ok=false code=${result.refusal.code}\n`,
+		);
+	}
 }
 
 function platformPlainHeader(
@@ -1472,10 +1481,14 @@ function platformPlainHeader(
 	caller: BrowserUseCallerMetadata,
 	extra: readonly string[] = [],
 ): string {
+	const schema =
+		contract === BROWSER_USE_SHARED_RUN_CONTRACT_ID
+			? BROWSER_USE_SHARED_RUN_SCHEMA_VERSION
+			: PLATFORM_STORE_SCHEMA_VERSION;
 	return (
 		[
 			`contract=${contract}`,
-			`schema=${PLATFORM_STORE_SCHEMA_VERSION}`,
+			`schema=${schema}`,
 			`caller=${caller.label ?? "none"}`,
 			...extra,
 		].join(" ") + "\n"
@@ -1525,7 +1538,7 @@ function emitSharedRunSuccess(input: {
 			run_id: command.runId,
 			data: {
 				contract: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 				run: projection,
 				...(input.dataExtra ?? {}),
 				caller: command.caller,
@@ -1585,7 +1598,7 @@ async function runRunStatus(input: PlatformCommandInput): Promise<number> {
 				run_id: input.runId,
 				data: {
 					contract: BROWSER_USE_SHARED_RUN_CONTRACT_ID,
-					schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+					schema_version: BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 					run_count: receipts.length,
 					receipts,
 					caller: input.caller,
@@ -3055,18 +3068,43 @@ async function recordTaskRunOutcome(
 		guard?: BrowserUseSensitiveRunGuard;
 		runbookNextStep?: number;
 		heldClaim?: LeaseWriteClaim;
+		structuredResults?: readonly BrowserUseRunStructuredResult[];
 	} = {},
 ): Promise<number> {
 	const artifacts = options.artifacts ?? [];
+	const structuredResults = options.structuredResults ?? [];
+	const captureRefusal = structuredResults.find((result) => !result.ok);
+	const provenRunbookNextStep =
+		captureRefusal === undefined ? options.runbookNextStep : undefined;
+	const resolvedMapping: AgentBrowserDispatchMapping =
+		captureRefusal !== undefined && mapping.kind === "confirmed"
+			? {
+					kind: "terminal",
+					state: "not-achieved",
+					mutationDispatched: mapping.mutationDispatched,
+					failure: {
+						code: "runbook_structured_result_refused",
+						message: captureRefusal.refusal.message,
+						actionId: "inspect_task_run_result",
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "repair_state",
+						dataExtra: {
+							capture_refusal_code: captureRefusal.refusal.code,
+						},
+					},
+				}
+			: mapping;
 	const targetState: BrowserUseRunState =
-		mapping.kind === "confirmed" ? "confirmed" : mapping.state;
+		resolvedMapping.kind === "confirmed" ? "confirmed" : resolvedMapping.state;
 	// The lane reports write-ahead mutation truth separately from terminal
 	// classification. A semantic target refusal leaves this false; confirmed,
 	// unmet-postcondition, and verification-unavailable outcomes after dispatch
 	// preserve true.
-	const mutationDispatched = mapping.mutationDispatched ?? false;
+	const mutationDispatched = resolvedMapping.mutationDispatched ?? false;
 	const continuation =
-		mapping.kind === "blocked" ? mapping.continuation : undefined;
+		resolvedMapping.kind === "blocked"
+			? resolvedMapping.continuation
+			: undefined;
 
 	const updated = await persistFencedSharedRun(
 		deps,
@@ -3076,10 +3114,10 @@ async function recordTaskRunOutcome(
 				const { continuation: _prior, ...rest } = current;
 				const progress =
 					current.runbook_progress !== undefined &&
-					options.runbookNextStep !== undefined
+					provenRunbookNextStep !== undefined
 						? {
 								...current.runbook_progress,
-								next_step: options.runbookNextStep,
+								next_step: provenRunbookNextStep,
 							}
 						: current.runbook_progress;
 				return {
@@ -3091,6 +3129,14 @@ async function recordTaskRunOutcome(
 					// existing references survive so a resume never drops evidence.
 					...(artifacts.length > 0
 						? { artifacts: [...current.artifacts, ...artifacts] }
+						: {}),
+					...(structuredResults.length > 0
+						? {
+								structured_results: [
+									...(current.structured_results ?? []),
+									...structuredResults,
+								],
+							}
 						: {}),
 					...(continuation !== undefined ? { continuation } : {}),
 				};
@@ -3107,8 +3153,8 @@ async function recordTaskRunOutcome(
 		selected_lane: route.lane_id,
 		lane_source: route.source,
 		external_effect: externalEffect,
-		...(mapping.kind === "confirmed"
-			? { executed_steps: mapping.executedSteps }
+		...(resolvedMapping.kind === "confirmed"
+			? { executed_steps: resolvedMapping.executedSteps }
 			: {}),
 	};
 	const plainExtra = [
@@ -3123,7 +3169,7 @@ async function recordTaskRunOutcome(
 	// can render the EXACT bytes into a capture buffer, sweep them, and only then
 	// replay them onto the real streams.
 	const emitOutcome = (target: PlatformCommandInput): number => {
-		if (mapping.kind === "confirmed") {
+		if (resolvedMapping.kind === "confirmed") {
 			return emitSharedRunSuccess({
 				command: target,
 				run: updated.run,
@@ -3136,8 +3182,11 @@ async function recordTaskRunOutcome(
 		// run projection reference; the failure's own data extras merge in the lane
 		// + effect facts so the caller sees the selected lane and observed effect.
 		return emitTaskRunFailure(target, updated.run.run_id, {
-			...mapping.failure,
-			dataExtra: { ...dataExtra, ...(mapping.failure.dataExtra ?? {}) },
+			...resolvedMapping.failure,
+			dataExtra: {
+				...dataExtra,
+				...(resolvedMapping.failure.dataExtra ?? {}),
+			},
 		});
 	};
 
@@ -3889,6 +3938,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				: {}),
 			runbookNextStep: nextStep,
 			heldClaim: dispatchClaim,
+			structuredResults: outcome.structured_results ?? [],
 		},
 	);
 	} finally {

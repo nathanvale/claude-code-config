@@ -43,6 +43,7 @@ import {
 	type BrowserUseRunbookHealth,
 	type BrowserUseRunbookInputs,
 	type BrowserUseRunbookPlan,
+	type BrowserUseRunbookReadActionMeta,
 	type BrowserUseRunbookStep,
 	materializeRunbookInputs,
 	parseRunbookRecord,
@@ -52,11 +53,14 @@ import {
 } from "./browser-use-runbook-model";
 import {
 	type BrowserUseActionGenerationSeam,
+	type BrowserUseResolvedReviewedAction,
 	type BrowserUseReviewedActionRefusal,
+	captureStructuredResult,
 	itemKeysAreValid,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
+import type { BrowserUseRunStructuredResult } from "./browser-use-run-model";
 
 // --- Discovery location ------------------------------------------------------
 
@@ -495,12 +499,38 @@ export type BrowserUseRunbookAuthDelivery = (input: {
  * structural truth verbatim plus the plan facts (resume index, total steps,
  * pending item bindings) the caller records onto the shared run.
  */
+/**
+ * One captured read-action outcome for the shared run (R21, R24): the bounded,
+ * validated, redacted structured result, or a typed capture refusal that keeps
+ * an unredactable or schema-mismatched read observation OUT of durable state
+ * without inventing a success. `action_id` names the read action it came from.
+ */
+export type BrowserUseRunbookStructuredResult = BrowserUseRunStructuredResult;
+
+type RawFreeAgentBrowserExecutionResult =
+	AgentBrowserExecutionResult extends infer Result
+		? Result extends unknown
+			? Omit<Result, "read_results">
+			: never
+		: never;
+
 export type BrowserUseRunbookExecutionResult =
 	| { ok: false; refusal: BrowserUseRunbookExecutionRefusal }
 	| {
 			ok: true;
 			plan: BrowserUseRunbookExecutionPlan;
-			result: AgentBrowserExecutionResult;
+			/**
+			 * Structural executor truth only. Raw read observations are consumed at
+			 * this boundary and cannot escape through the public result type.
+			 */
+			result: RawFreeAgentBrowserExecutionResult;
+			/**
+			 * Bounded structured results captured from this run's read actions
+			 * (R21, R24), in executor order. Present only when a read action ran and
+			 * confirmed; the caller records these onto the shared run. A capture
+			 * refusal rides here too so an unredactable read never silently vanishes.
+			 */
+			structured_results?: readonly BrowserUseRunbookStructuredResult[];
 	  };
 
 type BrowserUseRunbookExecutionPlan = Pick<
@@ -582,11 +612,32 @@ async function resolveRunbookActionSteps(
 	inputs: BrowserUseRunbookInputs,
 	seam: BrowserUseActionGenerationSeam,
 ): Promise<
-	| { ok: true; resolved: ReadonlyMap<number, readonly AgentBrowserTaskStep[]> }
+	| {
+			ok: true;
+			resolved: ReadonlyMap<number, readonly AgentBrowserTaskStep[]>;
+			readActionMeta: Readonly<
+				Record<string, BrowserUseRunbookReadActionMeta>
+			>;
+	  }
 	| { ok: false; refusal: BrowserUseReviewedActionRefusal }
 > {
 	const origin = singleAllowedOrigin(runbook);
 	const resolved = new Map<number, readonly AgentBrowserTaskStep[]>();
+	// Result schema + sensitivity for each read action execution, keyed by its
+	// action + optional item identity so iterated reads cannot overwrite one
+	// another's capture policy (R21, R24). A mutation contributes nothing here.
+	const readActionMeta: Record<string, BrowserUseRunbookReadActionMeta> = {};
+	const recordReadMeta = (
+		resolvedAction: BrowserUseResolvedReviewedAction,
+		itemKey?: string,
+	) => {
+		if (resolvedAction.effect_class === "read") {
+			readActionMeta[`${resolvedAction.step.action_id}:${itemKey ?? ""}`] = {
+				result_schema: resolvedAction.result_schema,
+				result_sensitivity: resolvedAction.result_sensitivity,
+			};
+		}
+	};
 	for (const [index, step] of runbook.steps.entries()) {
 		if (step.kind !== "action" && step.kind !== "iterate") continue;
 		if (!origin.ok) {
@@ -608,6 +659,7 @@ async function resolveRunbookActionSteps(
 				seam,
 			});
 			if (!one.ok) return { ok: false, refusal: one.refusal };
+			recordReadMeta(one.resolved);
 			resolved.set(index, [one.resolved.step]);
 			continue;
 		}
@@ -635,11 +687,18 @@ async function resolveRunbookActionSteps(
 				seam,
 			});
 			if (!one.ok) return { ok: false, refusal: one.refusal };
-			steps.push(one.resolved.step);
+			recordReadMeta(one.resolved, key);
+			// Each evaluated action invalidates task-local snapshot freshness. Give
+			// every iterated item its own fresh structural observation so item N+1
+			// never runs against item N's stale page state.
+			steps.push(
+				{ kind: "snapshot", interactive: false },
+				{ ...one.resolved.step, item_key: key },
+			);
 		}
 		resolved.set(index, steps);
 	}
-	return { ok: true, resolved };
+	return { ok: true, resolved, readActionMeta };
 }
 
 /**
@@ -672,6 +731,9 @@ export async function prepareRunbookExecution(
 	let resolvedActionSteps:
 		| ReadonlyMap<number, readonly AgentBrowserTaskStep[]>
 		| undefined;
+	let readActionMeta:
+		| Readonly<Record<string, BrowserUseRunbookReadActionMeta>>
+		| undefined;
 	const hasActionSteps = shown.runbook.steps.some(
 		(step: BrowserUseRunbookStep) =>
 			step.kind === "action" || step.kind === "iterate",
@@ -692,11 +754,13 @@ export async function prepareRunbookExecution(
 			};
 		}
 		resolvedActionSteps = resolution.resolved;
+		readActionMeta = resolution.readActionMeta;
 	}
 	const planned = planRunbookExecution(shown.runbook, {
 		inputs: normalizedInputs,
 		resumeFromStep: input.resumeFromStep,
 		...(resolvedActionSteps !== undefined ? { resolvedActionSteps } : {}),
+		...(readActionMeta !== undefined ? { readActionMeta } : {}),
 	});
 	return planned.ok
 		? { ok: true, plan: planned.plan }
@@ -848,11 +912,90 @@ export async function executePreparedRunbook(
 						completedNeutralOpen.mutation_dispatched ||
 						result.mutation_dispatched,
 				};
+	const structuredResults = captureRunbookReadResults(
+		combinedResult,
+		plan.read_action_meta,
+	);
+	const structuralResult: RawFreeAgentBrowserExecutionResult = combinedResult.ok
+		? (({ read_results: _rawReadResults, ...result }) => result)(combinedResult)
+		: combinedResult;
 	return {
 		ok: true,
 		plan: executionPlanOf(plan),
-		result: combinedResult,
+		result: structuralResult,
+		...(structuredResults.length > 0
+			? { structured_results: structuredResults }
+			: {}),
 	};
+}
+
+/**
+ * Validate + redact each confirmed read action's raw observation into a bounded
+ * structured result for the shared run (R21, R24). A read result whose action
+ * has no result-schema meta is skipped (it was not a read action). A payload
+ * that is unredactable or schema-mismatched becomes a typed capture refusal —
+ * it never enters durable state as a fabricated success. High-sensitivity or
+ * oversized read payloads spill through `captureStructuredResult`'s governed-
+ * artifact minter; U4 keeps Oncore grid state bounded + low-sensitivity so it
+ * stays inline, and a spill demand fails closed as a capture refusal until a
+ * retention-owned minter is wired (U6/U8), never silently inlining a large or
+ * sensitive payload.
+ */
+function captureRunbookReadResults(
+	result: AgentBrowserExecutionResult,
+	readActionMeta: Readonly<Record<string, BrowserUseRunbookReadActionMeta>>,
+): readonly BrowserUseRunbookStructuredResult[] {
+	if (!result.ok || result.read_results === undefined) return [];
+	const captured: BrowserUseRunbookStructuredResult[] = [];
+	for (const read of result.read_results) {
+		const meta =
+			readActionMeta[`${read.action_id}:${read.item_key ?? ""}`];
+		if (meta === undefined) continue;
+		// U4 has no retention-owned artifact minter yet: a read that demands
+		// spillover (oversized or high-sensitivity) fails closed as a typed
+		// capture refusal rather than silently inlining. The minter's sentinel
+		// return sets a side flag converted below. U6/U8 supply the real
+		// governed-artifact minter.
+		let spillDemanded = false;
+		const capture = captureStructuredResult({
+			value: read.data,
+			schema: meta.result_schema,
+			sensitivity: meta.result_sensitivity,
+			spillToGovernedArtifact: () => {
+				spillDemanded = true;
+				return "";
+			},
+		});
+		if (spillDemanded) {
+			captured.push({
+				ok: false,
+				action_id: read.action_id,
+				...(read.item_key !== undefined ? { item_key: read.item_key } : {}),
+				refusal: {
+					code: "structured_result_spillover_unavailable",
+					message:
+						"the read result requires a governed artifact (oversized or high-sensitivity), but no retention-owned minter is wired in this generation; it is withheld from durable state.",
+				},
+			});
+			continue;
+		}
+		if (capture.ok) {
+			captured.push({
+				ok: true,
+				action_id: read.action_id,
+				...(read.item_key !== undefined ? { item_key: read.item_key } : {}),
+				outcome: capture.outcome,
+			});
+			continue;
+		}
+		captured.push({
+			ok: false,
+			action_id: read.action_id,
+			...(read.item_key !== undefined ? { item_key: read.item_key } : {}),
+			refusal: capture.refusal,
+		});
+	}
+	return captured;
 }
 
 /**

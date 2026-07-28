@@ -711,6 +711,173 @@ describe("Agent Browser native task lane", () => {
 		expect(evaluate.join(" ")).not.toContain(script);
 	});
 
+	test.each([
+		["object", { rows: 7 }],
+		["scalar", 7],
+	] as const)(
+		"captures the native eval result field for a %s read observation",
+		async (_shape, observation) => {
+			const script = "async () => ({ rows: 7 })";
+			const runtime = runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t-read",
+								active: true,
+								type: "page",
+								url: "https://example.test/week",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ snapshot: "week grid", refs: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ stdout: json({ result: observation }) },
+			]);
+
+			const result = await executeAgentBrowserTask(runtime, {
+				handoff: HANDOFF,
+				run_id: `run-reviewed-read-${_shape}`,
+				target_tab_id: "t-read",
+				allowed_origins: ["https://example.test"],
+				steps: [
+					{ kind: "snapshot", interactive: false },
+					{
+						kind: "evaluate",
+						action_id: "timesheet.diagnose",
+						item_key: "monday",
+						script,
+						script_sha256: createHash("sha256").update(script).digest("hex"),
+						review_status: "approved",
+						allowed_origin: "https://example.test",
+						effect: "read",
+						inputs: {},
+					},
+				],
+			});
+
+			expect(result).toMatchObject({
+				ok: true,
+				read_results: [
+					{
+						action_id: "timesheet.diagnose",
+						item_key: "monday",
+						data: observation,
+					},
+				],
+			});
+		},
+	);
+
+	test("a later read failure preserves an earlier mutation dispatch", async () => {
+		const script = "async () => ({ rows: 7 })";
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t-mutate-read",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+			{ stdout: json({ opened: true }) },
+			{ stdout: json({ url: "https://example.test/week" }) },
+			{ stdout: json({ snapshot: "week grid", refs: {} }) },
+			{ stdout: json({ url: "https://example.test/week" }) },
+			{ exitCode: 1, stdout: semanticFailure() },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-mutation-then-read-failure",
+			target_tab_id: "t-mutate-read",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{
+					kind: "open",
+					url: "https://example.test/week",
+					postcondition: {
+						kind: "url-equals",
+						url: "https://example.test/week",
+					},
+				},
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet.diagnose",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "read",
+					inputs: {},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_action_read_not_achieved",
+			outcome: "not-achieved",
+			mutation_dispatched: true,
+		});
+	});
+
+	test("refuses a non-durable item key before evaluated action dispatch", async () => {
+		const script = "async () => ({ rows: 7 })";
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t-item-key",
+							active: true,
+							type: "page",
+							url: "https://example.test/week",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+			{ stdout: json({ snapshot: "week grid", refs: {} }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-invalid-item-key",
+			target_tab_id: "t-item-key",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet.diagnose",
+					item_key: "Monday",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "read",
+					inputs: {},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_action_integrity_refused",
+			mutation_dispatched: false,
+		});
+		expect(runtime.calls.some((call) => call.includes("eval"))).toBe(false);
+	});
+
 	test("refuses edited or unapproved evaluate actions before dispatch", async () => {
 		const runtime = runtimeFor([
 			{

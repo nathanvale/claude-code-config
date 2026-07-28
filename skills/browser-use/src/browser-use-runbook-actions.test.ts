@@ -719,7 +719,6 @@ describe("captureStructuredResult — bounded, redacted, spillover (R21)", () =>
 				},
 			},
 			sensitivity: "low",
-			summaryHint: "400 rows",
 			spillToGovernedArtifact: (payload) => {
 				spilled = payload;
 				return "artifact://run/big-grid";
@@ -730,7 +729,30 @@ describe("captureStructuredResult — bounded, redacted, spillover (R21)", () =>
 			expect(capture.outcome.inline).toBe(false);
 			expect(capture.outcome.governed_artifact_ref).toBe("artifact://run/big-grid");
 			expect(spilled).toBeDefined();
-			expect(capture.outcome.summary).toBe("400 rows");
+			expect(capture.outcome.summary).toBe(
+				"Low-sensitivity structured result captured.",
+			);
+		}
+	});
+
+	test("a low-sensitivity summary never embeds credential-shaped result content", () => {
+		const capture = captureStructuredResult({
+			value: { note: "password=abc" },
+			schema: {
+				kind: "object",
+				fields: {
+					note: { schema: { kind: "string" }, required: true },
+				},
+			},
+			sensitivity: "low",
+			spillToGovernedArtifact: () => "should-not-spill",
+		});
+		expect(capture.ok).toBe(true);
+		if (capture.ok) {
+			expect(capture.outcome.summary).toBe(
+				"Low-sensitivity structured result captured.",
+			);
+			expect(JSON.stringify(capture.outcome)).not.toContain("password=abc");
 		}
 	});
 
@@ -758,7 +780,6 @@ describe("captureStructuredResult — bounded, redacted, spillover (R21)", () =>
 				},
 			},
 			sensitivity: "high",
-			summaryHint: "hint-private-account-123",
 			spillToGovernedArtifact: () => "artifact://run/sensitive",
 		});
 		expect(capture.ok).toBe(true);

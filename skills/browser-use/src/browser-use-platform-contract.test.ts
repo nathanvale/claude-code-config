@@ -141,7 +141,9 @@ describe("platform family help and discovery", () => {
 		for (const [command, contractId] of Object.entries(expectedContractIds)) {
 			const discovered = tree.commands[command];
 			expect(discovered?.result_contract?.id).toBe(contractId);
-			expect(discovered?.result_contract?.schema_version).toBe("1");
+			expect(discovered?.result_contract?.schema_version).toBe(
+				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ? "2" : "1",
+			);
 			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
 				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,
 			);

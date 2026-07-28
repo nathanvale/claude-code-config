@@ -32,7 +32,11 @@ import {
 	fixedClock,
 	makeTempXdgEnv,
 } from "./browser-use-platform-test-helpers";
-import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
+import {
+	type RunStoreDeps,
+	createSharedRun,
+	loadSharedRun,
+} from "./browser-use-runs";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 import {
 	assertContainmentBeforeRelease,
@@ -811,6 +815,166 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		expect(emitted).toContain(RUN);
 		expect(emitted).not.toContain(SENTINEL);
 		expect(emitted).toContain("confirmed");
+	});
+
+	test("the fenced outcome commit persists admitted read results and makes capture refusal terminal", async () => {
+		const store = await makeStore();
+		const privateRunbookState = {
+			runbook_target_binding: {
+				schema_version: "1",
+				mode: "automatic",
+				binding_id: "candidate-structured-result",
+			},
+			runbook_progress: {
+				schema_version: "1",
+				service_id: "oncore",
+				flow_id: "diagnose",
+				runbook_version: "2",
+				next_step: 0,
+				total_steps: 1,
+			},
+		} as const;
+		const parsed = parseBrowserUseArgv([
+			"task",
+			"run",
+			"--handoff",
+			"handoff.json",
+			"--intent",
+			"scrape",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+
+		const admitted = await createSharedRun(store.deps, {
+			run_id: "run-structured-result-admitted",
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			...privateRunbookState,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(admitted.ok).toBe(true);
+		if (!admitted.ok) return;
+		const admittedStdout: string[] = [];
+		const admittedExit = await recordTaskRunOutcome(
+			{
+				parsed,
+				runtime: makeRuntime(),
+				stdout: { write: (chunk: string) => admittedStdout.push(chunk) },
+				stderr: { write: () => undefined },
+				runId: "cli-structured-result-admitted",
+				caller: { label: null },
+				durationMs: () => 1,
+			},
+			store.deps,
+			admitted.run,
+			{
+				lane_id: "agent-browser",
+				source: "intent-preferred",
+				intent: "runbook-execution",
+			},
+			{ kind: "confirmed", executedSteps: 1 },
+			{
+				runbookNextStep: 1,
+				structuredResults: [
+					{
+						ok: true,
+						action_id: "diagnose-grid",
+						item_key: "monday",
+						outcome: {
+							schema_id: "a".repeat(64),
+							sensitivity: "low",
+							summary: '{"rows":7}',
+							result_digest: "b".repeat(64),
+							inline: true,
+						},
+					},
+				],
+			},
+		);
+		expect(admittedExit).toBe(0);
+		const admittedLoaded = await loadSharedRun(
+			store.deps,
+			"run-structured-result-admitted",
+		);
+		expect(admittedLoaded.ok).toBe(true);
+		if (admittedLoaded.ok) {
+			expect(admittedLoaded.run.structured_results).toHaveLength(1);
+			expect(admittedLoaded.run.state).toBe("confirmed");
+			expect(admittedLoaded.run.runbook_progress?.next_step).toBe(1);
+		}
+		const admittedEnvelope = JSON.parse(admittedStdout.join(""));
+		expect(admittedEnvelope.data).toMatchObject({
+			contract: "browser-use.shared-run",
+			schema_version: "2",
+			run: { structured_results: [{ ok: true, item_key: "monday" }] },
+		});
+
+		const refused = await createSharedRun(store.deps, {
+			run_id: "run-structured-result-refused",
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			...privateRunbookState,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(refused.ok).toBe(true);
+		if (!refused.ok) return;
+		const refusedStdout: string[] = [];
+		const refusedExit = await recordTaskRunOutcome(
+			{
+				parsed,
+				runtime: makeRuntime(),
+				stdout: { write: (chunk: string) => refusedStdout.push(chunk) },
+				stderr: { write: () => undefined },
+				runId: "cli-structured-result-refused",
+				caller: { label: null },
+				durationMs: () => 1,
+			},
+			store.deps,
+			refused.run,
+			{
+				lane_id: "agent-browser",
+				source: "intent-preferred",
+				intent: "runbook-execution",
+			},
+			{ kind: "confirmed", executedSteps: 1 },
+			{
+				runbookNextStep: 1,
+				structuredResults: [
+					{
+						ok: false,
+						action_id: "diagnose-grid",
+						refusal: {
+							code: "structured_result_schema_mismatch",
+							message:
+								"the captured read result does not satisfy its schema.",
+						},
+					},
+				],
+			},
+		);
+		expect(refusedExit).toBe(BINDING_FAIL_CLOSED_EXIT_CODE);
+		const refusedLoaded = await loadSharedRun(
+			store.deps,
+			"run-structured-result-refused",
+		);
+		expect(refusedLoaded.ok).toBe(true);
+		if (refusedLoaded.ok) {
+			expect(refusedLoaded.run.state).toBe("not-achieved");
+			expect(refusedLoaded.run.structured_results?.[0]?.ok).toBe(false);
+			expect(refusedLoaded.run.runbook_progress?.next_step).toBe(0);
+		}
+		expect(JSON.parse(refusedStdout.join("")).error).toMatchObject({
+			code: "runbook_structured_result_refused",
+		});
 	});
 
 	test("dispatch truth and terminal truth produce the conservative effect table", async () => {

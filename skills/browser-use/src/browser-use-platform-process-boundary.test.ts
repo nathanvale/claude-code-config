@@ -188,10 +188,9 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 			]);
 			expect(result.exitCode).toBe(0);
 			const envelope = parse(result.stdout);
-			const run = (envelope.data as Record<string, unknown>).run as Record<
-				string,
-				unknown
-			>;
+			const data = envelope.data as Record<string, unknown>;
+			expect(data.schema_version).toBe("2");
+			const run = data.run as Record<string, unknown>;
 			expect(run).toMatchObject({
 				run_id: "run-blocked",
 				revision: 1,
@@ -212,7 +211,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 			const result = await spawnBrowserUse(["run", "status"]);
 			expect(result.exitCode).toBe(0);
 			expect(result.stdout).toContain(
-				"contract=browser-use.shared-run schema=1",
+				"contract=browser-use.shared-run schema=2",
 			);
 			expect(result.stdout).toContain("run_id=run-blocked");
 		},
