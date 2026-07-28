@@ -1372,7 +1372,7 @@ const browserUseTaskRunFlags = {
 	"--click-role": {
 		type: "string",
 		description:
-			"Exact accessible role to resolve from the current task-local snapshot for one routine-automation click.",
+			"Exact accessible role to resolve from the selected lane's current task-local snapshot for one semantic click.",
 	},
 	"--click-name": {
 		type: "string",
@@ -1868,6 +1868,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 				"Route one Task Intent to an admissible lane, attach through the verified Browser Connect handoff, execute, and return the shared run, observed external-effect state, selected lane, and next safe action.",
 			usage: [
 				"task run --intent routine-automation --click-role <role> --click-name <name> --postcondition-id <id> --expect-visible <selector> [--handoff <path>] [--tab <id>] --allowed-origin <origin> [--json|--plain]",
+				"task run --intent frontend-test --click-role <role> --click-name <name> --postcondition-id <id> --expect-visible <selector> [--handoff <path>] [--tab <index>] --allowed-origin <origin> [--json|--plain]",
 				"task run --intent <intent> [--lane <id>] [--handoff <path>] [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--dry-run] [--json|--plain]",
 				"task run --run <id> --handoff <path> [--tab <id>] [--allowed-origin <origin>] [--caller <label>] [--json|--plain]",
 			],

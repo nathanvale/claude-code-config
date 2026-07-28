@@ -1,5 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -316,6 +323,104 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 			expect((envelope.error as Record<string, unknown>).code).toBe(
 				"browser_lane_alias_rejected",
 			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"Playwright semantic mutation crosses the real process boundary with fresh postcondition truth",
+		async () => {
+			const fakePlaywright = join(neutralCwd, "playwright-cli-fixture");
+			const callLog = join(neutralCwd, "playwright-calls.jsonl");
+			const handoffPath = join(neutralCwd, "playwright-handoff.json");
+			writeFileSync(
+				fakePlaywright,
+				[
+					`#!${process.execPath}`,
+					'import { appendFileSync } from "node:fs";',
+					`const log = ${JSON.stringify(callLog)};`,
+					"const args = process.argv.slice(2);",
+					'appendFileSync(log, `${JSON.stringify(args)}\\n`);',
+					'if (args.at(-1) === "snapshot") process.stdout.write(\'### Page\\n- Page URL: https://example.test/account\\n### Snapshot\\n- button \"Save\" [ref=e7]\\n\');',
+					'else if (args.includes("eval")) process.stdout.write("true\\n");',
+				].join("\n"),
+				"utf8",
+			);
+			chmodSync(fakePlaywright, 0o755);
+			writeFileSync(
+				handoffPath,
+				JSON.stringify({
+					status: "ok",
+					run_id: "run-playwright-process",
+					data: {
+						outcome: "verified",
+						environment: { name: "agent-chrome", profile: "default" },
+						browser_entry_mode: "explicit-cdp",
+						attachment: {
+							adapter_id: "playwright-cdp",
+							route: "explicit-cdp",
+							probe_executable: fakePlaywright,
+						},
+						endpoint: {
+							http: "http://127.0.0.1:9222",
+							ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
+						},
+						launch: { launched: false },
+						proof: {
+							environment_contract_id: "warm-chrome.browser-entry",
+							environment_schema_version: "1",
+							route_evidence: "verified-live",
+						},
+						contract_id: "browser-connect.verified-handoff",
+						schema_version: "2",
+					},
+					error: null,
+				}),
+				"utf8",
+			);
+
+			const result = await spawnBrowserUse([
+				"task",
+				"run",
+				"--intent",
+				"frontend-test",
+				"--handoff",
+				handoffPath,
+				"--tab",
+				"1",
+				"--allowed-origin",
+				"https://example.test",
+				"--click-role",
+				"button",
+				"--click-name",
+				"Save",
+				"--postcondition-id",
+				"saved",
+				"--expect-visible",
+				"[data-persisted='true']",
+				"--json",
+			]);
+
+			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+			const envelope = parse(result.stdout);
+			expect(envelope.status).toBe("ok");
+			expect(envelope.data).toMatchObject({
+				selected_lane: "playwright-cdp",
+				executed_steps: 6,
+				external_effect: "none",
+				run: {
+					run_id: "run-playwright-process",
+					state: "confirmed",
+					mutation_dispatched: true,
+				},
+			});
+			const calls = readFileSync(callLog, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as string[]);
+			expect(calls.map((args) => args.at(-2))).toContain("click");
+			expect(calls.some((args) => args.includes("eval"))).toBe(true);
+			expect(calls.at(-1)?.at(-1)).toBe("detach");
 		},
 		TEST_TIMEOUT_MS,
 	);

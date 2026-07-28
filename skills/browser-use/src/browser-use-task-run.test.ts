@@ -944,6 +944,270 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		]);
 	});
 
+	test("Playwright semantic mutation marks dispatch before click and confirms only from fresh structure", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-mutation")),
+			"utf-8",
+		);
+		let markerObservedBeforeClick = false;
+		const { runtime, calls } = taskRunRuntime(
+			store.env,
+			[
+				{ stdout: "" },
+				{ stdout: "" },
+				{
+					stdout: [
+						"### Page",
+						"- Page URL: https://example.test/account",
+						"### Snapshot",
+						'- button "Save" [ref=e7]',
+					].join("\n"),
+				},
+				{ stdout: "" },
+				{ stdout: "true\n" },
+				{ stdout: "" },
+			],
+			async (call) => {
+				if (!call.includes("click")) return;
+				const loaded = await loadSharedRun(
+					store.deps,
+					"run-playwright-mutation",
+				);
+				markerObservedBeforeClick =
+					loaded.ok && loaded.run.mutation_dispatched;
+			},
+		);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--click-role", "button",
+				"--click-name", "Save",
+				"--postcondition-id", "saved",
+				"--expect-visible", "[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(markerObservedBeforeClick).toBe(true);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data).toMatchObject({
+			selected_lane: "playwright-cdp",
+			executed_steps: 6,
+			external_effect: "none",
+		});
+		expect(data.run).toMatchObject({
+			state: "confirmed",
+			mutation_dispatched: true,
+			postcondition: {
+				id: "saved",
+				summary: "The declared element is visible after mutation.",
+			},
+		});
+		expect(calls.map((call) => call.slice(1))).toEqual([
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright-mutation",
+			],
+			["--session=browser-use-run-playwright-mutation", "tab-select", "1"],
+			["--session=browser-use-run-playwright-mutation", "snapshot"],
+			["--session=browser-use-run-playwright-mutation", "click", "e7"],
+			[
+				"--session=browser-use-run-playwright-mutation",
+				"--raw",
+				"eval",
+				"el => !!(el && el.isConnected && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0)",
+				"[data-persisted='true']",
+			],
+			["--session=browser-use-run-playwright-mutation", "detach"],
+		]);
+	});
+
+	test("Playwright stale semantic refs refuse before mutation and cannot confirm the run", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-stale")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{
+				stdout: [
+					"### Page",
+					"- Page URL: https://example.test/account",
+					"### Snapshot",
+					'- link "Cancel" [ref=e7]',
+				].join("\n"),
+			},
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "locator-aria-assertion",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--click-role", "button",
+				"--click-name", "Save",
+				"--postcondition-id", "saved",
+				"--expect-visible", "[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_lane_refused" });
+		expect(json.data).toMatchObject({
+			selected_lane: "playwright-cdp",
+			lane_outcome: "playwright_task_ref_invalid",
+			external_effect: "none",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-playwright-stale");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: false,
+			});
+		}
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+		expect(calls.at(-1)?.at(-1)).toBe("detach");
+	});
+
+	test("Playwright click uncertainty records unknown once and blocks retry", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-unknown")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{
+				stdout: [
+					"### Page",
+					"- Page URL: https://example.test/account",
+					"### Snapshot",
+					'- button "Save" [ref=e7]',
+				].join("\n"),
+			},
+			{ stdout: "", exitCode: 1, timedOut: true },
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--click-role", "button",
+				"--click-name", "Save",
+				"--postcondition-id", "saved",
+				"--expect-visible", "[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_effect_unknown" });
+		expect(json.data).toMatchObject({
+			selected_lane: "playwright-cdp",
+			lane_outcome: "playwright_task_mutation_effect_unknown",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-playwright-unknown");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "unknown",
+				mutation_dispatched: true,
+			});
+		}
+		expect(
+			calls.filter((call) => call.includes("click")),
+		).toHaveLength(1);
+		expect(json.continuation).toMatchObject({
+			next_action_id: "inspect_task_run_result",
+		});
+	});
+
+	test("Playwright ambient success cannot override a false named postcondition", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("playwright-cdp", "run-playwright-false")),
+			"utf-8",
+		);
+		const { runtime } = taskRunRuntime(store.env, [
+			{ stdout: "" },
+			{ stdout: "" },
+			{
+				stdout: [
+					"### Page",
+					"- Page URL: https://example.test/account",
+					"### Snapshot",
+					'- button "Save" [ref=e7]',
+				].join("\n"),
+			},
+			{ stdout: "Saved successfully" },
+			{ stdout: "false\n" },
+			{ stdout: "" },
+		]);
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "frontend-test",
+				"--handoff", store.handoffPath,
+				"--tab", "1",
+				"--allowed-origin", "https://example.test",
+				"--click-role", "button",
+				"--click-name", "Save",
+				"--postcondition-id", "saved",
+				"--expect-visible", "[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "task_run_not_achieved" });
+		expect(json.data).toMatchObject({
+			lane_outcome: "playwright_task_postcondition_not_achieved",
+			external_effect: "unknown",
+		});
+		const loaded = await loadSharedRun(store.deps, "run-playwright-false");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run).toMatchObject({
+				state: "not-achieved",
+				mutation_dispatched: true,
+			});
+		}
+		expect(result.stdout).not.toContain("Saved successfully");
+	});
+
 	test("Playwright connection failure blocks the same run without adapter fallback", async () => {
 		const store = await makeStore();
 		const { writeFileSync } = await import("node:fs");

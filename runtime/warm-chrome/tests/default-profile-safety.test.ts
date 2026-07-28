@@ -26,7 +26,13 @@ import { isDefaultChromeProfilePath } from "../src/runtime.ts";
 // implementation slips a persistent enable in, this test goes red.
 // ===========================================================================
 
-const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const WARM_CHROME_SRC_DIR = join(REPO_ROOT, "runtime", "warm-chrome", "src");
+const SHIPPING_SOURCE_DIRS = [
+	WARM_CHROME_SRC_DIR,
+	join(REPO_ROOT, "runtime", "browser-connect", "src"),
+	join(REPO_ROOT, "skills", "browser-use", "src"),
+] as const;
 
 type SourceFixture = {
 	file: string;
@@ -89,6 +95,7 @@ async function sourceFiles(dir: string): Promise<string[]> {
 	for (const entry of entries) {
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) {
+			if (entry.name.startsWith("prototype-")) continue;
 			files.push(...(await sourceFiles(path)));
 			continue;
 		}
@@ -254,8 +261,10 @@ function findMutationPolicyViolations(
 }
 
 describe("DDA-F26 default-profile safety: the persistent remote-debugging setting is never enabled", () => {
-	test("no shipping source writes Chrome's persistent devtools.remote_debugging.user-enabled setting", async () => {
-		const files = await sourceFiles(SRC_DIR);
+	test("no browser-use, browser-connect, or warm-chrome source writes Chrome's persistent devtools.remote_debugging.user-enabled setting", async () => {
+		const files = (
+			await Promise.all(SHIPPING_SOURCE_DIRS.map(sourceFiles))
+		).flat();
 		expect(files.length).toBeGreaterThan(0);
 
 		// A programmatic enable would touch Chrome's Local State / Preferences and
@@ -285,10 +294,10 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 	});
 
 	test("Local State / Preferences writes are absent from shipping source (no persistent Chrome-settings mutation)", async () => {
-		const files = await sourceFiles(SRC_DIR);
+		const files = await sourceFiles(WARM_CHROME_SRC_DIR);
 		const fixtures = await Promise.all(
 			files.map(async (file) => ({
-				file: file.slice(SRC_DIR.length + 1),
+				file: file.slice(WARM_CHROME_SRC_DIR.length + 1),
 				source: await readFile(file, "utf8"),
 			})),
 		);
