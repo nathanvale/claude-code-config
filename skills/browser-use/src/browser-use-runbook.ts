@@ -950,7 +950,25 @@ function captureRunbookReadResults(
 	for (const read of result.read_results) {
 		const meta =
 			readActionMeta[`${read.action_id}:${read.item_key ?? ""}`];
-		if (meta === undefined) continue;
+		if (meta === undefined) {
+			// The executor only emits `read_results` for read `evaluate` steps, so
+			// a missing meta entry is an identity/planning mismatch (e.g. an item
+			// key that did not round-trip), NOT "this wasn't a read". Dropping the
+			// observation silently would discard a captured read with no durable
+			// trace; fail closed with a typed refusal instead, consistent with the
+			// spillover path's fail-closed posture.
+			captured.push({
+				ok: false,
+				action_id: read.action_id,
+				...(read.item_key !== undefined ? { item_key: read.item_key } : {}),
+				refusal: {
+					code: "structured_result_metadata_missing",
+					message:
+						"a read result was emitted with no matching result-schema metadata; its action id / item key did not resolve to a planned read action, so the observation is withheld from durable state.",
+				},
+			});
+			continue;
+		}
 		// U4 has no retention-owned artifact minter yet: a read that demands
 		// spillover (oversized or high-sensitivity) fails closed as a typed
 		// capture refusal rather than silently inlining. The minter's sentinel

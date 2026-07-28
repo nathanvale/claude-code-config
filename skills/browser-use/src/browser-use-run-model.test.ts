@@ -818,7 +818,7 @@ describe("run structured-result validation (R21, R24)", () => {
 					outcome: {
 						schema_id: "a".repeat(64),
 						sensitivity: "low",
-						summary: '{"rows":7}',
+						summary: "Low-sensitivity structured result captured.",
 						result_digest: "b".repeat(64),
 						inline: true,
 					},
@@ -858,6 +858,55 @@ describe("run structured-result validation (R21, R24)", () => {
 				},
 			],
 		} as unknown as BrowserUseSharedRun;
+		expect(validateSharedRun(run)).toContainEqual(
+			expect.objectContaining({ code: "run_structured_results_invalid" }),
+		);
+	});
+
+	test("accepts the metadata-missing capture refusal code", () => {
+		const run = {
+			...baseRun(),
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+			structured_results: [
+				{
+					ok: false,
+					action_id: "diagnose-grid",
+					item_key: "monday",
+					refusal: {
+						code: "structured_result_metadata_missing",
+						message:
+							"a read result was emitted with no matching result-schema metadata.",
+					},
+				},
+			],
+		} as BrowserUseSharedRun;
+		expect(validateSharedRun(run)).toEqual([]);
+	});
+
+	test("rejects a high-sensitivity outcome that claims inline (must always spill)", () => {
+		const run = {
+			...baseRun(),
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+			structured_results: [
+				{
+					ok: true,
+					action_id: "diagnose-grid",
+					outcome: {
+						schema_id: "a".repeat(64),
+						sensitivity: "high",
+						summary: "High-sensitivity structured result stored in a governed artifact.",
+						result_digest: "b".repeat(64),
+						// A high-sensitivity payload must carry a governed artifact ref,
+						// never ride inline — the durable gate must reject this shape.
+						inline: true,
+					},
+				},
+			],
+		} as BrowserUseSharedRun;
 		expect(validateSharedRun(run)).toContainEqual(
 			expect.objectContaining({ code: "run_structured_results_invalid" }),
 		);

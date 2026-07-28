@@ -355,7 +355,8 @@ export const BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH = 512;
 export type BrowserUseRunStructuredResultRefusalCode =
 	| "structured_result_schema_mismatch"
 	| "structured_result_unredactable"
-	| "structured_result_spillover_unavailable";
+	| "structured_result_spillover_unavailable"
+	| "structured_result_metadata_missing";
 
 /**
  * One admitted or refused read result persisted on the shared run (R21/R24).
@@ -675,6 +676,12 @@ function admittedStructuredResultProblem(
 		!FULL_DIGEST.test(proof.result_digest) ||
 		typeof proof.inline !== "boolean" ||
 		(proof.inline && hasArtifact) ||
+		// A high-sensitivity result must ALWAYS spill to a governed artifact
+		// (R21): it can never ride inline. The capture path enforces this, but
+		// this validator is the durable gate — a hand-authored or tampered
+		// record claiming high sensitivity with inline: true must fail closed
+		// here rather than persist a sensitive payload into shared-run state.
+		(proof.sensitivity === "high" && proof.inline) ||
 		(!proof.inline &&
 			(typeof proof.governed_artifact_ref !== "string" ||
 				proof.governed_artifact_ref.length === 0))
@@ -711,6 +718,7 @@ function refusedStructuredResultProblem(
 				"structured_result_schema_mismatch",
 				"structured_result_unredactable",
 				"structured_result_spillover_unavailable",
+				"structured_result_metadata_missing",
 			] as readonly unknown[]
 		).includes(refusalRecord.code) ||
 		typeof refusalRecord.message !== "string" ||

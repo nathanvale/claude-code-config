@@ -3073,7 +3073,10 @@ async function recordTaskRunOutcome(
 ): Promise<number> {
 	const artifacts = options.artifacts ?? [];
 	const structuredResults = options.structuredResults ?? [];
-	const captureRefusal = structuredResults.find((result) => !result.ok);
+	const captureRefusal = structuredResults.find(
+		(result): result is Extract<BrowserUseRunStructuredResult, { ok: false }> =>
+			!result.ok,
+	);
 	const provenRunbookNextStep =
 		captureRefusal === undefined ? options.runbookNextStep : undefined;
 	const resolvedMapping: AgentBrowserDispatchMapping =

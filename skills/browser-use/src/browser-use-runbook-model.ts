@@ -1344,10 +1344,12 @@ export type BrowserUseRunbookPlan = {
 	/** Item Binding ids the auth transaction must resolve before dispatch. */
 	pending_item_bindings: readonly string[];
 	/**
-	 * Result schema + sensitivity for each read `evaluate` action in this plan,
-	 * keyed by action id (R21, R24). Empty unless the runbook declares a read
-	 * action. The engine consumes it after execution to capture bounded,
-	 * redacted structured results into the shared-run outcome.
+	 * Result schema + sensitivity for each read `evaluate` execution in this
+	 * plan, keyed by `${action_id}:${item_key ?? ""}` — action id plus its
+	 * optional stable item key, so each iterated read has its own entry (R21,
+	 * R24). Empty unless the runbook declares a read action. The engine consumes
+	 * it after execution to capture bounded, redacted structured results into
+	 * the shared-run outcome; a bare-action-id lookup would miss iterated reads.
 	 */
 	read_action_meta: Readonly<Record<string, BrowserUseRunbookReadActionMeta>>;
 };
