@@ -34,7 +34,11 @@ import {
 	selectAgentBrowserTarget,
 	verifyAgentBrowserPostcondition,
 } from "./browser-use-agent-browser-target";
-import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
+import {
+	SAFE_BATCH_ITEM_KEY,
+	SAFE_RUN_ID,
+	SAFE_TAB_ID,
+} from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
@@ -113,6 +117,8 @@ export type AgentBrowserTaskStep =
 	| {
 			kind: "evaluate";
 			action_id: string;
+			/** Stable identity for one expanded iterate item (R12/R21). */
+			item_key?: string;
 			script: string;
 			script_sha256: string;
 			review_status: "approved" | "pending" | "rejected";
@@ -260,6 +266,7 @@ export type AgentBrowserExecutionFailureCode =
 	| "agent_browser_confidential_delivery_blocked"
 	| "agent_browser_action_integrity_refused"
 	| "agent_browser_action_target_refused"
+	| "agent_browser_action_read_not_achieved"
 	| "agent_browser_mutation_marker_unavailable"
 	| "agent_browser_mutation_effect_unknown"
 	| "agent_browser_postcondition_not_achieved";
@@ -292,6 +299,22 @@ export type AgentBrowserDeliveryEvidence = {
 };
 
 /**
+ * One read `evaluate` action's raw evaluated data, keyed by its action id
+ * (R21, R24). The executor carries the raw value ONLY as far as the runbook
+ * engine, which validates and redacts it through `captureStructuredResult`
+ * before any of it reaches durable shared-run state. A read action that emits
+ * no native `result` field yields `data: undefined` — a clean empty observation, never a
+ * fabricated value. This shape never rides a mutation result and never carries
+ * adapter stdout, endpoints, or secrets past the engine's redaction admission.
+ */
+export type AgentBrowserReadResult = {
+	action_id: string;
+	/** Stable identity when this read came from an expanded iterate item. */
+	item_key?: string;
+	data: unknown;
+};
+
+/**
  * Native Agent Browser execution result. It carries structural truth only,
  * never adapter stdout, page text, field values, endpoints, or secrets.
  */
@@ -304,6 +327,13 @@ export type AgentBrowserExecutionResult =
 			mutation_dispatched: boolean;
 			/** Present only when a confidential delivery engaged in this task. */
 			delivery?: AgentBrowserDeliveryEvidence;
+			/**
+			 * Raw evaluated data from each read `evaluate` action in this task, in
+			 * execution order (R21, R24). Empty unless a read action ran. The engine
+			 * is the only consumer: it validates + redacts each entry before the
+			 * bounded structured result reaches durable state.
+			 */
+			read_results?: readonly AgentBrowserReadResult[];
 	  }
 	| {
 			ok: false;
@@ -396,6 +426,7 @@ function actionIntegrityIsValid(
 ): boolean {
 	if (
 		!SAFE_RUN_ID.test(step.action_id) ||
+		(step.item_key !== undefined && !SAFE_BATCH_ITEM_KEY.test(step.item_key)) ||
 		step.review_status !== "approved" ||
 		step.script.length === 0 ||
 		step.script.length > 100_000 ||
@@ -638,6 +669,10 @@ export async function executeAgentBrowserTask(
 	let hasCurrentSnapshot = false;
 	let executedSteps = 0;
 	let mutationDispatched = false;
+	// Raw read-action data captured across this task's read `evaluate` steps
+	// (R21, R24). Stays empty for mutation-only or ref-only tasks. The engine
+	// validates + redacts each entry; the executor never persists it.
+	const readResults: AgentBrowserReadResult[] = [];
 	// Confidential-delivery evidence accumulates across the task's confidential
 	// fills (auth plan U5): the delivered shapes feed the sentinel owner, the
 	// method-step-complete events name the FSM steps the auth transaction records,
@@ -790,13 +825,36 @@ export async function executeAgentBrowserTask(
 			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
 			if (!commandSucceeded(evaluated)) {
-				return withDelivery(failure(
-					"agent_browser_mutation_effect_unknown",
-					"unknown",
-					"The reviewed action may have dispatched browser effects; inspect before retry.",
-					executedSteps,
-					mutationDispatched,
-				));
+				// A mutation that may have dispatched is `unknown` (no retry). A read
+				// dispatches no browser effect, so its failure is a clean
+				// `not-achieved` — it never manufactures a possible mutation (R21).
+				return withDelivery(
+					step.effect === "mutation"
+						? failure(
+								"agent_browser_mutation_effect_unknown",
+								"unknown",
+								"The reviewed action may have dispatched browser effects; inspect before retry.",
+								executedSteps,
+								mutationDispatched,
+							)
+						: failure(
+								"agent_browser_action_read_not_achieved",
+								"not-achieved",
+								"The reviewed read action did not return an observation.",
+								executedSteps,
+								mutationDispatched,
+							),
+				);
+			}
+			if (step.effect === "read") {
+				// Carry the raw read observation only as far as the engine, which
+				// validates + redacts it (R21). A read that emits no `result` field is a
+				// clean empty observation.
+				readResults.push({
+					action_id: step.action_id,
+					...(step.item_key !== undefined ? { item_key: step.item_key } : {}),
+					data: parseSuccessData(evaluated?.stdout ?? "")?.result,
+				});
 			}
 			if (step.effect === "mutation" && step.postcondition !== undefined) {
 				const verified = await verifyAgentBrowserPostcondition(
@@ -1016,5 +1074,6 @@ export async function executeAgentBrowserTask(
 					},
 				}
 			: {}),
+		...(readResults.length > 0 ? { read_results: readResults } : {}),
 	};
 }

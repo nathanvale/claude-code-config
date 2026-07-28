@@ -804,6 +804,38 @@ describe("U3 private state persistence (R38, R12)", () => {
 		}
 	});
 
+	test("bounded structured results round-trip without raw observations", () => {
+		const structuredResults = [
+			{
+				ok: true,
+				action_id: "diagnose-grid",
+				item_key: "monday",
+				outcome: {
+					schema_id: "a".repeat(64),
+					sensitivity: "low",
+					summary: '{"rows":7}',
+					result_digest: "b".repeat(64),
+					inline: true,
+				},
+			},
+		] as const;
+		const raw = encodeDurableRecord(
+			"shared-run",
+			basePayload({
+				task_intent: "runbook-execution",
+				runbook_target_binding: RUNBOOK_TARGET_BINDING,
+				runbook_progress: RUNBOOK_PROGRESS,
+				structured_results: structuredResults,
+			}),
+		);
+		expect(raw).not.toContain('"data"');
+		const parsed = parseDurableRecord(raw, "shared-run");
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(parsed.payload.structured_results).toEqual(structuredResults);
+		}
+	});
+
 	test("a version-1 record carrying an execution binding is rejected", () => {
 		const raw = JSON.parse(
 			encodeDurableRecord("shared-run", basePayload()),
@@ -815,7 +847,7 @@ describe("U3 private state persistence (R38, R12)", () => {
 			ok: false,
 			code: "record_payload_invalid",
 			message:
-				"shared-run schema version 1 must not carry private runbook target, progress, execution-binding, or item-batch state.",
+				"shared-run schema version 1 must not carry private runbook target, progress, execution-binding, item-batch, or structured-result state.",
 		});
 	});
 

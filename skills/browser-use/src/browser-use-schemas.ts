@@ -67,8 +67,8 @@ export type BrowserUseDurableRecordKind =
 export const BROWSER_USE_DURABLE_SCHEMA_VERSION = "1";
 
 /**
- * Shared runs carrying private target/progress state use a new envelope
- * version so older binaries reject rather than project unknown private keys.
+ * Shared runs carrying private runbook state or structured results use a new
+ * envelope version so older binaries reject rather than project unknown keys.
  */
 export const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "2";
 
@@ -345,8 +345,13 @@ export function encodeDurableRecord<K extends BrowserUseDurableRecordKind>(
 		const hasProgress = hasOwn(sharedRun, "runbook_progress");
 		const hasExecBinding = hasOwn(sharedRun, "run_execution_binding");
 		const hasItemBatch = hasOwn(sharedRun, "item_batch");
+		const hasStructuredResults = hasOwn(sharedRun, "structured_results");
 		sharedRunUsesPrivateState =
-			hasBinding || hasProgress || hasExecBinding || hasItemBatch;
+			hasBinding ||
+			hasProgress ||
+			hasExecBinding ||
+			hasItemBatch ||
+			hasStructuredResults;
 		if (sharedRunUsesPrivateState) {
 			const privateStateProblem = sharedRunEnvelopeVersionProblem(
 				BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
@@ -711,9 +716,14 @@ function sharedRunEnvelopeVersionProblem(
 	const hasProgress = hasOwn(value, "runbook_progress");
 	const hasExecBinding = hasOwn(value, "run_execution_binding");
 	const hasItemBatch = hasOwn(value, "item_batch");
+	const hasStructuredResults = hasOwn(value, "structured_results");
 	if (version === BROWSER_USE_DURABLE_SCHEMA_VERSION) {
-		return hasBinding || hasProgress || hasExecBinding || hasItemBatch
-			? "shared-run schema version 1 must not carry private runbook target, progress, execution-binding, or item-batch state."
+		return hasBinding ||
+			hasProgress ||
+			hasExecBinding ||
+			hasItemBatch ||
+			hasStructuredResults
+			? "shared-run schema version 1 must not carry private runbook target, progress, execution-binding, item-batch, or structured-result state."
 			: undefined;
 	}
 	// Version 2 carries the runbook target binding + progress pair; the U3

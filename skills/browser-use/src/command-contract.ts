@@ -297,7 +297,7 @@ export const BROWSER_USE_TASK_INTENTS_CONTRACT_ID =
 export const BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_SHARED_RUN_CONTRACT_ID =
 	"browser-use.shared-run" as const;
-const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID =
 	"browser-use.runbook-catalog" as const;
 const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "1" as const;

@@ -14,6 +14,7 @@
 
 import type { BrowserAdapterId } from "./discovery-model";
 import { BROWSER_USE_LIVE_ADAPTERS } from "./discovery-model";
+import { SAFE_BATCH_ITEM_KEY } from "./browser-use-identifiers";
 
 // --- Task intents (R21-R23) -------------------------------------------------
 
@@ -342,6 +343,52 @@ export type BrowserUseRunItemBatchTransitionCheck =
 			message: string;
 	  };
 
+/**
+ * Maximum bounded summary length accepted on a durable structured result.
+ *
+ * The capture owner imports this limit so admission and persistence cannot
+ * drift on the shared-run contract.
+ */
+export const BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH = 512;
+
+/** Typed refusal codes that may ride a durable read-result outcome. */
+export type BrowserUseRunStructuredResultRefusalCode =
+	| "structured_result_schema_mismatch"
+	| "structured_result_unredactable"
+	| "structured_result_spillover_unavailable"
+	| "structured_result_metadata_missing";
+
+/**
+ * One admitted or refused read result persisted on the shared run (R21/R24).
+ *
+ * Raw values never enter this shape. Admitted results carry only bounded
+ * summary and digest proof; iterated reads additionally carry their stable
+ * `item_key`.
+ */
+export type BrowserUseRunStructuredResult =
+	| {
+			ok: true;
+			action_id: string;
+			item_key?: string;
+			outcome: {
+				schema_id: string;
+				sensitivity: "low" | "high";
+				summary: string;
+				result_digest: string;
+				governed_artifact_ref?: string;
+				inline: boolean;
+			};
+	  }
+	| {
+			ok: false;
+			action_id: string;
+			item_key?: string;
+			refusal: {
+				code: BrowserUseRunStructuredResultRefusalCode;
+				message: string;
+			};
+	  };
+
 // --- The shared run ----------------------------------------------------------
 
 /**
@@ -368,6 +415,8 @@ export type BrowserUseSharedRun = {
 	run_execution_binding?: BrowserUseRunExecutionBindingState;
 	/** Durable bounded-iteration checkpoints (R12); an unknown item blocks the batch. */
 	item_batch?: BrowserUseRunItemBatchState;
+	/** Bounded admitted read results and typed capture refusals (R21/R24). */
+	structured_results?: readonly BrowserUseRunStructuredResult[];
 	/** Opaque versioned auth fragment; auth-owned content (R6). */
 	auth_fragment?: BrowserUseAuthFragmentSlot;
 	/** Bounded auth attestation reference; required before `ready` (R6). */
@@ -396,7 +445,8 @@ export type BrowserUseRunIssueCode =
 	| "runbook_target_binding_invalid"
 	| "runbook_progress_invalid"
 	| "run_execution_binding_invalid"
-	| "run_item_batch_invalid";
+	| "run_item_batch_invalid"
+	| "run_structured_results_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -411,8 +461,8 @@ function isBlockedState(state: BrowserUseRunState): boolean {
 }
 
 const FULL_DIGEST = /^[0-9a-f]{64}$/;
-const SAFE_BATCH_ITEM_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const ITEM_BATCH_MAX_KEYS = 512;
+const STRUCTURED_RESULT_MAX_COUNT = 512;
 
 /**
  * Validate shared-run invariants (R6, R24).
@@ -466,13 +516,15 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 	const progress = run.runbook_progress;
 	if (
 		(binding === undefined) !== (progress === undefined) ||
-		((run.run_execution_binding !== undefined || run.item_batch !== undefined) &&
+		((run.run_execution_binding !== undefined ||
+			run.item_batch !== undefined ||
+			run.structured_results !== undefined) &&
 			(binding === undefined || progress === undefined))
 	) {
 		issues.push({
 			code: "runbook_private_state_incomplete",
 			message:
-				"runbook_target_binding and runbook_progress must be committed together; execution-binding and item-batch state require both.",
+				"runbook_target_binding and runbook_progress must be committed together; execution-binding, item-batch, and structured-result state require both.",
 		});
 	}
 	if (
@@ -536,7 +588,177 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 			message: itemBatchProblem,
 		});
 	}
+	const structuredResultsProblem =
+		run.structured_results === undefined
+			? undefined
+			: runStructuredResultsValidationProblem(run.structured_results);
+	if (structuredResultsProblem !== undefined) {
+		issues.push({
+			code: "run_structured_results_invalid",
+			message: structuredResultsProblem,
+		});
+	}
 	return issues;
+}
+
+function objectHasExactlyKeys(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+): boolean {
+	const keys = Object.keys(value);
+	return (
+		keys.length === allowed.length &&
+		keys.every((key) => allowed.includes(key))
+	);
+}
+
+/**
+ * Return the first durable structured-result validation problem.
+ *
+ * The closed nested key sets mechanically prevent raw observations from being
+ * smuggled beside the bounded proof projection.
+ *
+ * @param value - Candidate durable structured-result array
+ * @returns Undefined when every result is bounded and raw-free
+ */
+function structuredResultIdentityProblem(
+	result: Record<string, unknown>,
+	index: number,
+): string | undefined {
+	const itemKey = result.item_key;
+	if (
+		typeof result.action_id !== "string" ||
+		!SAFE_BATCH_ITEM_KEY.test(result.action_id) ||
+		(itemKey !== undefined &&
+			(typeof itemKey !== "string" || !SAFE_BATCH_ITEM_KEY.test(itemKey)))
+	) {
+		return `structured_results.${index} must carry safe action_id and optional item_key values.`;
+	}
+	return undefined;
+}
+
+function admittedStructuredResultProblem(
+	result: Record<string, unknown>,
+	index: number,
+): string | undefined {
+	const expectedKeys =
+		result.item_key === undefined
+			? ["ok", "action_id", "outcome"]
+			: ["ok", "action_id", "item_key", "outcome"];
+	if (!objectHasExactlyKeys(result, expectedKeys)) {
+		return `structured_results.${index} admitted result contains unsupported fields.`;
+	}
+	const outcome = result.outcome;
+	if (typeof outcome !== "object" || outcome === null || Array.isArray(outcome)) {
+		return `structured_results.${index}.outcome must be a JSON object.`;
+	}
+	const proof = outcome as Record<string, unknown>;
+	const hasArtifact = proof.governed_artifact_ref !== undefined;
+	const expectedOutcomeKeys = hasArtifact
+		? [
+				"schema_id",
+				"sensitivity",
+				"summary",
+				"result_digest",
+				"governed_artifact_ref",
+				"inline",
+			]
+		: ["schema_id", "sensitivity", "summary", "result_digest", "inline"];
+	if (
+		!objectHasExactlyKeys(proof, expectedOutcomeKeys) ||
+		typeof proof.schema_id !== "string" ||
+		!FULL_DIGEST.test(proof.schema_id) ||
+		(proof.sensitivity !== "low" && proof.sensitivity !== "high") ||
+		typeof proof.summary !== "string" ||
+		proof.summary.length >
+			BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH ||
+		typeof proof.result_digest !== "string" ||
+		!FULL_DIGEST.test(proof.result_digest) ||
+		typeof proof.inline !== "boolean" ||
+		(proof.inline && hasArtifact) ||
+		// A high-sensitivity result must ALWAYS spill to a governed artifact
+		// (R21): it can never ride inline. The capture path enforces this, but
+		// this validator is the durable gate — a hand-authored or tampered
+		// record claiming high sensitivity with inline: true must fail closed
+		// here rather than persist a sensitive payload into shared-run state.
+		(proof.sensitivity === "high" && proof.inline) ||
+		(!proof.inline &&
+			(typeof proof.governed_artifact_ref !== "string" ||
+				proof.governed_artifact_ref.length === 0))
+	) {
+		return `structured_results.${index}.outcome must carry bounded digest, sensitivity, summary, and inline/artifact proof.`;
+	}
+	return undefined;
+}
+
+function refusedStructuredResultProblem(
+	result: Record<string, unknown>,
+	index: number,
+): string | undefined {
+	const expectedKeys =
+		result.item_key === undefined
+			? ["ok", "action_id", "refusal"]
+			: ["ok", "action_id", "item_key", "refusal"];
+	if (result.ok !== false || !objectHasExactlyKeys(result, expectedKeys)) {
+		return `structured_results.${index} refusal contains unsupported fields.`;
+	}
+	const refusal = result.refusal;
+	if (
+		typeof refusal !== "object" ||
+		refusal === null ||
+		Array.isArray(refusal)
+	) {
+		return `structured_results.${index}.refusal must be a JSON object.`;
+	}
+	const refusalRecord = refusal as Record<string, unknown>;
+	if (
+		!objectHasExactlyKeys(refusalRecord, ["code", "message"]) ||
+		!(
+			[
+				"structured_result_schema_mismatch",
+				"structured_result_unredactable",
+				"structured_result_spillover_unavailable",
+				"structured_result_metadata_missing",
+			] as readonly unknown[]
+		).includes(refusalRecord.code) ||
+		typeof refusalRecord.message !== "string" ||
+		refusalRecord.message.length === 0 ||
+		refusalRecord.message.length >
+			BROWSER_USE_RUN_STRUCTURED_RESULT_SUMMARY_MAX_LENGTH
+	) {
+		return `structured_results.${index}.refusal must carry a typed code and bounded message.`;
+	}
+	return undefined;
+}
+
+function runStructuredResultsValidationProblem(
+	value: unknown,
+): string | undefined {
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.length > STRUCTURED_RESULT_MAX_COUNT
+	) {
+		return "structured_results must contain between 1 and 512 outcomes.";
+	}
+	for (const [index, candidate] of value.entries()) {
+		if (
+			typeof candidate !== "object" ||
+			candidate === null ||
+			Array.isArray(candidate)
+		) {
+			return `structured_results.${index} must be a JSON object.`;
+		}
+		const result = candidate as Record<string, unknown>;
+		const identityProblem = structuredResultIdentityProblem(result, index);
+		if (identityProblem !== undefined) return identityProblem;
+		const resultProblem =
+			result.ok === true
+				? admittedStructuredResultProblem(result, index)
+				: refusedStructuredResultProblem(result, index);
+		if (resultProblem !== undefined) return resultProblem;
+	}
+	return undefined;
 }
 
 /**

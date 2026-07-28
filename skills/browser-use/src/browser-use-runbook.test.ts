@@ -34,6 +34,7 @@ import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-us
 import {
 	type BrowserUseActiveGenerationSeam,
 	type BrowserUseRunbookAuthDelivery,
+	type BrowserUseRunbookExecutionResult,
 	BrowserUseShippedRunbooksMissingError,
 	RUNBOOK_PRIVATE_INPUT_MAX_BYTES,
 	executePreparedRunbook,
@@ -2420,6 +2421,7 @@ function iterateRunbook(
 			},
 		],
 		steps: [
+			{ kind: "snapshot", interactive: false },
 			{
 				kind: "iterate",
 				over_input: "items",
@@ -2734,3 +2736,399 @@ describe("engine reviewed-action step resolution (U3)", () => {
 		},
 	);
 });
+
+// --- U4: Oncore read-diagnosis structured-result capture (R21, R24; AE7) -----
+//
+// The full hermetic lifecycle for a read action: the engine resolves the
+// approved observational action through the generation seam, the executor runs
+// it and surfaces the raw grid observation, and the engine validates + redacts
+// it into a bounded structured result on the shared-run outcome — all against a
+// synthetic portal, with no live Oncore surface and no real credentials.
+describe("Oncore read diagnosis: structured-result capture (U4, R21/R24)", () => {
+	const ACTION_ORIGIN_URL = "https://portal.example.com/timesheets";
+
+	test("the public runbook result type cannot expose raw read observations", () => {
+		type ExecutedResult = Extract<
+			BrowserUseRunbookExecutionResult,
+			{ ok: true }
+		>["result"];
+		const rawReadFieldDoesNotEscape: "read_results" extends keyof ExecutedResult
+			? false
+			: true = true;
+		expect(rawReadFieldDoesNotEscape).toBe(true);
+	});
+
+	// The read observation the synthetic eval "returns" from the portal grid.
+	// A schema-valid { rows: number } payload; bounded, low-sensitivity → inline.
+	function diagnoseResponses(
+		gridData: unknown,
+		overrides: { evalExitCode?: number } = {},
+	): readonly { stdout?: string; exitCode?: number }[] {
+		return [
+			// selectTarget: tab list (target on the allowed origin)
+			{ stdout: json({ tabs: [{ tabId: "t1", url: ACTION_ORIGIN_URL }] }) },
+			// selectTarget: tab select
+			{ stdout: json({ selected: true }) },
+			// selectTarget: fresh selected-url reproof (expectedTargetUrl)
+			{ stdout: json({ url: ACTION_ORIGIN_URL }) },
+			// snapshot step
+			{ stdout: json({ refs: { "@e1": {} } }) },
+			// evaluate: fresh origin reproof for the reviewed action
+			{ stdout: json({ url: ACTION_ORIGIN_URL }) },
+			// evaluate: the reviewed read action's structured observation
+			{
+				stdout: json({ result: gridData }),
+				...(overrides.evalExitCode !== undefined
+					? { exitCode: overrides.evalExitCode }
+					: {}),
+			},
+		];
+	}
+
+	function runDiagnosis(
+		dataRoot: string,
+		responses: readonly { stdout?: string; exitCode?: number }[],
+		record: BrowserUseReviewedActionRecord = approvedReadRecord(),
+	) {
+		return runRunbook(
+			{
+				fs: createDefaultPlatformFs(),
+				runtime: runtimeFor(responses),
+				dataRoot,
+				actionSeam: actionSeam(record, {
+					[ACTION_READ_DIGEST]: ACTION_READ_BYTES,
+				}),
+			},
+			{
+				serviceId: "oncore",
+				flowId: "diagnose",
+				handoff: HANDOFF,
+				runId: "run-diagnose-1",
+				targetTabId: "t1",
+				inputs: {},
+				resumeFromStep: 0,
+				expectedTargetUrl: ACTION_ORIGIN_URL,
+			},
+		);
+	}
+
+	test(
+		"a confirmed read diagnosis captures a bounded, inline, low-sensitivity structured result",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(dataRoot, diagnoseResponses({ rows: 7 }));
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			expect(outcome.structured_results).toBeDefined();
+			expect(outcome.structured_results).toHaveLength(1);
+			const captured = outcome.structured_results?.[0];
+			expect(captured?.ok).toBe(true);
+			if (captured?.ok) {
+				expect(captured.action_id).toBe("diagnose-grid");
+				expect(captured.outcome.inline).toBe(true);
+				expect(captured.outcome.sensitivity).toBe("low");
+				// A digest of the validated value rides the run; the bounded summary
+				// carries the value shape, never a raw adapter dump.
+				expect(captured.outcome.result_digest).toMatch(/^[a-f0-9]{64}$/);
+				expect(captured.outcome.schema_id).toMatch(/^[a-f0-9]{64}$/);
+			}
+		}),
+	);
+
+	test(
+		"an empty grid is a clean bounded observation, not a failure",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(dataRoot, diagnoseResponses({ rows: 0 }));
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			expect(outcome.structured_results?.[0]?.ok).toBe(true);
+		}),
+	);
+
+	test(
+		"a read observation that violates the result schema becomes a typed capture refusal, never a fabricated success",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			// `rows` is a string, not the schema's number: the read is confirmed at
+			// the executor, but capture refuses it out of durable state.
+			const outcome = await runDiagnosis(
+				dataRoot,
+				diagnoseResponses({ rows: "not-a-number" }),
+			);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			const captured = outcome.structured_results?.[0];
+			expect(captured?.ok).toBe(false);
+			if (captured && !captured.ok) {
+				expect(captured.action_id).toBe("diagnose-grid");
+				expect(captured.refusal.code).toBe("structured_result_schema_mismatch");
+			}
+		}),
+	);
+
+	test(
+		"a secret-shaped read value is refused from durable state (unredactable)",
+		withDataRoot(async (dataRoot) => {
+			// A permissive result schema that would ACCEPT the value, so the refusal
+			// is the redaction admission — not a schema mismatch.
+			const record = {
+				...approvedReadRecord(),
+				result_schema: {
+					kind: "object",
+					fields: { note: { schema: { kind: "string" }, required: true } },
+				},
+			} as const satisfies BrowserUseReviewedActionRecord;
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(
+				dataRoot,
+				diagnoseResponses({ note: "op://vault/item/field" }),
+				record,
+			);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			const captured = outcome.structured_results?.[0];
+			expect(captured?.ok).toBe(false);
+			if (captured && !captured.ok) {
+				expect(captured.refusal.code).toBe("structured_result_unredactable");
+			}
+			const serialized = JSON.stringify(outcome);
+			expect(serialized).not.toContain("op://vault/item/field");
+			expect("read_results" in outcome.result).toBe(false);
+		}),
+	);
+
+	test(
+		"a low-sensitivity summary never embeds credential-shaped read content",
+		withDataRoot(async (dataRoot) => {
+			const record = {
+				...approvedReadRecord(),
+				result_schema: {
+					kind: "object",
+					fields: { note: { schema: { kind: "string" }, required: true } },
+				},
+			} as const satisfies BrowserUseReviewedActionRecord;
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(
+				dataRoot,
+				diagnoseResponses({ note: "password=abc" }),
+				record,
+			);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.structured_results?.[0]?.ok).toBe(true);
+			expect(JSON.stringify(outcome)).not.toContain("password=abc");
+		}),
+	);
+
+	test.each([
+		{
+			name: "oversized low-sensitivity",
+			sensitivity: "low" as const,
+			value: { note: "x".repeat(5_000) },
+		},
+		{
+			name: "bounded high-sensitivity",
+			sensitivity: "high" as const,
+			value: { note: "private-grid-state" },
+		},
+	])(
+		"a $name read refuses when governed spillover is unavailable",
+		async (scenario) =>
+			withDataRoot(async (dataRoot) => {
+				const record = {
+					...approvedReadRecord(),
+					result_schema: {
+						kind: "object",
+						fields: { note: { schema: { kind: "string" }, required: true } },
+					},
+					result_sensitivity: scenario.sensitivity,
+				} as const satisfies BrowserUseReviewedActionRecord;
+				writeRunbook(dataRoot, actionRunbook());
+				const outcome = await runDiagnosis(
+					dataRoot,
+					diagnoseResponses(scenario.value),
+					record,
+				);
+				expect(outcome.ok).toBe(true);
+				if (!outcome.ok) return;
+				const captured = outcome.structured_results?.[0];
+				expect(captured?.ok).toBe(false);
+				if (captured && !captured.ok) {
+					expect(captured.refusal.code).toBe(
+						"structured_result_spillover_unavailable",
+					);
+				}
+				expect("read_results" in outcome.result).toBe(false);
+				expect(JSON.stringify(outcome)).not.toContain(scenario.value.note);
+			})(),
+	);
+
+	test(
+		"a read action whose eval fails is not-achieved with no captured result and no phantom mutation",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(
+				dataRoot,
+				diagnoseResponses({ rows: 1 }, { evalExitCode: 1 }),
+			);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(false);
+			if (!outcome.result.ok) {
+				// A read has no possible mutation: its failure is not-achieved, never
+				// an `unknown` phantom-mutation outcome.
+				expect(outcome.result.outcome).toBe("not-achieved");
+				expect(outcome.result.code).toBe("agent_browser_action_read_not_achieved");
+				expect(outcome.result.mutation_dispatched).toBe(false);
+			}
+			expect(outcome.structured_results ?? []).toHaveLength(0);
+		}),
+	);
+
+	test(
+		"a read that emits an explicit empty object satisfies an empty-object schema and captures inline",
+		withDataRoot(async (dataRoot) => {
+			// The result schema accepts an empty object; the eval returns `result: {}`.
+			const record = {
+				...approvedReadRecord(),
+				result_schema: { kind: "object", fields: {} },
+			} as const satisfies BrowserUseReviewedActionRecord;
+			writeRunbook(dataRoot, actionRunbook());
+			const outcome = await runDiagnosis(dataRoot, diagnoseResponses({}), record);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			const captured = outcome.structured_results?.[0];
+			expect(captured?.ok).toBe(true);
+			if (captured?.ok) expect(captured.outcome.inline).toBe(true);
+		}),
+	);
+
+	test(
+		"a read that emits NO data field refuses capture (undefined is not a valid object observation)",
+		withDataRoot(async (dataRoot) => {
+			const record = {
+				...approvedReadRecord(),
+				result_schema: { kind: "object", fields: {} },
+			} as const satisfies BrowserUseReviewedActionRecord;
+			writeRunbook(dataRoot, actionRunbook());
+			// The eval succeeds but returns success WITHOUT a `result` field → the read
+			// observation is undefined, which no object schema accepts. The engine
+			// refuses it out of durable state rather than inventing an empty result.
+			const responses = diagnoseResponses({}).slice(0, 5).concat([
+				{ stdout: json({}) },
+			]);
+			const outcome = await runDiagnosis(dataRoot, responses, record);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			const captured = outcome.structured_results?.[0];
+			expect(captured?.ok).toBe(false);
+			if (captured && !captured.ok) {
+				expect(captured.refusal.code).toBe("structured_result_schema_mismatch");
+			}
+		}),
+	);
+});
+
+test(
+	"iterate compiles stable item identity into each reviewed read",
+	withDataRoot(async (dataRoot) => {
+		writeRunbook(dataRoot, iterateRunbook());
+		const record = approvedReadRecord();
+		const prepared = await prepareRunbookExecution(
+			createDefaultPlatformFs(),
+			dataRoot,
+			{
+				serviceId: "oncore",
+				flowId: "diagnose",
+				inputs: { items: ["monday", "tuesday"] },
+				resumeFromStep: 0,
+				actionSeam: actionSeam(
+					{
+						...record,
+						input_schema: {
+							kind: "object",
+							fields: {
+								item_key: {
+									schema: { kind: "string", max_length: 128 },
+									required: true,
+								},
+							},
+						},
+					},
+					{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },
+				),
+			},
+		);
+		expect(prepared.ok).toBe(true);
+		if (!prepared.ok) return;
+		expect(
+			prepared.plan.steps
+				.filter((step) => step.kind === "evaluate")
+				.map((step) => step.item_key),
+		).toEqual(["monday", "tuesday"]);
+	}),
+);
+
+test(
+	"iterate captures each reviewed read under its stable item identity",
+	withDataRoot(async (dataRoot) => {
+		writeRunbook(dataRoot, iterateRunbook());
+		const record = {
+			...approvedReadRecord(),
+			input_schema: {
+				kind: "object",
+				fields: {
+					item_key: {
+						schema: { kind: "string", max_length: 128 },
+						required: true,
+					},
+				},
+			},
+		} as const satisfies BrowserUseReviewedActionRecord;
+		const outcome = await runRunbook(
+			{
+				fs: createDefaultPlatformFs(),
+				runtime: runtimeFor([
+					{ stdout: json({ tabs: [{ tabId: "t1", url: ACTION_ORIGIN }] }) },
+					{ stdout: json({ selected: true }) },
+					{ stdout: json({ url: ACTION_ORIGIN }) },
+					{ stdout: json({ snapshot: "week grid", refs: {} }) },
+					{ stdout: json({ snapshot: "monday grid", refs: {} }) },
+					{ stdout: json({ url: ACTION_ORIGIN }) },
+					{ stdout: json({ result: { rows: 1 } }) },
+					{ stdout: json({ snapshot: "tuesday grid", refs: {} }) },
+					{ stdout: json({ url: ACTION_ORIGIN }) },
+					{ stdout: json({ result: { rows: 2 } }) },
+				]),
+				dataRoot,
+				actionSeam: actionSeam(record, {
+					[ACTION_READ_DIGEST]: ACTION_READ_BYTES,
+				}),
+			},
+			{
+				serviceId: "oncore",
+				flowId: "diagnose",
+				handoff: HANDOFF,
+				runId: "run-iterate-results",
+				targetTabId: "t1",
+				inputs: { items: ["monday", "tuesday"] },
+				resumeFromStep: 0,
+				expectedTargetUrl: ACTION_ORIGIN,
+			},
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.result).toMatchObject({ ok: true, outcome: "confirmed" });
+		expect(outcome.structured_results).toHaveLength(2);
+		expect(
+			outcome.structured_results?.map((result) => result.item_key),
+		).toEqual(["monday", "tuesday"]);
+		expect(outcome.structured_results?.every((result) => result.ok)).toBe(true);
+	}),
+);

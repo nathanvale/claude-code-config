@@ -218,6 +218,7 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
 		expect(data.contract).toBe("browser-use.shared-run");
+		expect(data.schema_version).toBe("2");
 		expect(data.run_count).toBe(2);
 		const receipts = data.receipts as Array<Record<string, unknown>>;
 		expect(receipts.map((receipt) => receipt.run_id)).toEqual([
@@ -293,7 +294,7 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 		);
 		expect(plain.exitCode).toBe(0);
 		// Plain projects the SAME fields as stable key=value lines.
-		expect(plain.stdout).toContain("contract=browser-use.shared-run schema=1");
+		expect(plain.stdout).toContain("contract=browser-use.shared-run schema=2");
 		expect(plain.stdout).toContain("run_id=run-parity");
 		expect(plain.stdout).toContain("revision=1");
 		expect(plain.stdout).toContain("state=awaiting-auth");

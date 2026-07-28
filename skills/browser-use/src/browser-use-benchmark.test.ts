@@ -34,7 +34,7 @@ function fakeTaskRunEnvelope(input: {
 		run_id: "00000000-0000-0000-0000-000000000000",
 		data: {
 			contract: "browser-use.shared-run",
-			schema_version: "1",
+			schema_version: "2",
 			run: {
 				run_id: "00000000-0000-0000-0000-000000000000",
 				state: input.state,

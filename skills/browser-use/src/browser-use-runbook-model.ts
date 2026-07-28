@@ -38,6 +38,7 @@ import type {
 	AgentBrowserPostcondition,
 	AgentBrowserTaskStep,
 } from "./browser-use-agent-browser";
+import type { BrowserUseActionValueSchema } from "./browser-use-runbook-actions";
 
 /** The ONE supported runbook schema version. v1 is retired. */
 export const BROWSER_USE_RUNBOOK_SCHEMA_VERSION = "2" as const;
@@ -1319,6 +1320,18 @@ export type BrowserUseRunbookPlanRefusal = {
  * replays only from its first unproven step, so an already-confirmed mutation
  * is never re-dispatched.
  */
+/**
+ * The result schema + sensitivity for one resolved read `evaluate` action,
+ * keyed by action id (R21, R24). The engine uses this after execution to
+ * validate and redact the executor's raw read observation through
+ * `captureStructuredResult` before any bounded summary reaches shared-run state.
+ * Only read actions appear here; mutations have no capturable result.
+ */
+export type BrowserUseRunbookReadActionMeta = {
+	result_schema: BrowserUseActionValueSchema;
+	result_sensitivity: "low" | "high";
+};
+
 export type BrowserUseRunbookPlan = {
 	service_id: string;
 	flow_id: string;
@@ -1330,6 +1343,15 @@ export type BrowserUseRunbookPlan = {
 	steps: readonly AgentBrowserTaskStep[];
 	/** Item Binding ids the auth transaction must resolve before dispatch. */
 	pending_item_bindings: readonly string[];
+	/**
+	 * Result schema + sensitivity for each read `evaluate` execution in this
+	 * plan, keyed by `${action_id}:${item_key ?? ""}` — action id plus its
+	 * optional stable item key, so each iterated read has its own entry (R21,
+	 * R24). Empty unless the runbook declares a read action. The engine consumes
+	 * it after execution to capture bounded, redacted structured results into
+	 * the shared-run outcome; a bare-action-id lookup would miss iterated reads.
+	 */
+	read_action_meta: Readonly<Record<string, BrowserUseRunbookReadActionMeta>>;
 };
 
 export type BrowserUseRunbookPlanResult =
@@ -1436,6 +1458,16 @@ export function planRunbookExecution(
 		 * refused `runbook_action_registry_unavailable` — the pre-U3 behavior.
 		 */
 		resolvedActionSteps?: ReadonlyMap<number, readonly AgentBrowserTaskStep[]>;
+		/**
+		 * Result schema + sensitivity for each resolved read `evaluate` execution,
+		 * keyed by action id plus optional stable item key (R21, R24). The engine
+		 * resolves these alongside the executor steps and passes them through so
+		 * the compiled plan can drive post-execution structured-result capture.
+		 * Empty for action-free or mutation-only runbooks.
+		 */
+		readActionMeta?: Readonly<
+			Record<string, BrowserUseRunbookReadActionMeta>
+		>;
 	},
 ): BrowserUseRunbookPlanResult {
 	const issues = validateRunbook(runbook);
@@ -1547,6 +1579,7 @@ export function planRunbookExecution(
 			total_steps: runbook.steps.length,
 			steps: compiled,
 			pending_item_bindings: [...new Set(pendingBindings)],
+			read_action_meta: input.readActionMeta ?? {},
 		},
 	};
 }
