@@ -1,4 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync } from "node:fs";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
 	type AgentBrowserAuthDeliveryContext,
@@ -33,6 +37,7 @@ import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 import {
 	assertContainmentBeforeRelease,
 	beginSensitiveRunGuard,
+	type BrowserUseGovernedSurface,
 	markRunSensitive,
 } from "./browser-use-sensitive-run";
 import { makeRuntime } from "./browser-use-test-helpers";
@@ -905,4 +910,175 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			expect(envelope.data.external_effect).toBe(scenario.effect);
 		}
 	});
+});
+
+// =========================================================================
+// (H) Hermetic real-process runbook-run confidential delivery (U13 tier-H).
+//
+// A REAL child process drives the wired runbook engine end-to-end over a REAL
+// temp XDG store, with hermetic op-execute + delivery-hook fakes at the injected
+// port boundaries only (see fixtures/confidential-runbook-delivery-fixture.ts).
+// The fixture emits an ordered journal proving the phase order (quarantine
+// raised BEFORE secret acquisition, sensitive-interval lease acquired, exactly
+// one bounded write, cleanup + assertContainmentBeforeRelease released over the
+// real on-disk run bytes). This parent then sweeps EVERY governed surface the
+// process actually produced — run-store bytes, stdout, stderr, and artifacts —
+// for the derived sentinel and asserts ZERO occurrences, with a NEGATIVE control
+// proving the same sweep fails closed when a sentinel IS planted.
+//
+// The sentinel is a conformance marker (BU-CFD-SENTINEL-...), obviously fake and
+// never a real-looking credential.
+// =========================================================================
+
+const RUNBOOK_FIXTURE = join(
+	import.meta.dir,
+	"fixtures",
+	"confidential-runbook-delivery-fixture.ts",
+);
+const RUNBOOK_NONCE = "hruncfd01";
+
+async function waitForRunbookJournal(path: string, event: string): Promise<void> {
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		try {
+			const parsed = JSON.parse(await readFile(path, "utf8")) as string[];
+			if (parsed.includes(event)) return;
+		} catch {
+			// journal not written yet
+		}
+		await Bun.sleep(25);
+	}
+	throw new Error(`fixture journal never reached event: ${event}`);
+}
+
+async function filesUnder(root: string): Promise<string[]> {
+	if ((await stat(root).catch(() => null)) === null) return [];
+	const entries = await readdir(root, { recursive: true, withFileTypes: true });
+	return entries
+		.filter((entry) => entry.isFile())
+		.map((entry) => join(entry.parentPath, entry.name));
+}
+
+describe("(H) hermetic real-process runbook confidential delivery (U13)", () => {
+	test("a real runbook run delivers a confidential field with no sentinel on any governed surface, and the sweep fails closed when a sentinel is planted", async () => {
+		// realpath the temp base: macOS tmpdirs sit behind /var -> /private/var and
+		// the XDG root guard refuses a symlinked ancestor.
+		const root = realpathSync(
+			mkdtempSync(join(tmpdir(), "browser-use-runbook-cfd-")),
+		);
+		const dataRoot = join(root, "data");
+		const stateRoot = join(root, "state");
+		const journalPath = join(root, "journal.json");
+
+		// The sentinel the fixture delivers (== the derived conformance marker).
+		const sentinel = deriveConformanceSentinel("password", RUNBOOK_NONCE);
+		expect(sentinel.ok).toBe(true);
+		if (!sentinel.ok) return;
+
+		try {
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					RUNBOOK_FIXTURE,
+					dataRoot,
+					stateRoot,
+					journalPath,
+					RUNBOOK_NONCE,
+				],
+				{ cwd: root, stdout: "pipe", stderr: "pipe" },
+			);
+			await waitForRunbookJournal(journalPath, "cleanup:released");
+			const [exitCode, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+
+			// The real run confirmed and released.
+			expect(exitCode).toBe(0);
+			expect(stdout).toContain("runbook-delivery-complete");
+
+			// The journal proves the phase ORDER: quarantine raised BEFORE the op
+			// executor was asked for a secret, then lease, one bounded write, release.
+			const journal = JSON.parse(
+				await readFile(journalPath, "utf8"),
+			) as string[];
+			expect(journal[0]).toBe("quarantine:raised");
+			expect(journal).toContain("lease:acquired:oncore_password");
+			expect(journal).toContain("op-execute:secret-acquired");
+			expect(journal).toContain("delivery:bounded-write");
+			expect(journal[journal.length - 1]).toBe("cleanup:released");
+			// Quarantine strictly precedes secret acquisition.
+			expect(journal.indexOf("quarantine:raised")).toBeLessThan(
+				journal.indexOf("op-execute:secret-acquired"),
+			);
+			// Exactly one bounded write occurred.
+			expect(
+				journal.filter((e) => e === "delivery:bounded-write"),
+			).toHaveLength(1);
+
+			// Zero-sentinel sweep over EVERY real governed surface: run-store bytes
+			// (and every state file), stdout, stderr, and any artifacts.
+			const stateFiles = await filesUnder(stateRoot);
+			const runFiles = stateFiles.filter((f) => f.endsWith("run.json"));
+			expect(runFiles.length).toBeGreaterThan(0);
+			const surfaces: BrowserUseGovernedSurface[] = [
+				{ kind: "stdout-envelope", label: "child-stdout", content: stdout },
+				{ kind: "log", label: "child-stderr", content: stderr },
+			];
+			for (const file of stateFiles) {
+				surfaces.push({
+					kind: file.includes("/artifacts/") ? "artifact" : "run-store-file",
+					label: file,
+					content: await readFile(file, "utf8"),
+				});
+			}
+			// Direct byte assertion: the sentinel is nowhere.
+			for (const surface of surfaces) {
+				expect(surface.content).not.toContain(sentinel.value);
+			}
+
+			// Mechanical containment gate over the real surfaces: it releases clean.
+			const cleanGuard = beginSensitiveRunGuard("run-h-runbook-cfd");
+			expect(cleanGuard.ok).toBe(true);
+			if (!cleanGuard.ok) return;
+			const cleanMarked = markRunSensitive(cleanGuard.guard, {
+				trigger: "confidential-field-delivery",
+				sentinels: [sentinel.value],
+			});
+			expect(cleanMarked.ok).toBe(true);
+			if (!cleanMarked.ok) return;
+			const cleanGate = assertContainmentBeforeRelease(
+				cleanMarked.guard,
+				surfaces,
+			);
+			expect(cleanGate.release).toBe(true);
+
+			// NEGATIVE control: plant the sentinel on one surface — the SAME sweep
+			// must now withhold release (fail closed), proving the clean pass above
+			// was not vacuous.
+			const plantGuard = beginSensitiveRunGuard("run-h-runbook-plant");
+			expect(plantGuard.ok).toBe(true);
+			if (!plantGuard.ok) return;
+			const plantMarked = markRunSensitive(plantGuard.guard, {
+				trigger: "confidential-field-delivery",
+				sentinels: [sentinel.value],
+			});
+			expect(plantMarked.ok).toBe(true);
+			if (!plantMarked.ok) return;
+			const plantedGate = assertContainmentBeforeRelease(plantMarked.guard, [
+				...surfaces,
+				{
+					kind: "run-store-file",
+					label: "planted-leak",
+					content: `{"leaked":"${sentinel.value}"}`,
+				},
+			]);
+			expect(plantedGate.release).toBe(false);
+			if (plantedGate.release) return;
+			expect(plantedGate.reason).toBe("containment_failed");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 30_000);
 });

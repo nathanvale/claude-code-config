@@ -26,7 +26,37 @@ import { isDefaultChromeProfilePath } from "../src/runtime.ts";
 // implementation slips a persistent enable in, this test goes red.
 // ===========================================================================
 
-const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const WARM_CHROME_SRC_DIR = join(REPO_ROOT, "runtime", "warm-chrome", "src");
+const SHIPPING_SOURCE_DIRS = [
+	WARM_CHROME_SRC_DIR,
+	join(REPO_ROOT, "runtime", "browser-connect", "src"),
+	join(REPO_ROOT, "skills", "browser-use", "src"),
+] as const;
+
+// COVERAGE TIERS — read before trusting the F26 receipt.
+//
+// This guard proves the DDA-F26 invariant at two different strengths, and the
+// receipt must not be read as full mutation coverage across every owner:
+//
+//   1. AST MUTATION ANALYSIS (strongest): scoped to WARM_CHROME_SRC_DIR only.
+//      Every file-content write is matched by exact call shape against an
+//      allowlist, so dynamic/split-line Chrome config paths, aliased/destructured
+//      write APIs, and Bun.write all surface as unapproved mutations even when the
+//      target path never appears as a literal. warm-chrome owns the launch/repair
+//      code that actually touches Chrome's profile, so it earns the hard proof.
+//
+//   2. LITERAL FORBIDDEN-TOKEN SCAN (weaker): applied to ALL SHIPPING_SOURCE_DIRS,
+//      including browser-connect and browser-use. This catches the persistent
+//      remote-debugging setting tokens (remote_debugging, user-enabled, ...) but
+//      is a substring scan — a persistent Chrome-settings write assembled through
+//      split strings or aliases in browser-connect/browser-use would NOT be caught
+//      by tier 2 alone. The AST analysis is deliberately NOT extended to those
+//      owners: their shipping source contains dozens of legitimate durable-write,
+//      atomic-rename, retention-copy, and fixture mutation sites unrelated to
+//      Chrome settings, so a full mutation allowlist there would be large, brittle,
+//      and outside the F26 blast radius. Those owners have literal-token-only
+//      coverage; warm-chrome is the only owner with mutation-shape coverage.
 
 type SourceFixture = {
 	file: string;
@@ -89,6 +119,7 @@ async function sourceFiles(dir: string): Promise<string[]> {
 	for (const entry of entries) {
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) {
+			if (entry.name.startsWith("prototype-")) continue;
 			files.push(...(await sourceFiles(path)));
 			continue;
 		}
@@ -254,10 +285,19 @@ function findMutationPolicyViolations(
 }
 
 describe("DDA-F26 default-profile safety: the persistent remote-debugging setting is never enabled", () => {
-	test("no shipping source writes Chrome's persistent devtools.remote_debugging.user-enabled setting", async () => {
-		const files = await sourceFiles(SRC_DIR);
+	test("no browser-use, browser-connect, or warm-chrome source writes Chrome's persistent devtools.remote_debugging.user-enabled setting [literal-token-only coverage for non-warm-chrome owners]", async () => {
+		const files = (
+			await Promise.all(SHIPPING_SOURCE_DIRS.map(sourceFiles))
+		).flat();
 		expect(files.length).toBeGreaterThan(0);
 
+		// COVERAGE TIER 2 (see SHIPPING_SOURCE_DIRS note): this is a LITERAL
+		// substring scan across every shipping owner. It does NOT do mutation-shape
+		// analysis — browser-connect and browser-use have literal-token-only
+		// coverage here, so a persistent-setting write assembled through split
+		// strings or aliases in those owners would evade THIS test. The
+		// mutation-shape proof below is warm-chrome-only by design.
+		//
 		// A programmatic enable would touch Chrome's Local State / Preferences and
 		// set the persistent user-enabled flag. Remote debugging is legitimately
 		// requested only via the transient --remote-debugging-port launch flag, so
@@ -284,11 +324,19 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 		expect(offenders).toEqual([]);
 	});
 
-	test("Local State / Preferences writes are absent from shipping source (no persistent Chrome-settings mutation)", async () => {
-		const files = await sourceFiles(SRC_DIR);
+	test("Local State / Preferences writes are absent from warm-chrome shipping source (mutation-shape proof; warm-chrome-scoped by design)", async () => {
+		// COVERAGE TIER 1 (see SHIPPING_SOURCE_DIRS note): mutation-shape analysis is
+		// applied to WARM_CHROME_SRC_DIR ONLY. warm-chrome owns the launch/repair
+		// code that touches Chrome's profile, so it gets the hard proof: every write
+		// call shape must match the allowlist, defeating split/aliased/dynamic
+		// evasion. browser-connect and browser-use are NOT scanned here — extending
+		// this to them would require enumerating their many legitimate durable-write,
+		// atomic-rename, retention-copy, and fixture mutation sites, which is outside
+		// the F26 blast radius. Those owners rely on tier-2 literal-token coverage.
+		const files = await sourceFiles(WARM_CHROME_SRC_DIR);
 		const fixtures = await Promise.all(
 			files.map(async (file) => ({
-				file: file.slice(SRC_DIR.length + 1),
+				file: file.slice(WARM_CHROME_SRC_DIR.length + 1),
 				source: await readFile(file, "utf8"),
 			})),
 		);

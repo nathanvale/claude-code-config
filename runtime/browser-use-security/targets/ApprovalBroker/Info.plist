@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>ApprovalBroker</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.side-quest.browser-use-security.approval-broker</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Browser Use Security Approval Broker</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- On-demand, no background modes: launched per approval, exits when done. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Touch ID user-presence justification (create/expand/replace/revoke). -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Browser Use Security uses biometric user presence to authorize browser-automation approvals.</string>
+</dict>
+</plist>

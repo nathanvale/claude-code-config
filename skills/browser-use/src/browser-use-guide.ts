@@ -67,6 +67,8 @@ Page-action lifecycle (one adapter, one continuity):
 
 - One semantic click through the everyday front door:
   browser-use task run --intent routine-automation --click-role <role> --click-name <accessible-name> --postcondition-id <id> --expect-visible <selector> --allowed-origin <origin>
+- The same semantic contract is available to Playwright frontend-test and
+  locator-aria-assertion runs; pass a numeric --tab index.
 - Browser Use resolves role + name against the current task-local snapshot.
   Zero or multiple matches refuse before mutation; raw refs stay private.
 - A ref is valid only inside the adapter continuity that minted it. Discard

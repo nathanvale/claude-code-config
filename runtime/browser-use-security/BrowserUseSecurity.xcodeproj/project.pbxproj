@@ -1,0 +1,353 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AB01000000000000000000A1 /* ApprovalBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000A1 /* ApprovalBroker.swift */; };
+		AB01000000000000000000B1 /* TokenRetrievalLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000B1 /* TokenRetrievalLauncher.swift */; };
+		AB01000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AB00000000000000000000A1 /* ApprovalBroker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalBroker.swift; sourceTree = "<group>"; };
+		AB00000000000000000000A2 /* ApprovalBroker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = ApprovalBroker.entitlements; path = ../entitlements/ApprovalBroker.entitlements; sourceTree = "<group>"; };
+		AB00000000000000000000A3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AB00000000000000000000A9 /* ApprovalBroker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ApprovalBroker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB00000000000000000000B1 /* TokenRetrievalLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenRetrievalLauncher.swift; sourceTree = "<group>"; };
+		AB00000000000000000000B2 /* TokenRetrievalLauncher.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = TokenRetrievalLauncher.entitlements; path = ../entitlements/TokenRetrievalLauncher.entitlements; sourceTree = "<group>"; };
+		AB00000000000000000000B3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AB00000000000000000000B9 /* TokenRetrievalLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TokenRetrievalLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB00000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfidentialFieldDeliveryXPC.swift; sourceTree = "<group>"; };
+		AB00000000000000000000C2 /* ConfidentialFieldDeliveryXPC.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = ConfidentialFieldDeliveryXPC.entitlements; path = ../entitlements/ConfidentialFieldDeliveryXPC.entitlements; sourceTree = "<group>"; };
+		AB00000000000000000000C3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */ = {isa = PBXFileReference; explicitFileType = wrapper.xpc-service; includeInIndex = 0; path = ConfidentialFieldDeliveryXPC.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AB02000000000000000000A1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		AB02000000000000000000B1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		AB02000000000000000000C1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AB03000000000000000000FF /* Root */ = {
+			isa = PBXGroup;
+			children = (
+				AB03000000000000000000A0 /* ApprovalBroker */,
+				AB03000000000000000000B0 /* TokenRetrievalLauncher */,
+				AB03000000000000000000C0 /* ConfidentialFieldDeliveryXPC */,
+				AB03000000000000000000E0 /* entitlements */,
+				AB03000000000000000000FE /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000A0 /* ApprovalBroker */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000A1 /* ApprovalBroker.swift */,
+				AB00000000000000000000A3 /* Info.plist */,
+			);
+			path = targets/ApprovalBroker;
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000B0 /* TokenRetrievalLauncher */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000B1 /* TokenRetrievalLauncher.swift */,
+				AB00000000000000000000B3 /* Info.plist */,
+			);
+			path = targets/TokenRetrievalLauncher;
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000C0 /* ConfidentialFieldDeliveryXPC */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift */,
+				AB00000000000000000000C3 /* Info.plist */,
+			);
+			path = targets/ConfidentialFieldDeliveryXPC;
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000E0 /* entitlements */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000A2 /* ApprovalBroker.entitlements */,
+				AB00000000000000000000B2 /* TokenRetrievalLauncher.entitlements */,
+				AB00000000000000000000C2 /* ConfidentialFieldDeliveryXPC.entitlements */,
+			);
+			name = entitlements;
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000FE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000A9 /* ApprovalBroker.app */,
+				AB00000000000000000000B9 /* TokenRetrievalLauncher.app */,
+				AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AB05000000000000000000A1 /* ApprovalBroker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB06000000000000000000A1 /* Build configuration list for PBXNativeTarget "ApprovalBroker" */;
+			buildPhases = (
+				AB04000000000000000000A1 /* Sources */,
+				AB02000000000000000000A1 /* Frameworks */,
+			);
+			buildRules = ( );
+			dependencies = ( );
+			name = ApprovalBroker;
+			productName = ApprovalBroker;
+			productReference = AB00000000000000000000A9 /* ApprovalBroker.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AB05000000000000000000B1 /* TokenRetrievalLauncher */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB06000000000000000000B1 /* Build configuration list for PBXNativeTarget "TokenRetrievalLauncher" */;
+			buildPhases = (
+				AB04000000000000000000B1 /* Sources */,
+				AB02000000000000000000B1 /* Frameworks */,
+			);
+			buildRules = ( );
+			dependencies = ( );
+			name = TokenRetrievalLauncher;
+			productName = TokenRetrievalLauncher;
+			productReference = AB00000000000000000000B9 /* TokenRetrievalLauncher.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AB05000000000000000000C1 /* ConfidentialFieldDeliveryXPC */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB06000000000000000000C1 /* Build configuration list for PBXNativeTarget "ConfidentialFieldDeliveryXPC" */;
+			buildPhases = (
+				AB04000000000000000000C1 /* Sources */,
+				AB02000000000000000000C1 /* Frameworks */,
+			);
+			buildRules = ( );
+			dependencies = ( );
+			name = ConfidentialFieldDeliveryXPC;
+			productName = ConfidentialFieldDeliveryXPC;
+			productReference = AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */;
+			productType = "com.apple.product-type.xpc-service";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AB08000000000000000000FF /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					AB05000000000000000000A1 = { CreatedOnToolsVersion = 15.0; };
+					AB05000000000000000000B1 = { CreatedOnToolsVersion = 15.0; };
+					AB05000000000000000000C1 = { CreatedOnToolsVersion = 15.0; };
+				};
+			};
+			buildConfigurationList = AB07000000000000000000FF /* Build configuration list for PBXProject "BrowserUseSecurity" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = ( en, Base );
+			mainGroup = AB03000000000000000000FF /* Root */;
+			productRefGroup = AB03000000000000000000FE /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AB05000000000000000000A1 /* ApprovalBroker */,
+				AB05000000000000000000B1 /* TokenRetrievalLauncher */,
+				AB05000000000000000000C1 /* ConfidentialFieldDeliveryXPC */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AB04000000000000000000A1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ( AB01000000000000000000A1 /* ApprovalBroker.swift in Sources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB04000000000000000000B1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ( AB01000000000000000000B1 /* TokenRetrievalLauncher.swift in Sources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB04000000000000000000C1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ( AB01000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift in Sources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AB09000000000000000000F1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AB09000000000000000000F2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AB09000000000000000000A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/ApprovalBroker.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker";
+				PRODUCT_NAME = ApprovalBroker;
+			};
+			name = Debug;
+		};
+		AB09000000000000000000A2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/ApprovalBroker.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker";
+				PRODUCT_NAME = ApprovalBroker;
+			};
+			name = Release;
+		};
+		AB09000000000000000000B1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/TokenRetrievalLauncher.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/TokenRetrievalLauncher/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.token-retrieval-launcher";
+				PRODUCT_NAME = TokenRetrievalLauncher;
+			};
+			name = Debug;
+		};
+		AB09000000000000000000B2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/TokenRetrievalLauncher.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/TokenRetrievalLauncher/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.token-retrieval-launcher";
+				PRODUCT_NAME = TokenRetrievalLauncher;
+			};
+			name = Release;
+		};
+		AB09000000000000000000C1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/ConfidentialFieldDeliveryXPC.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/ConfidentialFieldDeliveryXPC/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", "@loader_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.confidential-field-delivery";
+				PRODUCT_NAME = ConfidentialFieldDeliveryXPC;
+			};
+			name = Debug;
+		};
+		AB09000000000000000000C2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "entitlements/ConfidentialFieldDeliveryXPC.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "targets/ConfidentialFieldDeliveryXPC/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", "@loader_path/../Frameworks", );
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.confidential-field-delivery";
+				PRODUCT_NAME = ConfidentialFieldDeliveryXPC;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AB07000000000000000000FF /* Build configuration list for PBXProject "BrowserUseSecurity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( AB09000000000000000000F1 /* Debug */, AB09000000000000000000F2 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB06000000000000000000A1 /* Build configuration list for PBXNativeTarget "ApprovalBroker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( AB09000000000000000000A1 /* Debug */, AB09000000000000000000A2 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB06000000000000000000B1 /* Build configuration list for PBXNativeTarget "TokenRetrievalLauncher" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( AB09000000000000000000B1 /* Debug */, AB09000000000000000000B2 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB06000000000000000000C1 /* Build configuration list for PBXNativeTarget "ConfidentialFieldDeliveryXPC" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( AB09000000000000000000C1 /* Debug */, AB09000000000000000000C2 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AB08000000000000000000FF /* Project object */;
+}

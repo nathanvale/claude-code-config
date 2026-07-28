@@ -86,6 +86,165 @@ describe("Playwright task lane", () => {
 		]);
 	});
 
+	test("resolves one fresh semantic ref, marks dispatch before click, and confirms a fresh visible postcondition", async () => {
+		const commands: McporterCommandInput[] = [];
+		let mutationMarked = false;
+		let mutationMarkedBeforeClick = false;
+		const outcome = await executePlaywrightTask(
+			{
+				runCommand: async (input) => {
+					commands.push(input);
+					if (input.args.at(-1) === "snapshot") {
+						return result(
+							[
+								"### Page",
+								"- Page URL: https://example.com/account",
+								"### Snapshot",
+								'- button "Save" [ref=e7] [cursor=pointer] [box=10,20,80,24]',
+							].join("\n"),
+						);
+					}
+					if (input.args.includes("click")) {
+						mutationMarkedBeforeClick = mutationMarked;
+					}
+					if (input.args.includes("eval")) {
+						return result("true\n");
+					}
+					return result();
+				},
+				beforeMutationDispatch: async () => {
+					mutationMarked = true;
+					return { ok: true };
+				},
+			},
+			task({
+				mutation: {
+					role: "button",
+					name: "Save",
+					visible_selector: "[data-persisted='true']",
+				},
+			}),
+		);
+
+		expect(outcome).toMatchObject({
+			ok: true,
+			outcome: "confirmed",
+			executed_commands: 6,
+			mutation_dispatched: true,
+		});
+		expect(mutationMarkedBeforeClick).toBe(true);
+		expect(commands.map((command) => command.args)).toEqual([
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright-1",
+			],
+			["--session=browser-use-run-playwright-1", "tab-select", "1"],
+			["--session=browser-use-run-playwright-1", "snapshot"],
+			["--session=browser-use-run-playwright-1", "click", "e7"],
+			[
+				"--session=browser-use-run-playwright-1",
+				"--raw",
+				"eval",
+				"el => !!(el && el.isConnected && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0)",
+				"[data-persisted='true']",
+			],
+			["--session=browser-use-run-playwright-1", "detach"],
+		]);
+	});
+
+	test.each([
+		"- heading \"Account\" [ref=e1]",
+		[
+			'- button "Save" [ref=e7]',
+			'- button "Save" [ref=e8]',
+		].join("\n"),
+	])("zero or duplicate current semantic matches refuse before mutation: %s", async (snapshotBody) => {
+		const commands: McporterCommandInput[] = [];
+		let markerCalls = 0;
+		const outcome = await executePlaywrightTask(
+			{
+				runCommand: async (input) => {
+					commands.push(input);
+					return input.args.at(-1) === "snapshot"
+						? result(
+								[
+									"### Page",
+									"- Page URL: https://example.com/account",
+									"### Snapshot",
+									snapshotBody,
+								].join("\n"),
+							)
+						: result();
+				},
+				beforeMutationDispatch: async () => {
+					markerCalls += 1;
+					return { ok: true };
+				},
+			},
+			task({
+				mutation: {
+					role: "button",
+					name: "Save",
+					visible_selector: "[data-persisted='true']",
+				},
+			}),
+		);
+
+		expect(outcome).toMatchObject({
+			ok: false,
+			outcome: "not-achieved",
+			code: "playwright_task_ref_invalid",
+			mutation_dispatched: false,
+		});
+		expect(markerCalls).toBe(0);
+		expect(commands.some((command) => command.args.includes("click"))).toBe(false);
+		expect(commands.at(-1)?.args.at(-1)).toBe("detach");
+	});
+
+	test("a click command failure after the write-ahead marker becomes unknown and never retries", async () => {
+		const commands: McporterCommandInput[] = [];
+		const outcome = await executePlaywrightTask(
+			{
+				runCommand: async (input) => {
+					commands.push(input);
+					if (input.args.at(-1) === "snapshot") {
+						return result(
+							[
+								"### Page",
+								"- Page URL: https://example.com/account",
+								"### Snapshot",
+								'- button "Save" [ref=e7]',
+							].join("\n"),
+						);
+					}
+					return input.args.includes("click")
+						? result("", { exitCode: 1, timedOut: true })
+						: result();
+				},
+				beforeMutationDispatch: async () => ({ ok: true }),
+			},
+			task({
+				mutation: {
+					role: "button",
+					name: "Save",
+					visible_selector: "[data-persisted='true']",
+				},
+			}),
+		);
+
+		expect(outcome).toMatchObject({
+			ok: false,
+			outcome: "unknown",
+			code: "playwright_task_mutation_effect_unknown",
+			mutation_dispatched: true,
+		});
+		expect(
+			commands.filter((command) => command.args.includes("click")),
+		).toHaveLength(1);
+		expect(commands.at(-1)?.args.at(-1)).toBe("detach");
+	});
+
 	test("refuses a snapshot from another origin and still detaches", async () => {
 		const commands: McporterCommandInput[] = [];
 		const outcome = await executePlaywrightTask(

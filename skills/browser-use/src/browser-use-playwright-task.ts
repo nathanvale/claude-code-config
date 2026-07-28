@@ -4,6 +4,7 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
 import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
@@ -37,6 +38,11 @@ export type PlaywrightTask = {
 	target_tab_index: number;
 	allowed_origins: readonly string[];
 	intent: PlaywrightTaskIntent;
+	mutation?: {
+		role: string;
+		name: string;
+		visible_selector: string;
+	};
 };
 
 /**
@@ -44,6 +50,9 @@ export type PlaywrightTask = {
  */
 export type PlaywrightTaskRuntime = {
 	runCommand(input: McporterCommandInput): Promise<McporterCommandResult>;
+	beforeMutationDispatch?: (input: {
+		run_id: string;
+	}) => Promise<{ ok: boolean }>;
 };
 
 /**
@@ -56,6 +65,10 @@ export type PlaywrightTaskFailureCode =
 	| "playwright_task_tab_unavailable"
 	| "playwright_task_command_failed"
 	| "playwright_task_origin_refused"
+	| "playwright_task_ref_invalid"
+	| "playwright_task_mutation_marker_unavailable"
+	| "playwright_task_mutation_effect_unknown"
+	| "playwright_task_postcondition_not_achieved"
 	| "playwright_task_detach_failed";
 
 /**
@@ -66,12 +79,14 @@ export type PlaywrightTaskResult =
 			ok: true;
 			outcome: "confirmed";
 			executed_commands: number;
+			mutation_dispatched: boolean;
 	  }
 	| {
 			ok: false;
-			outcome: "not-achieved";
+			outcome: "not-achieved" | "unknown";
 			code: PlaywrightTaskFailureCode;
 			message: string;
+			mutation_dispatched: boolean;
 	  };
 
 /**
@@ -131,18 +146,90 @@ export async function executePlaywrightTask(
 			);
 		} else {
 			const observedOrigin = pageOriginOf(snapshot?.stdout ?? "");
-			taskOutcome =
-				observedOrigin !== undefined &&
-				validated.allowedOrigins.has(observedOrigin)
-					? {
-							ok: true,
-							outcome: "confirmed",
-							executed_commands: 4,
-						}
-					: failure(
-							"playwright_task_origin_refused",
-							"Playwright CLI snapshot evidence did not prove an allowed page origin.",
+			if (
+				observedOrigin === undefined ||
+				!validated.allowedOrigins.has(observedOrigin)
+			) {
+				taskOutcome = failure(
+					"playwright_task_origin_refused",
+					"Playwright CLI snapshot evidence did not prove an allowed page origin.",
+				);
+			} else if (task.mutation === undefined) {
+				taskOutcome = {
+					ok: true,
+					outcome: "confirmed",
+					executed_commands: 4,
+					mutation_dispatched: false,
+				};
+			} else {
+				const ref = resolveUniqueSemanticRef(snapshot?.stdout ?? "", {
+					role: task.mutation.role,
+					name: task.mutation.name,
+				});
+				if (ref === undefined) {
+					taskOutcome = failure(
+						"playwright_task_ref_invalid",
+						"Playwright CLI could not resolve exactly one current snapshot ref for the semantic target.",
+					);
+				} else if (
+					runtime.beforeMutationDispatch === undefined ||
+					!(await runtime.beforeMutationDispatch({ run_id: task.run_id })).ok
+				) {
+					taskOutcome = failure(
+						"playwright_task_mutation_marker_unavailable",
+						"Playwright CLI refused the click because mutation dispatch truth could not be persisted first.",
+					);
+				} else {
+					const click = await runSessionCommand(
+						runtime,
+						executable,
+						session,
+						["click", ref],
+					);
+					if (!commandSucceeded(click)) {
+						taskOutcome = failure(
+							"playwright_task_mutation_effect_unknown",
+							"Playwright CLI could not prove whether the dispatched click changed the page.",
+							"unknown",
+							true,
 						);
+					} else {
+						const postcondition = await runSessionCommand(
+							runtime,
+							executable,
+							session,
+							[
+								"--raw",
+								"eval",
+								"el => !!(el && el.isConnected && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0)",
+								task.mutation.visible_selector,
+							],
+						);
+						if (!commandSucceeded(postcondition)) {
+							taskOutcome = failure(
+								"playwright_task_mutation_effect_unknown",
+								"Playwright CLI could not obtain fresh structure after the dispatched click.",
+								"unknown",
+								true,
+							);
+						} else if (!booleanTrueResult(postcondition?.stdout ?? "")) {
+							taskOutcome = failure(
+								"playwright_task_postcondition_not_achieved",
+								"Fresh Playwright structure did not satisfy the declared mutation postcondition.",
+								"not-achieved",
+								true,
+							);
+						} else {
+							taskOutcome = {
+								ok: true,
+								outcome: "confirmed",
+								executed_commands: 6,
+								mutation_dispatched: true,
+							};
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -153,6 +240,8 @@ export async function executePlaywrightTask(
 		return failure(
 			"playwright_task_detach_failed",
 			"Playwright CLI evidence completed but the named session did not detach cleanly.",
+			taskOutcome.mutation_dispatched ? "unknown" : "not-achieved",
+			taskOutcome.mutation_dispatched,
 		);
 	}
 	return taskOutcome;
@@ -186,7 +275,13 @@ function validateTask(
 		!Number.isSafeInteger(task.target_tab_index) ||
 		task.target_tab_index < 0 ||
 		(task.intent !== "frontend-test" &&
-			task.intent !== "locator-aria-assertion")
+			task.intent !== "locator-aria-assertion") ||
+		(task.mutation !== undefined &&
+			!semanticClickInputIsValid({
+				role: task.mutation.role,
+				name: task.mutation.name,
+				visibleSelector: task.mutation.visible_selector,
+			}))
 	) {
 		return {
 			ok: false,
@@ -241,6 +336,36 @@ function pageOriginOf(stdout: string): string | undefined {
 	}
 }
 
+function resolveUniqueSemanticRef(
+	stdout: string,
+	target: { role: string; name: string },
+): string | undefined {
+	const matches: string[] = [];
+	for (const line of stdout.split("\n")) {
+		const match = line.match(
+			/^\s*-\s+([A-Za-z][A-Za-z0-9_-]{0,63})\s+("(?:[^"\\]|\\.)*")((?:\s+\[[^\]\r\n]{1,128}\])*)\s*:?\s*$/,
+		);
+		if (match === null || match[1] !== target.role) continue;
+		let name: string;
+		try {
+			name = JSON.parse(match[2] ?? "");
+		} catch {
+			continue;
+		}
+		const ref = match[3]?.match(
+			/(?:^|\s)\[ref=([A-Za-z][A-Za-z0-9_-]{0,127})\](?:\s|$)/,
+		)?.[1];
+		if (name === target.name && ref !== undefined) matches.push(ref);
+	}
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+function booleanTrueResult(stdout: string): boolean {
+	return stdout
+		.split("\n")
+		.some((line) => line.trim() === "true");
+}
+
 async function runSessionCommand(
 	runtime: PlaywrightTaskRuntime,
 	executable: string,
@@ -278,6 +403,14 @@ function commandSucceeded(
 function failure(
 	code: PlaywrightTaskFailureCode,
 	message: string,
+	outcome: "not-achieved" | "unknown" = "not-achieved",
+	mutationDispatched = false,
 ): PlaywrightTaskResult {
-	return { ok: false, outcome: "not-achieved", code, message };
+	return {
+		ok: false,
+		outcome,
+		code,
+		message,
+		mutation_dispatched: mutationDispatched,
+	};
 }

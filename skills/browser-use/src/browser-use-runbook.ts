@@ -8,9 +8,10 @@
 // (`$XDG_DATA_HOME/browser-use/runbooks/<service-id>/<flow-id>/runbook.json`);
 // the catalog projection lists them redacted with health; show returns one
 // validated definition; run compiles a bounded plan and binds it to the
-// existing agent-browser executor per-step. Confidential steps refuse to the
-// auth transaction inside the executor (R30) — this engine never resolves a
-// secret and never becomes an auth delivery path.
+// existing agent-browser executor per-step. Confidential steps route through the
+// caller-injected auth-delivery seam (R30); this engine never resolves a secret
+// — the executor owns the sensitive-interval choreography, and an absent native
+// capability fails a confidential runbook closed with a typed repair pointer.
 //
 // F7 continuation: execution accepts a resume-from step index and compiles
 // only from there, so a resumed run replays no already-confirmed mutation. The
@@ -26,6 +27,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	type AgentBrowserAuthDeliveryContext,
 	type AgentBrowserExecutionResult,
 	type AgentBrowserExecutionRuntime,
 	type AgentBrowserTask,
@@ -441,9 +443,33 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_input_missing"
 		| "runbook_input_rejected"
 		| "runbook_resume_out_of_range"
-		| "runbook_confidential_requires_auth_transaction";
+		| "runbook_confidential_native_capability_absent"
+		| "runbook_confidential_delivery_unavailable";
 	message: string;
 };
+
+/**
+ * The auth-delivery seam the CLI driver injects (auth plan U5/U11). Given the
+ * plan's pending confidential item bindings, it yields the sensitive-interval
+ * {@link AgentBrowserAuthDeliveryContext} the agent-browser executor routes each
+ * confidential fill through — or a typed `blocked` outcome when the native
+ * capability is present but the sensitive-interval transaction could not
+ * complete (an unresolved binding, an unproven target). The seam is present ONLY
+ * when a native Token Retrieval Port exists (the driver builds it from the
+ * Browser Authentication provider); when the native capability is absent the
+ * driver injects nothing and the engine fails closed on a typed repair pointer —
+ * never a public bypass in either branch.
+ */
+export type BrowserUseRunbookAuthDeliveryOutcome =
+	| { ok: true; context: AgentBrowserAuthDeliveryContext }
+	| { ok: false; message: string };
+
+export type BrowserUseRunbookAuthDelivery = (input: {
+	pendingItemBindings: readonly string[];
+	handoff: AgentBrowserVerifiedHandoff;
+	runId: string;
+	targetTabId: string;
+}) => Promise<BrowserUseRunbookAuthDeliveryOutcome>;
 
 /**
  * A runbook execution outcome. `refused` is a typed engine refusal reached
@@ -470,10 +496,12 @@ export type BrowserUseRunbookExecutionResult =
 /**
  * Execute one runbook through the agent-browser lane (R30, F7). The engine
  * loads and validates the runbook, plans the bounded steps from
- * `resumeFromStep` onward (F7 restart-safe resume), refuses closed when a
- * confidential step is present but auth delivery is not wired here (R30 — this
- * engine never resolves a secret), then binds the compiled steps to the
- * existing agent-browser executor and returns its structural truth verbatim.
+ * `resumeFromStep` onward (F7 restart-safe resume), then routes any confidential
+ * step through the caller-injected auth-delivery seam (R30 — this engine never
+ * resolves a secret; the executor owns the sensitive-interval choreography). A
+ * confidential runbook with no seam injected (native capability absent) refuses
+ * closed with a typed repair pointer. The compiled steps then bind to the
+ * existing agent-browser executor and its structural truth returns verbatim.
  *
  * The caller (the CLI driver) owns durable shared-run state: it records the
  * executor's terminal/blocked truth through the fenced run-store pipeline, and
@@ -490,6 +518,13 @@ export async function runRunbook(
 		fs: BrowserUsePlatformFs;
 		runtime: AgentBrowserExecutionRuntime;
 		dataRoot: string;
+		/**
+		 * Auth-delivery seam (auth plan U11). Present ONLY when the native Token
+		 * Retrieval Port exists; absence means the native auth capability is
+		 * absent, so a confidential runbook fails closed with a typed repair
+		 * pointer rather than dispatching an unauthenticated fill.
+		 */
+		authDelivery?: BrowserUseRunbookAuthDelivery;
 	},
 	input: {
 		serviceId: string;
@@ -516,20 +551,42 @@ export async function runRunbook(
 		return { ok: false, refusal: planned.refusal };
 	}
 	const plan = planned.plan;
-	// R30 boundary: a confidential step needs the Browser Authentication
-	// Transaction; this engine never resolves a secret, so a pending item
-	// binding refuses closed with a repair pointer rather than dispatching an
-	// empty confidential fill that the executor would refuse anyway. This keeps
-	// the refusal at the engine seam where the auth continuation is named.
+	// R30 boundary (auth plan U11): a confidential step needs the Browser
+	// Authentication Transaction. This engine never resolves a secret; it only
+	// routes the auth-delivery context the driver builds from the native Token
+	// Retrieval Port through the executor, which owns the sensitive-interval
+	// choreography. When the native capability is absent the driver injects no
+	// `authDelivery` seam, so a confidential runbook fails CLOSED with a typed
+	// repair pointer rather than dispatching an unauthenticated fill — never a
+	// public bypass. The auth continuation is named in the message.
+	let authDelivery: AgentBrowserAuthDeliveryContext | undefined;
 	if (plan.pending_item_bindings.length > 0) {
-		return {
-			ok: false,
-			refusal: {
-				code: "runbook_confidential_requires_auth_transaction",
-				message:
-					"the runbook has a confidential field; confidential delivery must go through the Browser Authentication Transaction, which is not wired into runbook run yet.",
-			},
-		};
+		if (deps.authDelivery === undefined) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_confidential_native_capability_absent",
+					message:
+						"the runbook has a confidential field; confidential delivery must go through the Browser Authentication Transaction, whose native Token Retrieval capability is absent on this machine. Acquire the native capability before running this runbook.",
+				},
+			};
+		}
+		const built = await deps.authDelivery({
+			pendingItemBindings: plan.pending_item_bindings,
+			handoff: input.handoff,
+			runId: input.runId,
+			targetTabId: input.targetTabId,
+		});
+		if (!built.ok) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_confidential_delivery_unavailable",
+					message: built.message,
+				},
+			};
+		}
+		authDelivery = built.context;
 	}
 	const task: AgentBrowserTask = {
 		handoff: input.handoff,
@@ -537,6 +594,7 @@ export async function runRunbook(
 		target_tab_id: input.targetTabId,
 		allowed_origins: plan.allowed_origins,
 		steps: plan.steps,
+		...(authDelivery !== undefined ? { auth_delivery: authDelivery } : {}),
 	};
 	const result = await executeAgentBrowserTask(deps.runtime, task);
 	return {

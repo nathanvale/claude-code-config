@@ -153,6 +153,9 @@ describe("front door: guide family (D3)", () => {
 		expect(result.stdout).toContain("--click-role");
 		expect(result.stdout).toContain("--postcondition-id");
 		expect(result.stdout).toContain(
+			"The same semantic contract is available to Playwright",
+		);
+		expect(result.stdout).toContain(
 			"targets list --mode handoff-bound --adapter <id>",
 		);
 		expect(result.stdout).not.toContain("--handoff <envelope>");
