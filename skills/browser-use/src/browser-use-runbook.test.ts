@@ -814,18 +814,6 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					],
 				}),
 			);
-			const prepared = await prepareRunbookExecution(
-				createDefaultPlatformFs(),
-				dataRoot,
-				{
-					serviceId: "oncore",
-					flowId: "neutral-auth",
-					inputs: {},
-					resumeFromStep: 0,
-				},
-			);
-			expect(prepared.ok).toBe(true);
-			if (!prepared.ok) return;
 			const base = runtimeFor([
 				{ stdout: json({ tabs: [{ tabId: "t1", url: "about:blank" }] }) },
 				{ stdout: json({ selected: true }) },
@@ -860,9 +848,11 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				"otp-current": "unused-o",
 			});
 			const { seam } = confidentialSeam("run-neutral-auth", hook, false);
-			const outcome = await executePreparedRunbook(
+			const outcome = await runRunbook(
 				{
+					fs: createDefaultPlatformFs(),
 					runtime,
+					dataRoot,
 					authDelivery: async (input) => {
 						events.push("auth");
 						return await seam(input);
@@ -873,20 +863,27 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					},
 				},
 				{
-					plan: prepared.plan,
+					serviceId: "oncore",
+					flowId: "neutral-auth",
 					handoff: HANDOFF,
 					runId: "run-neutral-auth",
 					targetTabId: "t1",
 					expectedTargetUrl: "about:blank",
+					inputs: {},
+					resumeFromStep: 0,
 				},
 			);
 			expect(outcome.ok).toBe(true);
-			expect(events.indexOf("open https://portal.example.com/timesheets")).toBeLessThan(
-				events.indexOf("checkpoint 1"),
+			expect(events).toContain("open https://portal.example.com/timesheets");
+			expect(events).toContain("checkpoint 1");
+			expect(events).toContain("auth");
+			const openIndex = events.indexOf(
+				"open https://portal.example.com/timesheets",
 			);
-			expect(events.indexOf("checkpoint 1")).toBeLessThan(
-				events.indexOf("auth"),
-			);
+			const checkpointIndex = events.indexOf("checkpoint 1");
+			const authIndex = events.indexOf("auth");
+			expect(openIndex).toBeLessThan(checkpointIndex);
+			expect(checkpointIndex).toBeLessThan(authIndex);
 		}),
 	);
 
@@ -955,6 +952,103 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 			});
 			expect(authCalls).toBe(0);
 			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
+	test(
+		"keeps confidential leading-open execution fused for an allowed non-neutral target",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "allowed-origin-auth",
+					steps: [
+						{
+							kind: "open",
+							url: "https://portal.example.com/timesheets",
+							postcondition: {
+								kind: "url-equals",
+								url: "https://portal.example.com/timesheets",
+							},
+						},
+						{ kind: "snapshot", interactive: true },
+						{
+							kind: "fill",
+							ref: "@e1",
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "allowed-origin-auth",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const expectedTargetUrl = "https://portal.example.com/timesheets";
+			const base = runtimeFor([
+				{
+					stdout: json({
+						tabs: [{ tabId: "t1", url: expectedTargetUrl }],
+					}),
+				},
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: expectedTargetUrl }) },
+				{ stdout: json({ opened: true }) },
+				{ stdout: json({ url: expectedTargetUrl }) },
+				{ stdout: json({ refs: { "@e1": {} } }) },
+			]);
+			const events: string[] = [];
+			const runtime: AgentBrowserExecutionRuntime = {
+				beforeMutationDispatch: base.beforeMutationDispatch,
+				runCommand: async (command) => {
+					events.push(command.args.slice(4, 6).join(" "));
+					return await base.runCommand(command);
+				},
+			};
+			const { hook } = confidentialLeakHelper({
+				username: "unused-u",
+				password: "unused-p",
+				"otp-current": "unused-o",
+			});
+			const { seam } = confidentialSeam("run-allowed-origin-auth", hook, false);
+			const outcome = await executePreparedRunbook(
+				{
+					runtime,
+					authDelivery: async (input) => {
+						events.push("auth");
+						return await seam(input);
+					},
+					afterNeutralOpen: async (nextStep) => {
+						events.push(`checkpoint ${nextStep}`);
+						return true;
+					},
+				},
+				{
+					plan: prepared.plan,
+					handoff: HANDOFF,
+					runId: "run-allowed-origin-auth",
+					targetTabId: "t1",
+					expectedTargetUrl,
+				},
+			);
+
+			expect(outcome.ok).toBe(true);
+			expect(events[0]).toBe("auth");
+			expect(events).toContain("open https://portal.example.com/timesheets");
+			expect(events).not.toContain("checkpoint 1");
 		}),
 	);
 

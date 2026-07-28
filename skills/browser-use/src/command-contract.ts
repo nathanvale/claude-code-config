@@ -973,6 +973,28 @@ export const browserUsePlatformStoreSuccessActions = [
 	},
 ] as const;
 
+// Runbook target repair ids are shared by task-run and runbook-run discovery.
+export const browserUseRunbookTargetRepairActions = [
+	{
+		id: "prepare_unique_runbook_target",
+		summary:
+			"Leave exactly one admissible runbook tab in the verified session, then retry the original command.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_runbook_handoff",
+		summary:
+			"Re-mint the verified Agent Browser handoff with browser-connect connect --json, then retry the original runbook command.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "restore_bound_runbook_target",
+		summary:
+			"Restore the runbook's bound tab in the verified session, or start a new run; never rebind the existing run.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 // Wave-2 task run front door runtime action ids (release contract R6-R11, R23;
 // flows F1, F7). The stable continuation.next_action_id vocabulary `task run`
 // emits. Failure ids name executable recoveries; a refused route or an unknown
@@ -1026,24 +1048,7 @@ export const browserUseTaskRunFailureActions = [
 			"Correct the task run intent, lane, handoff, target, or origin arguments and retry.",
 		sideEffects: ["check"],
 	},
-	{
-		id: "prepare_unique_runbook_target",
-		summary:
-			"Leave exactly one admissible runbook tab in the verified session, then retry the original command.",
-		sideEffects: ["check"],
-	},
-	{
-		id: "refresh_runbook_handoff",
-		summary:
-			"Re-mint the verified Agent Browser handoff with browser-connect connect --json, then retry the original runbook command.",
-		sideEffects: ["check"],
-	},
-	{
-		id: "restore_bound_runbook_target",
-		summary:
-			"Restore the runbook's bound tab in the verified session, or start a new run; never rebind the existing run.",
-		sideEffects: ["check"],
-	},
+	...browserUseRunbookTargetRepairActions,
 ] as const;
 
 export const browserUseTaskRunSuccessActions = [
@@ -2079,7 +2084,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,
-				failure: browserUsePlatformStoreFailureActions,
+				failure: [
+					...browserUsePlatformStoreFailureActions,
+					...browserUseRunbookTargetRepairActions,
+				],
 			},
 			flags: browserUseRunbookRunFlags,
 			exitCodes: browserUsePlatformExitCodes,

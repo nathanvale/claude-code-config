@@ -848,6 +848,26 @@ describe("Agent Browser target resolution", () => {
 		]);
 	});
 
+	test("does not reconnect a target-list failure without a connection signal", async () => {
+		const runtime = runtimeFor([{ stdout: semanticFailure() }]);
+
+		const result = await resolveAgentBrowserTaskTarget(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-target-list-semantic-failure",
+			allowed_origins: ["https://example.test"],
+			steps: [openStep],
+			target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_target_unavailable",
+		});
+		expect(runtime.calls.map((call) => call.slice(5))).toEqual([
+			["tab", "list", "--json"],
+		]);
+	});
+
 	test("preserves an explicit exact override when multiple tabs are admissible", async () => {
 		const runtime = runtimeFor([
 			{

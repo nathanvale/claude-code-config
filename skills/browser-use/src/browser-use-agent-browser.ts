@@ -28,6 +28,7 @@ import {
 	agentBrowserAllowedOriginSet,
 	agentBrowserHasExactOrigin,
 	agentBrowserOriginIsAllowed,
+	neutralTargetIsAllowed,
 	reproveAgentBrowserOrigin,
 	resolveAgentBrowserTarget,
 	selectAgentBrowserTarget,
@@ -540,8 +541,7 @@ function validateTask(
 			) &&
 				!(
 					task.allow_neutral_target === true &&
-					task.expected_target_url === "about:blank" &&
-					task.steps[0]?.kind === "open"
+					neutralTargetIsAllowed(task.expected_target_url, task.steps)
 				)))
 	) {
 		return failure(

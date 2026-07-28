@@ -523,6 +523,19 @@ describe("shared-run payload validation (R24)", () => {
 		expect(validateSharedRunPayload(basePayload())).toEqual([]);
 	});
 
+	test("partial private runbook state is a typed payload issue", () => {
+		expect(
+			validateSharedRunPayload(
+				basePayload({
+					task_intent: "runbook-execution",
+					runbook_progress: RUNBOOK_PROGRESS,
+				}),
+			),
+		).toEqual([
+			expect.objectContaining({ code: "runbook_private_state_incomplete" }),
+		]);
+	});
+
 	test("revision below 1 is a typed CAS-token issue", () => {
 		expect(validateSharedRunPayload(basePayload({ revision: 0 }))).toEqual([
 			expect.objectContaining({ code: "run_revision_invalid" }),

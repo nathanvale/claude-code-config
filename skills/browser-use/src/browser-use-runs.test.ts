@@ -522,6 +522,43 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
 	});
 
+	test("a legacy run cannot persist progress without its target binding", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-progress-without-binding", {
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "progress-without-binding",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "partial-state-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "snapshot-verify",
+					runbook_version: "1",
+					next_step: 0,
+					total_steps: 3,
+				},
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
 	test("a mutated legacy run cannot acquire a late target binding", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);

@@ -156,8 +156,18 @@ async function listTabsForResolution(
 				: { ok: true, tabs };
 		}
 
-		lastSignal =
-			connectionSignalOf(listed) ?? "Agent Browser tab-list command failed";
+		const signal = connectionSignalOf(listed);
+		if (signal === undefined) {
+			return {
+				ok: false,
+				failure: failure(
+					"agent_browser_target_unavailable",
+					"not-achieved",
+					"Agent Browser could not list tabs through the verified handoff.",
+				),
+			};
+		}
+		lastSignal = signal;
 		if (attempts < CONNECTION_ESTABLISH_ATTEMPTS) {
 			await run(["get", "cdp-url", "--json"]);
 		}
@@ -181,7 +191,7 @@ async function listTabsForResolution(
 	};
 }
 
-function neutralTargetIsAllowed(
+export function neutralTargetIsAllowed(
 	url: string,
 	steps: AgentBrowserTargetResolutionInput["steps"],
 ): boolean {

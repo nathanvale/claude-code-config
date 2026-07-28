@@ -331,6 +331,7 @@ export type BrowserUseRunIssueCode =
 	| "run_ready_without_attestation"
 	| "run_ready_with_continuation"
 	| "run_adapter_unregistered"
+	| "runbook_private_state_incomplete"
 	| "runbook_target_binding_invalid"
 	| "runbook_progress_invalid";
 
@@ -395,6 +396,14 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 		});
 	}
 	const binding = run.runbook_target_binding;
+	const progress = run.runbook_progress;
+	if ((binding === undefined) !== (progress === undefined)) {
+		issues.push({
+			code: "runbook_private_state_incomplete",
+			message:
+				"runbook_target_binding and runbook_progress must be committed together or both absent.",
+		});
+	}
 	if (
 		binding !== undefined &&
 		(binding.schema_version !== "1" ||
@@ -412,7 +421,6 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 				"runbook_target_binding requires schema version 1, an exact or automatic mode, an opaque binding id, and a handoff-bound agent-browser runbook run.",
 		});
 	}
-	const progress = run.runbook_progress;
 	if (
 		progress !== undefined &&
 		(progress.schema_version !== "1" ||

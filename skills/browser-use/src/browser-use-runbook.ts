@@ -576,6 +576,7 @@ export async function executePreparedRunbook(
 	}
 	let completedNeutralOpen: AgentBrowserExecutionResult | undefined;
 	if (
+		input.expectedTargetUrl === "about:blank" &&
 		neutralOpen !== undefined &&
 		plan.pending_item_bindings.length > 0 &&
 		deps.afterNeutralOpen !== undefined
@@ -707,8 +708,12 @@ export async function executePreparedRunbook(
  * `resume_from_step + executed_steps` so a later resume replays only unproven
  * steps.
  *
- * @param deps - fs port, agent-browser runtime, admitted data root
- * @param input - Runbook id, verified handoff, target tab, inputs, resume index
+ * A caller starting a confidential runbook from `about:blank` supplies both
+ * `expectedTargetUrl` and `afterNeutralOpen`. The hook must durably checkpoint
+ * the confirmed first open before authentication construction can proceed.
+ *
+ * @param deps - fs port, runtime, data root, auth and neutral checkpoint seams
+ * @param input - Runbook id, handoff, target tab and URL, inputs, resume index
  * @returns One typed refusal, or the executor's structural result plus plan facts
  */
 export async function runRunbook(
@@ -723,6 +728,11 @@ export async function runRunbook(
 		 * pointer rather than dispatching an unauthenticated fill.
 		 */
 		authDelivery?: BrowserUseRunbookAuthDelivery;
+		/**
+		 * Durable checkpoint after a neutral first open. Required with
+		 * `expectedTargetUrl: "about:blank"` for confidential runbooks.
+		 */
+		afterNeutralOpen?: (nextStep: number) => Promise<boolean>;
 	},
 	input: {
 		serviceId: string;
@@ -730,6 +740,7 @@ export async function runRunbook(
 		handoff: AgentBrowserVerifiedHandoff;
 		runId: string;
 		targetTabId: string;
+		expectedTargetUrl?: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
 	},
@@ -747,12 +758,18 @@ export async function runRunbook(
 			...(deps.authDelivery !== undefined
 				? { authDelivery: deps.authDelivery }
 				: {}),
+			...(deps.afterNeutralOpen !== undefined
+				? { afterNeutralOpen: deps.afterNeutralOpen }
+				: {}),
 		},
 		{
 			plan: prepared.plan,
 			handoff: input.handoff,
 			runId: input.runId,
 			targetTabId: input.targetTabId,
+			...(input.expectedTargetUrl !== undefined
+				? { expectedTargetUrl: input.expectedTargetUrl }
+				: {}),
 		},
 	);
 }

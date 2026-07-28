@@ -229,6 +229,19 @@ export type DurableRecordParse<P> =
 			message: string;
 	  };
 
+type BrowserUseSharedRunSchemaVersion =
+	| typeof BROWSER_USE_DURABLE_SCHEMA_VERSION
+	| typeof BROWSER_USE_SHARED_RUN_SCHEMA_VERSION;
+
+function isSharedRunSchemaVersion(
+	value: unknown,
+): value is BrowserUseSharedRunSchemaVersion {
+	return (
+		value === BROWSER_USE_DURABLE_SCHEMA_VERSION ||
+		value === BROWSER_USE_SHARED_RUN_SCHEMA_VERSION
+	);
+}
+
 /**
  * Parse raw file text into one expected record kind (R10, R13 validation
  * step). Checks run in envelope order: JSON shape, record kind, schema
@@ -270,26 +283,24 @@ export function parseDurableRecord<K extends BrowserUseDurableRecordKind>(
 			),
 		};
 	}
-	const supportedVersions =
-		expected === "shared-run"
-			? [
-					BROWSER_USE_DURABLE_SCHEMA_VERSION,
-					BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
-				]
-			: [BROWSER_USE_DURABLE_SCHEMA_VERSION];
-	if (!supportedVersions.includes(parsed.schema_version as "1" | "2")) {
+	const unsupportedVersion = (supportedVersions: string) => {
 		const found = stringField(parsed.schema_version) ?? "no schema version";
 		return {
-			ok: false,
-			code: "record_version_unsupported",
+			ok: false as const,
+			code: "record_version_unsupported" as const,
 			message: redactUnsafeText(
-				`record kind ${expected} supports schema version ${supportedVersions.join(" or ")} but found ${found}.`,
+				`record kind ${expected} supports schema version ${supportedVersions} but found ${found}.`,
 			),
 		};
-	}
+	};
 	if (expected === "shared-run") {
+		if (!isSharedRunSchemaVersion(parsed.schema_version)) {
+			return unsupportedVersion(
+				`${BROWSER_USE_DURABLE_SCHEMA_VERSION} or ${BROWSER_USE_SHARED_RUN_SCHEMA_VERSION}`,
+			);
+		}
 		const versionProblem = sharedRunEnvelopeVersionProblem(
-			parsed.schema_version as "1" | "2",
+			parsed.schema_version,
 			parsed.payload,
 		);
 		if (versionProblem !== undefined) {
@@ -299,6 +310,8 @@ export function parseDurableRecord<K extends BrowserUseDurableRecordKind>(
 				message: redactUnsafeText(versionProblem),
 			};
 		}
+	} else if (parsed.schema_version !== BROWSER_USE_DURABLE_SCHEMA_VERSION) {
+		return unsupportedVersion(BROWSER_USE_DURABLE_SCHEMA_VERSION);
 	}
 	const problem = PAYLOAD_PROBLEMS[expected](parsed.payload);
 	if (problem !== undefined) {

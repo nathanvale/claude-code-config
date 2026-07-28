@@ -123,10 +123,12 @@ import {
 import {
 	type LeaseWriteClaim,
 	acquireLease,
+	heartbeatLease,
 	listLeases,
 	releaseLease,
 	withActivationEpochBarrier,
 } from "./browser-use-locks";
+import type { BrowserUseLeasePayload } from "./browser-use-schemas";
 import {
 	deleteArtifact,
 	listPendingTombstones,
@@ -1283,6 +1285,63 @@ function platformStoreFailureOf(
 				recoverability: "repair_state",
 			};
 	}
+}
+
+const RUNBOOK_DISPATCH_LEASE_TTL_MS = 600_000;
+const RUNBOOK_DISPATCH_HEARTBEAT_INTERVAL_MS =
+	RUNBOOK_DISPATCH_LEASE_TTL_MS / 3;
+
+function startRunbookDispatchLeaseHeartbeat(
+	deps: RunStoreDeps,
+	lease: BrowserUseLeasePayload,
+): {
+	failure: () => PlatformStoreFailure | undefined;
+	stop: () => Promise<BrowserUseLeasePayload>;
+} {
+	let currentLease = lease;
+	let failure: PlatformStoreFailure | undefined;
+	let stopRequested = false;
+	let wake: (() => void) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const completed = (async () => {
+		while (!stopRequested) {
+			await new Promise<void>((resolve) => {
+				const finishWait = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					timer = undefined;
+					wake = undefined;
+					resolve();
+				};
+				wake = finishWait;
+				timer = setTimeout(
+					finishWait,
+					RUNBOOK_DISPATCH_HEARTBEAT_INTERVAL_MS,
+				);
+			});
+			if (stopRequested) break;
+			const renewed = await heartbeatLease(deps, currentLease, {
+				ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
+			});
+			if (!renewed.ok) {
+				const message =
+					"message" in renewed
+						? renewed.message
+						: renewed.continuation.summary;
+				failure = platformStoreFailureOf(renewed.code, message);
+				break;
+			}
+			currentLease = renewed.lease;
+		}
+	})();
+	return {
+		failure: () => failure,
+		stop: async () => {
+			stopRequested = true;
+			wake?.();
+			await completed;
+			return currentLease;
+		},
+	};
 }
 
 function emitPlatformStoreFailure(
@@ -3597,12 +3656,15 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		storedBinding !== undefined &&
 		storedBinding.binding_id !== targetResolution.binding.target_candidate_id
 	) {
+		const mismatchSubject =
+			explicitTabId === undefined
+				? "the automatically resolved target"
+				: "the explicit --tab target";
 		const moved: Extract<AgentBrowserTargetResolutionResult, { ok: false }> = {
 			ok: false,
 			code: "agent_browser_target_moved",
 			outcome: "not-achieved",
-			message:
-				"the explicit target does not match the target bound to this run.",
+			message: `${mismatchSubject} does not match the target bound to this run.`,
 			executed_steps: 0,
 			mutation_dispatched: false,
 		};
@@ -3679,7 +3741,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	const dispatchLease = await acquireLease(store.deps, {
 		key: leaseKeyForRun(run),
 		holderId: `runbook-dispatch-${run.run_id}`,
-		ttlMs: 600_000,
+		ttlMs: RUNBOOK_DISPATCH_LEASE_TTL_MS,
 	});
 	if (!dispatchLease.ok) {
 		return emitPlatformStoreFailure(
@@ -3697,6 +3759,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		activation_epoch: dispatchLease.lease.activation_epoch,
 		holderId: dispatchLease.lease.holder_id,
 	};
+	const dispatchHeartbeat = startRunbookDispatchLeaseHeartbeat(
+		store.deps,
+		dispatchLease.lease,
+	);
 	try {
 	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
 	// non-sensitive until confidential delivery participates. A confidential
@@ -3784,6 +3850,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			runbookFailureOf(outcome.refusal.code, outcome.refusal.message),
 		);
 	}
+	const heartbeatFailure = dispatchHeartbeat.failure();
+	if (heartbeatFailure !== undefined) {
+		return emitPlatformStoreFailure(input, heartbeatFailure);
+	}
 
 	// Persist the executor's structural truth through the shared pipeline. If
 	// confidential delivery engaged (a confidential runbook routed through the
@@ -3820,7 +3890,8 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		},
 	);
 	} finally {
-		await releaseLease(store.deps, dispatchLease.lease);
+		const currentDispatchLease = await dispatchHeartbeat.stop();
+		await releaseLease(store.deps, currentDispatchLease);
 	}
 }
 

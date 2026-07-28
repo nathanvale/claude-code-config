@@ -18,6 +18,7 @@ import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
 import { parseHandoffFacts } from "./browser-use-discovery";
+import { browserUseContracts } from "./command-contract";
 
 // =========================================================================
 // Wave-3 shared-CLI integration: chrome-devtools-mcp task-run dispatch and the
@@ -342,6 +343,20 @@ describe("task run — chrome-devtools-mcp dispatch (U4 wiring)", () => {
 // =========================================================================
 
 describe("runbook family — live (U4 wiring)", () => {
+	test("runbook run discovery advertises every target repair continuation", () => {
+		const actionIds =
+			browserUseContracts["runbook-run"].actionAffordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+		expect(actionIds).toEqual(
+			expect.arrayContaining([
+				"prepare_unique_runbook_target",
+				"refresh_runbook_handoff",
+				"restore_bound_runbook_target",
+			]),
+		);
+	});
+
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
@@ -496,11 +511,32 @@ describe("runbook family — live (U4 wiring)", () => {
 			"run-runbook-transport",
 		);
 		const { runtime, calls } = scriptedRuntime(store.env, [
-			{ exitCode: 1 },
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
 			{ stdout: agentSuccess({ cdpUrl: "ws://fixture" }) },
-			{ exitCode: 1 },
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
 			{ stdout: agentSuccess({ cdpUrl: "ws://fixture" }) },
-			{ exitCode: 1 },
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					success: false,
+					data: null,
+					error: "CDP WebSocket connect failed",
+				}),
+			},
 		]);
 		const result = await runForTest(
 			[
@@ -757,6 +793,15 @@ describe("runbook family — live (U4 wiring)", () => {
 			).ok,
 		).toBe(true);
 		const calls: Array<readonly string[]> = [];
+		let signalFirstSnapshotStarted: (() => void) | undefined;
+		const firstSnapshotStarted = new Promise<void>((resolve) => {
+			signalFirstSnapshotStarted = resolve;
+		});
+		let releaseFirstSnapshot: (() => void) | undefined;
+		const firstSnapshotMayFinish = new Promise<void>((resolve) => {
+			releaseFirstSnapshot = resolve;
+		});
+		let snapshotInvocationCount = 0;
 		const runtime = makeRuntime({
 			env: store.env,
 			now: () => 1_000,
@@ -769,7 +814,11 @@ describe("runbook family — live (U4 wiring)", () => {
 				const semantic = input.args.slice(4);
 				calls.push(semantic);
 				if (semantic[0] === "snapshot") {
-					await new Promise((resolve) => setTimeout(resolve, 100));
+					snapshotInvocationCount += 1;
+					if (snapshotInvocationCount === 1) {
+						signalFirstSnapshotStarted?.();
+						await firstSnapshotMayFinish;
+					}
 					return {
 						exitCode: 0,
 						stdout: agentSuccess({ refs: {} }),
@@ -801,11 +850,17 @@ describe("runbook family — live (U4 wiring)", () => {
 			"--handoff", handoffPath,
 			"--json",
 		] as const;
-		const results = await Promise.all([
-			runForTest(argv, runtime),
-			runForTest(argv, runtime),
-		]);
-		expect(results.map((result) => result.exitCode).sort()).toEqual([0, 20]);
+		const firstResultPromise = runForTest(argv, runtime);
+		await firstSnapshotStarted;
+		const secondResult = await runForTest(argv, runtime);
+		releaseFirstSnapshot?.();
+		const firstResult = await firstResultPromise;
+		const results = [firstResult, secondResult];
+		expect(
+			results
+				.map((result) => result.exitCode)
+				.sort((left, right) => left - right),
+		).toEqual([0, 20]);
 		expect(calls.filter((call) => call[0] === "snapshot")).toHaveLength(1);
 		const loaded = await loadSharedRun(store.deps, runId);
 		expect(loaded.ok).toBe(true);
