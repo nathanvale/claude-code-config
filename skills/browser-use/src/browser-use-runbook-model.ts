@@ -92,6 +92,67 @@ const INPUT_SCHEMA_MAX_PATTERN_LENGTH = 512;
 /** Bounded array length a value may carry when validated against a schema. */
 export const INPUT_VALUE_MAX_ARRAY_LENGTH = 256;
 
+// fallow-ignore-next-line complexity
+function patternHasUnsafeBacktrackingShape(pattern: string): boolean {
+	const groups: Array<{ alternation: boolean; quantified: boolean }> = [];
+	let escaped = false;
+	let inCharacterClass = false;
+	for (let index = 0; index < pattern.length; index += 1) {
+		const character = pattern[index];
+		if (escaped) {
+			if (!inCharacterClass && (/[1-9]/.test(character ?? "") || character === "k")) {
+				return true;
+			}
+			escaped = false;
+			continue;
+		}
+		if (character === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (character === "[") {
+			inCharacterClass = true;
+			continue;
+		}
+		if (character === "]" && inCharacterClass) {
+			inCharacterClass = false;
+			continue;
+		}
+		if (inCharacterClass) continue;
+		if (character === "(") {
+			if (pattern[index + 1] === "?") {
+				if (pattern[index + 2] !== ":") return true;
+				index += 2;
+			}
+			groups.push({ alternation: false, quantified: false });
+			continue;
+		}
+		if (character === "|") {
+			const group = groups.at(-1);
+			if (group !== undefined) group.alternation = true;
+			continue;
+		}
+		if (character === ")") {
+			const group = groups.pop();
+			if (group === undefined) continue;
+			const suffix = pattern.slice(index + 1);
+			const groupIsQuantified = /^(?:[+*?]|\{\d+(?:,\d*)?\})/.test(suffix);
+			if (groupIsQuantified && (group.alternation || group.quantified)) return true;
+			const parent = groups.at(-1);
+			if (parent !== undefined) {
+				parent.alternation ||= group.alternation;
+				parent.quantified ||= group.quantified || groupIsQuantified;
+			}
+			continue;
+		}
+		if (character === "*" || character === "+" || character === "?" || character === "{") {
+			const group = groups.at(-1);
+			if (group !== undefined) group.quantified = true;
+		}
+	}
+	return false;
+}
+
 /**
  * The recursive typed-input value schema vocabulary (R9). Each variant is a
  * runtime-validated shape a v2 input declares. `default` and `bounds` are per
@@ -388,6 +449,12 @@ function validateValueSchema(
 				} else {
 					try {
 						new RegExp(schema.pattern);
+						if (patternHasUnsafeBacktrackingShape(schema.pattern)) {
+							issues.push({
+								code: "runbook_input_schema_invalid",
+								message: `${at}: string schema pattern has an unsafe backtracking shape.`,
+							});
+						}
 					} catch {
 						issues.push({
 							code: "runbook_input_schema_invalid",
@@ -546,7 +613,12 @@ export function valueMatchesSchema(
 			if (schema.min_length !== undefined && value.length < schema.min_length) return false;
 			if (schema.max_length !== undefined && value.length > schema.max_length) return false;
 			if (schema.pattern !== undefined) {
-				if (schema.pattern.length > INPUT_SCHEMA_MAX_PATTERN_LENGTH) return false;
+				if (
+					schema.pattern.length > INPUT_SCHEMA_MAX_PATTERN_LENGTH ||
+					patternHasUnsafeBacktrackingShape(schema.pattern)
+				) {
+					return false;
+				}
 				let anchored: RegExp;
 				try {
 					anchored = new RegExp(`^(?:${schema.pattern})$`);

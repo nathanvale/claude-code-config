@@ -732,6 +732,13 @@ describe("run item-batch validation (R12)", () => {
 		expect(
 			runItemBatchValidationProblem({
 				schema_version: "1",
+				item_keys: Array.from({ length: 513 }, (_, index) => `item-${index}`),
+				checkpoints: [],
+			}),
+		).toContain("between 1 and 512");
+		expect(
+			runItemBatchValidationProblem({
+				schema_version: "1",
 				item_keys: ["bad key"],
 				checkpoints: [],
 			}),

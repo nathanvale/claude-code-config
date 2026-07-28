@@ -411,6 +411,23 @@ describe("v2 typed-input value schemas (R9)", () => {
 		expect(issues.map((i) => i.code)).toContain("runbook_input_schema_invalid");
 	});
 
+	test("rejects string patterns with unsafe backtracking shapes", () => {
+		for (const pattern of ["(a+)+$", "(a|aa)+$", String.raw`(a)\1`]) {
+			const issues = validateRunbook(
+				inputSchema({ kind: "string", pattern }),
+			);
+			expect(issues.map((issue) => issue.code)).toContain(
+				"runbook_input_schema_invalid",
+			);
+			expect(valueMatchesSchema("aaaaaaaa!", { kind: "string", pattern })).toBe(
+				false,
+			);
+		}
+		expect(valueMatchesSchema("ABC-123", { kind: "string", pattern: "[A-Z]+-[0-9]{3}" })).toBe(
+			true,
+		);
+	});
+
 	test("rejects oversized patterns and inverted string or array bounds", () => {
 		for (const schema of [
 			{ kind: "string", pattern: "a".repeat(513) },
