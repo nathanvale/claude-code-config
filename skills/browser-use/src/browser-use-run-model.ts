@@ -285,6 +285,50 @@ export type BrowserUseRunbookProgress = {
 	total_steps: number;
 };
 
+/**
+ * The IMMUTABLE run execution binding persisted at run creation (R38, KTD13).
+ * Pins a run to one exact catalog identity so a resume resolves ONLY the pinned
+ * generation and rejects any replacement authority from flags. The rich
+ * resolver logic (drift/epoch/input/item-key checks) lives in
+ * browser-use-runbook-actions.ts; the run carries the pinned facts durably.
+ * Exactly one of `normalized_input_digest` / `governed_input_artifact_ref` is
+ * present (R41 — an ordinary input keeps only a digest; a sensitive input is a
+ * retention-owned artifact ref).
+ */
+export type BrowserUseRunExecutionBindingState = {
+	schema_version: "1";
+	generation_id: string;
+	activation_epoch: number;
+	service_id: string;
+	flow_id: string;
+	runbook_version: string;
+	runbook_digest: string;
+	action_registry_digest: string;
+	normalized_input_digest?: string;
+	governed_input_artifact_ref?: string;
+	item_key_digest: string;
+	target_scope: string;
+	postcondition: { id: string; summary: string };
+};
+
+/**
+ * One durable stable-key item checkpoint (R12): the item key and its proven
+ * outcome. A `confirmed` checkpoint is immutable; an `unknown` checkpoint blocks
+ * the batch (never redispatched, no later item runs). Outcome vocabulary mirrors
+ * browser-use-runbook-actions.ts.
+ */
+export type BrowserUseRunItemCheckpoint = {
+	item_key: string;
+	outcome: "pending" | "confirmed" | "not-achieved" | "unknown";
+};
+
+/** Durable bounded-iteration batch state (R12): ordered keys plus checkpoints. */
+export type BrowserUseRunItemBatchState = {
+	schema_version: "1";
+	item_keys: readonly string[];
+	checkpoints: readonly BrowserUseRunItemCheckpoint[];
+};
+
 // --- The shared run ----------------------------------------------------------
 
 /**
@@ -307,6 +351,10 @@ export type BrowserUseSharedRun = {
 	runbook_target_binding?: BrowserUseRunbookTargetBinding;
 	/** Independent progress cursor; repair continuations cannot replace it. */
 	runbook_progress?: BrowserUseRunbookProgress;
+	/** Immutable execution binding (R38); a resume resolves only its pinned generation. */
+	run_execution_binding?: BrowserUseRunExecutionBindingState;
+	/** Durable bounded-iteration checkpoints (R12); an unknown item blocks the batch. */
+	item_batch?: BrowserUseRunItemBatchState;
 	/** Opaque versioned auth fragment; auth-owned content (R6). */
 	auth_fragment?: BrowserUseAuthFragmentSlot;
 	/** Bounded auth attestation reference; required before `ready` (R6). */
@@ -333,7 +381,9 @@ export type BrowserUseRunIssueCode =
 	| "run_adapter_unregistered"
 	| "runbook_private_state_incomplete"
 	| "runbook_target_binding_invalid"
-	| "runbook_progress_invalid";
+	| "runbook_progress_invalid"
+	| "run_execution_binding_invalid"
+	| "run_item_batch_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -346,6 +396,10 @@ function isBlockedState(state: BrowserUseRunState): boolean {
 		state,
 	);
 }
+
+const FULL_DIGEST = /^[0-9a-f]{64}$/;
+const SAFE_BATCH_ITEM_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ITEM_BATCH_MAX_KEYS = 512;
 
 /**
  * Validate shared-run invariants (R6, R24).
@@ -443,7 +497,84 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 				"runbook_progress requires schema version 1, runbook identity, and an integer cursor between zero and total_steps.",
 		});
 	}
+	const execBinding = run.run_execution_binding;
+	if (execBinding !== undefined && !runExecutionBindingValid(execBinding)) {
+		issues.push({
+			code: "run_execution_binding_invalid",
+			message:
+				"run_execution_binding requires schema version 1, pinned generation/flow/version identity, 64-hex digests, an item-key digest, a target scope, a postcondition, and exactly one of a normalized-input digest or a governed-input artifact reference.",
+		});
+	}
+	const itemBatch = run.item_batch;
+	if (itemBatch !== undefined && !itemBatchStateValid(itemBatch)) {
+		issues.push({
+			code: "run_item_batch_invalid",
+			message:
+				"item_batch requires schema version 1, a bounded stable-key sequence, and checkpoints referencing only keys in that sequence.",
+		});
+	}
 	return issues;
+}
+
+function runExecutionBindingValid(
+	binding: BrowserUseRunExecutionBindingState,
+): boolean {
+	const hasDigest = binding.normalized_input_digest !== undefined;
+	const hasGoverned = binding.governed_input_artifact_ref !== undefined;
+	return (
+		binding.schema_version === "1" &&
+		typeof binding.generation_id === "string" &&
+		binding.generation_id.length > 0 &&
+		Number.isInteger(binding.activation_epoch) &&
+		binding.activation_epoch >= 1 &&
+		typeof binding.service_id === "string" &&
+		binding.service_id.length > 0 &&
+		typeof binding.flow_id === "string" &&
+		binding.flow_id.length > 0 &&
+		typeof binding.runbook_version === "string" &&
+		binding.runbook_version.length > 0 &&
+		FULL_DIGEST.test(binding.runbook_digest) &&
+		FULL_DIGEST.test(binding.action_registry_digest) &&
+		FULL_DIGEST.test(binding.item_key_digest) &&
+		typeof binding.target_scope === "string" &&
+		binding.target_scope.length > 0 &&
+		typeof binding.postcondition?.id === "string" &&
+		binding.postcondition.id.length > 0 &&
+		typeof binding.postcondition.summary === "string" &&
+		// Exactly one input-custody form (R41).
+		hasDigest !== hasGoverned &&
+		(!hasDigest || FULL_DIGEST.test(binding.normalized_input_digest as string)) &&
+		(!hasGoverned ||
+			(typeof binding.governed_input_artifact_ref === "string" &&
+				(binding.governed_input_artifact_ref as string).length > 0))
+	);
+}
+
+function itemBatchStateValid(batch: BrowserUseRunItemBatchState): boolean {
+	if (
+		batch.schema_version !== "1" ||
+		!Array.isArray(batch.item_keys) ||
+		batch.item_keys.length === 0 ||
+		batch.item_keys.length > ITEM_BATCH_MAX_KEYS
+	) {
+		return false;
+	}
+	const keys = new Set<string>();
+	for (const key of batch.item_keys) {
+		if (!SAFE_BATCH_ITEM_KEY.test(key) || keys.has(key)) return false;
+		keys.add(key);
+	}
+	for (const checkpoint of batch.checkpoints) {
+		if (
+			!keys.has(checkpoint.item_key) ||
+			!["pending", "confirmed", "not-achieved", "unknown"].includes(
+				checkpoint.outcome,
+			)
+		) {
+			return false;
+		}
+	}
+	return true;
 }
 
 // --- Auth integration Port (R6, KTD10) ---------------------------------------

@@ -613,3 +613,78 @@ describe("task intent catalog (R21-R23)", () => {
 		expect(ids.has("performance-profile")).toBe(true);
 	});
 });
+
+// --- U3: immutable execution binding + item-batch validation (R38, R12) ------
+
+const EXEC_BINDING = {
+	schema_version: "1",
+	generation_id: "gen-a",
+	activation_epoch: 3,
+	service_id: "oncore",
+	flow_id: "fill-timesheet",
+	runbook_version: "1.0.0",
+	runbook_digest: "a".repeat(64),
+	action_registry_digest: "b".repeat(64),
+	normalized_input_digest: "c".repeat(64),
+	item_key_digest: "d".repeat(64),
+	target_scope: "https://portal.example.com",
+	postcondition: { id: "saved", summary: "draft saved" },
+} as const;
+
+describe("run execution binding validation (R38)", () => {
+	test("a well-formed binding passes", () => {
+		expect(
+			validateSharedRun(baseRun({ run_execution_binding: EXEC_BINDING })),
+		).toEqual([]);
+	});
+
+	test("a binding carrying BOTH input-custody forms refuses (R41)", () => {
+		const issues = validateSharedRun(
+			baseRun({
+				run_execution_binding: {
+					...EXEC_BINDING,
+					governed_input_artifact_ref: "artifact://x",
+				},
+			}),
+		);
+		expect(issues.map((i) => i.code)).toContain("run_execution_binding_invalid");
+	});
+
+	test("a binding with a short digest refuses", () => {
+		const issues = validateSharedRun(
+			baseRun({
+				run_execution_binding: { ...EXEC_BINDING, action_registry_digest: "short" },
+			}),
+		);
+		expect(issues.map((i) => i.code)).toContain("run_execution_binding_invalid");
+	});
+});
+
+describe("run item-batch validation (R12)", () => {
+	test("a well-formed batch passes", () => {
+		expect(
+			validateSharedRun(
+				baseRun({
+					item_batch: {
+						schema_version: "1",
+						item_keys: ["mon", "tue"],
+						checkpoints: [{ item_key: "mon", outcome: "confirmed" }],
+					},
+				}),
+			),
+		).toEqual([]);
+	});
+
+	test("a checkpoint referencing a key outside the sequence refuses", () => {
+		const issues = validateSharedRun(
+			baseRun({
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [{ item_key: "wed", outcome: "confirmed" }],
+				},
+			}),
+		);
+		expect(issues.map((i) => i.code)).toContain("run_item_batch_invalid");
+	});
+});

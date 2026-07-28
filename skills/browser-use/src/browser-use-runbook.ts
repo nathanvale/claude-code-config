@@ -43,11 +43,18 @@ import {
 	type BrowserUseRunbookHealth,
 	type BrowserUseRunbookInputs,
 	type BrowserUseRunbookPlan,
+	type BrowserUseRunbookStep,
 	parseRunbookRecord,
 	projectRunbookCatalogRow,
 	planRunbookExecution,
 	validateRunbook,
 } from "./browser-use-runbook-model";
+import {
+	type BrowserUseActionGenerationSeam,
+	type BrowserUseReviewedActionRefusal,
+	resolveReviewedAction,
+} from "./browser-use-runbook-actions";
+import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
 
 // --- Discovery location ------------------------------------------------------
 
@@ -451,6 +458,7 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_resume_out_of_range"
 		| "runbook_neutral_checkpoint_unavailable"
 		| "runbook_action_registry_unavailable"
+		| "runbook_action_refused"
 		| "runbook_confidential_native_capability_absent"
 		| "runbook_confidential_delivery_unavailable";
 	message: string;
@@ -521,7 +529,106 @@ export type BrowserUsePreparedRunbookExecution =
 	| { ok: true; plan: BrowserUseRunbookPlan };
 
 /**
+ * The single allowed origin a reviewed action resolves against: a runbook that
+ * declares reviewed actions must declare EXACTLY ONE allowed origin so the
+ * action's exact allowed origin is unambiguous (R17). A runbook with reviewed
+ * actions and multiple origins is refused before any resolution.
+ */
+function singleAllowedOrigin(
+	runbook: BrowserUseRunbook,
+): { ok: true; origin: string } | { ok: false } {
+	return runbook.allowed_origins.length === 1 && runbook.allowed_origins[0] !== undefined
+		? { ok: true, origin: runbook.allowed_origins[0] }
+		: { ok: false };
+}
+
+// Substitute the runbook's typed inputs into an action step's declared input
+// map: each value is a scalar token or an already-structured input value keyed
+// by input id. `{{id}}` tokens resolve to the input value verbatim (structured
+// values pass through unchanged; scalar values render as the raw value).
+function resolveActionInputs(
+	declared: Readonly<Record<string, string>>,
+	inputs: BrowserUseRunbookInputs,
+): Readonly<Record<string, unknown>> {
+	const out: Record<string, unknown> = {};
+	for (const [key, token] of Object.entries(declared)) {
+		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
+		out[key] = match?.[1] !== undefined ? inputs[match[1]] : token;
+	}
+	return out;
+}
+
+/**
+ * Resolve every `action`/`iterate` step in a runbook into engine-verified
+ * executor `evaluate` steps (U3, R16-R23). Each action is resolved ONLY through
+ * the injected generation seam and the content-addressed reviewed-action
+ * registry; any refusal (candidate, changed digest, wrong origin, undeclared
+ * effect, invalid input, missing postcondition, unsupported containment) fails
+ * closed BEFORE any executor step is built. An `iterate` step expands into one
+ * verified action step per stable item key drawn from its `over_input` array.
+ *
+ * @returns A map (absolute step index -> verified executor steps), or the first
+ *   typed action refusal.
+ */
+async function resolveRunbookActionSteps(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+	seam: BrowserUseActionGenerationSeam,
+): Promise<
+	| { ok: true; resolved: ReadonlyMap<number, readonly AgentBrowserTaskStep[]> }
+	| { ok: false; refusal: BrowserUseReviewedActionRefusal }
+> {
+	const origin = singleAllowedOrigin(runbook);
+	const resolved = new Map<number, readonly AgentBrowserTaskStep[]>();
+	for (const [index, step] of runbook.steps.entries()) {
+		if (step.kind !== "action" && step.kind !== "iterate") continue;
+		if (!origin.ok) {
+			return {
+				ok: false,
+				refusal: {
+					code: "action_origin_invalid",
+					message:
+						"a runbook declaring reviewed actions must declare exactly one exact allowed origin.",
+				},
+			};
+		}
+		if (step.kind === "action") {
+			const one = await resolveReviewedAction({
+				actionId: step.action_id,
+				requestedOrigin: origin.origin,
+				inputs: resolveActionInputs(step.inputs, inputs),
+				seam,
+			});
+			if (!one.ok) return { ok: false, refusal: one.refusal };
+			resolved.set(index, [one.resolved.step]);
+			continue;
+		}
+		// iterate: one verified action per stable item key from `over_input`.
+		const overRaw = inputs[step.over_input];
+		const itemKeys = Array.isArray(overRaw) ? overRaw : [];
+		const steps: AgentBrowserTaskStep[] = [];
+		for (const key of itemKeys) {
+			const perItemInputs = resolveActionInputs(step.step.inputs, inputs);
+			const one = await resolveReviewedAction({
+				actionId: step.step.action_id,
+				requestedOrigin: origin.origin,
+				inputs: { ...perItemInputs, item_key: key },
+				seam,
+			});
+			if (!one.ok) return { ok: false, refusal: one.refusal };
+			steps.push(one.resolved.step);
+		}
+		resolved.set(index, steps);
+	}
+	return { ok: true, resolved };
+}
+
+/**
  * Load and compile one runbook before any target, auth, or durable-run effect.
+ * When the runbook declares reviewed-action or iteration steps, an
+ * `actionSeam` MUST be supplied so each action resolves through a staged/active
+ * generation and its content-addressed registry (U3); without it, an action
+ * step refuses `runbook_action_registry_unavailable`.
  */
 export async function prepareRunbookExecution(
 	fs: BrowserUsePlatformFs,
@@ -531,6 +638,7 @@ export async function prepareRunbookExecution(
 		flowId: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
+		actionSeam?: BrowserUseActionGenerationSeam;
 	},
 ): Promise<BrowserUsePreparedRunbookExecution> {
 	const shown = await showRunbook(fs, dataRoot, {
@@ -538,9 +646,34 @@ export async function prepareRunbookExecution(
 		flowId: input.flowId,
 	});
 	if (!shown.ok) return { ok: false, refusal: shown.failure };
+	let resolvedActionSteps:
+		| ReadonlyMap<number, readonly AgentBrowserTaskStep[]>
+		| undefined;
+	const hasActionSteps = shown.runbook.steps.some(
+		(step: BrowserUseRunbookStep) =>
+			step.kind === "action" || step.kind === "iterate",
+	);
+	if (hasActionSteps && input.actionSeam !== undefined) {
+		const resolution = await resolveRunbookActionSteps(
+			shown.runbook,
+			input.inputs,
+			input.actionSeam,
+		);
+		if (!resolution.ok) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_action_refused",
+					message: `reviewed action refused (${resolution.refusal.code}): ${resolution.refusal.message}`,
+				},
+			};
+		}
+		resolvedActionSteps = resolution.resolved;
+	}
 	const planned = planRunbookExecution(shown.runbook, {
 		inputs: input.inputs,
 		resumeFromStep: input.resumeFromStep,
+		...(resolvedActionSteps !== undefined ? { resolvedActionSteps } : {}),
 	});
 	return planned.ok
 		? { ok: true, plan: planned.plan }
@@ -740,6 +873,12 @@ export async function runRunbook(
 		 * `expectedTargetUrl: "about:blank"` for confidential runbooks.
 		 */
 		afterNeutralOpen?: (nextStep: number) => Promise<boolean>;
+		/**
+		 * The staged/active generation seam that resolves reviewed-action assets
+		 * (U3). Required for a runbook declaring `action`/`iterate` steps; absent
+		 * for action-free runbooks.
+		 */
+		actionSeam?: BrowserUseActionGenerationSeam;
 	},
 	input: {
 		serviceId: string;
@@ -757,6 +896,7 @@ export async function runRunbook(
 		flowId: input.flowId,
 		inputs: input.inputs,
 		resumeFromStep: input.resumeFromStep,
+		...(deps.actionSeam !== undefined ? { actionSeam: deps.actionSeam } : {}),
 	});
 	if (!prepared.ok) return prepared;
 	return await executePreparedRunbook(

@@ -760,3 +760,68 @@ describe("V5 — no secret-bearing fixture enters durable state", () => {
 		}
 	});
 });
+
+// --- U3: execution binding + item-batch persistence (R38, R12) ---------------
+
+describe("U3 private state persistence (R38, R12)", () => {
+	const EXEC_BINDING = {
+		schema_version: "1",
+		generation_id: "gen-a",
+		activation_epoch: 3,
+		service_id: "oncore",
+		flow_id: "fill-timesheet",
+		runbook_version: "1.0.0",
+		runbook_digest: "a".repeat(64),
+		action_registry_digest: "b".repeat(64),
+		normalized_input_digest: "c".repeat(64),
+		item_key_digest: "d".repeat(64),
+		target_scope: "https://portal.example.com",
+		postcondition: { id: "saved", summary: "draft saved" },
+	} as const;
+
+	test("a run carrying an execution binding + item-batch rides schema v2 and round-trips", () => {
+		const payload = basePayload({
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+			run_execution_binding: EXEC_BINDING,
+			item_batch: {
+				schema_version: "1",
+				item_keys: ["mon", "tue"],
+				checkpoints: [{ item_key: "mon", outcome: "confirmed" }],
+			},
+		});
+		const raw = encodeDurableRecord("shared-run", payload);
+		expect(JSON.parse(raw).schema_version).toBe(BROWSER_USE_SHARED_RUN_SCHEMA_VERSION);
+		const parsed = parseDurableRecord(raw, "shared-run");
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(parsed.payload.run_execution_binding).toEqual(EXEC_BINDING);
+		}
+	});
+
+	test("a version-1 record carrying an execution binding is rejected", () => {
+		const raw = JSON.parse(
+			encodeDurableRecord("shared-run", basePayload()),
+		) as Record<string, unknown>;
+		raw.schema_version = "1";
+		(raw.payload as Record<string, unknown>).run_execution_binding = EXEC_BINDING;
+		const parsed = parseDurableRecord(JSON.stringify(raw), "shared-run");
+		expect(parsed.ok).toBe(false);
+	});
+
+	test("an execution binding with both input-custody forms is rejected (R41)", () => {
+		const payload = basePayload({
+			task_intent: "runbook-execution",
+			runbook_target_binding: RUNBOOK_TARGET_BINDING,
+			runbook_progress: RUNBOOK_PROGRESS,
+			run_execution_binding: {
+				...EXEC_BINDING,
+				governed_input_artifact_ref: "artifact://sensitive",
+			},
+		});
+		expect(() => encodeDurableRecord("shared-run", payload)).toThrow(
+			/exactly one of normalized_input_digest or governed_input_artifact_ref/,
+		);
+	});
+});

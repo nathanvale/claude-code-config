@@ -1259,7 +1259,20 @@ function compileStep(
  */
 export function planRunbookExecution(
 	runbook: BrowserUseRunbook,
-	input: { inputs: BrowserUseRunbookInputs; resumeFromStep: number },
+	input: {
+		inputs: BrowserUseRunbookInputs;
+		resumeFromStep: number;
+		/**
+		 * Executor steps the ENGINE pre-resolved for `action`/`iterate` steps by
+		 * step index (U3). The reviewed-action registry is async and I/O-facing,
+		 * so the pure model never resolves an asset itself: the engine
+		 * (browser-use-runbook.ts) resolves each action through the generation
+		 * seam and passes the verified executor steps back in here. A runbook
+		 * that declares an `action`/`iterate` step with NO entry in this map is
+		 * refused `runbook_action_registry_unavailable` — the pre-U3 behavior.
+		 */
+		resolvedActionSteps?: ReadonlyMap<number, readonly AgentBrowserTaskStep[]>;
+	},
 ): BrowserUseRunbookPlanResult {
 	const issues = validateRunbook(runbook);
 	if (issues.length > 0) {
@@ -1271,16 +1284,23 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	// U3 stub: reviewed-action and iteration steps validate their SHAPE but are
-	// not compilable until the action registry lands. A runbook using them
-	// refuses with a typed pointer rather than silently dropping a step.
-	if (runbook.steps.some((step) => step.kind === "action" || step.kind === "iterate")) {
+	// Reviewed-action and iteration steps require an engine-resolved executor
+	// step (U3): the pure model NEVER resolves an asset. When the engine supplies
+	// no resolution for an action/iterate step, refuse with a typed pointer
+	// rather than silently dropping a step.
+	const resolvedActionSteps = input.resolvedActionSteps ?? new Map();
+	const unresolvedActionStep = runbook.steps.findIndex(
+		(step, index) =>
+			(step.kind === "action" || step.kind === "iterate") &&
+			!resolvedActionSteps.has(index),
+	);
+	if (unresolvedActionStep !== -1) {
 		return {
 			ok: false,
 			refusal: {
 				code: "runbook_action_registry_unavailable",
 				message:
-					"this runbook declares reviewed-action or iteration steps; the action registry that resolves them is not available until it is implemented (U3).",
+					"this runbook declares a reviewed-action or iteration step with no resolved action asset; resolve it through a staged or active generation before execution.",
 			},
 		};
 	}
@@ -1322,7 +1342,20 @@ export function planRunbookExecution(
 		};
 	}
 	const remaining = runbook.steps.slice(input.resumeFromStep);
-	const compiled = remaining.map((step) => compileStep(step, input.inputs));
+	// Compile each remaining step. An `action`/`iterate` step expands into its
+	// engine-resolved executor steps (U3, keyed by ABSOLUTE step index); every
+	// other kind compiles through the pure `compileStep`.
+	const compiled: AgentBrowserTaskStep[] = [];
+	for (const [offset, step] of remaining.entries()) {
+		if (step.kind === "action" || step.kind === "iterate") {
+			const absoluteIndex = input.resumeFromStep + offset;
+			for (const resolved of resolvedActionSteps.get(absoluteIndex) ?? []) {
+				compiled.push(resolved);
+			}
+			continue;
+		}
+		compiled.push(compileStep(step, input.inputs));
+	}
 	const pendingBindings = remaining
 		.filter(
 			(

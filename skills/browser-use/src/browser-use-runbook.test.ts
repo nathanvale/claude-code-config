@@ -57,6 +57,11 @@ import {
 	valueMatchesSchema,
 	validateRunbook,
 } from "./browser-use-runbook-model";
+import { actionAssetDigest } from "./browser-use-runbook-actions";
+import type {
+	BrowserUseActionGenerationSeam,
+	BrowserUseReviewedActionRecord,
+} from "./browser-use-runbook-actions";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -2210,5 +2215,164 @@ describe("private-file structured input custody (R10)", () => {
 			if (result.ok) return;
 			expect(result.refusal.code).toBe("private_input_json_invalid");
 		}),
+	);
+});
+
+// --- U3: reviewed-action step resolution through the engine ------------------
+
+const ACTION_ORIGIN = "https://portal.example.com";
+const ACTION_READ_BYTES =
+	"async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length })";
+const ACTION_READ_DIGEST = actionAssetDigest(ACTION_READ_BYTES);
+
+function actionRunbook(
+	overrides: Partial<BrowserUseRunbook> = {},
+): BrowserUseRunbook {
+	return baseRunbook({
+		flow_id: "diagnose",
+		allowed_origins: [ACTION_ORIGIN],
+		steps: [
+			{ kind: "snapshot", interactive: false },
+			{
+				kind: "action",
+				action_id: "diagnose-grid",
+				expected_digest: ACTION_READ_DIGEST,
+				inputs: {},
+			},
+		],
+		...overrides,
+	});
+}
+
+function actionSeam(
+	record: BrowserUseReviewedActionRecord,
+	bytes: Readonly<Record<string, string>>,
+): BrowserUseActionGenerationSeam {
+	return {
+		async loadActionRecord(actionId) {
+			return actionId === record.action_id
+				? { ok: true, record }
+				: { ok: false, absent: true };
+		},
+		async loadActionAssetBytes(assetId) {
+			const found = bytes[assetId];
+			return found === undefined
+				? { ok: false, reason: "bytes_unavailable" }
+				: { ok: true, bytes: found };
+		},
+	};
+}
+
+function approvedReadRecord(): BrowserUseReviewedActionRecord {
+	return {
+		action_id: "diagnose-grid",
+		asset_id: ACTION_READ_DIGEST,
+		expected_digest: ACTION_READ_DIGEST,
+		allowed_origin: ACTION_ORIGIN,
+		effect_class: "read",
+		containment: "read-only-observation",
+		input_schema: { kind: "object", fields: {} },
+		result_schema: {
+			kind: "object",
+			fields: { rows: { schema: { kind: "number" }, required: true } },
+		},
+		result_sensitivity: "low",
+		source_provenance: "oncore/diagnose-grid-state.js",
+		promotion_receipt: {
+			approved_digest: ACTION_READ_DIGEST,
+			disposition: "approved",
+			approved_origin: ACTION_ORIGIN,
+			approved_effect: "read",
+			approver_ref: "operator-1",
+		},
+	};
+}
+
+describe("engine reviewed-action step resolution (U3)", () => {
+	test(
+		"an action-step runbook refuses without a generation seam",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{ serviceId: "oncore", flowId: "diagnose", inputs: {}, resumeFromStep: 0 },
+			);
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_action_registry_unavailable");
+		}),
+	);
+
+	test(
+		"an approved action resolves to an evaluate step through the seam",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "diagnose",
+					inputs: {},
+					resumeFromStep: 0,
+					actionSeam: actionSeam(approvedReadRecord(), {
+						[ACTION_READ_DIGEST]: ACTION_READ_BYTES,
+					}),
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const evaluateStep = prepared.plan.steps.find((s) => s.kind === "evaluate");
+			expect(evaluateStep).toBeDefined();
+			if (evaluateStep?.kind === "evaluate") {
+				expect(evaluateStep.review_status).toBe("approved");
+				expect(evaluateStep.effect).toBe("read");
+				expect(evaluateStep.script_sha256).toBe(ACTION_READ_DIGEST);
+			}
+		}),
+	);
+
+	test(
+		"a rejected receipt refuses through the engine (before any dispatch)",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, actionRunbook());
+			const record = approvedReadRecord();
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "diagnose",
+					inputs: {},
+					resumeFromStep: 0,
+					actionSeam: actionSeam(
+						{
+							...record,
+							promotion_receipt: {
+								...record.promotion_receipt,
+								disposition: "rejected",
+							},
+						},
+						{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },
+					),
+				},
+			);
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_action_refused");
+			expect(prepared.refusal.message).toContain("action_receipt_not_approved");
+		}),
+	);
+
+	test(
+		"a runbook cannot inline script bytes: only the action id + digest reference exists",
+		() => {
+			const runbook = actionRunbook();
+			// The runbook JSON never carries script bytes — only an id + digest.
+			const serialized = JSON.stringify(runbook);
+			expect(serialized).not.toContain("document.querySelectorAll");
+			expect(serialized).toContain(ACTION_READ_DIGEST);
+		},
 	);
 });
