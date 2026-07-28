@@ -641,6 +641,22 @@ describe("shipped runbooks root resolution", () => {
 		};
 		expect(parsedMatest.service_id).toBe("matest");
 		expect(parsedMatest.flow_id).toBe("development-snapshot-verify");
+		expect(parsedMatest).toMatchObject({
+			allowed_origins: ["https://experience-test.elluciancloud.com.au"],
+			auth_context_ref: "matest-experience-session",
+			inputs: [],
+			steps: [
+				{
+					kind: "open",
+					url: "https://experience-test.elluciancloud.com.au/matest/development",
+					postcondition: {
+						kind: "url-equals",
+						url: "https://experience-test.elluciancloud.com.au/matest/development",
+					},
+				},
+				{ kind: "snapshot", interactive: true },
+			],
+		});
 	});
 
 	test(

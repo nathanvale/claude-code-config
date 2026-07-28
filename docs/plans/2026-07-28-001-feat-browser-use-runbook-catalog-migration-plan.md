@@ -76,15 +76,15 @@ The current migration engine inventories and stages safe bytes, quarantines Java
 - **R4.** Do not require one source artifact to equal one canonical runbook. Every canonical flow lists all source provenance; duplicate and superseded candidates retain inspectable lineage.
 - **R5.** Migrate explicit runbooks and playbooks. Classify domain prose, Target Flows, selectors, scripts, run evidence, and capabilities without promoting them automatically.
 - **R6.** Store migrated personal and domain knowledge in generation-bound XDG data/state. Keep the shipped catalog limited to safe defaults and testable product examples.
-- **R7.** One effective-catalog resolver serves list, show, and run. It composes the immutable shipped base, compatibility XDG v1 overrides, and the active generation with explicit precedence and identical corrupt-shadow behavior. It never reads the legacy source. Source deletion remains separately approved and outside this plan.
+- **R7.** One effective-catalog resolver serves list, show, and run. Precedence is active generation, then compatibility XDG v1 override, then immutable shipped base. If a higher-priority layer contains an id but that record is corrupt or invalid, the id fails closed at that layer and never falls through. List, show, and run use this same shadow matrix. The resolver never reads the legacy source. Source deletion remains separately approved and outside this plan.
 
 #### Runbook v2 and catalog contract
 
 - **R8.** Introduce explicit runbook schema v2. Continue parsing and executing v1 records unchanged; never reinterpret v1 fields with v2 semantics; reject unknown versions.
 - **R9.** Give v2 inputs runtime-validated string, number, boolean, enum, array, object, date, UUID, default, bound, and discriminated-union shapes. Reject unknown inputs and invalid defaults.
-- **R10.** Add one bounded private-file JSON input route for v2 while retaining scalar `--input <id>=<value>` behavior for v1. Admit owner-private, non-symlinked, non-versioned files; keep values and source paths out of process arguments, output, receipts, and provenance.
+- **R10.** Add one bounded private-file JSON input route for v2 while retaining scalar `--input <id>=<value>` behavior for v1. Open the admitted path once with no-follow semantics and read only through that descriptor after descriptor-level checks prove a regular file, expected owner, owner-only mode, link count one, bounded size, and containment beneath the admitted input root. Replacement, hard-link, symlink, and path-escape attempts fail closed. Keep values and source paths out of process arguments, output, receipts, and provenance.
 - **R11.** Replace durable `@eN` targets in v2 with runtime-resolved semantic targets or reviewed action references. Semantic targets require a fresh snapshot and exactly one match before dispatch.
-- **R12.** Support bounded iteration over stable item keys with per-item checkpoints. A batch resumes from the first unproven item and never repeats confirmed effects. A crash after possible dispatch but before fresh proof becomes `unknown`, never an automatic resume.
+- **R12.** Support bounded iteration over stable item keys with per-item checkpoints. A batch may skip confirmed items and resume only from the first unproven item. A crash after possible dispatch but before fresh proof becomes `unknown`; that item blocks the batch until repair or fresh reconciliation proves its outcome. The unknown item is never redispatched, and no later item runs past it.
 - **R13.** Expose input shape, effect class, static auth requirement, approval requirement, activation state, health, provenance, and one next safe action through code-owned JSON and plain projections. Dynamic auth readiness remains environment/profile/run state, not catalog metadata.
 - **R14.** Invalid or corrupt effective-catalog records cannot disappear silently. Whole-catalog verification reports the expected id, effective source, generation, version, and failure.
 - **R15.** Bump affected CLI result contracts when their projected shapes change. Keep discovery metadata, rendered help, parser acceptance, runtime behavior, and packaged assets mechanically aligned.
@@ -130,7 +130,7 @@ The current migration engine inventories and stages safe bytes, quarantines Java
 - **AE1 (R1-R5).** A fresh inventory of the current source root reports the expected baseline and gives every entry one disposition. Adding an unclassified file makes planning fail with its path and next safe action.
 - **AE2 (R4-R7).** Both Oncore candidates map to one canonical fill-timesheet flow with complete provenance; neither source file is deleted or read at runtime after activation.
 - **AE3 (R8-R15).** The existing shipped v1 seed lists, shows, and runs unchanged. A v2 flow accepts a bounded JSON input object and rejects an invalid enum, UUID, date, nested object, or unknown field.
-- **AE4 (R11-R12).** A semantic target with zero or multiple fresh matches refuses before mutation. A crash before dispatch may resume; a crash after write-ahead or possible dispatch but before proof becomes unknown; a confirmed item checkpoint resumes at the next stable key.
+- **AE4 (R11-R12).** A semantic target with zero or multiple fresh matches refuses before mutation. A crash before dispatch may resume; a crash after write-ahead or possible dispatch but before proof becomes unknown. An unknown middle item blocks redispatch and every later item until repaired or freshly reconciled; only a confirmed checkpoint may advance to the next stable key.
 - **AE5 (R16-R23, R42).** A runbook that claims an inline script is approved cannot execute. An approved exact action hash runs only on its admitted origin and returns a schema-valid redacted result or a typed refusal. Rejection, withdrawal, or changed bytes invalidate execution.
 - **AE6 (R19).** A legacy action labelled read-only but containing navigation or click behavior is classified as mutation or rewritten; it never bypasses write-ahead truth.
 - **AE7 (R21, R24-R25).** Oncore diagnosis returns a bounded grid summary plus governed artifact reference when needed. The staged migrated fill flow reconciles existing rows, saves a controlled draft, reloads, and proves persisted values plus `submitted=false`.
@@ -321,7 +321,8 @@ This is an ownership and data-flow sketch. Runtime schemas, action states, dispo
   - Valid nested arrays, objects, enums, numbers, booleans, dates, UUIDs, defaults, and discriminated batch entries compile.
   - Invalid type, bound, default, date, UUID, unknown field/input, excessive depth/size, and unknown schema version refuse.
   - Semantic targets require a fresh snapshot and exactly one match.
-  - Shipped base, compatibility v1 override, and active-generation precedence is deterministic; corrupt shadowing fails identically in list/show/run.
+  - Active generation shadows compatibility v1 override, which shadows shipped base; a corrupt or invalid higher-priority record fails closed without lower-layer fallback in list/show/run.
+  - Private-file input rejects descriptor replacement, hard links, symlinks, path escape, non-regular files, wrong owner/mode, and oversized content before reading values.
   - Discovery/help/parser/runtime/result-contract/no-dangle/front-door/platform-contract/anti-drift snapshots cannot drift.
 - **Verification:** v1 compatibility suite is unchanged; v2 malformed input never throws; plain output projects the same facts as JSON.
 
@@ -338,7 +339,8 @@ This is an ownership and data-flow sketch. Runtime schemas, action states, dispo
   - A read action returns bounded schema-valid redacted data and records no possible mutation.
   - Large results become bounded summaries plus governed artifact references.
   - A mutation records write-ahead truth before dispatch, verifies fresh post-state, and does not retry unknown.
-  - Crash after each batch item resumes from the first unproven stable key.
+  - Crash after each batch item resumes from the first unproven stable key only when its outcome is provable.
+  - A crash after possible dispatch of a middle item leaves it unknown, performs no redispatch, and runs no later item until repair or fresh reconciliation.
   - Altered resume flags, stale activation epoch, unavailable pinned generation, and generation drift refuse without current-catalog fallback.
 - **Verification:** structured result/proof reaches the shared-run outcome without raw adapter stdout; secret and leak harnesses remain clean.
 
