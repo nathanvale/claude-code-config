@@ -128,6 +128,70 @@ struct ConfidentialFieldDelivery {
     }
 }
 
+/// Explicit XPC peer authentication for the delivery listener.
+///
+/// The `_AllowedClients` array in `Info.plist` is defense in depth, not access
+/// control: an `xpc_connection_create_mach_service` listener otherwise accepts
+/// every incoming connection, and the plist allow-list alone does not reject a
+/// non-launcher peer before its descriptors are read. This type is the actual
+/// gate. It pins each accepted peer connection to a code-signing designated
+/// requirement — via `xpc_connection_set_peer_code_signing_requirement`, which
+/// derives identity from the peer's audit token (never a PID, which is reusable
+/// and spoofable) — that names the Token Retrieval Launcher's bundle id anchored
+/// to this product's own signing team. Any peer that fails the requirement has
+/// its messages dropped by XPC before the event handler runs, so no descriptor
+/// is ever accepted from an unauthorized caller.
+///
+/// Denial invariant (documented; exercised by the signed build):
+/// a connection whose audit-token code-signing identity does NOT satisfy
+/// `launcherDesignatedRequirement` never reaches `ConfidentialFieldDelivery`
+/// — XPC drops its requests on this listener (TN3127 semantics) — so there is
+/// no reply, no descriptor read, and no field write, log-free. This is the
+/// peer-denial live probe recorded for the signed-build operator gate: it
+/// cannot run against unsigned source (peer code-signing enforcement needs a
+/// signed binary and a signed peer), so it ships as a source-level invariant
+/// here and is exercised as a live denial probe once the operator signs the
+/// product.
+enum PeerAuthorization {
+    /// Bundle id of the sole authorized caller (ADR 0027 xpc-peer-pinned custody).
+    /// Mirrors `Info.plist` `_AllowedClients` and `TokenRetrievalLauncher`'s
+    /// `CFBundleIdentifier` exactly.
+    static let launcherBundleID =
+        "com.side-quest.browser-use-security.token-retrieval-launcher"
+
+    /// Designated requirement the peer's code signature must satisfy.
+    ///
+    /// Requires an Apple-anchored signature for the launcher's bundle id whose
+    /// leaf certificate carries this product's signing team in `subject.OU`. The
+    /// `$(TeamIdentifierPrefix)` placeholder is resolved to the concrete 10-char
+    /// Team ID at signing time (the operator gate signs this source); it is kept
+    /// as an explicit token so the anchored-to-same-team constraint cannot be
+    /// silently dropped when the requirement is minted. Pinning the team blocks a
+    /// signature that merely reuses the bundle id under a different (attacker)
+    /// team — the same defense `admission.ts` encodes for the manifest.
+    static let launcherDesignatedRequirement =
+        "anchor apple generic and identifier \"\(launcherBundleID)\" "
+        + "and certificate leaf[subject.OU] = \"$(TeamIdentifierPrefix)\""
+
+    /// Pin one inbound peer connection to `launcherDesignatedRequirement`.
+    ///
+    /// `xpc_connection_set_peer_code_signing_requirement` validates the peer via
+    /// its audit token: on a listener connection every request that does not
+    /// satisfy the requirement is dropped before delivery, so an unauthorized
+    /// peer's message never reaches the delivery handler. Returns `true` only
+    /// when the requirement was installed (return value `0`); a non-zero result
+    /// (invalid requirement string, or `ENOTSUP` on an unsupported platform)
+    /// fails closed and the caller cancels the connection.
+    static func pinPeerRequirement(_ connection: xpc_connection_t) -> Bool {
+        launcherDesignatedRequirement.withCString { requirement in
+            xpc_connection_set_peer_code_signing_requirement(
+                connection,
+                requirement
+            ) == 0
+        }
+    }
+}
+
 // XPC event handler: one bounded action per service instance, then exit. The
 // service is spawned on demand and is not kept alive (ADR 0027 no daemon).
 let listener = xpc_connection_create_mach_service(
@@ -138,6 +202,15 @@ let listener = xpc_connection_create_mach_service(
 xpc_connection_set_event_handler(listener) { peer in
     guard xpc_get_type(peer) == XPC_TYPE_CONNECTION else { return }
     let connection = peer
+    // Explicit peer authentication: pin this peer to the launcher's code-signing
+    // designated requirement before resuming it, so XPC drops any request from a
+    // non-launcher peer before a descriptor is read. If the requirement cannot be
+    // installed, fail closed and cancel — never fall back to accepting the peer.
+    // The plist `_AllowedClients` list stays as defense in depth, not relied on.
+    guard PeerAuthorization.pinPeerRequirement(connection) else {
+        xpc_connection_cancel(connection)
+        return
+    }
     xpc_connection_set_event_handler(connection) { message in
         guard xpc_get_type(message) == XPC_TYPE_DICTIONARY else { return }
         let status = ConfidentialFieldDelivery.handle(message)

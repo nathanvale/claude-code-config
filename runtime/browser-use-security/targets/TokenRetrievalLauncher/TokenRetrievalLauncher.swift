@@ -25,8 +25,10 @@ enum LauncherError: Error {
     case firstUnlockUnavailable
     case tokenItemMissing
     case tokenItemAmbiguous
+    case tokenAccessibilityMismatch
     case entitlementMissing
     case opBinaryNotFound
+    case opSignatureUntrusted
     case execFailed(Int32)
 }
 
@@ -37,6 +39,11 @@ enum TokenItemLocator {
     static let service = "com.side-quest.browser-use-security.op-service-account-token"
     /// The one environment variable the disposable op child receives.
     static let tokenEnvVar = "OP_SERVICE_ACCOUNT_TOKEN"
+    /// The only accessibility class this token may carry: readable after first
+    /// unlock, never migrated off this device. A same-service item stored with
+    /// any weaker class (e.g. `AfterFirstUnlock`, `WhenUnlocked`, or a
+    /// synchronizing/backup-eligible class) is rejected rather than accepted.
+    static let expectedAccessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 }
 
 struct TokenRetrievalLauncher {
@@ -47,6 +54,12 @@ struct TokenRetrievalLauncher {
     /// missing first unlock surfaces as `firstUnlockUnavailable`. The token
     /// bytes returned here are handed straight to the op child's environment and
     /// never retained, logged, or written anywhere else.
+    ///
+    /// `kSecAttrAccessible` is not a query constraint the keychain honors for
+    /// matching, so it is fetched back with `kSecReturnAttributes` and compared:
+    /// a same-service item stored under any other accessibility class (a weaker
+    /// protection, or a synchronizing/backup-eligible one) is rejected as
+    /// `tokenAccessibilityMismatch` rather than accepted.
     static func readSingleTokenItem() throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -55,6 +68,7 @@ struct TokenRetrievalLauncher {
             kSecAttrSynchronizable as String: false,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -72,11 +86,67 @@ struct TokenRetrievalLauncher {
         default:
             throw LauncherError.tokenItemMissing
         }
-        guard let items = result as? [Data] else { throw LauncherError.tokenItemMissing }
-        guard items.count == 1, let token = items.first else {
+        // With attributes returned, each match is a dictionary carrying both the
+        // token bytes (kSecValueData) and its accessibility class (kSecAttrAccessible).
+        guard let items = result as? [[String: Any]] else { throw LauncherError.tokenItemMissing }
+        guard items.count == 1, let item = items.first else {
             throw items.isEmpty ? LauncherError.tokenItemMissing : LauncherError.tokenItemAmbiguous
         }
+        // Require the expected accessibility class before accepting the token: a
+        // same-service item with a different class must not be returned.
+        let accessible = item[kSecAttrAccessible as String] as CFTypeRef?
+        guard let accessible,
+              CFEqual(accessible, TokenItemLocator.expectedAccessible)
+        else {
+            throw LauncherError.tokenAccessibilityMismatch
+        }
+        guard let token = item[kSecValueData as String] as? Data else {
+            throw LauncherError.tokenItemMissing
+        }
         return token
+    }
+
+    /// The immutable install path of the official op helper. A binary at any
+    /// other path is never handed the token.
+    static let opPath = "/usr/local/bin/op"
+
+    /// Designated requirement pinning 1Password's official `op` CLI identity.
+    ///
+    /// `op` ships signed by AgileBits Inc. under Apple Developer ID team
+    /// `2BUA8C4S2C` with code-signing identifier `com.1password.op` (verified
+    /// against the shipped binary's `codesign -d -r-` output). `anchor apple
+    /// generic` roots it in the Apple-issued Developer ID chain; the identifier
+    /// pin rejects a same-team binary with a different identity; the leaf OU pin
+    /// rejects a re-sign under any other team. A swapped or ad-hoc binary at the
+    /// install path fails this requirement and never receives the token.
+    static let opDesignatedRequirement =
+        "anchor apple generic and identifier \"com.1password.op\" "
+        + "and certificate leaf[subject.OU] = \"2BUA8C4S2C\""
+
+    /// Verify the binary at `opPath` satisfies the pinned op designated
+    /// requirement. Fails closed (`opSignatureUntrusted`) on any error: an
+    /// unreadable static code object, a malformed requirement, or a validity
+    /// check that does not pass. Only a binary that provably matches 1Password's
+    /// signing identity is admitted before the token env is assembled.
+    static func verifyOpSignature(atPath path: String) throws {
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let code = staticCode
+        else {
+            throw LauncherError.opSignatureUntrusted
+        }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            opDesignatedRequirement as CFString, [], &requirement
+        ) == errSecSuccess,
+            let requirement
+        else {
+            throw LauncherError.opSignatureUntrusted
+        }
+        guard SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess else {
+            throw LauncherError.opSignatureUntrusted
+        }
     }
 
     /// Exec the disposable official op helper with an exact environment.
@@ -86,11 +156,19 @@ struct TokenRetrievalLauncher {
     /// descriptors, and any browser channel are not passed down. The op binary
     /// is a short-lived trusted networked process; it gets the token but no
     /// browser endpoint (R16, R17).
+    ///
+    /// The binary is authenticated before any token is assembled:
+    /// `isExecutableFile` only proves the path can execute, so a swapped binary
+    /// there would still receive the token. The pinned designated requirement is
+    /// verified from the immutable install path first, and the token env is
+    /// assembled only after that passes — never for an unverified binary.
     static func execDisposableOp(arguments: [String], token: Data) throws -> Never {
-        let opPath = "/usr/local/bin/op"
         guard FileManager.default.isExecutableFile(atPath: opPath) else {
             throw LauncherError.opBinaryNotFound
         }
+        // Authenticate before touching the token: fail closed if the binary at
+        // the install path is not the pinned, 1Password-signed op.
+        try verifyOpSignature(atPath: opPath)
         guard let tokenString = String(data: token, encoding: .utf8) else {
             throw LauncherError.tokenItemMissing
         }

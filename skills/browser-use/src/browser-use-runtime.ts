@@ -85,20 +85,23 @@ function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
  * the product. Any non-`admitted` verdict (including the default
  * `native-capability-absent`) leaves the port undefined so the auth command
  * keeps returning the typed absent state. Never throws: a seam probe that
- * rejects is treated as absence, fail-closed.
+ * rejects — whether the admission probe, `createTokenExecutor()`, or port
+ * construction — is treated as absence, fail-closed. Executor/port construction
+ * stays inside the guard so an admitted seam whose `createTokenExecutor()`
+ * throws (the exact miswiring the native-absent seam's typed throw surfaces)
+ * yields absence, never an escaping rejection the CLI awaits unguarded.
  */
 async function resolveAuthTokenRetrieval(
 	seam: BrowserUseSecuritySeam,
 ): Promise<BrowserUseTokenRetrievalPort | undefined> {
-	let verdict: Awaited<ReturnType<AdmissionRuntime["verifyProduct"]>>;
 	try {
-		verdict = await seam.admission.verifyProduct();
+		const verdict = await seam.admission.verifyProduct();
+		if (verdict.verdict !== "admitted") return undefined;
+		const { execute, token_handle_id } = seam.createTokenExecutor();
+		return createOpTokenRetrievalPort({ execute, token_handle_id });
 	} catch {
 		return undefined;
 	}
-	if (verdict.verdict !== "admitted") return undefined;
-	const { execute, token_handle_id } = seam.createTokenExecutor();
-	return createOpTokenRetrievalPort({ execute, token_handle_id });
 }
 
 export type BrowserUseRuntime = {

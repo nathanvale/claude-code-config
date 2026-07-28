@@ -67,6 +67,8 @@ function matchingClaim(
 		team_identifier: entry.team_identifier,
 		designated_requirement: entry.designated_requirement,
 		entitlements: entry.entitlements,
+		lifetime: entry.lifetime,
+		custody: entry.custody,
 		product_version: MINTED.product_version,
 	};
 }
@@ -303,6 +305,100 @@ describe("admitTarget — placeholder bundle ids are never admissible", () => {
 		expect(verdict.verdict).toBe("not-admitted");
 		if (verdict.verdict === "not-admitted") {
 			expect(verdict.error_code).toBe("placeholder-bundle-id");
+		}
+	});
+});
+
+describe("admitTarget — placeholder team/DR are never admissible (fail closed)", () => {
+	test("a claim with a placeholder team_identifier is rejected against a minted manifest", () => {
+		const claim: AdmissionClaim = {
+			...matchingClaim("approval-broker"),
+			team_identifier: BUNDLE_ID_PLACEHOLDER,
+		};
+		const verdict = admitTarget(MINTED, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("placeholder-bundle-id");
+		}
+	});
+
+	test("a claim with a placeholder designated_requirement is rejected against a minted manifest", () => {
+		const claim: AdmissionClaim = {
+			...matchingClaim("token-retrieval-launcher"),
+			designated_requirement: BUNDLE_ID_PLACEHOLDER,
+		};
+		const verdict = admitTarget(MINTED, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("placeholder-bundle-id");
+		}
+	});
+
+	test("a manifest entry with a placeholder team_identifier admits nothing (even minted bundle ids)", () => {
+		// Repro: a manifest and claim carry minted bundle ids but a placeholder
+		// team_identifier. Guarding only bundle_id, they compare equal and admit.
+		const tamperedManifest = {
+			...MINTED,
+			targets: MINTED.targets.map((t) =>
+				t.target_id === "approval-broker"
+					? { ...t, team_identifier: BUNDLE_ID_PLACEHOLDER }
+					: t,
+			),
+		};
+		const claim: AdmissionClaim = {
+			...matchingClaim("approval-broker"),
+			team_identifier: BUNDLE_ID_PLACEHOLDER,
+		};
+		const verdict = admitTarget(tamperedManifest, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("placeholder-bundle-id");
+		}
+	});
+
+	test("a manifest entry with a placeholder designated_requirement admits nothing (even minted bundle ids)", () => {
+		const tamperedManifest = {
+			...MINTED,
+			targets: MINTED.targets.map((t) =>
+				t.target_id === "confidential-field-delivery-xpc"
+					? { ...t, designated_requirement: BUNDLE_ID_PLACEHOLDER }
+					: t,
+			),
+		};
+		const claim: AdmissionClaim = {
+			...matchingClaim("confidential-field-delivery-xpc"),
+			designated_requirement: BUNDLE_ID_PLACEHOLDER,
+		};
+		const verdict = admitTarget(tamperedManifest, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("placeholder-bundle-id");
+		}
+	});
+});
+
+describe("admitTarget — lifetime/custody posture compared unconditionally", () => {
+	test("a claim running a daemon lifetime is not admitted", () => {
+		const claim: AdmissionClaim = {
+			...matchingClaim("approval-broker"),
+			lifetime: "daemon",
+		};
+		const verdict = admitTarget(MINTED, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("lifetime-changed");
+		}
+	});
+
+	test("a claim with a foreign custody root is not admitted", () => {
+		const claim: AdmissionClaim = {
+			...matchingClaim("approval-broker"),
+			custody: "xpc-peer-pinned",
+		};
+		const verdict = admitTarget(MINTED, claim);
+		expect(verdict.verdict).toBe("not-admitted");
+		if (verdict.verdict === "not-admitted") {
+			expect(verdict.error_code).toBe("custody-changed");
 		}
 	});
 });

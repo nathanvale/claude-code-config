@@ -8,15 +8,24 @@ Package architecture for `@side-quest/browser-use-security`.
 Browser Use Security ships as one signed, notarized macOS product containing
 three separately signed executable targets — Approval Broker, Token Retrieval
 Launcher, and Confidential Field Delivery XPC. This package owns the code-side
-model of that product: per-target identity, the code-owned admission manifest,
-and the drift proof. It mints no Swift, signs nothing, and holds no secret
-bytes.
+model of that product — per-target identity, the code-owned admission manifest,
+and the drift proof — and hosts the unsigned native target sources
+(`BrowserUseSecurity.xcodeproj/`, `targets/`, `entitlements/`) under this owner
+directory per ADR 0027. Secret bytes never transit this package's TypeScript
+layer; token bytes are handled only inside the signed Token Retrieval Launcher,
+which hands them straight to the disposable `op` child. The native sources are
+pre-staged unsigned; signing and notarization stay operator-gated behind the
+ADR 0028 entry gate (full Xcode plus paid Apple Developer Program enrollment).
 
 ADR 0028 splits the pure contract (in `skills/browser-use/src/`) from this
 signed native capability. Absence of the native product is a legal, tested
 state — `native-capability-absent` — expressed through typed verdicts, never a
-crash or a stub. A later unit mints the literal `com.*` bundle strings; the
-placeholder sentinel in `src/model.ts` keeps admission fail-closed until then.
+crash or a stub. `src/model.ts` `TARGET_BUNDLE_IDS` is minted — it carries the
+real `com.side-quest.browser-use-security.*` strings mirrored by each Xcode
+target. `CODE_OWNED_ADMISSION_MANIFEST` intentionally stays placeholder-backed:
+its per-target entries keep the `BUNDLE_ID_PLACEHOLDER` sentinel, so
+`isMintedBundleId` rejects them and admission stays fail-closed until a signed
+install presents a minted claim.
 
 The Module Map below is the single per-module owner list. `AGENTS.md` and
 `README.md` point here instead of repeating it; `tests/docs-drift.test.ts`

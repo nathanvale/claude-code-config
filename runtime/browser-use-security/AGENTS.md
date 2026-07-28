@@ -3,8 +3,13 @@
 `@side-quest/browser-use-security` is the native product owner for Browser Use
 Security (ADR 0027): one signed macOS product, three separately signed
 targets — Approval Broker, Token Retrieval Launcher, Confidential Field
-Delivery XPC. This package owns the code-side model: per-target identity, the
-admission manifest, and the drift proof. No Swift, no signing, no secret bytes.
+Delivery XPC. This package owns the code-side model — per-target identity, the
+admission manifest, and the drift proof — and hosts the unsigned native target
+sources (`targets/`, `BrowserUseSecurity.xcodeproj/`, `entitlements/`) under
+this owner directory per ADR 0027/0028. Secret bytes never transit this
+package's TypeScript layer; token bytes are handled only inside the signed Token
+Retrieval Launcher, which hands them to the disposable `op` child. Signing and
+notarization stay operator-gated (ADR 0028 entry gate).
 
 This file routes maintainers. `README.md` explains the product to humans.
 `CONTEXT.md` owns package language.

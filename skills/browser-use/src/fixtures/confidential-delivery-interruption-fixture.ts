@@ -67,6 +67,19 @@ await deliverConfidentialFields({
 		if (!sentinel.ok) throw new Error("fixture sentinel rejected");
 		if (sentinel.value.length === 0) throw new Error("fixture sentinel empty");
 
+		// Emit the stdout marker BEFORE raising the signal file the test waits on,
+		// and flush it, so the file (which gates the SIGKILL) can only appear once
+		// "delivery-engaged" is already on stdout. Otherwise the kill can land in
+		// the window between the file write and the flush, making the stdout
+		// assertion flaky.
+		await new Promise<void>((resolve) => {
+			if (process.stdout.write("delivery-engaged\n")) {
+				resolve();
+				return;
+			}
+			process.stdout.once("drain", resolve);
+		});
+
 		await Bun.write(
 			signalPath,
 			JSON.stringify({
@@ -75,7 +88,6 @@ await deliverConfidentialFields({
 				byte_length: sentinel.value.length,
 			}),
 		);
-		process.stdout.write("delivery-engaged\n");
 
 		await Bun.sleep(60_000);
 		return {

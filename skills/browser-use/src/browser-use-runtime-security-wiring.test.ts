@@ -173,6 +173,25 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 		expect(runtime.authTokenRetrieval).toBeUndefined();
 	});
 
+	test("an admitted seam whose createTokenExecutor throws yields absence, no unhandled rejection", async () => {
+		// The miswiring the native-absent seam's typed throw is designed to
+		// surface: admission reports `admitted`, but the executor factory throws.
+		// Construction must stay inside the fail-closed guard so the runtime is
+		// returned with authTokenRetrieval undefined — never a rejection that
+		// escapes createProductionBrowserUseRuntime to the unguarded CLI await.
+		const seam: BrowserUseSecuritySeam = {
+			admission: createInMemoryAdmissionRuntime({ installed: MINTED }),
+			createTokenExecutor: () => {
+				throw new Error("executor miswired: native product absent");
+			},
+		};
+		const runtime = await createProductionBrowserUseRuntime(
+			EMPTY_OVERRIDES,
+			seam,
+		);
+		expect(runtime.authTokenRetrieval).toBeUndefined();
+	});
+
 	test("admitted seam constructs a working Token Retrieval Port", async () => {
 		const present = presentSeam();
 		const runtime = await createProductionBrowserUseRuntime(

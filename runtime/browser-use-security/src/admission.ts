@@ -51,7 +51,8 @@ export type {
  * - `product-version-skew` — the claim's product version differs from the
  *   admitted product version.
  * - `placeholder-bundle-id` — the manifest entry or the claim still carries the
- *   unminted placeholder sentinel.
+ *   unminted placeholder sentinel in any signing string (bundle id, team
+ *   identifier, or designated requirement).
  * - `bundle-id-mismatch` — the claimed bundle id is not the manifest's (a
  *   replaced/different signed binary).
  * - `team-identifier-mismatch` — the claimed signing team differs (re-signed
@@ -119,8 +120,18 @@ export interface AdmissionClaim {
 	team_identifier: BundleId;
 	designated_requirement: BundleId;
 	entitlements: TargetEntitlementsSummary;
-	lifetime?: TargetLifetime;
-	custody?: TargetCustody;
+	/**
+	 * Process lifetime posture. Required, not optional: an omitted lifetime once
+	 * bypassed the posture check and let a claim admit without lifetime evidence.
+	 * Compared unconditionally against the code-owned baseline (ADR 0027).
+	 */
+	lifetime: TargetLifetime;
+	/**
+	 * Custody root posture. Required, not optional: an omitted custody root once
+	 * bypassed the posture check and let a claim admit without custody evidence.
+	 * Compared unconditionally against the code-owned baseline (ADR 0027).
+	 */
+	custody: TargetCustody;
 	product_version: string;
 }
 
@@ -342,10 +353,20 @@ export function admitTarget(
 		};
 	}
 
-	// Placeholder guard: an unminted bundle id — in the manifest entry OR in the
-	// claim — is never admitted. This keeps the code-owned placeholder manifest
-	// fail-closed until a later unit mints the real strings.
-	if (!isMintedBundleId(entry.bundle_id) || !isMintedBundleId(claim.bundle_id)) {
+	// Placeholder guard: an unminted signing string — the bundle id, the team
+	// identifier, or the designated requirement — in the manifest entry OR in the
+	// claim is never admitted. Guarding all three closes the bug where a manifest
+	// and claim with minted bundle ids but placeholder team_identifier /
+	// designated_requirement compare equal and admit. Keeps the code-owned
+	// placeholder manifest fail-closed until a later unit mints the real strings.
+	if (
+		!isMintedBundleId(entry.bundle_id) ||
+		!isMintedBundleId(claim.bundle_id) ||
+		!isMintedBundleId(entry.team_identifier) ||
+		!isMintedBundleId(claim.team_identifier) ||
+		!isMintedBundleId(entry.designated_requirement) ||
+		!isMintedBundleId(claim.designated_requirement)
+	) {
 		return {
 			verdict: "not-admitted",
 			target_id: claim.target_id,
@@ -399,14 +420,14 @@ export function admitTarget(
 			error_code: "entitlements-widened",
 		};
 	}
-	if (claim.lifetime !== undefined && claim.lifetime !== baseline.lifetime) {
+	if (claim.lifetime !== baseline.lifetime) {
 		return {
 			verdict: "not-admitted",
 			target_id: claim.target_id,
 			error_code: "lifetime-changed",
 		};
 	}
-	if (claim.custody !== undefined && claim.custody !== baseline.custody) {
+	if (claim.custody !== baseline.custody) {
 		return {
 			verdict: "not-admitted",
 			target_id: claim.target_id,

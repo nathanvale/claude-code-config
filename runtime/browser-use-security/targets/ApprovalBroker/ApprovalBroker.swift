@@ -92,11 +92,14 @@ struct ApprovalBroker {
 
     /// Evaluate live Touch ID user presence for a mutation (R20).
     ///
-    /// Returns cleanly on success; maps cancellation and missing biometric
-    /// capability to typed errors so the caller fails only operations that need
-    /// new human authorization. Already-valid standing authorization stays
-    /// verifiable offline and does not call this.
-    static func requireUserPresence(for mutation: AuthorizationMutation) throws {
+    /// Returns the authenticated `LAContext` on success so the caller can bind
+    /// that same live presence evaluation to the Secure Enclave key it creates;
+    /// maps cancellation and missing biometric capability to typed errors so the
+    /// caller fails only operations that need new human authorization.
+    /// Already-valid standing authorization stays verifiable offline and does not
+    /// call this.
+    @discardableResult
+    static func requireUserPresence(for mutation: AuthorizationMutation) throws -> LAContext {
         let context = LAContext()
         var authError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError) else {
@@ -111,27 +114,35 @@ struct ApprovalBroker {
         }
         semaphore.wait()
         guard presenceGranted else { throw BrokerError.userPresenceCancelled }
+        return context
     }
 
     /// Create the device-bound, non-exportable Secure Enclave signing key.
     ///
     /// Requires user presence (create is a mutation). The private key never
     /// leaves the enclave; the caller receives only its handle and the pinned
-    /// public key that verifiers trust.
-    static func createDeviceBoundSigningKey() throws -> P256.Signing.PrivateKey {
-        try requireUserPresence(for: .create)
-        // SecureEnclave.P256 keys are non-exportable by construction: the key
-        // material stays in the enclave and only a persistent representation
-        // handle is retained. Presence is enforced by the access control above.
-        let access = try presenceRequiredAccessControl()
-        _ = access
+    /// public key that verifiers trust. The presence-gated access control and the
+    /// live authenticated `LAContext` are both attached to the key, so the
+    /// user-presence gate reaches the signing key itself — not just key creation.
+    static func createDeviceBoundSigningKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
+        let authenticationContext = try requireUserPresence(for: .create)
         guard SecureEnclave.isAvailable else {
             throw BrokerError.secureEnclaveUnavailable
         }
-        // The enclave-backed key is created here in the signed build. The
-        // in-enclave key is the authority; this P256 handle stands for it in the
-        // unsigned scaffold and is never serialized off the device.
-        return P256.Signing.PrivateKey()
+        // SecureEnclave.P256 keys are non-exportable by construction: the key
+        // material stays in the enclave and only a persistent representation
+        // handle is retained. The access control demands user presence on every
+        // private-key usage, and the authenticated context binds this creation to
+        // the live Touch ID evaluation above.
+        let access = try presenceRequiredAccessControl()
+        do {
+            return try SecureEnclave.P256.Signing.PrivateKey(
+                accessControl: access,
+                authenticationContext: authenticationContext
+            )
+        } catch {
+            throw BrokerError.secureEnclaveUnavailable
+        }
     }
 
     /// Issue a one-run Human Identity Attestation for a single run (ADR 0026).

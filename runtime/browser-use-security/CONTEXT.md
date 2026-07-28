@@ -1,9 +1,14 @@
 # Browser Use Security
 
 Native product owner for Browser Use Security: one signed macOS product, three
-separately signed executable targets (ADR 0027), modeled in pure TypeScript.
-This package holds identity and admission evidence only — no Swift, no signing,
-no secret bytes.
+separately signed executable targets (ADR 0027). This package owns the
+code-side model in pure TypeScript — identity, admission manifest, and drift
+proof — and hosts the unsigned native target sources (`targets/`,
+`BrowserUseSecurity.xcodeproj/`, `entitlements/`) under this owner directory per
+ADR 0027/0028. Secret bytes never transit this package's TypeScript layer;
+token bytes are handled only inside the signed Token Retrieval Launcher, which
+hands them to the disposable `op` child. Signing and notarization stay
+operator-gated (ADR 0028 entry gate).
 
 Current source map:
 
