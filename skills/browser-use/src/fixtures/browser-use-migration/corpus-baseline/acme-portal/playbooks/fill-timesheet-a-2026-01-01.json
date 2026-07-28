@@ -1,0 +1,9 @@
+{
+  "candidate": {
+    "id": "acme-fill-timesheet-a",
+    "domain": "acme-portal",
+    "flow": "fill-timesheet",
+    "lifecycleState": "local_candidate",
+    "steps": [{ "id": "s1", "kind": "open", "action": "open" }]
+  }
+}

@@ -97,6 +97,37 @@ const CONTINUATION = {
 	summary: "Prepare the credential binding, then resume this run.",
 };
 
+const RUN_EXECUTION_BINDING = {
+	schema_version: "1",
+	generation_id: "gen-a",
+	activation_epoch: 3,
+	service_id: "oncore",
+	flow_id: "fill-timesheet",
+	runbook_version: "1.0.0",
+	runbook_digest: "a".repeat(64),
+	action_registry_digest: "b".repeat(64),
+	normalized_input_digest: "c".repeat(64),
+	item_key_digest: "d".repeat(64),
+	target_scope: "https://portal.example.com",
+	postcondition: { id: "saved", summary: "draft saved" },
+} as const;
+
+const RUNBOOK_PRIVATE_STATE = {
+	runbook_target_binding: {
+		schema_version: "1",
+		mode: "automatic",
+		binding_id: "candidate-opaque-1",
+	},
+	runbook_progress: {
+		schema_version: "1",
+		service_id: "oncore",
+		flow_id: "snapshot-verify",
+		runbook_version: "1",
+		next_step: 0,
+		total_steps: 2,
+	},
+} as const;
+
 function blockedRun(
 	runId: string,
 	overrides: Partial<BrowserUseSharedRun> = {},
@@ -225,19 +256,8 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);
 		const input = blockedRun("run-bound-roundtrip", {
-			runbook_target_binding: {
-				schema_version: "1",
-				mode: "automatic",
-				binding_id: "candidate-opaque-1",
-			},
-			runbook_progress: {
-				schema_version: "1",
-				service_id: "oncore",
-				flow_id: "snapshot-verify",
-				runbook_version: "1",
-				next_step: 0,
-				total_steps: 2,
-			},
+			...RUNBOOK_PRIVATE_STATE,
+			run_execution_binding: RUN_EXECUTION_BINDING,
 		});
 		const created = await createOk(deps, input);
 		const loaded = await loadOk(deps, created.run_id);
@@ -247,6 +267,9 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 		expect(durable.schema_version).toBe("2");
 		expect(durable.payload.runbook_target_binding).toEqual(
 			input.runbook_target_binding,
+		);
+		expect(durable.payload.run_execution_binding).toEqual(
+			RUN_EXECUTION_BINDING,
 		);
 		expect(durable.payload).not.toHaveProperty("target_tab_id");
 	});
@@ -302,6 +325,27 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 		});
 		const loaded = await loadSharedRun(deps, "run-create-invalid");
 		expect(loaded).toMatchObject({ ok: false, code: "run_not_found" });
+	});
+
+	test("create refuses execution state without target binding and progress", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const runId = "run-create-incomplete-private-state";
+		const created = await createSharedRun(
+			deps,
+			blockedRun(runId, {
+				run_execution_binding: RUN_EXECUTION_BINDING,
+			}),
+		);
+		expect(created).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+			message: expect.stringContaining("require both"),
+		});
+		expect(await loadSharedRun(deps, runId)).toMatchObject({
+			ok: false,
+			code: "run_not_found",
+		});
 	});
 
 	test("a duplicate create is a typed store_record_conflict", async () => {
@@ -463,6 +507,357 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 		expect(loaded.run.continuation?.next_action_id).toBe("approve_run");
 		expect(loaded.payload.created_at_epoch_ms).toBe(1_000);
 		expect(loaded.payload.updated_at_epoch_ms).toBe(1_500);
+	});
+
+	test("execution binding enters at creation, never through generic CAS", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-execution-binding-attach", {
+				...RUNBOOK_PRIVATE_STATE,
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "execution-binding-attach",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "execution-binding-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				run_execution_binding: RUN_EXECUTION_BINDING,
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "run_execution_binding_creation_required",
+			message: expect.stringContaining("createSharedRun"),
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("execution binding cannot be replaced or removed after creation", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-execution-binding-immutable", {
+				...RUNBOOK_PRIVATE_STATE,
+				run_execution_binding: RUN_EXECUTION_BINDING,
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "execution-binding-immutable",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "execution-binding-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const attempts = [
+			(current: BrowserUseSharedRun) => {
+				if (current.run_execution_binding === undefined) {
+					throw new Error("unreachable");
+				}
+				current.run_execution_binding.generation_id = "gen-in-place";
+				return current;
+			},
+			(current: BrowserUseSharedRun) => ({
+				...current,
+				run_execution_binding: {
+					...RUN_EXECUTION_BINDING,
+					generation_id: "gen-b",
+				},
+			}),
+			(current: BrowserUseSharedRun) => {
+				const {
+					run_execution_binding: _binding,
+					...withoutExecutionBinding
+				} = current;
+				return withoutExecutionBinding;
+			},
+		];
+		for (const mutate of attempts) {
+			const updated = await casUpdateSharedRun(deps, {
+				runId: run.run_id,
+				expectedRevision: run.revision,
+				lease,
+				mutate,
+			});
+			expect(updated).toMatchObject({
+				ok: false,
+				code: "run_execution_binding_immutable",
+				message: expect.stringContaining("start a new run"),
+			});
+			expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+		}
+	});
+
+	test("the item-key sequence cannot be reordered, replaced, or removed", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-item-keys-immutable", {
+				...RUNBOOK_PRIVATE_STATE,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon", "tue"],
+					checkpoints: [],
+				},
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "item-keys-immutable",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "item-keys-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const attempts = [
+			(current: BrowserUseSharedRun) => {
+				(current.item_batch!.item_keys as string[]).reverse();
+				return current;
+			},
+			(current: BrowserUseSharedRun) => ({
+				...current,
+				item_batch: {
+					schema_version: "1" as const,
+					item_keys: ["tue", "mon"],
+					checkpoints: [],
+				},
+			}),
+			(current: BrowserUseSharedRun) => ({
+				...current,
+				item_batch: {
+					schema_version: "1" as const,
+					item_keys: ["mon", "wed"],
+					checkpoints: [],
+				},
+			}),
+			(current: BrowserUseSharedRun) => {
+				const { item_batch: _batch, ...withoutBatch } = current;
+				return withoutBatch;
+			},
+		];
+		for (const mutate of attempts) {
+			const updated = await casUpdateSharedRun(deps, {
+				runId: run.run_id,
+				expectedRevision: run.revision,
+				lease,
+				mutate,
+			});
+			expect(updated).toMatchObject({
+				ok: false,
+				code: "item_key_sequence_immutable",
+				message: expect.stringContaining("new run"),
+			});
+			expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+		}
+	});
+
+	test("confirmed checkpoints cannot be changed or removed", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-confirmed-checkpoint-immutable", {
+				...RUNBOOK_PRIVATE_STATE,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon", "tue"],
+					checkpoints: [{ item_key: "mon", outcome: "confirmed" }],
+				},
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "confirmed-checkpoint-immutable",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "checkpoint-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const attempts: Array<
+			(current: BrowserUseSharedRun) => BrowserUseSharedRun
+		> = [
+			(current: BrowserUseSharedRun) => {
+				const checkpoint = current.item_batch?.checkpoints[0];
+				if (checkpoint === undefined) throw new Error("unreachable");
+				checkpoint.outcome = "unknown";
+				return current;
+			},
+			(current) => ({
+				...current,
+				item_batch: {
+					...current.item_batch!,
+					checkpoints: [{ item_key: "mon", outcome: "unknown" }],
+				},
+			}),
+			(current) => ({
+				...current,
+				item_batch: { ...current.item_batch!, checkpoints: [] },
+			}),
+		];
+		for (const mutate of attempts) {
+			const updated = await casUpdateSharedRun(deps, {
+				runId: run.run_id,
+				expectedRevision: run.revision,
+				lease,
+				mutate,
+			});
+			expect(updated).toMatchObject({
+				ok: false,
+				code: "item_checkpoint_immutable",
+			});
+			expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+		}
+	});
+
+	test("a later checkpoint cannot advance past an earlier unconfirmed item", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		for (const [index, outcome] of (
+			["pending", "not-achieved", "unknown"] as const
+		).entries()) {
+			const run = await createOk(
+				deps,
+				blockedRun(`run-item-batch-blocked-${index}`, {
+					...RUNBOOK_PRIVATE_STATE,
+					item_batch: {
+						schema_version: "1",
+						item_keys: ["mon", "tue"],
+						checkpoints: [{ item_key: "mon", outcome }],
+					},
+					environment_profile: {
+						environment: "agent-chrome",
+						profile: `item-batch-blocked-${index}`,
+					},
+				}),
+			);
+			const lease = await acquireClaim(deps, run, `blocked-writer-${index}`);
+			const before = await rawRecordOf(deps, run.run_id);
+			const updated = await casUpdateSharedRun(deps, {
+				runId: run.run_id,
+				expectedRevision: run.revision,
+				lease,
+				mutate: (current) => ({
+					...current,
+					item_batch: {
+						...current.item_batch!,
+						checkpoints: [
+							...current.item_batch!.checkpoints,
+							{ item_key: "tue", outcome: "confirmed" },
+						],
+					},
+				}),
+			});
+			expect(updated).toMatchObject({
+				ok: false,
+				code: "item_batch_blocked",
+				message: expect.stringContaining("first, then retry"),
+			});
+			expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+		}
+	});
+
+	test("recorded non-confirmed truth cannot regress to pending", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-checkpoint-no-pending-regression", {
+				...RUNBOOK_PRIVATE_STATE,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [{ item_key: "mon", outcome: "unknown" }],
+				},
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "checkpoint-no-pending-regression",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "checkpoint-regression-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				item_batch: { ...current.item_batch!, checkpoints: [] },
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "item_checkpoint_pending_forbidden",
+			message: expect.stringContaining("freshly proven outcome"),
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
+	test("checkpoint reconciliation permits the next item on a later CAS", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-checkpoint-reconcile", {
+				...RUNBOOK_PRIVATE_STATE,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon", "tue"],
+					checkpoints: [],
+				},
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "checkpoint-reconcile",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "checkpoint-reconcile-writer");
+		const record = async (
+			current: BrowserUseSharedRun,
+			itemKey: string,
+			outcome: "confirmed" | "unknown",
+		) =>
+			await casUpdateSharedRun(deps, {
+				runId: current.run_id,
+				expectedRevision: current.revision,
+				lease,
+				mutate: (stored) => ({
+					...stored,
+					item_batch: {
+						...stored.item_batch!,
+						checkpoints: [
+							...stored.item_batch!.checkpoints.filter(
+								(checkpoint) => checkpoint.item_key !== itemKey,
+							),
+							{ item_key: itemKey, outcome },
+						],
+					},
+				}),
+			});
+		const unknown = await record(run, "mon", "unknown");
+		expect(unknown).toMatchObject({ ok: true, run: { revision: 2 } });
+		if (!unknown.ok) throw new Error("unreachable");
+		const reconciled = await record(unknown.run, "mon", "confirmed");
+		expect(reconciled).toMatchObject({ ok: true, run: { revision: 3 } });
+		if (!reconciled.ok) throw new Error("unreachable");
+		const next = await record(reconciled.run, "tue", "confirmed");
+		expect(next).toMatchObject({
+			ok: true,
+			run: {
+				revision: 4,
+				item_batch: {
+					checkpoints: [
+						{ item_key: "mon", outcome: "confirmed" },
+						{ item_key: "tue", outcome: "confirmed" },
+					],
+				},
+			},
+		});
 	});
 
 	test("a legacy unmutated run may bind once; committed binding is immutable", async () => {
@@ -702,6 +1097,36 @@ describe("casUpdateSharedRun (R13, R27)", () => {
 			code: "run_blocked_without_continuation",
 		});
 		expect(await rawRecordOf(deps, "run-update-invalid")).toBe(before);
+	});
+
+	test("update refuses item-batch state without target binding and progress", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-update-incomplete-private-state"),
+		);
+		const lease = await acquireClaim(deps, run, "incomplete-private-state-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			mutate: (current) => ({
+				...current,
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [],
+				},
+			}),
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "runbook_private_state_incomplete",
+			message: expect.stringContaining("require both"),
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
 	});
 
 	test("a mutate changing run_id is a typed run_id_immutable refusal", async () => {

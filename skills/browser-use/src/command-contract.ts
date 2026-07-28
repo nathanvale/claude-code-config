@@ -657,8 +657,9 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// Clean-break migration engine refusals (platform plan U3). Each phase
 	// (inventory/plan/apply/verify) fails closed with its own typed code so an
 	// invalid source, drift after the frozen snapshot, a duplicate YAML key, an
-	// incomplete disposition set, a deterministic-generation collision, or a
-	// verify mismatch each map to their own recovery — never a silent success.
+	// incomplete disposition set, a corpus census that drifts from the recorded
+	// baseline, a deterministic-generation collision, or a verify mismatch each
+	// map to their own recovery — never a silent success.
 	"migration_source_invalid",
 	"migration_source_drift",
 	"migration_state_missing",
@@ -666,6 +667,7 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"migration_yaml_invalid",
 	"migration_yaml_duplicate_key",
 	"migration_disposition_incomplete",
+	"migration_count_drift",
 	"migration_collision",
 	"migration_verify_failed",
 	// R27 auth repair surface (auth plan U3a): dispatching a repair command

@@ -285,6 +285,63 @@ export type BrowserUseRunbookProgress = {
 	total_steps: number;
 };
 
+/**
+ * The IMMUTABLE run execution binding persisted at run creation (R38, KTD13).
+ * Pins a run to one exact catalog identity so a resume resolves ONLY the pinned
+ * generation and rejects any replacement authority from flags. The rich
+ * resolver logic (drift/epoch/input/item-key checks) lives in
+ * browser-use-runbook-actions.ts; the run carries the pinned facts durably.
+ * Exactly one of `normalized_input_digest` / `governed_input_artifact_ref` is
+ * present (R41 — an ordinary input keeps only a digest; a sensitive input is a
+ * retention-owned artifact ref).
+ */
+export type BrowserUseRunExecutionBindingState = {
+	schema_version: "1";
+	generation_id: string;
+	activation_epoch: number;
+	service_id: string;
+	flow_id: string;
+	runbook_version: string;
+	runbook_digest: string;
+	action_registry_digest: string;
+	normalized_input_digest?: string;
+	governed_input_artifact_ref?: string;
+	item_key_digest: string;
+	target_scope: string;
+	postcondition: { id: string; summary: string };
+};
+
+/**
+ * One durable stable-key item checkpoint (R12): the item key and its proven
+ * outcome. A `confirmed` checkpoint is immutable; an `unknown` checkpoint blocks
+ * the batch (never redispatched, no later item runs). Outcome vocabulary mirrors
+ * browser-use-runbook-actions.ts.
+ */
+export type BrowserUseRunItemCheckpoint = {
+	item_key: string;
+	outcome: "pending" | "confirmed" | "not-achieved" | "unknown";
+};
+
+/** Durable bounded-iteration batch state (R12): ordered keys plus checkpoints. */
+export type BrowserUseRunItemBatchState = {
+	schema_version: "1";
+	item_keys: readonly string[];
+	checkpoints: readonly BrowserUseRunItemCheckpoint[];
+};
+
+/** Typed durable item-batch transition check (R12). */
+export type BrowserUseRunItemBatchTransitionCheck =
+	| { ok: true }
+	| {
+			ok: false;
+			code:
+				| "item_key_sequence_immutable"
+				| "item_checkpoint_immutable"
+				| "item_checkpoint_pending_forbidden"
+				| "item_batch_blocked";
+			message: string;
+	  };
+
 // --- The shared run ----------------------------------------------------------
 
 /**
@@ -307,6 +364,10 @@ export type BrowserUseSharedRun = {
 	runbook_target_binding?: BrowserUseRunbookTargetBinding;
 	/** Independent progress cursor; repair continuations cannot replace it. */
 	runbook_progress?: BrowserUseRunbookProgress;
+	/** Immutable execution binding (R38); a resume resolves only its pinned generation. */
+	run_execution_binding?: BrowserUseRunExecutionBindingState;
+	/** Durable bounded-iteration checkpoints (R12); an unknown item blocks the batch. */
+	item_batch?: BrowserUseRunItemBatchState;
 	/** Opaque versioned auth fragment; auth-owned content (R6). */
 	auth_fragment?: BrowserUseAuthFragmentSlot;
 	/** Bounded auth attestation reference; required before `ready` (R6). */
@@ -333,7 +394,9 @@ export type BrowserUseRunIssueCode =
 	| "run_adapter_unregistered"
 	| "runbook_private_state_incomplete"
 	| "runbook_target_binding_invalid"
-	| "runbook_progress_invalid";
+	| "runbook_progress_invalid"
+	| "run_execution_binding_invalid"
+	| "run_item_batch_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -346,6 +409,10 @@ function isBlockedState(state: BrowserUseRunState): boolean {
 		state,
 	);
 }
+
+const FULL_DIGEST = /^[0-9a-f]{64}$/;
+const SAFE_BATCH_ITEM_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ITEM_BATCH_MAX_KEYS = 512;
 
 /**
  * Validate shared-run invariants (R6, R24).
@@ -397,11 +464,15 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 	}
 	const binding = run.runbook_target_binding;
 	const progress = run.runbook_progress;
-	if ((binding === undefined) !== (progress === undefined)) {
+	if (
+		(binding === undefined) !== (progress === undefined) ||
+		((run.run_execution_binding !== undefined || run.item_batch !== undefined) &&
+			(binding === undefined || progress === undefined))
+	) {
 		issues.push({
 			code: "runbook_private_state_incomplete",
 			message:
-				"runbook_target_binding and runbook_progress must be committed together or both absent.",
+				"runbook_target_binding and runbook_progress must be committed together; execution-binding and item-batch state require both.",
 		});
 	}
 	if (
@@ -443,7 +514,263 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 				"runbook_progress requires schema version 1, runbook identity, and an integer cursor between zero and total_steps.",
 		});
 	}
+	const execBinding = run.run_execution_binding;
+	const execBindingProblem =
+		execBinding === undefined
+			? undefined
+			: runExecutionBindingValidationProblem(execBinding);
+	if (execBindingProblem !== undefined) {
+		issues.push({
+			code: "run_execution_binding_invalid",
+			message: execBindingProblem,
+		});
+	}
+	const itemBatch = run.item_batch;
+	const itemBatchProblem =
+		itemBatch === undefined
+			? undefined
+			: runItemBatchValidationProblem(itemBatch);
+	if (itemBatchProblem !== undefined) {
+		issues.push({
+			code: "run_item_batch_invalid",
+			message: itemBatchProblem,
+		});
+	}
 	return issues;
+}
+
+/**
+ * Return the first execution-binding validation problem for untrusted input.
+ *
+ * @param value - Candidate durable execution binding
+ * @returns Undefined when every execution-binding invariant holds
+ */
+export function runExecutionBindingValidationProblem(
+	value: unknown,
+): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "run_execution_binding must be a JSON object.";
+	}
+	const binding = value as Record<string, unknown>;
+	if (binding.schema_version !== "1") {
+		return "run_execution_binding.schema_version must be 1.";
+	}
+	for (const field of [
+		"generation_id",
+		"service_id",
+		"flow_id",
+		"runbook_version",
+		"target_scope",
+	] as const) {
+		if (typeof binding[field] !== "string" || binding[field].length === 0) {
+			return `run_execution_binding.${field} must be a non-empty string.`;
+		}
+	}
+	if (
+		!Number.isInteger(binding.activation_epoch) ||
+		(binding.activation_epoch as number) < 1
+	) {
+		return "run_execution_binding.activation_epoch must be an integer >= 1.";
+	}
+	for (const digestField of [
+		"runbook_digest",
+		"action_registry_digest",
+		"item_key_digest",
+	] as const) {
+		if (
+			typeof binding[digestField] !== "string" ||
+			!FULL_DIGEST.test(binding[digestField] as string)
+		) {
+			return `run_execution_binding.${digestField} must be a 64-hex digest.`;
+		}
+	}
+	const hasDigest = binding.normalized_input_digest !== undefined;
+	const hasGoverned = binding.governed_input_artifact_ref !== undefined;
+	if (hasDigest === hasGoverned) {
+		return "run_execution_binding must carry exactly one of normalized_input_digest or governed_input_artifact_ref.";
+	}
+	if (
+		hasDigest &&
+		(typeof binding.normalized_input_digest !== "string" ||
+			!FULL_DIGEST.test(binding.normalized_input_digest))
+	) {
+		return "run_execution_binding.normalized_input_digest must be a 64-hex digest.";
+	}
+	if (
+		hasGoverned &&
+		(typeof binding.governed_input_artifact_ref !== "string" ||
+			binding.governed_input_artifact_ref.length === 0)
+	) {
+		return "run_execution_binding.governed_input_artifact_ref must be a non-empty string.";
+	}
+	const postcondition = binding.postcondition;
+	if (
+		typeof postcondition !== "object" ||
+		postcondition === null ||
+		Array.isArray(postcondition) ||
+		typeof (postcondition as Record<string, unknown>).id !== "string" ||
+		(postcondition as Record<string, unknown>).id === "" ||
+		typeof (postcondition as Record<string, unknown>).summary !== "string" ||
+		(postcondition as Record<string, unknown>).summary === ""
+	) {
+		return "run_execution_binding.postcondition must carry non-empty id and summary strings.";
+	}
+	return undefined;
+}
+
+/**
+ * Return the first item-batch validation problem for untrusted input.
+ *
+ * @param value - Candidate durable item-batch state
+ * @returns Undefined when every bounded batch invariant holds
+ */
+export function runItemBatchValidationProblem(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "item_batch must be a JSON object.";
+	}
+	const batch = value as Record<string, unknown>;
+	if (
+		batch.schema_version !== "1" ||
+		!Array.isArray(batch.item_keys) ||
+		batch.item_keys.length === 0 ||
+		batch.item_keys.length > ITEM_BATCH_MAX_KEYS
+	) {
+		return "item_batch requires schema version 1 and between 1 and 512 stable item keys.";
+	}
+	const keys = new Set<string>();
+	for (const key of batch.item_keys) {
+		if (
+			typeof key !== "string" ||
+			!SAFE_BATCH_ITEM_KEY.test(key) ||
+			keys.has(key)
+		) {
+			return "item_batch.item_keys must contain unique safe stable keys.";
+		}
+		keys.add(key);
+	}
+	if (!Array.isArray(batch.checkpoints)) {
+		return "item_batch.checkpoints must be an array.";
+	}
+	const outcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
+	for (const candidate of batch.checkpoints) {
+		const checkpoint =
+			typeof candidate === "object" &&
+			candidate !== null &&
+			!Array.isArray(candidate)
+				? (candidate as Record<string, unknown>)
+				: undefined;
+		if (
+			checkpoint === undefined ||
+			typeof checkpoint.item_key !== "string" ||
+			!keys.has(checkpoint.item_key) ||
+			outcomes.has(checkpoint.item_key) ||
+			!["pending", "confirmed", "not-achieved", "unknown"].includes(
+				checkpoint.outcome as string,
+			)
+		) {
+			return "item_batch.checkpoints must reference batch keys once with valid outcomes.";
+		}
+		outcomes.set(
+			checkpoint.item_key,
+			checkpoint.outcome as BrowserUseRunItemCheckpoint["outcome"],
+		);
+	}
+	let blocked = false;
+	for (const key of batch.item_keys) {
+		const outcome = outcomes.get(key) ?? "pending";
+		if (blocked && outcome !== "pending") {
+			return "item_batch cannot advance a checkpoint after the first unconfirmed item.";
+		}
+		if (outcome !== "confirmed") blocked = true;
+	}
+	return undefined;
+}
+
+/**
+ * Check one durable item-batch mutation against the R12 checkpoint reducer.
+ * The generic CAS may initialize a pending batch, then record only the first
+ * item not already confirmed. Recorded truth cannot regress to `pending`.
+ *
+ * @param previous - Durable state before the mutation
+ * @param next - Candidate durable state
+ * @returns Ok, or one typed repairable refusal
+ */
+export function checkRunItemBatchTransition(
+	previous: BrowserUseRunItemBatchState | undefined,
+	next: BrowserUseRunItemBatchState | undefined,
+): BrowserUseRunItemBatchTransitionCheck {
+	if (previous === undefined && next === undefined) return { ok: true };
+	if (previous !== undefined && next === undefined) {
+		return {
+			ok: false,
+			code: "item_key_sequence_immutable",
+			message:
+				"item_batch cannot be removed after its ordered item-key sequence is committed; start a new run for a different batch.",
+		};
+	}
+	if (next === undefined) return { ok: true };
+	if (
+		previous !== undefined &&
+		(previous.item_keys.length !== next.item_keys.length ||
+			previous.item_keys.some((key, index) => key !== next.item_keys[index]))
+	) {
+		return {
+			ok: false,
+			code: "item_key_sequence_immutable",
+			message:
+				"item_batch.item_keys cannot be reordered or replaced after creation; start a new run with the required ordered keys.",
+		};
+	}
+
+	const previousOutcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
+	for (const checkpoint of previous?.checkpoints ?? []) {
+		previousOutcomes.set(checkpoint.item_key, checkpoint.outcome);
+	}
+	const nextOutcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
+	for (const checkpoint of next.checkpoints) {
+		nextOutcomes.set(checkpoint.item_key, checkpoint.outcome);
+	}
+
+	for (const [targetIndex, key] of next.item_keys.entries()) {
+		const before = previousOutcomes.get(key) ?? "pending";
+		const after = nextOutcomes.get(key) ?? "pending";
+		if (before === "confirmed" && after !== "confirmed") {
+			return {
+				ok: false,
+				code: "item_checkpoint_immutable",
+				message: `the confirmed checkpoint for item ${key} is immutable; keep it confirmed or start a new run.`,
+			};
+		}
+		if (before !== "pending" && after === "pending") {
+			return {
+				ok: false,
+				code: "item_checkpoint_pending_forbidden",
+				message: `the recorded checkpoint for item ${key} cannot regress to pending; reconcile it to a freshly proven outcome.`,
+			};
+		}
+		if (before === after || after === "pending") continue;
+		for (let index = 0; index < targetIndex; index += 1) {
+			const priorKey = next.item_keys[index] as string;
+			const priorOutcome = previousOutcomes.get(priorKey) ?? "pending";
+			if (priorOutcome !== "confirmed") {
+				return {
+					ok: false,
+					code: "item_batch_blocked",
+					message: `item ${key} cannot advance while earlier item ${priorKey} is ${priorOutcome}; confirm or reconcile ${priorKey} first, then retry.`,
+				};
+			}
+		}
+	}
+	return { ok: true };
 }
 
 // --- Auth integration Port (R6, KTD10) ---------------------------------------

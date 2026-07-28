@@ -100,6 +100,14 @@ export type AgentBrowserTaskStep =
 			ref: string;
 			value: string;
 			sensitivity: "ordinary" | "confidential";
+			/**
+			 * Optional runtime-resolved semantic target (runbook v2, R11). When
+			 * present, the executor resolves the fill ref from a FRESH snapshot by
+			 * role + name and dispatches only when EXACTLY ONE current ref matches,
+			 * overriding the durable `ref` placeholder. Absent for adapter-native
+			 * @eN fills that already hold a snapshot ref.
+			 */
+			target?: { role: string; name: string };
 			postcondition: AgentBrowserPostcondition;
 	  }
 	| {
@@ -813,13 +821,21 @@ export async function executeAgentBrowserTask(
 			executedSteps += 1;
 			continue;
 		}
-		const mutationRef =
+		const semanticTarget: { role: string; name: string } | undefined =
 			step.kind === "click-semantic"
+				? { role: step.role, name: step.name }
+				: step.kind === "fill" && step.target !== undefined
+					? step.target
+					: undefined;
+		const mutationRef =
+			semanticTarget !== undefined
 				? resolveUniqueSemanticRef(
 						{ refs: currentRefs, metadata: currentRefMetadata },
-						step,
+						semanticTarget,
 					)
-				: step.ref;
+				: step.kind === "click-semantic"
+					? undefined
+					: step.ref;
 		if (
 			mutationRef === undefined ||
 			!SAFE_REF.test(mutationRef) ||
@@ -828,8 +844,8 @@ export async function executeAgentBrowserTask(
 			return withDelivery(failure(
 				"agent_browser_ref_invalid",
 				"not-achieved",
-				step.kind === "click-semantic"
-					? "The semantic click target did not resolve to exactly one ref in the current task-local snapshot."
+				semanticTarget !== undefined
+					? "The semantic mutation target did not resolve to exactly one ref in the current task-local snapshot."
 					: "The requested ref is absent from the current task-local snapshot.",
 				executedSteps,
 			));
@@ -871,7 +887,7 @@ export async function executeAgentBrowserTask(
 			// of the executor's own `fill`. The choreography re-proves the target,
 			// mints an opaque handle, and performs one bounded write inside the
 			// disposable delivery helper — the executor never observes a value.
-			const field = delivery.field_by_ref[step.ref];
+			const field = delivery.field_by_ref[mutationRef];
 			if (field === undefined) {
 				return withDelivery(failure(
 					"agent_browser_confidential_delivery_blocked",

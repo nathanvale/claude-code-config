@@ -23,8 +23,9 @@
 // Date.now, no Math.random, no process.cwd().
 // ---------------------------------------------------------------------------
 
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { constants as fsConstants, existsSync } from "node:fs";
+import { lstat as fsLstat, open as fsOpen } from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type AgentBrowserAuthDeliveryContext,
@@ -42,10 +43,20 @@ import {
 	type BrowserUseRunbookHealth,
 	type BrowserUseRunbookInputs,
 	type BrowserUseRunbookPlan,
+	type BrowserUseRunbookStep,
+	materializeRunbookInputs,
+	parseRunbookRecord,
 	projectRunbookCatalogRow,
 	planRunbookExecution,
 	validateRunbook,
 } from "./browser-use-runbook-model";
+import {
+	type BrowserUseActionGenerationSeam,
+	type BrowserUseReviewedActionRefusal,
+	itemKeysAreValid,
+	resolveReviewedAction,
+} from "./browser-use-runbook-actions";
+import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
 
 // --- Discovery location ------------------------------------------------------
 
@@ -186,13 +197,17 @@ function parseRunbookRaw(
 			"runbook file is not valid JSON.",
 		);
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+	// TOTAL parse (drop-v1): prove the v2 object shape before any use — the
+	// engine NEVER casts untrusted JSON to BrowserUseRunbook. A non-object, a
+	// non-v2 version, or a malformed step/input/schema is a typed shape refusal.
+	const shape = parseRunbookRecord(parsed);
+	if (!shape.ok) {
 		return discoveryFailure(
 			"runbook_record_invalid",
-			"runbook file is not a JSON object.",
+			`runbook shape invalid: ${shape.issue.code}.`,
 		);
 	}
-	const runbook = parsed as BrowserUseRunbook;
+	const runbook = shape.runbook;
 	const issues = validateRunbook(runbook);
 	if (issues.length > 0) {
 		return discoveryFailure(
@@ -444,6 +459,8 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_input_rejected"
 		| "runbook_resume_out_of_range"
 		| "runbook_neutral_checkpoint_unavailable"
+		| "runbook_action_registry_unavailable"
+		| "runbook_action_refused"
 		| "runbook_confidential_native_capability_absent"
 		| "runbook_confidential_delivery_unavailable";
 	message: string;
@@ -514,7 +531,123 @@ export type BrowserUsePreparedRunbookExecution =
 	| { ok: true; plan: BrowserUseRunbookPlan };
 
 /**
+ * The single allowed origin a reviewed action resolves against: a runbook that
+ * declares reviewed actions must declare EXACTLY ONE allowed origin so the
+ * action's exact allowed origin is unambiguous (R17). A runbook with reviewed
+ * actions and multiple origins is refused before any resolution.
+ */
+function singleAllowedOrigin(
+	runbook: BrowserUseRunbook,
+): { ok: true; origin: string } | { ok: false } {
+	return runbook.allowed_origins.length === 1 && runbook.allowed_origins[0] !== undefined
+		? { ok: true, origin: runbook.allowed_origins[0] }
+		: { ok: false };
+}
+
+// Substitute the runbook's typed inputs into an action step's declared input
+// map: each value is a scalar token or an already-structured input value keyed
+// by input id. `{{id}}` tokens resolve to the input value verbatim (structured
+// values pass through unchanged; scalar values render as the raw value).
+function resolveActionInputs(
+	declared: Readonly<Record<string, string>>,
+	inputs: BrowserUseRunbookInputs,
+): Readonly<Record<string, unknown>> {
+	const out: Record<string, unknown> = {};
+	for (const [key, token] of Object.entries(declared)) {
+		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
+		if (match?.[1] === undefined) {
+			out[key] = token;
+			continue;
+		}
+		const resolved = inputs[match[1]];
+		if (resolved !== undefined) out[key] = resolved;
+	}
+	return out;
+}
+
+/**
+ * Resolve every `action`/`iterate` step in a runbook into engine-verified
+ * executor `evaluate` steps (U3, R16-R23). Each action is resolved ONLY through
+ * the injected generation seam and the content-addressed reviewed-action
+ * registry; any refusal (candidate, changed digest, wrong origin, undeclared
+ * effect, invalid input, missing postcondition, unsupported containment) fails
+ * closed BEFORE any executor step is built. An `iterate` step expands into one
+ * verified action step per stable item key drawn from its `over_input` array.
+ *
+ * @returns A map (absolute step index -> verified executor steps), or the first
+ *   typed action refusal.
+ */
+async function resolveRunbookActionSteps(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+	seam: BrowserUseActionGenerationSeam,
+): Promise<
+	| { ok: true; resolved: ReadonlyMap<number, readonly AgentBrowserTaskStep[]> }
+	| { ok: false; refusal: BrowserUseReviewedActionRefusal }
+> {
+	const origin = singleAllowedOrigin(runbook);
+	const resolved = new Map<number, readonly AgentBrowserTaskStep[]>();
+	for (const [index, step] of runbook.steps.entries()) {
+		if (step.kind !== "action" && step.kind !== "iterate") continue;
+		if (!origin.ok) {
+			return {
+				ok: false,
+				refusal: {
+					code: "action_origin_invalid",
+					message:
+						"a runbook declaring reviewed actions must declare exactly one exact allowed origin.",
+				},
+			};
+		}
+		if (step.kind === "action") {
+			const one = await resolveReviewedAction({
+				actionId: step.action_id,
+				expectedDigest: step.expected_digest,
+				requestedOrigin: origin.origin,
+				inputs: resolveActionInputs(step.inputs, inputs),
+				seam,
+			});
+			if (!one.ok) return { ok: false, refusal: one.refusal };
+			resolved.set(index, [one.resolved.step]);
+			continue;
+		}
+		// iterate: one verified action per stable item key from `over_input`.
+		const overRaw = inputs[step.over_input];
+		if (!itemKeysAreValid(overRaw)) {
+			return {
+				ok: false,
+				refusal: {
+					code: "action_input_rejected",
+					message:
+						"iterate input must be a non-empty bounded sequence of unique safe stable item keys.",
+				},
+			};
+		}
+		const itemKeys = overRaw;
+		const steps: AgentBrowserTaskStep[] = [];
+		for (const key of itemKeys) {
+			const perItemInputs = resolveActionInputs(step.step.inputs, inputs);
+			const one = await resolveReviewedAction({
+				actionId: step.step.action_id,
+				expectedDigest: step.step.expected_digest,
+				requestedOrigin: origin.origin,
+				inputs: { ...perItemInputs, item_key: key },
+				seam,
+			});
+			if (!one.ok) return { ok: false, refusal: one.refusal };
+			steps.push(one.resolved.step);
+		}
+		resolved.set(index, steps);
+	}
+	return { ok: true, resolved };
+}
+
+/**
  * Load and compile one runbook before any target, auth, or durable-run effect.
+ * When the runbook declares reviewed-action or iteration steps, an
+ * `actionSeam` MUST be supplied so each action resolves through a staged/active
+ * generation and its content-addressed registry (U3); without it, an action
+ * step refuses `runbook_action_registry_unavailable`.
  */
 export async function prepareRunbookExecution(
 	fs: BrowserUsePlatformFs,
@@ -524,6 +657,7 @@ export async function prepareRunbookExecution(
 		flowId: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
+		actionSeam?: BrowserUseActionGenerationSeam;
 	},
 ): Promise<BrowserUsePreparedRunbookExecution> {
 	const shown = await showRunbook(fs, dataRoot, {
@@ -531,9 +665,38 @@ export async function prepareRunbookExecution(
 		flowId: input.flowId,
 	});
 	if (!shown.ok) return { ok: false, refusal: shown.failure };
+	const normalizedInputs = materializeRunbookInputs(
+		shown.runbook,
+		input.inputs,
+	);
+	let resolvedActionSteps:
+		| ReadonlyMap<number, readonly AgentBrowserTaskStep[]>
+		| undefined;
+	const hasActionSteps = shown.runbook.steps.some(
+		(step: BrowserUseRunbookStep) =>
+			step.kind === "action" || step.kind === "iterate",
+	);
+	if (hasActionSteps && input.actionSeam !== undefined) {
+		const resolution = await resolveRunbookActionSteps(
+			shown.runbook,
+			normalizedInputs,
+			input.actionSeam,
+		);
+		if (!resolution.ok) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_action_refused",
+					message: `reviewed action refused (${resolution.refusal.code}): ${resolution.refusal.message}`,
+				},
+			};
+		}
+		resolvedActionSteps = resolution.resolved;
+	}
 	const planned = planRunbookExecution(shown.runbook, {
-		inputs: input.inputs,
+		inputs: normalizedInputs,
 		resumeFromStep: input.resumeFromStep,
+		...(resolvedActionSteps !== undefined ? { resolvedActionSteps } : {}),
 	});
 	return planned.ok
 		? { ok: true, plan: planned.plan }
@@ -733,6 +896,12 @@ export async function runRunbook(
 		 * `expectedTargetUrl: "about:blank"` for confidential runbooks.
 		 */
 		afterNeutralOpen?: (nextStep: number) => Promise<boolean>;
+		/**
+		 * The staged/active generation seam that resolves reviewed-action assets
+		 * (U3). Required for a runbook declaring `action`/`iterate` steps; absent
+		 * for action-free runbooks.
+		 */
+		actionSeam?: BrowserUseActionGenerationSeam;
 	},
 	input: {
 		serviceId: string;
@@ -750,6 +919,7 @@ export async function runRunbook(
 		flowId: input.flowId,
 		inputs: input.inputs,
 		resumeFromStep: input.resumeFromStep,
+		...(deps.actionSeam !== undefined ? { actionSeam: deps.actionSeam } : {}),
 	});
 	if (!prepared.ok) return prepared;
 	return await executePreparedRunbook(
@@ -772,4 +942,426 @@ export async function runRunbook(
 				: {}),
 		},
 	);
+}
+
+// --- Effective-catalog resolver + shadow matrix (R7, R14) --------------------
+
+/**
+ * The three shadow layers, highest precedence first (R7):
+ *   - `active-generation`: the future active Corpus Generation (U8). In U2 no
+ *     generation is activated, so the seam is an INTERFACE the resolver reads
+ *     through; a caller with an active generation plugs its records in here.
+ *   - `compat-xdg`: the operator-authored XDG data-root store
+ *     (`runbooksRoot(dataRoot)`) — a compatibility override.
+ *   - `shipped-base`: the immutable code-owned shipped catalog.
+ * List/show/run all resolve through this one matrix.
+ */
+export const BROWSER_USE_RUNBOOK_EFFECTIVE_SOURCES = [
+	"active-generation",
+	"compat-xdg",
+	"shipped-base",
+] as const;
+
+/** Effective-source union (R7). */
+export type BrowserUseRunbookEffectiveSource =
+	(typeof BROWSER_USE_RUNBOOK_EFFECTIVE_SOURCES)[number];
+
+/**
+ * The active-generation seam (R7 interface). A future active generation (U8)
+ * loads one runbook record for an id from its immutable generation store. A
+ * record at this layer that is corrupt or invalid FAILS CLOSED at this layer
+ * and never falls through to a lower layer. In U2 this seam is not supplied, so
+ * the resolver starts at the compat-xdg layer. `absent` lets the resolver
+ * descend to the next layer only when this layer holds NO record for the id.
+ */
+export type BrowserUseActiveGenerationSeam = {
+	/**
+	 * @returns the layer's outcome for one id: a valid runbook, a typed
+	 * fail-closed failure, or clean absence (descend to the next layer).
+	 */
+	loadRunbook(id: {
+		serviceId: string;
+		flowId: string;
+	}): Promise<
+		| { ok: true; runbook: BrowserUseRunbook; health: BrowserUseRunbookHealth }
+		| { ok: false; absent: true }
+		| { ok: false; absent: false; failure: BrowserUseRunbookDiscoveryFailure }
+	>;
+	/** Every id the active generation declares (for whole-catalog verification). */
+	listIds(): Promise<readonly { serviceId: string; flowId: string }[]>;
+};
+
+/**
+ * One resolved effective-catalog record: the id, the effective source it came
+ * from, and either the validated runbook or the typed failure that record hit
+ * at its resolving layer (R14 — a corrupt record never silently disappears).
+ */
+export type BrowserUseEffectiveCatalogEntry = {
+	service_id: string;
+	flow_id: string;
+	effective_source: BrowserUseRunbookEffectiveSource;
+	version?: string;
+} & (
+	| { ok: true; runbook: BrowserUseRunbook; health: BrowserUseRunbookHealth }
+	| { ok: false; failure: BrowserUseRunbookDiscoveryFailure }
+);
+
+/**
+ * Resolve ONE id through the shadow matrix (R7). Highest present layer wins; a
+ * corrupt/invalid record at a layer FAILS CLOSED at that layer (never falls
+ * through to a lower layer). Absent-only descends. This is the single owner
+ * list/show/run resolve through so precedence and fail-closed behavior can
+ * never diverge across the three commands.
+ *
+ * @param fs - Platform fs port
+ * @param dataRoot - The admitted `paths.data.root`
+ * @param id - Service and flow id
+ * @param seam - The optional active-generation layer (U8); absent in U2
+ * @returns One resolved effective-catalog entry, or `undefined` when no layer
+ *   holds the id at all
+ */
+export async function resolveEffectiveRunbook(
+	fs: BrowserUsePlatformFs,
+	dataRoot: string,
+	id: { serviceId: string; flowId: string },
+	seam?: BrowserUseActiveGenerationSeam,
+): Promise<BrowserUseEffectiveCatalogEntry | undefined> {
+	if (seam !== undefined) {
+		const fromGeneration = await seam.loadRunbook(id);
+		if (fromGeneration.ok) {
+			return {
+				service_id: id.serviceId,
+				flow_id: id.flowId,
+				effective_source: "active-generation",
+				version: fromGeneration.runbook.version,
+				ok: true,
+				runbook: fromGeneration.runbook,
+				health: fromGeneration.health,
+			};
+		}
+		// A corrupt/invalid higher-priority record fails closed at this layer.
+		if (!fromGeneration.absent) {
+			return {
+				service_id: id.serviceId,
+				flow_id: id.flowId,
+				effective_source: "active-generation",
+				ok: false,
+				failure: fromGeneration.failure,
+			};
+		}
+	}
+	const fromStore = await loadRunbookFromRoot(fs, runbooksRoot(dataRoot), id);
+	if (fromStore.ok) {
+		return {
+			service_id: id.serviceId,
+			flow_id: id.flowId,
+			effective_source: "compat-xdg",
+			version: fromStore.runbook.version,
+			ok: true,
+			runbook: fromStore.runbook,
+			health: fromStore.health,
+		};
+	}
+	if (!fromStore.absent) {
+		return {
+			service_id: id.serviceId,
+			flow_id: id.flowId,
+			effective_source: "compat-xdg",
+			ok: false,
+			failure: fromStore.failure,
+		};
+	}
+	const fromShipped = await loadRunbookFromRoot(fs, shippedRunbooksRoot(), id);
+	if (fromShipped.ok) {
+		return {
+			service_id: id.serviceId,
+			flow_id: id.flowId,
+			effective_source: "shipped-base",
+			version: fromShipped.runbook.version,
+			ok: true,
+			runbook: fromShipped.runbook,
+			health: fromShipped.health,
+		};
+	}
+	if (!fromShipped.absent) {
+		return {
+			service_id: id.serviceId,
+			flow_id: id.flowId,
+			effective_source: "shipped-base",
+			ok: false,
+			failure: fromShipped.failure,
+		};
+	}
+	return undefined;
+}
+
+/**
+ * Whole-catalog verification (R14): resolve EVERY id any layer declares through
+ * the shadow matrix and report, per id, the expected id, its effective source,
+ * generation/version, and either the validated runbook or the typed failure the
+ * resolving layer hit. An invalid or corrupt record never disappears — it
+ * surfaces here as a failed entry at its own effective source.
+ *
+ * @param fs - Platform fs port
+ * @param dataRoot - The admitted `paths.data.root`
+ * @param seam - The optional active-generation layer (U8); absent in U2
+ * @returns Every resolved entry, sorted by service then flow id
+ */
+export async function verifyEffectiveCatalog(
+	fs: BrowserUsePlatformFs,
+	dataRoot: string,
+	seam?: BrowserUseActiveGenerationSeam,
+): Promise<readonly BrowserUseEffectiveCatalogEntry[]> {
+	const ids = new Map<string, { serviceId: string; flowId: string }>();
+	const collect = async (root: string): Promise<void> => {
+		const rootStat = await fs.lstat(root);
+		if (rootStat === undefined || rootStat.kind !== "directory") return;
+		for (const serviceId of await fs.readDirectory(root)) {
+			if (!SAFE_SEGMENT.test(serviceId)) continue;
+			const serviceDir = join(root, serviceId);
+			const serviceStat = await fs.lstat(serviceDir);
+			if (serviceStat === undefined || serviceStat.kind !== "directory") continue;
+			for (const flowId of await fs.readDirectory(serviceDir)) {
+				if (!SAFE_SEGMENT.test(flowId)) continue;
+				ids.set(`${serviceId}/${flowId}`, { serviceId, flowId });
+			}
+		}
+	};
+	if (seam !== undefined) {
+		for (const id of await seam.listIds()) {
+			ids.set(`${id.serviceId}/${id.flowId}`, id);
+		}
+	}
+	await collect(runbooksRoot(dataRoot));
+	await collect(shippedRunbooksRoot());
+	const entries: BrowserUseEffectiveCatalogEntry[] = [];
+	for (const id of ids.values()) {
+		const resolved = await resolveEffectiveRunbook(fs, dataRoot, id, seam);
+		if (resolved !== undefined) entries.push(resolved);
+	}
+	return entries.sort((a, b) => {
+		if (a.service_id !== b.service_id) return a.service_id < b.service_id ? -1 : 1;
+		return a.flow_id < b.flow_id ? -1 : a.flow_id > b.flow_id ? 1 : 0;
+	});
+}
+
+// --- Private-file structured-input route (R10, R41) --------------------------
+
+/** Bounded private-file JSON input ceiling (R10): refuse oversized content. */
+export const RUNBOOK_PRIVATE_INPUT_MAX_BYTES = 64 * 1024;
+
+/** Typed private-file input refusal. Never carries the value or source path. */
+export type BrowserUseRunbookPrivateInputRefusal = {
+	code:
+		| "private_input_path_unsafe"
+		| "private_input_open_failed"
+		| "private_input_not_regular"
+		| "private_input_wrong_owner"
+		| "private_input_mode_loose"
+		| "private_input_multiple_links"
+		| "private_input_oversize"
+		| "private_input_json_invalid"
+		| "private_input_shape_invalid";
+	message: string;
+};
+
+/**
+ * A single admitted private-file structured-input read (R10/R41). One value id
+ * carries a structured value the runbook's typed-input schema then validates.
+ * The path and value NEVER appear in argv, output, receipts, or provenance —
+ * callers pass this map straight into the input binding.
+ */
+export type BrowserUseRunbookPrivateInputResult =
+	| { ok: true; inputs: Readonly<Record<string, unknown>> }
+	| { ok: false; refusal: BrowserUseRunbookPrivateInputRefusal };
+
+function privateInputRefusal(
+	code: BrowserUseRunbookPrivateInputRefusal["code"],
+	message: string,
+): { ok: false; refusal: BrowserUseRunbookPrivateInputRefusal } {
+	// Redaction is a safety net; the message names the failed check, never bytes.
+	return { ok: false, refusal: { code, message: redactUnsafeText(message) } };
+}
+
+// Prove containment beneath the admitted input root WITHOUT following symlinks
+// (a path check on the normalized strings, not a realpath resolution — the
+// no-follow open below is the enforcement, this is the pre-open path gate).
+function containedBeneath(root: string, candidate: string): boolean {
+	const normalizedRoot = normalize(resolve(root));
+	const normalizedCandidate = normalize(resolve(candidate));
+	if (normalizedCandidate === normalizedRoot) return false; // a file, not the root itself
+	const rel = relative(normalizedRoot, normalizedCandidate);
+	return (
+		rel.length > 0 &&
+		!rel.startsWith("..") &&
+		!isAbsolute(rel) &&
+		!rel.split(sep).includes("..")
+	);
+}
+
+// Reject a symlink (or non-directory) at the admitted root or any intermediate
+// path component before opening the final file. Node exposes no portable
+// openat(2)-style API that can anchor each lookup to the previously-opened
+// directory descriptor, so an attacker able to rename an ancestor can still
+// race this check and the final open. The final component remains protected by
+// O_NOFOLLOW, and every file invariant remains descriptor-checked after open.
+async function intermediatePathIsSymlinkFree(
+	root: string,
+	candidate: string,
+): Promise<boolean> {
+	const normalizedRoot = normalize(resolve(root));
+	const rel = relative(normalizedRoot, normalize(resolve(candidate)));
+	const components = rel.split(sep);
+	const directories = [
+		normalizedRoot,
+		...components.slice(0, -1).map((_component, index) =>
+			join(normalizedRoot, ...components.slice(0, index + 1)),
+		),
+	];
+	for (const directory of directories) {
+		try {
+			const stat = await fsLstat(directory);
+			if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+function boundedPrivateInputMaxBytes(requested: number | undefined): number {
+	if (requested === undefined || !Number.isFinite(requested)) {
+		return RUNBOOK_PRIVATE_INPUT_MAX_BYTES;
+	}
+	return Math.max(
+		0,
+		Math.min(Math.floor(requested), RUNBOOK_PRIVATE_INPUT_MAX_BYTES),
+	);
+}
+
+/**
+ * Read ONE bounded private-file JSON structured input (R10, KTD14). The
+ * security contract, all proven BEFORE any value byte is read:
+ *   1. the path is absolute and contained beneath the admitted input root;
+ *   2. the admitted root and every intermediate component are directories, not
+ *      symlinks, then the file opens with O_NOFOLLOW (a symlink at the final
+ *      component fails the open);
+ *   3. descriptor-level `fstat` (never a path stat that a swap could race)
+ *      proves: a regular file, the expected owner, owner-only mode (0600 or
+ *      stricter), link count EXACTLY one (no hard-link alias), and bounded size;
+ *   4. at most the capped bound plus one byte is read through THAT descriptor,
+ *      then parsed and shape-checked.
+ * Static intermediate symlinks, final-component replacement/symlink attempts,
+ * hard links, and path escapes fail closed. Node has no portable descriptor-
+ * relative open, so the pre-open intermediate check cannot eliminate an
+ * atomic ancestor-rename race. The value id is `inputId`; the returned map
+ * carries only the structured value.
+ *
+ * @param input - The input id, admitted input root, absolute file path, and the
+ *   expected owner uid (defaults to the process uid)
+ * @returns The structured input map, or one typed refusal
+ */
+export async function readPrivateStructuredInput(input: {
+	inputId: string;
+	inputRoot: string;
+	filePath: string;
+	expectedOwnerUid?: number;
+	maxBytes?: number;
+}): Promise<BrowserUseRunbookPrivateInputResult> {
+	const maxBytes = boundedPrivateInputMaxBytes(input.maxBytes);
+	const expectedUid = input.expectedOwnerUid ?? process.getuid?.();
+	if (!isAbsolute(input.filePath) || !containedBeneath(input.inputRoot, input.filePath)) {
+		return privateInputRefusal(
+			"private_input_path_unsafe",
+			"the private input path is not an absolute file contained beneath the admitted input root.",
+		);
+	}
+	if (!(await intermediatePathIsSymlinkFree(input.inputRoot, input.filePath))) {
+		return privateInputRefusal(
+			"private_input_path_unsafe",
+			"the private input path has a symlink or non-directory before its final component.",
+		);
+	}
+	// Open ONCE with no-follow: a symlink at the final component fails here, so a
+	// symlink redirect (and a race that swaps a regular file for a symlink) can
+	// never be dereferenced. Every check below reads THIS descriptor's fstat.
+	let handle: import("node:fs/promises").FileHandle;
+	try {
+		handle = await fsOpen(
+			input.filePath,
+			fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+		);
+	} catch {
+		return privateInputRefusal(
+			"private_input_open_failed",
+			"the private input file could not be opened with no-follow semantics (missing file, a symlink at the final component, or a permission error).",
+		);
+	}
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile()) {
+			return privateInputRefusal(
+				"private_input_not_regular",
+				"the private input descriptor is not a regular file.",
+			);
+		}
+		if (expectedUid !== undefined && stat.uid !== expectedUid) {
+			return privateInputRefusal(
+				"private_input_wrong_owner",
+				"the private input file is owned by another user.",
+			);
+		}
+		if ((stat.mode & 0o077) !== 0) {
+			return privateInputRefusal(
+				"private_input_mode_loose",
+				"the private input file carries group/other permission bits (owner-only mode required).",
+			);
+		}
+		if (stat.nlink !== 1) {
+			return privateInputRefusal(
+				"private_input_multiple_links",
+				"the private input file has a link count other than one (a hard-link alias is refused).",
+			);
+		}
+		if (stat.size > maxBytes) {
+			return privateInputRefusal(
+				"private_input_oversize",
+				`the private input file exceeds the ${maxBytes}-byte bound.`,
+			);
+		}
+		// Only now, after every descriptor-level check passed, read the value
+		// bytes through the same proven descriptor. The bounded buffer catches
+		// growth after fstat without allocating from the concurrently-grown size.
+		const buffer = Buffer.alloc(maxBytes + 1);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const chunk = await handle.read(
+				buffer,
+				bytesRead,
+				buffer.length - bytesRead,
+				bytesRead,
+			);
+			if (chunk.bytesRead === 0) break;
+			bytesRead += chunk.bytesRead;
+		}
+		if (bytesRead > maxBytes) {
+			return privateInputRefusal(
+				"private_input_oversize",
+				`the private input file exceeds the ${maxBytes}-byte bound.`,
+			);
+		}
+		const raw = buffer.subarray(0, bytesRead).toString("utf8");
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			return privateInputRefusal(
+				"private_input_json_invalid",
+				"the private input file is not valid JSON.",
+			);
+		}
+		return { ok: true, inputs: { [input.inputId]: parsed } };
+	} finally {
+		await handle.close();
+	}
 }

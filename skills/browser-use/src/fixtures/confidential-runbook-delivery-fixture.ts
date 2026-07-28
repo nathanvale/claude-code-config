@@ -104,11 +104,11 @@ const HANDOFF = {
 
 const RUNBOOK: BrowserUseRunbook = {
 	contract: "browser-use.runbook",
-	schema_version: "1",
+	schema_version: "2",
 	service_id: "oncore",
 	flow_id: "with-secret",
 	flow_name: "sign-in",
-	version: "1",
+	version: "2",
 	summary: "Confidential sign-in runbook.",
 	allowed_origins: ["https://portal.example.com"],
 	inputs: [],
@@ -116,7 +116,7 @@ const RUNBOOK: BrowserUseRunbook = {
 		{ kind: "snapshot", interactive: true },
 		{
 			kind: "fill",
-			ref: "@e1",
+			target: { role: "textbox", name: "Password" },
 			sensitivity: "confidential",
 			item_binding: "oncore_password",
 			postcondition: {
@@ -232,7 +232,10 @@ const RESPONSES: readonly string[] = [
 	}),
 	adapterSuccess({ selected: true }),
 	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
-	adapterSuccess({ snapshot: "@e1 textbox password", refs: { "@e1": {} } }),
+	adapterSuccess({
+		snapshot: "@e1 textbox password",
+		refs: { "@e1": { role: "textbox", name: "Password" } },
+	}),
 	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
 	adapterSuccess({ value: "•••" }),
 ];

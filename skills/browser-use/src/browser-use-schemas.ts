@@ -31,6 +31,8 @@ import {
 	type BrowserUseTaskIntent,
 	BROWSER_USE_RUN_STATES,
 	BROWSER_USE_TASK_INTENTS,
+	runExecutionBindingValidationProblem,
+	runItemBatchValidationProblem,
 	validateSharedRun,
 } from "./browser-use-run-model";
 import {
@@ -341,7 +343,10 @@ export function encodeDurableRecord<K extends BrowserUseDurableRecordKind>(
 		const sharedRun = payload as BrowserUseSharedRunPayload;
 		const hasBinding = hasOwn(sharedRun, "runbook_target_binding");
 		const hasProgress = hasOwn(sharedRun, "runbook_progress");
-		sharedRunUsesPrivateState = hasBinding || hasProgress;
+		const hasExecBinding = hasOwn(sharedRun, "run_execution_binding");
+		const hasItemBatch = hasOwn(sharedRun, "item_batch");
+		sharedRunUsesPrivateState =
+			hasBinding || hasProgress || hasExecBinding || hasItemBatch;
 		if (sharedRunUsesPrivateState) {
 			const privateStateProblem = sharedRunEnvelopeVersionProblem(
 				BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
@@ -638,6 +643,16 @@ function sharedRunProblem(value: unknown): string | undefined {
 		const problem = runbookProgressProblem(value.runbook_progress);
 		if (problem !== undefined) return problem;
 	}
+	if (value.run_execution_binding !== undefined) {
+		const problem = runExecutionBindingValidationProblem(
+			value.run_execution_binding,
+		);
+		if (problem !== undefined) return problem;
+	}
+	if (value.item_batch !== undefined) {
+		const problem = runItemBatchValidationProblem(value.item_batch);
+		if (problem !== undefined) return problem;
+	}
 	if (value.auth_fragment !== undefined) {
 		const slot = value.auth_fragment;
 		// Opacity boundary (R6): the platform reads schema_version ONLY.
@@ -694,13 +709,27 @@ function sharedRunEnvelopeVersionProblem(
 	if (!isJsonObject(value)) return undefined;
 	const hasBinding = hasOwn(value, "runbook_target_binding");
 	const hasProgress = hasOwn(value, "runbook_progress");
+	const hasExecBinding = hasOwn(value, "run_execution_binding");
+	const hasItemBatch = hasOwn(value, "item_batch");
 	if (version === BROWSER_USE_DURABLE_SCHEMA_VERSION) {
-		return hasBinding || hasProgress
-			? "shared-run schema version 1 must not carry private runbook target or progress state."
+		return hasBinding || hasProgress || hasExecBinding || hasItemBatch
+			? "shared-run schema version 1 must not carry private runbook target, progress, execution-binding, or item-batch state."
 			: undefined;
 	}
+	// Version 2 carries the runbook target binding + progress pair; the U3
+	// execution binding and item-batch are OPTIONAL additional private state.
 	if (!hasBinding || !hasProgress) {
 		return "shared-run schema version 2 must carry both runbook_target_binding and runbook_progress.";
+	}
+	if (hasExecBinding) {
+		const problem = runExecutionBindingValidationProblem(
+			value.run_execution_binding,
+		);
+		if (problem !== undefined) return problem;
+	}
+	if (hasItemBatch) {
+		const problem = runItemBatchValidationProblem(value.item_batch);
+		if (problem !== undefined) return problem;
 	}
 	return (
 		runbookTargetBindingProblem(value.runbook_target_binding) ??

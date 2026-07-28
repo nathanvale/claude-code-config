@@ -6,7 +6,11 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 import { redactUnsafeText } from "./browser-use-core";
+import { BROWSER_USE_ARTIFACT_CLASSES } from "./browser-use-migration-model";
 import type {
+	BrowserUseArtifactClass,
+	BrowserUseCanonicalTarget,
+	BrowserUseCorpusCensus,
 	BrowserUseMigrationDisposition,
 	BrowserUseMigrationFailure,
 	BrowserUseMigrationState,
@@ -22,6 +26,14 @@ import {
 import { readDurableFile, writeDurableFile } from "./browser-use-store";
 
 const MIGRATION_STATE_FILE = "migration-state.json";
+const CORPUS_CENSUS_FIELDS = [
+	"formal_artifacts",
+	"target_flows",
+	"scripts",
+	"auth_narratives",
+	"login_capabilities",
+	"domain_script_actions",
+] as const satisfies readonly (keyof BrowserUseCorpusCensus)[];
 
 function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
@@ -36,6 +48,39 @@ function migrationFailure(
 
 function migrationStatePath(deps: RetentionDeps): string {
 	return join(deps.paths.state.migrationsDir, MIGRATION_STATE_FILE);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		value <= Number.MAX_SAFE_INTEGER
+	);
+}
+
+function isCorpusCensus(value: unknown): value is BrowserUseCorpusCensus {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return CORPUS_CENSUS_FIELDS.every((field) =>
+		isNonNegativeSafeInteger(record[field]),
+	);
+}
+
+function isCanonicalTarget(value: unknown): value is BrowserUseCanonicalTarget {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record.canonical_target_id === "string" &&
+		record.canonical_target_id.length > 0 &&
+		Array.isArray(record.source_relative_paths) &&
+		record.source_relative_paths.length > 0 &&
+		record.source_relative_paths.every((path) => typeof path === "string")
+	);
 }
 
 async function writeMigrationState(
@@ -164,7 +209,7 @@ export async function inventoryBrowserUseMigration(
 	}
 	const state: BrowserUseMigrationState = {
 		contract: "browser-use.migration-status",
-		schema_version: "1",
+		schema_version: "2",
 		phase: "inventoried",
 		snapshot_id: snapshotId,
 		snapshot_digest: snapshotDigest,
@@ -172,6 +217,8 @@ export async function inventoryBrowserUseMigration(
 		source_entry_count: snapshot.entries.length,
 		disposition_count: 0,
 		dispositions: [],
+		corpus_census: null,
+		canonical_targets: [],
 		staged_generation: null,
 		last_apply_verified_noop: null,
 		activation_state: "unchanged",
@@ -199,7 +246,7 @@ export async function readBrowserUseMigrationStatus(
 			ok: true,
 			state: {
 				contract: "browser-use.migration-status",
-				schema_version: "1",
+				schema_version: "2",
 				phase: "empty",
 				snapshot_id: null,
 				snapshot_digest: null,
@@ -207,6 +254,8 @@ export async function readBrowserUseMigrationStatus(
 				source_entry_count: 0,
 				disposition_count: 0,
 				dispositions: [],
+				corpus_census: null,
+				canonical_targets: [],
 				staged_generation: null,
 				last_apply_verified_noop: null,
 				activation_state: "unchanged",
@@ -223,14 +272,18 @@ export async function readBrowserUseMigrationStatus(
 		const state = JSON.parse(read.raw) as BrowserUseMigrationState;
 		if (
 			state.contract !== "browser-use.migration-status" ||
-			state.schema_version !== "1" ||
+			state.schema_version !== "2" ||
 			typeof state.phase !== "string" ||
 			!Array.isArray(state.dispositions) ||
+			!Array.isArray(state.canonical_targets) ||
+			!("corpus_census" in state) ||
+			(state.corpus_census !== null && !isCorpusCensus(state.corpus_census)) ||
+			!state.canonical_targets.every(isCanonicalTarget) ||
 			state.activation_state !== "unchanged"
 		) {
 			return migrationFailure(
 				"migration_state_corrupt",
-				"migration state does not match schema version 1.",
+				"migration state does not match schema version 2.",
 			);
 		}
 		return { ok: true, state };
@@ -321,6 +374,186 @@ function hasSecretMaterial(contents: string): boolean {
 	].some((pattern) => pattern.test(contents));
 }
 
+const SCRIPT_EXTENSION = /\.(?:js|cjs|mjs|ts|tsx|sh|bash|zsh|py|rb|pl)$/;
+
+// A login/okta narrative is an auth-import candidate (R29), never a business
+// runbook — recognised by BASENAME token shape only. A domain whose name merely
+// contains "okta" (e.g. `ellucian-okta/ellucian-okta.md` domain prose) must not
+// be misrouted to auth: the token must anchor in the file's own basename.
+function isAuthNarrative(relativeOrBase: string): boolean {
+	const base = relativeOrBase.split("/").at(-1) ?? relativeOrBase;
+	return /(?:^|[-_])(?:okta|login|sign-?in|sso)(?:[-_.]|$)/.test(base);
+}
+
+// Classify one source entry into its artifact class (R2/R3). Classification is
+// a READ-ONLY predicate over the relative path shape (plus content only for
+// flow extraction elsewhere); it never depends on trusting a legacy label.
+function artifactClassFor(
+	entry: BrowserUseSourceSnapshotPayload["entries"][number],
+): BrowserUseArtifactClass {
+	const lower = entry.relative_path.toLowerCase();
+	const base = lower.split("/").at(-1) ?? lower;
+	const isScript =
+		entry.type === "file" &&
+		(SCRIPT_EXTENSION.test(lower) || (entry.mode & 0o111) !== 0);
+	// A domain-script action is a script that also lives in the registry dir
+	// (R3: "10 domain-script actions that are also scripts"). Only the .js/.ts
+	// asset counts as an action; the registry JSON itself is supporting.
+	if (
+		lower.includes("/domain-script-actions/") &&
+		isScript &&
+		SCRIPT_EXTENSION.test(lower)
+	) {
+		return "domain-script-action";
+	}
+	if (lower.includes("/capabilities/") && /login/.test(base)) {
+		return "login-capability";
+	}
+	// Playbooks are explicit formal artifacts regardless of their extension.
+	if (lower.includes("/playbooks/")) return "formal-playbook";
+	if (/^runbook[-_].+\.md$/.test(base) || base === "runbook.md") {
+		return isAuthNarrative(base) ? "auth-narrative" : "formal-runbook";
+	}
+	if (isScript) return "script";
+	if (lower.includes("/runs/")) return "run-evidence";
+	if (base.includes("selector")) return "selector-asset";
+	// A domain's OWN notes file (`<domain>/<domain>.md`) is domain prose even when
+	// the domain name contains an auth token (e.g. `ellucian-okta/ellucian-okta.md`).
+	const domain = lower.split("/")[0] ?? lower;
+	const baseName = base.replace(/\.[^.]+$/, "");
+	const isDomainNotes = baseName === domain;
+	if (!isDomainNotes && isAuthNarrative(base) && /\.(?:md|txt)$/.test(lower)) {
+		return "auth-narrative";
+	}
+	if (/\.md$/.test(lower)) return "domain-prose";
+	return "supporting";
+}
+
+// The domain segment is the first path component of a domain-rooted corpus.
+function domainOf(relativePath: string): string {
+	return relativePath.split("/")[0] ?? relativePath;
+}
+
+// Extract the declared flow id from a formal artifact's parsed body (R4).
+// JSON/YAML may carry `{ candidate: { flow } }` or a top-level `flow`.
+// Deliberately ignore YAML `name`: it may use a different identifier convention.
+// Fall back to the basename so every formal artifact has one stable flow identity.
+function formalFlowIdFor(
+	entry: BrowserUseSourceSnapshotPayload["entries"][number],
+	artifactClass: BrowserUseArtifactClass,
+	contents: string | undefined,
+): string | null {
+	if (
+		artifactClass !== "formal-playbook" &&
+		artifactClass !== "formal-runbook"
+	) {
+		return null;
+	}
+	const domain = domainOf(entry.relative_path);
+	const base = (entry.relative_path.split("/").at(-1) ?? "").replace(
+		/\.[^.]+$/,
+		"",
+	);
+	let flow: string | undefined;
+	if (contents !== undefined) {
+		const lower = entry.relative_path.toLowerCase();
+		try {
+			const parsed = (
+				/\.json$/.test(lower) ? JSON.parse(contents) : Bun.YAML.parse(contents)
+			) as unknown;
+			if (parsed !== null && typeof parsed === "object") {
+				const record = parsed as Record<string, unknown>;
+				const candidate = record.candidate;
+				const candidateFlow =
+					candidate !== null &&
+					typeof candidate === "object" &&
+					typeof (candidate as Record<string, unknown>).flow === "string"
+						? ((candidate as Record<string, unknown>).flow as string)
+						: undefined;
+				const directFlow =
+					typeof record.flow === "string" ? record.flow : undefined;
+				flow = candidateFlow ?? directFlow;
+			}
+		} catch {
+			// A malformed body still yields a basename-derived flow id; strict YAML
+			// validity is enforced separately in dispositionFor.
+		}
+	}
+	return `${domain}/${flow ?? base}`;
+}
+
+// The canonical target id collapses many candidates of the same intent into one
+// flow (R4): both Oncore fill-timesheet candidates share `<domain>/fill-timesheet`.
+function canonicalTargetIdFor(formalFlowId: string | null): string | null {
+	return formalFlowId;
+}
+
+// Count `### Flow: <name>` headings inside domain prose (R3 Target Flows). The
+// predicate is exact — a `### diagnose-grid-state` heading without the `Flow:`
+// prefix is NOT a Target Flow and must not inflate the count.
+function targetFlowCount(contents: string): number {
+	let count = 0;
+	for (const line of contents.split(/\r?\n/)) {
+		if (/^#{2,4}\s+Flow:\s+\S/.test(line)) count += 1;
+	}
+	return count;
+}
+
+// Fold the per-entry classifications into the overlapping mechanical census
+// (R3). `target_flows` is accumulated separately from prose content because it
+// counts headings inside files, not files themselves.
+function censusFor(
+	dispositions: readonly BrowserUseMigrationDisposition[],
+	targetFlows: number,
+): BrowserUseCorpusCensus {
+	const isClass = (
+		row: BrowserUseMigrationDisposition,
+		artifactClass: BrowserUseArtifactClass,
+	): boolean => row.artifact_class === artifactClass;
+	return {
+		formal_artifacts: dispositions.filter(
+			(row) =>
+				isClass(row, "formal-runbook") || isClass(row, "formal-playbook"),
+		).length,
+		// A domain-script action is ALSO a script: both predicates count it (R3).
+		scripts: dispositions.filter(
+			(row) =>
+				isClass(row, "script") || isClass(row, "domain-script-action"),
+		).length,
+		domain_script_actions: dispositions.filter((row) =>
+			isClass(row, "domain-script-action"),
+		).length,
+		auth_narratives: dispositions.filter((row) =>
+			isClass(row, "auth-narrative"),
+		).length,
+		login_capabilities: dispositions.filter((row) =>
+			isClass(row, "login-capability"),
+		).length,
+		target_flows: targetFlows,
+	};
+}
+
+// Build the canonical-target provenance edges (R4): every canonical id lists
+// every source that feeds it, so two candidates of one intent (both Oncore
+// fill-timesheet playbooks) resolve to ONE canonical flow with two sources.
+function canonicalTargetsFor(
+	dispositions: readonly BrowserUseMigrationDisposition[],
+): BrowserUseCanonicalTarget[] {
+	const byCanonical = new Map<string, string[]>();
+	for (const row of dispositions) {
+		if (row.canonical_target_id === null) continue;
+		const sources = byCanonical.get(row.canonical_target_id) ?? [];
+		sources.push(row.source_relative_path);
+		byCanonical.set(row.canonical_target_id, sources);
+	}
+	return [...byCanonical.entries()]
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([canonical_target_id, source_relative_paths]) => ({
+			canonical_target_id,
+			source_relative_paths: [...source_relative_paths].sort(),
+		}));
+}
+
 function dispositionFor(
 	entry: BrowserUseSourceSnapshotPayload["entries"][number],
 	contents: string | undefined,
@@ -329,8 +562,13 @@ function dispositionFor(
 	| BrowserUseMigrationFailure {
 	const relativePath = entry.relative_path;
 	const lower = relativePath.toLowerCase();
+	const artifactClass = artifactClassFor(entry);
+	const formalFlowId = formalFlowIdFor(entry, artifactClass, contents);
 	const base = {
 		source_relative_path: relativePath,
+		artifact_class: artifactClass,
+		formal_flow_id: formalFlowId,
+		canonical_target_id: canonicalTargetIdFor(formalFlowId),
 		source_content_hash: entry.content_hash,
 		transform_version: "copy-v1",
 	};
@@ -420,11 +658,38 @@ function dispositionFor(
 	};
 }
 
+// The known R3 corpus baseline. Count drift against this blocks planning until
+// the new entries receive dispositions. It is an optional guard: callers with a
+// deliberately different corpus (hermetic fixtures) pass their own baseline or
+// none, but the production dotfiles corpus is checked against these numbers.
+export const BROWSER_USE_R3_CORPUS_BASELINE: BrowserUseCorpusCensus = {
+	formal_artifacts: 12,
+	target_flows: 52,
+	scripts: 24,
+	auth_narratives: 3,
+	login_capabilities: 2,
+	domain_script_actions: 10,
+};
+
+function censusDrift(
+	expected: BrowserUseCorpusCensus,
+	actual: BrowserUseCorpusCensus,
+): string | undefined {
+	const drifted = (
+		Object.keys(expected) as Array<keyof BrowserUseCorpusCensus>
+	).filter((field) => expected[field] !== actual[field]);
+	if (drifted.length === 0) return undefined;
+	return drifted
+		.map((field) => `${field} expected ${expected[field]}, found ${actual[field]}`)
+		.join("; ");
+}
+
 /**
  * Assign a complete disposition and provenance row to every frozen entry.
  *
  * @param deps - Admitted platform store dependencies
  * @param sourceRoot - Absolute source root matching the frozen identity
+ * @param expectedCensus - Optional R3 baseline; count drift blocks planning
  * @returns Planned shared migration state or one typed refusal
  *
  * @example
@@ -435,6 +700,7 @@ function dispositionFor(
 export async function planBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
+	expectedCensus?: BrowserUseCorpusCensus,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
 	if (!isAbsolute(sourceRoot)) {
 		return migrationFailure(
@@ -472,6 +738,7 @@ export async function planBrowserUseMigration(
 		);
 	}
 	const dispositions: BrowserUseMigrationDisposition[] = [];
+	let targetFlows = 0;
 	for (const entry of inventoried.entries) {
 		let contents: string | undefined;
 		if (entry.type === "file") {
@@ -491,13 +758,33 @@ export async function planBrowserUseMigration(
 		}
 		const classified = dispositionFor(entry, contents);
 		if (!classified.ok) return classified;
+		// Target Flows are declared as headings inside domain prose (R3); only
+		// domain-prose markdown contributes to the flow tally.
+		if (
+			classified.disposition.artifact_class === "domain-prose" &&
+			contents !== undefined
+		) {
+			targetFlows += targetFlowCount(contents);
+		}
 		dispositions.push(classified.disposition);
+	}
+	const census = censusFor(dispositions, targetFlows);
+	if (expectedCensus !== undefined) {
+		const drift = censusDrift(expectedCensus, census);
+		if (drift !== undefined) {
+			return migrationFailure(
+				"migration_count_drift",
+				`corpus census drifted from the recorded baseline: ${drift}.`,
+			);
+		}
 	}
 	const state: BrowserUseMigrationState = {
 		...standing.state,
 		phase: "planned",
 		disposition_count: dispositions.length,
 		dispositions,
+		corpus_census: census,
+		canonical_targets: canonicalTargetsFor(dispositions),
 		staged_generation: null,
 		last_apply_verified_noop: null,
 		activation_state: "unchanged",
@@ -571,7 +858,16 @@ function dispositionsComplete(
 			entry === undefined ||
 			seen.has(disposition.source_relative_path) ||
 			disposition.source_content_hash !== entry.content_hash ||
-			disposition.transform_version === ""
+			disposition.transform_version === "" ||
+			// Every entry carries exactly one classified artifact class (R2/R3),
+			// and a canonical-target edge only exists for a formal flow (R4). A
+			// persisted record could carry any string here, so validate against
+			// the known class set rather than the compile-time union.
+			!BROWSER_USE_ARTIFACT_CLASSES.includes(
+				disposition.artifact_class as BrowserUseArtifactClass,
+			) ||
+			(disposition.canonical_target_id !== null &&
+				disposition.formal_flow_id === null)
 		) {
 			return false;
 		}
