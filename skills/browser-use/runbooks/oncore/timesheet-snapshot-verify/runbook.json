@@ -1,10 +1,10 @@
 {
   "contract": "browser-use.runbook",
-  "schema_version": "1",
+  "schema_version": "2",
   "service_id": "oncore",
   "flow_id": "timesheet-snapshot-verify",
   "flow_name": "verify-timesheet-loaded",
-  "version": "1",
+  "version": "2",
   "summary": "Read-only Oncore proof: navigate to the timesheet portal, observe fresh structure, and verify the timesheet surface is present. Dispatches no mutation.",
   "allowed_origins": ["https://oncoreservices.expr365.com.au"],
   "auth_context_ref": "oncore-portal-session",
@@ -13,7 +13,7 @@
       "id": "week_ending",
       "summary": "ISO week-ending date the verification targets.",
       "required": false,
-      "pattern": "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+      "schema": { "kind": "date" }
     }
   ],
   "steps": [

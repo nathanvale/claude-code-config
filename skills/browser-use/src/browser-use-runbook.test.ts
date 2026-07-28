@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
+	linkSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,20 +32,29 @@ import type {
 } from "./browser-use-op";
 import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-use-paths";
 import {
+	type BrowserUseActiveGenerationSeam,
 	type BrowserUseRunbookAuthDelivery,
 	BrowserUseShippedRunbooksMissingError,
+	RUNBOOK_PRIVATE_INPUT_MAX_BYTES,
 	executePreparedRunbook,
 	listRunbooks,
 	prepareRunbookExecution,
+	readPrivateStructuredInput,
+	resolveEffectiveRunbook,
 	runRunbook,
 	runbooksRoot,
 	shippedRunbooksRoot,
 	showRunbook,
+	verifyEffectiveCatalog,
 } from "./browser-use-runbook";
 import {
 	type BrowserUseRunbook,
+	type BrowserUseRunbookValueSchema,
+	INPUT_SCHEMA_MAX_DEPTH,
+	parseRunbookRecord,
 	planRunbookExecution,
 	projectRunbookCatalogRow,
+	valueMatchesSchema,
 	validateRunbook,
 } from "./browser-use-runbook-model";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
@@ -80,11 +92,11 @@ function baseRunbook(
 ): BrowserUseRunbook {
 	return {
 		contract: "browser-use.runbook",
-		schema_version: "1",
+		schema_version: "2",
 		service_id: "oncore",
 		flow_id: "snapshot-verify",
 		flow_name: "verify-loaded",
-		version: "1",
+		version: "2",
 		summary: "Read-only snapshot verification.",
 		allowed_origins: ["https://portal.example.com"],
 		inputs: [],
@@ -154,18 +166,22 @@ function writeRunbook(
 		writeFileSync(join(dir, "outcome.json"), JSON.stringify(outcome));
 	}
 }
+// --- Model: validation (v2) --------------------------------------------------
 
-// --- Model: validation -------------------------------------------------------
-
-describe("runbook model validation (R30)", () => {
-	test("a well-formed read-only runbook passes", () => {
+describe("runbook model validation (v2)", () => {
+	test("a well-formed read-only v2 runbook passes", () => {
 		expect(validateRunbook(baseRunbook())).toEqual([]);
 	});
 
-	test("rejects an unsafe service or flow id", () => {
+	test("rejects a non-v2 schema version", () => {
 		const issues = validateRunbook(
-			baseRunbook({ service_id: "../escape" }),
+			baseRunbook({ schema_version: "1" as unknown as "2" }),
 		);
+		expect(issues.map((i) => i.code)).toContain("runbook_schema_unsupported");
+	});
+
+	test("rejects an unsafe service or flow id", () => {
+		const issues = validateRunbook(baseRunbook({ service_id: "../escape" }));
 		expect(issues.map((i) => i.code)).toContain("runbook_id_invalid");
 	});
 
@@ -194,19 +210,35 @@ describe("runbook model validation (R30)", () => {
 		expect(issues.map((i) => i.code)).toContain("runbook_step_invalid");
 	});
 
-	test("rejects a click ref that is not an @e<n> reference", () => {
+	test("rejects a click with an empty semantic target", () => {
 		const issues = validateRunbook(
 			baseRunbook({
 				steps: [
 					{
 						kind: "click",
-						ref: "#submit",
+						target: { role: "", name: "Submit" },
 						postcondition: { kind: "element-visible", selector: ".done" },
 					},
 				],
 			}),
 		);
-		expect(issues.map((i) => i.code)).toContain("runbook_ref_invalid");
+		expect(issues.map((i) => i.code)).toContain("runbook_target_invalid");
+	});
+
+	test("accepts a click with a valid semantic target", () => {
+		expect(
+			validateRunbook(
+				baseRunbook({
+					steps: [
+						{
+							kind: "click",
+							target: { role: "button", name: "Save draft" },
+							postcondition: { kind: "element-visible", selector: ".saved" },
+						},
+					],
+				}),
+			),
+		).toEqual([]);
 	});
 
 	test("rejects a secret-shaped value in an ordinary fill", () => {
@@ -215,7 +247,7 @@ describe("runbook model validation (R30)", () => {
 				steps: [
 					{
 						kind: "fill",
-						ref: "@e1",
+						target: { role: "textbox", name: "Password" },
 						sensitivity: "ordinary",
 						value: "op://vault/item/password",
 						postcondition: { kind: "value-equals", selector: ".x", value: "y" },
@@ -235,7 +267,7 @@ describe("runbook model validation (R30)", () => {
 				steps: [
 					{
 						kind: "fill",
-						ref: "@e1",
+						target: { role: "textbox", name: "Week" },
 						sensitivity: "ordinary",
 						value: "{{week_ending}}",
 						postcondition: { kind: "value-equals", selector: ".x", value: "y" },
@@ -255,7 +287,7 @@ describe("runbook model validation (R30)", () => {
 					steps: [
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -275,9 +307,177 @@ describe("runbook model validation (R30)", () => {
 	});
 });
 
+// --- Model: recursive typed-input value schemas (R9) -------------------------
+
+describe("v2 typed-input value schemas (R9)", () => {
+	function inputSchema(schema: BrowserUseRunbookValueSchema): BrowserUseRunbook {
+		return baseRunbook({
+			inputs: [{ id: "value", summary: "s", required: true, schema }],
+		});
+	}
+
+	test("accepts nested array/object/enum/number/boolean/date/uuid defaults", () => {
+		const rb = inputSchema({
+			kind: "object",
+			fields: {
+				name: { schema: { kind: "string", min_length: 1 }, required: true },
+				count: {
+					schema: { kind: "number", integer: true, minimum: 0, maximum: 10, default: 3 },
+					required: false,
+				},
+				enabled: { schema: { kind: "boolean", default: true }, required: false },
+				mode: {
+					schema: { kind: "enum", values: ["a", "b"], default: "a" },
+					required: false,
+				},
+				when: { schema: { kind: "date", default: "2026-07-28" }, required: false },
+				id: {
+					schema: {
+						kind: "uuid",
+						default: "00000000-0000-0000-0000-000000000000",
+					},
+					required: false,
+				},
+				tags: {
+					schema: { kind: "array", items: { kind: "string" }, max_items: 4 },
+					required: false,
+				},
+			},
+		});
+		expect(validateRunbook(rb)).toEqual([]);
+	});
+
+	test("valueMatchesSchema accepts a conforming nested value and rejects an unknown field", () => {
+		const schema: BrowserUseRunbookValueSchema = {
+			kind: "object",
+			fields: { name: { schema: { kind: "string" }, required: true } },
+		};
+		expect(valueMatchesSchema({ name: "ok" }, schema)).toBe(true);
+		expect(valueMatchesSchema({ name: "ok", extra: 1 }, schema)).toBe(false);
+	});
+
+	test("valueMatchesSchema enforces enum, uuid, date, and number bounds", () => {
+		expect(
+			valueMatchesSchema("b", { kind: "enum", values: ["a", "b"] }),
+		).toBe(true);
+		expect(
+			valueMatchesSchema("c", { kind: "enum", values: ["a", "b"] }),
+		).toBe(false);
+		expect(valueMatchesSchema("not-a-uuid", { kind: "uuid" })).toBe(false);
+		expect(valueMatchesSchema("2026-02-30", { kind: "date" })).toBe(false);
+		expect(
+			valueMatchesSchema(11, { kind: "number", maximum: 10 }),
+		).toBe(false);
+	});
+
+	test("valueMatchesSchema resolves a discriminated union by its discriminant", () => {
+		const schema: BrowserUseRunbookValueSchema = {
+			kind: "discriminated-union",
+			discriminant: "kind",
+			variants: {
+				a: { x: { schema: { kind: "number" }, required: true } },
+				b: { y: { schema: { kind: "string" }, required: true } },
+			},
+		};
+		expect(valueMatchesSchema({ kind: "a", x: 1 }, schema)).toBe(true);
+		expect(valueMatchesSchema({ kind: "b", y: "s" }, schema)).toBe(true);
+		expect(valueMatchesSchema({ kind: "a", y: "s" }, schema)).toBe(false);
+		expect(valueMatchesSchema({ kind: "c" }, schema)).toBe(false);
+	});
+
+	test("rejects an invalid default (enum default not a member)", () => {
+		const issues = validateRunbook(
+			inputSchema({ kind: "enum", values: ["a", "b"], default: "z" }),
+		);
+		expect(issues.map((i) => i.code)).toContain("runbook_input_default_invalid");
+	});
+
+	test("rejects an invalid date default", () => {
+		const issues = validateRunbook(
+			inputSchema({ kind: "date", default: "2026-13-01" }),
+		);
+		expect(issues.map((i) => i.code)).toContain("runbook_input_default_invalid");
+	});
+
+	test("rejects an invalid string pattern schema", () => {
+		const issues = validateRunbook(
+			inputSchema({ kind: "string", pattern: "([" }),
+		);
+		expect(issues.map((i) => i.code)).toContain("runbook_input_schema_invalid");
+	});
+
+	test("rejects a schema nested past the maximum depth", () => {
+		let schema: BrowserUseRunbookValueSchema = { kind: "string" };
+		for (let i = 0; i < INPUT_SCHEMA_MAX_DEPTH + 2; i += 1) {
+			schema = { kind: "array", items: schema };
+		}
+		const issues = validateRunbook(inputSchema(schema));
+		expect(issues.map((i) => i.code)).toContain("runbook_input_schema_invalid");
+	});
+});
+
+// --- Model: total parsing (drop-v1) ------------------------------------------
+
+describe("runbook total parsing (drop-v1)", () => {
+	test("parses a well-formed v2 record shape", () => {
+		const result = parseRunbookRecord(JSON.parse(JSON.stringify(baseRunbook())));
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.runbook.schema_version).toBe("2");
+	});
+
+	test("rejects a retired v1 record with a schema-unsupported issue", () => {
+		const v1 = {
+			contract: "browser-use.runbook",
+			schema_version: "1",
+			service_id: "oncore",
+			flow_id: "f",
+			flow_name: "n",
+			version: "1",
+			summary: "s",
+			allowed_origins: ["https://portal.example.com"],
+			inputs: [],
+			steps: [{ kind: "snapshot", interactive: true }],
+		};
+		const result = parseRunbookRecord(v1);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.issue.code).toBe("runbook_schema_unsupported");
+	});
+
+	test("rejects a record that is not an object", () => {
+		const result = parseRunbookRecord([1, 2, 3]);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+
+	test("rejects a malformed step shape", () => {
+		const bad = {
+			...JSON.parse(JSON.stringify(baseRunbook())),
+			steps: [{ kind: "fill", target: { role: "x" } }],
+		};
+		const result = parseRunbookRecord(bad);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+
+	test("rejects a malformed input value schema", () => {
+		const bad = {
+			...JSON.parse(JSON.stringify(baseRunbook())),
+			inputs: [{ id: "v", summary: "s", required: true, schema: { kind: "nope" } }],
+		};
+		const result = parseRunbookRecord(bad);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+});
+
 // --- Model: plan (F7 continuation) -------------------------------------------
 
-describe("runbook execution planning (R30/R31, F7)", () => {
+describe("runbook execution planning (v2, F7)", () => {
 	test("compiles read-only steps for a fresh run", () => {
 		const planned = planRunbookExecution(baseRunbook(), {
 			inputs: {},
@@ -303,15 +503,35 @@ describe("runbook execution planning (R30/R31, F7)", () => {
 		expect(planned.plan.resume_from_step).toBe(1);
 	});
 
+	test("compiles a semantic-target click into a click-semantic step", () => {
+		const planned = planRunbookExecution(
+			baseRunbook({
+				steps: [
+					{
+						kind: "click",
+						target: { role: "button", name: "Save draft" },
+						postcondition: { kind: "element-visible", selector: ".saved" },
+					},
+				],
+			}),
+			{ inputs: {}, resumeFromStep: 0 },
+		);
+		expect(planned.ok).toBe(true);
+		if (!planned.ok) return;
+		const step = planned.plan.steps[0];
+		expect(step?.kind).toBe("click-semantic");
+		expect(step?.kind === "click-semantic" && step.name).toBe("Save draft");
+	});
+
 	test("substitutes a declared input into an ordinary fill value", () => {
 		const runbook = baseRunbook({
 			inputs: [
-				{ id: "week_ending", summary: "w", required: true, pattern: "[0-9-]+" },
+				{ id: "week_ending", summary: "w", required: true, schema: { kind: "date" } },
 			],
 			steps: [
 				{
 					kind: "fill",
-					ref: "@e1",
+					target: { role: "textbox", name: "Week" },
 					sensitivity: "ordinary",
 					value: "{{week_ending}}",
 					postcondition: {
@@ -334,7 +554,9 @@ describe("runbook execution planning (R30/R31, F7)", () => {
 
 	test("refuses a missing required input", () => {
 		const runbook = baseRunbook({
-			inputs: [{ id: "week_ending", summary: "w", required: true }],
+			inputs: [
+				{ id: "week_ending", summary: "w", required: true, schema: { kind: "date" } },
+			],
 		});
 		const planned = planRunbookExecution(runbook, {
 			inputs: {},
@@ -345,10 +567,15 @@ describe("runbook execution planning (R30/R31, F7)", () => {
 		expect(planned.refusal.code).toBe("runbook_input_missing");
 	});
 
-	test("refuses an input that fails its declared pattern", () => {
+	test("refuses an input that fails its declared value schema", () => {
 		const runbook = baseRunbook({
 			inputs: [
-				{ id: "week_ending", summary: "w", required: true, pattern: "[0-9]{4}" },
+				{
+					id: "week_ending",
+					summary: "w",
+					required: true,
+					schema: { kind: "date" },
+				},
 			],
 		});
 		const planned = planRunbookExecution(runbook, {
@@ -370,13 +597,36 @@ describe("runbook execution planning (R30/R31, F7)", () => {
 		expect(planned.refusal.code).toBe("runbook_resume_out_of_range");
 	});
 
+	test("refuses a declared-but-unavailable reviewed-action step (U3 stub)", () => {
+		const runbook = baseRunbook({
+			steps: [
+				{
+					kind: "action",
+					action_id: "oncore-diagnose",
+					expected_digest: "a".repeat(64),
+					inputs: {},
+				},
+			],
+		});
+		// The shape validates...
+		expect(validateRunbook(runbook)).toEqual([]);
+		// ...but compilation refuses until U3 supplies the action registry.
+		const planned = planRunbookExecution(runbook, {
+			inputs: {},
+			resumeFromStep: 0,
+		});
+		expect(planned.ok).toBe(false);
+		if (planned.ok) return;
+		expect(planned.refusal.code).toBe("runbook_action_registry_unavailable");
+	});
+
 	test("surfaces confidential item bindings as pending", () => {
 		const planned = planRunbookExecution(
 			baseRunbook({
 				steps: [
 					{
 						kind: "fill",
-						ref: "@e1",
+						target: { role: "textbox", name: "Password" },
 						sensitivity: "confidential",
 						item_binding: "oncore_password",
 						postcondition: {
@@ -399,18 +649,20 @@ describe("runbook execution planning (R30/R31, F7)", () => {
 
 // --- Catalog projection ------------------------------------------------------
 
-describe("runbook catalog projection (R35)", () => {
-	test("redacts to identity, counts, and health; no selector or origin", () => {
+describe("runbook catalog projection (R13/R35)", () => {
+	test("redacts to identity, counts, effect class, and health; no target or origin", () => {
 		const row = projectRunbookCatalogRow(baseRunbook(), "healthy");
 		expect(row).toEqual({
 			service_id: "oncore",
 			flow_id: "snapshot-verify",
 			flow_name: "verify-loaded",
-			version: "1",
+			version: "2",
 			summary: "Read-only snapshot verification.",
 			step_count: 2,
 			input_count: 0,
 			requires_auth: false,
+			requires_approval: false,
+			effect_class: "read-only",
 			health: "healthy",
 		});
 		expect(JSON.stringify(row)).not.toContain("portal.example.com");
@@ -423,9 +675,25 @@ describe("runbook catalog projection (R35)", () => {
 		);
 		expect(row.requires_auth).toBe(true);
 	});
-});
 
-// --- Discovery: list / show --------------------------------------------------
+	test("flags a mutation effect class and approval for a reviewed action", () => {
+		const row = projectRunbookCatalogRow(
+			baseRunbook({
+				steps: [
+					{
+						kind: "action",
+						action_id: "oncore-fill",
+						expected_digest: "b".repeat(64),
+						inputs: {},
+					},
+				],
+			}),
+			"healthy",
+		);
+		expect(row.effect_class).toBe("mutation");
+		expect(row.requires_approval).toBe(true);
+	});
+});
 
 describe("runbook discovery over the XDG data root", () => {
 	test(
@@ -747,7 +1015,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 						{ kind: "snapshot", interactive: true },
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -803,7 +1071,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 						{ kind: "snapshot", interactive: true },
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -905,7 +1173,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 						},
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -974,7 +1242,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 						{ kind: "snapshot", interactive: true },
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -1063,7 +1331,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 						{ kind: "snapshot", interactive: true },
 						{
 							kind: "fill",
-							ref: "@e1",
+							target: { role: "textbox", name: "Password" },
 							sensitivity: "confidential",
 							item_binding: "oncore_password",
 							postcondition: {
@@ -1142,8 +1410,12 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				{ stdout: json({ selected: true }) },
 				// selectTarget: fresh selected-url reproof
 				{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
-				// snapshot
-				{ stdout: json({ refs: { "@e1": {} } }) },
+				// snapshot yields the @e1 ref (with semantic metadata) the fill targets
+				{
+					stdout: json({
+						refs: { "@e1": { role: "textbox", name: "Password" } },
+					}),
+				},
 			]);
 			const outcome = await runRunbook(
 				{
@@ -1224,7 +1496,7 @@ const CONFIDENTIAL_RUNBOOK = baseRunbook({
 		{ kind: "snapshot", interactive: true },
 		{
 			kind: "fill",
-			ref: "@e1",
+			target: { role: "textbox", name: "Password" },
 			sensitivity: "confidential",
 			item_binding: "oncore_password",
 			postcondition: {
@@ -1314,7 +1586,12 @@ function confidentialRuntime(): AgentBrowserExecutionRuntime & {
 		},
 		{ stdout: json({ selected: true }) },
 		{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
-		{ stdout: json({ snapshot: "@e1 textbox password", refs: { "@e1": {} } }) },
+		{
+			stdout: json({
+				snapshot: "@e1 textbox password",
+				refs: { "@e1": { role: "textbox", name: "Password" } },
+			}),
+		},
 		// post-auth proof: reprove-origin `get url`, then the `get value` check.
 		{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
 		{ stdout: json({ value: "•••" }) },
@@ -1572,6 +1849,366 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			);
 			// No browser command dispatched: the engine refused before the executor.
 			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+});
+
+// --- Effective-catalog resolver + shadow matrix (R7, R14) --------------------
+
+describe("effective-catalog resolver shadow matrix (R7)", () => {
+	// A minimal active-generation seam fake: one id maps to one runbook, one id
+	// fails closed (corrupt), everything else is absent.
+	function seamFor(records: {
+		valid?: Record<string, BrowserUseRunbook>;
+		corrupt?: readonly string[];
+	}): BrowserUseActiveGenerationSeam {
+		const valid = records.valid ?? {};
+		const corrupt = new Set(records.corrupt ?? []);
+		return {
+			async loadRunbook(id) {
+				const key = `${id.serviceId}/${id.flowId}`;
+				if (corrupt.has(key)) {
+					return {
+						ok: false,
+						absent: false,
+						failure: {
+							code: "runbook_record_corrupt",
+							message: "active-generation record is corrupt.",
+						},
+					};
+				}
+				const runbook = valid[key];
+				if (runbook !== undefined) {
+					return { ok: true, runbook, health: "healthy" };
+				}
+				return { ok: false, absent: true };
+			},
+			async listIds() {
+				return [
+					...Object.keys(valid),
+					...corrupt,
+				].map((key) => {
+					const [serviceId, flowId] = key.split("/");
+					return { serviceId: serviceId ?? "", flowId: flowId ?? "" };
+				});
+			},
+		};
+	}
+
+	test(
+		"active generation shadows the compat XDG override and the shipped base",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			// compat-xdg record for oncore/snapshot-verify...
+			writeRunbook(
+				dataRoot,
+				baseRunbook({ flow_id: "snapshot-verify", flow_name: "store-wins" }),
+			);
+			// ...but the active generation shadows it.
+			const seam = seamFor({
+				valid: {
+					"oncore/snapshot-verify": baseRunbook({
+						flow_id: "snapshot-verify",
+						flow_name: "generation-wins",
+					}),
+				},
+			});
+			const resolved = await resolveEffectiveRunbook(
+				fs,
+				dataRoot,
+				{ serviceId: "oncore", flowId: "snapshot-verify" },
+				seam,
+			);
+			expect(resolved?.effective_source).toBe("active-generation");
+			expect(resolved?.ok).toBe(true);
+			if (resolved?.ok !== true) return;
+			expect(resolved.runbook.flow_name).toBe("generation-wins");
+		}),
+	);
+
+	test(
+		"compat XDG override shadows the shipped base",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					service_id: "oncore",
+					flow_id: "timesheet-snapshot-verify",
+					flow_name: "store-override",
+				}),
+			);
+			const resolved = await resolveEffectiveRunbook(fs, dataRoot, {
+				serviceId: "oncore",
+				flowId: "timesheet-snapshot-verify",
+			});
+			expect(resolved?.effective_source).toBe("compat-xdg");
+			expect(resolved?.ok === true && resolved.runbook.flow_name).toBe(
+				"store-override",
+			);
+		}),
+	);
+
+	test(
+		"resolves the shipped base when no higher layer holds the id",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			const resolved = await resolveEffectiveRunbook(fs, dataRoot, {
+				serviceId: "oncore",
+				flowId: "timesheet-snapshot-verify",
+			});
+			expect(resolved?.effective_source).toBe("shipped-base");
+			expect(resolved?.ok).toBe(true);
+		}),
+	);
+
+	test(
+		"a corrupt active-generation record FAILS CLOSED with no lower-layer fallback",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			// A VALID compat-xdg record exists for the same id...
+			writeRunbook(
+				dataRoot,
+				baseRunbook({ flow_id: "snapshot-verify", flow_name: "store-valid" }),
+			);
+			// ...but the higher active-generation layer holds a corrupt record; the
+			// id must fail closed at that layer, never fall through to the store.
+			const seam = seamFor({ corrupt: ["oncore/snapshot-verify"] });
+			const resolved = await resolveEffectiveRunbook(
+				fs,
+				dataRoot,
+				{ serviceId: "oncore", flowId: "snapshot-verify" },
+				seam,
+			);
+			expect(resolved?.effective_source).toBe("active-generation");
+			expect(resolved?.ok).toBe(false);
+			if (resolved?.ok !== false) return;
+			expect(resolved.failure.code).toBe("runbook_record_corrupt");
+		}),
+	);
+
+	test(
+		"a corrupt compat-xdg record FAILS CLOSED with no shipped fallback",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			// Torn JSON at the shipped seed's own id: fail closed, never shadowed by
+			// the valid shipped default.
+			const dir = join(
+				runbooksRoot(dataRoot),
+				"oncore",
+				"timesheet-snapshot-verify",
+			);
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "runbook.json"), "{ not json");
+			const resolved = await resolveEffectiveRunbook(fs, dataRoot, {
+				serviceId: "oncore",
+				flowId: "timesheet-snapshot-verify",
+			});
+			expect(resolved?.effective_source).toBe("compat-xdg");
+			expect(resolved?.ok).toBe(false);
+			if (resolved?.ok !== false) return;
+			expect(resolved.failure.code).toBe("runbook_record_corrupt");
+		}),
+	);
+
+	test(
+		"whole-catalog verification reports id, effective source, and failure per record (R14)",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			// One valid store record and one corrupt store record: BOTH must appear
+			// in verification — an invalid record never silently disappears.
+			writeRunbook(dataRoot, baseRunbook({ flow_id: "good-flow" }));
+			const badDir = join(runbooksRoot(dataRoot), "oncore", "bad-flow");
+			mkdirSync(badDir, { recursive: true });
+			writeFileSync(join(badDir, "runbook.json"), "{ not json");
+			const entries = await verifyEffectiveCatalog(fs, dataRoot);
+			const good = entries.find((e) => e.flow_id === "good-flow");
+			const bad = entries.find((e) => e.flow_id === "bad-flow");
+			expect(good?.ok).toBe(true);
+			expect(good?.effective_source).toBe("compat-xdg");
+			expect(bad?.ok).toBe(false);
+			expect(bad?.effective_source).toBe("compat-xdg");
+			if (bad?.ok !== false) return;
+			expect(bad.failure.code).toBe("runbook_record_corrupt");
+			// The shipped seeds still surface too.
+			expect(
+				entries.some((e) => e.flow_id === "timesheet-snapshot-verify"),
+			).toBe(true);
+		}),
+	);
+});
+
+// --- Private-file structured-input route (R10) -------------------------------
+
+describe("private-file structured input custody (R10)", () => {
+	function withInputRoot(
+		fn: (root: string) => void | Promise<void>,
+	): () => Promise<void> {
+		return async () => {
+			const root = mkdtempSync(join(tmpdir(), "browser-use-private-input-"));
+			try {
+				await fn(root);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		};
+	}
+
+	test(
+		"reads a well-formed owner-only regular private file",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "value.json");
+			writeFileSync(filePath, JSON.stringify({ week: "2026-07-28" }), {
+				mode: 0o600,
+			});
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.inputs).toEqual({ profile: { week: "2026-07-28" } });
+		}),
+	);
+
+	test(
+		"rejects a path escape above the admitted input root",
+		withInputRoot(async (root) => {
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath: join(root, "..", "escape.json"),
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_path_unsafe");
+			// Never echoes the value or the source path.
+			expect(result.refusal.message).not.toContain("escape.json");
+		}),
+	);
+
+	test(
+		"rejects a symlink at the final component (no-follow open)",
+		withInputRoot(async (root) => {
+			const real = join(root, "real.json");
+			writeFileSync(real, JSON.stringify({ v: 1 }), { mode: 0o600 });
+			const link = join(root, "link.json");
+			symlinkSync(real, link);
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath: link,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_open_failed");
+		}),
+	);
+
+	test(
+		"rejects a hard-link alias (link count other than one)",
+		withInputRoot(async (root) => {
+			const original = join(root, "orig.json");
+			writeFileSync(original, JSON.stringify({ v: 1 }), { mode: 0o600 });
+			const alias = join(root, "alias.json");
+			linkSync(original, alias);
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath: alias,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_multiple_links");
+		}),
+	);
+
+	test(
+		"rejects a non-regular file (a directory)",
+		withInputRoot(async (root) => {
+			const dirPath = join(root, "adir");
+			mkdirSync(dirPath, { mode: 0o700 });
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath: dirPath,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			// O_NOFOLLOW open of a directory for O_RDONLY may succeed, then fstat
+			// proves non-regular; either failure path is a fail-closed refusal.
+			expect(
+				["private_input_not_regular", "private_input_open_failed"],
+			).toContain(result.refusal.code);
+		}),
+	);
+
+	test(
+		"rejects a group/other-readable (loose-mode) file",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "loose.json");
+			writeFileSync(filePath, JSON.stringify({ v: 1 }), { mode: 0o644 });
+			chmodSync(filePath, 0o644);
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_mode_loose");
+		}),
+	);
+
+	test(
+		"rejects a wrong-owner file (expected owner mismatch)",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "owned.json");
+			writeFileSync(filePath, JSON.stringify({ v: 1 }), { mode: 0o600 });
+			// Force an owner mismatch by claiming a different expected uid.
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+				expectedOwnerUid: (process.getuid?.() ?? 0) + 99991,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_wrong_owner");
+		}),
+	);
+
+	test(
+		"rejects oversized content before parsing the value",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "big.json");
+			const big = `{"v":"${"x".repeat(RUNBOOK_PRIVATE_INPUT_MAX_BYTES + 10)}"}`;
+			writeFileSync(filePath, big, { mode: 0o600 });
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_oversize");
+		}),
+	);
+
+	test(
+		"rejects invalid JSON through the proven descriptor",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "torn.json");
+			writeFileSync(filePath, "{ not json", { mode: 0o600 });
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_json_invalid");
 		}),
 	);
 });
