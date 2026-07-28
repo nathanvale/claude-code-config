@@ -11,9 +11,25 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
-import type { AgentBrowserExecutionRuntime } from "./browser-use-agent-browser";
+import type {
+	AgentBrowserAuthDeliveryContext,
+	AgentBrowserExecutionRuntime,
+	AgentBrowserVerifiedHandoff,
+} from "./browser-use-agent-browser";
+import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseDeliveryHook,
+	BrowserUseTargetReproof,
+	BrowserUseVerifiedTarget,
+} from "./browser-use-confidential-field-delivery";
+import type {
+	BrowserUseOpCredentialField,
+	BrowserUseSecretHandle,
+	BrowserUseTokenRetrievalPort,
+} from "./browser-use-op";
 import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-use-paths";
 import {
+	type BrowserUseRunbookAuthDelivery,
 	BrowserUseShippedRunbooksMissingError,
 	listRunbooks,
 	runRunbook,
@@ -27,6 +43,7 @@ import {
 	projectRunbookCatalogRow,
 	validateRunbook,
 } from "./browser-use-runbook-model";
+import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 
 // --- Fixtures ----------------------------------------------------------------
 
@@ -681,7 +698,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 	);
 
 	test(
-		"refuses a confidential runbook to the auth transaction before any browser effect",
+		"fails a confidential runbook closed when the native auth capability is absent (no seam injected), before any browser effect",
 		withDataRoot(async (dataRoot) => {
 			writeRunbook(
 				dataRoot,
@@ -703,6 +720,9 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				}),
 			);
 			const runtime = runtimeFor([]);
+			// No authDelivery seam: the native Token Retrieval capability is absent,
+			// so the confidential runbook must fail closed on the typed repair
+			// pointer rather than dispatching an unauthenticated fill.
 			const outcome = await runRunbook(
 				{ fs: createDefaultPlatformFs(), runtime, dataRoot },
 				{
@@ -718,10 +738,135 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) return;
 			expect(outcome.refusal.code).toBe(
-				"runbook_confidential_requires_auth_transaction",
+				"runbook_confidential_native_capability_absent",
 			);
 			// No browser command was dispatched.
 			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
+	test(
+		"routes a confidential runbook through the injected auth-delivery seam and threads the context into the task",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "with-secret",
+					steps: [
+						{ kind: "snapshot", interactive: true },
+						{
+							kind: "fill",
+							ref: "@e1",
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			// The executor only reaches the confidential fill after the snapshot,
+			// which produces the ref the fill targets. The seam yields an
+			// out-of-sensitive-interval context: the executor then applies the
+			// EXACT pre-U11 refusal, proving the context is threaded verbatim
+			// without weakening the default. (A live in-interval delivery needs a
+			// proven target the engine cannot fabricate; the wiring proof is that
+			// the seam is consulted and its context reaches task.auth_delivery.)
+			const context: AgentBrowserAuthDeliveryContext = {
+				in_sensitive_interval: false,
+				binding: {
+					service_id: "oncore",
+					auth_context: "interactive-login",
+					allowed_origins: ["https://portal.example.com"],
+					allowed_login_paths: [],
+					vault_id: "vault-1",
+					item_id: "item-1",
+					allowed_auth_methods: ["password"],
+					binding_revision: 1,
+				},
+				target: {
+					lane_id: "agent-browser",
+					run_id: "run-3",
+					top_level_origin: "https://portal.example.com",
+					frame_origin: "https://portal.example.com",
+					target_id: "target-1",
+					page_id: "page-1",
+					frame_id: "frame-1",
+					account_ref: "account-1",
+					target_proof_digest: "d".repeat(32),
+				},
+				tokenRetrieval: {
+					listVaults: async () => ({ ok: true, vaults: [] }),
+					listLoginItems: async () => ({ ok: true, items: [] }),
+					getLoginItem: async () => ({
+						ok: false,
+						rejection: { code: "item-missing", message: "unused" },
+					}),
+					fetchCredentialField: async () => ({
+						ok: false,
+						rejection: { code: "token-invalid", message: "unused" },
+					}),
+				},
+				deliver: async () => ({
+					ok: true,
+					shape: { field: "password", byte_length: 1 },
+				}),
+				reproveTarget: async () => ({
+					proven: true,
+					observed_digest: "d".repeat(32),
+				}),
+				field_by_ref: {},
+			};
+			const seamCalls: Array<readonly string[]> = [];
+			// tab list + select, then the interactive snapshot yields the @e1 ref
+			// the confidential fill targets.
+			const runtime = runtimeFor([
+				// selectTarget: tab list
+				{
+					stdout: json({
+						tabs: [
+							{ tabId: "t1", url: "https://portal.example.com/timesheets" },
+						],
+					}),
+				},
+				// selectTarget: tab select
+				{ stdout: json({ selected: true }) },
+				// snapshot
+				{ stdout: json({ refs: { "@e1": {} } }) },
+			]);
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						seamCalls.push(seamInput.pendingItemBindings);
+						return { ok: true, context };
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF,
+					runId: "run-3",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			// The seam was consulted with the plan's pending bindings.
+			expect(seamCalls).toEqual([["oncore_password"]]);
+			// The executor ran (snapshot dispatched), then applied the threaded
+			// out-of-interval context's refusal at the confidential fill.
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(false);
+			if (outcome.result.ok) return;
+			expect(outcome.result.code).toBe(
+				"agent_browser_confidential_input_requires_auth_transaction",
+			);
 		}),
 	);
 
@@ -744,6 +889,378 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) return;
 			expect(outcome.refusal.code).toBe("runbook_not_found");
+			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+});
+
+// --- (C) Deterministic contract: the wired confidential runbook path ----------
+//
+// U13 tier-C. The newly wired runbook-run confidential path (U10/U11) routes a
+// confidential field through the REAL deliverConfidentialFields choreography
+// when an in-interval auth-delivery seam is injected — instead of refusing —
+// and holds the typed fail-closed pointer when the native Token Retrieval seam
+// is absent. Fakes live ONLY at the injected port boundaries (Seam A/B =
+// authDelivery, plus the TokenRetrievalPort + delivery hook the context
+// carries); the engine and the executor run for real. Sentinel VALUES are
+// conformance markers (obviously-fake, never a real-looking credential) so a
+// clean sweep of the task/adapter surfaces is meaningful, not vacuous. No
+// public test-only bypass exists: the confidential fill still refuses without a
+// seam, matching the browser-use-confidential-delivery-seam.test.ts posture.
+
+const CONFIDENTIAL_RUNBOOK = baseRunbook({
+	flow_id: "with-secret",
+	allowed_origins: ["https://portal.example.com"],
+	steps: [
+		{ kind: "snapshot", interactive: true },
+		{
+			kind: "fill",
+			ref: "@e1",
+			sensitivity: "confidential",
+			item_binding: "oncore_password",
+			postcondition: {
+				kind: "value-equals",
+				selector: "input[name=password]",
+				value: "•••",
+			},
+		},
+	],
+});
+
+const CONFIDENTIAL_BINDING: BrowserUseItemBinding = {
+	service_id: "oncore",
+	auth_context: "interactive-login",
+	allowed_origins: ["https://portal.example.com"],
+	allowed_login_paths: [],
+	vault_id: "vault-1",
+	item_id: "item-1",
+	allowed_auth_methods: ["password", "otp"],
+	binding_revision: 1,
+};
+
+function confidentialTarget(runId: string): BrowserUseVerifiedTarget {
+	return {
+		lane_id: "agent-browser",
+		run_id: runId,
+		top_level_origin: "https://portal.example.com",
+		frame_origin: "https://portal.example.com",
+		target_id: "target-1",
+		page_id: "page-1",
+		frame_id: "frame-1",
+		account_ref: "acct-ref-redacted",
+		target_proof_digest: "d".repeat(32),
+	};
+}
+
+const confidentialReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
+	proven: true,
+	observed_digest: target.target_proof_digest,
+});
+
+// An opaque-handle-only TokenRetrievalPort (never bytes): the ONLY place the
+// port boundary is faked. Its handle names the field, carrying no value.
+const confidentialFakePort: BrowserUseTokenRetrievalPort = {
+	listVaults: async () => ({ ok: true, vaults: [] }),
+	listLoginItems: async () => ({ ok: true, items: [] }),
+	getLoginItem: async () => ({
+		ok: false,
+		rejection: { code: "item-missing", message: "n/a" },
+	}),
+	fetchCredentialField: async (
+		input,
+	): Promise<{ ok: true; handle: BrowserUseSecretHandle }> => ({
+		ok: true,
+		handle: {
+			handle_id: `handle-${input.field}`,
+			field: input.field,
+			expires_at_epoch_ms: 9_999_999,
+		},
+	}),
+};
+
+// The delivery-hook fake: the ONLY component that observes sentinel bytes. It
+// reports back an outcome + a non-secret shape only.
+function confidentialLeakHelper(
+	sentinelValue: Readonly<Record<BrowserUseOpCredentialField, string>>,
+): { hook: BrowserUseDeliveryHook; observed: string[] } {
+	const observed: string[] = [];
+	const hook: BrowserUseDeliveryHook = async (input) => {
+		const value = sentinelValue[input.field];
+		observed.push(value);
+		return { ok: true, shape: { field: input.field, byte_length: value.length } };
+	};
+	return { hook, observed };
+}
+
+// A confidential runbook's runtime: tab list, tab select, interactive snapshot
+// yielding @e1, then the post-auth value-equals proof of the delivered field.
+function confidentialRuntime(): AgentBrowserExecutionRuntime & {
+	calls: Array<readonly string[]>;
+} {
+	return runtimeFor([
+		{
+			stdout: json({
+				tabs: [{ tabId: "t1", url: "https://portal.example.com/timesheets" }],
+			}),
+		},
+		{ stdout: json({ selected: true }) },
+		{ stdout: json({ snapshot: "@e1 textbox password", refs: { "@e1": {} } }) },
+		// post-auth proof: reprove-origin `get url`, then the `get value` check.
+		{ stdout: json({ url: "https://portal.example.com/timesheets" }) },
+		{ stdout: json({ value: "•••" }) },
+	]);
+}
+
+// Seam A/B factory (the injected authDelivery port). Given a delivery hook and
+// the sensitive-interval flag, it builds a real AgentBrowserAuthDeliveryContext
+// mapping @e1 -> password. `in_sensitive_interval` gates whether the executor
+// routes the confidential fill through delivery. This is the ONLY seam the
+// engine consumes; nothing bypasses the executor's confidential gate.
+function confidentialSeam(
+	runId: string,
+	hook: BrowserUseDeliveryHook,
+	inSensitiveInterval: boolean,
+): { seam: BrowserUseRunbookAuthDelivery; seamCalls: Array<readonly string[]> } {
+	const seamCalls: Array<readonly string[]> = [];
+	const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
+		seamCalls.push(seamInput.pendingItemBindings);
+		const context: AgentBrowserAuthDeliveryContext = {
+			in_sensitive_interval: inSensitiveInterval,
+			binding: CONFIDENTIAL_BINDING,
+			target: confidentialTarget(runId),
+			tokenRetrieval: confidentialFakePort,
+			deliver: hook,
+			reproveTarget: confidentialReproveOk,
+			field_by_ref: { "@e1": "password" },
+		};
+		return { ok: true, context };
+	};
+	return { seam, seamCalls };
+}
+
+describe("(C) runbook-run confidential path — wired delivery seam", () => {
+	test(
+		"Seam A: an in-interval seam routes a confidential field through deliverConfidentialFields instead of refusing",
+		withDataRoot(async (dataRoot) => {
+			const RUN = "run-c-seam-a";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			// Conformance sentinels: the delivered VALUE equals a marker the sentinel
+			// owner derives, so a leak onto any surface is literally a swept token.
+			const PASS = deriveConformanceSentinel("password", "runcseama01");
+			expect(PASS.ok).toBe(true);
+			if (!PASS.ok) return;
+			const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+				username: PASS.value,
+				password: PASS.value,
+				"otp-current": PASS.value,
+			};
+			const { hook, observed } = confidentialLeakHelper(sentinelValue);
+			const { seam, seamCalls } = confidentialSeam(RUN, hook, true);
+			const runtime = confidentialRuntime();
+
+			const outcome = await runRunbook(
+				{ fs: createDefaultPlatformFs(), runtime, dataRoot, authDelivery: seam },
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+
+			// The seam was consulted with the plan's pending bindings and the
+			// choreography delivered the password (the hook saw the sentinel bytes).
+			expect(seamCalls).toEqual([["oncore_password"]]);
+			expect(observed).toContain(sentinelValue.password);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			if (!outcome.result.ok) return;
+			// Delivery evidence rode the executor result verbatim; the executor never
+			// issued its own `fill` command for the confidential step.
+			expect(outcome.result.delivery?.method_step_events).toEqual([
+				"fill-password",
+			]);
+			expect(outcome.result.delivery?.delivered_shapes).toEqual([
+				{ field: "password", byte_length: sentinelValue.password.length },
+			]);
+			expect(
+				runtime.calls.some((call) => call.includes("fill")),
+			).toBe(false);
+			// No adapter argv and no task-surface JSON ever carried the raw value.
+			expect(JSON.stringify(runtime.calls)).not.toContain(
+				sentinelValue.password,
+			);
+			expect(JSON.stringify(outcome)).not.toContain(sentinelValue.password);
+		}),
+	);
+
+	test(
+		"Seam B: compact/pretty serialization of the seam-built context carries no delivered value (port-boundary parity)",
+		withDataRoot(async (dataRoot) => {
+			const RUN = "run-c-seam-b";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const PASS = deriveConformanceSentinel("password", "runcseamb01");
+			expect(PASS.ok).toBe(true);
+			if (!PASS.ok) return;
+			const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+				username: PASS.value,
+				password: PASS.value,
+				"otp-current": PASS.value,
+			};
+			const { hook } = confidentialLeakHelper(sentinelValue);
+			// Capture the exact context the seam hands the engine.
+			let captured: AgentBrowserAuthDeliveryContext | undefined;
+			const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
+				const context: AgentBrowserAuthDeliveryContext = {
+					in_sensitive_interval: true,
+					binding: CONFIDENTIAL_BINDING,
+					target: confidentialTarget(RUN),
+					tokenRetrieval: confidentialFakePort,
+					deliver: hook,
+					reproveTarget: confidentialReproveOk,
+					field_by_ref: { "@e1": "password" },
+				};
+				expect(seamInput.pendingItemBindings).toEqual(["oncore_password"]);
+				captured = context;
+				return { ok: true, context };
+			};
+			const outcome = await runRunbook(
+				{ fs: createDefaultPlatformFs(), runtime: confidentialRuntime(), dataRoot, authDelivery: seam },
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(true);
+			expect(captured).toBeDefined();
+			if (captured === undefined) return;
+			// The context is a real port object (functions do not serialize); the
+			// data-only portion serializes byte-identically compact vs pretty and
+			// carries only structural facts — never the delivered value.
+			const dataOnly = {
+				in_sensitive_interval: captured.in_sensitive_interval,
+				binding: captured.binding,
+				target: captured.target,
+				field_by_ref: captured.field_by_ref,
+			};
+			const compact = JSON.stringify(dataOnly);
+			const pretty = JSON.stringify(dataOnly, null, 2);
+			expect(JSON.parse(compact)).toEqual(JSON.parse(pretty));
+			expect(compact).not.toContain(sentinelValue.password);
+			expect(pretty).not.toContain(sentinelValue.password);
+			// The field mapping names the field kind only, no value.
+			expect(captured.field_by_ref).toEqual({ "@e1": "password" });
+		}),
+	);
+
+	test(
+		"Seam gate: an out-of-interval seam threads the context verbatim and the executor still refuses (default not weakened)",
+		withDataRoot(async (dataRoot) => {
+			const RUN = "run-c-seam-out";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const { hook, observed } = confidentialLeakHelper({
+				username: "not-a-real-secret-u",
+				password: "not-a-real-secret-p",
+				"otp-current": "not-a-real-secret-o",
+			});
+			const { seam, seamCalls } = confidentialSeam(RUN, hook, false);
+			const outcome = await runRunbook(
+				{ fs: createDefaultPlatformFs(), runtime: confidentialRuntime(), dataRoot, authDelivery: seam },
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(seamCalls).toEqual([["oncore_password"]]);
+			// Out of the sensitive interval: no delivery, unchanged typed refusal.
+			expect(observed).toHaveLength(0);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(false);
+			if (outcome.result.ok) return;
+			expect(outcome.result.code).toBe(
+				"agent_browser_confidential_input_requires_auth_transaction",
+			);
+		}),
+	);
+
+	test(
+		"Fail-closed pointer: with no seam injected (native Token Retrieval absent), the confidential runbook refuses closed before any browser effect",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const runtime = runtimeFor([]);
+			// No authDelivery: this models the unsigned machine where the native
+			// Token Retrieval capability is absent, so the driver injects no seam.
+			const outcome = await runRunbook(
+				{ fs: createDefaultPlatformFs(), runtime, dataRoot },
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: "run-c-no-seam",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_native_capability_absent",
+			);
+			// The typed pointer names the repair path and never a secret.
+			expect(outcome.refusal.message).toContain(
+				"Browser Authentication Transaction",
+			);
+			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
+	test(
+		"Seam blocked outcome maps to the typed delivery-unavailable refusal (present capability, unproven interval)",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const runtime = runtimeFor([]);
+			// The native capability is present but the seam cannot complete the
+			// sensitive-interval transaction (mirrors the driver's current
+			// buildRunbookAuthDelivery typed-blocked outcome). Fail closed, no fill.
+			const seam: BrowserUseRunbookAuthDelivery = async () => ({
+				ok: false,
+				message:
+					"the runbook lane's live sensitive-interval delivery is not wired yet.",
+			});
+			const outcome = await runRunbook(
+				{ fs: createDefaultPlatformFs(), runtime, dataRoot, authDelivery: seam },
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: "run-c-seam-blocked",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			// No browser command dispatched: the engine refused before the executor.
 			expect(runtime.calls).toHaveLength(0);
 		}),
 	);

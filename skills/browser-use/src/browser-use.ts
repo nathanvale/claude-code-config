@@ -111,6 +111,7 @@ import {
 import {
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
+	createProductionBrowserUseRuntime,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
@@ -143,6 +144,7 @@ import {
 import {
 	type RunResumeObservedIdentity,
 	type RunStoreDeps,
+	attestationByDigestFrom,
 	casUpdateSharedRun,
 	createSharedRun,
 	leaseKeyForRun,
@@ -150,6 +152,10 @@ import {
 	loadSharedRun,
 	resumeSharedRun,
 } from "./browser-use-runs";
+import {
+	type BrowserUseAuthProvider,
+	createBrowserUseAuthProvider,
+} from "./browser-use-auth-provider";
 import {
 	listOrphanTempFiles,
 	readDurableFile,
@@ -183,6 +189,7 @@ import {
 	executePlaywrightTask,
 } from "./browser-use-playwright-task";
 import {
+	type BrowserUseRunbookAuthDelivery,
 	type BrowserUseRunbookExecutionResult,
 	listRunbooks,
 	runRunbook,
@@ -231,7 +238,8 @@ export async function runBrowserUseCli(
 		stderr?: CliWriter;
 	} = {},
 ): Promise<number> {
-	const runtime = options.runtime ?? createDefaultBrowserUseRuntime();
+	const runtime =
+		options.runtime ?? (await createProductionBrowserUseRuntime());
 	const stdout = options.stdout ?? process.stdout;
 	const stderr = options.stderr ?? process.stderr;
 	const diagnosticInput = applyEnvRunId(argv, runtime.env.BROWSER_USE_RUN_ID);
@@ -1905,6 +1913,7 @@ function baselinePlaywrightTask(input: {
 	tabIndex: number;
 	allowedOrigin: string;
 	intent: BrowserUseTaskIntent;
+	semanticClick?: TaskRunSemanticClick;
 }): PlaywrightTask {
 	return {
 		handoff: input.rawHandoff as PlaywrightTask["handoff"],
@@ -1912,6 +1921,15 @@ function baselinePlaywrightTask(input: {
 		target_tab_index: input.tabIndex,
 		allowed_origins: [input.allowedOrigin],
 		intent: input.intent as PlaywrightTaskIntent,
+		...(input.semanticClick !== undefined
+			? {
+					mutation: {
+						role: input.semanticClick.role,
+						name: input.semanticClick.name,
+						visible_selector: input.semanticClick.visibleSelector,
+					},
+				}
+			: {}),
 	};
 }
 
@@ -1919,7 +1937,11 @@ function mapPlaywrightOutcome(
 	result: PlaywrightTaskResult,
 ): AgentBrowserDispatchMapping {
 	if (result.ok) {
-		return { kind: "confirmed", executedSteps: result.executed_commands };
+		return {
+			kind: "confirmed",
+			executedSteps: result.executed_commands,
+			mutationDispatched: result.mutation_dispatched,
+		};
 	}
 	if (result.code === "playwright_task_connection_unstable") {
 		return {
@@ -1930,6 +1952,7 @@ function mapPlaywrightOutcome(
 				summary:
 					"Re-mint a verified playwright-cdp handoff, then resume the same run.",
 			},
+			mutationDispatched: result.mutation_dispatched,
 			failure: {
 				code: "task_run_connection_unstable",
 				message: result.message,
@@ -1940,13 +1963,31 @@ function mapPlaywrightOutcome(
 			},
 		};
 	}
+	if (result.outcome === "unknown") {
+		return {
+			kind: "terminal",
+			state: "unknown",
+			mutationDispatched: result.mutation_dispatched,
+			failure: {
+				code: "task_run_effect_unknown",
+				message: result.message,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { lane_outcome: result.code },
+			},
+		};
+	}
 	const isRefusal =
 		result.code === "playwright_task_handoff_invalid" ||
 		result.code === "playwright_task_input_invalid" ||
-		result.code === "playwright_task_origin_refused";
+		result.code === "playwright_task_origin_refused" ||
+		result.code === "playwright_task_ref_invalid" ||
+		result.code === "playwright_task_mutation_marker_unavailable";
 	return {
 		kind: "terminal",
 		state: "not-achieved",
+		mutationDispatched: result.mutation_dispatched,
 		failure: {
 			code: isRefusal ? "task_run_lane_refused" : "task_run_not_achieved",
 			message: result.message,
@@ -2417,13 +2458,18 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		}
 		if (
 			existingRun !== undefined ||
-			intent !== "routine-automation" ||
-			route.lane_id !== "agent-browser"
+			!(
+				(route.lane_id === "agent-browser" &&
+					intent === "routine-automation") ||
+				(route.lane_id === "playwright-cdp" &&
+					(intent === "frontend-test" ||
+						intent === "locator-aria-assertion"))
+			)
 		) {
 			return emitTaskRunFailure(input, existingRun?.run_id ?? runFlag, {
 				code: "task_run_lane_refused",
 				message:
-					"semantic click is available only on a fresh routine-automation run routed to agent-browser.",
+					"semantic click is available only on a fresh mutation-capable run routed to agent-browser or playwright-cdp.",
 				actionId: "change_task_run_input",
 				exitCode: USAGE_EXIT_CODE,
 				recoverability: "change_input",
@@ -2658,20 +2704,41 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	}
 
 	if (route.lane_id === "playwright-cdp") {
+		let dispatchRun = run;
+		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		const result = await executePlaywrightTask(
-			input.runtime,
+			{
+				runCommand: input.runtime.runCommand,
+				beforeMutationDispatch: async ({ run_id }) => {
+					if (run_id !== dispatchRun.run_id) return { ok: false };
+					const marked = await persistTaskRunMutationDispatch(
+						store.deps,
+						dispatchRun,
+					);
+					if (!marked.ok) {
+						mutationMarkerFailure = marked.failure;
+						return { ok: false };
+					}
+					dispatchRun = marked.run;
+					return { ok: true };
+				},
+			},
 			baselinePlaywrightTask({
 				rawHandoff: rawHandoffData,
 				runId: run.run_id,
 				tabIndex: numericTabIndex ?? 0,
 				allowedOrigin,
 				intent: route.intent,
+				...(semanticClick !== undefined ? { semanticClick } : {}),
 			}),
 		);
+		if (mutationMarkerFailure !== undefined) {
+			return emitPlatformStoreFailure(input, mutationMarkerFailure);
+		}
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
-			run,
+			dispatchRun,
 			route,
 			mapPlaywrightOutcome(result),
 			{
@@ -3025,9 +3092,10 @@ function runbookFailureOf(
 				recoverability: "repair_state",
 			};
 		default:
-			// runbook_confidential_requires_auth_transaction and any future refusal
-			// route to the run's own persisted next safe action; the auth continuation
-			// is named in the message.
+			// runbook_confidential_native_capability_absent,
+			// runbook_confidential_delivery_unavailable, and any future refusal route
+			// to the run's own persisted next safe action; the auth continuation is
+			// named in the message.
 			return {
 				code,
 				message,
@@ -3122,6 +3190,31 @@ function parseRunbookInputs(
 function sanitizeInputPairForError(pair: string): string {
 	const eq = pair.indexOf("=");
 	return eq > 0 ? `${pair.slice(0, eq)}=[redacted]` : "[redacted]";
+}
+
+// Auth-delivery seam for `runbook run` (auth plan U11). Built ONLY when a native
+// Token Retrieval Port exists; the provider is the sole credential capability
+// (R7/R16). The provider composes into the sensitive-interval delivery context
+// via `buildAgentBrowserDeliveryContext`, but that context also needs a live
+// VERIFIED TARGET proof, the disposable delivery hook, and the target-reproof
+// closure — all produced by the live sensitive-interval transaction that a later
+// unit drives end-to-end for the runbook lane. Until that transaction is wired
+// here, this seam returns a typed `blocked` outcome (never a fabricated target,
+// never an unauthenticated fill): the run stays fail-closed with a repair
+// pointer even when the native capability is present. The engine consults the
+// seam with the plan's pending bindings, so the composition is proven live; only
+// the live-target assembly remains for the transaction unit.
+function buildRunbookAuthDelivery(
+	provider: BrowserUseAuthProvider,
+): BrowserUseRunbookAuthDelivery {
+	// Reference the provider so the sole credential capability is captured here
+	// and a miswiring that drops it is a type error, not a silent bypass.
+	void provider;
+	return async () => ({
+		ok: false,
+		message:
+			"the native Browser Authentication capability is present, but the runbook lane's live sensitive-interval delivery (verified-target proof and confidential-field hook) is not wired here yet. Complete the authentication transaction for this runbook lane before running a confidential runbook.",
+	});
 }
 
 /**
@@ -3236,11 +3329,29 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	}
 
 	// Sensitive Run Guard (auth plan U4): attach at run resolution. The run stays
-	// non-sensitive until confidential delivery participates; runbook run refuses
-	// confidential steps to the auth transaction (below), so it never turns
-	// sensitive in this unit — but the guard is held for the command's lifetime.
+	// non-sensitive until confidential delivery participates. A confidential
+	// runbook turns the run sensitive exactly once when the auth-delivery context
+	// engages (below); the guard is held for the command's lifetime.
 	const guardResult = beginSensitiveRunGuard(run.run_id);
 	const guard = guardResult.ok ? guardResult.guard : undefined;
+
+	// Auth-delivery wiring (auth plan U11): the Browser Authentication provider is
+	// constructed ONLY when the runtime carries a native Token Retrieval Port
+	// (store + tokenRetrieval + the store-backed attestation lookup). On this
+	// (unsigned) machine the port is absent, so no seam is threaded and the engine
+	// fails a confidential runbook closed with a typed native-capability-absent
+	// repair pointer — never a public bypass. When the port exists, the provider
+	// builds the sensitive-interval delivery context the agent-browser executor
+	// routes each confidential fill through.
+	const tokenRetrieval = input.runtime.authTokenRetrieval;
+	const authProvider =
+		tokenRetrieval !== undefined
+			? createBrowserUseAuthProvider({
+					store: store.deps,
+					tokenRetrieval,
+					attestationByDigest: attestationByDigestFrom(store.deps),
+				})
+			: undefined;
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;
@@ -3264,6 +3375,9 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				},
 			},
 			dataRoot: store.deps.paths.data.root,
+			...(authProvider !== undefined
+				? { authDelivery: buildRunbookAuthDelivery(authProvider) }
+				: {}),
 		},
 		{
 			serviceId,
@@ -4221,7 +4335,9 @@ export {
 } from "./browser-use-transport";
 export {
 	type BrowserUseRuntime,
+	type BrowserUseSecuritySeam,
 	createDefaultBrowserUseRuntime,
+	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {

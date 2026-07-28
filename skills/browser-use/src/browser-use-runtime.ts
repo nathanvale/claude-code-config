@@ -10,7 +10,15 @@
 // ---------------------------------------------------------------------------
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { BrowserUseTokenRetrievalPort } from "./browser-use-op";
+import {
+	type AdmissionRuntime,
+	createNativeAbsentRuntime,
+} from "@side-quest/browser-use-security";
+import {
+	type BrowserUseOpExecute,
+	type BrowserUseTokenRetrievalPort,
+	createOpTokenRetrievalPort,
+} from "./browser-use-op";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
@@ -20,6 +28,78 @@ import {
 	type McporterCommandResult,
 	spawnMcporterCommand,
 } from "./mcporter-transport";
+
+/**
+ * The native security seam the runtime factory queries to decide whether a real
+ * Token Retrieval Port can be constructed (auth plan U3a/U3b, ADR 0028).
+ *
+ * `admission` is the injectable admission runtime from
+ * `@side-quest/browser-use-security` — production wires
+ * {@link createNativeAbsentRuntime}, which reports `native-capability-absent`
+ * for every query until the signed native product exists. Only when
+ * `verifyProduct()` returns `admitted` does the factory ask the seam for its
+ * op-executor via {@link createTokenExecutor} and construct the port; on this
+ * machine the product is unsigned/absent, so the executor is never requested and
+ * `authTokenRetrieval` stays undefined (the public auth command then returns the
+ * typed `native-capability-absent` evaluation, never a crash).
+ *
+ * `createTokenExecutor` is the in-process op-executor factory (library-import
+ * precedent, never a shell-out): the signed product owns the real 1Password
+ * custody path. The prod placeholder has no executor because it is never
+ * admitted; the earned in-memory fake (tests) supplies both an `admitted`
+ * verdict and a capturing executor so the present branch is driven end-to-end.
+ */
+export type BrowserUseSecuritySeam = {
+	admission: AdmissionRuntime;
+	/**
+	 * Yield the op-executor + opaque token handle the port drives. Only invoked
+	 * after `admission.verifyProduct()` reports `admitted`, so an absent seam
+	 * never reaches it.
+	 */
+	createTokenExecutor: () => {
+		execute: BrowserUseOpExecute;
+		token_handle_id: string;
+	};
+};
+
+/**
+ * The production security seam: native capability is absent until the signed
+ * product exists (ADR 0028). `admission` always reports
+ * `native-capability-absent`; `createTokenExecutor` is unreachable behind that
+ * verdict and throws a typed error if a future miswiring ever calls it, so the
+ * absent path can never silently mint a port over a non-existent executor.
+ */
+function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
+	return {
+		admission: createNativeAbsentRuntime(),
+		createTokenExecutor: () => {
+			throw new Error(
+				"native token executor is absent; the signed Browser Use Security product is not installed.",
+			);
+		},
+	};
+}
+
+/**
+ * Construct the runtime's Token Retrieval Port ONLY when the native seam admits
+ * the product. Any non-`admitted` verdict (including the default
+ * `native-capability-absent`) leaves the port undefined so the auth command
+ * keeps returning the typed absent state. Never throws: a seam probe that
+ * rejects is treated as absence, fail-closed.
+ */
+async function resolveAuthTokenRetrieval(
+	seam: BrowserUseSecuritySeam,
+): Promise<BrowserUseTokenRetrievalPort | undefined> {
+	let verdict: Awaited<ReturnType<AdmissionRuntime["verifyProduct"]>>;
+	try {
+		verdict = await seam.admission.verifyProduct();
+	} catch {
+		return undefined;
+	}
+	if (verdict.verdict !== "admitted") return undefined;
+	const { execute, token_handle_id } = seam.createTokenExecutor();
+	return createOpTokenRetrievalPort({ execute, token_handle_id });
+}
 
 export type BrowserUseRuntime = {
 	env: Record<string, string | undefined>;
@@ -91,6 +171,37 @@ export function createDefaultBrowserUseRuntime(
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
 	};
+}
+
+/**
+ * Production runtime construction with native-capability wiring (auth plan
+ * U3a/U3b). Builds the default runtime, then queries the native security seam:
+ * only an `admitted` product yields a real Token Retrieval Port. On this
+ * machine the product is unsigned/absent, so `authTokenRetrieval` stays
+ * undefined and the public auth command keeps returning the typed
+ * `native-capability-absent` evaluation — byte-identical to today. An explicit
+ * `overrides.authTokenRetrieval` (or a caller-supplied port) is honored as-is
+ * and never overwritten by the seam probe.
+ *
+ * Kept separate from the synchronous {@link createDefaultBrowserUseRuntime} so
+ * the sync factory (and every test that constructs it) is unchanged; the
+ * seam probe is async and lives only on this production path.
+ *
+ * @param overrides - Partial runtime overrides, same shape the sync factory takes
+ * @param seam - The native security seam; defaults to the native-absent placeholder
+ */
+export async function createProductionBrowserUseRuntime(
+	overrides: Partial<BrowserUseRuntime> = {},
+	seam: BrowserUseSecuritySeam = createNativeAbsentSecuritySeam(),
+): Promise<BrowserUseRuntime> {
+	const runtime = createDefaultBrowserUseRuntime(overrides);
+	// Honor an explicitly injected port; otherwise let the seam decide. Absence
+	// leaves the field undefined so the auth command reports typed absence.
+	if (runtime.authTokenRetrieval === undefined) {
+		const port = await resolveAuthTokenRetrieval(seam);
+		if (port !== undefined) runtime.authTokenRetrieval = port;
+	}
+	return runtime;
 }
 
 // In-process envelope mint (D4). Imports browser-connect's CLI lazily so the
