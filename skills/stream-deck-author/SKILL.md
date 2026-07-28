@@ -108,10 +108,11 @@ mcporter call streamdeck-author.streamdeck_read_page \
   existing percentage, send relative `ticks` to a Home Assistant adjustment
   script and display the staged helper.
 - For rotate-to-preview and press-to-apply, keep separate staged and confirmed
-  helpers. Restart a delayed rollback on every rotation; pressing applies the
-  staged value first, then copies staged to confirmed only after Home Assistant
-  reports success. On failure, preserve the prior confirmed value and surface
-  the failed apply.
+  helpers.
+- Restart a delayed rollback on every rotation.
+- On press, apply the staged value first, then copy staged to confirmed only
+  after Home Assistant reports success.
+- On failure, preserve the prior confirmed value and surface the failed apply.
 - Do not set the rotation tick bucket to zero. Plugin 3.8.4 treats zero as its
   300 ms fallback; use 50-100 ms for responsive helper updates.
 
