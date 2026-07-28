@@ -11,6 +11,7 @@
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import { createHash } from "node:crypto";
+import { dirname, join, normalize } from "node:path";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -139,6 +140,7 @@ import type {
 	BrowserUseMigrationState,
 } from "./browser-use-migration-model";
 import {
+	BROWSER_USE_R3_CORPUS_BASELINE,
 	applyBrowserUseMigration,
 	inventoryBrowserUseMigration,
 	planBrowserUseMigration,
@@ -4389,11 +4391,21 @@ async function runMigration(input: PlatformCommandInput): Promise<number> {
 		// The parser has already proven --source is present for the four phase
 		// commands (a bare phase without --source never reaches here).
 		const source = stringField(input.parsed.flagValues["--source"]) ?? "";
+		const legacyCorpusRoot = join(
+			dirname(deps.paths.config.root),
+			"side-quest",
+			"browser-automation",
+			"domains",
+		);
+		const expectedCensus =
+			normalize(source) === normalize(legacyCorpusRoot)
+				? BROWSER_USE_R3_CORPUS_BASELINE
+				: undefined;
 		result =
 			command === "migration-inventory"
 				? await inventoryBrowserUseMigration(deps, source)
 				: command === "migration-plan"
-					? await planBrowserUseMigration(deps, source)
+					? await planBrowserUseMigration(deps, source, expectedCensus)
 					: command === "migration-apply"
 						? await applyBrowserUseMigration(deps, source)
 						: await verifyBrowserUseMigration(deps, source);

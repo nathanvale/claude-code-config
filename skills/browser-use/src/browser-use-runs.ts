@@ -21,6 +21,7 @@
 // ---------------------------------------------------------------------------
 
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { redactUnsafeText } from "./browser-use-core";
 import {
 	type LeaseWriteClaim,
@@ -43,6 +44,7 @@ import {
 	BROWSER_USE_TERMINAL_RUN_STATES,
 	applyAuthCommit,
 	checkSameLaneResume,
+	checkRunItemBatchTransition,
 	validateSharedRun,
 } from "./browser-use-run-model";
 import {
@@ -341,8 +343,10 @@ export async function createSharedRun(
  * lease validation -> pure `mutate` -> auth-fragment boundary ->
  * `validateSharedRun` -> durable write at `revision + 1`. The generic seam
  * cannot create, replace, or remove `auth_fragment`/`auth_attestation`, or
- * transition into `ready`; the auth integration Port owns those changes.
- * A rejected update writes nothing.
+ * transition into `ready`; the auth integration Port owns those changes. Run
+ * execution bindings enter only at creation and stay immutable. Item-batch
+ * changes must preserve the code-owned checkpoint transition rules. A
+ * rejected update writes nothing.
  *
  * @param deps - Injected fs, admitted paths, clock
  * @param input - Run id, expected revision, required lease claim, pure mutate
@@ -387,7 +391,10 @@ export async function casUpdateSharedRun(
 				if (!gate.ok) {
 					return { ok: false, code: gate.code, message: gate.message };
 				}
-				const mutated = input.mutate(loaded.run);
+				// The callback contract is pure. Give it a defensive copy so even a
+				// violating in-place mutation cannot rewrite the durable "before"
+				// state that every ownership and checkpoint guard compares against.
+				const mutated = input.mutate(structuredClone(loaded.run));
 				if (
 					JSON.stringify(mutated.auth_fragment) !==
 					JSON.stringify(loaded.run.auth_fragment)
@@ -411,6 +418,41 @@ export async function casUpdateSharedRun(
 					return runFailure(
 						"run_id_immutable",
 						"mutate changed run_id; run identity is immutable.",
+					);
+				}
+				const priorExecutionBinding = loaded.run.run_execution_binding;
+				const nextExecutionBinding = mutated.run_execution_binding;
+				if (
+					priorExecutionBinding === undefined &&
+					nextExecutionBinding !== undefined
+				) {
+					return runFailure(
+						"run_execution_binding_creation_required",
+						"generic run mutation cannot add run_execution_binding; pass it to createSharedRun when creating the run.",
+					);
+				}
+				if (
+					priorExecutionBinding !== undefined &&
+					(nextExecutionBinding === undefined ||
+						(nextExecutionBinding !== priorExecutionBinding &&
+							!isDeepStrictEqual(
+								nextExecutionBinding,
+								priorExecutionBinding,
+							)))
+				) {
+					return runFailure(
+						"run_execution_binding_immutable",
+						"run_execution_binding cannot be replaced or removed after creation; start a new run with the required binding.",
+					);
+				}
+				const itemBatchTransition = checkRunItemBatchTransition(
+					loaded.run.item_batch,
+					mutated.item_batch,
+				);
+				if (!itemBatchTransition.ok) {
+					return runFailure(
+						itemBatchTransition.code,
+						itemBatchTransition.message,
 					);
 				}
 				const priorBinding = loaded.run.runbook_target_binding;

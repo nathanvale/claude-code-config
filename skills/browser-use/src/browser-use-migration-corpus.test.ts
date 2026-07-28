@@ -606,6 +606,40 @@ describe("U1 corpus census and classification", () => {
 		expect(drifted.message).toMatch(/formal_artifacts expected 3, found 4/);
 	});
 
+	test("production CLI source enforces the code-owned R3 census baseline", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const source = join(
+			xdg.env.XDG_CONFIG_HOME as string,
+			"side-quest",
+			"browser-automation",
+			"domains",
+		);
+		mkdirSync(dirname(source), { recursive: true });
+		cpSync(corpusBaseline, source, { recursive: true });
+		const runtime = makeRuntime({ env: xdg.env });
+
+		expect(
+			(
+				await runForTest(
+					["migration", "inventory", "--source", source, "--json"],
+					runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const planned = await runForTest(
+			["migration", "plan", "--source", source, "--json"],
+			runtime,
+		);
+		expect(planned.exitCode).toBe(20);
+		expect(parseJson(planned.stdout).error).toMatchObject({
+			code: "migration_count_drift",
+		});
+		expect(
+			(parseJson(planned.stdout).error as { message: string }).message,
+		).toMatch(/formal_artifacts expected 12, found 3/);
+	});
+
 	test("R1/KTD12: inventory and plan leave the full source tree byte-identical (pre/post hash over the fixture tree)", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);

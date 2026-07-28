@@ -687,4 +687,38 @@ describe("run item-batch validation (R12)", () => {
 		);
 		expect(issues.map((i) => i.code)).toContain("run_item_batch_invalid");
 	});
+
+	test("duplicate checkpoints for one key refuse", () => {
+		const issues = validateSharedRun(
+			baseRun({
+				item_batch: {
+					schema_version: "1",
+					item_keys: ["mon"],
+					checkpoints: [
+						{ item_key: "mon", outcome: "pending" },
+						{ item_key: "mon", outcome: "confirmed" },
+					],
+				},
+			}),
+		);
+		expect(issues.map((i) => i.code)).toContain("run_item_batch_invalid");
+	});
+
+	test("a later checkpoint after the first unconfirmed item refuses", () => {
+		for (const outcome of ["pending", "not-achieved", "unknown"] as const) {
+			const issues = validateSharedRun(
+				baseRun({
+					item_batch: {
+						schema_version: "1",
+						item_keys: ["mon", "tue"],
+						checkpoints: [
+							{ item_key: "mon", outcome },
+							{ item_key: "tue", outcome: "confirmed" },
+						],
+					},
+				}),
+			);
+			expect(issues.map((i) => i.code)).toContain("run_item_batch_invalid");
+		}
+	});
 });

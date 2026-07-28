@@ -557,6 +557,40 @@ describe("runbook execution planning (v2, F7)", () => {
 		expect(step?.kind === "fill" && step.value).toBe("2026-07-27");
 	});
 
+	test("materializes an omitted optional default before substitution", () => {
+		const runbook = baseRunbook({
+			inputs: [
+				{
+					id: "page_size",
+					summary: "p",
+					required: false,
+					schema: { kind: "number", integer: true, default: 25 },
+				},
+			],
+			steps: [
+				{
+					kind: "fill",
+					target: { role: "textbox", name: "Page size" },
+					sensitivity: "ordinary",
+					value: "{{page_size}}",
+					postcondition: {
+						kind: "value-equals",
+						selector: ".page-size",
+						value: "25",
+					},
+				},
+			],
+		});
+		const planned = planRunbookExecution(runbook, {
+			inputs: {},
+			resumeFromStep: 0,
+		});
+		expect(planned.ok).toBe(true);
+		if (!planned.ok) return;
+		const step = planned.plan.steps[0];
+		expect(step?.kind === "fill" && step.value).toBe("25");
+	});
+
 	test("refuses a missing required input", () => {
 		const runbook = baseRunbook({
 			inputs: [
@@ -619,6 +653,44 @@ describe("runbook execution planning (v2, F7)", () => {
 		const planned = planRunbookExecution(runbook, {
 			inputs: {},
 			resumeFromStep: 0,
+		});
+		expect(planned.ok).toBe(false);
+		if (planned.ok) return;
+		expect(planned.refusal.code).toBe("runbook_action_registry_unavailable");
+	});
+
+	test("refuses an injected empty iterate resolution", () => {
+		const runbook = baseRunbook({
+			inputs: [
+				{
+					id: "item_keys",
+					summary: "i",
+					required: true,
+					schema: {
+						kind: "array",
+						items: { kind: "string" },
+						min_items: 1,
+						max_items: 512,
+					},
+				},
+			],
+			steps: [
+				{
+					kind: "iterate",
+					over_input: "item_keys",
+					step: {
+						kind: "action",
+						action_id: "oncore-fill",
+						expected_digest: "a".repeat(64),
+						inputs: {},
+					},
+				},
+			],
+		});
+		const planned = planRunbookExecution(runbook, {
+			inputs: { item_keys: ["mon"] },
+			resumeFromStep: 0,
+			resolvedActionSteps: new Map([[0, []]]),
 		});
 		expect(planned.ok).toBe(false);
 		if (planned.ok) return;
@@ -2112,6 +2184,30 @@ describe("private-file structured input custody (R10)", () => {
 	);
 
 	test(
+		"rejects a symlink in an intermediate component beneath the admitted root",
+		withInputRoot(async (root) => {
+			const outside = mkdtempSync(join(tmpdir(), "browser-use-private-outside-"));
+			try {
+				const filePath = join(outside, "value.json");
+				writeFileSync(filePath, JSON.stringify({ v: 1 }), { mode: 0o600 });
+				const redirectedDirectory = join(root, "redirected");
+				symlinkSync(outside, redirectedDirectory);
+				const result = await readPrivateStructuredInput({
+					inputId: "profile",
+					inputRoot: root,
+					filePath: join(redirectedDirectory, "value.json"),
+				});
+				expect(result.ok).toBe(false);
+				if (result.ok) return;
+				expect(result.refusal.code).toBe("private_input_path_unsafe");
+				expect(result.refusal.message).not.toContain(filePath);
+			} finally {
+				rmSync(outside, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
 		"rejects a hard-link alias (link count other than one)",
 		withInputRoot(async (root) => {
 			const original = join(root, "orig.json");
@@ -2202,6 +2298,25 @@ describe("private-file structured input custody (R10)", () => {
 	);
 
 	test(
+		"caps a caller-supplied maxBytes at the code-owned ceiling",
+		withInputRoot(async (root) => {
+			const filePath = join(root, "caller-bound.json");
+			const oversized = `{"v":"${"x".repeat(RUNBOOK_PRIVATE_INPUT_MAX_BYTES)}"}`;
+			writeFileSync(filePath, oversized, { mode: 0o600 });
+			const result = await readPrivateStructuredInput({
+				inputId: "profile",
+				inputRoot: root,
+				filePath,
+				maxBytes: Number.MAX_SAFE_INTEGER,
+			});
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.refusal.code).toBe("private_input_oversize");
+			expect(result.refusal.message).not.toContain("caller-bound.json");
+		}),
+	);
+
+	test(
 		"rejects invalid JSON through the proven descriptor",
 		withInputRoot(async (root) => {
 			const filePath = join(root, "torn.json");
@@ -2241,6 +2356,38 @@ function actionRunbook(
 			},
 		],
 		...overrides,
+	});
+}
+
+function iterateRunbook(
+	expectedDigest = ACTION_READ_DIGEST,
+): BrowserUseRunbook {
+	return actionRunbook({
+		inputs: [
+			{
+				id: "items",
+				summary: "Stable item keys.",
+				required: true,
+				schema: {
+					kind: "array",
+					min_items: 1,
+					max_items: 256,
+					items: { kind: "string", min_length: 1, max_length: 128 },
+				},
+			},
+		],
+		steps: [
+			{
+				kind: "iterate",
+				over_input: "items",
+				step: {
+					kind: "action",
+					action_id: "diagnose-grid",
+					expected_digest: expectedDigest,
+					inputs: {},
+				},
+			},
+		],
 	});
 }
 
@@ -2362,6 +2509,121 @@ describe("engine reviewed-action step resolution (U3)", () => {
 			if (prepared.ok) return;
 			expect(prepared.refusal.code).toBe("runbook_action_refused");
 			expect(prepared.refusal.message).toContain("action_receipt_not_approved");
+		}),
+	);
+
+	test(
+		"a direct action refuses when the runbook digest differs from the registry",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				actionRunbook({
+					steps: [
+						{
+							kind: "action",
+							action_id: "diagnose-grid",
+							expected_digest: "b".repeat(64),
+							inputs: {},
+						},
+					],
+				}),
+			);
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "diagnose",
+					inputs: {},
+					resumeFromStep: 0,
+					actionSeam: actionSeam(approvedReadRecord(), {
+						[ACTION_READ_DIGEST]: ACTION_READ_BYTES,
+					}),
+				},
+			);
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_action_refused");
+			expect(prepared.refusal.message).toContain("action_digest_mismatch");
+		}),
+	);
+
+	test(
+		"an iterate action refuses when the runbook digest differs from the registry",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, iterateRunbook("b".repeat(64)));
+			const record = approvedReadRecord();
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "diagnose",
+					inputs: { items: ["item-1"] },
+					resumeFromStep: 0,
+					actionSeam: actionSeam(
+						{
+							...record,
+							input_schema: {
+								kind: "object",
+								fields: {
+									item_key: {
+										schema: { kind: "string", max_length: 128 },
+										required: true,
+									},
+								},
+							},
+						},
+						{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },
+					),
+				},
+			);
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_action_refused");
+			expect(prepared.refusal.message).toContain("action_digest_mismatch");
+		}),
+	);
+
+	test(
+		"iterate validates a non-empty bounded unique stable-key sequence before action resolution",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, iterateRunbook());
+			const invalidInputs: readonly unknown[] = [
+				undefined,
+				"item-1",
+				[],
+				[""],
+				[1],
+				["bad key"],
+				["item-1", "item-1"],
+				Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+			];
+			const mustNotResolve: BrowserUseActionGenerationSeam = {
+				async loadActionRecord() {
+					throw new Error("invalid iteration reached action resolution");
+				},
+				async loadActionAssetBytes() {
+					throw new Error("invalid iteration reached asset resolution");
+				},
+			};
+			for (const items of invalidInputs) {
+				const prepared = await prepareRunbookExecution(
+					createDefaultPlatformFs(),
+					dataRoot,
+					{
+						serviceId: "oncore",
+						flowId: "diagnose",
+						inputs: items === undefined ? {} : { items },
+						resumeFromStep: 0,
+						actionSeam: mustNotResolve,
+					},
+				);
+				expect(prepared.ok).toBe(false);
+				if (prepared.ok) continue;
+				expect(prepared.refusal.code).toBe("runbook_action_refused");
+				expect(prepared.refusal.message).toContain("action_input_rejected");
+			}
 		}),
 	);
 

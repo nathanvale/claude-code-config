@@ -589,6 +589,69 @@ export function valueMatchesSchema(
 	}
 }
 
+function materializeValueDefaults(
+	value: unknown,
+	schema: BrowserUseRunbookValueSchema,
+): unknown {
+	if (value === undefined) {
+		switch (schema.kind) {
+			case "string":
+			case "number":
+			case "boolean":
+			case "enum":
+			case "date":
+			case "uuid":
+				return schema.default;
+			default:
+				return undefined;
+		}
+	}
+	if (schema.kind === "array" && Array.isArray(value)) {
+		return value.map((item) => materializeValueDefaults(item, schema.items));
+	}
+	if (schema.kind === "object" && isPlainObject(value)) {
+		const normalized: Record<string, unknown> = { ...value };
+		for (const [key, field] of Object.entries(schema.fields)) {
+			const next = materializeValueDefaults(normalized[key], field.schema);
+			if (next !== undefined) normalized[key] = next;
+		}
+		return normalized;
+	}
+	if (schema.kind === "discriminated-union" && isPlainObject(value)) {
+		const tag = value[schema.discriminant];
+		if (typeof tag !== "string") return value;
+		const variant = schema.variants[tag];
+		if (variant === undefined) return value;
+		const normalized: Record<string, unknown> = { ...value };
+		for (const [key, field] of Object.entries(variant)) {
+			const next = materializeValueDefaults(normalized[key], field.schema);
+			if (next !== undefined) normalized[key] = next;
+		}
+		return normalized;
+	}
+	return value;
+}
+
+/**
+ * Materialize declared defaults before validation, action resolution, and
+ * string substitution. The returned record is detached from caller-owned
+ * objects; missing optional values without defaults stay absent.
+ */
+export function materializeRunbookInputs(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): BrowserUseRunbookInputs {
+	const normalized: Record<string, unknown> = { ...inputs };
+	for (const declared of runbook.inputs) {
+		const next = materializeValueDefaults(
+			normalized[declared.id],
+			declared.schema,
+		);
+		if (next !== undefined) normalized[declared.id] = next;
+	}
+	return normalized;
+}
+
 /**
  * Validate one Browser Runbook against v2 (well-formed contract, safe ids,
  * exact origins, bounded typed-input value schemas, ordered bounded steps,
@@ -1284,15 +1347,18 @@ export function planRunbookExecution(
 			},
 		};
 	}
+	const normalizedInputs = materializeRunbookInputs(runbook, input.inputs);
 	// Reviewed-action and iteration steps require an engine-resolved executor
 	// step (U3): the pure model NEVER resolves an asset. When the engine supplies
 	// no resolution for an action/iterate step, refuse with a typed pointer
 	// rather than silently dropping a step.
 	const resolvedActionSteps = input.resolvedActionSteps ?? new Map();
 	const unresolvedActionStep = runbook.steps.findIndex(
-		(step, index) =>
-			(step.kind === "action" || step.kind === "iterate") &&
-			!resolvedActionSteps.has(index),
+		(step, index) => {
+			if (step.kind !== "action" && step.kind !== "iterate") return false;
+			const resolved = resolvedActionSteps.get(index);
+			return resolved === undefined || resolved.length === 0;
+		},
 	);
 	if (unresolvedActionStep !== -1) {
 		return {
@@ -1305,7 +1371,7 @@ export function planRunbookExecution(
 		};
 	}
 	for (const declared of runbook.inputs) {
-		const value = input.inputs[declared.id];
+		const value = normalizedInputs[declared.id];
 		if (value === undefined) {
 			if (declared.required) {
 				return {
@@ -1354,7 +1420,7 @@ export function planRunbookExecution(
 			}
 			continue;
 		}
-		compiled.push(compileStep(step, input.inputs));
+		compiled.push(compileStep(step, normalizedInputs));
 	}
 	const pendingBindings = remaining
 		.filter(

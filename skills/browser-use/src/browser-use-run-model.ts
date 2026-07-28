@@ -329,6 +329,19 @@ export type BrowserUseRunItemBatchState = {
 	checkpoints: readonly BrowserUseRunItemCheckpoint[];
 };
 
+/** Typed durable item-batch transition check (R12). */
+export type BrowserUseRunItemBatchTransitionCheck =
+	| { ok: true }
+	| {
+			ok: false;
+			code:
+				| "item_key_sequence_immutable"
+				| "item_checkpoint_immutable"
+				| "item_checkpoint_pending_forbidden"
+				| "item_batch_blocked";
+			message: string;
+	  };
+
 // --- The shared run ----------------------------------------------------------
 
 /**
@@ -510,7 +523,7 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 		issues.push({
 			code: "run_item_batch_invalid",
 			message:
-				"item_batch requires schema version 1, a bounded stable-key sequence, and checkpoints referencing only keys in that sequence.",
+				"item_batch requires schema version 1, a bounded stable-key sequence, one checkpoint per key, and no advanced checkpoint after the first unconfirmed item.",
 		});
 	}
 	return issues;
@@ -564,17 +577,114 @@ function itemBatchStateValid(batch: BrowserUseRunItemBatchState): boolean {
 		if (!SAFE_BATCH_ITEM_KEY.test(key) || keys.has(key)) return false;
 		keys.add(key);
 	}
+	const outcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
 	for (const checkpoint of batch.checkpoints) {
 		if (
 			!keys.has(checkpoint.item_key) ||
+			outcomes.has(checkpoint.item_key) ||
 			!["pending", "confirmed", "not-achieved", "unknown"].includes(
 				checkpoint.outcome,
 			)
 		) {
 			return false;
 		}
+		outcomes.set(checkpoint.item_key, checkpoint.outcome);
+	}
+	let blocked = false;
+	for (const key of batch.item_keys) {
+		const outcome = outcomes.get(key) ?? "pending";
+		if (blocked && outcome !== "pending") return false;
+		if (outcome !== "confirmed") blocked = true;
 	}
 	return true;
+}
+
+/**
+ * Check one durable item-batch mutation against the R12 checkpoint reducer.
+ * The generic CAS may initialize a pending batch, then record only the first
+ * item not already confirmed. Recorded truth cannot regress to `pending`.
+ *
+ * @param previous - Durable state before the mutation
+ * @param next - Candidate durable state
+ * @returns Ok, or one typed repairable refusal
+ */
+export function checkRunItemBatchTransition(
+	previous: BrowserUseRunItemBatchState | undefined,
+	next: BrowserUseRunItemBatchState | undefined,
+): BrowserUseRunItemBatchTransitionCheck {
+	if (previous === undefined && next === undefined) return { ok: true };
+	if (previous !== undefined && next === undefined) {
+		return {
+			ok: false,
+			code: "item_key_sequence_immutable",
+			message:
+				"item_batch cannot be removed after its ordered item-key sequence is committed; start a new run for a different batch.",
+		};
+	}
+	if (next === undefined) return { ok: true };
+	if (
+		previous !== undefined &&
+		(previous.item_keys.length !== next.item_keys.length ||
+			previous.item_keys.some((key, index) => key !== next.item_keys[index]))
+	) {
+		return {
+			ok: false,
+			code: "item_key_sequence_immutable",
+			message:
+				"item_batch.item_keys cannot be reordered or replaced after creation; start a new run with the required ordered keys.",
+		};
+	}
+
+	const previousOutcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
+	for (const checkpoint of previous?.checkpoints ?? []) {
+		previousOutcomes.set(checkpoint.item_key, checkpoint.outcome);
+	}
+	const nextOutcomes = new Map<
+		string,
+		BrowserUseRunItemCheckpoint["outcome"]
+	>();
+	for (const checkpoint of next.checkpoints) {
+		nextOutcomes.set(checkpoint.item_key, checkpoint.outcome);
+	}
+
+	for (const key of next.item_keys) {
+		const before = previousOutcomes.get(key) ?? "pending";
+		const after = nextOutcomes.get(key) ?? "pending";
+		if (before === "confirmed" && after !== "confirmed") {
+			return {
+				ok: false,
+				code: "item_checkpoint_immutable",
+				message: `the confirmed checkpoint for item ${key} is immutable; keep it confirmed or start a new run.`,
+			};
+		}
+		if (before !== "pending" && after === "pending") {
+			return {
+				ok: false,
+				code: "item_checkpoint_pending_forbidden",
+				message: `the recorded checkpoint for item ${key} cannot regress to pending; reconcile it to a freshly proven outcome.`,
+			};
+		}
+		if (before === after || after === "pending") continue;
+		const targetIndex = next.item_keys.indexOf(key);
+		for (let index = 0; index < targetIndex; index += 1) {
+			const priorKey = next.item_keys[index] as string;
+			const priorOutcome = previousOutcomes.get(priorKey) ?? "pending";
+			if (priorOutcome !== "confirmed") {
+				return {
+					ok: false,
+					code: "item_batch_blocked",
+					message: `item ${key} cannot advance while earlier item ${priorKey} is ${priorOutcome}; confirm or reconcile ${priorKey} first, then retry.`,
+				};
+			}
+		}
+	}
+	return { ok: true };
 }
 
 // --- Auth integration Port (R6, KTD10) ---------------------------------------

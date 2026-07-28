@@ -115,20 +115,31 @@ const MUTATION_BEHAVIOR_FINGERPRINTS: readonly RegExp[] = [
 	/\.\s*(?:dispatchEvent|requestSubmit)\s*\(/i,
 ];
 
+// Positive proofs for the deliberately narrow observational action vocabulary.
+// Absence from the mutation fingerprint list is not proof of observation:
+// arbitrary JavaScript may mutate through an unrecognized API. Extend this list
+// only for a reviewed, mechanically bounded source shape.
+const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
+	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*\(\s*\{\s*[A-Za-z_$][\w$]*\s*:\s*document\s*\.\s*querySelectorAll\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*length\s*\}\s*\)\s*;?\s*$/,
+];
+
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
- * effect class the bytes MECHANICALLY prove: `mutation` when any navigation,
- * click, storage, network, or final-boundary fingerprint appears; `read` only
- * when none does. A legacy `risk_class` never overrides this — the audit is the
- * authority.
+ * effect class the bytes MECHANICALLY prove: `read` only when the complete
+ * source matches a bounded observational proof; every mutation fingerprint and
+ * every unrecognized source shape is `mutation`. A legacy `risk_class` never
+ * overrides this — the audit is the authority.
  *
  * @param bytes - Exact action asset source bytes
  * @returns The mechanically-audited effect class
  */
 export function auditActionEffectClass(bytes: string): BrowserUseActionEffectClass {
-	return MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))
-		? "mutation"
-		: "read";
+	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
+		return "mutation";
+	}
+	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
+		? "read"
+		: "mutation";
 }
 
 // --- Typed value schemas (R17) ----------------------------------------------
@@ -153,6 +164,289 @@ export type BrowserUseActionValueSchema =
 	  };
 
 const ACTION_VALUE_MAX_ARRAY_LENGTH = 512;
+const ACTION_VALUE_SCHEMA_MAX_DEPTH = 32;
+const ACTION_VALUE_SCHEMA_MAX_NODES = 4_096;
+const ACTION_VALUE_SCHEMA_MAX_STRING_BOUND = 100_000;
+const ACTION_VALUE_SCHEMA_MAX_PATTERN_LENGTH = 512;
+const ACTION_VALUE_SCHEMA_MAX_OBJECT_FIELDS = 512;
+const ACTION_VALUE_SCHEMA_MAX_ENUM_VALUES = 512;
+
+function objectHasOnlyKeys(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+): boolean {
+	const keys = Object.keys(value);
+	return keys.length <= allowed.length && keys.every((key) => allowed.includes(key));
+}
+
+function optionalBoundedInteger(
+	value: unknown,
+	maximum: number,
+): value is number | undefined {
+	return (
+		value === undefined ||
+		(typeof value === "number" &&
+			Number.isSafeInteger(value) &&
+			value >= 0 &&
+			value <= maximum)
+	);
+}
+
+type ActionValueSchemaValidationState = {
+	nodes: number;
+	active: WeakSet<object>;
+};
+
+function stringSchemaIsValid(record: Record<string, unknown>): boolean {
+	if (!objectHasOnlyKeys(record, ["kind", "max_length", "pattern"])) {
+		return false;
+	}
+	if (
+		!optionalBoundedInteger(
+			record.max_length,
+			ACTION_VALUE_SCHEMA_MAX_STRING_BOUND,
+		)
+	) {
+		return false;
+	}
+	if (record.pattern === undefined) return true;
+	if (
+		typeof record.pattern !== "string" ||
+		record.pattern.length > ACTION_VALUE_SCHEMA_MAX_PATTERN_LENGTH
+	) {
+		return false;
+	}
+	try {
+		new RegExp(`^(?:${record.pattern})$`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function numberSchemaIsValid(record: Record<string, unknown>): boolean {
+	if (
+		!objectHasOnlyKeys(record, ["kind", "integer", "minimum", "maximum"])
+	) {
+		return false;
+	}
+	if (record.integer !== undefined && typeof record.integer !== "boolean") {
+		return false;
+	}
+	if (
+		(record.minimum !== undefined &&
+			(typeof record.minimum !== "number" ||
+				!Number.isFinite(record.minimum))) ||
+		(record.maximum !== undefined &&
+			(typeof record.maximum !== "number" || !Number.isFinite(record.maximum)))
+	) {
+		return false;
+	}
+	return !(
+		typeof record.minimum === "number" &&
+		typeof record.maximum === "number" &&
+		record.minimum > record.maximum
+	);
+}
+
+function enumSchemaIsValid(record: Record<string, unknown>): boolean {
+	if (
+		!objectHasOnlyKeys(record, ["kind", "values"]) ||
+		!Array.isArray(record.values) ||
+		record.values.length === 0 ||
+		record.values.length > ACTION_VALUE_SCHEMA_MAX_ENUM_VALUES
+	) {
+		return false;
+	}
+	return (
+		record.values.every(
+			(item) =>
+				typeof item === "string" &&
+				item.length <= ACTION_VALUE_SCHEMA_MAX_STRING_BOUND,
+		) && new Set(record.values).size === record.values.length
+	);
+}
+
+function arraySchemaIsValid(
+	record: Record<string, unknown>,
+	depth: number,
+	state: ActionValueSchemaValidationState,
+): boolean {
+	return (
+		objectHasOnlyKeys(record, ["kind", "items", "max_items"]) &&
+		optionalBoundedInteger(record.max_items, ACTION_VALUE_MAX_ARRAY_LENGTH) &&
+		isValueSchemaNode(record.items, depth + 1, state)
+	);
+}
+
+function objectSchemaIsValid(
+	record: Record<string, unknown>,
+	depth: number,
+	state: ActionValueSchemaValidationState,
+): boolean {
+	if (
+		!objectHasOnlyKeys(record, ["kind", "fields"]) ||
+		typeof record.fields !== "object" ||
+		record.fields === null ||
+		Array.isArray(record.fields)
+	) {
+		return false;
+	}
+	const entries = Object.entries(record.fields as Record<string, unknown>);
+	if (entries.length > ACTION_VALUE_SCHEMA_MAX_OBJECT_FIELDS) return false;
+	for (const [key, field] of entries) {
+		if (
+			key.length === 0 ||
+			key.length > 128 ||
+			typeof field !== "object" ||
+			field === null ||
+			Array.isArray(field)
+		) {
+			return false;
+		}
+		const descriptor = field as Record<string, unknown>;
+		if (
+			!objectHasOnlyKeys(descriptor, ["schema", "required"]) ||
+			typeof descriptor.required !== "boolean" ||
+			!isValueSchemaNode(descriptor.schema, depth + 1, state)
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function isValueSchemaNode(
+	value: unknown,
+	depth: number,
+	state: ActionValueSchemaValidationState,
+): value is BrowserUseActionValueSchema {
+	if (
+		typeof value !== "object" ||
+		value === null ||
+		Array.isArray(value) ||
+		depth > ACTION_VALUE_SCHEMA_MAX_DEPTH
+	) {
+		return false;
+	}
+	state.nodes += 1;
+	if (state.nodes > ACTION_VALUE_SCHEMA_MAX_NODES || state.active.has(value)) {
+		return false;
+	}
+	state.active.add(value);
+	try {
+		const record = value as Record<string, unknown>;
+		switch (record.kind) {
+			case "string":
+				return stringSchemaIsValid(record);
+			case "number":
+				return numberSchemaIsValid(record);
+			case "boolean":
+				return objectHasOnlyKeys(record, ["kind"]);
+			case "enum":
+				return enumSchemaIsValid(record);
+			case "array":
+				return arraySchemaIsValid(record, depth, state);
+			case "object":
+				return objectSchemaIsValid(record, depth, state);
+			default:
+				return false;
+		}
+	} finally {
+		state.active.delete(value);
+	}
+}
+
+function isValueSchema(value: unknown): value is BrowserUseActionValueSchema {
+	try {
+		return isValueSchemaNode(value, 0, {
+			nodes: 0,
+			active: new WeakSet<object>(),
+		});
+	} catch {
+		return false;
+	}
+}
+
+function stringValueMatches(
+	value: unknown,
+	schema: Extract<BrowserUseActionValueSchema, { kind: "string" }>,
+): boolean {
+	if (typeof value !== "string") return false;
+	if (schema.max_length !== undefined && value.length > schema.max_length) {
+		return false;
+	}
+	return (
+		schema.pattern === undefined ||
+		new RegExp(`^(?:${schema.pattern})$`).test(value)
+	);
+}
+
+function numberValueMatches(
+	value: unknown,
+	schema: Extract<BrowserUseActionValueSchema, { kind: "number" }>,
+): boolean {
+	if (typeof value !== "number" || !Number.isFinite(value)) return false;
+	if (schema.integer === true && !Number.isInteger(value)) return false;
+	if (schema.minimum !== undefined && value < schema.minimum) return false;
+	return schema.maximum === undefined || value <= schema.maximum;
+}
+
+function arrayValueMatches(
+	value: unknown,
+	schema: Extract<BrowserUseActionValueSchema, { kind: "array" }>,
+): boolean {
+	if (!Array.isArray(value) || value.length > ACTION_VALUE_MAX_ARRAY_LENGTH) {
+		return false;
+	}
+	if (schema.max_items !== undefined && value.length > schema.max_items) {
+		return false;
+	}
+	return value.every((item) =>
+		valueMatchesValidatedSchema(item, schema.items),
+	);
+}
+
+function objectValueMatches(
+	value: unknown,
+	schema: Extract<BrowserUseActionValueSchema, { kind: "object" }>,
+): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	const allowed = new Set(Object.keys(schema.fields));
+	if (Object.keys(record).some((key) => !allowed.has(key))) return false;
+	for (const [key, field] of Object.entries(schema.fields)) {
+		const present = Object.hasOwn(record, key);
+		if (!present) {
+			if (field.required) return false;
+			continue;
+		}
+		if (!valueMatchesValidatedSchema(record[key], field.schema)) return false;
+	}
+	return true;
+}
+
+function valueMatchesValidatedSchema(
+	value: unknown,
+	schema: BrowserUseActionValueSchema,
+): boolean {
+	switch (schema.kind) {
+		case "string":
+			return stringValueMatches(value, schema);
+		case "number":
+			return numberValueMatches(value, schema);
+		case "boolean":
+			return typeof value === "boolean";
+		case "enum":
+			return typeof value === "string" && schema.values.includes(value);
+		case "array":
+			return arrayValueMatches(value, schema);
+		case "object":
+			return objectValueMatches(value, schema);
+	}
+}
 
 /**
  * Runtime-validate a value against one action value schema (R17). Pure and
@@ -166,61 +460,11 @@ export function actionValueMatchesSchema(
 	value: unknown,
 	schema: BrowserUseActionValueSchema,
 ): boolean {
-	switch (schema.kind) {
-		case "string": {
-			if (typeof value !== "string") return false;
-			if (schema.max_length !== undefined && value.length > schema.max_length) {
-				return false;
-			}
-			if (schema.pattern !== undefined) {
-				let anchored: RegExp;
-				try {
-					anchored = new RegExp(`^(?:${schema.pattern})$`);
-				} catch {
-					return false;
-				}
-				if (!anchored.test(value)) return false;
-			}
-			return true;
-		}
-		case "number": {
-			if (typeof value !== "number" || !Number.isFinite(value)) return false;
-			if (schema.integer === true && !Number.isInteger(value)) return false;
-			if (schema.minimum !== undefined && value < schema.minimum) return false;
-			if (schema.maximum !== undefined && value > schema.maximum) return false;
-			return true;
-		}
-		case "boolean":
-			return typeof value === "boolean";
-		case "enum":
-			return typeof value === "string" && schema.values.includes(value);
-		case "array": {
-			if (!Array.isArray(value)) return false;
-			if (value.length > ACTION_VALUE_MAX_ARRAY_LENGTH) return false;
-			if (schema.max_items !== undefined && value.length > schema.max_items) {
-				return false;
-			}
-			return value.every((item) => actionValueMatchesSchema(item, schema.items));
-		}
-		case "object": {
-			if (typeof value !== "object" || value === null || Array.isArray(value)) {
-				return false;
-			}
-			const record = value as Record<string, unknown>;
-			const allowed = new Set(Object.keys(schema.fields));
-			for (const key of Object.keys(record)) {
-				if (!allowed.has(key)) return false;
-			}
-			for (const [key, field] of Object.entries(schema.fields)) {
-				const present = Object.hasOwn(record, key);
-				if (!present) {
-					if (field.required) return false;
-					continue;
-				}
-				if (!actionValueMatchesSchema(record[key], field.schema)) return false;
-			}
-			return true;
-		}
+	if (!isValueSchema(schema)) return false;
+	try {
+		return valueMatchesValidatedSchema(value, schema);
+	} catch {
+		return false;
 	}
 }
 
@@ -379,19 +623,6 @@ function refuse(
 	return { ok: false, refusal: { code, message: redactUnsafeText(message) } };
 }
 
-function isValueSchema(value: unknown): value is BrowserUseActionValueSchema {
-	if (typeof value !== "object" || value === null) return false;
-	const kind = (value as { kind?: unknown }).kind;
-	return (
-		kind === "string" ||
-		kind === "number" ||
-		kind === "boolean" ||
-		kind === "enum" ||
-		kind === "array" ||
-		kind === "object"
-	);
-}
-
 function exactOriginValid(value: string): boolean {
 	try {
 		const url = new URL(value);
@@ -452,6 +683,7 @@ export type BrowserUseReviewedActionResolution =
  */
 export async function resolveReviewedAction(input: {
 	actionId: string;
+	expectedDigest: string;
 	requestedOrigin: string;
 	inputs: Readonly<Record<string, unknown>>;
 	seam: BrowserUseActionGenerationSeam;
@@ -475,6 +707,18 @@ export async function resolveReviewedAction(input: {
 		return refuse(
 			"action_receipt_not_approved",
 			`the promotion receipt disposition is ${record.promotion_receipt.disposition}; only an operator-approved action is executable.`,
+		);
+	}
+
+	// The caller pins the reviewed digest from the compiled runbook. Resolve no
+	// asset bytes until that digest matches this generation's registry record.
+	if (
+		!SAFE_DIGEST.test(input.expectedDigest) ||
+		input.expectedDigest !== record.expected_digest
+	) {
+		return refuse(
+			"action_digest_mismatch",
+			"the runbook's expected action digest does not match the registry record.",
 		);
 	}
 
@@ -747,7 +991,10 @@ export function captureStructuredResult(input: {
 		.update(canonicalJson(input.schema))
 		.digest("hex");
 	const result_digest = createHash("sha256").update(canonical).digest("hex");
-	const rawSummary = input.summaryHint ?? canonical;
+	const rawSummary =
+		input.sensitivity === "high"
+			? "High-sensitivity structured result stored in a governed artifact."
+			: (input.summaryHint ?? canonical);
 	const summary = redactUnsafeText(
 		rawSummary.length > STRUCTURED_RESULT_SUMMARY_MAX_LENGTH
 			? `${rawSummary.slice(0, STRUCTURED_RESULT_SUMMARY_MAX_LENGTH - 1)}…`
@@ -825,11 +1072,18 @@ export type BrowserUseItemBatchResolution =
 	| { kind: "complete" }
 	| { kind: "invalid"; message: string };
 
-function itemKeysAreValid(keys: readonly string[]): boolean {
+export function itemKeysAreValid(keys: unknown): keys is readonly string[] {
+	if (!Array.isArray(keys)) return false;
 	if (keys.length === 0 || keys.length > ACTION_VALUE_MAX_ARRAY_LENGTH) return false;
 	const seen = new Set<string>();
 	for (const key of keys) {
-		if (!SAFE_ITEM_KEY.test(key) || seen.has(key)) return false;
+		if (
+			typeof key !== "string" ||
+			!SAFE_ITEM_KEY.test(key) ||
+			seen.has(key)
+		) {
+			return false;
+		}
 		seen.add(key);
 	}
 	return true;

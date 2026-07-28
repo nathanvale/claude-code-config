@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { constants as fsConstants, existsSync } from "node:fs";
-import { open as fsOpen } from "node:fs/promises";
+import { lstat as fsLstat, open as fsOpen } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -44,6 +44,7 @@ import {
 	type BrowserUseRunbookInputs,
 	type BrowserUseRunbookPlan,
 	type BrowserUseRunbookStep,
+	materializeRunbookInputs,
 	parseRunbookRecord,
 	projectRunbookCatalogRow,
 	planRunbookExecution,
@@ -52,6 +53,7 @@ import {
 import {
 	type BrowserUseActionGenerationSeam,
 	type BrowserUseReviewedActionRefusal,
+	itemKeysAreValid,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
@@ -595,6 +597,7 @@ async function resolveRunbookActionSteps(
 		if (step.kind === "action") {
 			const one = await resolveReviewedAction({
 				actionId: step.action_id,
+				expectedDigest: step.expected_digest,
 				requestedOrigin: origin.origin,
 				inputs: resolveActionInputs(step.inputs, inputs),
 				seam,
@@ -605,12 +608,23 @@ async function resolveRunbookActionSteps(
 		}
 		// iterate: one verified action per stable item key from `over_input`.
 		const overRaw = inputs[step.over_input];
-		const itemKeys = Array.isArray(overRaw) ? overRaw : [];
+		if (!itemKeysAreValid(overRaw)) {
+			return {
+				ok: false,
+				refusal: {
+					code: "action_input_rejected",
+					message:
+						"iterate input must be a non-empty bounded sequence of unique safe stable item keys.",
+				},
+			};
+		}
+		const itemKeys = overRaw;
 		const steps: AgentBrowserTaskStep[] = [];
 		for (const key of itemKeys) {
 			const perItemInputs = resolveActionInputs(step.step.inputs, inputs);
 			const one = await resolveReviewedAction({
 				actionId: step.step.action_id,
+				expectedDigest: step.step.expected_digest,
 				requestedOrigin: origin.origin,
 				inputs: { ...perItemInputs, item_key: key },
 				seam,
@@ -646,6 +660,10 @@ export async function prepareRunbookExecution(
 		flowId: input.flowId,
 	});
 	if (!shown.ok) return { ok: false, refusal: shown.failure };
+	const normalizedInputs = materializeRunbookInputs(
+		shown.runbook,
+		input.inputs,
+	);
 	let resolvedActionSteps:
 		| ReadonlyMap<number, readonly AgentBrowserTaskStep[]>
 		| undefined;
@@ -656,7 +674,7 @@ export async function prepareRunbookExecution(
 	if (hasActionSteps && input.actionSeam !== undefined) {
 		const resolution = await resolveRunbookActionSteps(
 			shown.runbook,
-			input.inputs,
+			normalizedInputs,
 			input.actionSeam,
 		);
 		if (!resolution.ok) {
@@ -671,7 +689,7 @@ export async function prepareRunbookExecution(
 		resolvedActionSteps = resolution.resolved;
 	}
 	const planned = planRunbookExecution(shown.runbook, {
-		inputs: input.inputs,
+		inputs: normalizedInputs,
 		resumeFromStep: input.resumeFromStep,
 		...(resolvedActionSteps !== undefined ? { resolvedActionSteps } : {}),
 	});
@@ -1176,18 +1194,63 @@ function containedBeneath(root: string, candidate: string): boolean {
 	);
 }
 
+// Reject a symlink (or non-directory) at the admitted root or any intermediate
+// path component before opening the final file. Node exposes no portable
+// openat(2)-style API that can anchor each lookup to the previously-opened
+// directory descriptor, so an attacker able to rename an ancestor can still
+// race this check and the final open. The final component remains protected by
+// O_NOFOLLOW, and every file invariant remains descriptor-checked after open.
+async function intermediatePathIsSymlinkFree(
+	root: string,
+	candidate: string,
+): Promise<boolean> {
+	const normalizedRoot = normalize(resolve(root));
+	const rel = relative(normalizedRoot, normalize(resolve(candidate)));
+	const components = rel.split(sep);
+	const directories = [
+		normalizedRoot,
+		...components.slice(0, -1).map((_component, index) =>
+			join(normalizedRoot, ...components.slice(0, index + 1)),
+		),
+	];
+	for (const directory of directories) {
+		try {
+			const stat = await fsLstat(directory);
+			if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+function boundedPrivateInputMaxBytes(requested: number | undefined): number {
+	if (requested === undefined || !Number.isFinite(requested)) {
+		return RUNBOOK_PRIVATE_INPUT_MAX_BYTES;
+	}
+	return Math.max(
+		0,
+		Math.min(Math.floor(requested), RUNBOOK_PRIVATE_INPUT_MAX_BYTES),
+	);
+}
+
 /**
  * Read ONE bounded private-file JSON structured input (R10, KTD14). The
  * security contract, all proven BEFORE any value byte is read:
  *   1. the path is absolute and contained beneath the admitted input root;
- *   2. the file opens with O_NOFOLLOW (a symlink at the final component fails
- *      the open — a replacement/redirect can never be followed);
+ *   2. the admitted root and every intermediate component are directories, not
+ *      symlinks, then the file opens with O_NOFOLLOW (a symlink at the final
+ *      component fails the open);
  *   3. descriptor-level `fstat` (never a path stat that a swap could race)
  *      proves: a regular file, the expected owner, owner-only mode (0600 or
  *      stricter), link count EXACTLY one (no hard-link alias), and bounded size;
- *   4. bytes are read only through THAT descriptor, parsed, and shape-checked.
- * Replacement, hard-link, symlink, and path-escape attempts fail closed. The
- * value id is `inputId`; the returned map carries only the structured value.
+ *   4. at most the capped bound plus one byte is read through THAT descriptor,
+ *      then parsed and shape-checked.
+ * Static intermediate symlinks, final-component replacement/symlink attempts,
+ * hard links, and path escapes fail closed. Node has no portable descriptor-
+ * relative open, so the pre-open intermediate check cannot eliminate an
+ * atomic ancestor-rename race. The value id is `inputId`; the returned map
+ * carries only the structured value.
  *
  * @param input - The input id, admitted input root, absolute file path, and the
  *   expected owner uid (defaults to the process uid)
@@ -1200,12 +1263,18 @@ export async function readPrivateStructuredInput(input: {
 	expectedOwnerUid?: number;
 	maxBytes?: number;
 }): Promise<BrowserUseRunbookPrivateInputResult> {
-	const maxBytes = input.maxBytes ?? RUNBOOK_PRIVATE_INPUT_MAX_BYTES;
+	const maxBytes = boundedPrivateInputMaxBytes(input.maxBytes);
 	const expectedUid = input.expectedOwnerUid ?? process.getuid?.();
 	if (!isAbsolute(input.filePath) || !containedBeneath(input.inputRoot, input.filePath)) {
 		return privateInputRefusal(
 			"private_input_path_unsafe",
 			"the private input path is not an absolute file contained beneath the admitted input root.",
+		);
+	}
+	if (!(await intermediatePathIsSymlinkFree(input.inputRoot, input.filePath))) {
+		return privateInputRefusal(
+			"private_input_path_unsafe",
+			"the private input path has a symlink or non-directory before its final component.",
 		);
 	}
 	// Open ONCE with no-follow: a symlink at the final component fails here, so a
@@ -1256,8 +1325,27 @@ export async function readPrivateStructuredInput(input: {
 			);
 		}
 		// Only now, after every descriptor-level check passed, read the value
-		// bytes through the same proven descriptor.
-		const raw = await handle.readFile("utf8");
+		// bytes through the same proven descriptor. The bounded buffer catches
+		// growth after fstat without allocating from the concurrently-grown size.
+		const buffer = Buffer.alloc(maxBytes + 1);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const chunk = await handle.read(
+				buffer,
+				bytesRead,
+				buffer.length - bytesRead,
+				bytesRead,
+			);
+			if (chunk.bytesRead === 0) break;
+			bytesRead += chunk.bytesRead;
+		}
+		if (bytesRead > maxBytes) {
+			return privateInputRefusal(
+				"private_input_oversize",
+				`the private input file exceeds the ${maxBytes}-byte bound.`,
+			);
+		}
+		const raw = buffer.subarray(0, bytesRead).toString("utf8");
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(raw);

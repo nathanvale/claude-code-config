@@ -8,6 +8,7 @@ import {
 	actionAssetDigest,
 	auditActionEffectClass,
 	captureStructuredResult,
+	itemKeysAreValid,
 	itemKeySequenceDigest,
 	normalizedInputDigest,
 	recordItemCheckpoint,
@@ -107,6 +108,7 @@ describe("resolveReviewedAction — approved happy paths", () => {
 	test("an approved exact read action resolves to an approved evaluate step", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(readRecord(), READ_BYTES_STORE),
@@ -123,6 +125,7 @@ describe("resolveReviewedAction — approved happy paths", () => {
 	test("an approved mutation action with a postcondition resolves", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "save-draft",
+			expectedDigest: MUTATION_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(mutationRecord(), { [MUTATION_DIGEST]: MUTATION_ASSET_BYTES }),
@@ -150,6 +153,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -170,6 +174,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -190,6 +195,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -201,6 +207,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 	test("missing registry record refuses", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "nonexistent",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(readRecord(), READ_BYTES_STORE),
@@ -215,6 +222,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		const record = readRecord();
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, { [READ_DIGEST]: drifted }),
@@ -223,9 +231,32 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		if (!result.ok) expect(result.refusal.code).toBe("action_digest_mismatch");
 	});
 
+	test("runbook digest mismatch refuses before loading asset bytes", async () => {
+		let assetLoadAttempted = false;
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: MUTATION_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: {
+				async loadActionRecord() {
+					return { ok: true, record: readRecord() };
+				},
+				async loadActionAssetBytes() {
+					assetLoadAttempted = true;
+					return { ok: true, bytes: READ_ASSET_BYTES };
+				},
+			},
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_digest_mismatch");
+		expect(assetLoadAttempted).toBe(false);
+	});
+
 	test("unavailable asset bytes refuses", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(readRecord(), {}),
@@ -237,6 +268,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 	test("wrong requested origin refuses", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: "https://evil.example",
 			inputs: {},
 			seam: seamFor(readRecord(), READ_BYTES_STORE),
@@ -262,6 +294,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: navDigest,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, { [navDigest]: navBytes }),
@@ -276,6 +309,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -293,6 +327,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: { week: "not-a-number" },
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -301,10 +336,179 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		if (!result.ok) expect(result.refusal.code).toBe("action_input_rejected");
 	});
 
+	test.each([
+		[
+			"negative string max_length",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "string", max_length: -1 },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"invalid string pattern",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "string", pattern: "[" },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"reversed numeric bounds",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "number", minimum: 2, maximum: 1 },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"non-boolean integer flag",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "number", integer: "yes" },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"non-string enum value",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "enum", values: ["ok", 2] },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"malformed array items",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "array", items: { kind: "unknown" } },
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"array max above runtime bound",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: {
+							kind: "array",
+							items: { kind: "boolean" },
+							max_items: 513,
+						},
+						required: false,
+					},
+				},
+			},
+		],
+		[
+			"malformed object field descriptor",
+			{
+				kind: "object",
+				fields: { value: { required: false } },
+			},
+		],
+		[
+			"non-boolean object required flag",
+			{
+				kind: "object",
+				fields: {
+					value: {
+						schema: { kind: "boolean" },
+						required: "yes",
+					},
+				},
+			},
+		],
+	])("malformed nested input schema refuses: %s", async (_label, schema) => {
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(readRecord({ input_schema: schema as never }), READ_BYTES_STORE),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_input_schema_invalid");
+	});
+
+	test("malformed nested result schema refuses without throwing", async () => {
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(
+				readRecord({
+					result_schema: {
+						kind: "object",
+						fields: {
+							rows: {
+								schema: {
+									kind: "array",
+									items: { kind: "enum", values: ["ok", 1] },
+								},
+								required: true,
+							},
+						},
+					} as never,
+				}),
+				READ_BYTES_STORE,
+			),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_result_schema_invalid");
+	});
+
+	test("cyclic schema refuses without unbounded recursion or throwing", async () => {
+		const cyclicSchema: {
+			kind: string;
+			fields: Record<string, unknown>;
+		} = { kind: "object", fields: {} };
+		cyclicSchema.fields.self = { schema: cyclicSchema, required: false };
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(
+				readRecord({ input_schema: cyclicSchema as never }),
+				READ_BYTES_STORE,
+			),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_input_schema_invalid");
+	});
+
 	test("missing mutation postcondition refuses", async () => {
 		const record = mutationRecord({ required_postcondition: undefined });
 		const result = await resolveReviewedAction({
 			actionId: "save-draft",
+			expectedDigest: MUTATION_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, { [MUTATION_DIGEST]: MUTATION_ASSET_BYTES }),
@@ -325,6 +529,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
@@ -345,12 +550,34 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
 			seam: seamFor(record, READ_BYTES_STORE),
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_origin_mismatch");
+	});
+
+	test("receipt approving a DIFFERENT effect refuses", async () => {
+		const record = readRecord({
+			promotion_receipt: {
+				approved_digest: READ_DIGEST,
+				disposition: "approved",
+				approved_origin: ORIGIN,
+				approved_effect: "mutation",
+				approver_ref: "operator-1",
+			},
+		});
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(record, READ_BYTES_STORE),
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_effect_mismatch");
 	});
 });
 
@@ -359,6 +586,17 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 describe("auditActionEffectClass — audited behavior is the authority (R19)", () => {
 	test("a pure observation is read", () => {
 		expect(auditActionEffectClass(READ_ASSET_BYTES)).toBe("read");
+	});
+	test.each([
+		["arbitrary expression", "async () => Math.random()"],
+		["unrecognized call", "async () => console.log('observing')"],
+		["empty function", "async () => ({})"],
+		[
+			"observation mixed with unrecognized code",
+			"async () => { customApi(); return document.querySelectorAll('.row').length }",
+		],
+	])("unrecognized source fails closed as mutation: %s", (_label, bytes) => {
+		expect(auditActionEffectClass(bytes)).toBe("mutation");
 	});
 	test.each([
 		["location.href", "location.href = '/x'"],
@@ -481,9 +719,49 @@ describe("captureStructuredResult — bounded, redacted, spillover (R21)", () =>
 			expect(capture.outcome.governed_artifact_ref).toBe("artifact://run/sensitive");
 		}
 	});
+
+	test("a high-sensitivity summary cannot leak payload data or an untrusted hint", () => {
+		const capture = captureStructuredResult({
+			value: { note: "private-account-123" },
+			schema: {
+				kind: "object",
+				fields: {
+					note: { schema: { kind: "string" }, required: true },
+				},
+			},
+			sensitivity: "high",
+			summaryHint: "hint-private-account-123",
+			spillToGovernedArtifact: () => "artifact://run/sensitive",
+		});
+		expect(capture.ok).toBe(true);
+		if (capture.ok) {
+			expect(capture.outcome.summary).toBe(
+				"High-sensitivity structured result stored in a governed artifact.",
+			);
+			expect(capture.outcome.summary).not.toContain("private-account-123");
+			expect(capture.outcome.summary).not.toContain("hint-");
+		}
+	});
 });
 
 // --- Item checkpoints + bounded iteration (R12) ------------------------------
+
+describe("itemKeysAreValid — bounded stable-key contract", () => {
+	test("accepts a non-empty unique safe-key sequence", () => {
+		expect(itemKeysAreValid(["mon", "week.2", "item_3"])).toBe(true);
+	});
+
+	test.each([
+		["non-array", { key: "mon" }],
+		["empty", []],
+		["non-string member", ["mon", 2]],
+		["unsafe key", ["UPPER"]],
+		["duplicate", ["mon", "mon"]],
+		["above 512 keys", Array.from({ length: 513 }, (_, index) => `key-${index}`)],
+	])("rejects %s", (_label, keys) => {
+		expect(itemKeysAreValid(keys)).toBe(false);
+	});
+});
 
 function batch(
 	keys: readonly string[],
