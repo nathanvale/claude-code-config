@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Token Retrieval Launcher entitlements (ADR 0028 daemon-in-app's-clothing,
+	  plan R7).
+
+	  App-like bundle embedding a provisioning profile so it can hold the
+	  restricted data-protection keychain access group. It reads exactly one
+	  AfterFirstUnlockThisDeviceOnly, non-synchronizing item, then execs the
+	  disposable official op helper with an exact environment. It receives NO
+	  browser channel, so it holds no XPC mach-lookup for the browser and no
+	  broad file access.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!--
+	  The launcher execs the official op binary (a short-lived trusted networked
+	  process) as a separate disposable process with inherit:false; the launcher
+	  itself opens no sockets, so it declares no network client entitlement.
+	-->
+	<key>com.apple.security.network.client</key>
+	<false/>
+	<!--
+	  Private data-protection keychain access group for the single Browser
+	  Automation token item. This is the restricted entitlement (TN3137) that
+	  requires the embedded provisioning profile. No other target names this
+	  group.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.side-quest.browser-use-security.token</string>
+	</array>
+	<key>com.apple.developer.default-data-protection</key>
+	<string>NSFileProtectionCompleteUntilFirstUserAuthentication</string>
+</dict>
+</plist>

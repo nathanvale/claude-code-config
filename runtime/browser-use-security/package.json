@@ -1,0 +1,19 @@
+{
+	"name": "@side-quest/browser-use-security",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Browser Use Security native product owner: per-target identity, admission manifest, and drift proof for the three signed targets (ADR 0027/0028).",
+	"exports": {
+		".": "./src/index.ts",
+		"./cli": "./src/cli.ts"
+	},
+	"scripts": {
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

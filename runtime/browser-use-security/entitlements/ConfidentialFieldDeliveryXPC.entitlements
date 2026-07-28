@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Confidential Field Delivery XPC entitlements (ADR 0022 / ADR 0027, plan
+	  R16-R17).
+
+	  A sandboxed disposable XPC service. It receives a secret-pipe descriptor
+	  and a pre-opened verified browser-channel descriptor through supported XPC
+	  file-descriptor APIs, performs one bounded field write, then exits. It must
+	  NOT be able to open new network connections or unrelated files, and it
+	  never receives the OP token. App Sandbox is ON, network client/server are
+	  OFF, and no broad file entitlement is granted.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Fail-closed: no outbound or inbound network from the delivery service. -->
+	<key>com.apple.security.network.client</key>
+	<false/>
+	<key>com.apple.security.network.server</key>
+	<false/>
+	<!-- No broad file access: it only uses inherited, pre-opened descriptors. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<false/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<false/>
+</dict>
+</plist>
