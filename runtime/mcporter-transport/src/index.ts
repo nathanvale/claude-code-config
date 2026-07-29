@@ -81,6 +81,11 @@ export type TransportCommandChannel = {
 export type TransportCommandInput = {
 	command: string;
 	args: readonly string[];
+	/**
+	 * Optional UTF-8 text delivered through a private pipe. Absent by default,
+	 * so commands cannot inherit or wait on the parent's stdin.
+	 */
+	stdinText?: string;
 	env?: Record<string, string | undefined>;
 	cwd?: string;
 	/**
@@ -97,6 +102,9 @@ export type TransportCommandInput = {
 	detached?: boolean;
 	timeoutMs: number;
 };
+
+/** Maximum UTF-8 payload accepted by the structured stdin channel. */
+export const TRANSPORT_STDIN_MAX_BYTES = 128 * 1024;
 
 /**
  * Result of a bounded command invocation. `exitCode` 127 (or a
@@ -285,6 +293,14 @@ export function transportOverrideInvalidHintText(
 export async function spawnTransportCommand(
 	input: TransportCommandInput,
 ): Promise<TransportCommandResult> {
+	if (
+		input.stdinText !== undefined &&
+		Buffer.byteLength(input.stdinText, "utf-8") > TRANSPORT_STDIN_MAX_BYTES
+	) {
+		throw new Error(
+			`spawnTransportCommand: stdinText exceeds ${TRANSPORT_STDIN_MAX_BYTES} UTF-8 bytes`,
+		);
+	}
 	if (input.exactEnv === true && input.env === undefined) {
 		// Fail closed (R28): exactEnv with no env would fall through to full
 		// process.env inheritance — the exact leak the flag exists to prevent.
@@ -300,14 +316,15 @@ export async function spawnTransportCommand(
 			// An isolated installer passes a neutral cwd and an EXACT allowlisted
 			// environment (`exactEnv`, R28) — never merged over process.env, so no
 			// inherited registry, auth, or proxy value can leak. Probes keep the
-			// merge-over-inherited behavior. stdin is never inherited: no prompt.
+			// merge-over-inherited behavior. stdin is ignored unless the caller
+			// supplies bounded text for a private pipe; it is never inherited.
 			...(input.cwd === undefined ? {} : { cwd: input.cwd }),
 			env: input.env
 				? input.exactEnv === true
 					? stripUndefined(input.env)
 					: { ...process.env, ...stripUndefined(input.env) }
 				: undefined,
-			stdin: "ignore",
+			stdin: input.stdinText === undefined ? "ignore" : "pipe",
 			// Own process group (POSIX `setsid` via Bun >= 1.3 `detached`): the
 			// timeout kill below can then reap the ENTIRE group — an installer's
 			// own children included — so no straggler outlives the SIGKILL and
@@ -317,6 +334,16 @@ export async function spawnTransportCommand(
 			// bounded timeouts already cover.
 			...(input.detached === true ? { detached: true } : {}),
 		});
+		if (input.stdinText !== undefined) {
+			const stdin = proc.stdin;
+			if (stdin === undefined || typeof stdin === "number") {
+				throw new Error(
+					"spawnTransportCommand: piped stdin was not writable",
+				);
+			}
+			stdin.write(input.stdinText);
+			stdin.end();
+		}
 	} catch (error) {
 		// Only a definitively-missing executable maps to the shell's 127
 		// convention. Other startup failures — invalid cwd, permission denied,

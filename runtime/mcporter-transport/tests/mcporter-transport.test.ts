@@ -4,6 +4,7 @@ import {
 	resolveTransportCommandVector,
 	runTransportCommand,
 	spawnTransportCommand,
+	TRANSPORT_STDIN_MAX_BYTES,
 	transportDependencyHintText,
 	transportOverrideInvalidHintText,
 	type TransportCommandChannel,
@@ -275,6 +276,47 @@ describe("spawnTransportCommand", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout.trim()).toBe("$(rm -rf /); `whoami`");
+	});
+
+	test("keeps stdin ignored by default", async () => {
+		const result = await spawnTransportCommand({
+			command: process.execPath,
+			args: [
+				"-e",
+				"for await (const chunk of Bun.stdin.stream()) process.stdout.write(chunk)",
+			],
+			timeoutMs: 5000,
+		});
+
+		expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+	});
+
+	test("delivers optional stdin text without adding it to argv", async () => {
+		const stdinText = '{"entry":"2026-07-27","units":8}';
+		const args = [
+			"-e",
+			"for await (const chunk of Bun.stdin.stream()) process.stdout.write(chunk)",
+		];
+		const result = await spawnTransportCommand({
+			command: process.execPath,
+			args,
+			stdinText,
+			timeoutMs: 5000,
+		});
+
+		expect(args.join("\n")).not.toContain(stdinText);
+		expect(result).toEqual({ exitCode: 0, stdout: stdinText, stderr: "" });
+	});
+
+	test("rejects stdin text above the shared byte ceiling before spawn", async () => {
+		await expect(
+			spawnTransportCommand({
+				command: process.execPath,
+				args: ["-e", "process.exit(99)"],
+				stdinText: "é".repeat(TRANSPORT_STDIN_MAX_BYTES),
+				timeoutMs: 5000,
+			}),
+		).rejects.toThrow(`exceeds ${TRANSPORT_STDIN_MAX_BYTES} UTF-8 bytes`);
 	});
 
 	test("exactEnv without an env allowlist fails closed", async () => {

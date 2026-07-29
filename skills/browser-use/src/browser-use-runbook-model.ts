@@ -365,7 +365,8 @@ const SAFE_DIGEST = /^[0-9a-f]{64}$/;
 // runtime backstop against a hand-authored file that smuggles one in.
 const OP_SECRET_REF = /op:\/\//i;
 
-function exactOriginValid(value: string): boolean {
+/** Whether a value is one exact HTTP(S) origin with no extra URL parts. */
+export function runbookExactOriginIsValid(value: string): boolean {
 	try {
 		const url = new URL(value);
 		return (
@@ -794,7 +795,7 @@ export function validateRunbook(
 		});
 	}
 	for (const origin of runbook.allowed_origins) {
-		if (!exactOriginValid(origin)) {
+		if (!runbookExactOriginIsValid(origin)) {
 			issues.push({
 				code: "runbook_origin_invalid",
 				message: "allowed_origins must be exact HTTP(S) origins.",
@@ -1332,6 +1333,14 @@ export type BrowserUseRunbookReadActionMeta = {
 	result_sensitivity: "low" | "high";
 };
 
+/** One engine-attested reviewed-action resolution for an absolute runbook step. */
+export type BrowserUseRunbookActionResolution =
+	| {
+			kind: "steps";
+			steps: readonly AgentBrowserTaskStep[];
+	  }
+	| { kind: "completed-iterate" };
+
 export type BrowserUseRunbookPlan = {
 	service_id: string;
 	flow_id: string;
@@ -1341,6 +1350,12 @@ export type BrowserUseRunbookPlan = {
 	resume_from_step: number;
 	total_steps: number;
 	steps: readonly AgentBrowserTaskStep[];
+	/**
+	 * Absolute runbook step index for each compiled executor step. Expanded
+	 * iterations repeat their source index so partial execution resumes the
+	 * iterate and lets durable item checkpoints skip only confirmed items.
+	 */
+	compiled_step_runbook_indices: readonly number[];
 	/** Item Binding ids the auth transaction must resolve before dispatch. */
 	pending_item_bindings: readonly string[];
 	/**
@@ -1353,6 +1368,25 @@ export type BrowserUseRunbookPlan = {
 	 */
 	read_action_meta: Readonly<Record<string, BrowserUseRunbookReadActionMeta>>;
 };
+
+/** Resolve the first runbook step not proven by compiled executor progress. */
+export function nextRunbookStepAfterExecution(
+	plan: Pick<
+		BrowserUseRunbookPlan,
+		| "resume_from_step"
+		| "total_steps"
+		| "compiled_step_runbook_indices"
+	>,
+	executedSteps: number,
+): number {
+	if (executedSteps >= plan.compiled_step_runbook_indices.length) {
+		return plan.total_steps;
+	}
+	return (
+		plan.compiled_step_runbook_indices[executedSteps] ??
+		plan.resume_from_step
+	);
+}
 
 export type BrowserUseRunbookPlanResult =
 	| { ok: true; plan: BrowserUseRunbookPlan }
@@ -1449,15 +1483,16 @@ export function planRunbookExecution(
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
 		/**
-		 * Executor steps the ENGINE pre-resolved for `action`/`iterate` steps by
-		 * step index (U3). The reviewed-action registry is async and I/O-facing,
-		 * so the pure model never resolves an asset itself: the engine
-		 * (browser-use-runbook.ts) resolves each action through the generation
-		 * seam and passes the verified executor steps back in here. A runbook
-		 * that declares an `action`/`iterate` step with NO entry in this map is
-		 * refused `runbook_action_registry_unavailable` — the pre-U3 behavior.
+		 * ENGINE-attested resolution for each `action`/`iterate` step by absolute
+		 * index (U3). A resolution carries verified executor steps or exact
+		 * completed-iterate truth. The pure model never resolves an asset itself.
+		 * A runbook action with no valid entry is refused
+		 * `runbook_action_registry_unavailable`.
 		 */
-		resolvedActionSteps?: ReadonlyMap<number, readonly AgentBrowserTaskStep[]>;
+		resolvedActionSteps?: ReadonlyMap<
+			number,
+			BrowserUseRunbookActionResolution
+		>;
 		/**
 		 * Result schema + sensitivity for each resolved read `evaluate` execution,
 		 * keyed by action id plus optional stable item key (R21, R24). The engine
@@ -1490,7 +1525,11 @@ export function planRunbookExecution(
 		(step, index) => {
 			if (step.kind !== "action" && step.kind !== "iterate") return false;
 			const resolved = resolvedActionSteps.get(index);
-			return resolved === undefined || resolved.length === 0;
+			return (
+				resolved === undefined ||
+				(resolved.kind === "steps" && resolved.steps.length === 0) ||
+				(resolved.kind === "completed-iterate" && step.kind !== "iterate")
+			);
 		},
 	);
 	if (unresolvedActionStep !== -1) {
@@ -1545,15 +1584,20 @@ export function planRunbookExecution(
 	// engine-resolved executor steps (U3, keyed by ABSOLUTE step index); every
 	// other kind compiles through the pure `compileStep`.
 	const compiled: AgentBrowserTaskStep[] = [];
+	const compiledStepRunbookIndices: number[] = [];
 	for (const [offset, step] of remaining.entries()) {
+		const absoluteIndex = input.resumeFromStep + offset;
 		if (step.kind === "action" || step.kind === "iterate") {
-			const absoluteIndex = input.resumeFromStep + offset;
-			for (const resolved of resolvedActionSteps.get(absoluteIndex) ?? []) {
+			const resolution = resolvedActionSteps.get(absoluteIndex);
+			if (resolution?.kind !== "steps") continue;
+			for (const resolved of resolution.steps) {
 				compiled.push(resolved);
+				compiledStepRunbookIndices.push(absoluteIndex);
 			}
 			continue;
 		}
 		compiled.push(compileStep(step, normalizedInputs));
+		compiledStepRunbookIndices.push(absoluteIndex);
 	}
 	const pendingBindings = remaining
 		.filter(
@@ -1578,6 +1622,7 @@ export function planRunbookExecution(
 			resume_from_step: input.resumeFromStep,
 			total_steps: runbook.steps.length,
 			steps: compiled,
+			compiled_step_runbook_indices: compiledStepRunbookIndices,
 			pending_item_bindings: [...new Set(pendingBindings)],
 			read_action_meta: input.readActionMeta ?? {},
 		},

@@ -30,6 +30,7 @@ import type {
 	BrowserUseSecretHandle,
 	BrowserUseTokenRetrievalPort,
 } from "./browser-use-op";
+import { buildOncoreSaveDraftMigration } from "./browser-use-oncore-migration";
 import { type BrowserUsePlatformFs, createDefaultPlatformFs } from "./browser-use-paths";
 import {
 	type BrowserUseActiveGenerationSeam,
@@ -52,15 +53,22 @@ import {
 	type BrowserUseRunbook,
 	type BrowserUseRunbookValueSchema,
 	INPUT_SCHEMA_MAX_DEPTH,
+	nextRunbookStepAfterExecution,
 	parseRunbookRecord,
 	planRunbookExecution,
 	projectRunbookCatalogRow,
 	valueMatchesSchema,
 	validateRunbook,
 } from "./browser-use-runbook-model";
-import { actionAssetDigest } from "./browser-use-runbook-actions";
+import {
+	actionAssetDigest,
+	actionValueMatchesSchema,
+	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+	recordItemCheckpoint,
+} from "./browser-use-runbook-actions";
 import type {
 	BrowserUseActionGenerationSeam,
+	BrowserUseItemBatchState,
 	BrowserUseReviewedActionRecord,
 } from "./browser-use-runbook-actions";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
@@ -537,6 +545,7 @@ describe("runbook execution planning (v2, F7)", () => {
 		expect(planned.plan.total_steps).toBe(2);
 		expect(planned.plan.resume_from_step).toBe(0);
 		expect(planned.plan.steps).toHaveLength(2);
+		expect(planned.plan.compiled_step_runbook_indices).toEqual([0, 1]);
 		expect(planned.plan.pending_item_bindings).toEqual([]);
 	});
 
@@ -550,6 +559,59 @@ describe("runbook execution planning (v2, F7)", () => {
 		expect(planned.plan.steps).toHaveLength(1);
 		expect(planned.plan.steps[0]?.kind).toBe("snapshot");
 		expect(planned.plan.resume_from_step).toBe(1);
+		expect(planned.plan.compiled_step_runbook_indices).toEqual([1]);
+	});
+
+	test("maps partial iterate execution back to the iterate without skipping save", () => {
+		const runbook = baseRunbook({
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "iterate",
+					over_input: "item_keys",
+					step: {
+						kind: "action",
+						action_id: "oncore-fill",
+						expected_digest: "a".repeat(64),
+						inputs: {},
+					},
+				},
+				{
+					kind: "action",
+					action_id: "oncore-save-draft",
+					expected_digest: "b".repeat(64),
+					inputs: {},
+				},
+			],
+			inputs: [
+				{
+					id: "item_keys",
+					summary: "Stable item keys.",
+					required: true,
+					schema: {
+						kind: "array",
+						items: { kind: "string" },
+						min_items: 1,
+						max_items: 3,
+					},
+				},
+			],
+		});
+		const step = { kind: "snapshot" as const, interactive: true };
+		const planned = planRunbookExecution(runbook, {
+			inputs: { item_keys: ["mon", "tue", "wed"] },
+			resumeFromStep: 1,
+			resolvedActionSteps: new Map([
+				[1, { kind: "steps" as const, steps: [step, step, step] }],
+				[2, { kind: "steps" as const, steps: [step] }],
+			]),
+		});
+		expect(planned.ok).toBe(true);
+		if (!planned.ok) return;
+		expect(planned.plan.compiled_step_runbook_indices).toEqual([1, 1, 1, 2]);
+		expect(nextRunbookStepAfterExecution(planned.plan, 2)).toBe(1);
+		expect(nextRunbookStepAfterExecution(planned.plan, 3)).toBe(2);
+		expect(nextRunbookStepAfterExecution(planned.plan, 4)).toBe(3);
 	});
 
 	test("compiles a semantic-target click into a click-semantic step", () => {
@@ -734,7 +796,30 @@ describe("runbook execution planning (v2, F7)", () => {
 		const planned = planRunbookExecution(runbook, {
 			inputs: { item_keys: ["mon"] },
 			resumeFromStep: 0,
-			resolvedActionSteps: new Map([[0, []]]),
+			resolvedActionSteps: new Map([
+				[0, { kind: "steps" as const, steps: [] }],
+			]),
+		});
+		expect(planned.ok).toBe(false);
+		if (planned.ok) return;
+		expect(planned.refusal.code).toBe("runbook_action_registry_unavailable");
+	});
+
+	test("refuses completed-iterate truth for a direct action", () => {
+		const runbook = baseRunbook({
+			steps: [
+				{
+					kind: "action",
+					action_id: "oncore-save",
+					expected_digest: "a".repeat(64),
+					inputs: {},
+				},
+			],
+		});
+		const planned = planRunbookExecution(runbook, {
+			inputs: {},
+			resumeFromStep: 0,
+			resolvedActionSteps: new Map([[0, { kind: "completed-iterate" }]]),
 		});
 		expect(planned.ok).toBe(false);
 		if (planned.ok) return;
@@ -3132,3 +3217,595 @@ test(
 		expect(outcome.structured_results?.every((result) => result.ok)).toBe(true);
 	}),
 );
+
+// --- U4: Oncore checkpointed fill / reload / save-draft proof (R25, AE7) -----
+
+const ONCORE_STAGED_ORIGIN = "https://portal.example.com";
+const ONCORE_STAGED_URL = `${ONCORE_STAGED_ORIGIN}/timesheets/current`;
+const ONCORE_RECONCILE_BYTES =
+	"async ({ inputs }) => ({ rows: document.querySelectorAll('.persisted-row').length })";
+const ONCORE_FILL_ENTRY_BYTES =
+	"async ({ inputs }) => { document.querySelector('#units').value = inputs.item_key; document.querySelector('#insert').click(); return {} }";
+const ONCORE_SAVE_DRAFT_BYTES =
+	"async ({ inputs }) => { document.querySelector('#save-draft').click(); return {} }";
+const ONCORE_ACTION_BYTES = {
+	[actionAssetDigest(ONCORE_RECONCILE_BYTES)]: ONCORE_RECONCILE_BYTES,
+	[actionAssetDigest(ONCORE_FILL_ENTRY_BYTES)]: ONCORE_FILL_ENTRY_BYTES,
+	[actionAssetDigest(ONCORE_SAVE_DRAFT_BYTES)]: ONCORE_SAVE_DRAFT_BYTES,
+	[actionAssetDigest(ONCORE_DRAFT_VERIFICATION_ACTION_BYTES)]:
+		ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+};
+const ONCORE_ENTRY_SCHEMA = {
+	kind: "array",
+	max_items: 31,
+	items: {
+		kind: "object",
+		fields: {
+			item_key: {
+				required: true,
+				schema: { kind: "string", max_length: 128 },
+			},
+			date: {
+				required: true,
+				schema: { kind: "string", max_length: 10 },
+			},
+			units: {
+				required: true,
+				schema: { kind: "number", minimum: 0, maximum: 24 },
+			},
+		},
+	},
+} as const;
+
+function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
+	const approved = (
+		action_id: string,
+		bytes: string,
+		effect_class: "read" | "mutation",
+		input_schema: BrowserUseReviewedActionRecord["input_schema"],
+		result_schema: BrowserUseReviewedActionRecord["result_schema"],
+		required_postcondition?: BrowserUseReviewedActionRecord["required_postcondition"],
+	): BrowserUseReviewedActionRecord => {
+		const digest = actionAssetDigest(bytes);
+		return {
+			action_id,
+			asset_id: digest,
+			expected_digest: digest,
+			allowed_origin: ONCORE_STAGED_ORIGIN,
+			effect_class,
+			containment: effect_class === "read" ? "read-only-observation" : "none",
+			input_schema,
+			result_schema,
+			result_sensitivity: "low",
+			...(required_postcondition !== undefined
+				? { required_postcondition }
+				: {}),
+			source_provenance: `oncore/${action_id}.js`,
+			promotion_receipt: {
+				approved_digest: digest,
+				disposition: "approved",
+				approved_origin: ONCORE_STAGED_ORIGIN,
+				approved_effect: effect_class,
+				approver_ref: "synthetic-staged-proof",
+			},
+		};
+	};
+	return [
+		approved(
+			"oncore-reconcile-rows",
+			ONCORE_RECONCILE_BYTES,
+			"read",
+			{
+				kind: "object",
+				fields: {
+					entries: { required: true, schema: ONCORE_ENTRY_SCHEMA },
+				},
+			},
+			{
+				kind: "object",
+				fields: {
+					rows: { required: true, schema: { kind: "number", minimum: 0 } },
+				},
+			},
+		),
+		approved(
+			"oncore-fill-entry",
+			ONCORE_FILL_ENTRY_BYTES,
+			"mutation",
+			{
+				kind: "object",
+				fields: {
+					entries: { required: true, schema: ONCORE_ENTRY_SCHEMA },
+					item_key: {
+						required: true,
+						schema: { kind: "string", max_length: 128 },
+					},
+				},
+			},
+			{ kind: "object", fields: {} },
+			{ kind: "element-visible", selector: "#entry-saved" },
+		),
+		approved(
+			"oncore-save-draft",
+			ONCORE_SAVE_DRAFT_BYTES,
+			"mutation",
+			{ kind: "object", fields: {} },
+			{ kind: "object", fields: {} },
+			{ kind: "element-visible", selector: "#draft-saved" },
+		),
+		approved(
+			"oncore-verify-draft",
+			ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+			"read",
+			{
+				kind: "object",
+				fields: {
+					item_keys: {
+						required: true,
+						schema: {
+							kind: "array",
+							max_items: 31,
+							items: { kind: "string", max_length: 128 },
+						},
+					},
+					entries: { required: true, schema: ONCORE_ENTRY_SCHEMA },
+				},
+			},
+			{
+				kind: "object",
+				fields: {
+					verification: {
+						required: true,
+						schema: {
+							kind: "enum",
+							values: ["oncore-draft-preserved-v1"],
+						},
+					},
+				},
+			},
+		),
+	];
+}
+
+function oncoreActionSeam(): BrowserUseActionGenerationSeam {
+	const records = new Map(
+		oncoreActionRecords().map((record) => [record.action_id, record] as const),
+	);
+	return {
+		async loadActionRecord(actionId) {
+			const record = records.get(actionId);
+			return record === undefined
+				? { ok: false, absent: true }
+				: { ok: true, record };
+		},
+		async loadActionAssetBytes(assetId) {
+			const bytes = ONCORE_ACTION_BYTES[assetId];
+			return bytes === undefined
+				? { ok: false, reason: "bytes_unavailable" }
+				: { ok: true, bytes };
+		},
+	};
+}
+
+function oncoreStagedRunbook(): BrowserUseRunbook {
+	return buildOncoreSaveDraftMigration({
+		allowedOrigin: ONCORE_STAGED_ORIGIN,
+		timesheetUrl: ONCORE_STAGED_URL,
+		activeSourceRelativePath:
+			"oncore/playbooks/fill-timesheet-split-dsa-2026-05-25.json",
+		supersededSourceRelativePaths: [
+			"oncore/playbooks/fill-timesheet-dsa-candidate-2026-05-18.json",
+		],
+		actionDigests: {
+			reconcileRows: actionAssetDigest(ONCORE_RECONCILE_BYTES),
+			fillEntry: actionAssetDigest(ONCORE_FILL_ENTRY_BYTES),
+			saveDraft: actionAssetDigest(ONCORE_SAVE_DRAFT_BYTES),
+			verifyDraft: actionAssetDigest(ONCORE_DRAFT_VERIFICATION_ACTION_BYTES),
+		},
+	}).runbook;
+}
+
+const ONCORE_ENTRIES = [
+	{ item_key: "mon", date: "2026-07-27", units: 1 },
+	{ item_key: "tue", date: "2026-07-28", units: 1 },
+] as const;
+
+async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
+	const action = new Function(
+		"document",
+		`return (${ONCORE_DRAFT_VERIFICATION_ACTION_BYTES});`,
+	)({
+		querySelector: (selector: string) =>
+			selector === "#draft-proof" ? { textContent: rawProof } : null,
+	}) as (input: {
+		inputs: {
+			item_keys: readonly string[];
+			entries: typeof ONCORE_ENTRIES;
+		};
+	}) => Promise<unknown>;
+	return action({
+		inputs: {
+			item_keys: ["mon", "tue"],
+			entries: ONCORE_ENTRIES,
+		},
+	});
+}
+
+function itemBatch(
+	checkpoints: BrowserUseItemBatchState["checkpoints"],
+): BrowserUseItemBatchState {
+	return {
+		schema_version: "1",
+		item_keys: ["mon", "tue"],
+		checkpoints,
+	};
+}
+
+describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
+	test.each([
+		[
+			"submitted is true",
+			{ editable: true, persisted_entries: ["mon", "tue"], submitted: true, total_units: 2 },
+		],
+		[
+			"entry keys have the wrong order",
+			{ editable: true, persisted_entries: ["tue", "mon"], submitted: false, total_units: 2 },
+		],
+		[
+			"total is wrong",
+			{ editable: true, persisted_entries: ["mon", "tue"], submitted: false, total_units: 3 },
+		],
+		[
+			"draft is not editable",
+			{ editable: false, persisted_entries: ["mon", "tue"], submitted: false, total_units: 2 },
+		],
+		["proof shape is malformed", { submitted: false }],
+	] as const)(
+		"the digest-pinned verification action rejects when %s",
+		async (_label, proof) => {
+			await expect(
+				runOncoreVerificationAction(JSON.stringify(proof)),
+			).rejects.toThrow("draft verification failed");
+		},
+	);
+
+	test("the digest-pinned verification action rejects malformed JSON", async () => {
+		await expect(runOncoreVerificationAction("{not-json")).rejects.toThrow(
+			"draft verification failed",
+		);
+	});
+
+	test(
+		"a rejected verification eval cannot yield a top-level confirmed result",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					inputs: {
+						item_keys: ["mon", "tue"],
+						entries: ONCORE_ENTRIES,
+					},
+					resumeFromStep: 0,
+					actionSeam: oncoreActionSeam(),
+					itemBatchStates: new Map([
+						[
+							2,
+							itemBatch([
+								{ item_key: "mon", outcome: "confirmed" },
+								{ item_key: "tue", outcome: "confirmed" },
+							]),
+						],
+					]),
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const verify = prepared.plan.steps.find(
+				(step) =>
+					step.kind === "evaluate" &&
+					step.action_id === "oncore-verify-draft",
+			);
+			expect(verify).toBeDefined();
+			if (verify === undefined) return;
+			const runtime = runtimeFor([
+				{ stdout: json({ tabs: [{ tabId: "t1", url: ONCORE_STAGED_URL }] }) },
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ exitCode: 1 },
+			]);
+			const outcome = await executePreparedRunbook(
+				{ runtime },
+				{
+					plan: {
+						...prepared.plan,
+						steps: [{ kind: "snapshot", interactive: false }, verify],
+					},
+					handoff: HANDOFF,
+					runId: "run-oncore-verification-rejected",
+					targetTabId: "t1",
+					expectedTargetUrl: ONCORE_STAGED_URL,
+				},
+			);
+
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result).toMatchObject({
+				ok: false,
+				code: "agent_browser_action_read_not_achieved",
+				outcome: "not-achieved",
+				mutation_dispatched: false,
+			});
+			expect(outcome.result).not.toMatchObject({
+				ok: true,
+				outcome: "confirmed",
+			});
+		}),
+	);
+
+	test(
+		"resume compiles only the first unproven fill entry and blocks an unknown entry",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const prepare = (batch: BrowserUseItemBatchState) =>
+				prepareRunbookExecution(createDefaultPlatformFs(), dataRoot, {
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					inputs: {
+						item_keys: ["mon", "tue"],
+						entries: ONCORE_ENTRIES,
+					},
+					resumeFromStep: 0,
+					actionSeam: oncoreActionSeam(),
+					itemBatchStates: new Map([[2, batch]]),
+				});
+
+			const fresh = await prepare(itemBatch([]));
+			expect(fresh.ok).toBe(true);
+			if (fresh.ok) {
+				expect(
+					fresh.plan.steps.flatMap((step) =>
+						step.kind === "evaluate" &&
+						step.action_id === "oncore-fill-entry"
+							? [step.item_key]
+							: [],
+					),
+				).toEqual(["mon", "tue"]);
+			}
+
+			const resumed = await prepare(
+				itemBatch([{ item_key: "mon", outcome: "confirmed" }]),
+			);
+			expect(resumed.ok).toBe(true);
+			if (resumed.ok) {
+				expect(
+					resumed.plan.steps.flatMap((step) =>
+						step.kind === "evaluate" &&
+						step.action_id === "oncore-fill-entry"
+							? [step.item_key]
+							: [],
+					),
+				).toEqual(["tue"]);
+			}
+
+			const completed = await prepare(
+				itemBatch([
+					{ item_key: "mon", outcome: "confirmed" },
+					{ item_key: "tue", outcome: "confirmed" },
+				]),
+			);
+			expect(completed.ok).toBe(true);
+			if (completed.ok) {
+				expect(
+					completed.plan.steps.filter(
+						(step) =>
+							step.kind === "evaluate" &&
+							step.action_id === "oncore-fill-entry",
+					),
+				).toHaveLength(0);
+			}
+
+			const blocked = await prepare(
+				itemBatch([{ item_key: "mon", outcome: "unknown" }]),
+			);
+			expect(blocked.ok).toBe(false);
+			if (!blocked.ok) {
+				expect(blocked.refusal.code).toBe("runbook_action_refused");
+				expect(blocked.refusal.message).toContain("action_item_batch_blocked");
+			}
+		}),
+	);
+
+	test(
+		"fills checkpointed entries, saves, reloads, and proves exact persisted values with submitted=false",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const persistedProof = {
+				editable: true,
+				persisted_entries: ["mon", "tue"],
+				submitted: false,
+				total_units: 2,
+			};
+			const verifiedProof = await runOncoreVerificationAction(
+				JSON.stringify(persistedProof),
+			);
+			expect(verifiedProof).toEqual({
+				verification: "oncore-draft-preserved-v1",
+			});
+			const verificationSchema = oncoreActionRecords().find(
+				(record) => record.action_id === "oncore-verify-draft",
+			)?.result_schema;
+			expect(verificationSchema).toBeDefined();
+			if (verificationSchema !== undefined) {
+				expect(
+					actionValueMatchesSchema(verifiedProof, verificationSchema),
+				).toBe(true);
+			}
+			const responses = [
+				{ stdout: json({ tabs: [{ tabId: "t1", url: ONCORE_STAGED_URL }] }) },
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ result: { rows: 0 } }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ result: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ visible: true }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ result: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ visible: true }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ result: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ visible: true }) },
+				{ stdout: json({ opened: true }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ result: verifiedProof }) },
+			];
+			let durableBatch = itemBatch([]);
+			const runtime = Object.assign(runtimeFor(responses), {
+				afterItemCheckpoint: async (checkpoint: {
+					item_key: string;
+					outcome: "confirmed" | "not-achieved" | "unknown";
+				}) => {
+					const recorded = recordItemCheckpoint(durableBatch, {
+						itemKey: checkpoint.item_key,
+						outcome: checkpoint.outcome,
+					});
+					if (!recorded.ok) return { ok: false as const };
+					durableBatch = recorded.state;
+					return { ok: true as const };
+				},
+			});
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					actionSeam: oncoreActionSeam(),
+				},
+				{
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					handoff: HANDOFF,
+					runId: "run-oncore-save-draft",
+					targetTabId: "t1",
+					inputs: {
+						item_keys: ["mon", "tue"],
+						entries: ONCORE_ENTRIES,
+					},
+					resumeFromStep: 0,
+					expectedTargetUrl: ONCORE_STAGED_URL,
+					itemBatchStates: new Map([[2, itemBatch([])]]),
+				},
+			);
+
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result).toMatchObject({
+				ok: true,
+				outcome: "confirmed",
+				mutation_dispatched: true,
+			});
+			expect(durableBatch.checkpoints).toEqual([
+				{ item_key: "mon", outcome: "confirmed" },
+				{ item_key: "tue", outcome: "confirmed" },
+			]);
+			const verified = outcome.structured_results?.find(
+				(result) => result.action_id === "oncore-verify-draft",
+			);
+			expect(verified?.ok).toBe(true);
+			if (verified?.ok) {
+				expect(verified.outcome.result_digest).toBe(
+					actionAssetDigest(JSON.stringify(verifiedProof)),
+				);
+			}
+			expect(
+				runtime.calls.filter((call) => call.includes("eval")),
+			).toHaveLength(5);
+			expect(JSON.stringify(runtime.calls)).not.toMatch(/\bsubmit\b/i);
+		}),
+	);
+
+	test(
+		"a save timeout is unknown and the save action is never repeated",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					inputs: {
+						item_keys: ["mon", "tue"],
+						entries: ONCORE_ENTRIES,
+					},
+					resumeFromStep: 0,
+					actionSeam: oncoreActionSeam(),
+					itemBatchStates: new Map([
+						[
+							2,
+							itemBatch([
+								{ item_key: "mon", outcome: "confirmed" },
+								{ item_key: "tue", outcome: "confirmed" },
+							]),
+						],
+					]),
+				},
+			);
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			const save = prepared.plan.steps.find(
+				(step) =>
+					step.kind === "evaluate" &&
+					step.action_id === "oncore-save-draft",
+			);
+			expect(save).toBeDefined();
+			if (save === undefined) return;
+			const runtime = runtimeFor([
+				{ stdout: json({ tabs: [{ tabId: "t1", url: ONCORE_STAGED_URL }] }) },
+				{ stdout: json({ selected: true }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: ONCORE_STAGED_URL }) },
+				{ exitCode: 1 },
+			]);
+			const outcome = await executePreparedRunbook(
+				{ runtime },
+				{
+					plan: {
+						...prepared.plan,
+						steps: [{ kind: "snapshot", interactive: false }, save],
+					},
+					handoff: HANDOFF,
+					runId: "run-oncore-save-timeout",
+					targetTabId: "t1",
+					expectedTargetUrl: ONCORE_STAGED_URL,
+				},
+			);
+
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result).toMatchObject({
+				ok: false,
+				code: "agent_browser_mutation_effect_unknown",
+				outcome: "unknown",
+				mutation_dispatched: true,
+			});
+			expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+		}),
+	);
+});
