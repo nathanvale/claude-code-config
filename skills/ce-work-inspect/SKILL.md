@@ -16,8 +16,9 @@ started it. No arguments: show the CLI help.
 - Resolve scripts/unit-workspace.py from the installed `ce-work` skill. If it
   is absent, stop with `controller_not_found`; the installed CE Work version
   does not support this inspector.
-- Run `bun run skills/ce-work-inspect/src/ce-work-inspect.ts --help`, then use
-  the documented human or JSON form.
+- Enter the canonical config repo: `cd "$HOME/code/claude-code-config"`.
+- Run `bun --filter ce-work-inspect-scripts ce-work-inspect --help`, then use the
+  documented human or JSON form.
 - Treat `next_action` as a handback to the owning CE Work run. This skill never
   advances, resumes, integrates, verifies, or cleans the run.
 

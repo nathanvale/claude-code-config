@@ -4,6 +4,8 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -359,6 +361,81 @@ describe("ce-work-inspect CLI", () => {
 		]);
 	});
 
+	test("classifies an unknown unit filter with the run inspection continuation", () => {
+		const fixture = makeStatusFixture();
+		const result = runCli(
+			[
+				"--run-id",
+				fixture.runId,
+				"--unit-id",
+				"missing-unit",
+				"--controller",
+				fixture.controllerPath,
+				"--json",
+			],
+			{ CE_WORK_RUNS_ROOT: fixture.runsRoot },
+		);
+		const output = JSON.parse(result.stdout.toString());
+
+		expect(result.exitCode).toBe(3);
+		expect(output).toMatchObject({
+			status: "blocked",
+			error: {
+				code: "unit_not_found",
+				retry_safe: true,
+			},
+			next_action: {
+				id: "inspect_run",
+			},
+		});
+		expect(result.stderr.toString()).toBe("");
+	});
+
+	test("bounds unsafe upstream failures and includes stderr detail", () => {
+		const fixture = makeStatusFixture();
+		writeFileSync(
+			fixture.controllerPath,
+			[
+				"#!/usr/bin/env python3",
+				"import sys",
+				'print("FAILED ../../unsafe output")',
+				'print("controller status denied", file=sys.stderr)',
+				"raise SystemExit(9)",
+				"",
+			].join("\n"),
+			{ mode: 0o700 },
+		);
+		chmodSync(fixture.controllerPath, 0o700);
+
+		const result = runCli(
+			[
+				"--run-id",
+				fixture.runId,
+				"--controller",
+				fixture.controllerPath,
+				"--json",
+			],
+			{ CE_WORK_RUNS_ROOT: fixture.runsRoot },
+		);
+		const output = JSON.parse(result.stdout.toString());
+
+		expect(result.exitCode).toBe(4);
+		expect(output).toMatchObject({
+			status: "blocked",
+			error: {
+				code: "upstream_failed",
+				message:
+					"CE Work status failed with failed; stderr: controller status denied",
+				retry_safe: true,
+			},
+			next_action: {
+				id: "return_to_ce_work_recovery",
+			},
+		});
+		expect(result.stdout.toString()).not.toContain("../../unsafe");
+		expect(result.stderr.toString()).toBe("");
+	});
+
 	test("rejects undocumented mutation-like arguments", () => {
 		const result = runCli([
 			"--run-id",
@@ -416,5 +493,74 @@ describe("ce-work-inspect CLI", () => {
 			},
 		});
 		expect(existsSync(join(runsRoot, ".locks"))).toBe(false);
+	});
+
+	test("rejects a symlinked CE state root", () => {
+		const fixture = makeStatusFixture();
+		const linkedRunsRoot = `${fixture.runsRoot}-link`;
+		symlinkSync(fixture.runsRoot, linkedRunsRoot, "dir");
+
+		const result = runCli(
+			[
+				"--run-id",
+				fixture.runId,
+				"--controller",
+				fixture.controllerPath,
+				"--json",
+			],
+			{ CE_WORK_RUNS_ROOT: linkedRunsRoot },
+		);
+		const output = JSON.parse(result.stdout.toString());
+
+		expect(result.exitCode).toBe(4);
+		expect(output).toMatchObject({
+			status: "blocked",
+			error: {
+				code: "state_unreadable",
+				message: `CE state path is a symlink: ${linkedRunsRoot}`,
+				retry_safe: true,
+			},
+			next_action: {
+				id: "return_to_ce_work_recovery",
+			},
+		});
+		expect(result.stderr.toString()).toBe("");
+	});
+
+	test("rejects a symlinked CE manifest", () => {
+		const fixture = makeStatusFixture();
+		const manifestPath = join(
+			fixture.runsRoot,
+			fixture.runId,
+			"manifest.json",
+		);
+		unlinkSync(manifestPath);
+		symlinkSync("manifest.lock", manifestPath);
+
+		const result = runCli(
+			[
+				"--run-id",
+				fixture.runId,
+				"--controller",
+				fixture.controllerPath,
+				"--json",
+			],
+			{ CE_WORK_RUNS_ROOT: fixture.runsRoot },
+		);
+		const output = JSON.parse(result.stdout.toString());
+
+		expect(result.exitCode).toBe(4);
+		expect(output).toMatchObject({
+			status: "blocked",
+			error: {
+				code: "state_unreadable",
+				message: `CE state path is a symlink: ${manifestPath}`,
+				retry_safe: true,
+			},
+			next_action: {
+				id: "return_to_ce_work_recovery",
+			},
+		});
+		expect(result.stderr.toString()).toBe("");
 	});
 });

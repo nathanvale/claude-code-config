@@ -12,21 +12,9 @@ import {
 	type InspectionResult,
 } from "./ce-work-status.ts";
 
-const args = process.argv.slice(2);
 const helpOption = CE_WORK_INSPECT_CONTRACT.options.find(
 	(option) => option.id === "help",
 );
-
-if (
-	args.length === 0 ||
-	helpOption === undefined ||
-	args.some(
-		(arg) => arg === helpOption.flag || helpOption.aliases.includes(arg as "-h"),
-	)
-) {
-	process.stdout.write(renderHelp());
-	process.exit(0);
-}
 
 interface ParsedArgs {
 	runId: string;
@@ -102,29 +90,55 @@ function renderHuman(result: InspectionResult): string {
 	return `${lines.join("\n")}\n`;
 }
 
-try {
-	const parsed = parseArgs(args);
-	const result = inspectCeWorkStatus({
-		runId: parsed.runId,
-		unitId: parsed.unitId,
-		controllerPath: parsed.controllerPath,
-		environment: process.env,
-	});
-	process.stdout.write(
-		parsed.json ? `${JSON.stringify(result)}\n` : renderHuman(result),
-	);
-} catch (error) {
-	if (error instanceof InspectionError) {
-		const jsonOption = CE_WORK_INSPECT_CONTRACT.options.find(
-			(option) => option.id === "json",
-		);
-		if (jsonOption && args.includes(jsonOption.flag)) {
-			process.stdout.write(`${JSON.stringify(buildFailureResult(error))}\n`);
-			process.exit(failureExitCode(error.code));
-		}
-		process.stderr.write(`ce-work-inspect: ${error.message}\n`);
-		process.exit(failureExitCode(error.code));
+function main(args: readonly string[]): number {
+	if (
+		args.length === 0 ||
+		helpOption === undefined ||
+		args.some(
+			(arg) =>
+				arg === helpOption.flag || helpOption.aliases.includes(arg as "-h"),
+		)
+	) {
+		process.stdout.write(renderHelp());
+		return 0;
 	}
-	process.stderr.write("ce-work-inspect: unexpected inspection failure\n");
-	process.exit(1);
+
+	const jsonOption = CE_WORK_INSPECT_CONTRACT.options.find(
+		(option) => option.id === "json",
+	);
+	const jsonRequested = jsonOption !== undefined && args.includes(jsonOption.flag);
+	try {
+		const parsed = parseArgs(args);
+		const result = inspectCeWorkStatus({
+			runId: parsed.runId,
+			unitId: parsed.unitId,
+			controllerPath: parsed.controllerPath,
+			environment: process.env,
+		});
+		process.stdout.write(
+			parsed.json ? `${JSON.stringify(result)}\n` : renderHuman(result),
+		);
+		return 0;
+	} catch (error) {
+		if (error instanceof InspectionError) {
+			if (jsonRequested) {
+				process.stdout.write(`${JSON.stringify(buildFailureResult(error))}\n`);
+			} else {
+				process.stderr.write(`ce-work-inspect: ${error.message}\n`);
+			}
+			return failureExitCode(error.code);
+		}
+		if (jsonRequested) {
+			const failure = new InspectionError(
+				"state_unreadable",
+				"unexpected inspection failure",
+			);
+			process.stdout.write(`${JSON.stringify(buildFailureResult(failure))}\n`);
+		} else {
+			process.stderr.write("ce-work-inspect: unexpected inspection failure\n");
+		}
+		return 1;
+	}
 }
+
+process.exitCode = main(process.argv.slice(2));

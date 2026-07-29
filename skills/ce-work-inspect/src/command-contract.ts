@@ -11,7 +11,7 @@ export const CE_WORK_INSPECT_CONTRACT = {
 	purpose: "Inspect one CE Work run without changing it.",
 	sideEffects: "read-only",
 	usage:
-		"ce-work-inspect --run-id <id> [--unit-id <id>] [--controller <path>] [--json]",
+		"ce-work-inspect --run-id <id> [--unit-id <id>] --controller <path> [--json]",
 	options: [
 		{
 			id: "runId",

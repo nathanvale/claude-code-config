@@ -119,8 +119,8 @@ For each connector in `.productivity.yml`:
 
 Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per step through `skills/productivity-connectors/SKILL.md`.
 Probe once per unique configured gog `(account, client)` pair. Reuse that result
-only when both values match. Treat an omitted client as the default client, but
-share its probe only for the same account.
+only when both values match. Treat an omitted client as distinct from explicit
+`client: default`; owner mapping may resolve them differently.
 
 **Output — one compact table before any sync begins:**
 

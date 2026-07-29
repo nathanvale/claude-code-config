@@ -5,6 +5,9 @@ import { join, resolve } from "node:path";
 const CONTRACT_ID = "ce-work-inspect.result";
 const SCHEMA_VERSION = "1";
 const SAFE_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const SAFE_UPSTREAM_ERROR_WORD = /^[A-Za-z0-9._-]{1,64}$/;
+const CONTROLLER_TIMEOUT_MS = 10_000;
+const MAX_UPSTREAM_STDERR_LENGTH = 512;
 const TERMINAL_STATES = new Set(["cleaned", "native-completed"]);
 
 /** Stable inspector failure categories. */
@@ -256,6 +259,18 @@ function assertSafeRunId(runId: string): void {
 	if (!SAFE_ID.test(runId) || !runId.replaceAll(".", "")) {
 		throw new InspectionError("usage_error", `unsafe run ID: ${runId}`);
 	}
+}
+
+function upstreamErrorWord(output: string): string {
+	const word = output.trim().split(/\r?\n/, 1)[0] ?? "";
+	return SAFE_UPSTREAM_ERROR_WORD.test(word) ? word.toLowerCase() : "failed";
+}
+
+function boundedUpstreamStderr(output: string): string {
+	return output
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, MAX_UPSTREAM_STDERR_LENGTH);
 }
 
 function assertPrivatePath(
@@ -557,12 +572,14 @@ export function inspectCeWorkStatus(input: {
 		env: input.environment,
 		stdout: "pipe",
 		stderr: "pipe",
+		timeout: CONTROLLER_TIMEOUT_MS,
 	});
 	if (controller.exitCode !== 0) {
-		const word = controller.stdout.toString().trim().split("\n")[0] || "FAILED";
+		const word = upstreamErrorWord(controller.stdout.toString());
+		const stderr = boundedUpstreamStderr(controller.stderr.toString());
 		throw new InspectionError(
-			`upstream_${word.toLowerCase()}`,
-			`CE Work status failed with ${word}`,
+			`upstream_${word}`,
+			`CE Work status failed with ${word}; stderr: ${stderr || "(empty)"}`,
 		);
 	}
 	const status = parseStatusOutput(controller.stdout.toString());
