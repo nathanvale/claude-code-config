@@ -3,6 +3,10 @@ import type {
 	BrowserUseTokenRetrievalPort,
 	BrowserUseTokenRetrievalRejection,
 } from "./browser-use-op";
+import type {
+	BrowserUseEnvironmentTokenCustodyAction,
+	BrowserUseEnvironmentTokenCustodyState,
+} from "./browser-use-environment-token";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -94,6 +98,146 @@ function rejection(
 	return { code, message: `retrieval rejected (${code}).` };
 }
 
+function lifecycleRuntime(input: {
+	tty?: boolean;
+	results: readonly BrowserUseEnvironmentTokenCustodyState[];
+}): {
+	runtime: ReturnType<typeof makeRuntime>;
+	calls: Array<{
+		action: BrowserUseEnvironmentTokenCustodyAction;
+		input_channel?: "stdin" | "tty";
+	}>;
+} {
+	const calls: Array<{
+		action: BrowserUseEnvironmentTokenCustodyAction;
+		input_channel?: "stdin" | "tty";
+	}> = [];
+	const results = [...input.results];
+	return {
+		calls,
+		runtime: makeRuntime({
+			environmentTokenLifecycle: {
+				inputIsTTY: () => input.tty ?? false,
+				execute: async (request) => {
+					calls.push(request);
+					const result = results.shift();
+					if (result === undefined) {
+						throw new Error("unexpected lifecycle execution");
+					}
+					return result;
+				},
+			},
+		}),
+	};
+}
+
+describe("environment-token lifecycle public commands", () => {
+	test("noninteractive install without explicit stdin returns a human gate and never waits", async () => {
+		const fixture = lifecycleRuntime({
+			results: [],
+		});
+		const result = await runForTest(
+			["auth", "install-token", "--json"],
+			fixture.runtime,
+		);
+		expect(result.exitCode).toBe(21);
+		expect(fixture.calls).toEqual([]);
+		expect(envelopeOf(result.stdout).error.code).toBe("human-action-required");
+		expect(result.stdout).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
+	});
+
+	test("status projects missing custody with one install continuation", async () => {
+		const fixture = lifecycleRuntime({
+			results: [{ state: "missing", next_action: "install-local-token" }],
+		});
+		const result = await runForTest(["auth", "status", "--json"], fixture.runtime);
+		expect(result.exitCode).toBe(0);
+		expect(fixture.calls).toEqual([{ action: "status" }]);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data).toMatchObject({
+			contract: "browser-use.environment-token-lifecycle",
+			operation: "status",
+			state: "missing",
+		});
+		expect(envelope.continuation.next_action_id).toBe("install-local-token");
+	});
+
+	test("explicit stdin installs when missing and replaces when already ready", async () => {
+		for (const [standing, mutation] of [
+			["missing", "install"],
+			["ready", "replace"],
+		] as const) {
+			const standingState: BrowserUseEnvironmentTokenCustodyState =
+				standing === "missing"
+					? { state: "missing", next_action: "install-local-token" }
+					: { state: "ready", next_action: "validate-service-account" };
+			const fixture = lifecycleRuntime({
+				results: [
+					standingState,
+					{
+						state: mutation === "install" ? "installed" : "replaced",
+						next_action: "validate-service-account",
+					},
+				],
+			});
+			const result = await runForTest(
+				["auth", "install-token", "--stdin", "--json"],
+				fixture.runtime,
+			);
+			expect(result.exitCode).toBe(0);
+			expect(fixture.calls).toEqual([
+				{ action: "status" },
+				{ action: mutation, input_channel: "stdin" },
+			]);
+			expect(envelopeOf(result.stdout).data).toMatchObject({
+				operation: mutation,
+				state: mutation === "install" ? "installed" : "replaced",
+			});
+		}
+	});
+
+	test("hidden TTY uses the native hidden channel and removal keeps remote revocation explicit", async () => {
+		const install = lifecycleRuntime({
+			tty: true,
+			results: [
+				{ state: "missing", next_action: "install-local-token" },
+				{ state: "installed", next_action: "validate-service-account" },
+			],
+		});
+		expect(
+			(await runForTest(["auth", "install-token", "--json"], install.runtime))
+				.exitCode,
+		).toBe(0);
+		expect(install.calls).toEqual([
+			{ action: "status" },
+			{ action: "install", input_channel: "tty" },
+		]);
+
+		const remove = lifecycleRuntime({
+			results: [
+				{
+					state: "removed",
+					remote_authority: "may-remain-live",
+					next_action: "revoke-service-account-token-remotely",
+				},
+			],
+		});
+		const removed = await runForTest(
+			["auth", "remove-token", "--json"],
+			remove.runtime,
+		);
+		expect(removed.exitCode).toBe(0);
+		expect(remove.calls).toEqual([{ action: "remove" }]);
+		expect(envelopeOf(removed.stdout).data).toMatchObject({
+			state: "removed",
+			remote_authority: "may-remain-live",
+		});
+		expect(envelopeOf(removed.stdout).continuation.next_action_id).toBe(
+			"revoke-service-account-token-remotely",
+		);
+	});
+});
+
 // A fake port whose every method answers from canned values; unset methods
 // fail the test loudly rather than silently succeeding.
 function fakePort(
@@ -153,13 +297,16 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 		}
 	});
 
-	test("every auth subcommand discharges exactly one cause-table continuation", () => {
+	test("every auth repair subcommand discharges exactly one cause-table continuation", () => {
 		const tableIds = new Set(
 			Object.values(BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE).map(
 				(entry) => entry.continuation.next_action_id,
 			),
 		);
-		for (const subcommand of BROWSER_USE_AUTH_SUBCOMMANDS) {
+		for (const subcommand of BROWSER_USE_AUTH_SUBCOMMANDS.filter(
+			(candidate) =>
+				!["status", "install-token", "remove-token"].includes(candidate),
+		)) {
 			expect(tableIds.has(subcommand)).toBe(true);
 		}
 	});

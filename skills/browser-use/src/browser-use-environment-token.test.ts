@@ -6,6 +6,7 @@ import {
 	BROWSER_USE_ENVIRONMENT_TOKEN_CUSTODY_STATES,
 	buildEnvironmentTokenCustodyInvocation,
 	environmentTokenPathsFor,
+	parseEnvironmentTokenCustodyState,
 } from "./browser-use-environment-token";
 
 function nativeEnumValues(source: string, enumName: string): string[] {
@@ -55,6 +56,179 @@ describe("environment token custody control model", () => {
 		});
 		expect(JSON.stringify(invocation)).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
 		expect(invocation.argv.join(" ")).not.toContain("token=");
+	});
+
+	test("builds the production validator-process install invocation", () => {
+		expect(
+			buildEnvironmentTokenCustodyInvocation({
+				executable_path: "/opt/browser-use/bin/browser-use-token-custody",
+				action: "replace",
+				config_root: "/safe/config/browser-use",
+				input: { kind: "tty" },
+				validator_executable_path:
+					"/opt/browser-use/bin/browser-use-op-supervisor",
+				op_executable_path: "/opt/homebrew/bin/op",
+			}),
+		).toEqual({
+			executable_path: "/opt/browser-use/bin/browser-use-token-custody",
+			argv: [
+				"replace",
+				"--config-root",
+				"/safe/config/browser-use",
+				"--hidden-tty",
+				"--validator-executable",
+				"/opt/browser-use/bin/browser-use-op-supervisor",
+				"--op-path",
+				"/opt/homebrew/bin/op",
+			],
+			inherited_fds: [],
+		});
+	});
+
+	test("parses every exact secret-free native lifecycle projection", () => {
+		const valid = [
+			{ state: "missing", next_action: "install-local-token" },
+			{ state: "ready", next_action: "validate-service-account" },
+			{ state: "installed", next_action: "validate-service-account" },
+			{ state: "replaced", next_action: "validate-service-account" },
+			{
+				state: "cleanup-required",
+				cause: "staging-residue",
+				next_action: "cleanup-token-staging",
+			},
+			{
+				state: "cleanup-required",
+				cause: "removal-residue",
+				remote_authority: "may-remain-live",
+				next_action: "complete-local-token-removal",
+			},
+			{
+				state: "blocked",
+				cause: "token-unsafe",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "blocked",
+				cause: "staging-residue",
+				next_action: "cleanup-token-staging",
+			},
+			{
+				state: "blocked",
+				cause: "removal-residue",
+				remote_authority: "may-remain-live",
+				next_action: "complete-local-token-removal",
+			},
+			{
+				state: "removed",
+				remote_authority: "may-remain-live",
+				next_action: "revoke-service-account-token-remotely",
+			},
+			{
+				state: "removed-sync-unproven",
+				cause: "parent-sync-failed",
+				remote_authority: "may-remain-live",
+				next_action: "revoke-service-account-token-remotely",
+			},
+			{ state: "cleaned", next_action: "inspect-token-status" },
+			{
+				state: "cleaned",
+				remote_authority: "may-remain-live",
+				next_action: "revoke-service-account-token-remotely",
+			},
+		] as const;
+
+		for (const value of valid) {
+			expect(parseEnvironmentTokenCustodyState(value)).toEqual(value);
+		}
+	});
+
+	test("rejects required, forbidden, or mismatched lifecycle fields", () => {
+		const invalid = [
+			{ state: "ready", next_action: "install-local-token" },
+			{
+				state: "blocked",
+				cause: "made-up",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "missing",
+				cause: "token-missing",
+				next_action: "install-local-token",
+			},
+			{
+				state: "ready",
+				remote_authority: "may-remain-live",
+				next_action: "validate-service-account",
+			},
+			{
+				state: "installed",
+				cause: undefined,
+				next_action: "validate-service-account",
+			},
+			{
+				state: "cleanup-required",
+				cause: "staging-residue",
+				remote_authority: "may-remain-live",
+				next_action: "cleanup-token-staging",
+			},
+			{
+				state: "cleanup-required",
+				cause: "removal-residue",
+				next_action: "complete-local-token-removal",
+			},
+			{
+				state: "cleanup-required",
+				cause: "staging-residue",
+				next_action: "complete-local-token-removal",
+			},
+			{ state: "blocked", next_action: "repair-token-custody" },
+			{
+				state: "blocked",
+				cause: "token-unsafe",
+				remote_authority: "may-remain-live",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "blocked",
+				cause: "staging-residue",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "blocked",
+				cause: "removal-residue",
+				remote_authority: "may-remain-live",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "removed",
+				cause: "parent-sync-failed",
+				remote_authority: "may-remain-live",
+				next_action: "revoke-service-account-token-remotely",
+			},
+			{
+				state: "removed-sync-unproven",
+				remote_authority: "may-remain-live",
+				next_action: "revoke-service-account-token-remotely",
+			},
+			{
+				state: "cleaned",
+				remote_authority: "may-remain-live",
+				next_action: "inspect-token-status",
+			},
+			{
+				state: "cleaned",
+				next_action: "revoke-service-account-token-remotely",
+			},
+			{
+				state: "missing",
+				next_action: "install-local-token",
+				message: "untrusted native text",
+			},
+		];
+
+		for (const value of invalid) {
+			expect(() => parseEnvironmentTokenCustodyState(value)).toThrow();
+		}
 	});
 
 	test("rejects token-bearing argv and environment options", () => {

@@ -6,6 +6,9 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
+	BROWSER_USE_CONTINUATION_CLAIM_RESULTS,
+	BROWSER_USE_CONTINUATION_REQUIRED_ACTORS,
+	BROWSER_USE_CONTINUATION_STATES,
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
 	BROWSER_USE_DIAGNOSTIC_CODES,
@@ -13,6 +16,7 @@ import {
 	BROWSER_USE_TARGETS_CONTRACT_ID,
 	BROWSER_USE_TARGETS_SCHEMA_VERSION,
 	type BrowserUseCommand,
+	type BrowserUseSecretFreeContinuation,
 	browserUseContracts,
 	browserUseGenerationFailureActions,
 	browserUseGenerationSuccessActions,
@@ -54,7 +58,10 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"artifact-list",
 	"repair-status",
 	"repair-apply",
-	// R27 auth repair surface (auth plan 2026-07-21-003 U3a).
+	// Environment-token lifecycle plus R27 auth repair surface.
+	"auth-status",
+	"auth-install-token",
+	"auth-remove-token",
 	"auth-enroll-browser-automation-token",
 	"auth-repair-vault-grant",
 	"auth-repair-item-binding",
@@ -178,6 +185,81 @@ describe("U3 command contract", () => {
 			"--plain",
 			"--source",
 		]);
+		expect(contractFlags("auth-status")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+		]);
+		expect(contractFlags("auth-install-token")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+			"--stdin",
+		]);
+		expect(contractFlags("auth-remove-token")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+		]);
+	});
+
+	test("token lifecycle discovery exposes the accepted input channel and human gate", () => {
+		const tree = discoveryTree();
+		expect(tree.commands["auth-install-token"]).toMatchObject({
+			interactivity: "optional",
+			result_contract: {
+				id: "browser-use.environment-token-lifecycle",
+				schema_version: "1",
+			},
+		});
+		expect(tree.commands["auth-install-token"]?.flags["--stdin"]).toMatchObject({
+			type: "boolean",
+		});
+		expect(tree.commands["auth-status"]?.interactivity).toBe("none");
+		expect(tree.commands["auth-remove-token"]?.interactivity).toBe("none");
+	});
+
+	test("R16 continuation schema and stable claim exits stay code-owned", () => {
+		const fixture = {
+			continuation_id: "continuation-1",
+			run_id: "run-1",
+			state: "pending",
+			reason: "user-presence-required",
+			required_actor: "human",
+			safe_to_retry: false,
+			checkpoint: "before-auth-submit",
+			expires_at_epoch_ms: 2_000,
+			resume_action: {
+				command: "run",
+				args: ["resume", "--run", "run-1", "--json"],
+			},
+			bindings: {
+				generation_id: "generation-1",
+				target_binding_id: "target-1",
+				environment: "agent-chrome",
+				profile: "default",
+			},
+		} as const satisfies BrowserUseSecretFreeContinuation;
+		expect(fixture.required_actor).toBe("human");
+		expect(BROWSER_USE_CONTINUATION_REQUIRED_ACTORS).toEqual(["agent", "human"]);
+		expect(BROWSER_USE_CONTINUATION_STATES).toEqual([
+			"pending",
+			"claimed",
+			"in-progress",
+			"completed",
+			"expired",
+			"invalidated",
+		]);
+		expect(BROWSER_USE_CONTINUATION_CLAIM_RESULTS).toEqual([
+			"claimed",
+			"already-claimed",
+			"in-progress",
+			"terminal",
+		]);
+		expect(browserUseContracts["run-resume"].exitCodes).toMatchObject({
+			"21": expect.stringContaining("human"),
+			"22": expect.stringContaining("claimed"),
+		});
 	});
 
 	// Scenario 5: command discovery exposes both result contracts with versions.

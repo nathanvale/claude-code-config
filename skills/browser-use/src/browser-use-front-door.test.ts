@@ -216,16 +216,30 @@ describe("front door: error identity (D6)", () => {
 	});
 
 	test("invalid leaf --help never masquerades as family help", async () => {
-		// `auth status` does not exist; silent family help here previously read
-		// as a successful help render (handoff defect list).
-		const result = await runForTest(["auth", "status", "--help"], makeRuntime());
+		const result = await runForTest(["auth", "bogus-leaf", "--help"], makeRuntime());
 		expect(result.exitCode).toBe(2);
 		expect(result.stdout).not.toContain("Subcommands:");
 		const envelope = parseJson(result.stdout) as {
 			status: string;
 			error: { message: string };
 		};
-		expect(envelope.error.message).toContain("status");
+		expect(envelope.error.message).toContain("bogus-leaf");
+	});
+
+	test("auth lifecycle help is contract-driven and secret-free", async () => {
+		for (const leaf of ["status", "install-token", "remove-token"] as const) {
+			const result = await runForTest(["auth", leaf, "--help"], makeRuntime());
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain(`Usage: browser-use auth ${leaf}`);
+			expect(result.stdout).not.toContain("--token");
+			expect(result.stdout).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
+		}
+		const install = await runForTest(
+			["auth", "install-token", "--help"],
+			makeRuntime(),
+		);
+		expect(install.stdout).toContain("--stdin");
+		expect(install.stdout).toContain("hidden terminal");
 	});
 });
 

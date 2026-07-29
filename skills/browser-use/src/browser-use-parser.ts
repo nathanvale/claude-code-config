@@ -208,6 +208,13 @@ export function parseBrowserUseArgv(
 	// flag check and the dry-run/live split — so an unregistered enum value fails
 	// closed for dry-run and live alike (R27, api-contract parity).
 	validateEnumFlagValues(flagValues, flags);
+	if (
+		command === "auth-status" ||
+		command === "auth-install-token" ||
+		command === "auth-remove-token"
+	) {
+		rejectUnexpectedPositionals(rest, flags);
+	}
 	if (command === "run-resume" || command === "run-cancel") {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
@@ -400,6 +407,30 @@ function toCommand(
 }
 
 type FlagSpec = { type?: string; values?: readonly string[] };
+
+function rejectUnexpectedPositionals(
+	argv: readonly string[],
+	flags: Readonly<Record<string, FlagSpec>>,
+): void {
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("--")) {
+			throw usageError(
+				"auth token lifecycle accepts no positional values; use --stdin or hidden terminal entry.",
+			);
+		}
+		const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+		const spec = flags[name];
+		if (
+			spec !== undefined &&
+			!arg.includes("=") &&
+			spec.type !== "boolean" &&
+			index + 1 < argv.length
+		) {
+			index += 1;
+		}
+	}
+}
 
 // Validate every enum-typed flag's supplied VALUE against the contract's
 // declared `values`, contract-derived so dry-run and live agree (R27): an

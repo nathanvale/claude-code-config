@@ -35,7 +35,8 @@ private func installForTest(
     replacing: Bool,
     backupExclusionProof: TokenCustodyBackupExclusionProof =
         acceptingBackupExclusionProof,
-    validatorTimeoutMilliseconds: Int32 = 5_000
+    validatorTimeoutMilliseconds: Int32 = 5_000,
+    validationCompletion: @escaping @Sendable () throws -> Void = {}
 ) -> TokenCustodyResult {
     TokenCustody.installForTesting(
         configRoot: configRoot,
@@ -43,7 +44,8 @@ private func installForTest(
         validatorDescriptor: validatorDescriptor,
         replacing: replacing,
         backupExclusionProof: backupExclusionProof,
-        validatorTimeoutMilliseconds: validatorTimeoutMilliseconds
+        validatorTimeoutMilliseconds: validatorTimeoutMilliseconds,
+        validationCompletion: validationCompletion
     )
 }
 
@@ -100,6 +102,10 @@ private final class RequestBox: @unchecked Sendable {
 
 private final class URLBox: @unchecked Sendable {
     var value: URL?
+}
+
+private final class ExitCodeBox: @unchecked Sendable {
+    var value: Int32?
 }
 
 private func controlAlignment(_ size: Int) -> Int {
@@ -1232,12 +1238,337 @@ private func environmentOpValidatorUsesReceivedDescriptor() throws {
     try check(result.state == .installed, "native validator rejected valid OP scope")
 }
 
+private func runAsFakeValidator() -> Never {
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    guard arguments.count == 5 else { Foundation.exit(41) }
+    guard arguments[0] == "validate" else { Foundation.exit(42) }
+    guard arguments[1] == "--validator-fd",
+          let socket = Int32(arguments[2]),
+          socket >= 0
+    else { Foundation.exit(43) }
+    guard arguments[3] == "--op-path",
+          (arguments[4] as NSString).isAbsolutePath
+    else { Foundation.exit(44) }
+    guard Set(ProcessInfo.processInfo.environment.keys) == [
+        "LANG",
+        "PATH",
+        "__CF_USER_TEXT_ENCODING",
+    ]
+    else { Foundation.exit(45) }
+    let opPath = arguments[4]
+    if opPath.hasSuffix(".descendant.pid") {
+        let descendant = testFork()
+        if descendant == 0 {
+            usleep(10_000_000)
+            _exit(0)
+        }
+        guard descendant > 0 else { Foundation.exit(46) }
+        try! String(descendant).write(
+            toFile: opPath,
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+    let received = receiveDescriptor(socket: socket)
+    defer {
+        if let descriptor = received.descriptor {
+            _ = Darwin.close(descriptor)
+        }
+    }
+    let approved = received.request == "browser-use-token-validator/v2\n"
+        && received.descriptor.map {
+            readDescriptor($0) == Data("ops_U3_NATIVE_LIFECYCLE".utf8)
+        } == true
+    let response = approved ? Array("ok\n".utf8) : Array("no\n".utf8)
+    _ = response.withUnsafeBytes {
+        Darwin.write(socket, $0.baseAddress, response.count)
+    }
+    if opPath.hasSuffix(".nonzero") {
+        Foundation.exit(47)
+    }
+    if opPath.hasSuffix(".stall") {
+        usleep(10_000_000)
+    }
+    Foundation.exit(approved ? 0 : 20)
+}
+
+private func makeFakeValidator(at root: URL) throws -> URL {
+    let executable = root.appendingPathComponent("browser-use-op-supervisor")
+    try FileManager.default.copyItem(
+        at: URL(fileURLWithPath: CommandLine.arguments[0]),
+        to: executable
+    )
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: executable.path
+    )
+    return executable
+}
+
+private func arbitrarySameNameValidatorIsRejectedBeforeSpawn() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let arbitrary = try makeFakeValidator(at: root)
+    let packagedSibling = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-op-supervisor")
+    do {
+        let child = try EnvironmentTokenValidatorProcess.start(
+            executablePath: arbitrary.path,
+            requiredExecutablePath: packagedSibling.path,
+            opPath: "/opt/homebrew/bin/op",
+            stagingRoot: root.path
+        )
+        child.cancel()
+        throw TestFailure(
+            description: "arbitrary owner-only same-name validator was admitted"
+        )
+    } catch is TestFailure {
+        throw TestFailure(
+            description: "arbitrary owner-only same-name validator was admitted"
+        )
+    } catch let cause as TokenCustodyCause {
+        try check(
+            cause == .invalidArguments,
+            "arbitrary validator returned the wrong refusal"
+        )
+    }
+}
+
+private func validatorFinishKillsDescendantsAfterCleanExit() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let validator = try makeFakeValidator(at: root)
+    let pidFile = root.appendingPathComponent("validator.descendant.pid")
+    let child = try EnvironmentTokenValidatorProcess.start(
+        executablePath: validator.path,
+        requiredExecutablePath: validator.path,
+        opPath: pidFile.path,
+        stagingRoot: root.path
+    )
+    let configRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: configRoot) }
+    var token = Array("ops_U3_NATIVE_LIFECYCLE".utf8)
+    let exitCode = ExitCodeBox()
+    let result = installForTest(
+        configRoot: configRoot.path,
+        tokenBytes: &token,
+        validatorDescriptor: child.socket,
+        replacing: false,
+        validationCompletion: {
+            exitCode.value = child.finish()
+            guard exitCode.value == 0 else {
+                throw TokenCustodyCause.validationUnavailable
+            }
+        }
+    )
+    try check(result.state == .installed, "descendant fixture validation failed")
+    try check(exitCode.value == 0, "clean validator exit was not observed")
+    guard let pidText = try? String(contentsOf: pidFile, encoding: .utf8),
+          let descendant = Int32(pidText)
+    else {
+        throw TestFailure(description: "validator descendant PID was not captured")
+    }
+    var gone = false
+    for _ in 0..<50 {
+        if kill(descendant, 0) < 0, errno == ESRCH {
+            gone = true
+            break
+        }
+        usleep(10_000)
+    }
+    if !gone {
+        _ = kill(descendant, SIGKILL)
+    }
+    try check(gone, "validator descendant survived clean direct-child exit")
+}
+
+private func validatorNonzeroAfterOkayNeverPublishesToken() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let validator = try makeFakeValidator(at: root)
+    let child = try EnvironmentTokenValidatorProcess.start(
+        executablePath: validator.path,
+        requiredExecutablePath: validator.path,
+        opPath: root.appendingPathComponent("validator.nonzero").path,
+        stagingRoot: root.path
+    )
+    let configRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: configRoot) }
+    var token = Array("ops_U3_NATIVE_LIFECYCLE".utf8)
+    let exitCode = ExitCodeBox()
+    let result = installForTest(
+        configRoot: configRoot.path,
+        tokenBytes: &token,
+        validatorDescriptor: child.socket,
+        replacing: false,
+        validationCompletion: {
+            exitCode.value = child.finish()
+            guard exitCode.value == 0 else {
+                throw TokenCustodyCause.validationUnavailable
+            }
+        }
+    )
+    let installed = configRoot
+        .appendingPathComponent(TokenCustodyPaths.directoryName)
+        .appendingPathComponent(TokenCustodyPaths.tokenName)
+    try check(exitCode.value == 47, "post-okay nonzero exit was not observed")
+    try check(
+        result.state == .blocked
+            && !FileManager.default.fileExists(atPath: installed.path),
+        "post-okay nonzero validator left a published token"
+    )
+}
+
+private func productionCustodySpawnsValidatorWithoutLeakingToken() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let buildDirectory = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+    let custodyExecutable = buildDirectory.appendingPathComponent(
+        "browser-use-token-custody"
+    )
+    try check(
+        FileManager.default.isExecutableFile(atPath: custodyExecutable.path),
+        "custody executable is unavailable; run swift build before the harness"
+    )
+    let packagedValidatorExecutable = buildDirectory.appendingPathComponent(
+        "browser-use-op-supervisor"
+    ).resolvingSymlinksInPath()
+    try check(
+        FileManager.default.isExecutableFile(
+            atPath: packagedValidatorExecutable.path
+        ),
+        "packaged validator executable is unavailable; run swift build first"
+    )
+    do {
+        let packagedProbe = try EnvironmentTokenValidatorProcess.start(
+            executablePath: packagedValidatorExecutable.path,
+            requiredExecutablePath: packagedValidatorExecutable.path,
+            opPath: "/usr/bin/false",
+            stagingRoot: root.path
+        )
+        let probeRoot = try makeConfigRoot()
+        defer { try? FileManager.default.removeItem(at: probeRoot) }
+        var probeBytes = Array("ops_U3_PACKAGED_PROBE".utf8)
+        let probeResult = installForTest(
+            configRoot: probeRoot.path,
+            tokenBytes: &probeBytes,
+            validatorDescriptor: packagedProbe.socket,
+            replacing: false
+        )
+        let probeExit = packagedProbe.finish()
+        try check(
+            probeResult.cause == .validationFailed && probeExit == 20,
+            "packaged validator protocol failed: cause=\(String(describing: probeResult.cause)) exit=\(String(describing: probeExit))"
+        )
+    } catch {
+        throw TestFailure(
+            description: "packaged validator admission failed: \(error)"
+        )
+    }
+
+    let input = Pipe()
+    let output = Pipe()
+    let errorOutput = Pipe()
+    let process = Process()
+    process.executableURL = custodyExecutable
+    process.arguments = [
+        "install",
+        "--config-root", root.path,
+        "--input-fd", "0",
+        "--validator-executable", packagedValidatorExecutable.path,
+        "--op-path", "/usr/bin/false",
+    ]
+    process.environment = [
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+    ]
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = errorOutput
+    try process.run()
+    let sentinel = "ops_U3_NATIVE_LIFECYCLE"
+    input.fileHandleForWriting.write(Data((sentinel + "\n").utf8))
+    try input.fileHandleForWriting.close()
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    if !process.isRunning {
+        finished.signal()
+    }
+    try check(
+        finished.wait(timeout: .now() + 8) == .success,
+        "production custody and validator process stalled"
+    )
+    let stdout = output.fileHandleForReading.readDataToEndOfFile()
+    let stderr = errorOutput.fileHandleForReading.readDataToEndOfFile()
+    let text = String(decoding: stdout, as: UTF8.self)
+    // Some filesystems reject backup-exclusion metadata before validation;
+    // others reach the deliberately unapproved hermetic OP fixture. Either
+    // typed gate proves the public executable accepted the production
+    // validator topology without invoking real 1Password.
+    try check(
+        process.terminationStatus == 20
+            && (
+                text.contains("\"cause\":\"backup-exclusion-unproven\"")
+                    || text.contains("\"cause\":\"validation-failed\"")
+            ),
+        "production custody did not reach the hermetic downstream gate: \(text)"
+    )
+    try check(!text.contains(sentinel), "custody stdout leaked token")
+    try check(!stderr.contains(Data(sentinel.utf8)), "custody stderr leaked token")
+
+    // Prove the descriptor-only child orchestration against the hermetic
+    // install seam, which injects the already-covered backup proof.
+    let hermeticRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: hermeticRoot) }
+    let validatorExecutable = try makeFakeValidator(at: root)
+    let child = try EnvironmentTokenValidatorProcess.start(
+        executablePath: validatorExecutable.path,
+        requiredExecutablePath: validatorExecutable.path,
+        opPath: "/opt/homebrew/bin/op",
+        stagingRoot: hermeticRoot.path
+    )
+    var bytes = Array(sentinel.utf8)
+    let validatorExit = ExitCodeBox()
+    let result = installForTest(
+        configRoot: hermeticRoot.path,
+        tokenBytes: &bytes,
+        validatorDescriptor: child.socket,
+        replacing: false,
+        validationCompletion: {
+            validatorExit.value = child.finish()
+            guard validatorExit.value == 0 else {
+                throw TokenCustodyCause.validationUnavailable
+            }
+        }
+    )
+    try check(
+        result.state == .installed,
+        "validator process rejected the staged descriptor: \(result.state) \(String(describing: result.cause)) exit=\(String(describing: validatorExit.value))"
+    )
+    try check(
+        validatorExit.value == 0,
+        "validator process did not exit cleanly: \(String(describing: validatorExit.value))"
+    )
+    let installed = hermeticRoot
+        .appendingPathComponent(TokenCustodyPaths.directoryName)
+        .appendingPathComponent(TokenCustodyPaths.tokenName)
+    try check(
+        try Data(contentsOf: installed) == Data(sentinel.utf8),
+        "hermetic custody did not publish the validated bytes"
+    )
+}
+
 @main
 enum BrowserUseEnvironmentAuthTests {
     static func main() throws {
-        if URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
-            .hasPrefix("browser-use-fake-op")
-        {
+        let executableName = URL(fileURLWithPath: CommandLine.arguments[0])
+            .lastPathComponent
+        if executableName == "browser-use-op-supervisor" {
+            runAsFakeValidator()
+        }
+        if executableName.hasPrefix("browser-use-fake-op") {
             runAsFakeOp()
             return
         }
@@ -1313,6 +1644,22 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "environment OP validator uses received descriptor",
                 environmentOpValidatorUsesReceivedDescriptor
+            ),
+            (
+                "arbitrary same-name validator is rejected before spawn",
+                arbitrarySameNameValidatorIsRejectedBeforeSpawn
+            ),
+            (
+                "validator finish kills descendants after clean exit",
+                validatorFinishKillsDescendantsAfterCleanExit
+            ),
+            (
+                "validator nonzero after okay never publishes token",
+                validatorNonzeroAfterOkayNeverPublishesToken
+            ),
+            (
+                "production custody spawns validator without leaking token",
+                productionCustodySpawnsValidatorWithoutLeakingToken
             ),
         ]
         for (name, test) in tests {

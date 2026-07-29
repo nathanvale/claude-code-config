@@ -39,6 +39,8 @@ import {
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
 	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
 	BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
@@ -60,6 +62,7 @@ import {
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
 	browserUseContracts,
+	browserUseEnvironmentTokenLifecycleActions,
 	browserUseGenerationFailureActions,
 	browserUseGenerationSuccessActions,
 	browserUseMigrationFailureActions,
@@ -74,6 +77,7 @@ import {
 	blockOfRetrievalRejection,
 	proveVaultScope,
 } from "./browser-use-op";
+import type { BrowserUseEnvironmentTokenCustodyState } from "./browser-use-environment-token";
 import {
 	type BrowserUseAdapterLaneView,
 	createAdapterLaneRegistry,
@@ -677,6 +681,21 @@ async function executeCommand(input: {
 	// as live check commands. Native custody absence is a typed evaluation,
 	// never a crash; dry-run keeps the mock envelope below.
 	if (parsed.family === "auth" && !parsed.dryRun) {
+		if (
+			parsed.command === "auth-status" ||
+			parsed.command === "auth-install-token" ||
+			parsed.command === "auth-remove-token"
+		) {
+			return runEnvironmentTokenLifecycle({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
 		return runAuthReadiness({
 			parsed,
 			runtime,
@@ -4058,6 +4077,210 @@ async function runMigration(input: PlatformCommandInput): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// Environment-token lifecycle (activation plan U3).
+// ---------------------------------------------------------------------------
+
+const environmentTokenLifecycleActionById = new Map<
+	string,
+	(typeof browserUseEnvironmentTokenLifecycleActions)[number]
+>(
+	browserUseEnvironmentTokenLifecycleActions.map((action) => [
+		action.id,
+		action,
+	]),
+);
+
+function environmentTokenLifecycleAction(id: string): RuntimeActionGuidance {
+	const safeId = environmentTokenLifecycleActionById.has(id)
+		? id
+		: "inspect-token-status";
+	return actionFor(
+		environmentTokenLifecycleActionById,
+		safeId,
+		"environment token lifecycle",
+	);
+}
+
+function emitEnvironmentTokenHumanGate(input: PlatformCommandInput): number {
+	const message =
+		"A human must provide token input through explicit stdin or a hidden terminal.";
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use human-action-required: ${message} action=human-action-required (run_id=${input.runId})\n`,
+		);
+		return 21;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: 21,
+			data: {
+				contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+				schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+				operation: "install",
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+			runtime_actions: [
+				environmentTokenLifecycleAction("human-action-required"),
+			],
+			continuation: { next_action_id: "human-action-required" },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: "human-action-required",
+				message,
+				exit_code: 21,
+				severity: "error",
+				...retryabilityForRecoverability("authenticate"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 21;
+}
+
+function emitEnvironmentTokenLifecycleUnavailable(
+	input: PlatformCommandInput,
+): number {
+	const message = "The native local auth lifecycle is unavailable.";
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use environment_token_lifecycle_unavailable: ${message} action=inspect-token-status (run_id=${input.runId})\n`,
+		);
+		return RUNTIME_FAILURE_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: RUNTIME_FAILURE_EXIT_CODE,
+			data: {
+				contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+				schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+			runtime_actions: [
+				environmentTokenLifecycleAction("inspect-token-status"),
+			],
+			continuation: { next_action_id: "inspect-token-status" },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: "environment_token_lifecycle_unavailable",
+				message,
+				exit_code: RUNTIME_FAILURE_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return RUNTIME_FAILURE_EXIT_CODE;
+}
+
+async function runEnvironmentTokenLifecycle(
+	input: PlatformCommandInput,
+): Promise<number> {
+	const port = input.runtime.environmentTokenLifecycle;
+	const command = input.parsed.command;
+	if (command === "auth-install-token") {
+		const explicitStdin = input.parsed.flagValues["--stdin"] !== undefined;
+		if (!explicitStdin && !(port?.inputIsTTY() ?? false)) {
+			return emitEnvironmentTokenHumanGate(input);
+		}
+	}
+	if (port === undefined) return emitEnvironmentTokenLifecycleUnavailable(input);
+
+	let operation: "status" | "install" | "replace" | "remove";
+	let state: BrowserUseEnvironmentTokenCustodyState;
+	try {
+		if (command === "auth-status") {
+			operation = "status";
+			state = await port.execute({ action: "status" });
+		} else if (command === "auth-remove-token") {
+			operation = "remove";
+			state = await port.execute({ action: "remove" });
+		} else {
+			const standing = await port.execute({ action: "status" });
+			if (standing.state !== "missing" && standing.state !== "ready") {
+				operation = "status";
+				state = standing;
+			} else {
+				operation = standing.state === "ready" ? "replace" : "install";
+				state = await port.execute({
+					action: operation,
+					input_channel:
+						input.parsed.flagValues["--stdin"] !== undefined ? "stdin" : "tty",
+				});
+			}
+		}
+	} catch {
+		return emitEnvironmentTokenLifecycleUnavailable(input);
+	}
+
+	const nextAction = environmentTokenLifecycleAction(state.next_action);
+	const data = {
+		contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+		operation,
+		...state,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			[
+				`contract=${data.contract}`,
+				`schema=${data.schema_version}`,
+				`operation=${operation}`,
+				`state=${state.state}`,
+				...("cause" in state && state.cause !== undefined
+					? [`cause=${state.cause}`]
+					: []),
+				`continuation=${nextAction.id}`,
+			].join(" ") + "\n",
+		);
+		return state.state === "blocked" ? BINDING_FAIL_CLOSED_EXIT_CODE : 0;
+	}
+	if (state.state === "blocked") {
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeErrorEnvelope({
+				run_id: input.runId,
+				process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				data,
+				runtime_actions: [nextAction],
+				continuation: { next_action_id: nextAction.id },
+				error: createCliRuntimeError({
+					run_id: input.runId,
+					code: `environment_token_${state.cause.replaceAll("-", "_")}`,
+					message: "Native local auth custody refused the lifecycle operation.",
+					exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+					severity: "error",
+					...retryabilityForRecoverability("repair_state"),
+					failure_domain: "browser_use",
+				}),
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data,
+			runtime_actions: [nextAction],
+			continuation: { next_action_id: nextAction.id },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+// ---------------------------------------------------------------------------
 // R27 auth repair surface (auth plan U3a; ADR 0028).
 //
 // Each subcommand IS a blocked-cause continuation id: an agent holding a
@@ -4222,6 +4445,10 @@ async function evaluateAuthReadiness(
 				continuationId: "acquire-native-capability",
 			};
 		}
+		case "status":
+		case "install-token":
+		case "remove-token":
+			throw new Error("environment token lifecycle command reached auth readiness");
 	}
 }
 

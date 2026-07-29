@@ -838,7 +838,27 @@ public enum TokenCustody {
             validatorDescriptor: validatorDescriptor,
             replacing: replacing,
             backupExclusionProof: .production,
-            validatorTimeoutMilliseconds: 5_000
+            validatorTimeoutMilliseconds: 5_000,
+            validationCompletion: {}
+        )
+    }
+
+    @_spi(Executor)
+    public static func installWithValidationCompletion(
+        configRoot: String,
+        tokenBytes: inout [UInt8],
+        validatorDescriptor: Int32,
+        replacing: Bool,
+        validationCompletion: @escaping @Sendable () throws -> Void
+    ) -> TokenCustodyResult {
+        install(
+            configRoot: configRoot,
+            tokenBytes: &tokenBytes,
+            validatorDescriptor: validatorDescriptor,
+            replacing: replacing,
+            backupExclusionProof: .production,
+            validatorTimeoutMilliseconds: 5_000,
+            validationCompletion: validationCompletion
         )
     }
 
@@ -849,7 +869,8 @@ public enum TokenCustody {
         validatorDescriptor: Int32,
         replacing: Bool,
         backupExclusionProof: TokenCustodyBackupExclusionProof,
-        validatorTimeoutMilliseconds: Int32 = 5_000
+        validatorTimeoutMilliseconds: Int32 = 5_000,
+        validationCompletion: @escaping @Sendable () throws -> Void = {}
     ) -> TokenCustodyResult {
         install(
             configRoot: configRoot,
@@ -857,7 +878,8 @@ public enum TokenCustody {
             validatorDescriptor: validatorDescriptor,
             replacing: replacing,
             backupExclusionProof: backupExclusionProof,
-            validatorTimeoutMilliseconds: validatorTimeoutMilliseconds
+            validatorTimeoutMilliseconds: validatorTimeoutMilliseconds,
+            validationCompletion: validationCompletion
         )
     }
 
@@ -867,7 +889,8 @@ public enum TokenCustody {
         validatorDescriptor: Int32,
         replacing: Bool,
         backupExclusionProof: TokenCustodyBackupExclusionProof,
-        validatorTimeoutMilliseconds: Int32
+        validatorTimeoutMilliseconds: Int32,
+        validationCompletion: @escaping @Sendable () throws -> Void
     ) -> TokenCustodyResult {
         defer {
             _ = tokenBytes.withUnsafeMutableBytes {
@@ -966,6 +989,7 @@ public enum TokenCustody {
                 stagedReadDescriptor: stagedReadDescriptor,
                 timeoutMilliseconds: validatorTimeoutMilliseconds
             )
+            try validationCompletion()
             try reproveStagedPath(
                 directoryDescriptor: directoryDescriptor,
                 stagingName: stagingName,

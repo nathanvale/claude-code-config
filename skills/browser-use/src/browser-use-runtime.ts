@@ -9,7 +9,9 @@
 // capturing runtime.
 // ---------------------------------------------------------------------------
 
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
@@ -22,7 +24,14 @@ import {
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
+	resolveBrowserUsePaths,
 } from "./browser-use-paths";
+import {
+	type BrowserUseEnvironmentTokenCustodyAction,
+	type BrowserUseEnvironmentTokenCustodyState,
+	buildEnvironmentTokenCustodyInvocation,
+	parseEnvironmentTokenCustodyState,
+} from "./browser-use-environment-token";
 import {
 	type McporterCommandInput,
 	type McporterCommandResult,
@@ -60,6 +69,20 @@ export type BrowserUseSecuritySeam = {
 		execute: BrowserUseOpExecute;
 		token_handle_id: string;
 	};
+};
+
+/** Secret-free native lifecycle request; input names a channel, never bytes. */
+export type BrowserUseEnvironmentTokenLifecycleRequest = {
+	action: BrowserUseEnvironmentTokenCustodyAction;
+	input_channel?: "stdin" | "tty";
+};
+
+/** Runtime seam keeping local auth bytes outside TypeScript. */
+export type BrowserUseEnvironmentTokenLifecyclePort = {
+	inputIsTTY(): boolean;
+	execute(
+		input: BrowserUseEnvironmentTokenLifecycleRequest,
+	): Promise<BrowserUseEnvironmentTokenCustodyState>;
 };
 
 /**
@@ -142,6 +165,12 @@ export type BrowserUseRuntime = {
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 	/**
+	 * Native local-token lifecycle. Token bytes remain in inherited stdin or
+	 * the native hidden terminal; TypeScript receives only the secret-free
+	 * lifecycle state.
+	 */
+	environmentTokenLifecycle?: BrowserUseEnvironmentTokenLifecyclePort;
+	/**
 	 * Internal Verified Handoff Envelope mint (design brief D4): prove the
 	 * connection and mint the envelope in-process through browser-connect's
 	 * exported `main` — the everyday `task run --intent` path needs no caller-
@@ -204,7 +233,188 @@ export async function createProductionBrowserUseRuntime(
 		const port = await resolveAuthTokenRetrieval(seam);
 		if (port !== undefined) runtime.authTokenRetrieval = port;
 	}
+	if (runtime.environmentTokenLifecycle === undefined) {
+		runtime.environmentTokenLifecycle = createNativeEnvironmentTokenLifecyclePort(
+			runtime.env,
+		);
+	}
 	return runtime;
+}
+
+const NATIVE_LIFECYCLE_TIMEOUT_MS = 15_000;
+const NATIVE_LIFECYCLE_TERMINATION_GRACE_MS = 2_000;
+const NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES = 65_536;
+
+export type BrowserUseEnvironmentTokenLifecycleProcess = {
+	readonly exited: Promise<number>;
+	kill(signal: "SIGTERM" | "SIGKILL"): unknown;
+};
+
+function processExitedWithin(
+	exited: Promise<number>,
+	timeoutMs: number,
+): Promise<boolean> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			resolve(false);
+		}, timeoutMs);
+		timer.unref?.();
+		void exited.then(() => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(true);
+		});
+	});
+}
+
+/**
+ * Give native custody its cleanup signal before forcing termination.
+ *
+ * SIGTERM runs the custody handler that terminates its validator process group.
+ * SIGKILL is reserved for a child that outlives the bounded cleanup grace.
+ */
+export async function terminateEnvironmentTokenLifecycleProcess(
+	child: BrowserUseEnvironmentTokenLifecycleProcess,
+	graceMs: number = NATIVE_LIFECYCLE_TERMINATION_GRACE_MS,
+): Promise<void> {
+	child.kill("SIGTERM");
+	if (await processExitedWithin(child.exited, graceMs)) return;
+	child.kill("SIGKILL");
+	await processExitedWithin(child.exited, graceMs);
+}
+
+/** Enforce the native executable's exact state-to-exit contract. */
+export function assertEnvironmentTokenLifecycleExit(
+	exitCode: number,
+	signalCode: NodeJS.Signals | null | undefined,
+	state: BrowserUseEnvironmentTokenCustodyState,
+): void {
+	if (signalCode != null) {
+		throw new Error("native lifecycle terminated by signal");
+	}
+	const expectedExitCode = state.state === "blocked" ? 20 : 0;
+	if (exitCode !== expectedExitCode) {
+		throw new Error("native lifecycle exit did not match its state");
+	}
+}
+
+function browserUseNativeBinRoot(): string {
+	return import.meta.dir.endsWith("/dist")
+		? join(import.meta.dir, "bin")
+		: join(
+				import.meta.dir,
+				"..",
+				"..",
+				"..",
+				"runtime",
+				"browser-use-environment-auth",
+				".build",
+				"release",
+			);
+}
+
+function fixedOpExecutablePath(): string {
+	const preferred =
+		process.arch === "arm64"
+			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
+			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
+	return preferred.find((path) => existsSync(path)) ?? preferred[0];
+}
+
+async function readBoundedNativeOutput(
+	stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+	const reader = stream.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	while (true) {
+		const next = await reader.read();
+		if (next.done) break;
+		total += next.value.byteLength;
+		if (total > NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES) {
+			await reader.cancel();
+			throw new Error("native lifecycle output exceeded its bound");
+		}
+		chunks.push(next.value);
+	}
+	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
+		"utf8",
+	);
+}
+
+function createNativeEnvironmentTokenLifecyclePort(
+	env: Record<string, string | undefined>,
+): BrowserUseEnvironmentTokenLifecyclePort {
+	const nativeBinRoot = browserUseNativeBinRoot();
+	const custodyExecutable = join(nativeBinRoot, "browser-use-token-custody");
+	const validatorExecutable = join(
+		nativeBinRoot,
+		"browser-use-op-supervisor",
+	);
+	const opExecutable = fixedOpExecutablePath();
+	return {
+		inputIsTTY: () => process.stdin.isTTY === true,
+		async execute(input) {
+			const resolved = resolveBrowserUsePaths(env);
+			if (!resolved.ok) throw new Error("Browser Use paths are unavailable");
+			const invocation = buildEnvironmentTokenCustodyInvocation({
+				executable_path: custodyExecutable,
+				action: input.action,
+				config_root: resolved.resolution.roots.config,
+				...(input.input_channel === "stdin"
+					? { input: { kind: "stdin" as const, fd: 0 } }
+					: input.input_channel === "tty"
+						? { input: { kind: "tty" as const } }
+						: {}),
+				...(input.action === "install" || input.action === "replace"
+					? {
+							validator_executable_path: validatorExecutable,
+							op_executable_path: opExecutable,
+						}
+					: {}),
+			});
+			const child = Bun.spawn(
+				[invocation.executable_path, ...invocation.argv],
+				{
+					env: { PATH: "/usr/bin:/bin", LANG: "C" },
+					stdin: input.input_channel === "stdin" ? "inherit" : "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const stdoutPromise = readBoundedNativeOutput(child.stdout);
+			const stderrPromise = readBoundedNativeOutput(child.stderr);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timedOut = await Promise.race([
+				child.exited.then(() => false),
+				new Promise<true>((resolve) => {
+					timer = setTimeout(
+						() => resolve(true),
+						NATIVE_LIFECYCLE_TIMEOUT_MS,
+					);
+				}),
+			]);
+			if (timer !== undefined) clearTimeout(timer);
+			if (timedOut) {
+				void Promise.allSettled([stdoutPromise, stderrPromise]);
+				await terminateEnvironmentTokenLifecycleProcess(child);
+				throw new Error("native lifecycle timed out");
+			}
+			const exitCode = await child.exited;
+			const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
+			const parsed = parseEnvironmentTokenCustodyState(JSON.parse(stdout));
+			assertEnvironmentTokenLifecycleExit(
+				exitCode,
+				child.signalCode,
+				parsed,
+			);
+			return parsed;
+		},
+	};
 }
 
 // In-process envelope mint (D4). Imports browser-connect's CLI lazily so the

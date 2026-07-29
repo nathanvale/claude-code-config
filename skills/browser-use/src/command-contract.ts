@@ -350,6 +350,66 @@ const BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_AUTH_READINESS_CONTRACT_ID =
 	"browser-use.auth-readiness" as const;
 export const BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID =
+	"browser-use.environment-token-lifecycle" as const;
+export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION =
+	"1" as const;
+/** Public contract identity for restart-safe continuation projections. */
+export const BROWSER_USE_CONTINUATION_CONTRACT_ID =
+	"browser-use.continuation" as const;
+/** First schema carrying every R16 binding and actor field. */
+export const BROWSER_USE_CONTINUATION_SCHEMA_VERSION = "1" as const;
+/** Actors a continuation can require without treating caller labels as authority. */
+export const BROWSER_USE_CONTINUATION_REQUIRED_ACTORS = [
+	"agent",
+	"human",
+] as const;
+/** Durable continuation lifecycle states exposed to a fresh process. */
+export const BROWSER_USE_CONTINUATION_STATES = [
+	"pending",
+	"claimed",
+	"in-progress",
+	"completed",
+	"expired",
+	"invalidated",
+] as const;
+/** Atomic claim outcomes; exactly one claimant can receive `claimed`. */
+export const BROWSER_USE_CONTINUATION_CLAIM_RESULTS = [
+	"claimed",
+	"already-claimed",
+	"in-progress",
+	"terminal",
+] as const;
+
+/** Secret-free continuation envelope persisted for restart-safe resume. */
+export type BrowserUseSecretFreeContinuation = {
+	continuation_id: string;
+	run_id: string;
+	state: (typeof BROWSER_USE_CONTINUATION_STATES)[number];
+	reason: string;
+	required_actor: (typeof BROWSER_USE_CONTINUATION_REQUIRED_ACTORS)[number];
+	safe_to_retry: boolean;
+	checkpoint: string;
+	expires_at_epoch_ms: number;
+	resume_action: {
+		command: "run";
+		args: readonly ["resume", "--run", string, "--json"];
+	};
+	bindings: {
+		generation_id: string;
+		target_binding_id: string;
+		environment: string;
+		profile: string;
+	};
+};
+
+/** Stable result of an atomic continuation claim attempt. */
+export type BrowserUseContinuationClaimResult = {
+	result: (typeof BROWSER_USE_CONTINUATION_CLAIM_RESULTS)[number];
+	continuation_id: string;
+	state: (typeof BROWSER_USE_CONTINUATION_STATES)[number];
+	required_actor: (typeof BROWSER_USE_CONTINUATION_REQUIRED_ACTORS)[number];
+};
 // Adapter Lane Registry projection (auth plan 2026-07-21-003 U1, R27):
 // JSON-first lane discovery over the code-owned registry composition.
 export const BROWSER_USE_ADAPTER_LANES_CONTRACT_ID =
@@ -472,6 +532,9 @@ export type BrowserUseRepairSubcommand =
 // approval broker) is legally absent until U3b, and that absence is a typed
 // state, never a crash or a stub.
 export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+	"status",
+	"install-token",
+	"remove-token",
 	"enroll-browser-automation-token",
 	"repair-vault-grant",
 	"repair-item-binding",
@@ -584,6 +647,9 @@ export type BrowserUseCommand =
 	| "artifact-list"
 	| "repair-status"
 	| "repair-apply"
+	| "auth-status"
+	| "auth-install-token"
+	| "auth-remove-token"
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
@@ -1644,6 +1710,12 @@ const browserUsePlatformExitCodes = {
 	"20": "Run, binding, or evidence state failed closed.",
 } as const satisfies BrowserUseCommandContract["exitCodes"];
 
+const browserUseContinuationResumeExitCodes = {
+	...browserUsePlatformExitCodes,
+	"21": "The continuation requires a human actor.",
+	"22": "The continuation is already claimed, in progress, or terminal.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
+
 const browserUseGenerationExitCodes = {
 	"0": "Immutable generation staged or verified as an exact no-op.",
 	"1": "Unexpected facade runtime failure.",
@@ -1800,6 +1872,89 @@ const browserUseAuthReadinessResultContract = {
 	kind: "Auth readiness evaluation for one repair continuation.",
 	schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseEnvironmentTokenLifecycleResultContract = {
+	id: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+	kind: "Local auth lifecycle state with one next safe action.",
+	schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+export const browserUseEnvironmentTokenLifecycleActions = [
+	{
+		id: "inspect-token-status",
+		summary: "Inspect local environment-token custody state.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "install-local-token",
+		summary:
+			"Install or atomically replace the local token through hidden terminal entry or explicit stdin.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "validate-service-account",
+		summary:
+			"Validate the installed token through the bounded exact-environment executor.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "cleanup-token-staging",
+		summary: "Remove recognized interrupted token staging residue.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "complete-local-token-removal",
+		summary: "Complete the interrupted local token removal.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "repair-token-custody",
+		summary: "Repair the local custody evidence named by the typed cause.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "revoke-service-account-token-remotely",
+		summary:
+			"Have a human revoke the remote service-account authority; local removal is cleanup only.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "human-action-required",
+		summary:
+			"Have a human provide token input through a hidden terminal or explicit stdin, then retry.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+const browserUseEnvironmentTokenLifecycleFailureActions = [
+	...browserUsePlatformStoreFailureActions,
+	{
+		id: "inspect-token-status",
+		summary: "Inspect local environment-token custody state before retrying.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+const browserUseEnvironmentTokenLifecycleFlags = {
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseEnvironmentTokenInstallFlags = {
+	"--stdin": {
+		type: "boolean",
+		description:
+			"Read token bytes from inherited stdin. Omit only for hidden terminal entry; token argv, flags, and environment values are refused.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseEnvironmentTokenLifecycleExitCodes = {
+	"0": "Lifecycle command completed.",
+	"1": "Native custody or validation runtime failed.",
+	"2": "Usage error.",
+	"20": "Custody or filesystem evidence failed closed.",
+	"21": "Human action is required; the command never waited for terminal input.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
 
 // R27 auth runtime action ids (auth plan U3a). The four continuation ids
 // double as subcommand names AND runtime actions, so a chained repair (scope
@@ -2169,7 +2324,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"run-status": {
 			script: "browser-use",
 			summary:
-				"Show a shared Browser Use run: state, revision, environment/profile, auth readiness reference, and next safe action.",
+				"Inspect a shared Browser Use run, including any restart-safe continuation and its next safe action.",
 			usage: ["run status [--run <id>] [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "operator",
@@ -2190,7 +2345,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"run-resume": {
 			script: "browser-use",
 			summary:
-				"Resume a blocked shared Browser Use run on the same adapter lane after auth, approval, or restart.",
+				"Resume a blocked shared Browser Use run on the same adapter lane after auth, approval, or restart; typed claim conflicts fail closed.",
 			usage: ["run resume --run <id> [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
@@ -2209,7 +2364,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUsePlatformStoreFailureActions,
 			},
 			flags: browserUseRunFlags,
-			exitCodes: browserUsePlatformExitCodes,
+			exitCodes: browserUseContinuationResumeExitCodes,
 		},
 		"run-cancel": {
 			script: "browser-use",
@@ -2542,6 +2697,79 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-status": {
+			script: "browser-use",
+			summary:
+				"Inspect local environment-token custody without reading token bytes.",
+			usage: ["auth status [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseEnvironmentTokenLifecycleResultContract,
+			actionAffordances: {
+				success: browserUseEnvironmentTokenLifecycleActions,
+				failure: browserUseEnvironmentTokenLifecycleFailureActions,
+			},
+			flags: browserUseEnvironmentTokenLifecycleFlags,
+			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,
+		},
+		"auth-install-token": {
+			script: "browser-use",
+			summary:
+				"Install or atomically replace the local environment token through native custody.",
+			usage: [
+				"auth install-token [--stdin] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Native custody validates a complete owner-only staged file before its one atomic replacement.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseEnvironmentTokenLifecycleResultContract,
+			actionAffordances: {
+				success: browserUseEnvironmentTokenLifecycleActions,
+				failure: browserUseEnvironmentTokenLifecycleFailureActions,
+			},
+			flags: browserUseEnvironmentTokenInstallFlags,
+			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,
+		},
+		"auth-remove-token": {
+			script: "browser-use",
+			summary:
+				"Remove the local environment token; remote revocation remains an explicit human action.",
+			usage: ["auth remove-token [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Removal is a bounded local cleanup; status is its read-only preview and remote revocation remains separate.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseEnvironmentTokenLifecycleResultContract,
+			actionAffordances: {
+				success: browserUseEnvironmentTokenLifecycleActions,
+				failure: browserUseEnvironmentTokenLifecycleFailureActions,
+			},
+			flags: browserUseEnvironmentTokenLifecycleFlags,
+			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,
 		},
 		"auth-enroll-browser-automation-token": {
 			script: "browser-use",

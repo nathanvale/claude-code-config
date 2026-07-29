@@ -110,6 +110,37 @@ describe("U3 help and version", () => {
 // =========================================================================
 
 describe("U3 parser", () => {
+	test("auth token lifecycle accepts only the contract-owned input form", () => {
+		expect(parseBrowserUseArgv(["auth", "status", "--json"])).toMatchObject({
+			kind: "command",
+			command: "auth-status",
+			outputMode: "json",
+		});
+		expect(
+			parseBrowserUseArgv(["auth", "install-token", "--stdin", "--plain"]),
+		).toMatchObject({
+			kind: "command",
+			command: "auth-install-token",
+			outputMode: "plain",
+			flagValues: { "--stdin": "" },
+		});
+		expect(parseBrowserUseArgv(["auth", "remove-token", "--json"])).toMatchObject({
+			kind: "command",
+			command: "auth-remove-token",
+			outputMode: "json",
+		});
+
+		for (const argv of [
+			["auth", "install-token", "raw-token"],
+			["auth", "install-token", "--token", "raw-token"],
+			["auth", "install-token", "--token-env", "OP_SERVICE_ACCOUNT_TOKEN"],
+			["auth", "status", "--stdin"],
+			["auth", "remove-token", "--stdin"],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow();
+		}
+	});
+
 	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
 	// door smoke tests). A PRESENT but unregistered family token stays a usage
 	// error naming the invalid value (D6).

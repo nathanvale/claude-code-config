@@ -1,4 +1,4 @@
-import BrowserUseEnvironmentAuth
+@_spi(Executor) import BrowserUseEnvironmentAuth
 import Darwin
 import Foundation
 
@@ -8,6 +8,8 @@ private struct Arguments {
     let inputDescriptor: Int32?
     let hiddenTTY: Bool
     let validatorDescriptor: Int32?
+    let validatorExecutable: String?
+    let opPath: String?
 }
 
 private func parseArguments(_ values: [String]) throws -> Arguments {
@@ -20,6 +22,8 @@ private func parseArguments(_ values: [String]) throws -> Arguments {
     var inputDescriptor: Int32?
     var hiddenTTY = false
     var validatorDescriptor: Int32?
+    var validatorExecutable: String?
+    var opPath: String?
     var index = 1
     while index < values.count {
         let flag = values[index]
@@ -42,6 +46,14 @@ private func parseArguments(_ values: [String]) throws -> Arguments {
                 throw TokenCustodyCause.invalidArguments
             }
             validatorDescriptor = value
+        case "--validator-executable":
+            index += 1
+            guard index < values.count else { throw TokenCustodyCause.invalidArguments }
+            validatorExecutable = values[index]
+        case "--op-path":
+            index += 1
+            guard index < values.count else { throw TokenCustodyCause.invalidArguments }
+            opPath = values[index]
         default:
             throw TokenCustodyCause.invalidArguments
         }
@@ -50,10 +62,16 @@ private func parseArguments(_ values: [String]) throws -> Arguments {
     guard let configRoot else { throw TokenCustodyCause.invalidArguments }
     let mutation = action == "install" || action == "replace"
     if mutation {
-        guard (inputDescriptor != nil) != hiddenTTY, validatorDescriptor != nil else {
+        let descriptorValidation = validatorDescriptor != nil
+        let executableValidation = validatorExecutable != nil && opPath != nil
+        guard (inputDescriptor != nil) != hiddenTTY,
+              descriptorValidation != executableValidation
+        else {
             throw TokenCustodyCause.invalidArguments
         }
-    } else if inputDescriptor != nil || hiddenTTY || validatorDescriptor != nil {
+    } else if inputDescriptor != nil || hiddenTTY || validatorDescriptor != nil
+        || validatorExecutable != nil || opPath != nil
+    {
         throw TokenCustodyCause.invalidArguments
     }
     return Arguments(
@@ -61,7 +79,9 @@ private func parseArguments(_ values: [String]) throws -> Arguments {
         configRoot: configRoot,
         inputDescriptor: inputDescriptor,
         hiddenTTY: hiddenTTY,
-        validatorDescriptor: validatorDescriptor
+        validatorDescriptor: validatorDescriptor,
+        validatorExecutable: validatorExecutable,
+        opPath: opPath
     )
 }
 
@@ -137,6 +157,80 @@ private func emit(_ result: TokenCustodyResult) {
     Foundation.exit(result.state == .blocked ? 20 : 0)
 }
 
+private final class ValidationCompletionBox: @unchecked Sendable {
+    var reached = false
+}
+
+private func packagedValidatorExecutablePath() throws -> String {
+    var buffer = [CChar](repeating: 0, count: 4_096)
+    guard proc_pidpath(getpid(), &buffer, UInt32(buffer.count)) > 0 else {
+        throw TokenCustodyCause.validationUnavailable
+    }
+    let end = buffer.firstIndex(of: 0) ?? buffer.endIndex
+    let executablePath = String(
+        decoding: buffer[..<end].map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+    )
+    let custodyExecutable = URL(
+        fileURLWithPath: executablePath
+    ).resolvingSymlinksInPath()
+    return custodyExecutable
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-op-supervisor")
+        .path
+}
+
+private func runMutation(_ arguments: Arguments) throws -> TokenCustodyResult {
+    var bytes = try arguments.hiddenTTY
+        ? readHiddenTTY()
+        : readBoundedInput(descriptor: arguments.inputDescriptor!)
+    defer {
+        _ = bytes.withUnsafeMutableBytes {
+            $0.initializeMemory(as: UInt8.self, repeating: 0)
+        }
+    }
+    let replacing = arguments.action == "replace"
+    if let validatorDescriptor = arguments.validatorDescriptor {
+        return TokenCustody.install(
+            configRoot: arguments.configRoot,
+            tokenBytes: &bytes,
+            validatorDescriptor: validatorDescriptor,
+            replacing: replacing
+        )
+    }
+    guard arguments.validatorExecutable != nil,
+          let opPath = arguments.opPath
+    else {
+        throw TokenCustodyCause.invalidArguments
+    }
+    let packagedValidator = try packagedValidatorExecutablePath()
+    let child = try EnvironmentTokenValidatorProcess.start(
+        executablePath: packagedValidator,
+        requiredExecutablePath: packagedValidator,
+        opPath: opPath,
+        stagingRoot: arguments.configRoot
+    )
+    let completion = ValidationCompletionBox()
+    let result = TokenCustody.installWithValidationCompletion(
+        configRoot: arguments.configRoot,
+        tokenBytes: &bytes,
+        validatorDescriptor: child.socket,
+        replacing: replacing,
+        validationCompletion: {
+            completion.reached = true
+            guard child.finish() == 0,
+                  !EnvironmentTokenValidatorProcess.terminationWasRequested
+            else {
+                throw TokenCustodyCause.validationUnavailable
+            }
+        }
+    )
+    if !completion.reached {
+        child.cancel()
+    }
+    return result
+}
+
 _ = signal(SIGPIPE, SIG_IGN)
 
 do {
@@ -162,15 +256,7 @@ do {
     case "status":
         emit(TokenCustody.status(configRoot: arguments.configRoot))
     case "install", "replace":
-        var bytes = try arguments.hiddenTTY
-            ? readHiddenTTY()
-            : readBoundedInput(descriptor: arguments.inputDescriptor!)
-        emit(TokenCustody.install(
-            configRoot: arguments.configRoot,
-            tokenBytes: &bytes,
-            validatorDescriptor: arguments.validatorDescriptor!,
-            replacing: arguments.action == "replace"
-        ))
+        emit(try runMutation(arguments))
     case "remove":
         emit(TokenCustody.remove(configRoot: arguments.configRoot))
     case "cleanup":

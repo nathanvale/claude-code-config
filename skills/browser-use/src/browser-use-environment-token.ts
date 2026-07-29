@@ -78,6 +78,10 @@ export type BrowserUseEnvironmentTokenCustodyInvocationInput = {
 	input?: BrowserUseEnvironmentTokenInput;
 	/** Full-duplex Unix socket used for descriptor-only validation. */
 	validator_fd?: number;
+	/** Installed native validator used when custody creates the private socket. */
+	validator_executable_path?: string;
+	/** Fixed official OP executable the native validator admits. */
+	op_executable_path?: string;
 };
 
 function assertDescriptor(fd: number, name: string): void {
@@ -115,6 +119,8 @@ export function buildEnvironmentTokenCustodyInvocation(
 		"config_root",
 		"input",
 		"validator_fd",
+		"validator_executable_path",
+		"op_executable_path",
 	]);
 	for (const key of Object.keys(input)) {
 		if (!allowedKeys.has(key)) {
@@ -129,9 +135,16 @@ export function buildEnvironmentTokenCustodyInvocation(
 	const argv = [input.action, "--config-root", input.config_root];
 	const inheritedFds: number[] = [];
 	if (input.action === "install" || input.action === "replace") {
-		if (input.input === undefined || input.validator_fd === undefined) {
+		const descriptorValidator = input.validator_fd !== undefined;
+		const processValidator =
+			input.validator_executable_path !== undefined &&
+			input.op_executable_path !== undefined;
+		if (
+			input.input === undefined ||
+			descriptorValidator === processValidator
+		) {
 			throw new TypeError(
-				"install and replace require an input channel and validator descriptor",
+				"install and replace require an input channel and exactly one validator form",
 			);
 		}
 		if (input.input.kind === "stdin") {
@@ -141,12 +154,34 @@ export function buildEnvironmentTokenCustodyInvocation(
 		} else {
 			argv.push("--hidden-tty");
 		}
-		assertDescriptor(input.validator_fd, "validator fd");
-		argv.push("--validator-fd", String(input.validator_fd));
-		inheritedFds.push(input.validator_fd);
-	} else if (input.input !== undefined || input.validator_fd !== undefined) {
+		if (descriptorValidator) {
+			assertDescriptor(input.validator_fd as number, "validator fd");
+			argv.push("--validator-fd", String(input.validator_fd));
+			inheritedFds.push(input.validator_fd as number);
+		} else {
+			if (
+				!isAbsolute(input.validator_executable_path as string) ||
+				!isAbsolute(input.op_executable_path as string)
+			) {
+				throw new TypeError(
+					"validator and OP executable paths must be absolute",
+				);
+			}
+			argv.push(
+				"--validator-executable",
+				input.validator_executable_path as string,
+				"--op-path",
+				input.op_executable_path as string,
+			);
+		}
+	} else if (
+		input.input !== undefined ||
+		input.validator_fd !== undefined ||
+		input.validator_executable_path !== undefined ||
+		input.op_executable_path !== undefined
+	) {
 		throw new TypeError(
-			"status, remove, and cleanup accept no input or validator descriptor",
+			"status, remove, and cleanup accept no input or validator",
 		);
 	}
 	return {
@@ -213,31 +248,260 @@ export type BrowserUseEnvironmentTokenCustodyState =
 	  }
 	| {
 			state: "cleanup-required";
-			cause: "staging-residue" | "removal-residue";
-			next_action:
-				| "cleanup-token-staging"
-				| "complete-local-token-removal";
-			remote_authority?: "may-remain-live";
+			cause: "staging-residue";
+			next_action: "cleanup-token-staging";
+	  }
+	| {
+			state: "cleanup-required";
+			cause: "removal-residue";
+			next_action: "complete-local-token-removal";
+			remote_authority: "may-remain-live";
 	  }
 	| {
 			state: "blocked";
-			cause: BrowserUseEnvironmentTokenCustodyCause;
-			next_action: string;
+			cause: Exclude<
+				BrowserUseEnvironmentTokenCustodyCause,
+				"staging-residue" | "removal-residue"
+			>;
+			next_action: "repair-token-custody";
+	  }
+	| {
+			state: "blocked";
+			cause: "staging-residue";
+			next_action: "cleanup-token-staging";
+	  }
+	| {
+			state: "blocked";
+			cause: "removal-residue";
+			next_action: "complete-local-token-removal";
+			remote_authority: "may-remain-live";
 	  }
 	| {
 			state: "installed" | "replaced";
 			next_action: "validate-service-account";
 	  }
 	| {
-			state: "removed" | "removed-sync-unproven";
-			cause?: "parent-sync-failed";
+			state: "removed";
+			remote_authority: "may-remain-live";
+			next_action: "revoke-service-account-token-remotely";
+	  }
+	| {
+			state: "removed-sync-unproven";
+			cause: "parent-sync-failed";
 			remote_authority: "may-remain-live";
 			next_action: "revoke-service-account-token-remotely";
 	  }
 	| {
 			state: "cleaned";
-			remote_authority?: "may-remain-live";
-			next_action:
-				| "inspect-token-status"
-				| "revoke-service-account-token-remotely";
+			next_action: "inspect-token-status";
+	  }
+	| {
+			state: "cleaned";
+			remote_authority: "may-remain-live";
+			next_action: "revoke-service-account-token-remotely";
 	  };
+
+const CUSTODY_STATE_SET = new Set<string>(
+	BROWSER_USE_ENVIRONMENT_TOKEN_CUSTODY_STATES,
+);
+const CUSTODY_CAUSE_SET = new Set<string>(
+	BROWSER_USE_ENVIRONMENT_TOKEN_CUSTODY_CAUSES,
+);
+const CUSTODY_NEXT_ACTION_SET = new Set<string>([
+	"install-local-token",
+	"validate-service-account",
+	"cleanup-token-staging",
+	"complete-local-token-removal",
+	"repair-token-custody",
+	"revoke-service-account-token-remotely",
+	"inspect-token-status",
+]);
+
+function hasExactKeys(
+	candidate: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const keys = Object.keys(candidate);
+	return (
+		keys.length === expected.length &&
+		keys.every((key) => expected.includes(key))
+	);
+}
+
+/**
+ * Parse the native lifecycle projection without accepting free-form output.
+ *
+ * @param value - Decoded JSON emitted by the native custody executable
+ * @returns One exhaustively checked lifecycle state
+ * @throws {TypeError} When the native projection is unknown or inconsistent
+ *
+ * @example
+ * ```typescript
+ * parseEnvironmentTokenCustodyState({
+ *   state: "missing",
+ *   next_action: "install-local-token",
+ * })
+ * ```
+ */
+export function parseEnvironmentTokenCustodyState(
+	value: unknown,
+): BrowserUseEnvironmentTokenCustodyState {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new TypeError("native custody result must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (
+		typeof candidate.state !== "string" ||
+		!CUSTODY_STATE_SET.has(candidate.state) ||
+		typeof candidate.next_action !== "string" ||
+		!CUSTODY_NEXT_ACTION_SET.has(candidate.next_action)
+	) {
+		throw new TypeError("native custody result has an unknown state or action");
+	}
+	if (
+		candidate.cause !== undefined &&
+		(typeof candidate.cause !== "string" ||
+			!CUSTODY_CAUSE_SET.has(candidate.cause))
+	) {
+		throw new TypeError("native custody result has an unknown cause");
+	}
+	if (
+		candidate.remote_authority !== undefined &&
+		candidate.remote_authority !== "may-remain-live"
+	) {
+		throw new TypeError("native custody result has an unknown remote authority");
+	}
+	const allowedKeys = new Set([
+		"state",
+		"cause",
+		"next_action",
+		"remote_authority",
+	]);
+	if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
+		throw new TypeError("native custody result contains an unsupported field");
+	}
+	switch (candidate.state) {
+		case "missing":
+			if (
+				hasExactKeys(candidate, ["state", "next_action"]) &&
+				candidate.next_action === "install-local-token"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "ready":
+		case "installed":
+		case "replaced":
+			if (
+				hasExactKeys(candidate, ["state", "next_action"]) &&
+				candidate.next_action === "validate-service-account"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "cleanup-required":
+			if (
+				candidate.cause === "staging-residue" &&
+				hasExactKeys(candidate, ["state", "cause", "next_action"]) &&
+				candidate.next_action === "cleanup-token-staging"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			if (
+				candidate.cause === "removal-residue" &&
+				hasExactKeys(candidate, [
+					"state",
+					"cause",
+					"next_action",
+					"remote_authority",
+				]) &&
+				candidate.next_action === "complete-local-token-removal" &&
+				candidate.remote_authority === "may-remain-live"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "blocked":
+			if (
+				candidate.cause === "staging-residue" &&
+				hasExactKeys(candidate, ["state", "cause", "next_action"]) &&
+				candidate.next_action === "cleanup-token-staging"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			if (
+				candidate.cause === "removal-residue" &&
+				hasExactKeys(candidate, [
+					"state",
+					"cause",
+					"next_action",
+					"remote_authority",
+				]) &&
+				candidate.next_action === "complete-local-token-removal" &&
+				candidate.remote_authority === "may-remain-live"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			if (
+				typeof candidate.cause === "string" &&
+				candidate.cause !== "staging-residue" &&
+				candidate.cause !== "removal-residue" &&
+				hasExactKeys(candidate, ["state", "cause", "next_action"]) &&
+				candidate.next_action === "repair-token-custody"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "removed":
+			if (
+				hasExactKeys(candidate, [
+					"state",
+					"next_action",
+					"remote_authority",
+				]) &&
+				candidate.next_action ===
+					"revoke-service-account-token-remotely" &&
+				candidate.remote_authority === "may-remain-live"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "removed-sync-unproven":
+			if (
+				hasExactKeys(candidate, [
+					"state",
+					"cause",
+					"next_action",
+					"remote_authority",
+				]) &&
+				candidate.cause === "parent-sync-failed" &&
+				candidate.next_action ===
+					"revoke-service-account-token-remotely" &&
+				candidate.remote_authority === "may-remain-live"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+		case "cleaned":
+			if (
+				hasExactKeys(candidate, ["state", "next_action"]) &&
+				candidate.next_action === "inspect-token-status"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			if (
+				hasExactKeys(candidate, [
+					"state",
+					"next_action",
+					"remote_authority",
+				]) &&
+				candidate.next_action ===
+					"revoke-service-account-token-remotely" &&
+				candidate.remote_authority === "may-remain-live"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			break;
+	}
+	throw new TypeError("native custody result fields are inconsistent");
+}
