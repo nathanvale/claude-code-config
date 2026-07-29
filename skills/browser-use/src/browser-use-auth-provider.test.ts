@@ -13,6 +13,8 @@ import {
 	type BrowserUseSecretFreePreparationOutcome,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
+import type { BrowserUseResolvedAuthCandidate } from "./browser-use-auth-bindings";
+import type { BrowserUseAuthBindingStore } from "./browser-use-auth-binding-store";
 import { applyAuthTransition } from "./browser-use-auth-transaction";
 import {
 	acquireLease,
@@ -28,6 +30,7 @@ import {
 	fixedClock,
 	makeTempXdgEnv,
 } from "./browser-use-platform-test-helpers";
+import { createOpTokenRetrievalPort } from "./browser-use-op";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import {
 	type RunStoreDeps,
@@ -87,6 +90,24 @@ type VaultItemEvidence = Extract<
 >["item"];
 
 type TokenPortScript = {
+	bindingEvidenceAvailable?: boolean;
+	getServiceAccountIdentity?:
+		| {
+				ok: true;
+				identity: {
+					service_account_id: string;
+					state: "ACTIVE";
+					type: "SERVICE_ACCOUNT";
+				};
+		  }
+		| readonly {
+				ok: true;
+				identity: {
+					service_account_id: string;
+					state: "ACTIVE";
+					type: "SERVICE_ACCOUNT";
+				};
+		  }[];
 	listVaults?: Awaited<ReturnType<TokenPort["listVaults"]>>;
 	listLoginItems?: Awaited<ReturnType<TokenPort["listLoginItems"]>>;
 	getLoginItem?: Awaited<ReturnType<TokenPort["getLoginItem"]>>;
@@ -115,6 +136,7 @@ function environmentAdmission(
 function makeTokenPort(script: TokenPortScript = {}): {
 	port: TokenPort;
 	calls: {
+		getServiceAccountIdentity: number;
 		listVaults: number;
 		listLoginItems: number;
 		getLoginItem: number;
@@ -123,32 +145,117 @@ function makeTokenPort(script: TokenPortScript = {}): {
 	total(): number;
 } {
 	const calls = {
+		getServiceAccountIdentity: 0,
 		listVaults: 0,
 		listLoginItems: 0,
 		getLoginItem: 0,
 		fetchCredentialField: 0,
 	};
-	const port: TokenPort = {
-		async listVaults() {
-			calls.listVaults += 1;
-			return script.listVaults ?? { ok: true, vaults: [{ vault_id: "vault-1" }] };
-		},
-		async listLoginItems() {
-			calls.listLoginItems += 1;
-			return script.listLoginItems ?? { ok: true, items: [] };
-		},
-		async getLoginItem() {
-			calls.getLoginItem += 1;
+	const getServiceAccountIdentity = async () => {
+		calls.getServiceAccountIdentity += 1;
+		const scripted = script.getServiceAccountIdentity;
+		if (Array.isArray(scripted)) {
 			return (
-				script.getLoginItem ?? {
-					ok: false,
-					rejection: {
-						code: "item-missing",
-						message: "the bound item is absent from the token-scoped vault.",
+				scripted[calls.getServiceAccountIdentity - 1] ??
+				scripted.at(-1) ?? {
+					ok: true as const,
+					identity: {
+						service_account_id: "service-account-1",
+						state: "ACTIVE" as const,
+						type: "SERVICE_ACCOUNT" as const,
 					},
 				}
 			);
+		}
+		return (
+			scripted ?? {
+				ok: true as const,
+				identity: {
+					service_account_id: "service-account-1",
+					state: "ACTIVE" as const,
+					type: "SERVICE_ACCOUNT" as const,
+				},
+			}
+		);
+	};
+	const listVaults = async () => {
+		calls.listVaults += 1;
+		return script.listVaults ?? { ok: true, vaults: [{ vault_id: "vault-1" }] };
+	};
+	const listLoginItems = async () => {
+		calls.listLoginItems += 1;
+		return script.listLoginItems ?? { ok: true, items: [] };
+	};
+	const getLoginItem = async () => {
+		calls.getLoginItem += 1;
+		return (
+			script.getLoginItem ?? {
+				ok: false as const,
+				rejection: {
+					code: "item-missing" as const,
+					message: "the bound item is absent from the token-scoped vault.",
+				},
+			}
+		);
+	};
+	const port = {
+		async getBindingEvidence(input) {
+			const identity = await getServiceAccountIdentity();
+			if (!identity.ok) return identity;
+			const vaults = await listVaults();
+			if (!vaults.ok) return vaults;
+			if (vaults.vaults.length !== 1) {
+				return {
+					ok: true as const,
+					evidence: {
+						identity: identity.identity,
+						vaults: vaults.vaults,
+						item_evidence: null,
+					},
+				};
+			}
+			const liveVault = vaults.vaults[0];
+			if (
+				liveVault === undefined ||
+				(input.expected_vault_id !== null &&
+					input.expected_vault_id !== liveVault.vault_id)
+			) {
+				return {
+					ok: true as const,
+					evidence: {
+						identity: identity.identity,
+						vaults: vaults.vaults,
+						item_evidence: null,
+					},
+				};
+			}
+			if (input.item_id !== null) {
+				const item = await getLoginItem();
+				if (!item.ok) return item;
+				return {
+					ok: true as const,
+					evidence: {
+						identity: identity.identity,
+						vaults: vaults.vaults,
+						item_evidence: { kind: "exact" as const, item: item.item },
+					},
+				};
+			}
+			const items = await listLoginItems();
+			if (!items.ok) return items;
+			return {
+				ok: true as const,
+				evidence: {
+					identity: identity.identity,
+					vaults: vaults.vaults,
+					item_evidence: { kind: "list" as const, items: items.items },
+				},
+			};
 		},
+		getServiceAccountIdentity,
+		listVaults,
+		listLoginItems,
+		getLoginItem,
 		async fetchCredentialField() {
 			calls.fetchCredentialField += 1;
 			return (
@@ -161,11 +268,12 @@ function makeTokenPort(script: TokenPortScript = {}): {
 				}
 			);
 		},
-	};
+	} satisfies TokenPort;
 	return {
 		port,
 		calls,
 		total: () =>
+			calls.getServiceAccountIdentity +
 			calls.listVaults +
 			calls.listLoginItems +
 			calls.getLoginItem +
@@ -173,7 +281,10 @@ function makeTokenPort(script: TokenPortScript = {}): {
 	};
 }
 
-async function makeProvider(script: TokenPortScript = {}): Promise<{
+async function makeProvider(
+	script: TokenPortScript = {},
+	bindingStore?: BrowserUseAuthBindingStore,
+): Promise<{
 	provider: BrowserUseAuthProvider;
 	store: RunStoreDeps;
 	calls: ReturnType<typeof makeTokenPort>["calls"];
@@ -183,10 +294,14 @@ async function makeProvider(script: TokenPortScript = {}): Promise<{
 	const clock = fixedClock();
 	const store = await makeStoreDeps(clock.now);
 	const { port, calls, total } = makeTokenPort(script);
+	if (script.bindingEvidenceAvailable === false) {
+		delete port.getBindingEvidence;
+	}
 	const provider = createBrowserUseAuthProvider({
 		store,
 		admission: environmentAdmission(port),
 		attestationByDigest: () => undefined,
+		...(bindingStore === undefined ? {} : { bindingStore }),
 	});
 	return { provider, store, calls, total, clock };
 }
@@ -284,11 +399,13 @@ function basePreparationInput(
 function baseBinding(overrides: Partial<ItemBinding> = {}): ItemBinding {
 	return {
 		service_id: "oncore",
+		service_account_id: "service-account-1",
 		auth_context: "interactive-login",
 		allowed_origins: ["https://portal.example.com"],
 		allowed_login_paths: [],
 		vault_id: "vault-1",
 		item_id: "item-1",
+		item_revision: 7,
 		allowed_auth_methods: ["password", "otp"],
 		binding_revision: 1,
 		...overrides,
@@ -301,10 +418,34 @@ function baseEvidence(
 	return {
 		item_id: "item-1",
 		vault_id: "vault-1",
+		item_revision: 7,
 		origins: ["https://portal.example.com"],
 		login_paths: [],
 		supported_methods: ["password", "otp"],
 		state: "active",
+		...overrides,
+	};
+}
+
+function baseResolution(
+	overrides: Partial<BrowserUseResolvedAuthCandidate> = {},
+): BrowserUseResolvedAuthCandidate {
+	return {
+		generation_id: "generation-a",
+		activation_epoch: 4,
+		auth_context_ref: "oncore-session",
+		route_digest: "a".repeat(64),
+		candidate_digest: "b".repeat(64),
+		candidate: {
+			candidate_id: "candidate-oncore",
+			service_id: "oncore",
+			auth_context: "interactive-login",
+			legacy_context_prose: null,
+			hint_item_id: null,
+			proposed_origins: ["https://portal.example.com"],
+			legacy_vault_name: null,
+			provenance: "legacy-auth-pointer",
+		},
 		...overrides,
 	};
 }
@@ -576,6 +717,119 @@ describe("heartbeat/release (sensitive-interval custody)", () => {
 // --- prepareSecretFree gate order (R8/R11, AE2, D5) --------------------------
 
 describe("prepareSecretFree gate order", () => {
+	test("signed admission exact-binding proof uses item-get and never item-list", async () => {
+		const store = await makeStoreDeps(fixedClock().now);
+		const calls: string[] = [];
+		const port = createOpTokenRetrievalPort({
+			token_handle_id: "signed-token-handle",
+			async execute(spec) {
+				calls.push(spec.argv.slice(0, 3).join(" "));
+				if (spec.argv[1] === "user") {
+					return {
+						kind: "json-evidence",
+						value: {
+							id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+					};
+				}
+				if (spec.argv[1] === "vault") {
+					return { kind: "json-evidence", value: [{ id: "vault-1" }] };
+				}
+				return {
+					kind: "json-evidence",
+					value: {
+						id: "item-1",
+						version: 7,
+						vault: { id: "vault-1" },
+						category: "LOGIN",
+						urls: [{ href: "https://portal.example.com" }],
+					},
+				};
+			},
+		});
+		const provider = createBrowserUseAuthProvider({
+			store,
+			admission: {
+				kind: "signed-admitted",
+				evidence: {
+					lane: "signed-native",
+					assurance: "signed-native",
+					native: { verdict: "admitted", product_version: "1.0.0" },
+				},
+				tokenRetrieval: port,
+			},
+			attestationByDigest: () => undefined,
+		});
+
+		const outcome = await provider.prepareSecretFree(
+			basePreparationInput({ binding: baseBinding() }),
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.binding?.service_account_id).toBe("service-account-1");
+		expect(outcome.binding?.item_id).toBe("item-1");
+		expect(calls).toEqual(["op user get", "op vault list", "op item get"]);
+		expect(calls).not.toContain("op item list");
+	});
+
+	test("signed admission preserves a typed exact-item failure", async () => {
+		const store = await makeStoreDeps(fixedClock().now);
+		const calls: string[] = [];
+		const port = createOpTokenRetrievalPort({
+			token_handle_id: "signed-token-handle",
+			async execute(spec) {
+				calls.push(spec.argv.slice(0, 3).join(" "));
+				if (spec.argv[1] === "user") {
+					return {
+						kind: "json-evidence",
+						value: {
+							id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+					};
+				}
+				if (spec.argv[1] === "vault") {
+					return { kind: "json-evidence", value: [{ id: "vault-1" }] };
+				}
+				return {
+					kind: "op-failure",
+					failure: {
+						code: "item-missing",
+						message: "the bound item is absent.",
+					},
+				};
+			},
+		});
+		const provider = createBrowserUseAuthProvider({
+			store,
+			admission: {
+				kind: "signed-admitted",
+				evidence: {
+					lane: "signed-native",
+					assurance: "signed-native",
+					native: { verdict: "admitted", product_version: "1.0.0" },
+				},
+				tokenRetrieval: port,
+			},
+			attestationByDigest: () => undefined,
+		});
+
+		const outcome = expectPreparationBlocked(
+			await provider.prepareSecretFree(
+				basePreparationInput({ binding: baseBinding() }),
+			),
+		);
+		expect(outcome.event).toEqual({ type: "blocked", cause: "revoked-binding" });
+		expect(outcome.detail).toMatchObject({
+			kind: "binding-repair",
+			stale_state: null,
+		});
+		expect(calls).toEqual(["op user get", "op vault list", "op item get"]);
+	});
+
 	test("a token failure blocks as missing-token before any discovery call", async () => {
 		const { provider, calls } = await makeProvider({
 			listVaults: {
@@ -584,7 +838,9 @@ describe("prepareSecretFree gate order", () => {
 			},
 		});
 		const outcome = expectPreparationBlocked(
-			await provider.prepareSecretFree(basePreparationInput()),
+			await provider.prepareSecretFree(
+				basePreparationInput({ binding: baseBinding() }),
+			),
 		);
 		expect(outcome.event).toEqual({ type: "blocked", cause: "missing-token" });
 		expect(outcome.continuation).toEqual(
@@ -608,7 +864,9 @@ describe("prepareSecretFree gate order", () => {
 			},
 		});
 		const outcome = expectPreparationBlocked(
-			await provider.prepareSecretFree(basePreparationInput()),
+			await provider.prepareSecretFree(
+				basePreparationInput({ binding: baseBinding() }),
+			),
 		);
 		expect(outcome.event).toEqual({
 			type: "blocked",
@@ -845,7 +1103,282 @@ describe("prepareSecretFree gate order", () => {
 // --- prepareSecretFree Gate 5: first bind (SD1/SD6 at the provider seam) -----
 
 describe("prepareSecretFree first bind (Gate 5)", () => {
-	test("one discovery with one matching item binds and completes", async () => {
+	test("captured candidate loads and saves the host binding without field retrieval", async () => {
+		const calls = { load: 0, save: 0, invalidate: 0 };
+		const bindingStore: BrowserUseAuthBindingStore = {
+			async load() {
+				calls.load += 1;
+				return { ok: true, binding: null };
+			},
+			async save() {
+				calls.save += 1;
+				return { ok: true };
+			},
+			async invalidate() {
+				calls.invalidate += 1;
+				return { ok: true };
+			},
+		};
+		const { provider, calls: opCalls } = await makeProvider(
+			{
+				listLoginItems: { ok: true, items: [baseEvidence()] },
+			},
+			bindingStore,
+		);
+		const resolution: BrowserUseResolvedAuthCandidate = {
+			generation_id: "generation-a",
+			activation_epoch: 4,
+			auth_context_ref: "oncore-session",
+			route_digest: "a".repeat(64),
+			candidate_digest: "b".repeat(64),
+			candidate: {
+				candidate_id: "candidate-oncore",
+				service_id: "oncore",
+				auth_context: "interactive-login",
+				legacy_context_prose: null,
+				hint_item_id: null,
+				proposed_origins: ["https://portal.example.com"],
+				legacy_vault_name: null,
+				provenance: "legacy-auth-pointer",
+			},
+		};
+		const outcome = await provider.prepareGenerationBinding({
+			resolution,
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password",
+		});
+		expect(outcome.ok).toBe(true);
+		expect(calls).toEqual({ load: 1, save: 1, invalidate: 0 });
+		expect(opCalls.getServiceAccountIdentity).toBe(1);
+		expect(opCalls.listLoginItems).toBe(1);
+		expect(opCalls.getLoginItem).toBe(0);
+		expect(opCalls.fetchCredentialField).toBe(0);
+	});
+
+	test("stale generation cache blocks once, invalidates, then replaces after fresh proof", async () => {
+		const calls = { load: 0, save: 0, invalidate: 0 };
+		let stalePresent = true;
+		const bindingStore: BrowserUseAuthBindingStore = {
+			async load() {
+				calls.load += 1;
+				return stalePresent
+					? {
+							ok: false,
+							failure: {
+								code: "auth_binding_cache_stale",
+								message: "the cached generation is stale.",
+							},
+						}
+					: { ok: true, binding: null };
+			},
+			async save() {
+				calls.save += 1;
+				return { ok: true };
+			},
+			async invalidate() {
+				calls.invalidate += 1;
+				stalePresent = false;
+				return { ok: true };
+			},
+		};
+		const { provider, calls: opCalls } = await makeProvider(
+			{ listLoginItems: { ok: true, items: [baseEvidence()] } },
+			bindingStore,
+		);
+
+		const input = {
+			resolution: baseResolution({
+				generation_id: "generation-b",
+				activation_epoch: 5,
+			}),
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password" as const,
+		};
+		const outcome = await provider.prepareGenerationBinding(input);
+
+		expect(outcome).toMatchObject({
+			ok: false,
+			event: { type: "blocked", cause: "revoked-binding" },
+		});
+		const repaired = await provider.prepareGenerationBinding(input);
+		expect(repaired.ok).toBe(true);
+		expect(calls).toEqual({ load: 2, save: 1, invalidate: 1 });
+		expect(opCalls.getServiceAccountIdentity).toBe(1);
+		expect(opCalls.listLoginItems).toBe(1);
+		expect(opCalls.getLoginItem).toBe(0);
+	});
+
+	test("an unchanged live binding is not rewritten", async () => {
+		const calls = { load: 0, save: 0, invalidate: 0 };
+		const bindingStore: BrowserUseAuthBindingStore = {
+			async load() {
+				calls.load += 1;
+				return { ok: true, binding: baseBinding() };
+			},
+			async save() {
+				calls.save += 1;
+				return { ok: true };
+			},
+			async invalidate() {
+				calls.invalidate += 1;
+				return { ok: true };
+			},
+		};
+		const { provider } = await makeProvider(
+			{ listLoginItems: { ok: true, items: [baseEvidence()] } },
+			bindingStore,
+		);
+
+		const outcome = await provider.prepareGenerationBinding({
+			resolution: baseResolution(),
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password",
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(calls).toEqual({ load: 1, save: 0, invalidate: 0 });
+	});
+
+	test("a forged cached item cannot bypass fresh ambiguity detection", async () => {
+		const calls = { load: 0, save: 0, invalidate: 0 };
+		const bindingStore: BrowserUseAuthBindingStore = {
+			async load() {
+				calls.load += 1;
+				return { ok: true, binding: baseBinding({ item_id: "item-2" }) };
+			},
+			async save() {
+				calls.save += 1;
+				return { ok: true };
+			},
+			async invalidate() {
+				calls.invalidate += 1;
+				return { ok: true };
+			},
+		};
+		const { provider, calls: opCalls } = await makeProvider(
+			{
+				listLoginItems: {
+					ok: true,
+					items: [baseEvidence(), baseEvidence({ item_id: "item-2" })],
+				},
+			},
+			bindingStore,
+		);
+		const outcome = await provider.prepareGenerationBinding({
+			resolution: {
+				generation_id: "generation-a",
+				activation_epoch: 4,
+				auth_context_ref: "oncore-session",
+				route_digest: "a".repeat(64),
+				candidate_digest: "b".repeat(64),
+				candidate: {
+					candidate_id: "candidate-oncore",
+					service_id: "oncore",
+					auth_context: "interactive-login",
+					legacy_context_prose: null,
+					hint_item_id: null,
+					proposed_origins: ["https://portal.example.com"],
+					legacy_vault_name: null,
+					provenance: "legacy-auth-pointer",
+				},
+			},
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password",
+		});
+		expect(outcome).toMatchObject({
+			ok: false,
+			event: { type: "blocked", cause: "ambiguous-binding-selection" },
+		});
+		expect(calls).toEqual({ load: 1, save: 0, invalidate: 0 });
+		expect(opCalls.listLoginItems).toBe(1);
+		expect(opCalls.getLoginItem).toBe(0);
+	});
+
+	test("a stale cached binding blocks once, invalidates, then converges from fresh live proof", async () => {
+		const calls = { load: 0, save: 0, invalidate: 0 };
+		let stalePresent = true;
+		const bindingStore: BrowserUseAuthBindingStore = {
+			async load() {
+				calls.load += 1;
+				return {
+					ok: true,
+					binding: stalePresent
+						? baseBinding({ item_id: "item-forged" })
+						: null,
+				};
+			},
+			async save() {
+				calls.save += 1;
+				return { ok: true };
+			},
+			async invalidate() {
+				calls.invalidate += 1;
+				stalePresent = false;
+				return { ok: true };
+			},
+		};
+		const { provider } = await makeProvider(
+			{ listLoginItems: { ok: true, items: [baseEvidence()] } },
+			bindingStore,
+		);
+		const outcome = await provider.prepareGenerationBinding({
+			resolution: {
+				generation_id: "generation-a",
+				activation_epoch: 4,
+				auth_context_ref: "oncore-session",
+				route_digest: "a".repeat(64),
+				candidate_digest: "b".repeat(64),
+				candidate: {
+					candidate_id: "candidate-oncore",
+					service_id: "oncore",
+					auth_context: "interactive-login",
+					legacy_context_prose: null,
+					hint_item_id: null,
+					proposed_origins: ["https://portal.example.com"],
+					legacy_vault_name: null,
+					provenance: "legacy-auth-pointer",
+				},
+			},
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password",
+		});
+		expect(outcome).toMatchObject({
+			ok: false,
+			event: { type: "blocked", cause: "revoked-binding" },
+			detail: { kind: "binding-repair" },
+		});
+		const repaired = await provider.prepareGenerationBinding({
+			resolution: {
+				generation_id: "generation-a",
+				activation_epoch: 4,
+				auth_context_ref: "oncore-session",
+				route_digest: "a".repeat(64),
+				candidate_digest: "b".repeat(64),
+				candidate: {
+					candidate_id: "candidate-oncore",
+					service_id: "oncore",
+					auth_context: "interactive-login",
+					legacy_context_prose: null,
+					hint_item_id: null,
+					proposed_origins: ["https://portal.example.com"],
+					legacy_vault_name: null,
+					provenance: "legacy-auth-pointer",
+				},
+			},
+			target_origins: ["https://portal.example.com"],
+			login_path: null,
+			method: "password",
+		});
+		expect(repaired.ok).toBe(true);
+		expect(calls).toEqual({ load: 2, save: 1, invalidate: 1 });
+	});
+
+	test("one principal-bound evidence call supplies identity, vault scope, and first binding", async () => {
 		const { provider, calls } = await makeProvider({
 			listLoginItems: { ok: true, items: [baseEvidence()] },
 		});
@@ -853,12 +1386,61 @@ describe("prepareSecretFree first bind (Gate 5)", () => {
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
 			expect(outcome.event).toEqual({ type: "preparation-complete" });
+			expect(outcome.binding).toMatchObject({
+				service_account_id: "service-account-1",
+			});
 			expect(outcome.binding?.item_id).toBe("item-1");
 			expect(outcome.binding?.vault_id).toBe("vault-1");
 		}
+		expect(calls.getServiceAccountIdentity).toBe(1);
 		expect(calls.listVaults).toBe(1);
 		expect(calls.listLoginItems).toBe(1);
 		expect(calls.getLoginItem).toBe(0);
+		expect(calls.fetchCredentialField).toBe(0);
+	});
+
+	test("a lane without principal-bound evidence blocks before discovery", async () => {
+		const { provider, calls } = await makeProvider({
+			bindingEvidenceAvailable: false,
+			listLoginItems: { ok: true, items: [baseEvidence()] },
+		});
+		const outcome = await provider.prepareSecretFree(basePreparationInput());
+		expect(outcome).toMatchObject({
+			ok: false,
+			event: { type: "blocked", cause: "capability-loss" },
+			detail: { kind: "capability" },
+		});
+		expect(calls.getServiceAccountIdentity).toBe(0);
+		expect(calls.listVaults).toBe(0);
+		expect(calls.listLoginItems).toBe(0);
+		expect(calls.getLoginItem).toBe(0);
+		expect(calls.fetchCredentialField).toBe(0);
+	});
+
+	test("principal-bound evidence from another account cannot validate a cached binding", async () => {
+		const { provider, calls } = await makeProvider({
+			getServiceAccountIdentity: {
+				ok: true,
+				identity: {
+					service_account_id: "service-account-2",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+			},
+			getLoginItem: { ok: true, item: baseEvidence() },
+		});
+		const outcome = await provider.prepareSecretFree(
+			basePreparationInput({ binding: baseBinding() }),
+		);
+		expect(outcome).toMatchObject({
+			ok: false,
+			event: { type: "blocked", cause: "capability-loss" },
+			detail: { kind: "capability" },
+		});
+		expect(calls.getServiceAccountIdentity).toBe(1);
+		expect(calls.listVaults).toBe(1);
+		expect(calls.getLoginItem).toBe(1);
+		expect(calls.fetchCredentialField).toBe(0);
 	});
 
 	test("two matching items block ambiguous-binding-selection with the redacted ranked list", async () => {
@@ -984,77 +1566,10 @@ describe("prepareSecretFree first bind (Gate 5)", () => {
 
 // --- Mid-interval retrieval (D6) ---------------------------------------------
 
-describe("retrieveCredentialField (phase-aware, D6)", () => {
-	test("mid-interval token loss is capability-loss, never missing-token", async () => {
-		const { provider } = await makeProvider({
-			fetchCredentialField: {
-				ok: false,
-				rejection: {
-					code: "token-revoked",
-					message: "the service-account token was revoked.",
-				},
-			},
-		});
-		const result = await provider.retrieveCredentialField({
-			binding: baseBinding(),
-			field: "password",
-		});
-		expect(result.ok).toBe(false);
-		if (result.ok) throw new Error("unreachable");
-		expect(result.event).toEqual({ type: "blocked", cause: "capability-loss" });
-		expect(result.continuation).toEqual(
-			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["capability-loss"].continuation,
-		);
-		expect(result.rejection.code).toBe("token-revoked");
-
-		// capability-loss is legal on a sensitive-interval fragment...
-		const sensitive = baseFragment({ phase: "sensitive-interval" });
-		expect(applyAuthTransition(sensitive, result.event).ok).toBe(true);
-
-		// ...and missing-token is not (D6 is forced by the phase table).
-		const rejected = applyAuthTransition(sensitive, {
-			type: "blocked",
-			cause: "missing-token",
-		});
-		expect(rejected.ok).toBe(false);
-		if (!rejected.ok) {
-			expect(rejected.rejection.code).toBe("auth_blocked_cause_illegal");
-		}
-	});
-
-	test("an edited binding never reaches the Port mid-interval (AE2)", async () => {
-		const { provider, total } = await makeProvider();
-		const result = await provider.retrieveCredentialField({
-			binding: baseBinding({ item_id: "op://Private/GitHub/password" }),
-			field: "password",
-		});
-		expect(result.ok).toBe(false);
-		if (result.ok) throw new Error("unreachable");
-		expect(result.event).toEqual({ type: "blocked", cause: "capability-loss" });
-		expect(result.rejection.code).toBe("binding-shape-invalid");
-		expect(JSON.stringify(result)).not.toContain("op://");
-		expect(total()).toBe(0);
-	});
-
-	test("a retrieved field is only ever an opaque handle", async () => {
-		const { provider } = await makeProvider({
-			fetchCredentialField: {
-				ok: true,
-				handle: {
-					handle_id: "handle-1",
-					field: "password",
-					expires_at_epoch_ms: 2_000,
-				},
-			},
-		});
-		const result = await provider.retrieveCredentialField({
-			binding: baseBinding(),
-			field: "password",
-		});
-		expect(result).toEqual({
-			ok: true,
-			handle: { handle_id: "handle-1", field: "password", expires_at_epoch_ms: 2_000 },
-		});
+describe("credential retrieval authority", () => {
+	test("the U5 provider exposes no raw-binding field retrieval surface", async () => {
+		const { provider } = await makeProvider();
+		expect(provider).not.toHaveProperty("retrieveCredentialField");
 	});
 });
 

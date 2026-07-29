@@ -130,11 +130,13 @@ const RUNBOOK: BrowserUseRunbook = {
 
 const BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://portal.example.com"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };

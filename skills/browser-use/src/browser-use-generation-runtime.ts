@@ -11,6 +11,13 @@ import type {
 	BrowserUseReviewedActionRecord,
 } from "./browser-use-runbook-actions";
 import {
+	type BrowserUseAuthGenerationFailure,
+	type BrowserUseAuthGenerationSeam,
+	type BrowserUseImportCandidate,
+	validateImportCandidateShape,
+} from "./browser-use-auth-bindings";
+import { parseGenerationAuthRouteRecord } from "./browser-use-generation-schemas";
+import {
 	type BrowserUseActiveGenerationSeam,
 	type BrowserUseGenerationBindingIdentity,
 	type BrowserUseRunbookDiscoveryFailure,
@@ -30,6 +37,13 @@ function failure(
 	code: BrowserUseRunbookDiscoveryFailure["code"],
 	message: string,
 ): BrowserUseRunbookDiscoveryFailure {
+	return { code, message };
+}
+
+function authFailure(
+	code: BrowserUseAuthGenerationFailure["code"],
+	message: string,
+): BrowserUseAuthGenerationFailure {
 	return { code, message };
 }
 
@@ -74,6 +88,7 @@ export type BrowserUseGenerationRuntime = {
 	manifest: BrowserUseRuntimeGenerationManifest;
 	activeGenerationSeam: BrowserUseActiveGenerationSeam;
 	actionGenerationSeam: BrowserUseActionGenerationSeam;
+	authGenerationSeam: BrowserUseAuthGenerationSeam;
 	bindingIdentityFor(id: {
 		serviceId: string;
 		flowId: string;
@@ -141,6 +156,145 @@ export async function createBrowserUseGenerationRuntime(
 			action,
 		]),
 	);
+
+	const authGenerationSeam: BrowserUseAuthGenerationSeam = {
+		async loadAuthCandidate(authContextRef) {
+			const routeRefs = manifest.auth.routes.filter(
+				(ref) => ref.auth_context_ref === authContextRef,
+			);
+			const routeRef = routeRefs[0];
+			if (routeRefs.length === 0 || routeRef === undefined) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_route_not_found",
+						"the captured generation has no auth route for this context.",
+					),
+				};
+			}
+			if (routeRefs.length !== 1) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_invalid",
+						"the captured generation has ambiguous auth route authority.",
+					),
+				};
+			}
+			const routeRaw = await readBoundText(
+				deps.fs,
+				generationFilePath(
+					deps.paths,
+					manifest.generation_id,
+					routeRef.path,
+				),
+				routeRef.digest,
+			);
+			if (routeRaw === undefined) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_corrupt",
+						"the captured generation auth route is unreadable or digest-mismatched.",
+					),
+				};
+			}
+			let routeValue: unknown;
+			try {
+				routeValue = JSON.parse(routeRaw);
+			} catch {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_corrupt",
+						"the captured generation auth route is not valid JSON.",
+					),
+				};
+			}
+			const route = parseGenerationAuthRouteRecord(routeValue);
+			if (
+				route === undefined ||
+				route.auth_context_ref !== routeRef.auth_context_ref ||
+				route.candidate_id !== routeRef.candidate_id
+			) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_invalid",
+						"the captured generation auth route does not match its manifest identity.",
+					),
+				};
+			}
+
+			const candidateRefs = manifest.auth.candidates.filter(
+				(ref) => ref.candidate_id === route.candidate_id,
+			);
+			const candidateRef = candidateRefs[0];
+			if (candidateRefs.length !== 1 || candidateRef === undefined) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_invalid",
+						"the captured generation auth candidate authority is missing or ambiguous.",
+					),
+				};
+			}
+			const candidateRaw = await readBoundText(
+				deps.fs,
+				generationFilePath(
+					deps.paths,
+					manifest.generation_id,
+					candidateRef.path,
+				),
+				candidateRef.digest,
+			);
+			if (candidateRaw === undefined) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_corrupt",
+						"the captured generation auth candidate is unreadable or digest-mismatched.",
+					),
+				};
+			}
+			let candidateValue: unknown;
+			try {
+				candidateValue = JSON.parse(candidateRaw);
+			} catch {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_corrupt",
+						"the captured generation auth candidate is not valid JSON.",
+					),
+				};
+			}
+			if (
+				validateImportCandidateShape(candidateValue).length > 0 ||
+				(candidateValue as { candidate_id?: unknown }).candidate_id !==
+					candidateRef.candidate_id
+			) {
+				return {
+					ok: false,
+					failure: authFailure(
+						"auth_generation_record_invalid",
+						"the captured generation auth candidate does not match its manifest identity.",
+					),
+				};
+			}
+			return {
+				ok: true,
+				resolution: {
+					generation_id: manifest.generation_id,
+					activation_epoch: manifest.activation_epoch,
+					auth_context_ref: route.auth_context_ref,
+					route_digest: routeRef.digest,
+					candidate_digest: candidateRef.digest,
+					candidate: candidateValue as BrowserUseImportCandidate,
+				},
+			};
+		},
+	};
 
 	const activeGenerationSeam: BrowserUseActiveGenerationSeam = {
 		async listIds() {
@@ -274,6 +428,7 @@ export async function createBrowserUseGenerationRuntime(
 			manifest,
 			activeGenerationSeam,
 			actionGenerationSeam,
+			authGenerationSeam,
 			bindingIdentityFor(id) {
 				const target = targets.get(`${id.serviceId}/${id.flowId}`);
 				if (target === undefined) {

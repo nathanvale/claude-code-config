@@ -10,14 +10,25 @@ import {
 
 const BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://portal.example.com"],
 	allowed_login_paths: ["/login"],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password"],
 	binding_revision: 1,
 };
+
+function portReturningBindingEvidence(value: unknown) {
+	return createEnvironmentOpTokenRetrievalPort({
+		executeMetadata: async () => ({ ok: true, value }),
+		mintCapability: () => {
+			throw new Error("capability mint was not expected");
+		},
+	});
+}
 
 describe("environment OP executable admission", () => {
 	test("admits only one absolute supported official OP executable", () => {
@@ -90,6 +101,22 @@ describe("environment OP executable admission", () => {
 				message: "native OP execution was refused; inspect the typed code.",
 			},
 		});
+		expect(
+			parseEnvironmentOpMetadataResult({
+				schema_version: 1,
+				ok: false,
+				rejection: {
+					code: "item-missing",
+					message: "untrusted native detail",
+				},
+			}),
+		).toEqual({
+			ok: false,
+			rejection: {
+				code: "item-missing",
+				message: "native OP execution was refused; inspect the typed code.",
+			},
+		});
 	});
 });
 
@@ -118,6 +145,255 @@ describe("environment OP native invocation", () => {
 			env: {},
 			inherited_fds: [],
 		});
+		expect(
+			buildEnvironmentOpMetadataInvocation({
+				supervisor_path: "/opt/browser-use/bin/browser-use-op-supervisor",
+				op_path: "/opt/homebrew/bin/op",
+				config_root: "/safe/config/browser-use",
+				operation: {
+					kind: "binding-evidence",
+					expected_vault_id: "vault-1",
+					item_id: "item-1",
+				},
+			}).argv,
+		).toEqual([
+			"metadata",
+			"--config-root",
+			"/safe/config/browser-use",
+			"--op-path",
+			"/opt/homebrew/bin/op",
+			"--operation",
+			"binding-evidence",
+			"--item-id",
+			"item-1",
+			"--expected-vault-id",
+			"vault-1",
+		]);
+	});
+
+	test("projects one principal-bound binding evidence envelope", async () => {
+		const operations: unknown[] = [];
+		const port = createEnvironmentOpTokenRetrievalPort({
+			executeMetadata: async (operation) => {
+				operations.push(operation);
+				return {
+					ok: true,
+					value: {
+						identity: {
+							id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+						vaults: [{ id: "vault-1" }],
+						item_evidence: {
+							kind: "exact",
+							item: {
+								id: "item-1",
+								version: 7,
+								vault: { id: "vault-1" },
+								category: "LOGIN",
+								urls: [{ href: "https://portal.example.com/login" }],
+							},
+						},
+					},
+				};
+			},
+			mintCapability: () => {
+				throw new Error("capability mint was not expected");
+			},
+		});
+
+		expect(
+			await port.getBindingEvidence?.({
+				expected_vault_id: "vault-1",
+				item_id: "item-1",
+			}),
+		).toMatchObject({
+			ok: true,
+			evidence: {
+				identity: { service_account_id: "service-account-1" },
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: {
+					kind: "exact",
+					item: { item_id: "item-1", vault_id: "vault-1" },
+				},
+			},
+		});
+		expect(operations).toEqual([
+			{
+				kind: "binding-evidence",
+				expected_vault_id: "vault-1",
+				item_id: "item-1",
+			},
+		]);
+	});
+
+	test("projects list evidence from one principal-bound environment envelope", async () => {
+		const port = portReturningBindingEvidence({
+			identity: {
+				id: "service-account-1",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			},
+			vaults: [{ id: "vault-1" }],
+			item_evidence: {
+				kind: "list",
+				items: [
+					{
+						id: "item-1",
+						version: 7,
+						vault: { id: "vault-1" },
+						category: "LOGIN",
+						urls: [{ href: "https://portal.example.com/login" }],
+					},
+				],
+			},
+		});
+
+		expect(
+			await port.getBindingEvidence?.({
+				expected_vault_id: "vault-1",
+				item_id: null,
+			}),
+		).toEqual({
+			ok: true,
+			evidence: {
+				identity: {
+					service_account_id: "service-account-1",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: {
+					kind: "list",
+					items: [
+						{
+							item_id: "item-1",
+							vault_id: "vault-1",
+							item_revision: 7,
+							origins: ["https://portal.example.com"],
+							login_paths: [],
+							supported_methods: ["password", "otp"],
+							state: "active",
+						},
+					],
+				},
+			},
+		});
+	});
+
+	test.each([
+		["zero-vault scope", []],
+		["multi-vault scope", [{ id: "vault-1" }, { id: "vault-2" }]],
+		["mismatched vault", [{ id: "vault-2" }]],
+	] as const)(
+		"preserves null item evidence for %s",
+		async (_label, vaults) => {
+			const port = portReturningBindingEvidence({
+				identity: {
+					id: "service-account-1",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults,
+				item_evidence: null,
+			});
+
+			expect(
+				await port.getBindingEvidence?.({
+					expected_vault_id: "vault-1",
+					item_id: "item-1",
+				}),
+			).toEqual({
+				ok: true,
+				evidence: {
+					identity: {
+						service_account_id: "service-account-1",
+						state: "ACTIVE",
+						type: "SERVICE_ACCOUNT",
+					},
+					vaults: vaults.map(({ id }) => ({ vault_id: id })),
+					item_evidence: null,
+				},
+			});
+		},
+	);
+
+	test.each([
+		[
+			"malformed revision",
+			{
+				id: "item-1",
+				version: 0,
+				vault: { id: "vault-1" },
+				category: "LOGIN",
+				urls: [{ href: "https://portal.example.com/login" }],
+			},
+		],
+		[
+			"secret-shaped item row",
+			{
+				id: "item-1",
+				version: 7,
+				vault: { id: "vault-1" },
+				category: "LOGIN",
+				urls: [{ href: "op://vault/item" }],
+			},
+		],
+	] as const)("rejects %s without partial evidence", async (_label, item) => {
+		const port = portReturningBindingEvidence({
+			identity: {
+				id: "service-account-1",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			},
+			vaults: [{ id: "vault-1" }],
+			item_evidence: { kind: "list", items: [item] },
+		});
+
+		expect(
+			await port.getBindingEvidence?.({
+				expected_vault_id: "vault-1",
+				item_id: null,
+			}),
+		).toEqual({
+			ok: false,
+			rejection: {
+				code: "output-shape-invalid",
+				message: "native principal-bound binding evidence was invalid.",
+			},
+		});
+	});
+
+	test("service-account identity uses user-get and strips display metadata", async () => {
+		const operations: unknown[] = [];
+		const port = createEnvironmentOpTokenRetrievalPort({
+			executeMetadata: async (operation) => {
+				operations.push(operation);
+				return {
+					ok: true,
+					value: {
+						id: "service-account-1",
+						state: "ACTIVE",
+						type: "SERVICE_ACCOUNT",
+						email: "not-projected@example.com",
+					},
+				};
+			},
+			mintCapability: () => {
+				throw new Error("capability mint was not expected");
+			},
+		});
+
+		expect(await port.getServiceAccountIdentity()).toEqual({
+			ok: true,
+			identity: {
+				service_account_id: "service-account-1",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			},
+		});
+		expect(operations).toEqual([{ kind: "user-get" }]);
 	});
 
 	test("credential fetch mints a deferred capability with zero OP execution", async () => {

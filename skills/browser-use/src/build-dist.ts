@@ -26,6 +26,7 @@ const NATIVE_EXECUTABLES = [
 	"browser-use-token-custody",
 	"browser-use-op-supervisor",
 ] as const;
+const DESCRIPTOR_IO_SOURCE = "browser-use-auth-binding-io.c";
 const ownedNativeBinaryRoot = join(
 	defaultSkillRoot,
 	"..",
@@ -237,6 +238,7 @@ export async function buildBrowserUseDist(
 			(entrypoint) => `${basename(entrypoint, ".ts")}.js`,
 		),
 	);
+	expectedDistFiles.add(DESCRIPTOR_IO_SOURCE);
 
 	for (const executable of NATIVE_EXECUTABLES) {
 		const source = join(nativeBinaryRoot, executable);
@@ -267,6 +269,10 @@ export async function buildBrowserUseDist(
 			`Browser Use dist bundle failed:\n${build.logs.map(String).join("\n")}`,
 		);
 	}
+	await cp(
+		join(skillRoot, "src", DESCRIPTOR_IO_SOURCE),
+		join(distRoot, DESCRIPTOR_IO_SOURCE),
+	);
 
 	await cp(shippedRunbooksSource, shippedRunbooksDist, {
 		recursive: true,
@@ -310,6 +316,17 @@ export async function buildBrowserUseDist(
 		const stats = await lstat(distPath);
 		if (!stats.isFile()) {
 			throw new Error(`Dist payload entry is not a file: ${entry}`);
+		}
+		if (entry === DESCRIPTOR_IO_SOURCE) {
+			const [source, copied] = await Promise.all([
+				readFile(join(skillRoot, "src", DESCRIPTOR_IO_SOURCE)),
+				readFile(distPath),
+			]);
+			if (!source.equals(copied)) {
+				throw new Error("Descriptor-relative I/O source changed during dist copy.");
+			}
+			await chmod(distPath, 0o644);
+			continue;
 		}
 		const text = await readFile(distPath, "utf8");
 		const firstLine = text.split(/\r?\n/, 1)[0] ?? "";

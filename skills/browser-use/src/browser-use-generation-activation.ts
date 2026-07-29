@@ -42,6 +42,7 @@ import {
 	type BrowserUseRunbook,
 	validateRunbook,
 } from "./browser-use-runbook-model";
+import { parseGenerationAuthRouteRecord } from "./browser-use-generation-schemas";
 import {
 	type BrowserUseActivationPendingPayload,
 	type BrowserUseCorpusGenerationCandidatePayload,
@@ -60,11 +61,6 @@ const ACTIVE_CORPUS_MANIFEST_FILE = "active-corpus-manifest.json";
 const ACTIVATION_PENDING_FILE = "activation-pending.json";
 const GENERATION_EFFECT_FENCES_DIR = "effect-fences";
 const SAFE_EFFECT_REF = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-const AUTH_ROUTE_KEYS = [
-	"auth_context_ref",
-	"candidate_id",
-	"status",
-] as const;
 
 /** Fixed candidate-manifest path inside every activation-ready generation. */
 export const CORPUS_GENERATION_CANDIDATE_MANIFEST_PATH =
@@ -1217,13 +1213,12 @@ async function validateCandidateClosure(
 				"auth route is not valid JSON.",
 			);
 		}
+		const parsedRoute = parseGenerationAuthRouteRecord(raw);
 		if (
-			!isJsonRecord(raw) ||
-			!sameStrings(Object.keys(raw), AUTH_ROUTE_KEYS) ||
-			findRedactionViolations(raw).length > 0 ||
-			raw.auth_context_ref !== route.auth_context_ref ||
-			raw.candidate_id !== route.candidate_id ||
-			raw.status !== "active" ||
+			parsedRoute === undefined ||
+			findRedactionViolations(parsedRoute).length > 0 ||
+			parsedRoute.auth_context_ref !== route.auth_context_ref ||
+			parsedRoute.candidate_id !== route.candidate_id ||
 			routedAuthCandidates.has(route.auth_context_ref)
 		) {
 			return migrationFailure(

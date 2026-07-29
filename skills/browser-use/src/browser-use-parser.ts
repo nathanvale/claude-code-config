@@ -316,20 +316,23 @@ export function parseBrowserUseArgv(
 	// R11: binding repair and selection projection are targeted reads of exact
 	// coordinates, never scans, so their coordinates are hard-required.
 	if (command === "auth-repair-item-binding") {
-		for (const flag of ["--vault-id", "--item-id"] as const) {
-			const value = stringField(flagValues[flag]);
-			if (!value || value.startsWith("--")) {
-				throw usageError(
-					`auth repair-item-binding requires ${flag} <id>.`,
-				);
-			}
+		const vaultId = stringField(flagValues["--vault-id"]);
+		const itemId = stringField(flagValues["--item-id"]);
+		const runId = stringField(flagValues["--run"]);
+		const hasVaultId = vaultId !== undefined && !vaultId.startsWith("--");
+		const hasItemId = itemId !== undefined && !itemId.startsWith("--");
+		if (hasVaultId !== hasItemId || (!hasVaultId && runId === undefined)) {
+			throw usageError(
+				"auth repair-item-binding requires both --vault-id <id> and --item-id <id>, or a blocked --run <id>.",
+			);
 		}
 	}
 	if (command === "auth-request-binding-selection-grant") {
 		const vaultId = stringField(flagValues["--vault-id"]);
-		if (!vaultId || vaultId.startsWith("--")) {
+		const runId = stringField(flagValues["--run"]);
+		if ((!vaultId || vaultId.startsWith("--")) && runId === undefined) {
 			throw usageError(
-				"auth request-binding-selection-grant requires --vault-id <id>.",
+				"auth request-binding-selection-grant requires --vault-id <id> or a blocked --run <id>.",
 			);
 		}
 	}

@@ -539,6 +539,9 @@ export const BROWSER_USE_AUTH_SUBCOMMANDS = [
 	"repair-vault-grant",
 	"repair-item-binding",
 	"request-binding-selection-grant",
+	"choose-supported-auth-method",
+	"inspect-capability-loss",
+	"inspect-auth-readiness",
 ] as const;
 export type BrowserUseAuthSubcommand =
 	(typeof BROWSER_USE_AUTH_SUBCOMMANDS)[number];
@@ -653,7 +656,10 @@ export type BrowserUseCommand =
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
-	| "auth-request-binding-selection-grant";
+	| "auth-request-binding-selection-grant"
+	| "auth-choose-supported-auth-method"
+	| "auth-inspect-capability-loss"
+	| "auth-inspect-auth-readiness";
 
 /** Private-input refusal codes reachable through the public runbook command. */
 export const BROWSER_USE_PRIVATE_INPUT_DIAGNOSTIC_CODES = [
@@ -1994,6 +2000,21 @@ export const browserUseAuthRepairActions = [
 		summary: "Request a signed one-use grant to select one login item.",
 		sideEffects: ["check"],
 	},
+	{
+		id: "choose-supported-auth-method",
+		summary: "Choose an authentication method the selected lane supports.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect-capability-loss",
+		summary: "Inspect the selected lane evidence and restore its lost capability.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseRunbookAuthFailureActions = [
+	...browserUseAuthRepairActions,
+	...browserUseEnvironmentTokenLifecycleActions,
 ] as const;
 
 // Failures reuse the platform store vocabulary (the store is the only
@@ -2040,6 +2061,11 @@ const browserUseAuthSelectionFlags = {
 	},
 	...browserUseAuthFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthRunContinuationWriteExemption = {
+	reason:
+		"Supplying --run performs one fenced shared-run continuation write; omission remains a metadata-only check.",
+} as const;
 
 export const browserUseContracts = defineCommandFacadeContract(
 	{
@@ -2452,6 +2478,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 					...browserUsePlatformStoreFailureActions,
 					...browserUseRunbookInputFailureActions,
 					...browserUseRunbookTargetRepairActions,
+					...browserUseRunbookAuthFailureActions,
 				],
 			},
 			flags: browserUseRunbookRunFlags,
@@ -2780,9 +2807,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			],
 			json: true,
 			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
@@ -2803,9 +2831,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			],
 			json: true,
 			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
@@ -2823,12 +2852,14 @@ export const browserUseContracts = defineCommandFacadeContract(
 				"Re-prove one exact item binding by targeted read (R11) — present, moved, or forbidden — never an unbound scan.",
 			usage: [
 				"auth repair-item-binding --vault-id <id> --item-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+				"auth repair-item-binding --run <id> [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
@@ -2846,12 +2877,14 @@ export const browserUseContracts = defineCommandFacadeContract(
 				"Project the ambiguous-binding candidate set a signed one-use selection grant must bind (R20); signing stays with the native Approval Broker.",
 			usage: [
 				"auth request-binding-selection-grant --vault-id <id> [--run <id>] [--caller <label>] [--json|--plain]",
+				"auth request-binding-selection-grant --run <id> [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
@@ -2861,6 +2894,78 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseAuthRepairFailureActions,
 			},
 			flags: browserUseAuthSelectionFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-choose-supported-auth-method": {
+			script: "browser-use",
+			summary:
+				"Inspect the admitted auth lane after a requested method is unsupported; keep method selection explicit.",
+			usage: [
+				"auth choose-supported-auth-method [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-inspect-capability-loss": {
+			script: "browser-use",
+			summary:
+				"Inspect whether the selected auth lane still exposes its metadata-only retrieval capability.",
+			usage: [
+				"auth inspect-capability-loss [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-inspect-auth-readiness": {
+			script: "browser-use",
+			summary:
+				"Inspect the admitted metadata capability and report the remaining live session-proof gate.",
+			usage: [
+				"auth inspect-auth-readiness [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: browserUseAuthRunContinuationWriteExemption,
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,

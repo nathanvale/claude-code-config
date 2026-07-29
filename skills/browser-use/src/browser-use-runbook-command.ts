@@ -3,11 +3,12 @@ import type {
 	RuntimeErrorRecoverability,
 	CliWriter,
 } from "@side-quest/cli-command-facade";
-import type {
-	browserUseAuthRepairActions,
-	browserUseEnvironmentTokenLifecycleActions,
+import {
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
+	browserUseRunbookAuthFailureActions,
+} from "./command-contract";
+import type {
 	browserUseRunbookInputFailureActions,
 	browserUseTaskRunFailureActions,
 	browserUseTaskRunSuccessActions,
@@ -29,6 +30,12 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
+import {
+	type BrowserUseAuthBlockedCause,
+	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
+} from "./browser-use-auth-model";
+import { createBrowserUseAuthBindingStore } from "./browser-use-auth-binding-store";
+import type { BrowserUseResolvedAuthCandidate } from "./browser-use-auth-bindings";
 import type { HandoffFacts } from "./browser-use-discovery";
 import {
 	type BrowserUseGenerationRuntime,
@@ -95,8 +102,19 @@ import type {
 type RunbookPlatformActionId =
 	| (typeof browserUsePlatformStoreFailureActions)[number]["id"]
 	| (typeof browserUsePlatformStoreSuccessActions)[number]["id"]
-	| (typeof browserUseAuthRepairActions)[number]["id"]
-	| (typeof browserUseEnvironmentTokenLifecycleActions)[number]["id"];
+	| (typeof browserUseRunbookAuthFailureActions)[number]["id"];
+
+const runbookPlatformActionIds = new Set<string>([
+	...browserUsePlatformStoreFailureActions.map((action) => action.id),
+	...browserUsePlatformStoreSuccessActions.map((action) => action.id),
+	...browserUseRunbookAuthFailureActions.map((action) => action.id),
+]);
+
+function isRunbookPlatformActionId(
+	value: string,
+): value is RunbookPlatformActionId {
+	return runbookPlatformActionIds.has(value);
+}
 
 type RunbookTaskActionId =
 	| (typeof browserUseTaskRunFailureActions)[number]["id"]
@@ -135,6 +153,7 @@ export type BrowserUseRunbookCommandFailure = {
 	actionId: RunbookPlatformActionId;
 	exitCode: number;
 	recoverability: RuntimeErrorRecoverability;
+	authBlockedCause?: BrowserUseAuthBlockedCause;
 };
 
 /**
@@ -468,6 +487,46 @@ function buildRunbookAuthDelivery(
 	});
 }
 
+/**
+ * Prepare the digest-bound generation candidate using metadata only.
+ *
+ * U5 ends here. U7 owns confidential field delivery and keeps the existing
+ * fail-closed delivery seam until a proven target and sensitive interval exist.
+ *
+ * @internal
+ */
+export async function prepareRunbookGenerationAuthBinding(
+	provider: Pick<BrowserUseAuthProvider, "prepareGenerationBinding">,
+	resolution: BrowserUseResolvedAuthCandidate,
+	targetOrigins: readonly string[],
+): Promise<
+	{ ok: true } | { ok: false; failure: BrowserUseRunbookCommandFailure }
+> {
+	const prepared = await provider.prepareGenerationBinding({
+		resolution,
+		target_origins: targetOrigins,
+		login_path: null,
+		method: "password",
+	});
+	if (prepared.ok) return { ok: true };
+	const actionId = isRunbookPlatformActionId(
+		prepared.continuation.next_action_id,
+	)
+		? prepared.continuation.next_action_id
+		: "inspect-auth-readiness";
+	return {
+		ok: false,
+		failure: {
+			code: `runbook_auth_${prepared.event.cause.replaceAll("-", "_")}`,
+			message: prepared.continuation.summary,
+			actionId,
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			authBlockedCause: prepared.event.cause,
+		},
+	};
+}
+
 function buildBlockedRunbookAuthDelivery(
 	admission: Extract<
 		NonNullable<BrowserUseRuntime["authAdmission"]>,
@@ -492,7 +551,7 @@ function blockedAdmissionFailure(
 		admission.cause.code === "environment-token-not-ready"
 			? (admission.evidence.environment?.next_action ?? "inspect-token-status")
 			: admission.cause.code.startsWith("native-")
-				? "inspect-auth-readiness"
+				? "inspect-capability-loss"
 				: "inspect-token-status";
 	return {
 		code: `runbook_auth_${admission.cause.code.replaceAll("-", "_")}`,
@@ -516,6 +575,33 @@ function persistRunbookPrivateState(
 		`runbook-state-${run.run_id}`,
 		mutate,
 		heldClaim,
+	);
+}
+
+function persistRunbookAuthBlock(
+	ports: BrowserUseRunbookCommandPorts,
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	claim: LeaseWriteClaim,
+	failure: BrowserUseRunbookCommandFailure,
+): Promise<RunbookStateWriteResult> {
+	return persistRunbookPrivateState(
+		ports,
+		deps,
+		run,
+		(current) => ({
+			...current,
+			state:
+				failure.authBlockedCause === undefined
+					? "awaiting-auth"
+					: BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[failure.authBlockedCause]
+							.run_state,
+			continuation: {
+				next_action_id: failure.actionId,
+				summary: failure.message,
+			},
+		}),
+		claim,
 	);
 }
 
@@ -960,6 +1046,43 @@ async function runRunbookRun(
 				shown.failure.message,
 			),
 		);
+	}
+	let resolvedAuthCandidate: BrowserUseResolvedAuthCandidate | undefined;
+	if (shown.runbook.auth_context_ref !== undefined) {
+		if (generationRuntime === undefined) {
+			return ports.output.emitPlatformFailure(
+				runbookCommandFailureOf(
+					"runbook_record_invalid",
+					"an auth-bound runbook requires captured generation authority.",
+				),
+			);
+		}
+		const resolved =
+			await generationRuntime.authGenerationSeam.loadAuthCandidate(
+				shown.runbook.auth_context_ref,
+			);
+		if (!resolved.ok) {
+			return ports.output.emitPlatformFailure(
+				runbookCommandFailureOf(
+					resolved.failure.code === "auth_generation_record_corrupt"
+						? "runbook_record_corrupt"
+						: "runbook_record_invalid",
+					resolved.failure.message,
+				),
+			);
+		}
+		if (
+			resolved.resolution.candidate.service_id !==
+			shown.runbook.service_id
+		) {
+			return ports.output.emitPlatformFailure(
+				runbookCommandFailureOf(
+					"runbook_record_invalid",
+					"the captured auth candidate does not match the runbook service.",
+				),
+			);
+		}
+		resolvedAuthCandidate = resolved.resolution;
 	}
 	const custody = enforceRunbookInputCustody(shown.runbook, {
 		publicInputIds: Object.keys(parsedInputs.inputs),
@@ -1447,7 +1570,24 @@ async function runRunbookRun(
 		dispatchLease.lease,
 		ports.run.platformFailureOf,
 	);
+	const authBlockRun = run;
 	try {
+		const emitPersistedAuthFailure = async (
+			failure: BrowserUseRunbookCommandFailure,
+		): Promise<number> => {
+			const persisted = await persistRunbookAuthBlock(
+				ports,
+				deps,
+				authBlockRun,
+				dispatchClaim,
+				failure,
+			);
+			if (!persisted.ok) {
+				return ports.output.emitPlatformFailure(persisted.failure);
+			}
+			run = persisted.run;
+			return ports.output.emitPlatformFailure(failure);
+		};
 		const guardResult = beginSensitiveRunGuard(run.run_id);
 		const guard = guardResult.ok ? guardResult.guard : undefined;
 		const admission = ports.runtime.authAdmission;
@@ -1457,8 +1597,46 @@ async function runRunbookRun(
 						store: deps,
 						admission,
 						attestationByDigest: attestationByDigestFrom(deps),
+						bindingStore: createBrowserUseAuthBindingStore({
+							paths: deps.paths,
+						}),
 					})
 				: undefined;
+		if (resolvedAuthCandidate !== undefined) {
+			if (authProvider === undefined) {
+				const failure: BrowserUseRunbookCommandFailure =
+					admission?.kind === "blocked"
+						? blockedAdmissionFailure(
+								admission,
+								"authentication lane admission blocked before generation binding proof.",
+							)
+						: {
+								code: "runbook_auth_capability_missing",
+								message:
+									"the runbook auth route requires an admitted authentication capability.",
+								actionId: "inspect-capability-loss",
+								exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+								recoverability: "repair_state" as const,
+							};
+				return await emitPersistedAuthFailure(failure);
+			}
+			const preparedAuth = await prepareRunbookGenerationAuthBinding(
+				authProvider,
+				resolvedAuthCandidate,
+				shown.runbook.allowed_origins,
+			);
+			if (!preparedAuth.ok) {
+				return await emitPersistedAuthFailure(preparedAuth.failure);
+			}
+			return await emitPersistedAuthFailure({
+				code: "runbook_auth_browser_principal_unproven",
+				message:
+					"metadata binding is proven, but the active browser principal has not been re-proven.",
+				actionId: "inspect-auth-readiness",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
 
 		let dispatchRun = run;
 		let mutationMarkerFailure:

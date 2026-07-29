@@ -17,11 +17,13 @@ if (signalPath === undefined || nonce === undefined) {
 
 const binding: BrowserUseItemBinding = {
 	service_id: "fixture",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://fixture.test"],
 	allowed_login_paths: [],
 	vault_id: "fixture-vault",
 	item_id: "fixture-item",
+	item_revision: 7,
 	allowed_auth_methods: ["password"],
 	binding_revision: 1,
 };
@@ -39,6 +41,14 @@ const target: BrowserUseVerifiedTarget = {
 };
 
 const tokenRetrieval: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({

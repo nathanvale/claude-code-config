@@ -20,7 +20,11 @@ import {
 } from "./browser-use-auth-model";
 import type { BrowserUseVaultItemEvidence } from "./browser-use-auth-bindings";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
-import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
+import {
+	type RunStoreDeps,
+	createSharedRun,
+	loadSharedRun,
+} from "./browser-use-runs";
 import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
@@ -84,6 +88,7 @@ function evidenceItem(
 	return {
 		item_id: itemId,
 		vault_id: "vault-1",
+		item_revision: 7,
 		origins: ["https://portal.example.test"],
 		login_paths: ["/login"],
 		supported_methods: ["password"],
@@ -247,6 +252,14 @@ function fakePort(
 		throw new Error(`fake port method ${name} was not expected to be called`);
 	};
 	return {
+		getServiceAccountIdentity: async () => ({
+			ok: true,
+			identity: {
+				service_account_id: "service-account-1",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			},
+		}),
 		listVaults: refuse("listVaults") as BrowserUseTokenRetrievalPort["listVaults"],
 		listLoginItems: refuse(
 			"listLoginItems",
@@ -288,6 +301,8 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 			"invalid-vault-scope",
 			"revoked-binding",
 			"ambiguous-binding-selection",
+			"unsupported-method",
+			"capability-loss",
 		] as const) {
 			const continuation =
 				BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].continuation.next_action_id;
@@ -305,7 +320,12 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 		);
 		for (const subcommand of BROWSER_USE_AUTH_SUBCOMMANDS.filter(
 			(candidate) =>
-				!["status", "install-token", "remove-token"].includes(candidate),
+				![
+					"status",
+					"install-token",
+					"remove-token",
+					"inspect-auth-readiness",
+				].includes(candidate),
 		)) {
 			expect(tableIds.has(subcommand)).toBe(true);
 		}
@@ -387,6 +407,74 @@ describe("enroll-browser-automation-token over an injected port", () => {
 		});
 		expect(envelope.continuation.next_action_id).toBe(
 			"acquire-native-capability",
+		);
+	});
+});
+
+describe("unsupported-method and capability-loss continuations", () => {
+	test("choose-supported-auth-method is a live dispatchable check", async () => {
+		const result = await runForTest(
+			["auth", "choose-supported-auth-method", "--json"],
+			makeRuntime({ authTokenRetrieval: fakePort({}) }),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "method-selection-required",
+			blocked_cause: "unsupported-method",
+		});
+		expect(envelope.continuation.next_action_id).toBe(
+			"inspect-auth-readiness",
+		);
+	});
+
+	test("inspect-capability-loss proves the metadata port is callable", async () => {
+		const result = await runForTest(
+			["auth", "inspect-capability-loss", "--json"],
+			makeRuntime({
+				authTokenRetrieval: fakePort({
+					listVaults: async () => ({
+						ok: true,
+						vaults: [{ vault_id: "vault-1" }],
+					}),
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "capability-present",
+			detail: { visible_vault_count: 1 },
+		});
+		expect(envelope.continuation.next_action_id).toBe(
+			"inspect-auth-readiness",
+		);
+	});
+
+	test("inspect-auth-readiness is a live bounded session-proof gate", async () => {
+		const result = await runForTest(
+			["auth", "inspect-auth-readiness", "--json"],
+			makeRuntime({
+				authTokenRetrieval: fakePort({
+					listVaults: async () => ({
+						ok: true,
+						vaults: [{ vault_id: "vault-1" }],
+					}),
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "session-identity-proof-unavailable",
+			blocked_cause: "capability-loss",
+			detail: {
+				metadata_capability: "present",
+				visible_vault_count: 1,
+			},
+		});
+		expect(envelope.continuation.next_action_id).toBe(
+			"inspect-auth-readiness",
 		);
 	});
 });
@@ -654,6 +742,87 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 });
 
 describe("--run binding (the run's continuation stays the one truth)", () => {
+	test("selection-grant derives the single live vault when the run discarded coordinates", async () => {
+		const store = await makeStore();
+		await createSharedRun(
+			store.deps,
+			blockedRun(
+				"run-auth-selection-no-vault",
+				"request-binding-selection-grant",
+			),
+		);
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--run",
+				"run-auth-selection-no-vault",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({
+					listVaults: async () => ({
+						ok: true,
+						vaults: [{ vault_id: "vault-1" }],
+					}),
+					listLoginItems: async () => ({
+						ok: true,
+						items: [evidenceItem("item-1")],
+					}),
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "selection-candidates-projected",
+			detail: {
+				vault_id: "vault-1",
+				candidate_count: 1,
+			},
+		});
+	});
+
+	test("repair-item-binding remains dispatchable when the run has no repair coordinates", async () => {
+		const store = await makeStore();
+		await createSharedRun(
+			store.deps,
+			blockedRun("run-auth-no-coordinates", "repair-item-binding"),
+		);
+		const result = await runForTest(
+			[
+				"auth",
+				"repair-item-binding",
+				"--run",
+				"run-auth-no-coordinates",
+				"--json",
+			],
+			makeRuntime({
+				env: store.env,
+				authTokenRetrieval: fakePort({}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "binding-coordinates-unavailable",
+			blocked_cause: "revoked-binding",
+		});
+		expect(envelope.continuation.next_action_id).toBe(
+			"inspect-auth-readiness",
+		);
+		const loaded = await loadSharedRun(
+			store.deps,
+			"run-auth-no-coordinates",
+		);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.continuation?.next_action_id).toBe(
+				"inspect-auth-readiness",
+			);
+		}
+	});
+
 	test("a run naming this command binds the evaluation to it", async () => {
 		const store = await makeStore();
 		await createSharedRun(

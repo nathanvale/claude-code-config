@@ -1,4 +1,5 @@
 import Darwin
+import CoreFoundation
 import CryptoKit
 import Foundation
 
@@ -222,6 +223,7 @@ public enum EnvironmentOpExecutionCause: String, Codable, Error, Sendable {
     case processSignalled = "process-signalled"
     case ioFailure = "io-failure"
     case outputShapeInvalid = "output-shape-invalid"
+    case itemMissing = "item-missing"
     case validatorProtocolInvalid = "validator-protocol-invalid"
 }
 
@@ -297,6 +299,133 @@ private func readChildToken(_ descriptor: Int32) -> [UInt8]? {
         return nil
     }
     return token
+}
+
+private struct EnvironmentTokenDescriptorIdentity: Equatable {
+    let device: dev_t
+    let inode: ino_t
+    let size: off_t
+    let changedSeconds: Int
+    let changedNanoseconds: Int
+    let modifiedSeconds: Int
+    let modifiedNanoseconds: Int
+}
+
+private func environmentTokenDescriptorIdentity(
+    _ descriptor: Int32
+) -> EnvironmentTokenDescriptorIdentity? {
+    guard proveEnvironmentTokenDescriptor(descriptor) else { return nil }
+    var metadata = stat()
+    guard fstat(descriptor, &metadata) == 0,
+          metadata.st_size > 0,
+          metadata.st_size <= 65_536
+    else {
+        return nil
+    }
+    return EnvironmentTokenDescriptorIdentity(
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+        size: metadata.st_size,
+        changedSeconds: metadata.st_ctimespec.tv_sec,
+        changedNanoseconds: metadata.st_ctimespec.tv_nsec,
+        modifiedSeconds: metadata.st_mtimespec.tv_sec,
+        modifiedNanoseconds: metadata.st_mtimespec.tv_nsec
+    )
+}
+
+/// Copy token custody through the kernel into one unlinked descriptor.
+///
+/// The supervisor handles descriptors and metadata only. Token bytes never
+/// enter its address space. Every OP child in a binding proof reads the same
+/// immutable-by-unreachability snapshot, so an in-place source-file ABA cannot
+/// compose evidence from different principals.
+private func snapshotEnvironmentTokenDescriptor(
+    _ sourceDescriptor: Int32,
+    absoluteDeadlineMilliseconds: Int64
+) -> Result<Int32, EnvironmentOpExecutionCause> {
+    guard opMonotonicMilliseconds() < absoluteDeadlineMilliseconds else {
+        return .failure(.timeout)
+    }
+    guard let sourceIdentity = environmentTokenDescriptorIdentity(sourceDescriptor),
+          let base = privateEnvironmentOpStagingRoot()
+    else {
+        return .failure(.tokenInvalid)
+    }
+    let template = (base as NSString)
+        .appendingPathComponent("browser-use-token-snapshot.XXXXXXXX")
+    var templateBytes = Array(template.utf8CString)
+    var writerDescriptor = mkstemp(&templateBytes)
+    guard writerDescriptor >= 0 else {
+        return .failure(.ioFailure)
+    }
+    let snapshotPath = stringBeforeNull(templateBytes)
+    var readerDescriptor: Int32 = -1
+    var unlinked = false
+    defer {
+        if writerDescriptor >= 0 { closeOpDescriptor(writerDescriptor) }
+        if readerDescriptor >= 0 { closeOpDescriptor(readerDescriptor) }
+        if !unlinked { _ = unlink(snapshotPath) }
+    }
+    guard fcopyfile(
+        sourceDescriptor,
+        writerDescriptor,
+        nil,
+        copyfile_flags_t(COPYFILE_DATA)
+    ) == 0
+    else {
+        return .failure(.tokenInvalid)
+    }
+    guard opMonotonicMilliseconds() < absoluteDeadlineMilliseconds else {
+        return .failure(.timeout)
+    }
+    guard
+        environmentTokenDescriptorIdentity(sourceDescriptor) == sourceIdentity,
+        fchmod(writerDescriptor, mode_t(0o400)) == 0
+    else {
+        return .failure(.tokenInvalid)
+    }
+    guard fsync(writerDescriptor) == 0 else {
+        return .failure(.tokenInvalid)
+    }
+    guard opMonotonicMilliseconds() < absoluteDeadlineMilliseconds else {
+        return .failure(.timeout)
+    }
+    readerDescriptor = Darwin.open(
+        snapshotPath,
+        O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+    )
+    var writerMetadata = stat()
+    var readerMetadata = stat()
+    guard readerDescriptor >= 0,
+          fstat(writerDescriptor, &writerMetadata) == 0,
+          fstat(readerDescriptor, &readerMetadata) == 0,
+          writerMetadata.st_dev == readerMetadata.st_dev,
+          writerMetadata.st_ino == readerMetadata.st_ino,
+          readerMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+          readerMetadata.st_mode & mode_t(0o777) == mode_t(0o400),
+          readerMetadata.st_uid == geteuid(),
+          readerMetadata.st_nlink == 1,
+          readerMetadata.st_size == sourceIdentity.size,
+          unlink(snapshotPath) == 0
+    else {
+        return .failure(.tokenInvalid)
+    }
+    unlinked = true
+    closeOpDescriptor(writerDescriptor)
+    writerDescriptor = -1
+    guard opMonotonicMilliseconds() < absoluteDeadlineMilliseconds else {
+        return .failure(.timeout)
+    }
+    var unlinkedMetadata = stat()
+    guard fstat(readerDescriptor, &unlinkedMetadata) == 0,
+          unlinkedMetadata.st_nlink == 0,
+          lseek(readerDescriptor, 0, SEEK_SET) == 0
+    else {
+        return .failure(.tokenInvalid)
+    }
+    let admittedDescriptor = readerDescriptor
+    readerDescriptor = -1
+    return .success(admittedDescriptor)
 }
 
 private func execExact(
@@ -436,7 +565,8 @@ public enum EnvironmentOpProcessRunner {
         tokenDescriptor: Int32?,
         timeoutMilliseconds: Int32 = 10_000,
         maximumStdoutBytes: Int = 262_144,
-        maximumStderrBytes: Int = 65_536
+        maximumStderrBytes: Int = 65_536,
+        absoluteDeadlineMilliseconds: Int64? = nil
     ) -> EnvironmentOpProcessResult {
         guard EnvironmentOpExecutableAdmission.proveExecutable(executablePath) == nil,
               timeoutMilliseconds > 0,
@@ -444,6 +574,14 @@ public enum EnvironmentOpProcessRunner {
               maximumStderrBytes > 0
         else {
             return .blocked(.executableUnavailable)
+        }
+        let startedAt = opMonotonicMilliseconds()
+        let deadline = min(
+            absoluteDeadlineMilliseconds ?? Int64.max,
+            startedAt + Int64(timeoutMilliseconds)
+        )
+        guard deadline > startedAt else {
+            return .blocked(.timeout)
         }
         var stdoutPipe: [Int32] = [-1, -1]
         var stderrPipe: [Int32] = [-1, -1]
@@ -527,13 +665,20 @@ public enum EnvironmentOpProcessRunner {
             closeOpDescriptor(stderrPipe[0])
         }
 
-        let deadline = opMonotonicMilliseconds() + Int64(timeoutMilliseconds)
         var stdout: [UInt8]? = []
         var discardedStderr: [UInt8]? = nil
         var stdoutCount = 0
         var stderrCount = 0
         var status: Int32 = 0
         while true {
+            if opMonotonicMilliseconds() >= deadline {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                return .blocked(.timeout)
+            }
             if let cause = drainDescriptor(
                 stdoutPipe[0],
                 bytes: &stdout,
@@ -625,6 +770,7 @@ public enum EnvironmentOpMetadataOperation: Equatable, Sendable {
     case vaultList
     case itemList(vaultID: String)
     case itemGet(vaultID: String, itemID: String)
+    case bindingEvidence(expectedVaultID: String?, itemID: String?)
 
     fileprivate var arguments: [String] {
         switch self {
@@ -642,6 +788,8 @@ public enum EnvironmentOpMetadataOperation: Equatable, Sendable {
                 "item", "list", "--vault", vaultID,
                 "--categories", "Login", "--format=json",
             ]
+        case .bindingEvidence:
+            return []
         }
     }
 }
@@ -690,6 +838,7 @@ private func safeMetadataURL(_ value: Any?) -> String? {
     }
     components.scheme = components.scheme?.lowercased()
     components.host = components.host?.lowercased()
+    components.path = "/"
     return components.url?.absoluteString
 }
 
@@ -706,6 +855,10 @@ private func projectItem(_ raw: Any) -> [String: Any]? {
     guard let row = raw as? [String: Any],
           let id = boundedString(row["id"]),
           let category = boundedString(row["category"]),
+          let version = row["version"] as? NSNumber,
+          CFGetTypeID(version) != CFBooleanGetTypeID(),
+          version.int64Value > 0,
+          NSNumber(value: version.int64Value) == version,
           let vault = row["vault"] as? [String: Any],
           let vaultID = boundedString(vault["id"])
     else {
@@ -723,6 +876,7 @@ private func projectItem(_ raw: Any) -> [String: Any]? {
     }
     var projected: [String: Any] = [
         "id": id,
+        "version": version,
         "category": category,
         "vault": ["id": vaultID],
         "urls": urls,
@@ -744,16 +898,13 @@ private func projectMetadata(
     switch operation {
     case .userGet:
         guard let row = raw as? [String: Any],
-              let id = boundedString(row["id"])
+              let id = boundedString(row["id"]),
+              let state = boundedString(row["state"]),
+              let type = boundedString(row["type"])
         else {
             return nil
         }
-        var projected: [String: Any] = ["id": id]
-        if let state = row["state"] {
-            guard let boundedState = boundedString(state) else { return nil }
-            projected["state"] = boundedState
-        }
-        return projected
+        return ["id": id, "state": state, "type": type]
     case .vaultList:
         guard let rows = raw as? [Any] else { return nil }
         let projected = rows.compactMap(projectVault)
@@ -763,20 +914,9 @@ private func projectMetadata(
         let projected = rows.compactMap(projectItem)
         return projected.count == rows.count ? projected : nil
     case .itemGet:
-        guard case let .itemGet(_, itemID) = operation,
-              let rows = raw as? [Any]
-        else {
-            return nil
-        }
-        let matches = rows.compactMap { row -> [String: Any]? in
-            guard let candidate = row as? [String: Any],
-                  boundedString(candidate["id"]) == itemID
-            else {
-                return nil
-            }
-            return projectItem(candidate)
-        }
-        return matches.count == 1 ? matches[0] : nil
+        return nil
+    case .bindingEvidence:
+        return nil
     }
 }
 
@@ -820,6 +960,179 @@ private func admissionEnvelope(_ cause: EnvironmentOpAdmissionCause) -> Data {
 
 @_spi(Executor)
 public enum EnvironmentOpSupervisor {
+    private static func projectedOperation(
+        executablePath: String,
+        operation: EnvironmentOpMetadataOperation,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32,
+        absoluteDeadlineMilliseconds: Int64? = nil
+    ) -> Result<Any, EnvironmentOpExecutionCause> {
+        switch EnvironmentOpProcessRunner.run(
+            executablePath: executablePath,
+            arguments: operation.arguments,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: timeoutMilliseconds,
+            absoluteDeadlineMilliseconds: absoluteDeadlineMilliseconds
+        ) {
+        case let .blocked(cause):
+            return .failure(cause)
+        case let .success(output):
+            if case let .itemGet(vaultID, itemID) = operation {
+                guard let raw = try? JSONSerialization.jsonObject(
+                    with: Data(output.stdout)
+                ) as? [Any]
+                else {
+                    return .failure(.outputShapeInvalid)
+                }
+                let projectedRows = raw.compactMap(projectItem)
+                guard projectedRows.count == raw.count else {
+                    return .failure(.outputShapeInvalid)
+                }
+                let matches = projectedRows.filter {
+                    boundedString($0["id"]) == itemID
+                }
+                if matches.isEmpty {
+                    return .failure(.itemMissing)
+                }
+                guard matches.count == 1,
+                      let projected = matches.first,
+                      let vault = projected["vault"] as? [String: Any],
+                      boundedString(vault["id"]) == vaultID
+                else {
+                    return .failure(.outputShapeInvalid)
+                }
+                return .success(projected)
+            }
+            guard let projected = projectMetadata(
+                operation: operation,
+                bytes: output.stdout
+            ) else {
+                return .failure(.outputShapeInvalid)
+            }
+            return .success(projected)
+        }
+    }
+
+    private static func executeBindingEvidence(
+        executablePath: String,
+        expectedVaultID: String?,
+        itemID: String?,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32
+    ) -> Data {
+        let deadline = opMonotonicMilliseconds() + Int64(timeoutMilliseconds)
+        let snapshotDescriptor: Int32
+        switch snapshotEnvironmentTokenDescriptor(
+            tokenDescriptor,
+            absoluteDeadlineMilliseconds: deadline
+        ) {
+        case let .success(descriptor):
+            snapshotDescriptor = descriptor
+        case let .failure(cause):
+            return envelope(cause: cause)
+        }
+        defer { closeOpDescriptor(snapshotDescriptor) }
+        guard opMonotonicMilliseconds() < deadline else {
+            return envelope(cause: .timeout)
+        }
+        func remainingTimeout() -> Int32? {
+            let remaining = deadline - opMonotonicMilliseconds()
+            guard remaining > 0 else { return nil }
+            return Int32(min(remaining, Int64(Int32.max)))
+        }
+
+        guard let identityTimeout = remainingTimeout() else {
+            return envelope(cause: .timeout)
+        }
+        let identity: Any
+        switch projectedOperation(
+            executablePath: executablePath,
+            operation: .userGet,
+            tokenDescriptor: snapshotDescriptor,
+            timeoutMilliseconds: identityTimeout,
+            absoluteDeadlineMilliseconds: deadline
+        ) {
+        case let .success(value):
+            guard opMonotonicMilliseconds() < deadline else {
+                return envelope(cause: .timeout)
+            }
+            identity = value
+        case let .failure(cause):
+            return envelope(cause: cause)
+        }
+
+        guard let vaultTimeout = remainingTimeout() else {
+            return envelope(cause: .timeout)
+        }
+        let vaults: [Any]
+        switch projectedOperation(
+            executablePath: executablePath,
+            operation: .vaultList,
+            tokenDescriptor: snapshotDescriptor,
+            timeoutMilliseconds: vaultTimeout,
+            absoluteDeadlineMilliseconds: deadline
+        ) {
+        case let .success(value):
+            guard opMonotonicMilliseconds() < deadline else {
+                return envelope(cause: .timeout)
+            }
+            guard let projectedVaults = value as? [Any] else {
+                return envelope(cause: .outputShapeInvalid)
+            }
+            vaults = projectedVaults
+        case let .failure(cause):
+            return envelope(cause: cause)
+        }
+
+        var itemEvidence: Any = NSNull()
+        if vaults.count == 1,
+           let onlyVault = vaults[0] as? [String: Any],
+           let liveVaultID = onlyVault["id"] as? String
+        {
+            if let expectedVaultID, expectedVaultID != liveVaultID {
+                return envelope(value: [
+                    "identity": identity,
+                    "vaults": vaults,
+                    "item_evidence": itemEvidence,
+                ])
+            }
+            let itemOperation: EnvironmentOpMetadataOperation
+            if let itemID {
+                itemOperation = .itemGet(vaultID: liveVaultID, itemID: itemID)
+            } else {
+                itemOperation = .itemList(vaultID: liveVaultID)
+            }
+            guard let itemTimeout = remainingTimeout() else {
+                return envelope(cause: .timeout)
+            }
+            switch projectedOperation(
+                executablePath: executablePath,
+                operation: itemOperation,
+                tokenDescriptor: snapshotDescriptor,
+                timeoutMilliseconds: itemTimeout,
+                absoluteDeadlineMilliseconds: deadline
+            ) {
+            case let .success(value):
+                guard opMonotonicMilliseconds() < deadline else {
+                    return envelope(cause: .timeout)
+                }
+                itemEvidence = itemID == nil
+                    ? ["kind": "list", "items": value]
+                    : ["kind": "exact", "item": value]
+            case let .failure(cause):
+                return envelope(cause: cause)
+            }
+        }
+        guard opMonotonicMilliseconds() < deadline else {
+            return envelope(cause: .timeout)
+        }
+        return envelope(value: [
+            "identity": identity,
+            "vaults": vaults,
+            "item_evidence": itemEvidence,
+        ])
+    }
+
     @_spi(Testing)
     public static func admitOfficialExecutableForTesting(
         executablePath: String
@@ -920,21 +1233,24 @@ public enum EnvironmentOpSupervisor {
         tokenDescriptor: Int32,
         timeoutMilliseconds: Int32 = 10_000
     ) -> Data {
-        switch EnvironmentOpProcessRunner.run(
+        if case let .bindingEvidence(expectedVaultID, itemID) = operation {
+            return executeBindingEvidence(
+                executablePath: executablePath,
+                expectedVaultID: expectedVaultID,
+                itemID: itemID,
+                tokenDescriptor: tokenDescriptor,
+                timeoutMilliseconds: timeoutMilliseconds
+            )
+        }
+        switch projectedOperation(
             executablePath: executablePath,
-            arguments: operation.arguments,
+            operation: operation,
             tokenDescriptor: tokenDescriptor,
             timeoutMilliseconds: timeoutMilliseconds
         ) {
-        case let .blocked(cause):
+        case let .failure(cause):
             return envelope(cause: cause)
-        case let .success(output):
-            guard let projected = projectMetadata(
-                operation: operation,
-                bytes: output.stdout
-            ) else {
-                return envelope(cause: .outputShapeInvalid)
-            }
+        case let .success(projected):
             return envelope(value: projected)
         }
     }

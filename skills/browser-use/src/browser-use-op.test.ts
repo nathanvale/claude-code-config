@@ -17,11 +17,13 @@ import {
 	buildCredentialFieldCommand,
 	buildLoginItemGetCommand,
 	buildLoginItemListCommand,
+	buildServiceAccountIdentityCommand,
 	buildVaultListCommand,
 	createOpTokenRetrievalPort,
 	mintDeferredCredentialCapability,
 	projectLoginItemGetOutput,
 	projectLoginItemListOutput,
+	projectServiceAccountIdentityOutput,
 	projectVaultListOutput,
 	proveVaultScope,
 	screenOpEnvironmentProposal,
@@ -49,11 +51,13 @@ function baseBinding(
 ): BrowserUseItemBinding {
 	return {
 		service_id: "oncore",
+		service_account_id: "service-account-1",
 		auth_context: "interactive-login",
 		allowed_origins: ["https://portal.example.com"],
 		allowed_login_paths: ["/login"],
 		vault_id: "vault-1",
 		item_id: "item-1",
+		item_revision: 7,
 		allowed_auth_methods: ["password", "otp"],
 		binding_revision: 1,
 		...overrides,
@@ -65,6 +69,7 @@ function baseItemRow(
 ): Record<string, unknown> {
 	return {
 		id: "item-1",
+		version: 7,
 		vault: { id: "vault-1" },
 		category: "LOGIN",
 		urls: [{ href: "https://Portal.Example.com/login", primary: true }],
@@ -157,6 +162,7 @@ describe("environment screening (R7/R16)", () => {
 		expect(credential.ok).toBe(true);
 		if (!credential.ok) return;
 		const specs: BrowserUseOpCommandSpec[] = [
+			buildServiceAccountIdentityCommand({ token_handle_id: TOKEN_HANDLE }),
 			buildVaultListCommand({ token_handle_id: TOKEN_HANDLE }),
 			buildLoginItemListCommand({
 				token_handle_id: TOKEN_HANDLE,
@@ -179,6 +185,18 @@ describe("environment screening (R7/R16)", () => {
 
 describe("command specs as data", () => {
 	test("evidence commands capture json-evidence and name their targets", () => {
+		const identity = buildServiceAccountIdentityCommand({
+			token_handle_id: TOKEN_HANDLE,
+		});
+		expect(identity.capture).toBe("json-evidence");
+		expect(identity.argv).toEqual([
+			"op",
+			"user",
+			"get",
+			"--me",
+			"--format=json",
+		]);
+
 		const vaultList = buildVaultListCommand({ token_handle_id: TOKEN_HANDLE });
 		expect(vaultList.capture).toBe("json-evidence");
 		expect(vaultList.argv).toContain("vault");
@@ -291,6 +309,39 @@ describe("vault-scope proof (R8/AE2)", () => {
 });
 
 describe("fail-closed output projection (KTD7)", () => {
+	test("an active service account projects immutable identity only", () => {
+		expect(
+			projectServiceAccountIdentityOutput({
+				id: "service-account-1",
+				name: "Browser Automation",
+				email: "secret-shaped@example.com",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			}),
+		).toEqual({
+			ok: true,
+			value: {
+				service_account_id: "service-account-1",
+				state: "ACTIVE",
+				type: "SERVICE_ACCOUNT",
+			},
+		});
+		expect(
+			projectServiceAccountIdentityOutput({
+				id: "person-1",
+				state: "ACTIVE",
+				type: "USER",
+			}).ok,
+		).toBe(false);
+		expect(
+			projectServiceAccountIdentityOutput({
+				id: "service-account-1",
+				state: "SUSPENDED",
+				type: "SERVICE_ACCOUNT",
+			}).ok,
+		).toBe(false);
+	});
+
 	test("a vault list projects ids only; names never escape", () => {
 		const projection = projectVaultListOutput([
 			{ id: "vault-1", name: "Personal Vault" },
@@ -306,7 +357,7 @@ describe("fail-closed output projection (KTD7)", () => {
 		expect(projection.issues[0]?.code).toBe("op_output_shape_invalid");
 	});
 
-	test("an item list projects normalized origins, login paths, and state", () => {
+	test("an item list projects normalized origins and strips URL paths", () => {
 		const projection = projectLoginItemListOutput([baseItemRow()]);
 		expect(projection.ok).toBe(true);
 		if (!projection.ok) return;
@@ -314,12 +365,34 @@ describe("fail-closed output projection (KTD7)", () => {
 			{
 				item_id: "item-1",
 				vault_id: "vault-1",
+				item_revision: 7,
 				origins: ["https://portal.example.com"],
-				login_paths: ["/login"],
+				login_paths: [],
 				supported_methods: ["password", "otp"],
 				state: "active",
 			},
 		]);
+	});
+
+	test("a bearer-like URL path never reaches item evidence", () => {
+		const sentinel = "bearer-token-sentinel-4f93";
+		const projection = projectLoginItemGetOutput(
+			baseItemRow({
+				urls: [
+					{
+						href: `https://portal.example.com/reset/${sentinel}`,
+					},
+				],
+			}),
+		);
+		expect(projection.ok).toBe(true);
+		expect(JSON.stringify(projection)).not.toContain(sentinel);
+		if (projection.ok) {
+			expect(projection.value.origins).toEqual([
+				"https://portal.example.com",
+			]);
+			expect(projection.value.login_paths).toEqual([]);
+		}
 	});
 
 	test("a missing state projects as active; a stale state is honored", () => {

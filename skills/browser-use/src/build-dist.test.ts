@@ -158,6 +158,105 @@ describe("browser-use dist catalog validation", () => {
 					({ service_id, flow_id }) => `${service_id}/${flow_id}`,
 				),
 			).toEqual(expectedRunbooks);
+
+			const probeSource = join(root, "binding-store-probe.ts");
+			writeFileSync(
+				probeSource,
+				`
+import { createBrowserUseAuthBindingStore } from ${JSON.stringify(
+					join(import.meta.dir, "browser-use-auth-binding-store.ts"),
+				)};
+import { createDefaultPlatformFs, openBrowserUsePaths } from ${JSON.stringify(
+					join(import.meta.dir, "browser-use-paths.ts"),
+				)};
+
+const opened = await openBrowserUsePaths(createDefaultPlatformFs(), process.env);
+if (!opened.ok) throw new Error(opened.refusal.code);
+const resolution = {
+	generation_id: "generation-a",
+	activation_epoch: 1,
+	auth_context_ref: "oncore-session",
+	route_digest: "a".repeat(64),
+	candidate_digest: "b".repeat(64),
+	candidate: {
+		candidate_id: "candidate-oncore",
+		service_id: "oncore",
+		auth_context: "interactive-login",
+		legacy_context_prose: null,
+		hint_item_id: null,
+		proposed_origins: ["https://portal.example.com"],
+		legacy_vault_name: null,
+		provenance: "legacy-auth-pointer",
+	},
+};
+const binding = {
+	service_id: "oncore",
+	service_account_id: "service-account-1",
+	auth_context: "interactive-login",
+	allowed_origins: ["https://portal.example.com"],
+	allowed_login_paths: [],
+	vault_id: "vault-1",
+	item_id: "item-1",
+	item_revision: 7,
+	allowed_auth_methods: ["password"],
+	binding_revision: 1,
+};
+const store = createBrowserUseAuthBindingStore({
+	paths: opened.paths,
+});
+const saved = await store.save({ resolution, binding });
+const loaded = await store.load(resolution);
+console.log(JSON.stringify({ saved, loaded }));
+`,
+			);
+			const probeBuild = await Bun.build({
+				entrypoints: [probeSource],
+				outdir: distRoot,
+				target: "bun",
+				splitting: false,
+				minify: false,
+				sourcemap: "none",
+			});
+			expect(probeBuild.success).toBe(true);
+
+			const probe = Bun.spawn(
+				[process.execPath, join(distRoot, "binding-store-probe.js")],
+				{
+					cwd: neutralCwd,
+					env: {
+						HOME: join(root, "home"),
+						PATH: process.env.PATH ?? "/usr/bin:/bin",
+						XDG_CONFIG_HOME: join(root, "probe-config"),
+						XDG_DATA_HOME: join(root, "probe-data"),
+						XDG_STATE_HOME: join(root, "probe-state"),
+						XDG_CACHE_HOME: join(root, "probe-cache"),
+						XDG_RUNTIME_DIR: join(root, "probe-runtime"),
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [probeStdout, probeStderr, probeExitCode] = await Promise.all([
+				new Response(probe.stdout).text(),
+				new Response(probe.stderr).text(),
+				probe.exited,
+			]);
+			if (probeExitCode !== 0) {
+				throw new Error(
+					`dist binding-store probe exited ${probeExitCode}: stdout=${JSON.stringify(probeStdout)} stderr=${JSON.stringify(probeStderr)}`,
+				);
+			}
+			expect(probeStderr).toBe("");
+			const probeResult = JSON.parse(probeStdout) as {
+				saved: { ok: boolean };
+				loaded: {
+					ok: boolean;
+					binding?: { item_id?: string };
+				};
+			};
+			expect(probeResult.saved.ok).toBe(true);
+			expect(probeResult.loaded.ok).toBe(true);
+			expect(probeResult.loaded.binding?.item_id).toBe("item-1");
 		},
 		30_000,
 	);

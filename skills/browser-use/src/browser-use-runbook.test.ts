@@ -1692,11 +1692,13 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				in_sensitive_interval: false,
 				binding: {
 					service_id: "oncore",
+					service_account_id: "service-account-1",
 					auth_context: "interactive-login",
 					allowed_origins: ["https://portal.example.com"],
 					allowed_login_paths: [],
 					vault_id: "vault-1",
 					item_id: "item-1",
+					item_revision: 7,
 					allowed_auth_methods: ["password"],
 					binding_revision: 1,
 				},
@@ -1712,6 +1714,14 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					target_proof_digest: "d".repeat(32),
 				},
 				tokenRetrieval: {
+					getServiceAccountIdentity: async () => ({
+						ok: true,
+						identity: {
+							service_account_id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+					}),
 					listVaults: async () => ({ ok: true, vaults: [] }),
 					listLoginItems: async () => ({ ok: true, items: [] }),
 					getLoginItem: async () => ({
@@ -1849,11 +1859,13 @@ const CONFIDENTIAL_RUNBOOK = baseRunbook({
 
 const CONFIDENTIAL_BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://portal.example.com"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -1880,6 +1892,14 @@ const confidentialReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
 // An opaque-handle-only TokenRetrievalPort (never bytes): the ONLY place the
 // port boundary is faked. Its handle names the field, carrying no value.
 const confidentialFakePort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({
@@ -3499,6 +3519,14 @@ const ONCORE_ENTRY_SCHEMA = {
 				required: true,
 				schema: { kind: "number", minimum: 0, maximum: 24 },
 			},
+			rate_value: {
+				required: true,
+				schema: { kind: "string", max_length: 256 },
+			},
+			client_state: {
+				required: true,
+				schema: { kind: "string", max_length: 8_192 },
+			},
 		},
 	},
 } as const;
@@ -3652,9 +3680,41 @@ function oncoreStagedRunbook(): BrowserUseRunbook {
 }
 
 const ONCORE_ENTRIES = [
-	{ item_key: "mon", date: "2026-07-27", units: 1 },
-	{ item_key: "tue", date: "2026-07-28", units: 1 },
+	{
+		item_key: "mon",
+		date: "2026-07-27",
+		units: 1,
+		rate_value: "STANDARD",
+		client_state: "2026-07-27-00-00-00",
+	},
+	{
+		item_key: "tue",
+		date: "2026-07-28",
+		units: 1,
+		rate_value: "STANDARD",
+		client_state: "2026-07-28-00-00-00",
+	},
 ] as const;
+
+const ONCORE_TIMESHEET_RUN = {
+	envelope: {
+		target_account: "worker@example.com",
+		period_start: "2026-07-27",
+		period_end: "2026-08-02",
+		selected_work_dates: ["2026-07-27", "2026-07-28"],
+		expected_aggregate: { unit: "units", value: 2 },
+		mutation_mode: "prepare-draft",
+		final_action: "human-submit",
+	},
+	payload: {
+		portal: "oncore",
+		timesheet_id: "TS-123",
+		empty_grid_policy: "require-empty",
+		item_keys: ["mon", "tue"],
+		entries: ONCORE_ENTRIES,
+		expected_row_count: 2,
+	},
+} as const;
 
 async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
 	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
@@ -3689,6 +3749,39 @@ function itemBatch(
 }
 
 describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
+	test(
+		"rejects portal-incompatible timesheet intent before action resolution",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const invalid = {
+				...ONCORE_TIMESHEET_RUN,
+				envelope: {
+					...ONCORE_TIMESHEET_RUN.envelope,
+					expected_aggregate: {
+						...ONCORE_TIMESHEET_RUN.envelope.expected_aggregate,
+						value: 3,
+					},
+				},
+			};
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					inputs: { timesheet_run: invalid },
+					resumeFromStep: 0,
+					actionSeam: oncoreActionSeam(),
+				},
+			);
+
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_input_rejected");
+			expect(prepared.refusal.message).toContain("expected units");
+		}),
+	);
+
 	test.each([
 		[
 			"submitted is true",
@@ -3733,8 +3826,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),
@@ -3804,8 +3896,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),
@@ -3950,8 +4041,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					runId: "run-oncore-save-draft",
 					targetTabId: "t1",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					expectedTargetUrl: ONCORE_STAGED_URL,
@@ -3982,7 +4072,9 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 			expect(
 				runtime.calls.filter((call) => call.includes("eval")),
 			).toHaveLength(5);
-			expect(JSON.stringify(runtime.calls)).not.toMatch(/\bsubmit\b/i);
+			expect(JSON.stringify(runtime.calls)).not.toMatch(
+				/(?:requestSubmit|\.submit\s*\(|#submit|submit-button)/i,
+			);
 		}),
 	);
 
@@ -3997,8 +4089,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),

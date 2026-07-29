@@ -7,6 +7,8 @@ import {
 	mintDeferredCredentialCapability,
 	projectLoginItemGetOutput,
 	projectLoginItemListOutput,
+	projectPrincipalBoundBindingEvidenceOutput,
+	projectServiceAccountIdentityOutput,
 	projectVaultListOutput,
 } from "./browser-use-op";
 
@@ -71,7 +73,12 @@ export type BrowserUseEnvironmentOpMetadataOperation =
 	| { kind: "user-get" }
 	| { kind: "vault-list" }
 	| { kind: "item-list"; vault_id: string }
-	| { kind: "item-get"; vault_id: string; item_id: string };
+	| { kind: "item-get"; vault_id: string; item_id: string }
+	| {
+			kind: "binding-evidence";
+			expected_vault_id: string | null;
+			item_id: string | null;
+	  };
 
 export type BrowserUseEnvironmentOpMetadataInvocation = {
 	executable_path: string;
@@ -121,8 +128,17 @@ export function buildEnvironmentOpMetadataInvocation(input: {
 		argv.push("--vault-id", input.operation.vault_id);
 	}
 	if ("item_id" in input.operation) {
-		assertCoordinate(input.operation.item_id, "item id");
-		argv.push("--item-id", input.operation.item_id);
+		if (input.operation.item_id !== null) {
+			assertCoordinate(input.operation.item_id, "item id");
+			argv.push("--item-id", input.operation.item_id);
+		}
+	}
+	if (
+		"expected_vault_id" in input.operation &&
+		input.operation.expected_vault_id !== null
+	) {
+		assertCoordinate(input.operation.expected_vault_id, "expected vault id");
+		argv.push("--expected-vault-id", input.operation.expected_vault_id);
 	}
 	return {
 		executable_path: input.supervisor_path,
@@ -166,6 +182,7 @@ export type BrowserUseEnvironmentOpMetadataResult =
 					| "capability-missing"
 					| "token-invalid"
 					| "token-revoked"
+					| "item-missing"
 					| "timeout"
 					| "io-failure"
 					| "output-shape-invalid";
@@ -175,6 +192,7 @@ export type BrowserUseEnvironmentOpMetadataResult =
 
 const NATIVE_REJECTION_MAP = {
 	"token-invalid": "token-invalid",
+	"item-missing": "item-missing",
 	timeout: "timeout",
 	"io-failure": "io-failure",
 	"output-shape-invalid": "output-shape-invalid",
@@ -278,6 +296,39 @@ export function createEnvironmentOpTokenRetrievalPort(
 	deps: BrowserUseEnvironmentOpTokenRetrievalDeps,
 ): BrowserUseTokenRetrievalPort {
 	return {
+		async getBindingEvidence(input) {
+			const result = await deps.executeMetadata({
+				kind: "binding-evidence",
+				expected_vault_id: input.expected_vault_id,
+				item_id: input.item_id,
+			});
+			if (!result.ok) return result;
+			const projected = projectPrincipalBoundBindingEvidenceOutput(result.value);
+			return projected.ok
+				? { ok: true, evidence: projected.value }
+				: {
+						ok: false,
+						rejection: {
+							code: "output-shape-invalid",
+							message: "native principal-bound binding evidence was invalid.",
+						},
+					};
+		},
+		async getServiceAccountIdentity() {
+			const result = await deps.executeMetadata({ kind: "user-get" });
+			if (!result.ok) return result;
+			const projected = projectServiceAccountIdentityOutput(result.value);
+			return projected.ok
+				? { ok: true, identity: projected.value }
+				: {
+						ok: false,
+						rejection: {
+							code: "output-shape-invalid",
+							message: "native OP identity projection was invalid.",
+						},
+					};
+		},
+
 		async listVaults() {
 			const result = await deps.executeMetadata({ kind: "vault-list" });
 			if (!result.ok) return result;

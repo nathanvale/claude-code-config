@@ -39,6 +39,7 @@ import {
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_AUTH_SUBCOMMANDS,
 	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
 	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
 	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
@@ -4582,9 +4583,24 @@ async function evaluateAuthReadiness(
 			};
 		}
 		case "request-binding-selection-grant": {
-			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
-			const authority = await proveRequestedVaultAuthority(port, vaultId);
-			if (!authority.ok) return authority.evaluation;
+			let vaultId = stringField(input.parsed.flagValues["--vault-id"]);
+			if (vaultId === undefined) {
+				const vaults = await port.listVaults();
+				if (!vaults.ok) return retrievalBlockedEvaluation(vaults.rejection);
+				const proof = proveVaultScope(vaults.vaults);
+				if (!proof.ok) {
+					return {
+						status: "invalid-vault-scope",
+						blocked_cause: proof.blocked_cause,
+						detail: { visible_count: proof.visible_count },
+						continuationId: "repair-vault-grant",
+					};
+				}
+				vaultId = proof.vault_id;
+			} else {
+				const authority = await proveRequestedVaultAuthority(port, vaultId);
+				if (!authority.ok) return authority.evaluation;
+			}
 			const items = await port.listLoginItems({ vault_id: vaultId });
 			if (!items.ok) return retrievalBlockedEvaluation(items.rejection);
 			// The selection set the signed one-use grant must bind (R20).
@@ -4602,6 +4618,34 @@ async function evaluateAuthReadiness(
 					})),
 				},
 				continuationId: "acquire-native-capability",
+			};
+		}
+		case "choose-supported-auth-method":
+			return {
+				status: "method-selection-required",
+				blocked_cause: "unsupported-method",
+				continuationId: "inspect-auth-readiness",
+			};
+		case "inspect-capability-loss": {
+			const vaults = await port.listVaults();
+			if (!vaults.ok) return retrievalBlockedEvaluation(vaults.rejection);
+			return {
+				status: "capability-present",
+				detail: { visible_vault_count: vaults.vaults.length },
+				continuationId: "inspect-auth-readiness",
+			};
+		}
+		case "inspect-auth-readiness": {
+			const vaults = await port.listVaults();
+			if (!vaults.ok) return retrievalBlockedEvaluation(vaults.rejection);
+			return {
+				status: "session-identity-proof-unavailable",
+				blocked_cause: "capability-loss",
+				detail: {
+					metadata_capability: "present",
+					visible_vault_count: vaults.vaults.length,
+				},
+				continuationId: "inspect-auth-readiness",
 			};
 		}
 		case "status":
@@ -4670,6 +4714,8 @@ function emitAuthContinuationMismatch(
 async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
 	const runFlag = stringField(input.parsed.flagValues["--run"]);
+	let boundStore: RunStoreDeps | undefined;
+	let boundRun: BrowserUseSharedRun | undefined;
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
 		| undefined;
@@ -4700,8 +4746,69 @@ async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
 			state: loaded.run.state,
 			continuation_id: persisted,
 		};
+		boundStore = store.deps;
+		boundRun = loaded.run;
 	}
 	const evaluation = await evaluateAuthReadiness(subcommand, input);
+	if (
+		boundStore !== undefined &&
+		boundRun !== undefined &&
+		(BROWSER_USE_AUTH_SUBCOMMANDS as readonly string[]).includes(
+			evaluation.continuationId,
+		) &&
+		boundRun.continuation?.next_action_id !== evaluation.continuationId
+	) {
+		const lease = await acquireLease(boundStore, {
+			key: leaseKeyForRun(boundRun),
+			holderId: `auth-readiness-${input.runId}`,
+			ttlMs: 30_000,
+		});
+		if (!lease.ok) {
+			return emitPlatformStoreFailure(
+				input,
+				platformStoreFailureOf(
+					lease.code,
+					lease.code === "lease_held"
+						? lease.continuation.summary
+						: lease.message,
+				),
+			);
+		}
+		const claim: LeaseWriteClaim = {
+			fencing_token: lease.lease.fencing_token,
+			activation_epoch: lease.lease.activation_epoch,
+			holderId: lease.lease.holder_id,
+		};
+		try {
+			const updated = await casUpdateSharedRun(boundStore, {
+				runId: boundRun.run_id,
+				expectedRevision: boundRun.revision,
+				lease: claim,
+				mutate: (current) => ({
+					...current,
+					continuation: {
+						next_action_id: evaluation.continuationId,
+						summary:
+							"Follow the latest metadata-only auth readiness result before resuming.",
+					},
+				}),
+			});
+			if (!updated.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					platformStoreFailureOf(updated.code, updated.message),
+				);
+			}
+			boundRun = updated.run;
+			runBinding = {
+				run_id: updated.run.run_id,
+				state: updated.run.state,
+				continuation_id: evaluation.continuationId,
+			};
+		} finally {
+			await releaseLease(boundStore, lease.lease);
+		}
+	}
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller, [

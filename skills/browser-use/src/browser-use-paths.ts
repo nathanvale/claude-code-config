@@ -731,6 +731,10 @@ export type BrowserUseAdmittedPaths = {
 		leasesDir: string;
 		/** <state>/attestations — durable bounded auth attestation records. */
 		attestationsDir: string;
+		/** <state>/auth-bindings — host-lifetime secret-free binding cache. */
+		authBindingsDir: string;
+		/** <state>/auth-bindings/<candidate-id>.json */
+		authBindingFile(candidateId: string): string;
 		/** <state>/attestations/<full-64-hex-digest>.json */
 		attestationFile(digest: string): string;
 		/** <state>/activation-epoch.json */
@@ -785,6 +789,7 @@ function deriveAdmittedPaths(
 	const runsDir = join(roots.state, "runs");
 	const artifactsDir = join(roots.state, "artifacts");
 	const attestationsDir = join(roots.state, "attestations");
+	const authBindingsDir = join(roots.state, "auth-bindings");
 	return {
 		resolution,
 		state: {
@@ -803,6 +808,11 @@ function deriveAdmittedPaths(
 			generationsDir: join(roots.state, "generations"),
 			leasesDir: join(roots.state, "leases"),
 			attestationsDir,
+			authBindingsDir,
+			authBindingFile(candidateId: string): string {
+				assertSafePathSegment(candidateId);
+				return join(authBindingsDir, `${candidateId}.json`);
+			},
 			attestationFile(digest: string): string {
 				assertAttestationDigestShape(digest);
 				return join(attestationsDir, `${digest}.json`);

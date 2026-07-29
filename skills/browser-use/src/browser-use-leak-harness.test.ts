@@ -327,11 +327,13 @@ const {
 
 const CRASH_BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://oncore.test"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -357,6 +359,14 @@ const crashReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
 
 // An opaque-handle-only TokenRetrievalPort (never bytes).
 const crashPort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({

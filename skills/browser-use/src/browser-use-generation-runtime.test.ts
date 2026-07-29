@@ -41,10 +41,26 @@ describe("createBrowserUseGenerationRuntime", () => {
 			version: "1.0.0",
 			summary: "Read portal state.",
 			allowed_origins: ["https://portal.example"],
+			auth_context_ref: "acme-session",
 			inputs: [],
 			steps: [{ kind: "snapshot", interactive: false }],
 		})}\n`;
 		const registry = `${JSON.stringify({ actions: [] })}\n`;
+		const authCandidate = `${JSON.stringify({
+			candidate_id: "candidate-acme",
+			service_id: "acme",
+			auth_context: "interactive-login",
+			legacy_context_prose: null,
+			hint_item_id: null,
+			proposed_origins: ["https://portal.example"],
+			legacy_vault_name: null,
+			provenance: "legacy-auth-pointer",
+		})}\n`;
+		const authRoute = `${JSON.stringify({
+			auth_context_ref: "acme-session",
+			candidate_id: "candidate-acme",
+			status: "active",
+		})}\n`;
 		const staged = await stageGeneration(
 			{ fs, paths: opened.paths, clock: () => 100 },
 			{
@@ -55,6 +71,14 @@ describe("createBrowserUseGenerationRuntime", () => {
 						contents: runbook,
 					},
 					{ relPath: "actions/registry.json", contents: registry },
+					{
+						relPath: "auth/candidates/candidate-acme.json",
+						contents: authCandidate,
+					},
+					{
+						relPath: "auth/routes/acme-session.json",
+						contents: authRoute,
+					},
 				],
 			},
 		);
@@ -98,7 +122,23 @@ describe("createBrowserUseGenerationRuntime", () => {
 				registry_digest: sha256(registry),
 				actions: [],
 			},
-			auth: { candidates: [], routes: [] },
+			auth: {
+				candidates: [
+					{
+						candidate_id: "candidate-acme",
+						path: "auth/candidates/candidate-acme.json",
+						digest: sha256(authCandidate),
+					},
+				],
+				routes: [
+					{
+						auth_context_ref: "acme-session",
+						candidate_id: "candidate-acme",
+						path: "auth/routes/acme-session.json",
+						digest: sha256(authRoute),
+					},
+				],
+			},
 			proofs: [],
 			shipped_catalog_digest: await shippedCatalogDigest(
 				shippedRunbooksRoot(),
@@ -143,6 +183,49 @@ describe("createBrowserUseGenerationRuntime", () => {
 			activation_epoch: 2,
 			runbook_digest: sha256(runbook),
 			action_registry_digest: sha256(registry),
+		});
+		expect(
+			await openedRuntime.runtime.authGenerationSeam.loadAuthCandidate(
+				"acme-session",
+			),
+		).toEqual({
+			ok: true,
+			resolution: {
+				generation_id: generationId,
+				activation_epoch: 2,
+				auth_context_ref: "acme-session",
+				route_digest: sha256(authRoute),
+				candidate_digest: sha256(authCandidate),
+				candidate: JSON.parse(authCandidate),
+			},
+		});
+
+		const mismatched = await createBrowserUseGenerationRuntime(
+			{ fs, paths: opened.paths },
+			{
+				...manifest,
+				auth: {
+					...manifest.auth,
+					candidates: manifest.auth.candidates.map((candidate) => ({
+						...candidate,
+						digest: "f".repeat(64),
+					})),
+				},
+			},
+		);
+		expect(mismatched.ok).toBe(true);
+		if (!mismatched.ok) throw new Error(mismatched.failure.code);
+		expect(
+			await mismatched.runtime.authGenerationSeam.loadAuthCandidate(
+				"acme-session",
+			),
+		).toEqual({
+			ok: false,
+			failure: {
+				code: "auth_generation_record_corrupt",
+				message:
+					"the captured generation auth candidate is unreadable or digest-mismatched.",
+			},
 		});
 	});
 

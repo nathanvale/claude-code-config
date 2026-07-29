@@ -77,6 +77,28 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
                 return nil
             }
             operation = .itemGet(vaultID: vaultID, itemID: itemID)
+        case "binding-evidence":
+            let expectedVaultID = options["--expected-vault-id"]
+            let itemID = options["--item-id"]
+            let requiredKeys: Set<String> = [
+                "--config-root",
+                "--op-path",
+                "--operation",
+            ]
+            let expectedKeys = expectedVaultID == nil
+                ? requiredKeys
+                : requiredKeys.union(["--expected-vault-id", "--item-id"])
+            guard (expectedVaultID == nil || safeCoordinate(expectedVaultID!)),
+                  (itemID == nil || safeCoordinate(itemID!)),
+                  (itemID == nil) == (expectedVaultID == nil),
+                  Set(options.keys) == expectedKeys
+            else {
+                return nil
+            }
+            operation = .bindingEvidence(
+                expectedVaultID: expectedVaultID,
+                itemID: itemID
+            )
         default:
             return nil
         }

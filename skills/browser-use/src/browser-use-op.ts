@@ -170,6 +170,20 @@ export function buildVaultListCommand(input: {
 	};
 }
 
+/** Build the active service-account identity proof command. */
+export function buildServiceAccountIdentityCommand(input: {
+	token_handle_id: string;
+	timeout_ms?: number;
+}): BrowserUseOpCommandSpec {
+	return {
+		argv: ["op", "user", "get", "--me", "--format=json"],
+		env: envSpecOf(input.token_handle_id),
+		stdin: null,
+		capture: "json-evidence",
+		timeout_ms: input.timeout_ms ?? DEFAULT_OP_TIMEOUT_MS,
+	};
+}
+
 /** Build the login-item enumeration command for the one proven vault. */
 export function buildLoginItemListCommand(input: {
 	token_handle_id: string;
@@ -363,6 +377,13 @@ export type BrowserUseOpProjection<T> =
 /** Redacted vault reference: the id only. */
 export type BrowserUseOpVaultRef = { vault_id: string };
 
+/** Secret-free active service-account identity. */
+export type BrowserUseServiceAccountIdentityEvidence = {
+	service_account_id: string;
+	state: "ACTIVE";
+	type: "SERVICE_ACCOUNT";
+};
+
 function shapeIssue(path: string, message: string): BrowserUseOpIssue {
 	return { code: "op_output_shape_invalid", path, message };
 }
@@ -380,6 +401,40 @@ function scanString(path: string, value: unknown): BrowserUseOpIssue | undefined
 		};
 	}
 	return undefined;
+}
+
+/** Project `op user get --me` to the only admitted service-account facts. */
+export function projectServiceAccountIdentityOutput(
+	value: unknown,
+): BrowserUseOpProjection<BrowserUseServiceAccountIdentityEvidence> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return {
+			ok: false,
+			issues: [shapeIssue("identity", "expected a service-account identity row.")],
+		};
+	}
+	const candidate = value as Record<string, unknown>;
+	const idIssue = scanString("identity.id", candidate.id);
+	if (idIssue !== undefined) return { ok: false, issues: [idIssue] };
+	if (candidate.state !== "ACTIVE" || candidate.type !== "SERVICE_ACCOUNT") {
+		return {
+			ok: false,
+			issues: [
+				shapeIssue(
+					"identity",
+					"expected an active service-account identity.",
+				),
+			],
+		};
+	}
+	return {
+		ok: true,
+		value: {
+			service_account_id: candidate.id as string,
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	};
 }
 
 /**
@@ -460,6 +515,15 @@ function projectLoginItemRow(
 
 	const idIssue = scanString(`${path}.id`, candidate.id);
 	if (idIssue !== undefined) issues.push(idIssue);
+	if (
+		typeof candidate.version !== "number" ||
+		!Number.isSafeInteger(candidate.version) ||
+		candidate.version < 1
+	) {
+		issues.push(
+			shapeIssue(`${path}.version`, "expected a positive safe item revision."),
+		);
+	}
 
 	let vaultId: unknown;
 	const vault = candidate.vault;
@@ -476,7 +540,6 @@ function projectLoginItemRow(
 	}
 
 	const origins: string[] = [];
-	const loginPaths: string[] = [];
 	const urls = candidate.urls === undefined ? [] : candidate.urls;
 	if (!Array.isArray(urls)) {
 		issues.push(shapeIssue(`${path}.urls`, "expected an array of url rows."));
@@ -503,15 +566,6 @@ function projectLoginItemRow(
 				return;
 			}
 			if (!origins.includes(normalized.origin)) origins.push(normalized.origin);
-			let pathname = "/";
-			try {
-				pathname = new URL(href as string).pathname;
-			} catch {
-				pathname = "/";
-			}
-			if (pathname !== "/" && !loginPaths.includes(pathname)) {
-				loginPaths.push(pathname);
-			}
 		});
 	}
 
@@ -535,8 +589,11 @@ function projectLoginItemRow(
 	const evidence: BrowserUseVaultItemEvidence = {
 		item_id: candidate.id as string,
 		vault_id: vaultId as string,
+		item_revision: candidate.version as number,
 		origins,
-		login_paths: loginPaths,
+		// URL paths may carry reset tokens or other bearer material. Binding
+		// evidence therefore retains only normalized origins.
+		login_paths: [],
 		// Category-derived (KTD7): the Login category is the only admitted
 		// source of method claims; both CLI-retrievable methods derive from it.
 		// DOCUMENTED PLACEHOLDER (PR2/U3b follow-up): op item-list output does
@@ -593,6 +650,103 @@ export function projectLoginItemGetOutput(
 		};
 	}
 	return { ok: true, value: projected.evidence };
+}
+
+/** Principal, vault scope, and item evidence collected under one token descriptor. */
+export type BrowserUsePrincipalBoundBindingEvidence = {
+	identity: BrowserUseServiceAccountIdentityEvidence;
+	vaults: readonly BrowserUseOpVaultRef[];
+	item_evidence:
+		| { kind: "list"; items: readonly BrowserUseVaultItemEvidence[] }
+		| { kind: "exact"; item: BrowserUseVaultItemEvidence }
+		| null;
+};
+
+/** Project the native one-descriptor binding-evidence envelope. */
+export function projectPrincipalBoundBindingEvidenceOutput(
+	value: unknown,
+): BrowserUseOpProjection<BrowserUsePrincipalBoundBindingEvidence> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return {
+			ok: false,
+			issues: [
+				shapeIssue("binding_evidence", "expected a binding evidence object."),
+			],
+		};
+	}
+	const candidate = value as Record<string, unknown>;
+	const identity = projectServiceAccountIdentityOutput(candidate.identity);
+	const vaults = projectVaultListOutput(candidate.vaults);
+	if (!identity.ok || !vaults.ok) {
+		return {
+			ok: false,
+			issues: [
+				...(identity.ok ? [] : identity.issues),
+				...(vaults.ok ? [] : vaults.issues),
+			],
+		};
+	}
+	if (candidate.item_evidence === null) {
+		return {
+			ok: true,
+			value: {
+				identity: identity.value,
+				vaults: vaults.value,
+				item_evidence: null,
+			},
+		};
+	}
+	if (
+		typeof candidate.item_evidence !== "object" ||
+		candidate.item_evidence === null ||
+		Array.isArray(candidate.item_evidence)
+	) {
+		return {
+			ok: false,
+			issues: [
+				shapeIssue(
+					"binding_evidence.item_evidence",
+					"expected a typed item evidence object or null.",
+				),
+			],
+		};
+	}
+	const itemEvidence = candidate.item_evidence as Record<string, unknown>;
+	if (itemEvidence.kind === "list") {
+		const items = projectLoginItemListOutput(itemEvidence.items);
+		return items.ok
+			? {
+					ok: true,
+					value: {
+						identity: identity.value,
+						vaults: vaults.value,
+						item_evidence: { kind: "list", items: items.value },
+					},
+				}
+			: items;
+	}
+	if (itemEvidence.kind === "exact") {
+		const item = projectLoginItemGetOutput(itemEvidence.item);
+		return item.ok
+			? {
+					ok: true,
+					value: {
+						identity: identity.value,
+						vaults: vaults.value,
+						item_evidence: { kind: "exact", item: item.value },
+					},
+				}
+			: item;
+	}
+	return {
+		ok: false,
+		issues: [
+			shapeIssue(
+				"binding_evidence.item_evidence.kind",
+				"expected list or exact item evidence.",
+			),
+		],
+	};
 }
 
 // --- Vault-scope proof (R8) -----------------------------------------------------
@@ -656,6 +810,17 @@ export type BrowserUseTokenRetrievalRejection = {
  * `getLoginItem` exists so the R11 repair path never enumerates.
  */
 export type BrowserUseTokenRetrievalPort = {
+	getBindingEvidence?(input: {
+		expected_vault_id: string | null;
+		item_id: string | null;
+	}): Promise<
+		| { ok: true; evidence: BrowserUsePrincipalBoundBindingEvidence }
+		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }
+	>;
+	getServiceAccountIdentity(): Promise<
+		| { ok: true; identity: BrowserUseServiceAccountIdentityEvidence }
+		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }
+	>;
 	listVaults(): Promise<
 		| { ok: true; vaults: readonly BrowserUseOpVaultRef[] }
 		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }
@@ -780,6 +945,29 @@ export function createOpTokenRetrievalPort(
 	};
 
 	return {
+		async getBindingEvidence() {
+			return {
+				ok: false,
+				rejection: {
+					code: "capability-missing",
+					message:
+						"principal-bound binding evidence requires the native environment token supervisor.",
+				},
+			};
+		},
+		async getServiceAccountIdentity() {
+			const spec = buildServiceAccountIdentityCommand({
+				token_handle_id: deps.token_handle_id,
+			});
+			const evidence = await runEvidence(spec);
+			if (!evidence.ok) return evidence;
+			const projection = projectServiceAccountIdentityOutput(evidence.value);
+			if (!projection.ok) {
+				return { ok: false, rejection: projectionRejectionOf(projection.issues) };
+			}
+			return { ok: true, identity: projection.value };
+		},
+
 		async listVaults() {
 			const spec = buildVaultListCommand({
 				token_handle_id: deps.token_handle_id,

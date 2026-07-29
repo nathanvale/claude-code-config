@@ -22,6 +22,7 @@ import {
 	browserUseGenerationSuccessActions,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
+	browserUseRunbookAuthFailureActions,
 } from "./command-contract";
 import { contractFlags } from "./browser-use-test-helpers";
 
@@ -53,6 +54,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"migration-plan",
 	"migration-apply",
 	"migration-verify",
+	"migration-import",
 	"migration-generate",
 	"migration-activate",
 	"artifact-list",
@@ -66,6 +68,9 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"auth-repair-vault-grant",
 	"auth-repair-item-binding",
 	"auth-request-binding-selection-grant",
+	"auth-choose-supported-auth-method",
+	"auth-inspect-capability-loss",
+	"auth-inspect-auth-readiness",
 ];
 
 function discoveryTree() {
@@ -156,6 +161,45 @@ describe("U3 command contract", () => {
 				(action) => action.id,
 			),
 		).toContain("change_runbook_input");
+	});
+
+	test("runbook discovery declares every runtime auth-repair continuation", () => {
+		const expected = browserUseRunbookAuthFailureActions.map(
+			(action) => action.id,
+		);
+		const declared =
+			browserUseContracts["runbook-run"].actionAffordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+		const discovered =
+			discoveryTree().commands["runbook-run"]?.action_affordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+
+		expect(declared).toEqual(expect.arrayContaining(expected));
+		expect(discovered).toEqual(expect.arrayContaining(expected));
+	});
+
+	test("run-bound auth continuations conservatively advertise shared-run writes", () => {
+		for (const command of [
+			"auth-enroll-browser-automation-token",
+			"auth-repair-vault-grant",
+			"auth-repair-item-binding",
+			"auth-request-binding-selection-grant",
+			"auth-choose-supported-auth-method",
+			"auth-inspect-capability-loss",
+			"auth-inspect-auth-readiness",
+		] as const) {
+			expect(browserUseContracts[command]).toMatchObject({
+				mutation: "write",
+				sideEffects: ["check", "write"],
+				executionModes: ["normal"],
+			});
+			expect(discoveryTree().commands[command]).toMatchObject({
+				mutation: "write",
+				side_effects: ["check", "write"],
+			});
+		}
 	});
 
 	test("subcommands expose only their declared flags", () => {

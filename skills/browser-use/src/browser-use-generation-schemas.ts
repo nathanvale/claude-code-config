@@ -61,6 +61,35 @@ export type BrowserUseCorpusGenerationAuthRouteRef = {
 	digest: string;
 };
 
+/** Exact active route record stored inside one immutable generation. */
+export type BrowserUseGenerationAuthRouteRecord = {
+	auth_context_ref: string;
+	candidate_id: string;
+	status: "active";
+};
+
+/** Parse one route record without accepting extension keys or inactive aliases. */
+export function parseGenerationAuthRouteRecord(
+	value: unknown,
+): BrowserUseGenerationAuthRouteRecord | undefined {
+	if (!isJsonObject(value)) return undefined;
+	if (
+		Object.keys(value).length !== 3 ||
+		typeof value.auth_context_ref !== "string" ||
+		value.auth_context_ref.length === 0 ||
+		typeof value.candidate_id !== "string" ||
+		value.candidate_id.length === 0 ||
+		value.status !== "active"
+	) {
+		return undefined;
+	}
+	return {
+		auth_context_ref: value.auth_context_ref,
+		candidate_id: value.candidate_id,
+		status: "active",
+	};
+}
+
 /** One proof artifact bound by name and exact bytes. */
 export type BrowserUseCorpusGenerationProofRef = {
 	proof_ref: string;

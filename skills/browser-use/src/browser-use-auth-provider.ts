@@ -42,12 +42,15 @@ import {
 	type BrowserUseImportCandidate,
 	type BrowserUseItemBinding,
 	type BrowserUseRedactedSelectionOption,
+	type BrowserUseResolvedAuthCandidate,
 	assessBindingMethod,
 	assessBindingUsability,
+	itemBindingsEqual,
 	matchItemBinding,
 	secretShapeFindingOf,
 	validateItemBindingShape,
 } from "./browser-use-auth-bindings";
+import type { BrowserUseAuthBindingStore } from "./browser-use-auth-binding-store";
 import {
 	type BrowserUseAuthBlockedCause,
 	type BrowserUseAuthContinuation,
@@ -66,7 +69,7 @@ import {
 } from "./browser-use-locks";
 import {
 	type BrowserUseOpCredentialField,
-	type BrowserUseSecretHandle,
+	type BrowserUsePrincipalBoundBindingEvidence,
 	type BrowserUseTokenRetrievalPort,
 	type BrowserUseTokenRetrievalRejection,
 	blockOfRetrievalRejection,
@@ -100,6 +103,8 @@ export type BrowserUseAuthProviderDeps = {
 		{ kind: "blocked" }
 	>;
 	attestationByDigest: BrowserUseAuthContractDeps["attestationByDigest"];
+	/** Host-lifetime cache; live OP evidence remains authority on every use. */
+	bindingStore?: BrowserUseAuthBindingStore;
 };
 
 // --- Lease -> transaction-event mapping ---------------------------------------
@@ -222,18 +227,12 @@ export type BrowserUseAuthProvider = {
 	prepareSecretFree(
 		input: BrowserUseSecretFreePreparationInput,
 	): Promise<BrowserUseSecretFreePreparationOutcome>;
-	retrieveCredentialField(input: {
-		binding: BrowserUseItemBinding;
-		field: BrowserUseOpCredentialField;
-	}): Promise<
-		| { ok: true; handle: BrowserUseSecretHandle }
-		| {
-				ok: false;
-				event: { type: "blocked"; cause: "capability-loss" };
-				continuation: BrowserUseAuthContinuation;
-				rejection: BrowserUseTokenRetrievalRejection;
-		  }
-	>;
+	prepareGenerationBinding(input: {
+		resolution: BrowserUseResolvedAuthCandidate;
+		target_origins: readonly string[];
+		login_path: string | null;
+		method: BrowserUseLaneAuthMethod;
+	}): Promise<BrowserUseSecretFreePreparationOutcome>;
 	commitWithClaim(
 		claim: LeaseWriteClaim,
 		input: {
@@ -389,6 +388,69 @@ export function createBrowserUseAuthProvider(
 ): BrowserUseAuthProvider {
 	const tokenRetrieval = deps.admission.tokenRetrieval;
 
+	async function collectBindingEvidence(input: {
+		expected_vault_id: string | null;
+		item_id: string | null;
+	}): Promise<
+		| { ok: true; evidence: BrowserUsePrincipalBoundBindingEvidence }
+		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }
+	> {
+		if (deps.admission.kind === "environment-admitted") {
+			if (tokenRetrieval.getBindingEvidence === undefined) {
+				return {
+					ok: false,
+					rejection: {
+						code: "capability-missing",
+						message:
+							"the environment token lane cannot collect principal-bound binding evidence.",
+					},
+				};
+			}
+			return tokenRetrieval.getBindingEvidence(input);
+		}
+
+		// The signed-native lane retains its existing executor-owned proof path.
+		// Its native product owns principal consistency; the environment lane's
+		// lower-assurance descriptor batch is neither available nor required.
+		const identity = await tokenRetrieval.getServiceAccountIdentity();
+		if (!identity.ok) return identity;
+		const vaults = await tokenRetrieval.listVaults();
+		if (!vaults.ok) return vaults;
+		let itemEvidence: BrowserUsePrincipalBoundBindingEvidence["item_evidence"] =
+			null;
+		if (vaults.vaults.length === 1) {
+			const liveVault = vaults.vaults[0];
+			if (
+				liveVault !== undefined &&
+				(input.expected_vault_id === null ||
+					input.expected_vault_id === liveVault.vault_id)
+			) {
+				if (input.item_id === null) {
+					const listed = await tokenRetrieval.listLoginItems({
+						vault_id: liveVault.vault_id,
+					});
+					if (!listed.ok) return listed;
+					itemEvidence = { kind: "list", items: listed.items };
+				} else {
+					const item = await tokenRetrieval.getLoginItem({
+						vault_id: liveVault.vault_id,
+						item_id: input.item_id,
+					});
+					if (!item.ok) return item;
+					itemEvidence = { kind: "exact", item: item.item };
+				}
+			}
+		}
+		return {
+			ok: true,
+			evidence: {
+				identity: identity.identity,
+				vaults: vaults.vaults,
+				item_evidence: itemEvidence,
+			},
+		};
+	}
+
 	function integrationPortFor(claim: LeaseWriteClaim): BrowserUseRunIntegrationPort {
 		return createRunIntegrationPort(
 			deps.store,
@@ -438,13 +500,47 @@ export function createBrowserUseAuthProvider(
 			if (input.method === "session-reuse") return preparationComplete(null);
 		}
 
-		// Gate 2 — token gate: a Port rejection blocks before ANY discovery.
-		const vaults = await tokenRetrieval.listVaults();
-		if (!vaults.ok) return retrievalBlock(vaults.rejection, repairHint);
+		// Gates 2-5 execute under one native-held token descriptor. Separate OP
+		// processes may run inside that supervisor, but token-path replacement
+		// cannot compose principal A with vault or item evidence from principal B.
+		if (
+			deps.admission.kind === "environment-admitted" &&
+			tokenRetrieval.getBindingEvidence === undefined
+		) {
+			return preparationBlock(
+				"capability-loss",
+				continuationOf("capability-loss"),
+				{
+					kind: "capability",
+					message:
+						"the environment token lane cannot collect principal-bound binding evidence.",
+				},
+			);
+		}
+		const collected = await collectBindingEvidence({
+			expected_vault_id: input.binding?.vault_id ?? null,
+			item_id: input.binding?.item_id ?? null,
+		});
+		if (!collected.ok) return retrievalBlock(collected.rejection, repairHint);
+		const { identity, vaults, item_evidence: itemEvidence } = collected.evidence;
+		if (
+			input.binding !== null &&
+			input.binding.service_account_id !==
+				identity.service_account_id
+		) {
+			return preparationBlock(
+				"capability-loss",
+				continuationOf("capability-loss"),
+				{
+					kind: "capability",
+					message: "the live service-account identity changed.",
+				},
+			);
+		}
 
 		// Gate 3 — vault-scope proof (R8/AE2): 0 or 2+ visible vaults fail
 		// before item discovery is ever reached.
-		const scope = proveVaultScope(vaults.vaults);
+		const scope = proveVaultScope(vaults);
 		if (!scope.ok) {
 			return preparationBlock("invalid-vault-scope", scope.continuation, {
 				kind: "vault-scope",
@@ -466,37 +562,20 @@ export function createBrowserUseAuthProvider(
 					{ kind: "binding-repair", repair_hint: repairHint, stale_state: "moved" },
 				);
 			}
-			// Gate 4 — exact bound-item read (R11): never a rescan, never an
-			// auto-selected replacement.
-			const read = await tokenRetrieval.getLoginItem({
-				vault_id: input.binding.vault_id,
-				item_id: input.binding.item_id,
-			});
-			if (!read.ok) {
-				if (read.rejection.code === "item-missing") {
-					const usability = assessBindingUsability(input.binding, { item: null });
-					if (!usability.usable) {
-						return preparationBlock(
-							usability.blocked_cause,
-							usability.continuation,
-							{
-								kind: "binding-repair",
-								repair_hint: repairHint,
-								stale_state: usability.stale_state,
-							},
-						);
-					}
-					// A usable binding over an absent item is unrepresentable;
-					// fail closed on the repair path.
-					return preparationBlock(
-						"revoked-binding",
-						continuationOf("revoked-binding"),
-						{ kind: "binding-repair", repair_hint: repairHint, stale_state: null },
-					);
-				}
-				return retrievalBlock(read.rejection, repairHint);
+			if (itemEvidence?.kind !== "exact") {
+				return preparationBlock(
+					"capability-loss",
+					continuationOf("capability-loss"),
+					{
+						kind: "capability",
+						message:
+							"the principal-bound evidence omitted the exact bound item.",
+					},
+				);
 			}
-			const usability = assessBindingUsability(input.binding, { item: read.item });
+			const usability = assessBindingUsability(input.binding, {
+				item: itemEvidence.item,
+			});
 			if (!usability.usable) {
 				return preparationBlock(usability.blocked_cause, usability.continuation, {
 					kind: "binding-repair",
@@ -509,17 +588,25 @@ export function createBrowserUseAuthProvider(
 
 		// Gate 5 — first bind: one discovery, then the single-owner match
 		// policy. The hint ranks; it never authorizes (SD1).
-		const listed = await tokenRetrieval.listLoginItems({
-			vault_id: scope.vault_id,
-		});
-		if (!listed.ok) return retrievalBlock(listed.rejection, repairHint);
+		if (itemEvidence?.kind !== "list") {
+			return preparationBlock(
+				"capability-loss",
+				continuationOf("capability-loss"),
+				{
+					kind: "capability",
+					message:
+						"the principal-bound evidence omitted login-item discovery.",
+				},
+			);
+		}
 		const match = matchItemBinding({
 			service_id: input.service_id,
+			service_account_id: identity.service_account_id,
 			auth_context: input.auth_context,
 			target_origins: input.target_origins,
 			login_path: input.login_path,
 			vault_id: scope.vault_id,
-			items: listed.items,
+			items: itemEvidence.items,
 			hint: input.candidate_hint,
 		});
 		if (match.kind === "bound") {
@@ -552,6 +639,124 @@ export function createBrowserUseAuthProvider(
 		});
 	}
 
+	async function prepareGenerationBinding(input: {
+		resolution: BrowserUseResolvedAuthCandidate;
+		target_origins: readonly string[];
+		login_path: string | null;
+		method: BrowserUseLaneAuthMethod;
+	}): Promise<BrowserUseSecretFreePreparationOutcome> {
+		if (deps.bindingStore === undefined) {
+			return preparationBlock(
+				"capability-loss",
+				continuationOf("capability-loss"),
+				{
+					kind: "capability",
+					message: "the host binding cache is unavailable.",
+				},
+			);
+		}
+			const loaded = await deps.bindingStore.load(input.resolution);
+			if (!loaded.ok) {
+				if (loaded.failure.code === "auth_binding_cache_stale") {
+					const invalidated = await deps.bindingStore.invalidate(
+						input.resolution,
+					);
+					if (!invalidated.ok) {
+						return preparationBlock(
+							"capability-loss",
+							continuationOf("capability-loss"),
+							{
+								kind: "capability",
+								message: invalidated.failure.message,
+							},
+						);
+					}
+					return preparationBlock(
+						"revoked-binding",
+						continuationOf("revoked-binding"),
+						{
+							kind: "binding-repair",
+							repair_hint: {
+								legacy_vault_name:
+									input.resolution.candidate.legacy_vault_name,
+							},
+							stale_state: null,
+						},
+					);
+				} else {
+					return preparationBlock(
+						"capability-loss",
+						continuationOf("capability-loss"),
+						{ kind: "capability", message: loaded.failure.message },
+					);
+				}
+			}
+			const cachedBinding = loaded.binding;
+			// Host cache is a hint, never selection authority. Always repeat the
+			// unique live match so zero/multiple candidates cannot be bypassed.
+			const prepared = await prepareSecretFree({
+				service_id: input.resolution.candidate.service_id,
+				auth_context: input.resolution.candidate.auth_context,
+				target_origins: input.target_origins,
+				login_path: input.login_path,
+				method: input.method,
+				binding: null,
+				candidate_hint: {
+					hint_item_id: input.resolution.candidate.hint_item_id,
+					legacy_vault_name:
+						input.resolution.candidate.legacy_vault_name,
+				},
+			});
+			if (!prepared.ok || prepared.binding === null) return prepared;
+			if (
+				cachedBinding !== null &&
+				!itemBindingsEqual(cachedBinding, prepared.binding)
+			) {
+				const invalidated = await deps.bindingStore.invalidate(
+					input.resolution,
+				);
+				if (!invalidated.ok) {
+					return preparationBlock(
+						"capability-loss",
+						continuationOf("capability-loss"),
+						{
+							kind: "capability",
+							message: invalidated.failure.message,
+						},
+					);
+				}
+				return preparationBlock(
+					"revoked-binding",
+					continuationOf("revoked-binding"),
+					{
+						kind: "binding-repair",
+						repair_hint: {
+							legacy_vault_name:
+								input.resolution.candidate.legacy_vault_name,
+						},
+						stale_state:
+							cachedBinding.item_revision !==
+							prepared.binding.item_revision
+								? "revision-changed"
+								: "moved",
+					},
+				);
+			}
+			if (cachedBinding !== null) return prepared;
+			const saved = await deps.bindingStore.save({
+				resolution: input.resolution,
+				binding: prepared.binding,
+		});
+		if (!saved.ok) {
+			return preparationBlock(
+				"capability-loss",
+				continuationOf("capability-loss"),
+				{ kind: "capability", message: saved.failure.message },
+			);
+		}
+		return prepared;
+	}
+
 	return {
 		async acquireSensitiveIntervalLease(input) {
 			return leaseEventOutcomeOf(
@@ -576,33 +781,10 @@ export function createBrowserUseAuthProvider(
 
 		integrationPortFor,
 
-		prepareSecretFree,
+			prepareSecretFree,
+			prepareGenerationBinding,
 
-		async retrieveCredentialField(input) {
-			// AE2 tail: the injected binding must pass shape admission before it
-			// can reach the Port and shape an op invocation.
-			const refusal = bindingAdmissionFailure(input.binding);
-			if (refusal !== null) {
-				return {
-					ok: false,
-					event: { type: "blocked", cause: "capability-loss" },
-					continuation: continuationOf("capability-loss"),
-					rejection: { code: "binding-shape-invalid", message: refusal },
-				};
-			}
-			const fetched = await tokenRetrieval.fetchCredentialField(input);
-			if (fetched.ok) return { ok: true, handle: fetched.handle };
-			// D6: missing-token is illegal in phase sensitive-interval; every
-			// mid-interval retrieval failure is capability-loss.
-			return {
-				ok: false,
-				event: { type: "blocked", cause: "capability-loss" },
-				continuation: continuationOf("capability-loss"),
-				rejection: fetched.rejection,
-			};
-		},
-
-		async commitWithClaim(claim, input) {
+			async commitWithClaim(claim, input) {
 			// Common-path pre-check: a stale claim gets a typed refusal without
 			// entering the Port's throwing critical section (D8).
 			const loaded = await loadSharedRun(deps.store, input.run_id);

@@ -32,6 +32,7 @@ import {
 } from "./browser-use-schemas";
 import { writeDurableFile } from "./browser-use-store";
 import { runForTest } from "./browser-use";
+import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
 import { parseHandoffFacts } from "./browser-use-discovery";
@@ -175,6 +176,32 @@ async function seedActiveGeneration(
 	const registryRaw = `${JSON.stringify({ actions: [] })}\n`;
 	const proofRaw = `${JSON.stringify({ proof: "wave3" })}\n`;
 	const runbookPath = `runbooks/${runbook.service_id}/${runbook.flow_id}/runbook.json`;
+	const authContextRef = runbook.auth_context_ref;
+	const authCandidate =
+		authContextRef === undefined
+			? undefined
+			: {
+					candidate_id: `candidate-${runbook.service_id}`,
+					service_id: runbook.service_id,
+					auth_context: "interactive-login",
+					legacy_context_prose: null,
+					hint_item_id: null,
+					proposed_origins: runbook.allowed_origins,
+					legacy_vault_name: null,
+					provenance: "legacy-auth-pointer" as const,
+				};
+	const authRoute =
+		authContextRef === undefined || authCandidate === undefined
+			? undefined
+			: {
+					auth_context_ref: authContextRef,
+					candidate_id: authCandidate.candidate_id,
+					status: "active" as const,
+				};
+	const authCandidateRaw =
+		authCandidate === undefined ? undefined : `${JSON.stringify(authCandidate)}\n`;
+	const authRouteRaw =
+		authRoute === undefined ? undefined : `${JSON.stringify(authRoute)}\n`;
 	const shippedDigest = await shippedCatalogDigest(
 		shippedRunbooksRoot(),
 		store.deps.fs,
@@ -205,7 +232,29 @@ async function seedActiveGeneration(
 			registry_digest: sha256(registryRaw),
 			actions: [],
 		},
-		auth: { candidates: [], routes: [] },
+		auth:
+			authCandidate === undefined ||
+			authRoute === undefined ||
+			authCandidateRaw === undefined ||
+			authRouteRaw === undefined
+				? { candidates: [], routes: [] }
+				: {
+						candidates: [
+							{
+								candidate_id: authCandidate.candidate_id,
+								path: `auth/candidates/${authCandidate.candidate_id}.json`,
+								digest: sha256(authCandidateRaw),
+							},
+						],
+						routes: [
+							{
+								auth_context_ref: authRoute.auth_context_ref,
+								candidate_id: authRoute.candidate_id,
+								path: `auth/routes/${authRoute.auth_context_ref}.json`,
+								digest: sha256(authRouteRaw),
+							},
+						],
+					},
 		proofs: [
 			{
 				proof_ref: "proof-wave3",
@@ -225,6 +274,22 @@ async function seedActiveGeneration(
 			{ relPath: runbookPath, contents: runbookRaw },
 			{ relPath: "actions/registry.json", contents: registryRaw },
 			{ relPath: "proofs/wave3.json", contents: proofRaw },
+			...(authCandidate === undefined || authCandidateRaw === undefined
+				? []
+				: [
+						{
+							relPath: `auth/candidates/${authCandidate.candidate_id}.json`,
+							contents: authCandidateRaw,
+						},
+					]),
+			...(authRoute === undefined || authRouteRaw === undefined
+				? []
+				: [
+						{
+							relPath: `auth/routes/${authRoute.auth_context_ref}.json`,
+							contents: authRouteRaw,
+						},
+					]),
 			{
 				relPath: "corpus-generation-candidate.json",
 				contents: candidateRaw,
@@ -351,11 +416,19 @@ function readOnlyRunbook(): BrowserUseRunbook {
 	};
 }
 
+function authBoundReadOnlyRunbook(): BrowserUseRunbook {
+	return {
+		...readOnlyRunbook(),
+		auth_context_ref: "oncore-session",
+	};
+}
+
 // A runtime replaying a scripted adapter response sequence over the real store.
 function scriptedRuntime(
 	env: Record<string, string | undefined>,
 	responses: readonly { stdout?: string; exitCode?: number; timedOut?: boolean }[],
 	platformFs: BrowserUsePlatformFs = createDefaultPlatformFs(),
+	runtimeOverrides: Partial<BrowserUseRuntime> = {},
 ) {
 	let index = 0;
 	const calls: Array<readonly string[]> = [];
@@ -379,6 +452,7 @@ function scriptedRuntime(
 				import("node:fs/promises").then((m) =>
 					m.writeFile(path, contents, { mode: 0o600 }),
 				),
+			...runtimeOverrides,
 			runCommand: async (input) => {
 				calls.push([input.command, ...input.args]);
 				const response = responses[index++] ?? {};
@@ -793,6 +867,236 @@ describe("runbook family — live (U4 wiring)", () => {
 			},
 		});
 	});
+
+	test("auth-bound read-only runbook persists the auth block before runbook steps", async () => {
+		const store = await makeStore();
+		await seedActiveGeneration(store, authBoundReadOnlyRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-auth-bound-1",
+		);
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--handoff",
+				handoffPath,
+				"--tab",
+				"t1",
+				"--run-id",
+				"invocation-auth-bound-1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		const envelope = parseJson(result.stdout);
+		expect(envelope.error).toMatchObject({
+			code: "runbook_auth_capability_missing",
+		});
+		expect(envelope.runtime_actions).toMatchObject([
+			{ id: "inspect-capability-loss" },
+		]);
+		expect(calls.every((call) => !call.includes("open"))).toBe(true);
+		expect(calls.every((call) => !call.includes("snapshot"))).toBe(true);
+		const loaded = await loadSharedRun(store.deps, "run-auth-bound-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.state).toBe("awaiting-auth");
+			expect(loaded.run.continuation).toMatchObject({
+				next_action_id: "inspect-capability-loss",
+			});
+			expect(loaded.run.mutation_dispatched).toBe(false);
+		}
+	});
+
+	test.each([
+		{
+			label:
+				"admitted metadata proof still blocks before warm-session identity proof",
+			supportedMethods: ["password"] as const,
+			runId: "run-auth-session-proof-1",
+			invocationId: "invocation-auth-session-proof-1",
+			expectedCode: "runbook_auth_browser_principal_unproven",
+			expectedState: "awaiting-auth",
+			expectedAction: "inspect-auth-readiness",
+		},
+		{
+			label: "unsupported auth method persists the canonical human state",
+			supportedMethods: ["otp"] as const,
+			runId: "run-auth-unsupported-method-1",
+			invocationId: "invocation-auth-unsupported-method-1",
+			expectedCode: "runbook_auth_unsupported_method",
+			expectedState: "needs-human",
+			expectedAction: "choose-supported-auth-method",
+		},
+	])(
+		"$label",
+		async ({
+			supportedMethods,
+			runId,
+			invocationId,
+			expectedCode,
+			expectedState,
+			expectedAction,
+		}) => {
+		const store = await makeStore();
+		await seedActiveGeneration(store, authBoundReadOnlyRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			runId,
+		);
+		const tokenRetrieval = {
+			async getBindingEvidence() {
+				return {
+					ok: true as const,
+					evidence: {
+						identity: {
+							service_account_id: "service-account-1",
+							state: "ACTIVE" as const,
+							type: "SERVICE_ACCOUNT" as const,
+						},
+						vaults: [{ vault_id: "vault-1" }],
+						item_evidence: {
+							kind: "list" as const,
+							items: [
+								{
+									item_id: "item-1",
+									vault_id: "vault-1",
+									item_revision: 7,
+									origins: ["https://example.test"],
+									login_paths: [],
+									supported_methods: supportedMethods,
+									state: "active" as const,
+								},
+							],
+						},
+					},
+				};
+			},
+			async getServiceAccountIdentity() {
+				return {
+					ok: true as const,
+					identity: {
+						service_account_id: "service-account-1",
+						state: "ACTIVE" as const,
+						type: "SERVICE_ACCOUNT" as const,
+					},
+				};
+			},
+			async listVaults() {
+				return { ok: true as const, vaults: [{ vault_id: "vault-1" }] };
+			},
+			async listLoginItems() {
+				return { ok: true as const, items: [] };
+			},
+			async getLoginItem() {
+				return {
+					ok: false as const,
+					rejection: {
+						code: "item-missing" as const,
+						message: "fixture item absent",
+					},
+				};
+			},
+			async fetchCredentialField() {
+				return {
+					ok: false as const,
+					rejection: {
+						code: "field-not-permitted" as const,
+						message: "fixture field unavailable",
+					},
+				};
+			},
+		};
+		const { runtime, calls } = scriptedRuntime(
+			store.env,
+			[
+				{
+					stdout: agentSuccess({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+			],
+			createDefaultPlatformFs(),
+			{
+				authAdmission: {
+					kind: "environment-admitted",
+					evidence: {
+						lane: "environment-injected-op",
+						assurance: "lower-assurance",
+						native: { verdict: "native-capability-absent" },
+						environment: {
+							state: "ready",
+							next_action: "validate-service-account",
+						},
+					},
+					tokenRetrieval,
+				},
+			},
+		);
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--handoff",
+				handoffPath,
+				"--tab",
+				"t1",
+				"--run-id",
+				invocationId,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: expectedCode,
+		});
+		expect(calls.every((call) => !call.includes("open"))).toBe(true);
+		expect(calls.every((call) => !call.includes("snapshot"))).toBe(true);
+		const loaded = await loadSharedRun(
+			store.deps,
+			runId,
+		);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.state).toBe(expectedState);
+			expect(loaded.run.continuation?.next_action_id).toBe(expectedAction);
+		}
+		},
+	);
 
 	test("inactive generation target refuses before handoff acquisition", async () => {
 		const store = await makeStore();

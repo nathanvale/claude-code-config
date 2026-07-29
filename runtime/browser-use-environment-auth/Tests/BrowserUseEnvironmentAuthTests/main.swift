@@ -839,10 +839,33 @@ private func emitFakeOpJSON(_ value: Any) {
     FileHandle.standardOutput.write(Data([0x0a]))
 }
 
+private func appendFakeOpBindingPhase(
+    _ phase: String,
+    executable: URL
+) {
+    let marker = executable.deletingLastPathComponent()
+        .appendingPathComponent(".binding-phases")
+    let descriptor = Darwin.open(
+        marker.path,
+        O_WRONLY | O_APPEND | O_CLOEXEC
+    )
+    guard descriptor >= 0 else { Foundation.exit(42) }
+    defer { _ = Darwin.close(descriptor) }
+    let bytes = Array("\(phase)\n".utf8)
+    let written = bytes.withUnsafeBytes { buffer in
+        Darwin.write(descriptor, buffer.baseAddress, buffer.count)
+    }
+    guard written == bytes.count else { Foundation.exit(42) }
+}
+
 private func runAsFakeOp() {
     let arguments = Array(CommandLine.arguments.dropFirst())
+    let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+    let principalTwo = ProcessInfo.processInfo.environment[
+        "OP_SERVICE_ACCOUNT_TOKEN"
+    ] == "ops_OTHER_PRINCIPAL"
     if arguments == ["--version"] {
-        if URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+        if executable.lastPathComponent
             == "browser-use-fake-op-replacing"
         {
             let current = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -859,6 +882,23 @@ private func runAsFakeOp() {
         }
         print("2.31.0")
         return
+    }
+    if executable.lastPathComponent.contains("slow-binding") {
+        let phase: String?
+        if arguments.starts(with: ["user", "get"]) {
+            phase = "user"
+        } else if arguments.starts(with: ["vault", "list"]) {
+            phase = "vault"
+        } else if arguments.starts(with: ["item", "list"]) {
+            phase = "item"
+        } else {
+            phase = nil
+        }
+        if let phase {
+            appendFakeOpBindingPhase("\(phase)-start", executable: executable)
+            usleep(400_000)
+            appendFakeOpBindingPhase("\(phase)-done", executable: executable)
+        }
     }
     if arguments == ["test-environment"] {
         let environment = ProcessInfo.processInfo.environment
@@ -911,19 +951,111 @@ private func runAsFakeOp() {
     }
     if arguments.starts(with: ["user", "get"]) {
         emitFakeOpJSON([
-            "id": "user-1",
+            "id": principalTwo ? "user-2" : "user-1",
             "state": "ACTIVE",
+            "type": "SERVICE_ACCOUNT",
             "email": "not-projected@example.com",
         ])
+        let mutationMarker = executable.deletingLastPathComponent()
+            .appendingPathComponent(".mutate-token-after-user")
+        if FileManager.default.fileExists(atPath: mutationMarker.path) {
+            let token = executable.deletingLastPathComponent()
+                .appendingPathComponent("token")
+            let handle = try! FileHandle(forWritingTo: token)
+            try! handle.truncate(atOffset: 0)
+            try! handle.write(contentsOf: Data("ops_OTHER_PRINCIPAL".utf8))
+            try! handle.synchronize()
+            try! handle.close()
+        }
         return
     }
     if arguments.starts(with: ["vault", "list"]) {
         emitFakeOpJSON([
-            ["id": "vault-1", "name": "not-projected"],
+            [
+                "id": principalTwo ? "vault-2" : "vault-1",
+                "name": "not-projected",
+            ],
         ])
         return
     }
     if arguments.starts(with: ["item", "list"]) {
+        if arguments.contains("permission-denied") {
+            Foundation.exit(41)
+        }
+        if arguments.contains("duplicate-item") {
+            emitFakeOpJSON([
+                [
+                    "id": "item-1",
+                    "version": 7,
+                    "vault": ["id": "duplicate-item"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+                [
+                    "id": "item-1",
+                    "version": 8,
+                    "vault": ["id": "duplicate-item"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+            ])
+            return
+        }
+        if arguments.contains("malformed-item") {
+            emitFakeOpJSON([
+                [
+                    "id": "item-1",
+                    "version": 0,
+                    "vault": ["id": "vault-1"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+            ])
+            return
+        }
+        if arguments.contains("boolean-version") {
+            emitFakeOpJSON([
+                [
+                    "id": "item-1",
+                    "version": true,
+                    "vault": ["id": "boolean-version"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+            ])
+            return
+        }
+        if arguments.contains("malformed-unrelated") {
+            emitFakeOpJSON([
+                [
+                    "id": "item-1",
+                    "version": 7,
+                    "vault": ["id": "malformed-unrelated"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+                [
+                    "id": "unrelated-item",
+                    "version": 0,
+                    "vault": ["id": "malformed-unrelated"],
+                    "category": "LOGIN",
+                    "urls": [],
+                ],
+            ])
+            return
+        }
+        if arguments.contains("cross-vault-item") {
+            emitFakeOpJSON([
+                [
+                    "id": "cross-vault-item",
+                    "version": 7,
+                    "vault": ["id": "other-vault"],
+                    "category": "LOGIN",
+                    "urls": [["href": "https://portal.example.com/login"]],
+                ],
+            ])
+            return
+        }
         if arguments.contains("malformed") {
             FileHandle.standardOutput.write(Data([0xff, 0x00, 0x7b]))
             return
@@ -931,11 +1063,17 @@ private func runAsFakeOp() {
         FileHandle.standardError.write(Data("ops_SECRET_STDERR_SENTINEL\n".utf8))
         let href = arguments.contains("secret-url")
             ? "https://portal.example.com/login?token=ops_SECRET_URL_SENTINEL"
+            : arguments.contains("secret-path")
+                ? "https://portal.example.com/reset/ops_SECRET_PATH_SENTINEL"
             : "https://portal.example.com/login"
         emitFakeOpJSON([
             [
-                "id": "item-1",
-                "vault": ["id": "vault-1", "name": "not-projected"],
+                "id": principalTwo ? "item-2" : "item-1",
+                "version": 7,
+                "vault": [
+                    "id": principalTwo ? "vault-2" : "vault-1",
+                    "name": "not-projected",
+                ],
                 "category": "LOGIN",
                 "urls": [["href": href]],
                 "title": "not-projected",
@@ -944,11 +1082,25 @@ private func runAsFakeOp() {
         return
     }
     if arguments.starts(with: ["item", "get"]) {
+        let marker = executable.deletingLastPathComponent()
+            .appendingPathComponent(".item-get-invoked")
+        FileManager.default.createFile(
+            atPath: marker.path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o600]
+        )
+        if arguments.contains("missing-item") {
+            Foundation.exit(40)
+        }
+        if arguments.contains("permission-denied") {
+            Foundation.exit(41)
+        }
         if arguments.contains("stderr-secret") {
             FileHandle.standardError.write(Data("ops_SECRET_STDERR_SENTINEL\n".utf8))
         }
         emitFakeOpJSON([
             "id": arguments.count > 2 ? arguments[2] : "item-1",
+            "version": 7,
             "vault": ["id": "vault-1", "name": "not-projected"],
             "category": "LOGIN",
             "urls": [["href": "https://portal.example.com/login"]],
@@ -1058,6 +1210,109 @@ private func environmentOpOutputIsBoundedAndProjected() throws {
         try check(text.contains("\"ok\":true"), "valid item metadata was blocked")
         try check(!text.contains("SECRET"), "secret-bearing OP output escaped projection")
         try check(!text.contains("title"), "non-allowlisted item metadata escaped projection")
+        let missing = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(vaultID: "vault-1", itemID: "missing-item"),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: missing, as: UTF8.self)
+                .contains("\"code\":\"item-missing\""),
+            "confirmed exact item absence did not reach binding repair"
+        )
+        let permissionDenied = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemList(vaultID: "permission-denied"),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: permissionDenied, as: UTF8.self)
+                .contains("\"code\":\"process-failed\""),
+            "permission failure was mislabeled as item missing"
+        )
+        let malformedItem = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(vaultID: "malformed-item", itemID: "item-1"),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: malformedItem, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "malformed matching item was mislabeled as item missing"
+        )
+        let booleanVersion = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(vaultID: "boolean-version", itemID: "item-1"),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: booleanVersion, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "boolean item version was admitted as an integer"
+        )
+        let duplicateItem = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(vaultID: "duplicate-item", itemID: "item-1"),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: duplicateItem, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "duplicate exact item matches were admitted as binding evidence"
+        )
+        let malformedUnrelated = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(
+                vaultID: "malformed-unrelated",
+                itemID: "item-1"
+            ),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: malformedUnrelated, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "malformed unrelated item row was misreported as exact evidence"
+        )
+        let crossVaultItem = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(
+                vaultID: "vault-1",
+                itemID: "cross-vault-item"
+            ),
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: crossVaultItem, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "exact item evidence was not bound to the requested vault"
+        )
+        let principalBound = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .bindingEvidence(
+                expectedVaultID: "vault-1",
+                itemID: "item-1"
+            ),
+            tokenDescriptor: descriptor
+        )
+        let principalBoundText = String(decoding: principalBound, as: UTF8.self)
+        try check(
+            principalBoundText.contains("\"ok\":true")
+                && principalBoundText.contains("\"item_evidence\"")
+                && principalBoundText.contains("\"user-1\""),
+            "one-descriptor binding evidence was not projected"
+        )
+        try check(
+            !principalBoundText.contains("SECRET")
+                && !principalBoundText.contains("title"),
+            "one-descriptor binding evidence leaked non-allowlisted metadata"
+        )
+        try check(
+            !FileManager.default.fileExists(
+                atPath: fake.deletingLastPathComponent()
+                    .appendingPathComponent(".item-get-invoked").path
+            ),
+            "binding metadata proof invoked credential-bearing item get"
+        )
 
         try check(
             EnvironmentOpProcessRunner.run(
@@ -1106,6 +1361,110 @@ private func environmentOpOutputIsBoundedAndProjected() throws {
             secretURLText.contains("\"code\":\"output-shape-invalid\"")
                 && !secretURLText.contains("SECRET_URL"),
             "secret-bearing metadata crossed the native projection"
+        )
+        let secretPath = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemList(vaultID: "secret-path"),
+            tokenDescriptor: descriptor
+        )
+        let secretPathText = String(decoding: secretPath, as: UTF8.self)
+        try check(
+            secretPathText.contains("\"ok\":true")
+                && secretPathText.contains("https:\\/\\/portal.example.com\\/")
+                && !secretPathText.contains("SECRET_PATH"),
+            "secret-bearing URL path crossed the native projection"
+        )
+    }
+}
+
+private func environmentOpBindingEvidenceUsesOneTokenSnapshot() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fake = root.appendingPathComponent("browser-use-fake-op")
+    try FileManager.default.copyItem(
+        at: URL(fileURLWithPath: CommandLine.arguments[0]),
+        to: fake
+    )
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: fake.path
+    )
+    let token = root.appendingPathComponent("token")
+    FileManager.default.createFile(
+        atPath: token.path,
+        contents: Data("ops_U2_SENTINEL_TOKEN".utf8),
+        attributes: [.posixPermissions: 0o600]
+    )
+    FileManager.default.createFile(
+        atPath: root.appendingPathComponent(".mutate-token-after-user").path,
+        contents: Data(),
+        attributes: [.posixPermissions: 0o600]
+    )
+    let descriptor = Darwin.open(token.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    guard descriptor >= 0 else { throw POSIXError(.ENOENT) }
+    defer { _ = Darwin.close(descriptor) }
+
+    let evidence = EnvironmentOpSupervisor.executeMetadata(
+        executablePath: fake.path,
+        operation: .bindingEvidence(
+            expectedVaultID: "vault-1",
+            itemID: "item-1"
+        ),
+        tokenDescriptor: descriptor
+    )
+    let text = String(decoding: evidence, as: UTF8.self)
+    try check(
+        text.contains("\"ok\":true")
+            && text.contains("\"user-1\"")
+            && text.contains("\"vault-1\"")
+            && text.contains("\"item-1\""),
+        "in-place source mutation changed the principal-bound snapshot"
+    )
+    try check(
+        !text.contains("\"user-2\"")
+            && !text.contains("\"vault-2\"")
+            && !text.contains("\"item-2\""),
+        "binding evidence composed two token principals"
+    )
+}
+
+private func environmentOpBindingEvidenceUsesOneTotalDeadline() throws {
+    let fake = try makeFakeOp(name: "browser-use-fake-op-slow-binding")
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    let marker = fake.deletingLastPathComponent()
+        .appendingPathComponent(".binding-phases")
+    FileManager.default.createFile(
+        atPath: marker.path,
+        contents: Data(),
+        attributes: [.posixPermissions: 0o600]
+    )
+    try withTokenDescriptor { descriptor in
+        let evidence = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .bindingEvidence(
+                expectedVaultID: "vault-1",
+                itemID: "item-1"
+            ),
+            tokenDescriptor: descriptor,
+            timeoutMilliseconds: 1_000
+        )
+        try check(
+            String(decoding: evidence, as: UTF8.self)
+                .contains("\"code\":\"timeout\""),
+            "binding evidence reset the deadline for each OP child"
+        )
+        let phases = try String(contentsOf: marker, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        try check(
+            phases == [
+                "user-start",
+                "user-done",
+                "vault-start",
+                "vault-done",
+                "item-start",
+            ],
+            "shared deadline did not expire during the cumulative third child: \(phases)"
         )
     }
 }
@@ -1303,6 +1662,39 @@ private func makeFakeValidator(at root: URL) throws -> URL {
         ofItemAtPath: executable.path
     )
     return executable
+}
+
+private func bindingEvidenceRejectsUnknownOptions() throws {
+    let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-op-supervisor")
+    try check(
+        FileManager.default.isExecutableFile(atPath: executable.path),
+        "packaged supervisor executable is unavailable; run swift build first"
+    )
+    let output = Pipe()
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = [
+        "metadata",
+        "--config-root", "/tmp",
+        "--op-path", "/usr/bin/false",
+        "--operation", "binding-evidence",
+        "--unknown", "value",
+    ]
+    process.standardOutput = output
+    process.standardError = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    let bytes = output.fileHandleForReading.readDataToEndOfFile()
+    let envelope = try JSONSerialization.jsonObject(with: bytes)
+        as? [String: Any]
+    let rejection = envelope?["rejection"] as? [String: Any]
+    try check(process.terminationStatus == 20, "unknown option did not fail closed")
+    try check(
+        rejection?["code"] as? String == "invalid-arguments",
+        "unknown option returned the wrong refusal"
+    )
 }
 
 private func arbitrarySameNameValidatorIsRejectedBeforeSpawn() throws {
@@ -1626,6 +2018,14 @@ enum BrowserUseEnvironmentAuthTests {
                 environmentOpOutputIsBoundedAndProjected
             ),
             (
+                "environment OP binding evidence uses one token snapshot",
+                environmentOpBindingEvidenceUsesOneTokenSnapshot
+            ),
+            (
+                "environment OP binding evidence uses one total deadline",
+                environmentOpBindingEvidenceUsesOneTotalDeadline
+            ),
+            (
                 "environment OP replacement blocks before token use",
                 environmentOpReplacementBlocksBeforeTokenUse
             ),
@@ -1644,6 +2044,10 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "environment OP validator uses received descriptor",
                 environmentOpValidatorUsesReceivedDescriptor
+            ),
+            (
+                "binding evidence rejects unknown options",
+                bindingEvidenceRejectsUnknownOptions
             ),
             (
                 "arbitrary same-name validator is rejected before spawn",
