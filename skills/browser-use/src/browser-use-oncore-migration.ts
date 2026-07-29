@@ -71,6 +71,9 @@ function assertMigrationInput(input: BrowserUseOncoreSaveDraftMigrationInput): v
 	} catch {
 		throw new Error("Oncore staged migration requires an exact HTTP(S) timesheet URL.");
 	}
+	if (timesheet.protocol !== "http:" && timesheet.protocol !== "https:") {
+		throw new Error("Oncore staged migration requires an exact HTTP(S) timesheet URL.");
+	}
 	if (origin === undefined || timesheet.origin !== origin) {
 		throw new Error(
 			"Oncore staged migration requires the timesheet URL and reviewed actions to share one exact allowed origin.",

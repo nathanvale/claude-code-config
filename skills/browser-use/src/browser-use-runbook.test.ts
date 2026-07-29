@@ -3411,6 +3411,7 @@ const ONCORE_ENTRIES = [
 ] as const;
 
 async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
+	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
 	const action = new Function(
 		"document",
 		`return (${ONCORE_DRAFT_VERIFICATION_ACTION_BYTES});`,

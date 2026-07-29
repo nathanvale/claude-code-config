@@ -250,6 +250,9 @@ export type AgentBrowserExecutionRuntime = {
 	/**
 	 * Persist one iterated mutation's structural outcome before a later item.
 	 *
+	 * Structurally false postconditions collapse to `unknown` for durable retry
+	 * safety because the mutation may already have changed browser state.
+	 *
 	 * A confirmed mutation whose checkpoint cannot be recorded becomes unknown;
 	 * the executor stops so no later item can pass uncommitted truth.
 	 */
@@ -257,7 +260,7 @@ export type AgentBrowserExecutionRuntime = {
 		input: Readonly<{
 			run_id: string;
 			item_key: string;
-			outcome: "confirmed" | "not-achieved" | "unknown";
+			outcome: "confirmed" | "unknown";
 		}>,
 	): Promise<{ ok: true } | { ok: false }>;
 };
@@ -267,7 +270,7 @@ async function checkpointItem(
 	input: Readonly<{
 		run_id: string;
 		item_key: string;
-		outcome: "confirmed" | "not-achieved" | "unknown";
+		outcome: "confirmed" | "unknown";
 	}>,
 ): Promise<boolean> {
 	try {

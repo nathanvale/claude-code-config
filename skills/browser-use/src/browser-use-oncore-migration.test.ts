@@ -128,8 +128,18 @@ describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
 			"exact allowed origin",
 		],
 		[
-			"non-HTTP URL",
+			"malformed URL",
 			{ timesheetUrl: "not-a-url" },
+			"exact HTTP(S) timesheet URL",
+		],
+		[
+			"file URL",
+			{ timesheetUrl: "file:///tmp/timesheet.html" },
+			"exact HTTP(S) timesheet URL",
+		],
+		[
+			"FTP URL",
+			{ timesheetUrl: "ftp://portal.example.com/timesheets/current" },
 			"exact HTTP(S) timesheet URL",
 		],
 		[

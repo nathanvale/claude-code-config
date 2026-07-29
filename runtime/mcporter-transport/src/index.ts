@@ -334,16 +334,6 @@ export async function spawnTransportCommand(
 			// bounded timeouts already cover.
 			...(input.detached === true ? { detached: true } : {}),
 		});
-		if (input.stdinText !== undefined) {
-			const stdin = proc.stdin;
-			if (stdin === undefined || typeof stdin === "number") {
-				throw new Error(
-					"spawnTransportCommand: piped stdin was not writable",
-				);
-			}
-			stdin.write(input.stdinText);
-			stdin.end();
-		}
 	} catch (error) {
 		// Only a definitively-missing executable maps to the shell's 127
 		// convention. Other startup failures — invalid cwd, permission denied,
@@ -385,32 +375,44 @@ export async function spawnTransportCommand(
 		new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
 		proc.exited,
 	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
+	if (input.stdinText !== undefined) {
+		try {
+			const stdin = proc.stdin;
+			if (stdin === undefined || typeof stdin === "number") {
+				throw new Error(
+					"spawnTransportCommand: piped stdin was not writable",
+				);
+			}
+			await stdin.write(input.stdinText);
+			await stdin.end();
+		} catch (error) {
+			killTransportProcess(proc, input.detached === true);
+			let cleanupTimeout: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await Promise.race([
+					completion.catch(() => undefined),
+					new Promise((settle) => {
+						cleanupTimeout = setTimeout(settle, KILL_CONFIRM_GRACE_MS);
+					}),
+				]);
+			} finally {
+				if (cleanupTimeout) clearTimeout(cleanupTimeout);
+			}
+			const message =
+				error instanceof Error ? error.message : String(error ?? "");
+			return {
+				exitCode: 126,
+				stdout: "",
+				stderr: `${input.command}: could not deliver stdin: ${message}`,
+			};
+		}
+	}
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let timedOut = false;
 	const timeoutResult = new Promise<TransportCommandResult>((resolve) => {
 		timeout = setTimeout(async () => {
 			timedOut = true;
-			if (input.detached === true) {
-				// The child is its own process-group leader (`detached` above), so
-				// signal the GROUP (negative pid): the child's own children die with
-				// it instead of surviving a direct-child-only SIGKILL. Fall back to
-				// the direct child if the group signal fails (already exited).
-				try {
-					process.kill(-proc.pid, "SIGKILL");
-				} catch {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// Best effort. Timeout result still preserves bounded CLI behavior.
-					}
-				}
-			} else {
-				try {
-					proc.kill("SIGKILL");
-				} catch {
-					// Best effort. Timeout result still preserves bounded CLI behavior.
-				}
-			}
+			killTransportProcess(proc, input.detached === true);
 			// Wait for CONFIRMED termination (bounded): a caller that begins
 			// cleanup while the killed child is still exiting can race its final
 			// writes. The grace bound keeps the CLI's bounded behavior if an
@@ -438,6 +440,27 @@ export async function spawnTransportCommand(
 // Bounded post-SIGKILL wait for the child's confirmed exit before the timeout
 // result is returned to the caller.
 const KILL_CONFIRM_GRACE_MS = 2_000;
+
+function killTransportProcess(
+	proc: ReturnType<typeof Bun.spawn>,
+	detached: boolean,
+): void {
+	if (detached) {
+		// The child is its own process-group leader, so signal the group. Fall
+		// back to the direct child if the group is already unavailable.
+		try {
+			process.kill(-proc.pid, "SIGKILL");
+			return;
+		} catch {
+			// Fall through to direct-child termination.
+		}
+	}
+	try {
+		proc.kill("SIGKILL");
+	} catch {
+		// Best effort. Callers preserve their bounded failure result.
+	}
+}
 
 function errnoCode(error: unknown): string | undefined {
 	if (error && typeof error === "object") {

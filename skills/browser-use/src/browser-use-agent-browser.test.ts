@@ -954,7 +954,7 @@ describe("Agent Browser native task lane", () => {
 			{
 				afterItemCheckpoint: async (checkpoint: {
 					item_key: string;
-					outcome: "confirmed" | "not-achieved" | "unknown";
+					outcome: "confirmed" | "unknown";
 				}) => {
 					const recorded = recordItemCheckpoint(durableBatch, {
 						itemKey: checkpoint.item_key,
