@@ -1,8 +1,7 @@
 """
-teams_reader.py — PROTOTYPE reader library for the local (new Teams v2) IndexedDB store.
+teams_reader.py — reader library for the local (new Teams v2) IndexedDB store.
 
-THROWAWAY: validates the query design for a future skill. No error handling beyond
-what makes it run. Reads YOUR already-synced local cache; zero network to Microsoft.
+Reads YOUR already-synced local cache; zero network to Microsoft.
 
 Databases used (all under origin https_teams.microsoft.com_0):
   Teams:replychain-manager        replychains          -> channel/reply messages (messageMap)
@@ -12,7 +11,9 @@ Databases used (all under origin https_teams.microsoft.com_0):
 """
 from __future__ import annotations
 
+import contextlib
 import html
+import logging
 import re
 import subprocess
 import tempfile
@@ -25,6 +26,8 @@ from ccl_chromium_reader.ccl_chromium_indexeddb import WrappedIndexDB
 
 CONTAINER = Path.home() / "Library/Containers/com.microsoft.teams2"
 
+log = logging.getLogger("teams_reader")
+
 
 # ---------------------------------------------------------------- store location
 def find_leveldb() -> Path:
@@ -35,17 +38,58 @@ def find_leveldb() -> Path:
     return max(hits, key=lambda p: sum(f.stat().st_size for f in p.glob("*")))
 
 
-def snapshot(leveldb: Path) -> tuple[Path, Path | None, Path]:
-    """Read-only cp -R of leveldb + sibling .blob into a temp dir. Returns (ldb, blob, tmp)."""
+@contextlib.contextmanager
+def snapshot(leveldb: Path):
+    """Read-only cp -R of leveldb + sibling .blob into a temp dir.
+
+    Yields ``(ldb, blob)`` and removes the temp copy on the way out — on the
+    happy path, on exception, and on SIGINT alike.
+
+    The cleanup lives here, in the library, rather than in a caller's
+    ``finally``: the snapshot is a full plaintext copy of the user's chat
+    history, so an early exit that skipped cleanup would orphan it on disk.
+    No caller can opt out.
+
+    ``tempfile.mkdtemp`` gives us 0o700 under the per-user TMPDIR, so the
+    residual exposure is duration rather than readability.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="teams-reader-"))
-    ldb = tmp / leveldb.name
-    subprocess.run(["cp", "-R", str(leveldb), str(ldb)], check=True)
-    blob_src = leveldb.parent / leveldb.name.replace(".leveldb", ".blob")
-    blob = None
-    if blob_src.is_dir():
-        blob = tmp / blob_src.name
-        subprocess.run(["cp", "-R", str(blob_src), str(blob)], check=True)
-    return ldb, blob, tmp
+    try:
+        ldb = tmp / leveldb.name
+        subprocess.run(["cp", "-R", str(leveldb), str(ldb)], check=True)
+        blob_src = leveldb.parent / leveldb.name.replace(".leveldb", ".blob")
+        blob = None
+        if blob_src.is_dir():
+            blob = tmp / blob_src.name
+            subprocess.run(["cp", "-R", str(blob_src), str(blob)], check=True)
+        yield ldb, blob
+    finally:
+        # Report rather than swallow: a failed unlink leaves chat data on disk,
+        # which the user needs to know about.
+        errors: list[str] = []
+        shutil.rmtree(tmp, onerror=lambda _fn, path, exc: errors.append(f"{path}: {exc[1]}"))
+        if errors or tmp.exists():
+            log.error(
+                "teams_reader: FAILED to remove snapshot at %s — it contains a "
+                "plaintext copy of your chat history and should be deleted manually. %s",
+                tmp,
+                "; ".join(errors),
+            )
+
+
+@contextlib.contextmanager
+def open_reader(leveldb: Path | None = None):
+    """Snapshot the live store and yield a ready ``TeamsReader``.
+
+    The single entry point callers should use: it guarantees both the snapshot
+    cleanup and the reader close, so neither can be skipped.
+    """
+    with snapshot(leveldb or find_leveldb()) as (ldb, blob):
+        reader = TeamsReader(ldb, blob)
+        try:
+            yield reader
+        finally:
+            reader.close()
 
 
 # ---------------------------------------------------------------- value helpers
@@ -113,6 +157,30 @@ class Conversation:
     n_members: int | None = None
 
 
+@dataclass
+class SelfIdentity:
+    """Who the store belongs to.
+
+    ``confidence`` is one of:
+      ``high``      auto-detected and cross-checked against the store's own
+                    user GUID — safe to gate on.
+      ``config``    supplied by the user via config; trusted as given.
+      ``low``       a candidate exists but did not clear the margin. Never
+                    used for gating; surfaced so the user can confirm it.
+      ``unresolved`` nothing usable. Name-gating must be disabled, not guessed.
+    """
+
+    mri: str | None
+    display_name: str | None
+    confidence: str
+    detail: str = ""
+    candidate_mri: str | None = None
+
+    @property
+    def resolved(self) -> bool:
+        return self.confidence in ("high", "config") and bool(self.mri)
+
+
 # ---------------------------------------------------------------- the reader
 class TeamsReader:
     def __init__(self, leveldb: Path, blob: Path | None):
@@ -131,6 +199,100 @@ class TeamsReader:
     @staticmethod
     def _skip_bad(k, d):  # bad_deserializer handler: swallow undecodable records
         return None
+
+    # ---- self-identity ---------------------------------------------------------
+    # Auto-accept thresholds. The modal self-sent creator is a safe signal for an
+    # active single-tenant account, but it degrades badly for low-volume lurkers,
+    # shared/delegated mailboxes, and guest/B2B stores holding several orgids. We
+    # require both an absolute floor and a dominant share before trusting it.
+    SELF_MIN_MESSAGES = 5
+    SELF_MIN_SHARE = 0.6
+
+    _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+
+    def store_user_guid(self) -> str | None:
+        """The signed-in user's GUID, read from the IndexedDB database names.
+
+        Teams names its databases
+        ``Teams:<manager>:react-web-client:<clientId>:<userGuid>:<locale>``. The
+        second GUID is the account the store belongs to, and it is the suffix of
+        that account's MRI — which makes it an independent cross-check on the
+        message-derived candidate.
+        """
+        counts: dict[str, int] = {}
+        for did in self.db.database_ids:
+            parts = (did.name or "").split(":")
+            guids = [p for p in parts if self._GUID.fullmatch(p)]
+            # parts: Teams, <manager>, react-web-client, <clientId>, <userGuid>, <locale>
+            if len(guids) >= 2:
+                counts[guids[-1].lower()] = counts.get(guids[-1].lower(), 0) + 1
+        if not counts:
+            return None
+        return max(counts, key=counts.get)
+
+    def self_identity(self, config_mri: str | None = None) -> SelfIdentity:
+        """Resolve who this store belongs to, refusing to guess when unsure."""
+        people = self.people()
+
+        if config_mri:
+            prof = people.get(config_mri) or {}
+            return SelfIdentity(
+                mri=config_mri,
+                display_name=prof.get("displayName"),
+                confidence="config",
+                detail="supplied by config (self.mri)",
+            )
+
+        counts: dict[str, int] = {}
+        for m in self.iter_messages():
+            if m.from_me and m.creator_mri:
+                counts[m.creator_mri] = counts.get(m.creator_mri, 0) + 1
+
+        if not counts:
+            return SelfIdentity(
+                None, None, "unresolved",
+                "no messages flagged isSentByCurrentUser; set self.mri in config",
+            )
+
+        total = sum(counts.values())
+        candidate = max(counts, key=counts.get)
+        n = counts[candidate]
+        share = n / total
+        prof = people.get(candidate) or {}
+        display_name = prof.get("displayName")
+
+        # Cross-check against the store's own user GUID. A mismatch means we
+        # picked someone else's identity, which is always wrong — hard-stop
+        # rather than proceeding with mis-attributed "to me" flags.
+        store_guid = self.store_user_guid()
+        if store_guid and store_guid not in candidate.lower():
+            raise SystemExit(
+                "teams_reader: self-identity cross-check FAILED.\n"
+                f"  message-derived candidate: {candidate}\n"
+                f"  store's own user GUID:     {store_guid}\n"
+                "The candidate does not belong to the account this store was "
+                "written for. Refusing to guess — set self.mri in your config."
+            )
+
+        if n < self.SELF_MIN_MESSAGES or share < self.SELF_MIN_SHARE or not display_name:
+            reasons = []
+            if n < self.SELF_MIN_MESSAGES:
+                reasons.append(f"only {n} self-sent message(s), need {self.SELF_MIN_MESSAGES}")
+            if share < self.SELF_MIN_SHARE:
+                reasons.append(f"share {share:.0%} below {self.SELF_MIN_SHARE:.0%}")
+            if not display_name:
+                reasons.append("no profile display name resolved")
+            return SelfIdentity(
+                None, display_name, "low",
+                "; ".join(reasons) + " — confirm this MRI or set self.mri in config",
+                candidate_mri=candidate,
+            )
+
+        return SelfIdentity(
+            candidate, display_name, "high",
+            f"{n}/{total} self-sent messages ({share:.0%}), cross-checked against store user GUID",
+            candidate_mri=candidate,
+        )
 
     # ---- conversations (id -> name/type) --------------------------------------
     def conversations(self) -> dict[str, Conversation]:
@@ -328,7 +490,7 @@ class TeamsReader:
 
     # ---- CAP6: ticket timeline across all channels (feature 3) ----------------
     def ticket_timeline(self, ticket: str) -> list[Message]:
-        """Every message mentioning `ticket` (e.g. POS-4059), across all conversations, chronological."""
+        """Every message mentioning `ticket` (e.g. PROJ-1234), across all conversations, chronological."""
         tl = ticket.lower()
         out = [m for m in self.iter_messages() if tl in m.content.lower()]
         out.sort(key=lambda m: m.time or datetime.min.replace(tzinfo=timezone.utc))
@@ -390,6 +552,11 @@ class TeamsReader:
         r"final(?:ised|ized)?|the plan is|conclusion|going with|agreed to)\b", re.I)
 
     def decisions(self, conversation_id: str | None = None, since: datetime | None = None) -> list[Message]:
+        """Messages that look like decisions.
+
+        HEURISTIC: a regex grep over message text, not a summarizer. Expect
+        false positives.
+        """
         out = []
         for m in self.iter_messages({conversation_id} if conversation_id else None):
             if since and (not m.time or m.time < since):
@@ -404,15 +571,46 @@ class TeamsReader:
         r"\b(can you|could you|please|pls|will you|need you to|"
         r"assigned to|todo|to-do|action item|follow up|by (?:eod|tomorrow|friday|monday))\b", re.I)
 
-    def action_items(self, mri_self: str | None = None, since: datetime | None = None) -> list[dict]:
-        """Messages that look like commitments. Flags to_me / from_me using @mention + creator."""
+    def _name_gate(self, identity: SelfIdentity | None,
+                   name_gate: list[str] | None) -> list[str]:
+        """Lowercased substrings that mean "this message is addressed to me".
+
+        Derived from the resolved identity (its MRI and display name, plus the
+        first name people actually type), and extended by any config-supplied
+        aliases. Returns empty when identity is unresolved and no config gate is
+        given — callers must then skip "to me" detection rather than guess.
+        """
+        gate: list[str] = []
+        if identity and identity.resolved:
+            if identity.mri:
+                gate.append(identity.mri.lower())
+            if identity.display_name:
+                full = identity.display_name.lower()
+                gate.append(full)
+                first = full.split()[0] if full.split() else ""
+                # A one- or two-character first name would match far too much.
+                if len(first) >= 3:
+                    gate.append(first)
+        gate.extend(g.lower() for g in (name_gate or []) if g)
+        return list(dict.fromkeys(gate))
+
+    def action_items(self, identity: SelfIdentity | None = None,
+                     name_gate: list[str] | None = None,
+                     since: datetime | None = None) -> list[dict]:
+        """Messages that look like commitments. Flags to_me / from_me.
+
+        HEURISTIC: a regex grep over message text, not a summarizer. Expect
+        false positives.
+        """
+        gate = self._name_gate(identity, name_gate)
         out = []
         for m in self.iter_messages():
             if since and (not m.time or m.time < since):
                 continue
             if not self._ACTION.search(m.content):
                 continue
-            to_me = bool(mri_self and mri_self in (m.content or "")) or "nathan" in m.content.lower()
+            lowered = m.content.lower()
+            to_me = any(g in lowered for g in gate) if gate else False
             out.append({"time": m.time, "author": m.author, "from_me": m.from_me,
                         "to_me": to_me, "conversation_id": m.conversation_id,
                         "content": m.content})
@@ -420,15 +618,29 @@ class TeamsReader:
         return out
 
     # ---- CAP11: standup prep (feature 12) -------------------------------------
-    def standup_prep(self, watch_ids: set[str], hours: int = 24) -> dict:
-        """Bucket recent watched-channel activity into: my messages, questions to me, PRs/tickets."""
+    # Generic Jira-style key. Trackers with another shape (GitHub #1234,
+    # numeric-only ids) need a ticket_pattern override in config.
+    DEFAULT_TICKET_PATTERN = r"\b[A-Z][A-Z0-9]+-\d+\b"
+
+    def standup_prep(self, watch_ids: set[str], hours: int = 24,
+                     ticket_pattern: str | None = None,
+                     identity: SelfIdentity | None = None,
+                     name_gate: list[str] | None = None) -> dict:
+        """Bucket recent watched-channel activity into: my messages, questions to me, tickets.
+
+        HEURISTIC: regex extraction over message text, not a summarizer. Expect
+        false positives.
+        """
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         mine, questions, tickets = [], [], []
-        tk = re.compile(r"\bPOS-\d+\b")
+        tk = re.compile(ticket_pattern or self.DEFAULT_TICKET_PATTERN)
+        gate = self._name_gate(identity, name_gate)
         for m in self.digest(watch_ids, hours=hours, limit=10000):
             if m.from_me:
                 mine.append(m)
-            if ("?" in m.content or self._ACTION.search(m.content)) and "nathan" in m.content.lower():
+            lowered = m.content.lower()
+            addressed = any(g in lowered for g in gate) if gate else False
+            if addressed and ("?" in m.content or self._ACTION.search(m.content)):
                 questions.append(m)
             for t in tk.findall(m.content):
                 tickets.append((t, m))
