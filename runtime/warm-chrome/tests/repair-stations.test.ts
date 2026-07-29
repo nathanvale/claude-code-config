@@ -1,7 +1,7 @@
 // U7: both repair stations plus the R11 never-kill-unverified and
 // never-follow-symlink invariants, driven through main(argv, deps) with a
 // stateful fake runtime seam (repairs must be observable: chmod flips the
-// stored mode, ensureProfileDir creates the entry, writeTextFile updates the
+// stored mode, profile initialization creates the entry, writeTextFile updates the
 // DevToolsActivePort state the re-prove reads). Proof failures reached via
 // repair are asserted mechanically against the U3 re-emit map.
 import { describe, expect, test } from "bun:test";
@@ -37,9 +37,13 @@ import {
 } from "../src/repair.ts";
 import {
 	createDefaultRuntime,
+	createOneUseProfileCreationApprovalOwner,
 	type ListenerProcess,
 	type ProfileStat,
 	REAL_GOOGLE_CHROME_BINARY,
+	type WarmChromeCredentialPosture,
+	type WarmChromeProfileCreationApproval,
+	type WarmChromeProfileCreationApprovalRequest,
 	type WarmChromeRuntime,
 	WarmChromeRuntimeError,
 } from "../src/runtime.ts";
@@ -52,13 +56,56 @@ const BROWSER_WS_PATH = "/devtools/browser/warm-chrome-token";
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+const CLEAN_CREDENTIAL_POSTURE: WarmChromeCredentialPosture = {
+	disk: {
+		saveSetting: "disabled",
+		autoSignInSetting: "disabled",
+		syncSetting: "disabled",
+		storedLogin: "absent",
+	},
+	process: {
+		disableSyncSwitch: "present",
+		disableExtensionsSwitch: "present",
+	},
+	effective: {
+		observation: "running-chrome",
+		saveCapability: "disabled",
+		fillExposure: "no-source",
+		syncState: "disabled",
+		savePrompt: "suppressed",
+		observer: {
+			source: "chrome-webui",
+			browserPid: 4242,
+			port: WARM_CHROME_DEFAULT_CDP_PORT,
+			profileMatch: "exact",
+			observedAtMs: 0,
+		},
+	},
+};
+
+function repairProfileCreationApproval() {
+	return createOneUseProfileCreationApprovalOwner({
+		command: "repair",
+		port: WARM_CHROME_DEFAULT_CDP_PORT,
+		profileDir: DEDICATED_PROFILE,
+	});
+}
 
 function chromeCommand(
-	overrides: { port?: string; profile?: string } = {},
+	overrides: {
+		port?: string;
+		profile?: string;
+		disableSync?: boolean;
+		disableExtensions?: boolean;
+		extraArgs?: string;
+	} = {},
 ): string {
 	return `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=${
 		overrides.port ?? WARM_CHROME_DEFAULT_CDP_PORT
-	} --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE} --no-first-run`;
+	} --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE} --profile-directory=Default --no-first-run${
+		overrides.disableSync === false ? "" : " --disable-sync"
+	}${overrides.disableExtensions === false ? "" : " --disable-extensions"
+	}${overrides.extraArgs ? ` ${overrides.extraArgs}` : ""}`;
 }
 
 function chromeListener(
@@ -118,16 +165,26 @@ type RepairFixtureOptions = {
 	/** /json/version script. Arrays play per call; the last entry repeats. */
 	version?: VersionStep | ReadonlyArray<VersionStep>;
 	cdp?: Record<string, CdpEntry>;
-	/** Mutable statProfile store; chmod/ensureProfileDir repairs update it. */
+	/** Mutable statProfile store; chmod/profile initialization repairs update it. */
 	profiles?: Record<string, ProfileStat>;
+	/** Explicit statProfile failures keyed by requested path. */
+	statProfileErrors?: Record<string, Error>;
 	/** Initial DevToolsActivePort state; writes through the seam update it. */
 	activePort?: { port: string; wsPath: string } | null;
 	/** Paths whose lstat probe reports a planted symlink. */
 	symlinkPaths?: readonly string[];
-	ensureProfileDirError?: Error;
 	chmodError?: Error;
 	chmodNoOp?: boolean;
 	writeTextFileError?: Error;
+	credentialPosture?: WarmChromeCredentialPosture;
+	initializeProfileError?: Error;
+	profileCreationApproval?:
+		| WarmChromeProfileCreationApproval
+		| ((
+				request: WarmChromeProfileCreationApprovalRequest,
+		  ) =>
+				| WarmChromeProfileCreationApproval
+				| Promise<WarmChromeProfileCreationApproval>);
 };
 
 type RepairFixture = {
@@ -139,6 +196,9 @@ type RepairFixture = {
 		chmodPaths: string[];
 		writes: Array<{ path: string; content: string }>;
 		ensureProfileDirPaths: string[];
+		initializeProfilePaths: string[];
+		requestProfileCreationApproval: number;
+		profileCreationApprovalRequests: WarmChromeProfileCreationApprovalRequest[];
 		lstatPaths: string[];
 		spawnChrome: number;
 		/** Kills issued through any spawn handle — the seam's only process-affecting call. */
@@ -148,7 +208,7 @@ type RepairFixture = {
 
 // Local stateful variant of check-stations' warmChromeFixture (repo precedent:
 // fixtures stay test-file-local). Repair mutations must be observable by the
-// re-prove, so chmod, ensureProfileDir, and writeTextFile update fixture state.
+// re-prove, so chmod, profile initialization, and writeTextFile update fixture state.
 function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 	const calls: RepairFixture["calls"] = {
 		fetchJsonUrls: [],
@@ -156,6 +216,9 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		chmodPaths: [],
 		writes: [],
 		ensureProfileDirPaths: [],
+		initializeProfilePaths: [],
+		requestProfileCreationApproval: 0,
+		profileCreationApprovalRequests: [],
 		lstatPaths: [],
 		spawnChrome: 0,
 		kills: 0,
@@ -178,6 +241,13 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
 	};
+	for (const profileRoot of Object.keys(profiles)) {
+		if (!profileRoot.endsWith("/Default")) {
+			profiles[`${profileRoot}/Default`] ??= profileStat(
+				`${profileRoot}/Default`,
+			);
+		}
+	}
 	const cdp = options.cdp ?? healthyCdp();
 	const state = { activePort: options.activePort ?? null };
 
@@ -205,15 +275,45 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 		},
 		currentUser: async () => "501",
 		statProfile: async (path) => {
+			const explicitError = options.statProfileErrors?.[path];
+			if (explicitError) throw explicitError;
 			const stat = profiles[path];
-			if (!stat) throw new Error(`no profile directory at ${path}`);
+			if (!stat) {
+				const error = new Error(`no profile directory at ${path}`);
+				Object.assign(error, { code: "ENOENT" });
+				throw error;
+			}
 			return stat;
 		},
 		ensureProfileDir: async (path) => {
 			calls.ensureProfileDirPaths.push(path);
-			if (options.ensureProfileDirError) throw options.ensureProfileDirError;
 			profiles[path] = profileStat(path);
 			return path;
+		},
+		inspectCredentialPosture: async (input) =>
+			options.credentialPosture ?? {
+				...CLEAN_CREDENTIAL_POSTURE,
+				process: {
+					disableSyncSwitch: input.syncDisabledByLaunch
+						? "present"
+						: "absent",
+					disableExtensionsSwitch: input.extensionsDisabledByLaunch
+						? "present"
+						: "absent",
+				},
+			},
+		initializeCredentialCleanProfile: async (path) => {
+			calls.initializeProfilePaths.push(path);
+			if (options.initializeProfileError) throw options.initializeProfileError;
+			profiles[path] ??= profileStat(path);
+			profiles[`${path}/Default`] ??= profileStat(`${path}/Default`);
+		},
+		requestCredentialCleanProfileCreationApproval: async (request) => {
+			calls.requestProfileCreationApproval += 1;
+			calls.profileCreationApprovalRequests.push(request);
+			return typeof options.profileCreationApproval === "function"
+				? options.profileCreationApproval(request)
+				: (options.profileCreationApproval ?? "unavailable");
 		},
 		chmod: async (path, mode) => {
 			calls.chmodPaths.push(path);
@@ -254,6 +354,23 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 			if (!entry) throw new Error(`unexpected CDP method: ${method}`);
 			if (entry instanceof Error) throw entry;
 			return entry;
+		},
+		observeEffectiveCredentialPosture: async (input) => {
+			const effective =
+				options.credentialPosture?.effective ??
+				CLEAN_CREDENTIAL_POSTURE.effective;
+			return effective.observation === "not-observed"
+				? effective
+				: {
+						...effective,
+						observer: {
+							source: "chrome-webui",
+							browserPid: input.browserPid,
+							port: input.port,
+							profileMatch: "exact",
+							observedAtMs: Date.now(),
+						},
+					};
 		},
 		readDevToolsActivePort: async () => state.activePort,
 		lstatFileKind: async (path): Promise<WarmChromeRepairFileKind> => {
@@ -410,8 +527,11 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expectNoProcessAffectingCalls(fixture);
 	});
 
-	test("missing profile dir is created and the re-prove verifies", async () => {
-		const fixture = repairFixture({ profiles: {} });
+	test("human-confirmed missing profile dir is initialized and the re-prove verifies", async () => {
+		const fixture = repairFixture({
+			profiles: {},
+			profileCreationApproval: repairProfileCreationApproval(),
+		});
 		const run = await runRepair(["repair"], fixture);
 
 		const envelope = expectRepaired(run);
@@ -419,21 +539,161 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expect(envelope.data?.repair_mutations).toEqual([
 			{ id: "profile_dir_created", path: DEDICATED_PROFILE },
 		]);
-		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([DEDICATED_PROFILE]);
+		expect(fixture.calls.requestProfileCreationApproval).toBe(1);
+		expect(fixture.calls.profileCreationApprovalRequests).toEqual([
+			{
+				command: "repair",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			},
+		]);
 		expectNoProcessAffectingCalls(fixture);
 	});
 
-	test("listenerless repair with no --profile targets the expanded dedicated default, not a literal tilde", async () => {
+	test("a launch-scoped approval cannot authorize repair", async () => {
+		const fixture = repairFixture({
+			profiles: {},
+			profileCreationApproval: createOneUseProfileCreationApprovalOwner({
+				command: "launch",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			}),
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		expect(run.exitCode).toBe(21);
+		expect(parseEnvelope(run).data?.reason).toBe(
+			"profile_creation_requires_human",
+		);
+		expect(fixture.calls.profileCreationApprovalRequests).toEqual([
+			{
+				command: "repair",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			},
+		]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([]);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("listenerless missing profile returns the human gate and does not create a literal tilde path", async () => {
 		const fixture = repairFixture({
 			version: new Error("connect ECONNREFUSED"),
 			listeners: {},
 			profiles: {},
 		});
-		await runRepair(["repair"], fixture);
+		const argv = ["repair"] as const;
+		const run = await runRepair(argv, fixture);
 
-		// The documented listenerless default is ~/.agent-warm-profile under
-		// HOME; an un-expanded literal would mkdir a "./~" dir in cwd instead.
-		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
+		expect(run.exitCode).toBe(21);
+		assertStationEnvelope(
+			repairStation("repair.human-action-required"),
+			toProcessResult("repair.human-action-required", argv, run),
+		);
+		const envelope = parseEnvelope(run);
+		expect(envelope.error?.code).toBe("human-action-required");
+		expect(envelope.data?.reason).toBe("profile_creation_requires_human");
+		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		expect(fixture.calls.requestProfileCreationApproval).toBe(1);
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([]);
+	});
+
+	test("absent default and temporary targets never request or consume approval", async () => {
+		for (const profileDir of [
+			`${HOME}/Library/Application Support/Google/Chrome`,
+			"/tmp/warm-profile",
+		]) {
+			const fixture = repairFixture({
+				version: new Error("connect ECONNREFUSED"),
+				listeners: {},
+				profiles: {},
+				profileCreationApproval: createOneUseProfileCreationApprovalOwner({
+					command: "repair",
+					port: WARM_CHROME_DEFAULT_CDP_PORT,
+					profileDir,
+				}),
+			});
+			const run = await runRepair(
+				["repair", "--profile", profileDir],
+				fixture,
+			);
+
+			expect(run.exitCode).toBe(20);
+			expect(fixture.calls.requestProfileCreationApproval).toBe(0);
+			expect(fixture.calls.initializeProfilePaths).toEqual([]);
+			expectNoProcessAffectingCalls(fixture);
+		}
+	});
+
+	test("an uninspectable repair profile is never treated as fresh or sent to the human gate", async () => {
+		const fixture = repairFixture({
+			profiles: {},
+			statProfileErrors: {
+				[DEDICATED_PROFILE]: Object.assign(new Error("permission denied"), {
+					code: "EACCES",
+				}),
+			},
+			profileCreationApproval: repairProfileCreationApproval(),
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		expect(run.exitCode).toBe(20);
+		expect(parseEnvelope(run).data?.reason).toBe("controls_unproven");
+		expect(fixture.calls.requestProfileCreationApproval).toBe(0);
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([]);
+		expect(fixture.calls.chmodPaths).toEqual([]);
+	});
+
+	test("existing dirty profile is never repaired in place", async () => {
+		const fixture = repairFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE, {
+					mode: "755",
+				}),
+			},
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					storedLogin: "present",
+				},
+			},
+		});
+		const run = await runRepair(["repair"], fixture);
+		const envelope = parseEnvelope(run);
+
+		expect(run.exitCode).toBe(20);
+		expect(envelope.error?.code).toBe("profile_posture_unsafe");
+		expect(envelope.data?.reason).toBe("stored_login_present");
+		expect(envelope.runtime_actions?.map((action) => action.id)).toEqual([
+			"create_clean_profile",
+		]);
+		expect(fixture.calls.chmodPaths).toEqual([]);
+		expect(fixture.calls.writes).toEqual([]);
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([]);
+	});
+
+	test("sync-switch lookalikes never certify the active repair profile", async () => {
+		const fixture = repairFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
+					disableSync: false,
+					extraArgs: "--disable-sync-types=bookmarks",
+				}),
+			},
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		expect(run.exitCode).toBe(20);
+		expect(parseEnvelope(run).data?.reason).toBe("controls_unproven");
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.initializeProfilePaths).toEqual([]);
+		expect(fixture.calls.chmodPaths).toEqual([]);
 	});
 
 	test("stale DevToolsActivePort is rewritten from the live endpoint and the re-prove verifies", async () => {
@@ -614,7 +874,8 @@ describe("warm-chrome repair.unrepairable (U7): fail closed without touching unv
 	test("an uncreatable profile dir fails closed", async () => {
 		const fixture = repairFixture({
 			profiles: {},
-			ensureProfileDirError: new Error("EACCES: permission denied"),
+			initializeProfileError: new Error("EACCES: permission denied"),
+			profileCreationApproval: repairProfileCreationApproval(),
 		});
 		const run = await runRepair(["repair"], fixture);
 
@@ -877,7 +1138,7 @@ describe("warm-chrome repair re-emit rule (U7): proof failures via repair are ch
 });
 
 describe("warm-chrome repair station evidence (U7)", () => {
-	test("both repair stations attach evidence and stop being missing", async () => {
+	test("all three repair stations attach evidence and stop being missing", async () => {
 		const evidence: WarmChromeBranchStationEvidence[] = [];
 
 		const stationRuns: Array<{
@@ -902,6 +1163,11 @@ describe("warm-chrome repair station evidence (U7)", () => {
 				fixture: repairFixture({
 					listeners: { [WARM_CHROME_DEFAULT_CDP_PORT]: FOREIGN_LISTENER },
 				}),
+			},
+			{
+				stationId: "repair.human-action-required",
+				argv: ["repair"],
+				fixture: repairFixture({ profiles: {} }),
 			},
 		];
 

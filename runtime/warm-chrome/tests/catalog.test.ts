@@ -29,6 +29,7 @@ const AUTHORITATIVE_STATION_IDS = [
 	"check.endpoint_unreachable",
 	"check.wrong_browser",
 	"check.unsafe_profile",
+	"check.profile_posture_unsafe",
 	"check.non_loopback",
 	"check.invalid_cdp",
 	"check.listener_mismatch",
@@ -38,8 +39,10 @@ const AUTHORITATIVE_STATION_IDS = [
 	"launch.already_verified",
 	"launch.port_occupied_foreign",
 	"launch.spawned_unverified",
+	"launch.human-action-required",
 	"repair.repaired",
 	"repair.unrepairable",
+	"repair.human-action-required",
 ] as const;
 
 const REEMITTING_COMMANDS = ["launch", "repair"] as const satisfies readonly WarmChromeReemittingCommand[];
@@ -58,7 +61,7 @@ describe("warm-chrome branch station catalog (U3 R4)", () => {
 		expect(findWarmChromeBranchStationCatalogDrift()).toEqual([]);
 	});
 
-	test("catalog transcribes exactly the 16 authoritative stations", () => {
+	test("catalog transcribes exactly the 19 authoritative stations", () => {
 		expect(warmChromeBranchStationCatalog.map((station) => station.id)).toEqual([
 			...AUTHORITATIVE_STATION_IDS,
 		]);
@@ -66,7 +69,7 @@ describe("warm-chrome branch station catalog (U3 R4)", () => {
 
 	test("station-map finding ids sorted-equal catalog ids before any evidence", () => {
 		const stationMap = projectWarmChromeStationMap();
-		expect(stationMap.stations).toHaveLength(16);
+		expect(stationMap.stations).toHaveLength(19);
 		expect(stationMap.findings.map((finding) => finding.station_id).sort()).toEqual(
 			[...AUTHORITATIVE_STATION_IDS].sort(),
 		);
@@ -197,7 +200,7 @@ describe("warm-chrome canonical error codes and actions (U3 R5)", () => {
 });
 
 describe("warm-chrome branch station evidence manifest (U3)", () => {
-	test("all 16 stations are missing before any scenario runs", () => {
+	test("all 19 stations are missing before any scenario runs", () => {
 		expect(listMissingWarmChromeBranchStationEvidence([])).toEqual(
 			[...AUTHORITATIVE_STATION_IDS].sort(),
 		);

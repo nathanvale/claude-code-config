@@ -12,9 +12,9 @@ export const WARM_CHROME_CONTRACT_ID = "warm-chrome.browser-entry" as const;
 /**
  * Machine schema version for v1 warm-chrome JSON results.
  *
- * @defaultValue "1"
+ * @defaultValue "2"
  */
-export const WARM_CHROME_SCHEMA_VERSION = "1" as const;
+export const WARM_CHROME_SCHEMA_VERSION = "2" as const;
 
 /**
  * Canonical CLI name (bin entry and discovery surface).
@@ -87,6 +87,7 @@ export const WARM_CHROME_BROWSER_ENTRY_EXIT_CODE = "20" as const;
 export const WARM_CHROME_FAILURE_ACTION_IDS = [
 	"launch_warm_chrome",
 	"repair_profile",
+	"create_clean_profile",
 	"rerun_with_explicit_port",
 	"inspect_listener",
 	"inspect_diagnostics",
@@ -172,6 +173,14 @@ export const WARM_CHROME_CHECK_REASONS = {
 		"unsafe_profile_permissions",
 		"invalid_profile_path",
 		"profile_dir_remap",
+	],
+	profile_posture_unsafe: [
+		"save_control_enabled",
+		"autofill_control_enabled",
+		"sync_enabled",
+		"stored_login_present",
+		"save_prompt_observed",
+		"controls_unproven",
 	],
 	listener_mismatch: [
 		"port_mismatch",

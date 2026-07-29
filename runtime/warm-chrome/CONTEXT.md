@@ -65,7 +65,7 @@ behavior — no such script exists anymore."
 **Station**:
 One deterministic agent-visible command outcome in the Branch Station
 Catalog: station id = canonical error code = primary runtime action =
-mutation pin, sixteen in total. Tests attach envelope evidence per station;
+mutation pin, nineteen in total. Tests attach envelope evidence per station;
 a missing or contradicting envelope is a drift finding.
 _Avoid_: log line, health value, freeform status, fine-grained cause
 _Developer example_: "`check.port_occupied_foreign` stays one station even when
@@ -76,14 +76,31 @@ _Avoid example_: "Add a new station for every listener failure string."
 The single `check`-owned verification path in `src/proof.ts` every command
 shares: loopback assertion, bounded attach probe, listener identity by binary
 path, default-profile foreignness, payload/websocket validation, CDP
-round-trips, profile posture, final listener consistency. `DevToolsActivePort`
-is adapter hint material, never browser identity. `launch` and `repair` re-enter
+round-trips, structural profile posture, configuration posture, effective
+running-Chrome posture, final listener consistency. `DevToolsActivePort` is
+adapter hint material, never browser identity. `launch` and `repair` re-enter
 the proof rather than duplicating it.
 _Avoid_: per-command duplicate checks, banner trust, argv trust
 _Developer example_: "Launch should call the proof chain after spawn instead
 of reimplementing listener identity checks."
 _Avoid example_: "Repair can trust the Chrome argv because it already found a
 matching port."
+
+**Credential-clean posture**:
+The redacted profile proof separates disk/process configuration from effective
+running-Chrome observation. Safe preferences plus disable-sync and
+disable-extensions switches are `configuration-only`; they never authorize
+confidential delivery. `live-clean` requires the exact running profile,
+password saving off, browser sign-in off, zero live credential sources, sync
+disabled by the exact process switch, and a suppressed save prompt. It does
+not claim Chrome's fill engine is disabled. Missing controls, credential-source
+evidence, unsafe effective state, or absent observation lands
+`check.profile_posture_unsafe` with one `create_clean_profile` action. The
+proof never returns raw Preferences, account data, or Login Data rows.
+_Avoid_: raw profile dump, in-place credential deletion, inferred clean state
+_Developer example_: "Status returns bounded posture states and preserves the
+old profile until a human approves a fresh path."
+_Avoid example_: "Repair the old profile by deleting its stored logins."
 
 **Re-emit rule**:
 Proof failures reached through `launch` or `repair` re-emit the `check`-owned

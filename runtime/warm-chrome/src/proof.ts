@@ -30,6 +30,11 @@ import {
 	type WarmChromeCommand,
 } from "./model.ts";
 import {
+	observeWarmChromeEffectivePosture,
+	WARM_CHROME_EFFECTIVE_POSTURE_BUDGET_MS,
+	type WarmChromeEffectivePostureInput,
+} from "./effective-posture.ts";
+import {
 	expandHome,
 	extractUserDataDir,
 	isDefaultChromeProfilePath,
@@ -93,6 +98,10 @@ export type WarmChromeDevToolsActivePort = {
 export type WarmChromeProofDeps = {
 	/** Live CDP round-trip over the verbatim browser websocket (R6). */
 	cdpRoundTrip: WarmChromeCdpRoundTrip;
+	/** Redacted effective-state observer bound to the running browser. */
+	observeEffectiveCredentialPosture: (
+		input: WarmChromeEffectivePostureInput,
+	) => ReturnType<typeof observeWarmChromeEffectivePosture>;
 	/** Read `<profileDir>/DevToolsActivePort`; null when absent (R6c). */
 	readDevToolsActivePort: (
 		profileDir: string,
@@ -105,6 +114,8 @@ export type WarmChromeProofDeps = {
 export function createDefaultProofDeps(): WarmChromeProofDeps {
 	return {
 		cdpRoundTrip: defaultCdpRoundTrip,
+		observeEffectiveCredentialPosture: (input) =>
+			observeWarmChromeEffectivePosture(input),
 		readDevToolsActivePort: defaultReadDevToolsActivePort,
 	};
 }
@@ -257,6 +268,13 @@ const CHECK_ERROR_ENVELOPE_OPTIONS: Record<
 		recoverability: "repair_state",
 		hintAction: "repair_state",
 		hintSummary: "Run warm-chrome repair with the same port and profile.",
+	},
+	profile_posture_unsafe: {
+		recoverability: "repair_state",
+		hintAction: "repair_state",
+		hintSummary:
+			"Create a fresh isolated Warm Chrome profile after explicit human approval; preserve the prior profile.",
+		primaryActionId: "create_clean_profile",
 	},
 	listener_mismatch: {
 		recoverability: "repair_state",
@@ -637,32 +655,39 @@ export async function runWarmChromeCheckProof(
 		parsedCommand.args,
 		"--profile-directory",
 	);
-	if (profileDirectory !== null) {
-		let resolvedProfile: ProfileStat;
-		try {
-			resolvedProfile = await runtime.statProfile(
-				join(userDataDir, profileDirectory),
-			);
-		} catch {
-			throw fail(
-				"unsafe_profile",
-				"invalid_profile_path",
-				"Chrome --profile-directory could not be resolved.",
-				listenerData,
-			);
-		}
-		if (
-			resolvedProfile.realPath !== profile.realPath &&
-			!resolvedProfile.realPath.startsWith(`${profile.realPath}/`)
-		) {
-			throw fail(
-				"unsafe_profile",
-				"profile_dir_remap",
-				"Resolved profile path does not live under the dedicated user-data-dir.",
-				listenerData,
-			);
-		}
+	if (profileDirectory === null) {
+		throw fail(
+			"profile_posture_unsafe",
+			"controls_unproven",
+			"Chrome active profile cannot be proven without an explicit --profile-directory.",
+			listenerData,
+		);
 	}
+	let resolvedProfile: ProfileStat;
+	try {
+		resolvedProfile = await runtime.statProfile(
+			join(profile.realPath, profileDirectory),
+		);
+	} catch {
+		throw fail(
+			"unsafe_profile",
+			"invalid_profile_path",
+			"Chrome --profile-directory could not be resolved.",
+			listenerData,
+		);
+	}
+	if (
+		resolvedProfile.realPath !== profile.realPath &&
+		!resolvedProfile.realPath.startsWith(`${profile.realPath}/`)
+	) {
+		throw fail(
+			"unsafe_profile",
+			"profile_dir_remap",
+			"Resolved profile path does not live under the dedicated user-data-dir.",
+			listenerData,
+		);
+	}
+	const activeProfileDir = resolvedProfile.realPath;
 	if (input.profileInput !== undefined) {
 		const providedPath = expandHome(input.profileInput, runtime.env);
 			if (isDefaultChromeProfilePath(providedPath, runtime.env)) {
@@ -706,7 +731,71 @@ export async function runWarmChromeCheckProof(
 		}
 	}
 
-	// 8. Final consistency: the listener that answered the whole chain must
+	// 8. Credential-clean posture. The runtime owner reads only the active
+	// profile's controls and a bounded `SELECT 1` from Login Data; this proof
+	// receives redacted states only and never raw preferences or credential rows.
+	const disableSyncSwitch = tokenizeCommandArgs(parsedCommand.args).includes(
+		"--disable-sync",
+	);
+	const disableExtensionsSwitch = tokenizeCommandArgs(
+		parsedCommand.args,
+	).includes("--disable-extensions");
+	let credentialPosture = await runtime.inspectCredentialPosture({
+		activeProfileDir,
+		syncDisabledByLaunch: disableSyncSwitch,
+		extensionsDisabledByLaunch: disableExtensionsSwitch,
+	});
+	const observedEffective = await deps.observeEffectiveCredentialPosture({
+		activeProfileDir,
+		browserPid: listener.pid,
+		port: input.port,
+		webSocketDebuggerUrl,
+		disableSyncSwitch,
+		disableExtensionsSwitch,
+	});
+	const observedAtMs =
+		observedEffective.observation === "running-chrome"
+			? observedEffective.observer.observedAtMs
+			: null;
+	const nowMs = runtime.now();
+	const effective =
+		observedEffective.observation === "running-chrome" &&
+		observedEffective.observer.browserPid === listener.pid &&
+		observedEffective.observer.port === input.port &&
+		observedEffective.observer.profileMatch === "exact" &&
+		observedAtMs !== null &&
+		observedAtMs <= nowMs &&
+		nowMs - observedAtMs <= WARM_CHROME_EFFECTIVE_POSTURE_BUDGET_MS
+			? observedEffective
+			: ({ observation: "not-observed" } as const);
+	credentialPosture = {
+		...credentialPosture,
+		disk: {
+			...credentialPosture.disk,
+			storedLogin:
+				effective.observation === "running-chrome" &&
+				effective.fillExposure === "no-source" &&
+				credentialPosture.disk.storedLogin !== "present"
+					? "live-observed-absent"
+					: credentialPosture.disk.storedLogin,
+		},
+		effective,
+	};
+	const credentialPostureReason = resolveProfilePostureReason(
+		credentialPosture,
+	);
+	if (credentialPostureReason !== null) {
+		throw fail(
+			"profile_posture_unsafe",
+			credentialPostureReason,
+			"Warm Chrome profile posture is not clean.",
+			{
+				credential_posture: projectCredentialPosture(credentialPosture),
+			},
+		);
+	}
+
+	// 9. Final consistency: the listener that answered the whole chain must
 	// still be the listener on the port.
 	let finalListener: ListenerProcess | null;
 	try {
@@ -740,7 +829,7 @@ export async function runWarmChromeCheckProof(
 		);
 	}
 
-	// 9. Verified. The ok envelope is the only endpoint authority (R8) and
+	// 10. Verified. The ok envelope is the only endpoint authority (R8) and
 	// records the observed Chrome build (R17). The verbatim websocket URL is
 	// exempt from redaction on this JSON channel only (R13).
 	return {
@@ -762,8 +851,158 @@ export async function runWarmChromeCheckProof(
 			profile_dir: profile.realPath,
 			profile_owner: profile.owner,
 			profile_permissions: profile.mode,
+			credential_posture: projectCredentialPosture(credentialPosture),
 		},
 	};
+}
+
+export type ProfilePostureReason = Extract<
+	WarmChromeCheckReason,
+	| "save_control_enabled"
+	| "autofill_control_enabled"
+	| "sync_enabled"
+	| "stored_login_present"
+	| "save_prompt_observed"
+	| "controls_unproven"
+>;
+
+export function resolveProfilePostureReason(
+	posture: Awaited<ReturnType<WarmChromeRuntime["inspectCredentialPosture"]>>,
+): ProfilePostureReason | null {
+	const configurationReason = resolveProfileConfigurationReason(posture);
+	if (configurationReason !== null) {
+		return configurationReason;
+	}
+	if (posture.effective.observation !== "running-chrome") {
+		return "controls_unproven";
+	}
+	if (posture.effective.savePrompt === "observed") {
+		return "save_prompt_observed";
+	}
+	if (posture.effective.saveCapability === "enabled") {
+		return "save_control_enabled";
+	}
+	if (posture.effective.fillExposure === "source-present") {
+		return "stored_login_present";
+	}
+	if (posture.effective.syncState === "enabled") {
+		return "sync_enabled";
+	}
+	if (
+		posture.effective.saveCapability !== "disabled" ||
+		posture.effective.fillExposure !== "no-source" ||
+		posture.effective.syncState !== "disabled" ||
+		posture.effective.savePrompt !== "suppressed"
+	) {
+		return "controls_unproven";
+	}
+	return null;
+}
+
+export function resolveProfileConfigurationReason(
+	posture: Awaited<ReturnType<WarmChromeRuntime["inspectCredentialPosture"]>>,
+): ProfilePostureReason | null {
+	if (posture.disk.storedLogin === "present") {
+		return "stored_login_present";
+	}
+	if (posture.disk.saveSetting === "enabled") {
+		return "save_control_enabled";
+	}
+	if (posture.disk.autoSignInSetting === "enabled") {
+		return "autofill_control_enabled";
+	}
+	if (posture.disk.syncSetting === "enabled") {
+		return "sync_enabled";
+	}
+	if (
+		posture.disk.saveSetting !== "disabled" ||
+		posture.disk.autoSignInSetting !== "disabled" ||
+		posture.disk.syncSetting !== "disabled" ||
+		(posture.disk.storedLogin !== "absent" &&
+			posture.disk.storedLogin !== "live-observed-absent") ||
+		posture.process.disableSyncSwitch !== "present" ||
+		posture.process.disableExtensionsSwitch !== "present"
+	) {
+		return "controls_unproven";
+	}
+	return null;
+}
+
+function projectCredentialPosture(
+	posture: Awaited<ReturnType<WarmChromeRuntime["inspectCredentialPosture"]>>,
+): Record<string, unknown> {
+	const state = projectCredentialPostureState(posture);
+	return {
+		state,
+		disk: {
+			save_setting: posture.disk.saveSetting,
+			auto_signin_setting: posture.disk.autoSignInSetting,
+			sync_setting: posture.disk.syncSetting,
+			stored_login: posture.disk.storedLogin,
+		},
+		process: {
+			disable_sync_switch: posture.process.disableSyncSwitch,
+			disable_extensions_switch: posture.process.disableExtensionsSwitch,
+		},
+		effective:
+			posture.effective.observation === "not-observed"
+				? { observation: "not-observed" }
+				: {
+						observation: "running-chrome",
+						save_capability: posture.effective.saveCapability,
+						fill_exposure: posture.effective.fillExposure,
+						sync_state: posture.effective.syncState,
+						save_prompt: posture.effective.savePrompt,
+						observer: {
+							source: posture.effective.observer.source,
+							browser_pid: posture.effective.observer.browserPid,
+							port: posture.effective.observer.port,
+							profile_match: posture.effective.observer.profileMatch,
+							observed_at_ms: posture.effective.observer.observedAtMs,
+						},
+					},
+	};
+}
+
+function projectCredentialPostureState(
+	posture: Awaited<ReturnType<WarmChromeRuntime["inspectCredentialPosture"]>>,
+): "live-clean" | "configuration-only" | "unsafe" | "unproven" {
+	if (
+		posture.disk.storedLogin === "present" ||
+		posture.disk.saveSetting === "enabled" ||
+		posture.disk.autoSignInSetting === "enabled" ||
+		posture.disk.syncSetting === "enabled" ||
+		(posture.effective.observation === "running-chrome" &&
+			(posture.effective.saveCapability === "enabled" ||
+				posture.effective.fillExposure === "source-present" ||
+				posture.effective.syncState === "enabled" ||
+				posture.effective.savePrompt === "observed"))
+	) {
+		return "unsafe";
+	}
+	if (
+		posture.disk.saveSetting !== "disabled" ||
+		posture.disk.autoSignInSetting !== "disabled" ||
+		posture.disk.syncSetting !== "disabled" ||
+		(posture.disk.storedLogin !== "absent" &&
+			posture.disk.storedLogin !== "live-observed-absent") ||
+		posture.process.disableSyncSwitch !== "present" ||
+		posture.process.disableExtensionsSwitch !== "present"
+	) {
+		return "unproven";
+	}
+	if (posture.effective.observation === "not-observed") {
+		return "configuration-only";
+	}
+	if (
+		posture.effective.saveCapability !== "disabled" ||
+		posture.effective.fillExposure !== "no-source" ||
+		posture.effective.syncState !== "disabled" ||
+		posture.effective.savePrompt !== "suppressed"
+	) {
+		return "unproven";
+	}
+	return "live-clean";
 }
 
 /**

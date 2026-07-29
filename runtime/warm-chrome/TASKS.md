@@ -30,7 +30,7 @@ Verification.
 
 ## Current Priority
 
-Implementation U1-U8 closed on 2026-07-03. Sixteen stations, redaction proofs,
+Implementation U1-U8 closed on 2026-07-03. Nineteen stations, redaction proofs,
 entrypoint gate membership, and docs-drift are live. The browser-use switchover
 closed on 2026-07-04 and the interim delegator retired on 2026-07-16 (migration
 cleanup U5/KTD6): browser entry reaches this package only through
@@ -46,7 +46,7 @@ skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 
 ## Now
 
-- (empty)
+No active P0/P1 work.
 
 ## Next
 

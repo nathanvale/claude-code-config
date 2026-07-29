@@ -26,6 +26,7 @@ import {
 	warmChromeContracts,
 	warmChromeExitCodes,
 	warmChromeFailureActions,
+	warmChromeMutatingExitCodes,
 	warmChromeSuccessActions,
 } from "../src/command-contract.ts";
 
@@ -70,12 +71,19 @@ describe("warm-chrome command contract (U2 R2/R3)", () => {
 	});
 
 	test("every command declares baseline 0/1/2 plus package-owned 20 (R3)", () => {
-		for (const command of WARM_CHROME_COMMANDS) {
+		for (const command of ["check", "status"] as const) {
 			expect(
 				Object.keys(warmChromeContracts[command].exitCodes).sort(
 					(a, b) => Number(a) - Number(b),
 				),
 			).toEqual(["0", "1", "2", "20"]);
+		}
+		for (const command of MUTATING_COMMANDS) {
+			expect(
+				Object.keys(warmChromeContracts[command].exitCodes).sort(
+					(a, b) => Number(a) - Number(b),
+				),
+			).toEqual(["0", "1", "2", "20", "21"]);
 		}
 		expect(WARM_CHROME_BROWSER_ENTRY_EXIT_CODE).toBe("20");
 		// Exit-20 meaning is agent-visible and carries the no-adapter-fallback
@@ -149,10 +157,10 @@ describe("warm-chrome help flag surface (U2)", () => {
 			"verifies only",
 		);
 		expect(warmChromeContracts.launch.flags["--profile"]?.description).toContain(
-			"create and chmod",
+			"external human continuation",
 		);
 		expect(warmChromeContracts.repair.flags["--profile"]?.description).toContain(
-			"rewrite local profile",
+			"external human continuation",
 		);
 		const chromeFlag = Object.entries(warmChromeContracts.launch.flags).find(
 			([flag]) => flag === "--chrome",
@@ -176,6 +184,17 @@ describe("warm-chrome help flag surface (U2)", () => {
 			"--chrome",
 		);
 		expect(Object.keys(warmChromeContracts.launch.flags)).toContain("--chrome");
+	});
+
+	test("profile creation has no self-attested approval input and the public CLI stays noninteractive", () => {
+		for (const command of ["check", "status", ...MUTATING_COMMANDS] as const) {
+			expect(Object.keys(warmChromeContracts[command].flags)).not.toContain(
+				"--approve-profile-creation",
+			);
+		}
+		expect(warmChromeContracts.launch.interactivity).toBe("none");
+		expect(warmChromeContracts.repair.interactivity).toBe("none");
+		expect(warmChromeMutatingExitCodes["21"]).toContain("Human action");
 	});
 });
 
@@ -273,6 +292,10 @@ describe("warm-chrome write preview honesty (U2)", () => {
 });
 
 describe("warm-chrome discovery projection (U2 R14)", () => {
+	test("profile-posture shape change is carried by schema 2", () => {
+		expect(WARM_CHROME_SCHEMA_VERSION).toBe("2");
+	});
+
 	test("exposes all four commands, exit 20 with its meaning, capability_roles, and the result contract id", () => {
 		const tree = projectWarmChromeCommandDiscoveryTree();
 		expect(Object.keys(tree.commands).sort()).toEqual([
