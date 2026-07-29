@@ -68,7 +68,7 @@ For each connector in `.productivity.yml`:
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
 | `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
-| `teams` (via notion-search) | Same probe as `notion`; if missing → ❌ |
+| `teams` (local cache) | `~/.claude/skills/teams/.venv` exists → ⚠️ "run bootstrap.sh" if missing; else `teams_cli.py doctor --json` returns ok → ❌ if not |
 | `imessage` | Confirm `mcp__*imessage*sync_archive` OR `~/.claude/skills/imessage-reader/scripts/query-imessage.ts` exists; if neither → ❌ |
 | `github` | `gh auth status` exits 0; if not → ❌ |
 | `none` | Skip silently — not an error |
@@ -84,7 +84,7 @@ Pre-flight (2026-05-11 13:15):
   ✅ github (gh authed as nathanvale-bunnings)
   ❌ calendar (microsoft-365) — no Graph MCP tool loaded; skipping
   ❌ email (microsoft-365) — no Graph MCP tool loaded; skipping
-  ⚠️  chat (teams via notion-search) — usable; deferred unless --deep
+  ✅ chat (teams local cache)
 
 Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 ```
@@ -404,7 +404,13 @@ Chat is now part of default mode when configured. Reasoning: in projects where `
 - Deep mode (see below): expands to 7d for retrospective scan.
 
 **Sources by `chat:` value:**
-- `chat: teams` — Microsoft Teams via Notion's connected-source search (`notion-search` with Teams as the source). Notion indexes Teams content under the user's account if the connector is set up. Falls back to skipping if Notion search returns no Teams results.
+- `chat: teams` — Microsoft Teams via the local `teams` skill (`~/.claude/skills/teams`), which reads the on-machine Teams v2 IndexedDB cache read-only (no Graph API, no Notion, no network to Microsoft). Dispatch via its CLI (`skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py <command> --json`):
+  - **Windowed pull:** `digest --hours <N> --json` where `N` = hours since `cursor.chat.last_sync` (fallback 24). This is the default-mode chat window. Each message object in `data[]` carries `time` (ISO timestamp), `author` (display name), `creator_mri` (stable identity — use this for attribution), `content` (message text), `conversation_id`, `from_me`, and `message_id`.
+  - **Ticket cross-reference:** for each `POS-NNNN` in the active sprint, `ticket POS-NNNN --json` returns every mention chronologically — more reliable than substring search. Treat an empty `data[]` as "no mentions cached" (normal — older tickets predate the cache window), not an error.
+  - **Attribution:** read `creator_mri` from the JSON, never `author` — display names collide. This is load-bearing given the two-Nathans split (see `project_gift_card_api_backend_pod.md`); Nathan Vale and Nathan Liu appear in the same digest with distinct MRIs (Vale = `8:orgid:f8e08355-…`, per the store's `whoami`). Run `disambiguate "Nathan"` / `whois <query>` if an MRI is unfamiliar, before ledgering any commitment.
+  - **Freshness:** the newest messages lag until Teams flushes its LevelDB memtable — keep Teams running for a current cache; a missing recent message is usually lag, not absence.
+  - Falls back to skip-with-note if `.venv` is missing (`bootstrap.sh` not yet run) or `doctor` reports the store unavailable.
+  - **Indexing order (fast path first):** if this run will use `qmd search`/`qmd query` over the corpus (deep mode, or any historical lookup), run `teams sync` (BM25-only, fast) **before** chat extraction so keyword search is live. Do **not** embed vectors here — the vector pass is slow and is deferred to the end of the skill (see the closing "Refresh vectors" step). Default-mode `digest`/`ticket` read the live cache directly and need no `sync` at all.
 - `chat: slack` — Slack MCP if available (`mcp__slack__*`). Falls back to skip-with-note if not installed.
 - `chat: none` (or omitted) — skip silently, no warning.
 
@@ -1390,6 +1396,16 @@ If findings is **non-empty** (drift remains):
 - ❌ Continuing to fire the trailer after `enabled_until` has passed — the gate is mandatory; silently keeping training wheels on forever defeats the purpose of the auto-disable
 - ❌ Surfacing every drift finding equally — the `Recommended` line should name the single most load-bearing finding (typically active-sprint-identity > unsurfaced-assignee-ticket > section-mismatch). The user clicks `/heal-skill` once per session, not once per finding
 
+### 12. Refresh chat vectors (deferred, last)
+
+If `chat: teams` is configured **and** this run touched the corpus (ran `teams sync`, i.e. a deep run or any historical lookup), run the deferred vector-embedding pass as the **final action of the skill**, after the report is rendered:
+
+```
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py embed --json
+```
+
+Rationale (measured 2026-07-29): `teams sync` refreshes the BM25 index (fast, sub-second) so keyword search is live during the run, but vector embedding is the slow step. Deferring `embed` to the very end means it never blocks signal extraction, ticket cross-referencing, or the report. It is incremental, so it is cheap when little changed. Skip this step entirely if the run did no `teams sync` (default-mode `digest`/`ticket` read the live cache and never touch the corpus). Never run `embed` mid-flow, and never call `qmd query` before this step has completed on a fresh corpus (vectors would be stale — `qmd search` is the correct engine until then).
+
 ## Deep Mode (`--deep`)
 
 Everything in Default Mode, plus a deep scan of recent activity.
@@ -1397,7 +1413,7 @@ Everything in Default Mode, plus a deep scan of recent activity.
 ### Extra Step: Scan Activity Sources
 
 Gather data from all configured MCP sources (reference the **productivity-connectors** skill):
-- **Chat (deep):** Expand window to 7d (vs 24h default), include channels not on the project allowlist, include reactions / threads. Default-mode chat already covers signal extraction; deep mode is for retrospective scans (e.g. "what did the team discuss about voucher 1.5 last week?").
+- **Chat (deep):** Expand window to 7d (vs 24h default), include channels not on the project allowlist, include reactions / threads. Default-mode chat already covers signal extraction; deep mode is for retrospective scans (e.g. "what did the team discuss about voucher 1.5 last week?"). For `chat: teams`, prefer the **fast** paths (per the teams skill's retrieval router): `search "<kw>" --since <7d-ago> [--from <name>] --json` for recent keyword recall (live cache), and `qmd search "<kw>" -c teams` for fast keyword recall over older history the live cache has aged out (~0.5s, durable corpus). Only escalate to `qmd query "<question>" -c teams` when a keyword search comes back empty and the question is genuinely semantic — it is slow (10-160s) and must never run inside a tight sync loop. Use `history "<channel>" --since <7d-ago>` for full channel replay.
 - **Sent email:** Search sent messages for commitments made
 - **Documents:** List recently touched docs
 - **Calendar:** Expand to full week scan (vs 2+3 day default)

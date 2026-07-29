@@ -208,11 +208,17 @@ class CorpusWriter:
                 "skipped": self.skipped}
 
 
-def reindex(corpus_dir: Path, *, embed: bool = True) -> dict:
+def reindex(corpus_dir: Path, *, update: bool = True, embed: bool = True) -> dict:
     """Refresh the QMD index over the corpus so new notes become searchable.
 
     Run from inside the corpus directory: ``qmd collection add`` resolves paths
     relative to cwd, and ``qmd update`` scopes its work the same way.
+
+    Two independent steps, so callers can order them by cost:
+      - ``update`` (BM25 index) is cheap and makes ``qmd search`` live immediately.
+      - ``embed`` (vector embeddings) is the slow step; defer it so it never blocks
+        a sync. ``reindex(embed=False)`` runs BM25 only; ``reindex(update=False)``
+        runs the deferred vector pass on its own (the standalone ``embed`` command).
 
     Note ``qmd update`` re-scans every registered collection, not just this one,
     which is why this is an explicit step on ``sync`` rather than a silent side
@@ -228,7 +234,7 @@ def reindex(corpus_dir: Path, *, embed: bool = True) -> dict:
         return {"ok": False, "reason": f"corpus directory not found: {corpus_dir}"}
 
     steps: list[dict] = []
-    for name, argv in (("update", ["qmd", "update"]),
+    for name, argv in (("update", ["qmd", "update"]) if update else (None, None),
                        ("embed", ["qmd", "embed"]) if embed else (None, None)):
         if name is None:
             continue

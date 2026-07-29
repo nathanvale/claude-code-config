@@ -407,9 +407,28 @@ class TeamsReader:
         return msgs[:limit]
 
     # ---- CAP 2: search --------------------------------------------------------
-    def search(self, query: str, limit: int = 50) -> list[Message]:
+    def search(self, query: str, limit: int = 50, *,
+               since: datetime | None = None, until: datetime | None = None,
+               sender: str | None = None) -> list[Message]:
+        """Substring search over cached messages, with optional frontmatter-style filters.
+
+        `since`/`until` bound `m.time` (inclusive). `sender` matches a case-insensitive
+        substring of the author display name OR an exact `creator_mri` — the latter is the
+        collision-proof way to scope to one person when a display name is shared by several.
+        """
         ql = query.lower()
-        hits = [m for m in self.iter_messages() if ql in m.content.lower() or ql in m.author.lower()]
+        sl = sender.lower() if sender else None
+        hits = []
+        for m in self.iter_messages():
+            if ql not in m.content.lower() and ql not in m.author.lower():
+                continue
+            if since and (m.time is None or m.time < since):
+                continue
+            if until and (m.time is None or m.time > until):
+                continue
+            if sl and sl not in m.author.lower() and (m.creator_mri or "").lower() != sl:
+                continue
+            hits.append(m)
         hits.sort(key=lambda m: m.time or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return hits[:limit]
 

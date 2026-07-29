@@ -47,8 +47,8 @@ COMMANDS: list[dict] = [
      "summary": "Recent activity in watched channels.",
      "usage": "digest [--hours N] [--limit N]"},
     {"name": "search", "group": "read", "heuristic": False,
-     "summary": "Full-text search across all cached messages.",
-     "usage": "search <query> [--limit N]"},
+     "summary": "Full-text search across all cached messages, with optional date/sender filters.",
+     "usage": "search <query> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--from NAME|MRI] [--limit N]"},
     {"name": "mentions", "group": "read", "heuristic": False,
      "summary": "Messages that @mention you.",
      "usage": "mentions [--unread] [--limit N]"},
@@ -68,9 +68,14 @@ COMMANDS: list[dict] = [
      "summary": "Messages containing code or pre blocks.",
      "usage": "code [--channel NAME] [--limit N]"},
     {"name": "sync", "group": "corpus", "heuristic": False,
-     "summary": "Backfill every cached message into the markdown corpus for "
-                "indexing. Incremental via a cursor; --full rewrites.",
-     "usage": "sync [--full] [--save-dir PATH]"},
+     "summary": "Backfill every cached message into the markdown corpus and refresh "
+                "the BM25 index (fast). Vector embedding is deferred — pass --embed "
+                "to include it, or run `embed` afterwards. Incremental; --full rewrites.",
+     "usage": "sync [--full] [--embed] [--no-index] [--save-dir PATH]"},
+    {"name": "embed", "group": "corpus", "heuristic": False,
+     "summary": "Run the deferred vector-embedding pass on its own. Call at the end "
+                "of a batch so slow embedding never blocks the sync.",
+     "usage": "embed [--save-dir PATH]"},
     {"name": "unread", "group": "read", "heuristic": False,
      "summary": "Unread activity-feed items and conversations. Note: the cache "
                 "keeps no per-message read horizon.",
@@ -315,7 +320,10 @@ def cmd_digest(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
 
 
 def cmd_search(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
-    messages = reader.search(args.query, limit=args.limit)
+    messages = reader.search(
+        args.query, limit=args.limit,
+        since=parse_date(args.since), until=parse_date(args.until),
+        sender=args.sender)
     if not args.json:
         print_messages(reader, messages, f"Search {args.query!r}")
     return msg_rows(messages)
@@ -455,9 +463,13 @@ def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
 
     # Re-index so the notes just written are actually searchable. A corpus QMD
     # has not seen is invisible, which defeats the point of writing it.
+    # BM25 (`qmd update`) only by default — it is fast and makes keyword search
+    # (`qmd search`) live immediately. Vector embedding (`qmd embed`) is the slow
+    # step; it is deferred so it never blocks a sync. Pass --embed to run both, or
+    # run the standalone `embed` command afterwards (e.g. at the end of a batch).
     index = None
     if writer.written and not args.no_index:
-        index = reindex(writer.dir)
+        index = reindex(writer.dir, embed=args.embed)
         if not index["ok"]:
             warn(f"corpus written but reindex failed: {index.get('reason') or index}")
 
@@ -477,6 +489,25 @@ def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
             print(f"  indexed : {'yes' if index['ok'] else 'FAILED'}")
         elif writer.written:
             print("  indexed : skipped (--no-index)")
+    return data
+
+
+def cmd_embed(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    """Run the deferred vector-embedding pass on its own.
+
+    `sync` writes notes and refreshes the BM25 index (fast) but skips embedding by
+    default. Call this at the end of a batch (e.g. the tail of a productivity sync)
+    to bring vectors current without ever blocking the sync's real work. Embedding
+    is incremental, so this is cheap when little changed.
+    """
+    writer = _ACTIVE.get("writer") or CorpusWriter(args.save_dir)
+    result = reindex(writer.dir, update=False, embed=True)
+    if not result["ok"]:
+        warn(f"embed failed: {result.get('reason') or result}")
+    data = {"corpus_dir": str(writer.dir), "embed": result}
+    if not args.json:
+        print(f"Embed (vectors) : {'ok' if result['ok'] else 'FAILED'}")
+        print(f"  corpus : {writer.dir}")
     return data
 
 
@@ -588,6 +619,7 @@ HANDLERS = {
     "unread": cmd_unread,
     "reactions": cmd_reactions,
     "sync": cmd_sync,
+    "embed": cmd_embed,
     "people": cmd_people,
     "whois": cmd_whois,
     "whoami": cmd_whoami,
@@ -708,6 +740,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("search", "Full-text search across all cached messages.")
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--since", default=None, help="only messages at/after YYYY-MM-DD")
+    p.add_argument("--until", default=None, help="only messages at/before YYYY-MM-DD")
+    p.add_argument("--from", dest="sender", default=None,
+                   help="filter by author name substring or exact creator_mri")
 
     p = add("mentions", "Messages that @mention you.")
     p.add_argument("--unread", action="store_true")
@@ -740,6 +776,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rewrite the whole corpus, ignoring the cursor")
     p.add_argument("--no-index", action="store_true",
                    help="skip the QMD reindex after writing")
+    p.add_argument("--embed", action="store_true",
+                   help="also run vector embedding now (slow); default is BM25-only, "
+                        "with embedding deferred to the standalone `embed` command")
+
+    add("embed", "Run the deferred vector-embedding pass on the corpus.")
 
     p = add("unread", "Unread activity-feed items and conversations.")
     p.add_argument("--limit", type=int, default=50)

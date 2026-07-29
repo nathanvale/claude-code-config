@@ -23,25 +23,74 @@ If `.venv` does not exist, run `skills/teams/scripts/bootstrap.sh` first
 ## Searching: use QMD, not `search`
 
 Every message read is saved as a markdown note in `~/.local/share/teams/` and
-indexed as the `teams` QMD collection. **For anything semantic, query QMD** —
-it does BM25 + vector + reranking. The CLI's `search` is a substring match and
-should only be used for exact strings (an id, a URL, a specific error).
+also indexed as the `teams` QMD collection. There are **three retrieval engines**;
+pick by the shape of the question, not by habit.
+
+### Retrieval router
+
+| You want… | Use | Why |
+|---|---|---|
+| An exact string, ticket key, or **recent** message (last days/weeks) | `search "<text>"` / `ticket <KEY>` / `digest [--hours N]` | Direct **live-cache** read. Fast enough (~sub-second to a few seconds) and catches fresh messages not yet in the corpus. |
+| Keyword recall on recent chat, scoped by date or person | `search "<kw>" --since YYYY-MM-DD [--until …] [--from NAME\|MRI]` | Live-cache substring with frontmatter-equivalent filters (`m.time`, author, `creator_mri`). The default for scoped **recent** keyword lookups. |
+| **Fast** keyword recall over **months** of history | `qmd search "<kw>" -c teams` | BM25 over the durable corpus. **Sub-second**, and retains messages the live cache has already aged out. Fastest historical path. |
+| A **meaning-based** question over months — paraphrases, "who worried about X" | `qmd query "<question>" -c teams` | Vector + rerank. The **only** engine that finds paraphrases, but **10s–160s** per call. Deep one-shot recall only. |
+
+**Fast path wins — route by speed, then reach for semantics only when you must.**
+Measured on this corpus (formal A/B, 2026-07-29):
+
+- **Direct CLI** (`search`/`digest`/`ticket`) — reads the **live cache**, ~sub-second
+  to a few seconds. Catches fresh and not-yet-corpused messages. Can miss history that
+  has aged out of the cache. **Default for anything recent.**
+- **`qmd search` (BM25)** — reads the **durable corpus**, **~0.5s**. Retains aged-out
+  history the live cache dropped, and is ~10× faster than the direct CLI for old
+  keyword lookups. **Use it for fast historical keyword recall.** (This is a real niche:
+  it beats the CLI on old messages and beats `qmd query` on speed.)
+- **`qmd query` (vector+rerank)** — **10s–160s**, wildly variable. The only engine that
+  recalls paraphrases with no shared keyword. **Never wire into a sync/batch path** —
+  reserve for deep, one-shot "find where someone said X" questions where waiting is fine.
+
+Rule of thumb: try the **fast** path first (direct CLI for recent, `qmd search` for old),
+and escalate to `qmd query` only when a keyword search comes back empty and the question
+is genuinely about meaning, not words.
+
+**`qmd query` returns references, not attribution — always resolve before quoting.**
+A hit gives you the message's file path (`qmd://teams/YYYY/MM/…​.md:NN`), the date
+(in the path), a text snippet, and a score — but **not** the author, `from_mri`,
+`conversation`, or exact timestamp. Those live in the note's frontmatter. Before you
+attribute or ledger a semantic hit, run `qmd get "<path>"` on it and read the
+frontmatter (`from`, `from_mri`, `conversation`, `sent_at`, `direction`). This
+two-step is what keeps QMD recall attribution-safe when a display name is shared —
+never quote a `qmd query` snippet's implied speaker without the `qmd get` resolve.
 
 ```bash
+# semantic recall over the whole corpus
 qmd query "who raised concerns about the deploy" -c teams
 qmd query "bulk print decisions" -c teams -c repo-pos-yellow   # chat + project docs
+
+# scoped keyword recall — fast, deterministic
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py \
+  search "deploy" --since 2026-07-20 --from "Sonny" --json
 ```
 
-Scope with `-c teams` for "what did someone say". Repeat the flag to widen;
+Scope QMD with `-c teams` for "what did someone say". Repeat the flag to widen;
 comma-separated names do **not** work. Leave it off only for genuine
 cross-source questions — the collection is ~9,000 short chat messages and will
 otherwise outweigh curated docs on general queries.
 
-Frontmatter carries `from_mri`, `conversation`, `sent_at` and `direction`, so
-retrieved notes can be filtered or attributed without re-reading the store.
+Note frontmatter carries `from_mri`, `conversation`, `sent_at` and `direction`,
+so retrieved notes can be filtered or attributed without re-reading the store.
 
-`sync` re-indexes automatically after writing. If notes seem missing from
-search results, run it — or `cd ~/.local/share/teams && qmd update && qmd embed`.
+`sync` refreshes the **BM25 index only** after writing (fast) — so `qmd search -c
+teams` is live immediately, but **vector embeddings are deferred**. Run vectors as a
+separate, slow step at the end of a batch: `teams embed` (or `sync --embed` to do both
+at once, or `cd ~/.local/share/teams && qmd embed` by hand). This is deliberate: a
+freshly-synced corpus is keyword-searchable at once, and the expensive embed never
+blocks the sync. Until `embed` runs, `qmd query` (vector) may miss the newest messages
+while `qmd search` (BM25) already has them.
+
+(The collection is registered as `teams` → `~/.local/share/teams`; if `qmd query
+-c teams` ever returns nothing, confirm with `qmd collection show teams` that its
+path is the corpus root and not a phantom subdirectory.)
 
 ## Choosing a Command
 
@@ -56,8 +105,10 @@ Common routes:
 | Ask | Command |
 |-----|---------|
 | what happened recently | `digest [--hours N]` |
-| find a message by meaning | **`qmd query "..." -c teams`** (see above) |
-| find an exact string | `search "<text>"` |
+| find an exact string (recent) | `search "<text>"` |
+| keyword recall on recent chat, scoped | `search "<kw>" --since YYYY-MM-DD [--from NAME\|MRI]` |
+| fast keyword recall over months | `qmd search "<kw>" -c teams` (durable corpus, ~0.5s) |
+| find a message by meaning over months | `qmd query "..." -c teams` (slow, 10-160s; see router above) |
 | backfill + reindex the corpus | `sync` |
 | who pinged me | `mentions [--unread]` |
 | what is waiting | `unread` |
