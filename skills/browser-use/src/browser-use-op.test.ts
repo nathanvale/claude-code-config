@@ -19,6 +19,7 @@ import {
 	buildLoginItemListCommand,
 	buildVaultListCommand,
 	createOpTokenRetrievalPort,
+	mintDeferredCredentialCapability,
 	projectLoginItemGetOutput,
 	projectLoginItemListOutput,
 	projectVaultListOutput,
@@ -83,6 +84,29 @@ function executorOf(outcome: BrowserUseOpExecutionOutcome): {
 	};
 	return { calls, execute };
 }
+
+describe("deferred environment capability", () => {
+	test("mints an opaque handle without executing OP", () => {
+		expect(
+			mintDeferredCredentialCapability({
+				binding: baseBinding(),
+				field: "password",
+				mint: ({ field }) => ({
+					handle_id: "deferred-field-1",
+					field,
+					expires_at_epoch_ms: 5_000,
+				}),
+			}),
+		).toEqual({
+			ok: true,
+			handle: {
+				handle_id: "deferred-field-1",
+				field: "password",
+				expires_at_epoch_ms: 5_000,
+			},
+		});
+	});
+});
 
 const EXPECTED_ENV = {
 	token_env_key: "OP_SERVICE_ACCOUNT_TOKEN",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	mkdtempSync,
 	mkdirSync,
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	buildBrowserUseDist,
+	validateBrowserUseNativeExecutable,
 	validateShippedRunbookCatalog,
 } from "./build-dist";
 
@@ -38,6 +40,20 @@ function writeRunbook(
 }
 
 describe("browser-use dist catalog validation", () => {
+	test("rejects a shell script as a native security artifact", async () => {
+		const root = mkdtempSync(join(tmpdir(), "browser-use-native-proof-"));
+		temporaryRoots.push(root);
+		const executable = join(root, "browser-use-op-supervisor");
+		writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+		chmodSync(executable, 0o755);
+		await expect(
+			validateBrowserUseNativeExecutable(
+				executable,
+				"browser-use-op-supervisor",
+			),
+		).rejects.toThrow("not Mach-O");
+	});
+
 	test("rejects any invalid shipped runbook with its catalog path", async () => {
 		const root = mkdtempSync(join(tmpdir(), "browser-use-build-catalog-"));
 		temporaryRoots.push(root);
@@ -93,6 +109,9 @@ describe("browser-use dist catalog validation", () => {
 				relativePath.split("/").slice(0, 2).join("/"),
 			);
 			expect(existsSync(join(installRoot, "runbooks"))).toBe(false);
+			expect(
+				existsSync(join(distRoot, "bin", "browser-use-op-supervisor")),
+			).toBe(true);
 
 			const child = Bun.spawn(
 				[

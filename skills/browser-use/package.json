@@ -24,7 +24,7 @@
 		}
 	},
 	"scripts": {
-		"build": "bun run src/build-dist.ts",
+		"build": "bun run --cwd=../../runtime/browser-use-environment-auth build:release && bun run src/build-dist.ts",
 		"browser-use": "./src/browser-use.ts",
 		"pack:dry-run": "bun pm pack --dry-run",
 		"prepack": "bun run build",

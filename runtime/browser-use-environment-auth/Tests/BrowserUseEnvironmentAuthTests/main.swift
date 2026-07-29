@@ -1,6 +1,10 @@
 @_spi(Testing) import BrowserUseEnvironmentAuth
+@_spi(Executor) import BrowserUseEnvironmentAuth
 import Darwin
 import Foundation
+
+@_silgen_name("fork")
+private func testFork() -> pid_t
 
 private struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -797,9 +801,446 @@ private func syncProviderAncestorBlocksBeforeValidation() throws {
     )
 }
 
+private func environmentOpAdmissionRequiresAbsoluteSupportedBinary() throws {
+    let admitted = EnvironmentOpExecutableAdmission.admit(
+        executablePath: "/opt/homebrew/bin/op",
+        versionOutput: "2.31.0\n"
+    )
+    try check(admitted == .admitted(path: "/opt/homebrew/bin/op", version: "2.31.0"),
+              "supported absolute OP executable was not admitted")
+    try check(
+        EnvironmentOpExecutableAdmission.admit(
+            executablePath: "op",
+            versionOutput: "2.31.0\n"
+        ) == .blocked(.pathNotAbsolute),
+        "relative OP executable was admitted"
+    )
+    try check(
+        EnvironmentOpExecutableAdmission.admit(
+            executablePath: "/opt/homebrew/bin/op",
+            versionOutput: "2.17.0\n"
+        ) == .blocked(.versionUnsupported),
+        "unsupported OP executable was admitted"
+    )
+}
+
+private func emitFakeOpJSON(_ value: Any) {
+    let bytes = try! JSONSerialization.data(
+        withJSONObject: value,
+        options: [.sortedKeys]
+    )
+    FileHandle.standardOutput.write(bytes)
+    FileHandle.standardOutput.write(Data([0x0a]))
+}
+
+private func runAsFakeOp() {
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    if arguments == ["--version"] {
+        if URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+            == "browser-use-fake-op-replacing"
+        {
+            let current = URL(fileURLWithPath: CommandLine.arguments[0])
+            let replacement = current.appendingPathExtension("next")
+            try! FileManager.default.copyItem(at: current, to: replacement)
+            try! FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: replacement.path
+            )
+            _ = try! FileManager.default.replaceItemAt(
+                current,
+                withItemAt: replacement
+            )
+        }
+        print("2.31.0")
+        return
+    }
+    if arguments == ["test-environment"] {
+        let environment = ProcessInfo.processInfo.environment
+        var openDescriptors: [Int32] = []
+        for descriptor in Int32(3)..<Int32(64) {
+            if fcntl(descriptor, F_GETFD) >= 0 {
+                openDescriptors.append(descriptor)
+            }
+        }
+        emitFakeOpJSON([
+            "environment_keys": environment.keys.sorted(),
+            "token_matches": environment["OP_SERVICE_ACCOUNT_TOKEN"]
+                == "ops_U2_SENTINEL_TOKEN",
+            "pid": getpid(),
+            "parent_pid": getppid(),
+            "open_descriptors": openDescriptors,
+        ])
+        return
+    }
+    if arguments == ["test-timeout"] {
+        usleep(300_000)
+        return
+    }
+    if arguments == ["test-huge"] {
+        FileHandle.standardOutput.write(Data(repeating: 65, count: 300_000))
+        return
+    }
+    if arguments == ["test-malformed"] {
+        FileHandle.standardOutput.write(Data([0xff, 0x00, 0x7b]))
+        return
+    }
+    if arguments == ["test-signal"] {
+        _ = raise(SIGTERM)
+        return
+    }
+    if arguments.count == 2, arguments[0] == "test-descendant" {
+        let descendant = testFork()
+        if descendant == 0 {
+            usleep(10_000_000)
+            _exit(0)
+        }
+        guard descendant > 0 else { Foundation.exit(41) }
+        try! String(descendant).write(
+            toFile: arguments[1],
+            atomically: true,
+            encoding: .utf8
+        )
+        usleep(5_000_000)
+        return
+    }
+    if arguments.starts(with: ["user", "get"]) {
+        emitFakeOpJSON([
+            "id": "user-1",
+            "state": "ACTIVE",
+            "email": "not-projected@example.com",
+        ])
+        return
+    }
+    if arguments.starts(with: ["vault", "list"]) {
+        emitFakeOpJSON([
+            ["id": "vault-1", "name": "not-projected"],
+        ])
+        return
+    }
+    if arguments.starts(with: ["item", "list"]) {
+        if arguments.contains("malformed") {
+            FileHandle.standardOutput.write(Data([0xff, 0x00, 0x7b]))
+            return
+        }
+        FileHandle.standardError.write(Data("ops_SECRET_STDERR_SENTINEL\n".utf8))
+        let href = arguments.contains("secret-url")
+            ? "https://portal.example.com/login?token=ops_SECRET_URL_SENTINEL"
+            : "https://portal.example.com/login"
+        emitFakeOpJSON([
+            [
+                "id": "item-1",
+                "vault": ["id": "vault-1", "name": "not-projected"],
+                "category": "LOGIN",
+                "urls": [["href": href]],
+                "title": "not-projected",
+            ],
+        ])
+        return
+    }
+    if arguments.starts(with: ["item", "get"]) {
+        if arguments.contains("stderr-secret") {
+            FileHandle.standardError.write(Data("ops_SECRET_STDERR_SENTINEL\n".utf8))
+        }
+        emitFakeOpJSON([
+            "id": arguments.count > 2 ? arguments[2] : "item-1",
+            "vault": ["id": "vault-1", "name": "not-projected"],
+            "category": "LOGIN",
+            "urls": [["href": "https://portal.example.com/login"]],
+            "title": "not-projected",
+            "fields": [
+                ["label": "password", "value": "ops_SECRET_OUTPUT_SENTINEL"],
+            ],
+        ])
+        return
+    }
+    Foundation.exit(40)
+}
+
+private func makeFakeOp(
+    name: String = "browser-use-fake-op"
+) throws -> URL {
+    let root = try makeConfigRoot()
+    let fake = root.appendingPathComponent(name)
+    try FileManager.default.copyItem(
+        at: URL(fileURLWithPath: CommandLine.arguments[0]),
+        to: fake
+    )
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: fake.path
+    )
+    return fake
+}
+
+private func withTokenDescriptor<T>(
+    _ body: (Int32) throws -> T
+) throws -> T {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let token = root.appendingPathComponent("token")
+    FileManager.default.createFile(
+        atPath: token.path,
+        contents: Data("ops_U2_SENTINEL_TOKEN".utf8),
+        attributes: [.posixPermissions: 0o600]
+    )
+    let descriptor = Darwin.open(token.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    guard descriptor >= 0 else { throw POSIXError(.ENOENT) }
+    defer { _ = Darwin.close(descriptor) }
+    return try body(descriptor)
+}
+
+private func environmentOpChildGetsOnlyExactEnvironment() throws {
+    let fake = try makeFakeOp()
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    setenv("OP_CONNECT_HOST", "https://ambient.invalid", 1)
+    setenv("OP_CONNECT_TOKEN", "ambient-connect-token", 1)
+    setenv("OP_SERVICE_ACCOUNT_TOKEN", "ambient-token", 1)
+    defer {
+        unsetenv("OP_CONNECT_HOST")
+        unsetenv("OP_CONNECT_TOKEN")
+        unsetenv("OP_SERVICE_ACCOUNT_TOKEN")
+    }
+    try withTokenDescriptor { descriptor in
+        let result = EnvironmentOpProcessRunner.run(
+            executablePath: fake.path,
+            arguments: ["test-environment"],
+            tokenDescriptor: descriptor
+        )
+        guard case let .success(output) = result,
+              let object = try JSONSerialization.jsonObject(with: Data(output.stdout))
+                as? [String: Any]
+        else {
+            throw TestFailure(description: "fake OP exact-environment probe failed")
+        }
+        let environmentKeys = object["environment_keys"] as? [String] ?? []
+        try check(
+            environmentKeys == [
+                "LANG",
+                "OP_SERVICE_ACCOUNT_TOKEN",
+                "PATH",
+                // CoreFoundation synthesizes this process-local locale key at
+                // startup even when execve receives the three-entry envp.
+                "__CF_USER_TEXT_ENCODING",
+            ],
+            "fake OP inherited an ambient environment key: \(environmentKeys)"
+        )
+        try check(
+            object["token_matches"] as? Bool == true,
+            "fake OP did not receive the fixed descriptor token"
+        )
+        try check(
+            (object["parent_pid"] as? NSNumber)?.int32Value == getpid(),
+            "an intermediate process appeared between supervisor and OP"
+        )
+        try check(
+            object["open_descriptors"] as? [Int] == [],
+            "fake OP inherited an unrelated descriptor"
+        )
+    }
+}
+
+private func environmentOpOutputIsBoundedAndProjected() throws {
+    let fake = try makeFakeOp()
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    try withTokenDescriptor { descriptor in
+        let projected = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemGet(vaultID: "vault-1", itemID: "item-1"),
+            tokenDescriptor: descriptor
+        )
+        let text = String(decoding: projected, as: UTF8.self)
+        try check(text.contains("\"ok\":true"), "valid item metadata was blocked")
+        try check(!text.contains("SECRET"), "secret-bearing OP output escaped projection")
+        try check(!text.contains("title"), "non-allowlisted item metadata escaped projection")
+
+        try check(
+            EnvironmentOpProcessRunner.run(
+                executablePath: fake.path,
+                arguments: ["test-timeout"],
+                tokenDescriptor: descriptor,
+                timeoutMilliseconds: 25
+            ) == .blocked(.timeout),
+            "OP timeout was not typed"
+        )
+        try check(
+            EnvironmentOpProcessRunner.run(
+                executablePath: fake.path,
+                arguments: ["test-huge"],
+                tokenDescriptor: descriptor,
+                maximumStdoutBytes: 32_768
+            ) == .blocked(.outputTooLarge),
+            "oversize OP output was not typed"
+        )
+        try check(
+            EnvironmentOpProcessRunner.run(
+                executablePath: fake.path,
+                arguments: ["test-signal"],
+                tokenDescriptor: descriptor
+            ) == .blocked(.processSignalled),
+            "OP signal was not typed"
+        )
+        let malformed = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemList(vaultID: "malformed"),
+            tokenDescriptor: descriptor,
+            timeoutMilliseconds: 1_000
+        )
+        try check(
+            String(decoding: malformed, as: UTF8.self)
+                .contains("\"code\":\"output-shape-invalid\""),
+            "malformed metadata was not classified without byte relay"
+        )
+        let secretURL = EnvironmentOpSupervisor.executeMetadata(
+            executablePath: fake.path,
+            operation: .itemList(vaultID: "secret-url"),
+            tokenDescriptor: descriptor
+        )
+        let secretURLText = String(decoding: secretURL, as: UTF8.self)
+        try check(
+            secretURLText.contains("\"code\":\"output-shape-invalid\"")
+                && !secretURLText.contains("SECRET_URL"),
+            "secret-bearing metadata crossed the native projection"
+        )
+    }
+}
+
+private func environmentOpReplacementBlocksBeforeTokenUse() throws {
+    let fake = try makeFakeOp(name: "browser-use-fake-op-replacing")
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    try withTokenDescriptor { descriptor in
+        let result = EnvironmentOpSupervisor
+            .executeIdentityBoundMetadataForTesting(
+            executablePath: fake.path,
+            operation: .vaultList,
+            tokenDescriptor: descriptor
+        )
+        let text = String(decoding: result, as: UTF8.self)
+        try check(
+            text.contains("\"code\":\"op-executable-unavailable\""),
+            "OP replacement during admission was not blocked"
+        )
+    }
+}
+
+private func environmentOpTimeoutKillsTokenBearingDescendants() throws {
+    let fake = try makeFakeOp()
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    let pidFile = fake.deletingLastPathComponent().appendingPathComponent("descendant.pid")
+    try withTokenDescriptor { descriptor in
+        let result = EnvironmentOpProcessRunner.run(
+            executablePath: fake.path,
+            arguments: ["test-descendant", pidFile.path],
+            tokenDescriptor: descriptor,
+            timeoutMilliseconds: 1_000
+        )
+        try check(result == .blocked(.timeout), "descendant probe did not time out")
+        guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
+              let descendant = Int32(text)
+        else {
+            throw TestFailure(description: "descendant PID evidence was not written")
+        }
+        var gone = false
+        for _ in 0..<50 {
+            if kill(descendant, 0) < 0, errno == ESRCH {
+                gone = true
+                break
+            }
+            usleep(10_000)
+        }
+        try check(gone, "token-bearing OP descendant survived group cleanup")
+    }
+}
+
+private func environmentOpOfficialIdentityBlocksUnapprovedBinary() throws {
+    let fake = try makeFakeOp()
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    try withTokenDescriptor { descriptor in
+        let result = EnvironmentOpSupervisor.executeAdmittedMetadata(
+            executablePath: fake.path,
+            operation: .vaultList,
+            tokenDescriptor: descriptor
+        )
+        try check(
+            String(decoding: result, as: UTF8.self)
+                .contains("\"code\":\"op-path-unapproved\""),
+            "unapproved OP path reached the token execution boundary"
+        )
+    }
+}
+
+private func installedOfficialEnvironmentOpPassesPinnedIdentity() throws {
+    let candidates = ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
+    guard let installed = candidates.first(where: {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }) else {
+        return
+    }
+    guard case .admitted = EnvironmentOpSupervisor
+        .admitOfficialExecutableForTesting(executablePath: installed)
+    else {
+        throw TestFailure(
+            description: "installed official OP failed pinned identity admission"
+        )
+    }
+}
+
+private func environmentOpValidatorUsesReceivedDescriptor() throws {
+    let fake = try makeFakeOp()
+    defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+    let configRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: configRoot) }
+
+    var sockets: [Int32] = [0, 0]
+    guard socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0 else {
+        throw POSIXError(.ENOTSOCK)
+    }
+    let done = DispatchSemaphore(value: 0)
+    let server = sockets[1]
+    DispatchQueue.global().async {
+        defer {
+            _ = Darwin.close(server)
+            done.signal()
+        }
+        guard let descriptor = try? EnvironmentOpSupervisor.receiveTokenDescriptor(
+            socket: server
+        ) else {
+            let response = Array("no\n".utf8)
+            _ = response.withUnsafeBytes {
+                Darwin.write(server, $0.baseAddress, response.count)
+            }
+            return
+        }
+        defer { _ = Darwin.close(descriptor) }
+        let approved = EnvironmentOpSupervisor.validateStagedTokenForTesting(
+            executablePath: fake.path,
+            tokenDescriptor: descriptor
+        )
+        let response = approved ? Array("ok\n".utf8) : Array("no\n".utf8)
+        _ = response.withUnsafeBytes {
+            Darwin.write(server, $0.baseAddress, response.count)
+        }
+    }
+    var token = Array("ops_U2_SENTINEL_TOKEN".utf8)
+    let result = installForTest(
+        configRoot: configRoot.path,
+        tokenBytes: &token,
+        validatorDescriptor: sockets[0],
+        replacing: false
+    )
+    _ = Darwin.close(sockets[0])
+    try check(done.wait(timeout: .now() + 3) == .success, "native validator stalled")
+    try check(result.state == .installed, "native validator rejected valid OP scope")
+}
+
 @main
 enum BrowserUseEnvironmentAuthTests {
     static func main() throws {
+        if URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+            .hasPrefix("browser-use-fake-op")
+        {
+            runAsFakeOp()
+            return
+        }
         _ = signal(SIGPIPE, SIG_IGN)
         let tests: [(String, () throws -> Void)] = [
             (
@@ -840,6 +1281,38 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "sync-provider ancestor blocks before validation",
                 syncProviderAncestorBlocksBeforeValidation
+            ),
+            (
+                "environment OP admission requires absolute supported binary",
+                environmentOpAdmissionRequiresAbsoluteSupportedBinary
+            ),
+            (
+                "environment OP child gets only exact environment",
+                environmentOpChildGetsOnlyExactEnvironment
+            ),
+            (
+                "environment OP output is bounded and projected",
+                environmentOpOutputIsBoundedAndProjected
+            ),
+            (
+                "environment OP replacement blocks before token use",
+                environmentOpReplacementBlocksBeforeTokenUse
+            ),
+            (
+                "environment OP timeout kills token-bearing descendants",
+                environmentOpTimeoutKillsTokenBearingDescendants
+            ),
+            (
+                "environment OP official identity blocks unapproved binary",
+                environmentOpOfficialIdentityBlocksUnapprovedBinary
+            ),
+            (
+                "installed official environment OP passes pinned identity",
+                installedOfficialEnvironmentOpPassesPinnedIdentity
+            ),
+            (
+                "environment OP validator uses received descriptor",
+                environmentOpValidatorUsesReceivedDescriptor
             ),
         ]
         for (name, test) in tests {

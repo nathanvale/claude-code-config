@@ -9,11 +9,22 @@ let package = Package(
             name: "browser-use-token-custody",
             targets: ["BrowserUseTokenCustody"]
         ),
+        .executable(
+            name: "browser-use-op-supervisor",
+            targets: ["BrowserUseEnvironmentOpSupervisor"]
+        ),
     ],
     targets: [
-        .target(name: "BrowserUseEnvironmentAuth"),
+        .target(
+            name: "BrowserUseEnvironmentAuth",
+            linkerSettings: [.linkedFramework("CryptoKit")]
+        ),
         .executableTarget(
             name: "BrowserUseTokenCustody",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .executableTarget(
+            name: "BrowserUseEnvironmentOpSupervisor",
             dependencies: ["BrowserUseEnvironmentAuth"]
         ),
         .executableTarget(

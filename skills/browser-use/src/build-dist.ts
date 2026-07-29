@@ -22,6 +22,19 @@ import {
 } from "./browser-use-runbook-model";
 
 const defaultSkillRoot = join(import.meta.dir, "..");
+const NATIVE_EXECUTABLES = [
+	"browser-use-token-custody",
+	"browser-use-op-supervisor",
+] as const;
+const ownedNativeBinaryRoot = join(
+	defaultSkillRoot,
+	"..",
+	"..",
+	"runtime",
+	"browser-use-environment-auth",
+	".build",
+	"release",
+);
 const SHIPPED_RUNBOOK_PATH =
 	/^([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/runbook\.json$/;
 
@@ -153,6 +166,43 @@ export type BrowserUseDistBuildOptions = {
 	log?: (message: string) => void;
 };
 
+/** Prove one owned release artifact is the expected linker-signed Mach-O. */
+export async function validateBrowserUseNativeExecutable(
+	path: string,
+	expectedIdentifier: string,
+): Promise<void> {
+	const stats = await lstat(path);
+	if (!stats.isFile() || stats.isSymbolicLink() || (stats.mode & 0o111) === 0) {
+		throw new Error(
+			`Native Browser Use executable is not a regular executable file: ${path}`,
+		);
+	}
+	const bytes = await readFile(path);
+	const magic = bytes.subarray(0, 4).toString("hex");
+	if (!["cffaedfe", "cafebabe", "bebafeca"].includes(magic)) {
+		throw new Error(`Native Browser Use executable is not Mach-O: ${path}`);
+	}
+	const inspection = Bun.spawn(
+		["/usr/bin/codesign", "-d", "--verbose=4", path],
+		{ env: {}, stdout: "pipe", stderr: "pipe" },
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(inspection.stdout).text(),
+		new Response(inspection.stderr).text(),
+		inspection.exited,
+	]);
+	const receipt = `${stdout}\n${stderr}`;
+	if (
+		exitCode !== 0 ||
+		!receipt.includes(`Identifier=${expectedIdentifier}`) ||
+		!receipt.includes("Signature=adhoc")
+	) {
+		throw new Error(
+			`Native Browser Use executable identity is invalid: ${path}`,
+		);
+	}
+}
+
 /**
  * Build and prove the complete Browser Use package payload.
  *
@@ -174,9 +224,11 @@ export async function buildBrowserUseDist(
 ): Promise<ShippedRunbookCatalogValidation & { distRoot: string }> {
 	const skillRoot = options.skillRoot ?? defaultSkillRoot;
 	const distRoot = options.distRoot ?? join(skillRoot, "dist");
+	const nativeBinaryRoot = ownedNativeBinaryRoot;
 	const log = options.log ?? console.log;
 	const shippedRunbooksSource = join(skillRoot, "runbooks");
 	const shippedRunbooksDist = join(distRoot, "runbooks");
+	const nativeDist = join(distRoot, "bin");
 	const entrypoints = ["browser-use.ts"].map((entrypoint) =>
 		join(skillRoot, "src", entrypoint),
 	);
@@ -185,6 +237,11 @@ export async function buildBrowserUseDist(
 			(entrypoint) => `${basename(entrypoint, ".ts")}.js`,
 		),
 	);
+
+	for (const executable of NATIVE_EXECUTABLES) {
+		const source = join(nativeBinaryRoot, executable);
+		await validateBrowserUseNativeExecutable(source, executable);
+	}
 
 	const sourceCatalog = await validateShippedRunbookCatalog(
 		shippedRunbooksSource,
@@ -214,6 +271,12 @@ export async function buildBrowserUseDist(
 	await cp(shippedRunbooksSource, shippedRunbooksDist, {
 		recursive: true,
 	});
+	await mkdir(nativeDist, { recursive: false });
+	for (const executable of NATIVE_EXECUTABLES) {
+		const destination = join(nativeDist, executable);
+		await cp(join(nativeBinaryRoot, executable), destination);
+		await chmod(destination, 0o755);
+	}
 	const distCatalog = await validateShippedRunbookCatalog(
 		shippedRunbooksDist,
 	);
@@ -225,12 +288,16 @@ export async function buildBrowserUseDist(
 
 	const distEntries = await readdir(distRoot);
 	const unexpected = distEntries.filter(
-		(entry) => !expectedDistFiles.has(entry) && entry !== "runbooks",
+		(entry) =>
+			!expectedDistFiles.has(entry) &&
+			entry !== "runbooks" &&
+			entry !== "bin",
 	);
 	const missing = [...expectedDistFiles].filter(
 		(entry) => !distEntries.includes(entry),
 	);
 	if (!distEntries.includes("runbooks")) missing.push("runbooks");
+	if (!distEntries.includes("bin")) missing.push("bin");
 	if (missing.length > 0 || unexpected.length > 0) {
 		throw new Error(
 			`Unexpected browser-use dist payload. missing=${missing.join(",") || "none"} unexpected=${unexpected.join(",") || "none"}`,
@@ -238,7 +305,7 @@ export async function buildBrowserUseDist(
 	}
 
 	for (const entry of distEntries) {
-		if (entry === "runbooks") continue;
+		if (entry === "runbooks" || entry === "bin") continue;
 		const distPath = join(distRoot, entry);
 		const stats = await lstat(distPath);
 		if (!stats.isFile()) {
@@ -261,11 +328,26 @@ export async function buildBrowserUseDist(
 		}
 		await chmod(distPath, 0o755);
 	}
+	const nativeEntries = await readdir(nativeDist);
+	if (
+		nativeEntries.length !== NATIVE_EXECUTABLES.length ||
+		NATIVE_EXECUTABLES.some((entry) => !nativeEntries.includes(entry))
+	) {
+		throw new Error(
+			`Unexpected native Browser Use payload: ${nativeEntries.sort().join(",")}`,
+		);
+	}
+	for (const executable of nativeEntries) {
+		await validateBrowserUseNativeExecutable(
+			join(nativeDist, executable),
+			executable,
+		);
+	}
 
 	log(
 		`Built browser-use dist: ${[...expectedDistFiles]
 			.map((entry) => relative(skillRoot, join(distRoot, entry)))
-			.join(", ")} runbooks=${distCatalog.runbookCount} catalog_sha256=${distCatalog.digest}`,
+			.join(", ")} native=${NATIVE_EXECUTABLES.join(",")} runbooks=${distCatalog.runbookCount} catalog_sha256=${distCatalog.digest}`,
 	);
 	return { ...distCatalog, distRoot };
 }

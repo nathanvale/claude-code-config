@@ -291,6 +291,37 @@ export type BrowserUseSecretHandle = {
 	expires_at_epoch_ms: number;
 };
 
+/**
+ * Validate one field request and mint only its deferred delivery capability.
+ *
+ * This path builds the exact permitted command as an admission check, but it
+ * never executes OP. The native delivery owner consumes the opaque handle.
+ */
+export function mintDeferredCredentialCapability(input: {
+	binding: BrowserUseItemBinding;
+	field: BrowserUseOpCredentialField;
+	mint: (value: {
+		binding: BrowserUseItemBinding;
+		field: BrowserUseOpCredentialField;
+	}) => BrowserUseSecretHandle;
+}):
+	| { ok: true; handle: BrowserUseSecretHandle }
+	| {
+			ok: false;
+			rejection: { code: "field-not-permitted"; message: string };
+	  } {
+	const permitted = buildCredentialFieldCommand({
+		token_handle_id: "deferred-environment-token",
+		binding: input.binding,
+		field: input.field,
+	});
+	if (!permitted.ok) return permitted;
+	return {
+		ok: true,
+		handle: input.mint({ binding: input.binding, field: input.field }),
+	};
+}
+
 /** Closed op failure vocabulary the executor reports. */
 export const BROWSER_USE_OP_FAILURE_CODES = [
 	"capability-missing",

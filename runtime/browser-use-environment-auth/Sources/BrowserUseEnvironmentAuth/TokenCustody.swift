@@ -439,6 +439,46 @@ private func openAndProveToken(
     }
 }
 
+/// Open the fixed admitted token for an immediate native child handoff.
+///
+/// The caller receives only a descriptor. It must never read the bytes in the
+/// supervisor process; the forked wrapper child reads and immediately execs
+/// the official OP executable.
+@_spi(Executor)
+public func openEnvironmentTokenDescriptor(configRoot: String) throws -> Int32 {
+    let paths = try TokenCustodyPaths(configRoot: configRoot)
+    let configDescriptor = try openAdmittedConfigRoot(paths.configRoot)
+    defer { closeIfOpen(configDescriptor) }
+    guard let custodyDescriptor = try openCustodyDirectory(
+        configDescriptor: configDescriptor,
+        paths: paths,
+        create: false,
+        backupExclusionProof: .production
+    ) else {
+        throw TokenCustodyCause.tokenMissing
+    }
+    defer { closeIfOpen(custodyDescriptor) }
+    guard (try removalEntries(custodyDescriptor)).isEmpty,
+          (try stagingEntries(custodyDescriptor)).isEmpty,
+          let (tokenDescriptor, _) = try openAndProveToken(
+              directoryDescriptor: custodyDescriptor,
+              paths: paths,
+              backupExclusionProof: .production
+          )
+    else {
+        throw TokenCustodyCause.tokenUnsafe
+    }
+    return tokenDescriptor
+}
+
+@_spi(Executor)
+public func proveEnvironmentTokenDescriptor(_ descriptor: Int32) -> Bool {
+    guard fcntl(descriptor, F_GETFL) & O_ACCMODE == O_RDONLY else {
+        return false
+    }
+    return (try? proveTokenDescriptor(descriptor)) != nil
+}
+
 private func writeAll(_ descriptor: Int32, bytes: [UInt8]) throws {
     var offset = 0
     while offset < bytes.count {
