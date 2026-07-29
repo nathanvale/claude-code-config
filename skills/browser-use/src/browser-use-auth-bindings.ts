@@ -12,11 +12,13 @@
 // ---------------------------------------------------------------------------
 
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
+import type { BrowserUseEnvironmentTokenCustodyState } from "./browser-use-environment-token";
 import {
 	type BrowserUseAuthBlockedCause,
 	type BrowserUseAuthContinuation,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 } from "./browser-use-auth-model";
+import type { ProductAdmissionResult } from "@side-quest/browser-use-security";
 
 // --- Vocabularies (ADR 0029) ----------------------------------------------------
 
@@ -49,6 +51,55 @@ export const BROWSER_USE_BINDING_STALE_STATES = [
 /** Stale state union. */
 export type BrowserUseBindingStaleState =
 	(typeof BROWSER_USE_BINDING_STALE_STATES)[number];
+
+/**
+ * One immutable command's selected credential lane.
+ *
+ * The port remains attached to the evidence that admitted it, so status and
+ * execution cannot independently re-probe or select different lanes.
+ */
+export type BrowserUseAuthLaneAdmission<Port> =
+	| {
+			kind: "signed-admitted";
+			evidence: {
+				lane: "signed-native";
+				assurance: "signed-native";
+				native: Extract<ProductAdmissionResult, { verdict: "admitted" }>;
+			};
+			tokenRetrieval: Port;
+	  }
+	| {
+			kind: "environment-admitted";
+			evidence: {
+				lane: "environment-injected-op";
+				assurance: "lower-assurance";
+				native: Extract<
+					ProductAdmissionResult,
+					{ verdict: "native-capability-absent" }
+				>;
+				environment: Extract<
+					BrowserUseEnvironmentTokenCustodyState,
+					{ state: "ready" }
+				>;
+			};
+			tokenRetrieval: Port;
+	  }
+	| {
+			kind: "blocked";
+			cause: {
+				code:
+					| "native-not-admitted"
+					| "native-probe-failed"
+					| "native-executor-failed"
+					| "environment-token-not-ready"
+					| "environment-probe-failed"
+					| "environment-executor-failed";
+			};
+			evidence: {
+				native?: ProductAdmissionResult;
+				environment?: BrowserUseEnvironmentTokenCustodyState;
+			};
+	  };
 
 // --- Secret-shape guard (D3: single public owner for all U3a modules) -----------
 

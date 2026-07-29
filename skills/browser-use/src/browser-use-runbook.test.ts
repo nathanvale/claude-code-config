@@ -2168,6 +2168,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 				ok: false,
 				message:
 					"the runbook lane's live sensitive-interval delivery is not wired yet.",
+				admission_code: "native-not-admitted",
 			});
 			const outcome = await runRunbook(
 				{ fs: createDefaultPlatformFs(), runtime, dataRoot, authDelivery: seam },
@@ -2186,6 +2187,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			expect(outcome.refusal.code).toBe(
 				"runbook_confidential_delivery_unavailable",
 			);
+			expect(outcome.refusal.admission_code).toBe("native-not-admitted");
 			// No browser command dispatched: the engine refused before the executor.
 			expect(runtime.calls).toHaveLength(0);
 		}),

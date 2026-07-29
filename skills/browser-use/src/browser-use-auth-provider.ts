@@ -36,6 +36,7 @@ import type {
 } from "./browser-use-confidential-field-delivery";
 import {
 	type BrowserUseAuthContext,
+	type BrowserUseAuthLaneAdmission,
 	type BrowserUseBindingRepairHint,
 	type BrowserUseBindingStaleState,
 	type BrowserUseImportCandidate,
@@ -94,7 +95,10 @@ import type { BrowserUseLeasePayload } from "./browser-use-schemas";
  */
 export type BrowserUseAuthProviderDeps = {
 	store: RunStoreDeps;
-	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	admission: Exclude<
+		BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>,
+		{ kind: "blocked" }
+	>;
 	attestationByDigest: BrowserUseAuthContractDeps["attestationByDigest"];
 };
 
@@ -383,6 +387,8 @@ function retrievalBlock(
 export function createBrowserUseAuthProvider(
 	deps: BrowserUseAuthProviderDeps,
 ): BrowserUseAuthProvider {
+	const tokenRetrieval = deps.admission.tokenRetrieval;
+
 	function integrationPortFor(claim: LeaseWriteClaim): BrowserUseRunIntegrationPort {
 		return createRunIntegrationPort(
 			deps.store,
@@ -433,7 +439,7 @@ export function createBrowserUseAuthProvider(
 		}
 
 		// Gate 2 — token gate: a Port rejection blocks before ANY discovery.
-		const vaults = await deps.tokenRetrieval.listVaults();
+		const vaults = await tokenRetrieval.listVaults();
 		if (!vaults.ok) return retrievalBlock(vaults.rejection, repairHint);
 
 		// Gate 3 — vault-scope proof (R8/AE2): 0 or 2+ visible vaults fail
@@ -462,7 +468,7 @@ export function createBrowserUseAuthProvider(
 			}
 			// Gate 4 — exact bound-item read (R11): never a rescan, never an
 			// auto-selected replacement.
-			const read = await deps.tokenRetrieval.getLoginItem({
+			const read = await tokenRetrieval.getLoginItem({
 				vault_id: input.binding.vault_id,
 				item_id: input.binding.item_id,
 			});
@@ -503,7 +509,7 @@ export function createBrowserUseAuthProvider(
 
 		// Gate 5 — first bind: one discovery, then the single-owner match
 		// policy. The hint ranks; it never authorizes (SD1).
-		const listed = await deps.tokenRetrieval.listLoginItems({
+		const listed = await tokenRetrieval.listLoginItems({
 			vault_id: scope.vault_id,
 		});
 		if (!listed.ok) return retrievalBlock(listed.rejection, repairHint);
@@ -584,7 +590,7 @@ export function createBrowserUseAuthProvider(
 					rejection: { code: "binding-shape-invalid", message: refusal },
 				};
 			}
-			const fetched = await deps.tokenRetrieval.fetchCredentialField(input);
+			const fetched = await tokenRetrieval.fetchCredentialField(input);
 			if (fetched.ok) return { ok: true, handle: fetched.handle };
 			// D6: missing-token is illegal in phase sensitive-interval; every
 			// mid-interval retrieval failure is capability-loss.
@@ -675,7 +681,7 @@ export function createBrowserUseAuthProvider(
 				in_sensitive_interval: input.in_sensitive_interval,
 				binding: input.binding,
 				target: input.target,
-				tokenRetrieval: deps.tokenRetrieval,
+				tokenRetrieval,
 				deliver: input.deliver,
 				reproveTarget: input.reproveTarget,
 				field_by_ref: input.field_by_ref,

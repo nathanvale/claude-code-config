@@ -78,7 +78,7 @@ async function makeStoreDeps(
 	return { fs, paths: opened.paths, clock };
 }
 
-type TokenPort = BrowserUseAuthProviderDeps["tokenRetrieval"];
+type TokenPort = BrowserUseAuthProviderDeps["admission"]["tokenRetrieval"];
 type PreparationInput = Parameters<BrowserUseAuthProvider["prepareSecretFree"]>[0];
 type ItemBinding = NonNullable<PreparationInput["binding"]>;
 type VaultItemEvidence = Extract<
@@ -92,6 +92,24 @@ type TokenPortScript = {
 	getLoginItem?: Awaited<ReturnType<TokenPort["getLoginItem"]>>;
 	fetchCredentialField?: Awaited<ReturnType<TokenPort["fetchCredentialField"]>>;
 };
+
+function environmentAdmission(
+	port: TokenPort,
+): BrowserUseAuthProviderDeps["admission"] {
+	return {
+		kind: "environment-admitted",
+		evidence: {
+			lane: "environment-injected-op",
+			assurance: "lower-assurance",
+			native: { verdict: "native-capability-absent" },
+			environment: {
+				state: "ready",
+				next_action: "validate-service-account",
+			},
+		},
+		tokenRetrieval: port,
+	};
+}
 
 // In-memory Port closure with per-method call counting (spec test idiom).
 function makeTokenPort(script: TokenPortScript = {}): {
@@ -167,7 +185,7 @@ async function makeProvider(script: TokenPortScript = {}): Promise<{
 	const { port, calls, total } = makeTokenPort(script);
 	const provider = createBrowserUseAuthProvider({
 		store,
-		tokenRetrieval: port,
+		admission: environmentAdmission(port),
 		attestationByDigest: () => undefined,
 	});
 	return { provider, store, calls, total, clock };
@@ -1085,7 +1103,7 @@ describe("commitWithClaim (throw -> typed refusal, D8)", () => {
 		const { port } = makeTokenPort();
 		const provider = createBrowserUseAuthProvider({
 			store,
-			tokenRetrieval: port,
+			admission: environmentAdmission(port),
 			attestationByDigest: () => undefined,
 		});
 		const created = await createSharedRun(
@@ -1142,7 +1160,7 @@ describe("commitWithClaim (throw -> typed refusal, D8)", () => {
 		const { port } = makeTokenPort();
 		const provider = createBrowserUseAuthProvider({
 			store,
-			tokenRetrieval: port,
+			admission: environmentAdmission(port),
 			attestationByDigest: () => undefined,
 		});
 		const created = await createSharedRun(store, baseRun());

@@ -12,10 +12,18 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
+import type { BrowserUseAuthLaneAdmission } from "./browser-use-auth-bindings";
+import {
+	type BrowserUseEnvironmentOpMetadataOperation,
+	buildEnvironmentOpMetadataInvocation,
+	createEnvironmentOpTokenRetrievalPort,
+	parseEnvironmentOpMetadataResult,
+} from "./browser-use-environment-op-executor";
 import {
 	type BrowserUseOpExecute,
 	type BrowserUseTokenRetrievalPort,
@@ -69,7 +77,19 @@ export type BrowserUseSecuritySeam = {
 		execute: BrowserUseOpExecute;
 		token_handle_id: string;
 	};
+	/**
+	 * Lower-assurance lane. It is consulted only after the native admission
+	 * runtime proves that the signed product is absent.
+	 */
+	environment?: {
+		inspectToken: () => Promise<BrowserUseEnvironmentTokenCustodyState>;
+		createTokenRetrieval: () => BrowserUseTokenRetrievalPort;
+	};
 };
+
+/** Command-scoped lane evidence paired with the only port it admits. */
+export type BrowserUseAuthAdmissionSnapshot =
+	BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>;
 
 /** Secret-free native lifecycle request; input names a channel, never bytes. */
 export type BrowserUseEnvironmentTokenLifecycleRequest = {
@@ -92,7 +112,10 @@ export type BrowserUseEnvironmentTokenLifecyclePort = {
  * verdict and throws a typed error if a future miswiring ever calls it, so the
  * absent path can never silently mint a port over a non-existent executor.
  */
-function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
+function createNativeAbsentSecuritySeam(
+	runtime: BrowserUseRuntime,
+): BrowserUseSecuritySeam {
+	const lifecycle = runtime.environmentTokenLifecycle;
 	return {
 		admission: createNativeAbsentRuntime(),
 		createTokenExecutor: () => {
@@ -100,30 +123,112 @@ function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
 				"native token executor is absent; the signed Browser Use Security product is not installed.",
 			);
 		},
+		environment: {
+			inspectToken: async () => {
+				if (lifecycle === undefined) {
+					throw new Error("environment token lifecycle is unavailable");
+				}
+				return lifecycle.execute({ action: "status" });
+			},
+			createTokenRetrieval: () =>
+				createNativeEnvironmentTokenRetrievalPort(runtime.env, runtime.now),
+		},
 	};
 }
 
 /**
- * Construct the runtime's Token Retrieval Port ONLY when the native seam admits
- * the product. Any non-`admitted` verdict (including the default
- * `native-capability-absent`) leaves the port undefined so the auth command
- * keeps returning the typed absent state. Never throws: a seam probe that
- * rejects — whether the admission probe, `createTokenExecutor()`, or port
- * construction — is treated as absence, fail-closed. Executor/port construction
- * stays inside the guard so an admitted seam whose `createTokenExecutor()`
- * throws (the exact miswiring the native-absent seam's typed throw surfaces)
- * yields absence, never an escaping rejection the CLI awaits unguarded.
+ * Capture one command's lane decision.
+ *
+ * Signed admission wins. Only typed native absence may inspect the environment
+ * token. Native drift, probe failure, and executor failure remain distinct
+ * blocks and never trigger fallback.
  */
-async function resolveAuthTokenRetrieval(
+async function resolveAuthAdmission(
 	seam: BrowserUseSecuritySeam,
-): Promise<BrowserUseTokenRetrievalPort | undefined> {
+): Promise<BrowserUseAuthAdmissionSnapshot> {
+	let native: Awaited<ReturnType<AdmissionRuntime["verifyProduct"]>>;
 	try {
-		const verdict = await seam.admission.verifyProduct();
-		if (verdict.verdict !== "admitted") return undefined;
-		const { execute, token_handle_id } = seam.createTokenExecutor();
-		return createOpTokenRetrievalPort({ execute, token_handle_id });
+		native = await seam.admission.verifyProduct();
 	} catch {
-		return undefined;
+		return {
+			kind: "blocked",
+			cause: { code: "native-probe-failed" },
+			evidence: {},
+		};
+	}
+	if (native.verdict === "not-admitted") {
+		return {
+			kind: "blocked",
+			cause: { code: "native-not-admitted" },
+			evidence: { native },
+		};
+	}
+	if (native.verdict === "admitted") {
+		try {
+			const { execute, token_handle_id } = seam.createTokenExecutor();
+			const tokenRetrieval = createOpTokenRetrievalPort({
+				execute,
+				token_handle_id,
+			});
+			return {
+				kind: "signed-admitted",
+				evidence: {
+					lane: "signed-native",
+					assurance: "signed-native",
+					native,
+				},
+				tokenRetrieval,
+			};
+		} catch {
+			return {
+				kind: "blocked",
+				cause: { code: "native-executor-failed" },
+				evidence: { native },
+			};
+		}
+	}
+	if (seam.environment === undefined) {
+		return {
+			kind: "blocked",
+			cause: { code: "environment-probe-failed" },
+			evidence: { native },
+		};
+	}
+	let environment: BrowserUseEnvironmentTokenCustodyState;
+	try {
+		environment = await seam.environment.inspectToken();
+	} catch {
+		return {
+			kind: "blocked",
+			cause: { code: "environment-probe-failed" },
+			evidence: { native },
+		};
+	}
+	if (environment.state !== "ready") {
+		return {
+			kind: "blocked",
+			cause: { code: "environment-token-not-ready" },
+			evidence: { native, environment },
+		};
+	}
+	try {
+		const tokenRetrieval = seam.environment.createTokenRetrieval();
+		return {
+			kind: "environment-admitted",
+			evidence: {
+				lane: "environment-injected-op",
+				assurance: "lower-assurance",
+				native,
+				environment,
+			},
+			tokenRetrieval,
+		};
+	} catch {
+		return {
+			kind: "blocked",
+			cause: { code: "environment-executor-failed" },
+			evidence: { native, environment },
+		};
 	}
 }
 
@@ -164,6 +269,11 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/**
+	 * One admission decision captured during production runtime construction.
+	 * Every consumer receives this same object and selected port.
+	 */
+	authAdmission?: BrowserUseAuthAdmissionSnapshot;
 	/**
 	 * Native local-token lifecycle. Token bytes remain in inherited stdin or
 	 * the native hidden terminal; TypeScript receives only the secret-free
@@ -206,38 +316,31 @@ export function createDefaultBrowserUseRuntime(
 }
 
 /**
- * Production runtime construction with native-capability wiring (auth plan
- * U3a/U3b). Builds the default runtime, then queries the native security seam:
- * only an `admitted` product yields a real Token Retrieval Port. On this
- * machine the product is unsigned/absent, so `authTokenRetrieval` stays
- * undefined and the public auth command keeps returning the typed
- * `native-capability-absent` evaluation — byte-identical to today. An explicit
- * `overrides.authTokenRetrieval` (or a caller-supplied port) is honored as-is
- * and never overwritten by the seam probe.
+ * Build one production command runtime and capture its admission snapshot.
  *
- * Kept separate from the synchronous {@link createDefaultBrowserUseRuntime} so
- * the sync factory (and every test that constructs it) is unchanged; the
- * seam probe is async and lives only on this production path.
+ * Runtime overrides cannot mint production admission. Tests that need a lane
+ * inject its evidence through the security seam.
  *
- * @param overrides - Partial runtime overrides, same shape the sync factory takes
- * @param seam - The native security seam; defaults to the native-absent placeholder
+ * @param overrides - Partial non-admission runtime overrides
+ * @param seam - Injectable signed/environment security seam
  */
 export async function createProductionBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
-	seam: BrowserUseSecuritySeam = createNativeAbsentSecuritySeam(),
+	seam?: BrowserUseSecuritySeam,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
-	// Honor an explicitly injected port; otherwise let the seam decide. Absence
-	// leaves the field undefined so the auth command reports typed absence.
-	if (runtime.authTokenRetrieval === undefined) {
-		const port = await resolveAuthTokenRetrieval(seam);
-		if (port !== undefined) runtime.authTokenRetrieval = port;
-	}
 	if (runtime.environmentTokenLifecycle === undefined) {
 		runtime.environmentTokenLifecycle = createNativeEnvironmentTokenLifecyclePort(
 			runtime.env,
 		);
 	}
+	runtime.authAdmission = await resolveAuthAdmission(
+		seam ?? createNativeAbsentSecuritySeam(runtime),
+	);
+	runtime.authTokenRetrieval =
+		runtime.authAdmission.kind === "blocked"
+			? undefined
+			: runtime.authAdmission.tokenRetrieval;
 	return runtime;
 }
 
@@ -323,6 +426,93 @@ function fixedOpExecutablePath(): string {
 			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
 			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
 	return preferred.find((path) => existsSync(path)) ?? preferred[0];
+}
+
+function environmentMetadataFailure() {
+	return {
+		ok: false as const,
+		rejection: {
+			code: "io-failure" as const,
+			message: "native OP metadata execution failed.",
+		},
+	};
+}
+
+async function executeNativeEnvironmentMetadata(
+	env: Record<string, string | undefined>,
+	operation: BrowserUseEnvironmentOpMetadataOperation,
+) {
+	try {
+		const resolved = resolveBrowserUsePaths(env);
+		if (!resolved.ok) return environmentMetadataFailure();
+		const invocation = buildEnvironmentOpMetadataInvocation({
+			supervisor_path: join(
+				browserUseNativeBinRoot(),
+				"browser-use-op-supervisor",
+			),
+			op_path: fixedOpExecutablePath(),
+			config_root: resolved.resolution.roots.config,
+			operation,
+		});
+		const child = Bun.spawn(
+			[invocation.executable_path, ...invocation.argv],
+			{
+				env: invocation.env,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const stdoutPromise = readBoundedNativeOutput(child.stdout);
+		const stderrPromise = readBoundedNativeOutput(child.stderr);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOut = await Promise.race([
+			child.exited.then(() => false),
+			new Promise<true>((resolve) => {
+				timer = setTimeout(
+					() => resolve(true),
+					NATIVE_LIFECYCLE_TIMEOUT_MS,
+				);
+			}),
+		]);
+		if (timer !== undefined) clearTimeout(timer);
+		if (timedOut) {
+			void Promise.allSettled([stdoutPromise, stderrPromise]);
+			await terminateEnvironmentTokenLifecycleProcess(child);
+			return {
+				ok: false as const,
+				rejection: {
+					code: "timeout" as const,
+					message: "native OP metadata execution timed out.",
+				},
+			};
+		}
+		const exitCode = await child.exited;
+		const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
+		if (child.signalCode != null) return environmentMetadataFailure();
+		const parsed = parseEnvironmentOpMetadataResult(JSON.parse(stdout));
+		const expectedExitCode = parsed.ok ? 0 : 20;
+		return exitCode === expectedExitCode
+			? parsed
+			: environmentMetadataFailure();
+	} catch {
+		return environmentMetadataFailure();
+	}
+}
+
+function createNativeEnvironmentTokenRetrievalPort(
+	env: Record<string, string | undefined>,
+	now: () => number,
+): BrowserUseTokenRetrievalPort {
+	return createEnvironmentOpTokenRetrievalPort({
+		executeMetadata: (operation) =>
+			executeNativeEnvironmentMetadata(env, operation),
+		mintCapability: ({ field }) => ({
+			handle_id: `environment-${randomUUID()}`,
+			field,
+			expires_at_epoch_ms: now() + 60_000,
+		}),
+	});
 }
 
 async function readBoundedNativeOutput(

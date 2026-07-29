@@ -462,6 +462,10 @@ describe("repair-item-binding over an injected port (R11 targeted read)", () => 
 	test("a live exact item evaluates binding-live with redacted evidence", async () => {
 		const runtime = makeRuntime({
 			authTokenRetrieval: fakePort({
+				listVaults: async () => ({
+					ok: true,
+					vaults: [{ vault_id: "vault-1" }],
+				}),
 				getLoginItem: async (input) => ({
 					ok: true,
 					item: evidenceItem("item-1", { vault_id: input.vault_id }),
@@ -501,6 +505,10 @@ describe("repair-item-binding over an injected port (R11 targeted read)", () => 
 	test("a missing item is the revoked-binding cause with the self continuation", async () => {
 		const runtime = makeRuntime({
 			authTokenRetrieval: fakePort({
+				listVaults: async () => ({
+					ok: true,
+					vaults: [{ vault_id: "vault-1" }],
+				}),
 				getLoginItem: async () => ({
 					ok: false,
 					rejection: rejection("item-missing"),
@@ -528,6 +536,40 @@ describe("repair-item-binding over an injected port (R11 targeted read)", () => 
 		});
 		expect(envelope.continuation.next_action_id).toBe("repair-item-binding");
 	});
+
+	test("a caller-selected second vault blocks before the item read", async () => {
+		let itemReads = 0;
+		const runtime = makeRuntime({
+			authTokenRetrieval: fakePort({
+				listVaults: async () => ({
+					ok: true,
+					vaults: [{ vault_id: "vault-1" }, { vault_id: "vault-2" }],
+				}),
+				getLoginItem: async () => {
+					itemReads += 1;
+					throw new Error("must not read outside proven vault scope");
+				},
+			}),
+		});
+		const result = await runForTest(
+			[
+				"auth",
+				"repair-item-binding",
+				"--vault-id",
+				"vault-2",
+				"--item-id",
+				"item-1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "invalid-vault-scope",
+			blocked_cause: "invalid-vault-scope",
+			detail: { visible_count: 2 },
+		});
+		expect(itemReads).toBe(0);
+	});
 });
 
 describe("request-binding-selection-grant over an injected port (R20)", () => {
@@ -542,6 +584,10 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 	test("the candidate set projects with ordinals; signing stays broker-owned", async () => {
 		const runtime = makeRuntime({
 			authTokenRetrieval: fakePort({
+				listVaults: async () => ({
+					ok: true,
+					vaults: [{ vault_id: "vault-1" }],
+				}),
 				listLoginItems: async () => ({
 					ok: true,
 					// A stale second candidate proves per-item state projects
@@ -570,6 +616,40 @@ describe("request-binding-selection-grant over an injected port (R20)", () => {
 		expect(envelope.continuation.next_action_id).toBe(
 			"acquire-native-capability",
 		);
+	});
+
+	test("a vault id outside the single visible grant blocks before discovery", async () => {
+		let discoveryCalls = 0;
+		const runtime = makeRuntime({
+			authTokenRetrieval: fakePort({
+				listVaults: async () => ({
+					ok: true,
+					vaults: [{ vault_id: "vault-1" }],
+				}),
+				listLoginItems: async () => {
+					discoveryCalls += 1;
+					throw new Error("must not discover outside proven vault scope");
+				},
+			}),
+		});
+		const result = await runForTest(
+			[
+				"auth",
+				"request-binding-selection-grant",
+				"--vault-id",
+				"vault-2",
+				"--json",
+			],
+			runtime,
+		);
+		expect(envelopeOf(result.stdout).data.evaluation).toMatchObject({
+			status: "invalid-vault-scope",
+			detail: {
+				visible_count: 1,
+				requested_vault_matches: false,
+			},
+		});
+		expect(discoveryCalls).toBe(0);
 	});
 });
 

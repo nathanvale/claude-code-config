@@ -70,6 +70,7 @@ import {
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
 import type { BrowserUseRunStructuredResult } from "./browser-use-run-model";
+import { validateTimesheetRunbookInputs } from "./browser-use-timesheet-run-contract";
 
 // --- Discovery location ------------------------------------------------------
 
@@ -502,6 +503,7 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_confidential_native_capability_absent"
 		| "runbook_confidential_delivery_unavailable";
 	message: string;
+	admission_code?: string;
 };
 
 /**
@@ -518,7 +520,7 @@ export type BrowserUseRunbookExecutionRefusal = {
  */
 export type BrowserUseRunbookAuthDeliveryOutcome =
 	| { ok: true; context: AgentBrowserAuthDeliveryContext }
-	| { ok: false; message: string };
+	| { ok: false; message: string; admission_code?: string };
 
 export type BrowserUseRunbookAuthDelivery = (input: {
 	pendingItemBindings: readonly string[];
@@ -616,6 +618,27 @@ export type BrowserUseGenerationBindingIdentity = {
 	governed_input_artifact_ref?: string;
 };
 
+function runbookInputAtPath(
+	inputs: BrowserUseRunbookInputs,
+	path: string,
+): unknown {
+	const [root, ...segments] = path.split(".");
+	if (root === undefined || !Object.hasOwn(inputs, root)) return undefined;
+	let value: unknown = inputs[root];
+	for (const segment of segments) {
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			Array.isArray(value) ||
+			!Object.hasOwn(value, segment)
+		) {
+			return undefined;
+		}
+		value = (value as Readonly<Record<string, unknown>>)[segment];
+	}
+	return value;
+}
+
 function orderedRunbookItemKeys(
 	runbook: BrowserUseRunbook,
 	inputs: BrowserUseRunbookInputs,
@@ -623,7 +646,7 @@ function orderedRunbookItemKeys(
 	const itemKeys: string[] = [];
 	for (const step of runbook.steps) {
 		if (step.kind !== "iterate") continue;
-		const values = inputs[step.over_input];
+		const values = runbookInputAtPath(inputs, step.over_input);
 		if (!Array.isArray(values)) continue;
 		for (const value of values) {
 			if (typeof value === "string") itemKeys.push(value);
@@ -720,21 +743,24 @@ function singleAllowedOrigin(
 }
 
 // Substitute the runbook's typed inputs into an action step's declared input
-// map: each value is a scalar token or an already-structured input value keyed
-// by input id. `{{id}}` tokens resolve to the input value verbatim (structured
-// values pass through unchanged; scalar values render as the raw value).
+// map. `{{id}}` and `{{id.object.path}}` tokens resolve verbatim, so a shared
+// input envelope can feed a portal-owned reviewed action without flattening or
+// duplicating the human-authored run contract.
 function resolveActionInputs(
 	declared: Readonly<Record<string, string>>,
 	inputs: BrowserUseRunbookInputs,
 ): Readonly<Record<string, unknown>> {
 	const out: Record<string, unknown> = {};
 	for (const [key, token] of Object.entries(declared)) {
-		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
+		const match =
+			/^\{\{([a-z0-9][a-z0-9_]{0,63}(?:\.[a-z0-9][a-z0-9_]{0,63})*)\}\}$/.exec(
+				token,
+			);
 		if (match?.[1] === undefined) {
 			out[key] = token;
 			continue;
 		}
-		const resolved = inputs[match[1]];
+		const resolved = runbookInputAtPath(inputs, match[1]);
 		if (resolved !== undefined) out[key] = resolved;
 	}
 	return out;
@@ -810,7 +836,7 @@ async function resolveRunbookActionSteps(
 			continue;
 		}
 		// iterate: one verified action per stable item key from `over_input`.
-		const overRaw = inputs[step.over_input];
+		const overRaw = runbookInputAtPath(inputs, step.over_input);
 		if (!itemKeysAreValid(overRaw)) {
 			return {
 				ok: false,
@@ -919,6 +945,22 @@ export async function prepareRunbookExecution(
 		shown.runbook,
 		input.inputs,
 	);
+	const timesheetIssues = validateTimesheetRunbookInputs(
+		shown.runbook.service_id,
+		shown.runbook.flow_id,
+		normalizedInputs,
+	);
+	if (timesheetIssues.length > 0) {
+		return {
+			ok: false,
+			refusal: {
+				code: "runbook_input_rejected",
+				message: `timesheet input rejected: ${timesheetIssues
+					.map((issue) => `${issue.path}: ${issue.message}`)
+					.join(" ")}`,
+			},
+		};
+	}
 	let resolvedActionSteps:
 		| ReadonlyMap<number, BrowserUseRunbookActionResolution>
 		| undefined;
@@ -1072,6 +1114,9 @@ export async function executePreparedRunbook(
 				refusal: {
 					code: "runbook_confidential_delivery_unavailable",
 					message: built.message,
+					...(built.admission_code !== undefined
+						? { admission_code: built.admission_code }
+						: {}),
 				},
 			};
 		}

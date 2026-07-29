@@ -403,7 +403,19 @@ function buildCrashContext(
 ): AgentBrowserAuthDeliveryContext {
 	const provider = createBrowserUseAuthProvider({
 		store: deps,
-		tokenRetrieval: crashPort,
+		admission: {
+			kind: "environment-admitted",
+			evidence: {
+				lane: "environment-injected-op",
+				assurance: "lower-assurance",
+				native: { verdict: "native-capability-absent" },
+				environment: {
+					state: "ready",
+					next_action: "validate-service-account",
+				},
+			},
+			tokenRetrieval: crashPort,
+		},
 		attestationByDigest: () => undefined,
 	});
 	return provider.buildAgentBrowserDeliveryContext({

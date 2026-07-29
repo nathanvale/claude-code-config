@@ -4,6 +4,8 @@ import type {
 	CliWriter,
 } from "@side-quest/cli-command-facade";
 import type {
+	browserUseAuthRepairActions,
+	browserUseEnvironmentTokenLifecycleActions,
 	browserUsePlatformStoreFailureActions,
 	browserUsePlatformStoreSuccessActions,
 	browserUseRunbookInputFailureActions,
@@ -92,7 +94,9 @@ import type {
 
 type RunbookPlatformActionId =
 	| (typeof browserUsePlatformStoreFailureActions)[number]["id"]
-	| (typeof browserUsePlatformStoreSuccessActions)[number]["id"];
+	| (typeof browserUsePlatformStoreSuccessActions)[number]["id"]
+	| (typeof browserUseAuthRepairActions)[number]["id"]
+	| (typeof browserUseEnvironmentTokenLifecycleActions)[number]["id"];
 
 type RunbookTaskActionId =
 	| (typeof browserUseTaskRunFailureActions)[number]["id"]
@@ -206,7 +210,7 @@ type RecordRunbookOutcomeOptions = {
  */
 export type BrowserUseRunbookCommandPorts = {
 	clock: () => number;
-	runtime: Pick<BrowserUseRuntime, "runCommand" | "authTokenRetrieval">;
+	runtime: Pick<BrowserUseRuntime, "runCommand" | "authAdmission">;
 	store: {
 		open: (
 			access?: "read" | "write",
@@ -462,6 +466,41 @@ function buildRunbookAuthDelivery(
 		message:
 			"the native Browser Authentication capability is present, but the runbook lane's live sensitive-interval delivery (verified-target proof and confidential-field hook) is not wired here yet. Complete the authentication transaction for this runbook lane before running a confidential runbook.",
 	});
+}
+
+function buildBlockedRunbookAuthDelivery(
+	admission: Extract<
+		NonNullable<BrowserUseRuntime["authAdmission"]>,
+		{ kind: "blocked" }
+	>,
+): BrowserUseRunbookAuthDelivery {
+	return async () => ({
+		ok: false,
+		message: `authentication lane admission is blocked (${admission.cause.code}).`,
+		admission_code: admission.cause.code,
+	});
+}
+
+function blockedAdmissionFailure(
+	admission: Extract<
+		NonNullable<BrowserUseRuntime["authAdmission"]>,
+		{ kind: "blocked" }
+	>,
+	message: string,
+): BrowserUseRunbookCommandFailure {
+	const actionId =
+		admission.cause.code === "environment-token-not-ready"
+			? (admission.evidence.environment?.next_action ?? "inspect-token-status")
+			: admission.cause.code.startsWith("native-")
+				? "inspect-auth-readiness"
+				: "inspect-token-status";
+	return {
+		code: `runbook_auth_${admission.cause.code.replaceAll("-", "_")}`,
+		message,
+		actionId,
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	};
 }
 
 function persistRunbookPrivateState(
@@ -1411,12 +1450,12 @@ async function runRunbookRun(
 	try {
 		const guardResult = beginSensitiveRunGuard(run.run_id);
 		const guard = guardResult.ok ? guardResult.guard : undefined;
-		const tokenRetrieval = ports.runtime.authTokenRetrieval;
+		const admission = ports.runtime.authAdmission;
 		const authProvider =
-			tokenRetrieval !== undefined
+			admission !== undefined && admission.kind !== "blocked"
 				? createBrowserUseAuthProvider({
 						store: deps,
-						tokenRetrieval,
+						admission,
 						attestationByDigest: attestationByDigestFrom(deps),
 					})
 				: undefined;
@@ -1453,7 +1492,12 @@ async function runRunbookRun(
 								authDelivery:
 									buildRunbookAuthDelivery(authProvider),
 							}
-						: {}),
+						: admission?.kind === "blocked"
+							? {
+									authDelivery:
+										buildBlockedRunbookAuthDelivery(admission),
+								}
+							: {}),
 					afterNeutralOpen: async (nextStep) => {
 						const checkpointed =
 							await persistRunbookPrivateState(
@@ -1492,6 +1536,17 @@ async function runRunbookRun(
 			);
 		}
 		if (!outcome.ok) {
+			if (
+				admission?.kind === "blocked" &&
+				outcome.refusal.admission_code === admission.cause.code
+			) {
+				return ports.output.emitPlatformFailure(
+					blockedAdmissionFailure(
+						admission,
+						outcome.refusal.message,
+					),
+				);
+			}
 			return ports.output.emitPlatformFailure(
 				runbookCommandFailureOf(
 					outcome.refusal.code,

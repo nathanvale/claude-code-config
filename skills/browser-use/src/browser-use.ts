@@ -569,8 +569,8 @@ async function executeCommand(input: {
 			clock: runtime.now,
 			runtime: {
 				runCommand: runtime.runCommand,
-				...(runtime.authTokenRetrieval !== undefined
-					? { authTokenRetrieval: runtime.authTokenRetrieval }
+				...(runtime.authAdmission !== undefined
+					? { authAdmission: runtime.authAdmission }
 					: {}),
 			},
 			store: {
@@ -1226,6 +1226,8 @@ type PlatformCommandInput = {
 const platformStoreActions = [
 	...browserUsePlatformStoreFailureActions,
 	...browserUsePlatformStoreSuccessActions,
+	...browserUseAuthRepairActions,
+	...browserUseEnvironmentTokenLifecycleActions,
 ] as const;
 // Keyed on plain string so the blocked-resume path can probe whether a run's
 // persisted continuation id is a registry action.
@@ -4181,11 +4183,104 @@ function emitEnvironmentTokenLifecycleUnavailable(
 	return RUNTIME_FAILURE_EXIT_CODE;
 }
 
+function emitBlockedAuthAdmissionStatus(
+	input: PlatformCommandInput,
+	admission: Extract<
+		NonNullable<BrowserUseRuntime["authAdmission"]>,
+		{ kind: "blocked" }
+	>,
+): number {
+	const message = "Authentication lane admission is blocked.";
+	const data = {
+		contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+		operation: "status",
+		state: "blocked",
+		selected_lane: null,
+		admission_code: admission.cause.code,
+		native_verdict: admission.evidence.native?.verdict ?? null,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use lane_admission_blocked: ${message} admission_code=${admission.cause.code} action=inspect-auth-readiness (run_id=${input.runId})\n`,
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data,
+			runtime_actions: [authAction("inspect-auth-readiness")],
+			continuation: { next_action_id: "inspect-auth-readiness" },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: "lane_admission_blocked",
+				message,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+function emitSignedAuthAdmissionStatus(
+	input: PlatformCommandInput,
+	admission: Extract<
+		NonNullable<BrowserUseRuntime["authAdmission"]>,
+		{ kind: "signed-admitted" }
+	>,
+): number {
+	const data = {
+		contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
+		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+		operation: "status",
+		state: "ready",
+		selected_lane: admission.evidence.lane,
+		assurance: admission.evidence.assurance,
+		native_verdict: admission.evidence.native.verdict,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			`contract=${data.contract} schema=${data.schema_version} operation=status state=ready selected_lane=${data.selected_lane} assurance=${data.assurance} continuation=inspect-auth-readiness\n`,
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data,
+			runtime_actions: [authAction("inspect-auth-readiness")],
+			continuation: { next_action_id: "inspect-auth-readiness" },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
 async function runEnvironmentTokenLifecycle(
 	input: PlatformCommandInput,
 ): Promise<number> {
 	const port = input.runtime.environmentTokenLifecycle;
 	const command = input.parsed.command;
+	const admission = input.runtime.authAdmission;
+	if (command === "auth-status" && admission?.kind === "signed-admitted") {
+		return emitSignedAuthAdmissionStatus(input, admission);
+	}
+	if (
+		command === "auth-status" &&
+		admission?.kind === "blocked"
+	) {
+		return emitBlockedAuthAdmissionStatus(input, admission);
+	}
 	if (command === "auth-install-token") {
 		const explicitStdin = input.parsed.flagValues["--stdin"] !== undefined;
 		if (!explicitStdin && !(port?.inputIsTTY() ?? false)) {
@@ -4199,7 +4294,13 @@ async function runEnvironmentTokenLifecycle(
 	try {
 		if (command === "auth-status") {
 			operation = "status";
-			state = await port.execute({ action: "status" });
+			state =
+				admission?.kind === "environment-admitted"
+					? admission.evidence.environment
+					: admission?.kind === "blocked" &&
+							admission.evidence.environment !== undefined
+						? admission.evidence.environment
+						: await port.execute({ action: "status" });
 		} else if (command === "auth-remove-token") {
 			operation = "remove";
 			state = await port.execute({ action: "remove" });
@@ -4227,6 +4328,19 @@ async function runEnvironmentTokenLifecycle(
 		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
 		operation,
 		...state,
+		...(admission?.kind === "environment-admitted"
+			? {
+					selected_lane: admission.evidence.lane,
+					assurance: admission.evidence.assurance,
+					native_verdict: admission.evidence.native.verdict,
+				}
+			: admission?.kind === "blocked"
+				? {
+						selected_lane: null,
+						admission_code: admission.cause.code,
+						native_verdict: admission.evidence.native?.verdict ?? null,
+					}
+				: {}),
 		caller: input.caller,
 	};
 	if (input.parsed.outputMode === "plain") {
@@ -4351,11 +4465,52 @@ function retrievalBlockedEvaluation(
 	};
 }
 
+async function proveRequestedVaultAuthority(
+	port: NonNullable<BrowserUseRuntime["authTokenRetrieval"]>,
+	vaultId: string,
+): Promise<{ ok: true } | { ok: false; evaluation: AuthReadinessEvaluation }> {
+	const vaults = await port.listVaults();
+	if (!vaults.ok) {
+		return {
+			ok: false,
+			evaluation: retrievalBlockedEvaluation(vaults.rejection),
+		};
+	}
+	const proof = proveVaultScope(vaults.vaults);
+	if (!proof.ok || proof.vault_id !== vaultId) {
+		return {
+			ok: false,
+			evaluation: {
+				status: "invalid-vault-scope",
+				blocked_cause: "invalid-vault-scope",
+				detail: {
+					visible_count: proof.ok ? 1 : proof.visible_count,
+					requested_vault_matches: proof.ok && proof.vault_id === vaultId,
+				},
+				continuationId: "repair-vault-grant",
+			},
+		};
+	}
+	return { ok: true };
+}
+
 async function evaluateAuthReadiness(
 	subcommand: BrowserUseAuthSubcommand,
 	input: PlatformCommandInput,
 ): Promise<AuthReadinessEvaluation> {
-	const port = input.runtime.authTokenRetrieval;
+	const admission = input.runtime.authAdmission;
+	if (admission?.kind === "blocked") {
+		return {
+			status: "lane-admission-blocked",
+			blocked_cause: "capability-loss",
+			detail: { admission_code: admission.cause.code },
+			continuationId: "inspect-auth-readiness",
+		};
+	}
+	const port =
+		admission === undefined
+			? input.runtime.authTokenRetrieval
+			: admission.tokenRetrieval;
 	if (port === undefined) return NATIVE_CAPABILITY_ABSENT;
 	switch (subcommand) {
 		case "enroll-browser-automation-token": {
@@ -4400,6 +4555,8 @@ async function evaluateAuthReadiness(
 		case "repair-item-binding": {
 			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
 			const itemId = stringField(input.parsed.flagValues["--item-id"]) ?? "";
+			const authority = await proveRequestedVaultAuthority(port, vaultId);
+			if (!authority.ok) return authority.evaluation;
 			const item = await port.getLoginItem({
 				vault_id: vaultId,
 				item_id: itemId,
@@ -4426,6 +4583,8 @@ async function evaluateAuthReadiness(
 		}
 		case "request-binding-selection-grant": {
 			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+			const authority = await proveRequestedVaultAuthority(port, vaultId);
+			if (!authority.ok) return authority.evaluation;
 			const items = await port.listLoginItems({ vault_id: vaultId });
 			if (!items.ok) return retrievalBlockedEvaluation(items.rejection);
 			// The selection set the signed one-use grant must bind (R20).

@@ -213,7 +213,19 @@ function buildContext(
 ): AgentBrowserAuthDeliveryContext {
 	const provider = createBrowserUseAuthProvider({
 		store: deps,
-		tokenRetrieval: fakePort,
+		admission: {
+			kind: "environment-admitted",
+			evidence: {
+				lane: "environment-injected-op",
+				assurance: "lower-assurance",
+				native: { verdict: "native-capability-absent" },
+				environment: {
+					state: "ready",
+					next_action: "validate-service-account",
+				},
+			},
+			tokenRetrieval: fakePort,
+		},
 		attestationByDigest: () => undefined,
 	});
 	return provider.buildAgentBrowserDeliveryContext({
