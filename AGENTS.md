@@ -45,17 +45,16 @@
 - Code-structure choices, a new module, or reaching for a design pattern: run the `$HOME/code/claude-code-config/context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
 - Connect browser adapters only through `browser-connect connect --json`; workflow: `$HOME/code/claude-code-config/skills/browser-use/SKILL.md`.
-- For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
+- For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
 - For plans and terminology, use `grill-with-docs`.
 - After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
-- Use domain terms precisely.
 
 ## Skill Authoring
 
 - For any first-party skill create/update request, edit the canonical source under `$HOME/code/claude-code-config/skills/<id>/` regardless of the current project; never edit generated `~/.claude/skills/` or `~/.agents/skills/` projections.
-- After any first-party skill change, run `setup sync --check --json`; follow with `setup sync` after add/rename/remove or when Nathan asks to sync. Content-only edits use live projections, so a clean check needs no apply. Otherwise inspect with `setup catalog`; preflight named third-party work with `setup catalog <id>`, acquire with `bunx skills add <source> -s <skill>`, then diagnose with `setup doctor`.
+- After any first-party skill change, run `setup sync --check --json`; follow with `setup sync` after add/rename/remove or when Nathan asks to sync. Content-only edits use live projections, so a clean check needs no apply. Otherwise inspect with `setup catalog`; preflight named third-party work with `setup catalog <id>`, then use `skills-sync` to change `skills-sources.yml`, regenerate `skills-lock.json`, and restore verified projections.
 - Never author, review, heal, or repair a `SKILL.md` before reading `$HOME/code/claude-code-config/skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
@@ -79,11 +78,12 @@
 - Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers; don't rely on ambient shell env.
 - MCP auth checks: never source `.env` or print key prefixes; check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
 - Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
+- Homebrew additions/removals: edit `$HOME/code/dotfiles/config/brew/Brewfile` first; install with `brew bundle` and remove with previewed `brew bundle cleanup`; never run direct `brew install`, `brew uninstall`, or `brew tap`, because they create untracked machine drift; verify with `brew bundle check`.
 
 ## External Data
 
-- Calendar/email/contact sync work: use `productivity-sync`.
-- Read `.productivity.yml` before dispatch.
+- Google services: use `gog`; never use native Claude Code or Codex Google connectors/apps (Gmail, Calendar, Drive, Docs, Sheets, Contacts).
+- Read the nearest `.productivity.yml` before Google dispatch; for calendar/email/contact sync, use `productivity-sync`.
 
 ## Email Safety
 

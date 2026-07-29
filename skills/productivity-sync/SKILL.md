@@ -108,8 +108,7 @@ For each connector in `.productivity.yml`:
 | Connector value | Probe (cheap, <1s each) |
 |---|---|
 | `microsoft-365` (calendar/email) | Confirm an `mcp__*` Microsoft Graph tool is loaded; if not → ❌ |
-| `google-calendar` / `gmail` | Confirm `gcal_*` / `gmail_*` MCP tool is loaded; if not → ❌ |
-| `gog` | `which gog >/dev/null` AND `<connector>-account` set in `.productivity.yml` → ❌ if either fails |
+| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account appears in local `gog --client <name> --account <email> auth list --json --no-input` output when a client is set, otherwise in local `gog --account <email> auth list --json --no-input` output → ❌ if any fails |
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
 | `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
@@ -119,6 +118,9 @@ For each connector in `.productivity.yml`:
 | `none` | Skip silently — not an error |
 
 Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per step through `skills/productivity-connectors/SKILL.md`.
+Probe once per unique configured gog `(account, client)` pair. Reuse that result
+only when both values match. Treat an omitted client as distinct from explicit
+`client: default`; owner mapping may resolve them differently.
 
 **Output — one compact table before any sync begins:**
 
@@ -1300,18 +1302,19 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
 `gog email search` takes the Gmail query as a **positional argument**, not a `--query` flag.
 
 - **NEVER** write: `gog email search --account ... --query "is:unread"` — exits code 2 with "unknown flag --query", produces no output, and looks identical to an auth or rate-limit failure
-- **ALWAYS** write the query as a positional arg: `gog email search --account ... --client ... --json "<query>"`
+- **ALWAYS** write the query as a positional arg:
+  `gog --account ... --client ... --readonly --no-input --wrap-untrusted --json email search "<query>"`
 - `gog gmail search` and `gog email search` are both valid aliases for the same command — either works
 - Pagination flag is `--max N` (not `--limit`)
 
 Correct examples:
 ```bash
 # Unread emails since a date
-gog email search --account nathan.vale@monash.edu --client monash --json "is:unread after:2026/05/18"
+gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email search "is:unread after:2026/05/18"
 
 # All unread, more results
-gog email search --account nathan.vale@monash.edu --client monash --json "is:unread" --max 20
+gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email search "is:unread" --max 20
 
 # Read a specific thread body
-gog email get --account nathan.vale@monash.edu --client monash --json <threadId>
+gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email thread get <threadId>
 ```

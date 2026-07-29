@@ -20,7 +20,7 @@ For the runbook convention this skill expects, see [convention.md](references/co
 - `references/preflight.md`: bundled reference, hard dependency.
 - `references/convention.md`: bundled reference, hard dependency.
 - `/ce-brainstorm`: optional handoff for `new` add-seam flow.
-- `skills/improve-codebase-architecture/SKILL.md`: optional handoff for bootstrap and report tightness passes.
+- External `improve-codebase-architecture` skill: optional handoff for bootstrap and report tightness passes.
 - Missing bundled reference: blocked.
 - Missing `/ce-brainstorm`: degraded; draft the seam prompt and ask the user to run the brainstorm manually.
 - Missing `improve-codebase-architecture`: degraded for `status`, `launch`, and `audit`; blocked for bootstrap or report tightness pass.

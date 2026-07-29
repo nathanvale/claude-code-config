@@ -21,8 +21,8 @@ architecture pressure.
 ## Owner Map
 
 - Skill decision log: `docs/decisions/2026-06-13-001-gof-pressure-lens-skill-decision-log.md`.
-- ICA workflow owner: `skills/improve-codebase-architecture/SKILL.md`.
-- ICA vocabulary owner: `skills/improve-codebase-architecture/LANGUAGE.md`.
+- ICA workflow owner: external `improve-codebase-architecture` skill.
+- ICA vocabulary owner: external `codebase-design` skill.
 - Skill authoring owner: `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Deferred ICA output envelope: no owner path exists yet; use `skills/cli-author/SKILL.md` before adding one.
 

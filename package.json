@@ -9,11 +9,13 @@
       "skills/browser-use",
       "skills/classic-cinema",
       "skills/cli-execution-auditor",
+      "skills/ce-work-inspect",
       "skills/coding-task-tracker",
       "skills/cli-author",
       "skills/fallow",
       "skills/record-decision",
       "skills/skill-feedback",
+      "skills/skills-sync",
       "skills/test-runner",
       "skills/worktree",
       "skills/browser-use/src/prototype-playwright-vocab-map"
