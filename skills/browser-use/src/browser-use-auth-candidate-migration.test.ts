@@ -268,10 +268,46 @@ describe("login-narrative auth candidate migration (U7, R29-R30/AE10)", () => {
 			{ contextProse: "reads the account password from the vault" },
 			"credential-naming value",
 		],
+		[
+			"personal-identity context prose",
+			{ contextProse: "sign in as n***e@monash.edu then verify" },
+			"leaked context",
+		],
+		[
+			"1Password-CLI context prose",
+			{ contextProse: "run op read then continue" },
+			"leaked context",
+		],
+		[
+			"CDP-port context prose",
+			{ contextProse: "attach over CDP port 9222 first" },
+			"leaked context",
+		],
+		[
+			"profile-path context prose",
+			{ contextProse: "uses the chrome-agent user_data_dir profile" },
+			"leaked context",
+		],
+		[
+			"lifecycle-recipe context prose",
+			{ contextProse: "cookies clear then sign out to force fresh login" },
+			"leaked context",
+		],
 	] as const)("rejects %s", (_label, overrides, message) => {
 		expect(() =>
 			transformLoginNarrativeToCandidate({ ...ELLUCIAN, ...overrides }),
 		).toThrow(message);
+	});
+
+	test("still accepts synthesized flow-shape context prose", () => {
+		// The default synthesized prose (method-shape hint + MFA stage) must not
+		// trip the leaked-context guard.
+		const candidate = transformLoginNarrativeToCandidate({
+			...ELLUCIAN,
+			contextProse: null,
+		});
+		expect(candidate.legacy_context_prose).toContain("password-totp");
+		expect(validateImportCandidateShape(candidate)).toEqual([]);
 	});
 
 	test("normalizes a path-bearing login URL to its bare origin proposal", () => {

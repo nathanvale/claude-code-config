@@ -58,6 +58,11 @@ function exactOrigin(value: string): string | undefined {
 function sourceRelativePathValid(value: string): boolean {
 	return (
 		value.length > 0 &&
+		// `isAbsolute` is platform-specific: on POSIX it ignores a Windows drive
+		// path (`C:\foo`) or a backslash escape (`..\secret`), which then survive
+		// the `/`-split `..` check as a single segment. Reject any backslash so the
+		// safe-relative invariant holds on non-Windows CI/dev hosts too.
+		!value.includes("\\") &&
 		!isAbsolute(value) &&
 		!value.split("/").some((segment) => segment === "" || segment === "..")
 	);
