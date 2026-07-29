@@ -1,0 +1,72 @@
+# Teams local-store reader — example config.
+#
+# Copy this to `teams-reader.yaml` (same directory) and edit. That filename is
+# gitignored, so your channel names and identity stay out of version control.
+# If no teams-reader.yaml exists, this example is used as the fallback.
+#
+# Every key is optional. With an empty config the reader still works — you just
+# get no default watch list, so `digest` covers all named conversations.
+
+# ---------------------------------------------------------------- watch list
+# Channels and chats included in `digest` and `standup` by default.
+#
+# Names are fuzzy-matched (case-insensitive substring) against the conversation
+# names Teams has cached, so a short distinctive fragment is enough. Matching
+# never silently guesses: no match warns and lists the nearest names, and
+# multiple matches lists them all.
+#
+# Run `teams_cli.py channels` to see the names available in your own store.
+watch: []
+# watch:
+#   - "Platform Team"
+#   - "Design Guild"
+
+# ---------------------------------------------------------------- digest window
+lookback_hours: 24
+max_per_channel: 20
+
+# ---------------------------------------------------------------- ticket pattern
+# Regex used by `ticket` and `standup` to spot issue keys in message text.
+#
+# The default is a generic Jira-style key: an uppercase project prefix, a
+# hyphen, and digits (ABC-123, PROJ2-4567). Override it if your tracker looks
+# different — for example:
+#
+#   GitHub / GitLab issues:   ticket_pattern: "#\\d+"
+#   Linear:                   ticket_pattern: "\\b[A-Z]{3}-\\d+\\b"
+#   Numeric-only tickets:     ticket_pattern: "\\bticket \\d+\\b"
+#
+# Remember these are YAML strings, so backslashes need escaping as "\\d".
+# If you have no ticket system at all, leave this commented out — the ticket
+# bucket in `standup` will simply come back empty.
+# ticket_pattern: "\\b[A-Z][A-Z0-9]+-\\d+\\b"
+
+# ---------------------------------------------------------------- identity
+# Who this store belongs to. Used to flag messages addressed "to me".
+#
+# Normally you do NOT need to set this: the reader auto-detects your MRI from
+# the store and cross-checks it against the store's own user GUID. Set it only
+# if auto-detection reports low confidence, which happens on accounts that have
+# sent very few messages, or on shared/delegated/guest stores.
+#
+# Find yours with: teams_cli.py whoami
+# self:
+#   mri: "8:orgid:00000000-0000-0000-0000-000000000000"
+
+# Extra substrings that also mean "this message is addressed to me" — nicknames
+# and shortenings colleagues actually type. Your MRI, full display name, and
+# first name are already included automatically.
+name_gate: []
+# name_gate:
+#   - "aless"
+
+# ---------------------------------------------------------------- e.g.
+# A filled-in config, for reference:
+#
+#   watch:
+#     - "POS Yellow Devs"
+#     - "POS Yellow and Payments Resellers"
+#     - "POS & Payments"
+#   lookback_hours: 24
+#   max_per_channel: 20
+#   ticket_pattern: "\\bPOS-\\d+\\b"
