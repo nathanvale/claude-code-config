@@ -88,6 +88,20 @@ export type BrowserUseAuthCandidateMigration = {
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const SECRET_KEY_HINT_PATTERN = /(password|passwd|secret|seed|totp|credential|token)/i;
 
+/**
+ * Redaction-failure markers for the display-only `contextProse` field: the
+ * generalizable identity/source/recipe classes the legacy narratives must never
+ * carry into a candidate — an email address, a 1Password CLI reference, a vault
+ * name, a CDP port, a profile/user-data path, and a cookie-clear / sign-out /
+ * process-kill lifecycle recipe. `secretShapeFindingOf` and
+ * {@link SECRET_KEY_HINT_PATTERN} catch secret *shapes* and credential key-names;
+ * these catch the leaked-context *classes* those two miss (R29/R30 redaction).
+ * Deliberately content-class, not personal-name matching: a bare surname would
+ * false-positive on legitimate flow-shape prose.
+ */
+const LEAKED_CONTEXT_PATTERN =
+	/(@[\w.-]+\.\w{2,}|\bop (?:read|item)\b|op:\/\/|\bcdp\b|\bport\s*\d{2,5}\b|\b9222\b|user_data_dir|chrome-agent|--otp|cookies?\s+clear|sign\s?-?\s?out|\bkill\b)/i;
+
 function sourceRelativePathValid(value: string): boolean {
 	return (
 		value.length > 0 &&
@@ -116,6 +130,11 @@ function assertSourceString(field: string, value: string): void {
 	if (SECRET_KEY_HINT_PATTERN.test(value)) {
 		throw new Error(
 			`Login-narrative migration rejected a credential-naming value at ${field}.`,
+		);
+	}
+	if (LEAKED_CONTEXT_PATTERN.test(value)) {
+		throw new Error(
+			`Login-narrative migration rejected leaked context (identity, source, port, profile, or lifecycle recipe) at ${field}.`,
 		);
 	}
 }

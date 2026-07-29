@@ -148,6 +148,11 @@ describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
 			"safe relative source",
 		],
 		[
+			"backslash source path (POSIX traversal bypass)",
+			{ activeSourceRelativePath: "..\\fill.json" },
+			"safe relative source",
+		],
+		[
 			"invalid action digest",
 			{ actionDigests: { ...DIGESTS, saveDraft: "not-a-digest" } },
 			"exact content digest",
