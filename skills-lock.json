@@ -1,0 +1,286 @@
+{
+  "generatedFrom": "skills-sources.yml via skills/skills-sync/src/third-party-skills-cli.ts",
+  "skills": {
+    "codebase-design": {
+      "computedHash": "b3fca0f412ca76fff007d2e7eb108c6de168ca39a085b1573ca711122814ff35",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/codebase-design/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "diagnosing-bugs": {
+      "computedHash": "467c181e89d075e050d354454d0ff994ff87a0dc213907de91dbb3fd4d5c0d5d",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/diagnosing-bugs/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "domain-modeling": {
+      "computedHash": "643e936299b8ce2f1ebdae5c654289d3102ad68b6a6b09189eaad0e7483b3073",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/domain-modeling/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "gog": {
+      "computedHash": "481d8a358f2caf1d2afcb72fa431ba778e68d09582480b79e908f122825ce28a",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-admin": {
+      "computedHash": "1509142af3af055d51e8392e20df8fb0b34f4f059787af8a7b3c8df93ce6dba9",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-admin/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-analytics": {
+      "computedHash": "fb05eed9788de7b3e391a308040b1935d2a26810bab6680bdf660e8813246bf0",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-analytics/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-appscript": {
+      "computedHash": "77be6339a286536ae7ba6c19d9e9c834d2f6bdab81cbc3dbfd328384016ab6fa",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-appscript/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-calendar": {
+      "computedHash": "be290d8b2dd7db96dca27de7f6d06d624a10b43e326f314d55d73fb93d626d95",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-calendar/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-chat": {
+      "computedHash": "b61b42ba1ba51f6f80fc11bcfcd95333c33f30a3fc27cccae72215af1fa1a3fe",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-chat/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-classroom": {
+      "computedHash": "62dc9bbb36577d6dee9bc40fe8e1aca4c8a0a4906fd1538ff1c8189ae86353c6",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-classroom/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-contacts": {
+      "computedHash": "dbfc9924945ecdf02ddcca6c2b495429db5247ed8663c75aa5b207868af5ea11",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-contacts/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-contacts-cleanup": {
+      "computedHash": "d32896bc6a65a6b8932ef08a1ee847126fcdfde836f6f6eb468f6f248f689733",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-contacts-cleanup/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-docs": {
+      "computedHash": "d1fe437acf47dd619e7a877b37f828ec70220a77d96f4fc7342b1fc03d7720ed",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-docs/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-drive": {
+      "computedHash": "d0024ffaaf959c422d1870f397819c6850efe324d7f5517eadcaf8464c95455a",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-drive/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-drive-audit": {
+      "computedHash": "69b7f568aa93d8adab30c903f893e90eb07b49ccb7c385239a8f0ad1074f6f55",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-drive-audit/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-forms": {
+      "computedHash": "ce37555c52dbef088552e85543798873bdbbda760fd494f97287843a89dfa668",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-forms/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-gmail": {
+      "computedHash": "e96d98a5592e0d01dfa15adcba96f94804310ac890494b773a812f9caa83d1ed",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-gmail/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-groups": {
+      "computedHash": "4f5f6d4311cc28a0930d8d7b3b8beecbab227696bbe186bdae489c0ec18596c0",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-groups/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-inbox-triage": {
+      "computedHash": "1b17598de7b22151c155cb16f9a00f0affad6e5b900f1ee280cc1838ff2fe9c1",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-inbox-triage/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-keep": {
+      "computedHash": "13e1deb4a5be7df9a09d50621497feb1f37c44dfc97947375343cf69307ba222",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-keep/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-maps": {
+      "computedHash": "472a0a61df9edfacf9c46abf20a94539c64408e5c4e2d6acbb928487cc737ff7",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-maps/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-meet": {
+      "computedHash": "4d41ad0032848ee96970b16e7b61dc33597c6ef233a184748e12e84e709d4355",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-meet/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-meeting-prep": {
+      "computedHash": "d12d0f6a9cb0ddbd20dcda489cb37db5da8c9e44fa47ee0b0372c59076909247",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-meeting-prep/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-people": {
+      "computedHash": "f0e8e2a45d3b8beb90b5bc0997e23149532813004b1dab7fe9cd5ffee8f46757",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-people/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-photos": {
+      "computedHash": "f75f4db04059f4872e694aa5d2dc591cfe8e0cff08c4c6b09a9616549fd075a0",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-photos/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-save-attachments": {
+      "computedHash": "d493a8d4a0673294005a5ebedd3f837754709d5b068d1c5e79d108ae600ca7af",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-save-attachments/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-searchconsole": {
+      "computedHash": "f8650a47fdc19160e6d3935e8034b03e2b2cb02c9362564923b4e570c9453ef5",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-searchconsole/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-sheets": {
+      "computedHash": "59bc01f138ed052685e74257463e954b8b0dd2b2b655330da567f07295c8a4b3",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-sheets/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-sites": {
+      "computedHash": "ead5a70506f0957141ed9f03693d1d0de4602bf1c08b8a057555517ec86dfdac",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-sites/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-slides": {
+      "computedHash": "d8d607a01953b6a2bf4c7d90cab8a37942f8cbe5d593073d4df76520b0f222c6",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-slides/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-tasks": {
+      "computedHash": "81b02bbaa56a338cca6025f16bb42a4710e7679fdeb39319b158038b9b405209",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-tasks/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-weekly-digest": {
+      "computedHash": "852c7f2a7bf2c29483dcdb68d4cafdf7d72e5cfad720c9a404d74aaf7664b466",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-weekly-digest/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "gog-youtube": {
+      "computedHash": "cb6bdc7e94d5ffb6320289eea5ef1a101ed6e23a6147c00eff24c8fbe57d798e",
+      "ref": "1b261244fc2687d33bccb6d23f85aa3f88c1062a",
+      "skillPath": ".agents/skills/gog-youtube/SKILL.md",
+      "source": "openclaw/gogcli",
+      "sourceType": "github"
+    },
+    "grill-me": {
+      "computedHash": "a80af47181aa8d021ce917d5c4bbf0bd16fb5570e88d998dea2608d8a5792cfa",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/productivity/grill-me/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "grill-with-docs": {
+      "computedHash": "b53cce9ba3a98ac10cbcdeda972fec4e7efd72147c5376bfd82ee52be78398ed",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/grill-with-docs/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "grilling": {
+      "computedHash": "a67e2f602815c262444eddca1e1960bb6a7dc9fa71f9f1d5aea0d785aa49d88f",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/productivity/grilling/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "improve-codebase-architecture": {
+      "computedHash": "93e94c094cdcd3fcefec4c7cb826b79de29ba3a7d0d11cea2afb9f7e9d0c7fe5",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "prototype": {
+      "computedHash": "625a58698995b04cd942a67d1e0d5e5fc5200a07a5dd38de582bffe873fc8051",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/prototype/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "tdd": {
+      "computedHash": "97c3963fd8bb1dcb9d25a8abb29fc6402b2076687742bf6da48d1124974aca09",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/engineering/tdd/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    },
+    "teach": {
+      "computedHash": "b7b8893aefac5994b3063ab42b64be679e2576994b4d249ed104098a75875a91",
+      "ref": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skillPath": "skills/productivity/teach/SKILL.md",
+      "source": "mattpocock/skills",
+      "sourceType": "github"
+    }
+  },
+  "version": 1
+}

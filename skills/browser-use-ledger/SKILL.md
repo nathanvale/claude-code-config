@@ -23,7 +23,7 @@ The ledger owns verdicts, tiers, and admission rules (its `Rules` and
 3. Verdict flips follow the ledger Rules verbatim: PASS needs a named fixture,
    test path, or live receipt recorded first; BLOCKED stays BLOCKED until its
    gate clears — never skipped or passed.
-4. Regression gate: fix a FAIL test-first (`skills/tdd/SKILL.md`); the new test
+4. Regression gate: fix a FAIL test-first with the external `tdd` skill; the new test
    path lands in the ledger row and TEST_MATRIX before the flip.
 5. Edge-case harvest: propose new rows as UNASSESSED with a tier from the
    ledger's tier table; park unadmitted candidates in the deferred-candidates

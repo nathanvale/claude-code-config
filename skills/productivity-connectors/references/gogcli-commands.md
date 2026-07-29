@@ -2,12 +2,24 @@
 
 Read this file when the active connector is `gog` and you need the exact bash invocation for a calendar, gmail, contacts, or sheets operation.
 
-**Binary:** `gog` (gogcli v0.12.0)
-**Auth:** OAuth tokens managed by gogcli's keyring. Use `gog auth list --json` to check status (note: `--check` in v0.12.0 shows stale data — verify with a real API call instead).
+**Binary:** `gog`; inspect the installed contract with `gog schema --json`.
+**Auth:** OAuth tokens managed by gog's keyring. Check them with
+`gog auth list --check --json --no-input` and
+`gog auth doctor --check --json --no-input`.
+
+Agent reads put root flags before the command:
+
+```bash
+gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json <service> <command>
+```
+
+Omit `--client` only when `.productivity.yml` does not pin one. Writes omit
+`--readonly` and require the owning skill's confirmation gate.
 
 ## Multi-client routing
 
-gogcli supports multiple named OAuth clients (one per GCP project). Each client has its own credentials file (`~/.config/gogcli/credentials-<name>.json`). Each `<account, client>` pairing gets its own refresh token.
+gog supports multiple named OAuth clients. Each `<account, client>` pairing
+gets its own refresh token.
 
 **For productivity-sync dispatches**, always pass `--client <name>` matching the `<connector>-client` field in `.productivity.yml`. Every example below uses `--client <name>` as a placeholder — substitute the real client name at dispatch time.
 
@@ -16,10 +28,6 @@ gogcli supports multiple named OAuth clients (one per GCP project). Each client 
 List registered clients:
 ```bash
 gog auth credentials list
-# CLIENT    PATH
-# default   /Users/nathanvale/.config/gogcli/credentials.json
-# monash    /Users/nathanvale/.config/gogcli/credentials-monash.json
-# personal  /Users/nathanvale/.config/gogcli/credentials-personal.json
 ```
 
 ## Calendar
@@ -177,10 +185,16 @@ gog sheets get 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms "Sheet1!A1:D10" --ac
 
 ```bash
 # Check auth status for all accounts
-gog auth list --json
+gog auth list --check --json --no-input
+
+# Check one named OAuth client
+gog --client <name> auth list --check --json --no-input
+
+# Diagnose keyring and token refresh
+gog --client <name> auth doctor --check --json --no-input
 
 # Add/refresh auth for an account
-gog auth add <email>
+gog --client <name> auth add <email>
 ```
 
 ## Pagination
@@ -242,8 +256,12 @@ Use `--days=N` for forward windows from a start date.
 | 3 | No results (when `--fail-empty` is used) | Expected — not an error |
 | Non-zero | Error (auth expired, network, bad flags) | Read stderr for details |
 
-**Auth expired:** stderr will mention token/auth. Recovery: `gog auth add <email>`
+**Auth expired:** branch on exit code 4. Diagnose with
+`gog --client <name> auth doctor --check --json --no-input`; recover with
+`gog --client <name> auth add <email>`.
 
 **Wrong account (silent failure):** Exit 0 but returns data from the wrong account. This happens when `--account` is omitted. Always pass `--account <email>` explicitly.
 
-**Headless/SSH (Mac Mini):** Set `GOG_KEYRING_BACKEND=file` before running gog commands to avoid keychain access errors.
+**Headless/SSH:** Set `GOG_KEYRING_BACKEND=file`, `GOG_KEYRING_PASSWORD`, and
+the same `GOG_HOME` on the actual agent or service process. A successful shell
+probe does not prove that process inherited them.

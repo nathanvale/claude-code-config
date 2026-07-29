@@ -4,4 +4,6 @@
 - URL: `https://github.com/mattpocock/skills`.
 - License: MIT, Matt Pocock, 2026.
 - Pulled: 2026-05-30 at commit `e3b90b5238f38cdea5996e16861dcae28ef52eda`.
-- Reviewed against upstream `694fa30311e02c2639942308513555e61ee84a6f` (2026-06-14); upstream "suggested skills" line already present in local fork — kept local version (adds role, argument-hint, Verification).
+- Reviewed against upstream `2ab958093e83e0ec752e6c1c5932da465bf23e0c`
+  (2026-07-29); retained locally because the fork adds repository evidence,
+  authority boundaries, blockers, redaction, and verification.

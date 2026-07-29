@@ -14,6 +14,7 @@
       "skills/fallow",
       "skills/record-decision",
       "skills/skill-feedback",
+      "skills/skills-sync",
       "skills/test-runner",
       "skills/worktree",
       "skills/browser-use/src/prototype-playwright-vocab-map"

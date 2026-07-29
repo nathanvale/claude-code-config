@@ -32,7 +32,7 @@ If the candidates are split into disconnected follow-ups, the architecture insig
 - **Two-step router.** First choose Basic CLI or Agent-native CLI as the design lane, then choose whether facade-backed enforcement applies.
 - **Runtime facts stay runtime-owned.** Capability maps, public test helpers, generated reports, and Station Map mechanics belong to the facade runtime owner.
 - **Prose proof is not enough.** Future `cli-author` edits should be checked by fresh behavior-regression evidence, not by rereading a checklist.
-- **ICA stays architecture owner.** `cli-author` may route architecture pressure, but `skills/improve-codebase-architecture/SKILL.md` owns ICA vocabulary and deepening judgment.
+- **ICA stays architecture owner.** `cli-author` may route architecture pressure, but the external `improve-codebase-architecture` and `codebase-design` skills own deepening judgment and vocabulary.
 - **V1 ships two candidates.** V1 includes the `cli-author Behavior Regression Check` and the design-lane/enforcement-path split; provenance and runtime-owned candidates remain follow-ups.
 - **V1 check stays small.** The `cli-author Behavior Regression Check` lives as a small script beside the checklist, not a full `src/` runner or package command.
 - **V1 checks file markers.** The script reads current `cli-author` files and verifies key routing/owner markers; it does not simulate an agent prompt run.

@@ -21,6 +21,10 @@ amended_by: docs/plans/2026-07-13-001-feat-agent-setup-cli-plan.md
 > owns first-party live projection, collision preflight, and diagnosis. The
 > retired projector names, source paths, and commands below are historical
 > decision evidence, not executable routes.
+>
+> **Integrity supersession note (2026-07-29):** Decision 5 keeps the ownership
+> split but replaces provider-direct restore with a reviewed YAML manifest and
+> repository-owned integrity command.
 
 Use this log for accepted decisions about how the community `skills` CLI
 (`npx skills` / skills.sh) and `runtime/agent-skills` share `.agents/skills/`.
@@ -80,10 +84,11 @@ Consequences:
 
 ```yaml
 id: npx-skills-division-002
-status: accepted
+status: superseded
 decided_at: "2026-07-02"
 decision: Commit skills-lock.json; keep installed copies gitignored; fresh worktrees restore with bunx skills experimental_install
 owner: agent-skills
+superseded_by: npx-skills-division-005
 ```
 
 Decision:
@@ -141,10 +146,11 @@ Consequences:
 
 ```yaml
 id: npx-skills-division-004
-status: accepted
+status: superseded
 decided_at: "2026-07-02"
 decision: Accept the pre-install overwrite hazard with a startup guard; record the provider hash-verification gap and the ADR 0011 global-topology thread as open
 owner: agent-skills
+superseded_by: npx-skills-division-005
 ```
 
 Decision:
@@ -168,3 +174,57 @@ Rationale:
 - The overwrite hazard was proven by the Skillporter prototype; a startup
   guard is the cheapest mitigation that does not rebuild Skillporter.
 - Recording gaps beats assuming the provider covers them.
+
+## Decision 5: Manifest Owns Selection; Lock Proves Content
+
+```yaml
+id: npx-skills-division-005
+status: accepted
+decided_at: "2026-07-29"
+decision: Track reviewed provider commits and exact skill allowlists in skills-sources.yml; generate skills-lock.json and verified project/global projections through the skills-sync runtime
+owner: skills-sync
+source:
+  - code review 2026-07-29
+  - skills/skills-sync/src/third-party-skills-cli.ts
+  - skills-sources.yml
+supersedes:
+  - npx-skills-division-002
+  - npx-skills-division-004
+```
+
+Decision:
+
+- Keep third-party selection policy in `skills-sources.yml`.
+- Pin every provider to a full commit SHA and list every selected skill.
+- Generate `skills-lock.json` as content-hash evidence.
+- Restore project and global copies through the `skills-sync` runtime.
+- Keep the community `skills` package as the copy installer behind that
+  runtime.
+
+Rationale:
+
+- `skills@1.5.14` cannot clone commit SHA refs through its public source
+  syntax.
+- Its built-in restore recomputes lock hashes instead of enforcing the
+  reviewed hashes.
+- A small repository owner can fetch exact commits, constrain acquisition to
+  one allowlist, preserve the canonical lock, and verify every projection.
+
+Consequences:
+
+- `skills-lock.json` remains tracked but is generated, never hand-edited.
+- Fresh worktrees use the `skills-sync` restore command, not
+  `experimental_install`.
+- Provider review approval binds to one immutable commit.
+- Unknown upstream skills never enter the install plan.
+
+Next:
+
+- Keep the runtime tests, typecheck, clean-home restore proof, and Setup
+  collision checks green.
+
+V2 Ideas:
+
+- Revisit the wrapper only when the provider supports commit-SHA restore plus
+  enforced project/global content hashes.
+- Reconcile the remaining ADR 0011 global-topology thread separately.
