@@ -12,6 +12,8 @@
 
 ## SSH Usage
 
+Flaky/dropped SSH, timeouts, connecting for cmux, or first-time mini key setup: use the `mac-mini-ssh` skill (`skills/mac-mini-ssh/SKILL.md`) — it owns the diagnose→fix→configure runbook (macOS sleep/pmset, keepalives, dedicated key, durable tmux/cmux).
+
 SSH with key auth works directly from Claude Code — no interactive login needed. Run commands via:
 
 ```bash
