@@ -1,0 +1,307 @@
+{
+	"contract": "browser-use.monash-smst-candidate-fixture",
+	"schema_version": "1",
+	"source_groups": {
+		"context7-confluence": [
+			"docs/runbooks/context7-add-confluence-library.md"
+		],
+		"fasttrack-timesheet": [
+			".claude/agent-memory/timesheet-browser-agent/MEMORY.md",
+			".claude/agent-memory/timesheet-browser-agent/feedback_angularjs-navigation.md",
+			".claude/agent-memory/timesheet-browser-agent/feedback_break-modal-structure.md",
+			".claude/agent-memory/timesheet-browser-agent/feedback_break-modal-trigger.md",
+			".claude/agent-memory/timesheet-browser-agent/feedback_save-via-scope-apply.md",
+			".claude/agents/timesheet-browser-agent.md",
+			".claude/browser-configs/config.fasttrack360.yaml",
+			".claude/browser-configs/playbooks/fasttrack360/add-breaks.yaml",
+			".claude/browser-configs/playbooks/fasttrack360/fill-week.yaml",
+			".claude/browser-configs/playbooks/fasttrack360/scripts/add-breaks.js",
+			".claude/browser-configs/playbooks/fasttrack360/scripts/fill-week.js",
+			".claude/browser-configs/playbooks/fasttrack360/scripts/verify-add-breaks.js",
+			".claude/browser-configs/playbooks/fasttrack360/scripts/verify-fill-week.js",
+			".claude/browser-configs/selectors.fasttrack360.yaml",
+			".claude/skills/timesheet/SKILL.md",
+			"docs/gotchas/browser-agent/manpowergroup-fasttrack360.md"
+		],
+		"monash-portal-audit": [
+			".claude/skills/monash-portal-audit/SKILL.md"
+		],
+		"npm-publishing": [
+			".claude/skills/setup-publishing/SKILL.md"
+		],
+		"zoom-transcript": [
+			".claude/skills/zoom-transcript-scraper/SKILL.md"
+		]
+	},
+	"candidates": [
+		{
+			"candidate_id": "context7-confluence-create-library",
+			"category": "context7-confluence",
+			"service_id": "context7-confluence",
+			"flow_id": "create-library",
+			"disposition": "import-inactive",
+			"canonical_target_id": "context7-confluence/create-library",
+			"source_group_id": "context7-confluence",
+			"outcome": "Create one focused Context7 library from selected Confluence pages.",
+			"allowed_origins": [
+				"https://context7.com"
+			],
+			"human_presence": [
+				"connected-account",
+				"consent"
+			],
+			"reason": "Distinct user-visible outcome; import inactive until live review and authentication proof."
+		},
+		{
+			"candidate_id": "fasttrack-export-timesheet-history",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "export-timesheet-history",
+			"disposition": "import-inactive",
+			"canonical_target_id": "fasttrack/export-timesheet-history",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "List or export approved historical timesheets.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [],
+			"reason": "Distinct read-oriented user intent; import inactive pending live proof."
+		},
+		{
+			"candidate_id": "fasttrack-fill-submit-timesheet",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "fill-week",
+			"disposition": "merge-existing-target",
+			"canonical_target_id": "fasttrack/fill-week",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "Fill and save the selected week, pause before Submit, then verify the human-finalized result.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [
+				"final-submit"
+			],
+			"reason": "Merge with the existing FastTrack fill-week target; add-breaks and helper scripts are not duplicate flows."
+		},
+		{
+			"candidate_id": "fasttrack-inspect-rejected-timesheets",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "inspect-rejected-timesheets",
+			"disposition": "import-inactive",
+			"canonical_target_id": "fasttrack/inspect-rejected-timesheets",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "List rejected timesheets and their rejection reasons.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [],
+			"reason": "Distinct read-only user intent; import inactive pending live proof."
+		},
+		{
+			"candidate_id": "fasttrack-list-available-timesheets",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "list-available-timesheets",
+			"disposition": "import-inactive",
+			"canonical_target_id": "fasttrack/list-available-timesheets",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "List available timesheets with their date range and assignment identity.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [],
+			"reason": "Distinct read-only user intent; import inactive pending live proof."
+		},
+		{
+			"candidate_id": "fasttrack-list-incomplete-timesheets",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "list-incomplete-timesheets",
+			"disposition": "import-inactive",
+			"canonical_target_id": "fasttrack/list-incomplete-timesheets",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "List saved but unsubmitted timesheets.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [],
+			"reason": "Distinct read-only user intent; import inactive pending live proof."
+		},
+		{
+			"candidate_id": "fasttrack-list-submitted-timesheets",
+			"category": "fasttrack-timesheet",
+			"service_id": "fasttrack",
+			"flow_id": "list-submitted-timesheets",
+			"disposition": "import-inactive",
+			"canonical_target_id": "fasttrack/list-submitted-timesheets",
+			"source_group_id": "fasttrack-timesheet",
+			"outcome": "List submitted timesheets awaiting approval.",
+			"allowed_origins": [
+				"https://manpowergroup.fasttrack360.com.au"
+			],
+			"human_presence": [],
+			"reason": "Distinct read-only user intent; import inactive pending live proof."
+		},
+		{
+			"candidate_id": "monash-ess-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-ess",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-ess/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the ESS portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://eservices.monash.edu.au"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-identity-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-identity",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-identity/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the Identity portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://identity.monash.edu"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-mspace-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-mspace",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-mspace/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the M-Space portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://mspace.monash.edu"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-mydevelopment-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-mydevelopment",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-mydevelopment/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the myDevelopment portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://monash.csod.com"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-myservices-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-myservices",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-myservices/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the myServices portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://servicedeskonline-myit.onbmc.com"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-staff-portal-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-staff-portal",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-staff-portal/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the Staff Portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://staff.monash"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "monash-zoom-audit",
+			"category": "monash-portal-audit",
+			"service_id": "monash-zoom",
+			"flow_id": "audit-portal",
+			"disposition": "import-inactive",
+			"canonical_target_id": "monash-zoom/audit-portal",
+			"source_group_id": "monash-portal-audit",
+			"outcome": "Audit the Monash Zoom portal structure and retain selectors as Browser Use knowledge.",
+			"allowed_origins": [
+				"https://monash.zoom.us"
+			],
+			"human_presence": [
+				"user-presence-challenge"
+			],
+			"reason": "Separate portal identity sharing the common audit behavior pattern."
+		},
+		{
+			"candidate_id": "npm-setup-publishing",
+			"category": "npm-publishing",
+			"service_id": "npm",
+			"flow_id": "setup-publishing",
+			"disposition": "import-inactive",
+			"canonical_target_id": "npm/setup-publishing",
+			"source_group_id": "npm-publishing",
+			"outcome": "Publish a package and configure an npm trusted publisher.",
+			"allowed_origins": [
+				"https://www.npmjs.com"
+			],
+			"human_presence": [
+				"login",
+				"passkey",
+				"two-factor",
+				"token-creation",
+				"first-publish",
+				"trusted-publisher"
+			],
+			"reason": "Distinct user-visible outcome with retained human-presence gates."
+		},
+		{
+			"candidate_id": "zoom-extract-transcript",
+			"category": "zoom-transcript",
+			"service_id": "zoom",
+			"flow_id": "extract-transcript",
+			"disposition": "import-inactive",
+			"canonical_target_id": "zoom/extract-transcript",
+			"source_group_id": "zoom-transcript",
+			"outcome": "Extract one Zoom recording transcript for downstream note creation.",
+			"allowed_origins": [
+				"https://monash.zoom.us"
+			],
+			"human_presence": [
+				"recording-passcode",
+				"login"
+			],
+			"reason": "Distinct browser outcome; parsing remains a non-browser downstream concern."
+		}
+	]
+}
