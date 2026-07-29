@@ -258,11 +258,12 @@ when repository routing must not depend on machine-local account/domain maps.
 
 ### Auth preflight
 For a pinned or resolved client, use
-`gog --client <name> auth list --check --json --no-input` for the selected token
-bucket. If no client is selected, use
-`gog auth list --check --json --no-input`. On failure, run the matching
-`gog [--client <name>] auth doctor --check --json --no-input`. Branch on exit
-code 4 for unusable auth and 10 for missing local configuration.
+`gog --client <name> --account <email> auth list --check --json --no-input` for
+the selected token bucket and account. If no client is selected, use
+`gog --account <email> auth list --check --json --no-input`. On failure, run the
+matching `gog [--client <name>] --account <email> auth doctor --check --json
+--no-input`. Branch on exit code 4 for unusable auth and 10 for missing local
+configuration.
 
 ### Multi-client multi-terminal safety
 Two terminals in two different repos (e.g., `monash-smst` with `calendar-client: monash` and `my-second-brain` with `calendar-client: personal`) can run gog commands concurrently without conflict — each client has a separate credentials file (`~/.config/gogcli/credentials-<name>.json`) and the refresh tokens for different accounts don't collide in Keychain. The only thing you **cannot** do is run two terminals both trying to re-auth the *same* account at the same time (Keychain write race). For normal read operations, parallelism is safe.

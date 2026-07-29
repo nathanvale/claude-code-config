@@ -108,7 +108,7 @@ For each connector in `.productivity.yml`:
 | Connector value | Probe (cheap, <1s each) |
 |---|---|
 | `microsoft-365` (calendar/email) | Confirm an `mcp__*` Microsoft Graph tool is loaded; if not → ❌ |
-| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account resolves in `gog --client <name> auth list --check --json --no-input` when a client is set, otherwise in `gog auth list --check --json --no-input` → ❌ if any fails |
+| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account resolves in `gog --client <name> --account <email> auth list --check --json --no-input` when a client is set, otherwise in `gog --account <email> auth list --check --json --no-input` → ❌ if any fails |
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
 | `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
@@ -118,9 +118,9 @@ For each connector in `.productivity.yml`:
 | `none` | Skip silently — not an error |
 
 Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per step through `skills/productivity-connectors/SKILL.md`.
-Probe once per unique configured gog client. Reuse that result only for
-connectors whose `<connector>-client` value is identical; omitted clients share
-the default-client probe.
+Probe once per unique configured gog `(account, client)` pair. Reuse that result
+only when both values match. Treat an omitted client as the default client, but
+share its probe only for the same account.
 
 **Output — one compact table before any sync begins:**
 
