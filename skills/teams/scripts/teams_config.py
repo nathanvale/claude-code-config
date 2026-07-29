@@ -4,19 +4,29 @@ Real YAML (PyYAML), replacing the prototype's hand-rolled mini-parser.
 
 Resolution order for the config path:
   1. an explicit ``--config`` path
-  2. ``skills/teams/teams-reader.yaml``          (the user's private config)
-  3. ``skills/teams/teams-reader.example.yaml``  (committed generic fallback)
+  2. ``$XDG_CONFIG_HOME/teams/teams-reader.yaml``  (user config, default ~/.config)
+  3. ``skills/teams/teams-reader.yaml``            (legacy in-skill config, back-compat)
+  4. ``skills/teams/teams-reader.example.yaml``    (committed generic fallback)
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-USER_CONFIG = SKILL_DIR / "teams-reader.yaml"
+
+
+def _xdg_config_home() -> Path:
+    override = os.environ.get("XDG_CONFIG_HOME")
+    return Path(override) if override else Path.home() / ".config"
+
+
+XDG_CONFIG = _xdg_config_home() / "teams" / "teams-reader.yaml"
+LEGACY_CONFIG = SKILL_DIR / "teams-reader.yaml"
 EXAMPLE_CONFIG = SKILL_DIR / "teams-reader.example.yaml"
 
 
@@ -36,7 +46,7 @@ class Config:
 
 
 def default_config_path() -> Path | None:
-    for candidate in (USER_CONFIG, EXAMPLE_CONFIG):
+    for candidate in (XDG_CONFIG, LEGACY_CONFIG, EXAMPLE_CONFIG):
         if candidate.is_file():
             return candidate
     return None

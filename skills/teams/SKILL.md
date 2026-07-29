@@ -100,9 +100,11 @@ rebuildable from the Teams cache at any time with `sync --full`.
 
 ## Configuration
 
-Optional. Copy `teams-reader.example.yaml` to `teams-reader.yaml` (gitignored)
-to set a watch list, a ticket pattern for your tracker, and lookback defaults.
-Without it, everything still works over all cached conversations.
+Optional. Copy `teams-reader.example.yaml` to
+`$XDG_CONFIG_HOME/teams/teams-reader.yaml` (default `~/.config/teams/`) to set a
+watch list, a ticket pattern for your tracker, and lookback defaults. An
+in-skill `teams-reader.yaml` (gitignored) still works as a legacy fallback.
+Without any config, everything still works over all cached conversations.
 
 Identity is auto-detected and cross-checked against the store; set `self.mri`
 only if `whoami` reports low confidence.

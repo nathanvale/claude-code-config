@@ -675,8 +675,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true",
                         help="emit a structured envelope on stdout")
     parser.add_argument("--config", type=Path, default=None,
-                        help="config file (default: teams-reader.yaml, "
-                             "falling back to teams-reader.example.yaml)")
+                        help="config file (default: $XDG_CONFIG_HOME/teams/teams-reader.yaml, "
+                             "then in-skill teams-reader.yaml, then teams-reader.example.yaml)")
     sub = parser.add_subparsers(dest="command")
 
     def add(name: str, help_text: str) -> argparse.ArgumentParser:
