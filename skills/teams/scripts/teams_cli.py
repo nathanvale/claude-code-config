@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from teams_config import Config, ConfigError, load_config  # noqa: E402
+from teams_corpus import CorpusWriter, Cursor, NoteInput  # noqa: E402
 from teams_output import (  # noqa: E402
     EXIT_FAILURE,
     EXIT_OK,
@@ -66,6 +67,10 @@ COMMANDS: list[dict] = [
     {"name": "code", "group": "extract", "heuristic": False,
      "summary": "Messages containing code or pre blocks.",
      "usage": "code [--channel NAME] [--limit N]"},
+    {"name": "sync", "group": "corpus", "heuristic": False,
+     "summary": "Backfill every cached message into the markdown corpus for "
+                "indexing. Incremental via a cursor; --full rewrites.",
+     "usage": "sync [--full] [--save-dir PATH]"},
     {"name": "unread", "group": "read", "heuristic": False,
      "summary": "Unread activity-feed items and conversations. Note: the cache "
                 "keeps no per-message read horizon.",
@@ -192,7 +197,43 @@ def resolve_identity(reader: TeamsReader, cfg: Config,
     return identity
 
 
-def msg_rows(messages) -> list[dict]:
+# Per-run handles for the active reader and corpus writer. Set once in main so
+# read-through persistence does not have to be threaded through every handler.
+_ACTIVE: dict = {}
+
+
+def persist(reader: TeamsReader, messages, writer: CorpusWriter | None) -> None:
+    """Read-through persistence: saving is a side effect of reading.
+
+    Every message a command returns becomes a markdown note, so the corpus
+    grows as the user works and QMD can index it. No separate export step.
+    """
+    if writer is None or not writer.enabled:
+        return
+    convs = reader.conversations()
+    for m in messages:
+        conv = convs.get(m.conversation_id)
+        writer.write(NoteInput(
+            message_id=m.message_id,
+            sent_at=m.time,
+            author=m.author,
+            author_mri=m.creator_mri,
+            is_from_me=m.from_me,
+            conversation_id=m.conversation_id,
+            conversation_name=conv.name if conv else None,
+            conversation_type=conv.type if conv else None,
+            content=m.content,
+        ))
+
+
+def msg_rows(messages, reader: TeamsReader | None = None,
+             writer: CorpusWriter | None = None) -> list[dict]:
+    # The writer rides on the reader (set once in main) so every handler gets
+    # read-through persistence without threading it through each signature.
+    reader = reader or _ACTIVE.get("reader")
+    writer = writer or _ACTIVE.get("writer")
+    if reader is not None:
+        persist(reader, messages, writer)
     return [
         {"time": m.time, "author": m.author, "from_me": m.from_me,
          "creator_mri": m.creator_mri, "conversation_id": m.conversation_id,
@@ -391,6 +432,43 @@ def cmd_reactions(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     return result
 
 
+def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    """Backfill the whole cache into the markdown corpus.
+
+    Incremental by default: the cursor records the newest message already
+    written, so repeat runs only add what arrived since. --full rewrites
+    everything, which is also the repair path if the corpus is damaged (it is
+    rebuildable from the Teams cache).
+    """
+    writer = _ACTIVE.get("writer") or CorpusWriter(args.save_dir)
+    writer.enabled = True
+    cursor = Cursor()
+    since = None if args.full else cursor.last_synced()
+
+    messages = [m for m in reader.iter_messages()
+                if m.time and (since is None or m.time > since)]
+    messages.sort(key=lambda m: m.time)
+    persist(reader, messages, writer)
+
+    newest = messages[-1].time if messages else since
+    cursor.write(newest, writer.written)
+
+    data = {**writer.summary(), "cursor": str(cursor.path),
+            "since": since, "newest_message": newest,
+            "mode": "full" if args.full else "incremental"}
+    if not args.json:
+        mode = "full" if args.full else "incremental"
+        print(f"Synced corpus ({mode})")
+        print(f"  corpus  : {writer.dir}")
+        print(f"  written : {writer.written} notes"
+              + (f" (skipped {writer.skipped})" if writer.skipped else ""))
+        print(f"  newest  : {fmt_time(newest)}")
+        print(f"  cursor  : {cursor.path}")
+        if writer.written:
+            print("\n  Point QMD at the corpus directory to make these searchable.")
+    return data
+
+
 def cmd_people(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     ppl = sorted(reader.people().values(), key=lambda p: (p["displayName"] or "").lower())
     ppl = ppl[: args.limit]
@@ -498,6 +576,7 @@ HANDLERS = {
     "code": cmd_code,
     "unread": cmd_unread,
     "reactions": cmd_reactions,
+    "sync": cmd_sync,
     "people": cmd_people,
     "whois": cmd_whois,
     "whoami": cmd_whoami,
@@ -593,6 +672,11 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text, description=help_text)
         p.add_argument("--json", action="store_true", help="structured output")
         p.add_argument("--config", type=Path, default=None, help="config file")
+        p.add_argument("--save-dir", type=Path, default=None,
+                       help="markdown corpus directory "
+                            "(default: $XDG_DATA_HOME/teams)")
+        p.add_argument("--no-save", action="store_true",
+                       help="do not write returned messages to the corpus")
         return p
 
     # Discovery: always emits JSON, but accepts --json so a driver can pass it
@@ -639,6 +723,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("code", "Messages containing code or pre blocks.")
     p.add_argument("--channel", default=None)
     p.add_argument("--limit", type=int, default=30)
+
+    p = add("sync", "Backfill every cached message into the markdown corpus.")
+    p.add_argument("--full", action="store_true",
+                   help="rewrite the whole corpus, ignoring the cursor")
 
     p = add("unread", "Unread activity-feed items and conversations.")
     p.add_argument("--limit", type=int, default=50)
@@ -694,9 +782,15 @@ def main(argv: list[str] | None = None) -> int:
 
     handler = HANDLERS[args.command]
     warnings: list[str] = []
+    writer = CorpusWriter(getattr(args, "save_dir", None),
+                          enabled=not getattr(args, "no_save", False))
     try:
         with open_reader() as reader:
+            _ACTIVE["reader"] = reader
+            _ACTIVE["writer"] = writer
             data = handler(reader, cfg, args, warnings)
+            if writer.written and not as_json:
+                warn(f"saved {writer.written} messages to {writer.dir}")
             if as_json:
                 return emit_json(args.command, data,
                                  heuristic=args.command in HEURISTIC_COMMANDS,
