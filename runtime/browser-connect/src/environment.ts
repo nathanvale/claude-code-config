@@ -8,9 +8,11 @@
 // KTD2). The interface is not extracted until slice two's second environment
 // implementation earns it.
 
-import type {
-	WarmChromeCheckErrorCode,
-	WarmChromeRuntime,
+import {
+	WARM_CHROME_CONTRACT_ID,
+	WARM_CHROME_SCHEMA_VERSION,
+	type WarmChromeCheckErrorCode,
+	type WarmChromeRuntime,
 } from "@side-quest/warm-chrome";
 import type { WarmChromeMainDeps } from "@side-quest/warm-chrome/cli";
 
@@ -20,6 +22,7 @@ import type {
 	BrowserConnectEnvironmentRepairContext,
 	BrowserConnectFailureClass,
 	BrowserConnectLaunchProvenance,
+	BrowserConnectProfilePostureProof,
 	BrowserConnectProofEvidence,
 	BrowserConnectSuggestedPortEvidence,
 	BrowserConnectVerifiedEndpoint,
@@ -87,6 +90,8 @@ export const WARM_CHROME_REASON_TO_FAILURE_CLASS = {
 	invalid_cdp: "foreign-listener",
 	// A real Chrome on an unsafe/default profile — a foreign instance.
 	unsafe_profile: "foreign-listener",
+	// The profile exists but its effective credential posture is untrusted.
+	profile_posture_unsafe: "foreign-listener",
 	// The verified listener's identity shifted mid-proof — untrusted.
 	listener_mismatch: "foreign-listener",
 } as const satisfies Record<WarmChromeCheckErrorCode, BrowserConnectFailureClass>;
@@ -107,6 +112,7 @@ export const WARM_CHROME_REASON_TO_ENVIRONMENT_CAUSE = {
 	wrong_browser: "foreign_listener",
 	non_loopback: "foreign_listener",
 	unsafe_profile: "foreign_listener",
+	profile_posture_unsafe: "foreign_listener",
 	// Something answered but could not be verified as an Agent Chrome CDP end.
 	invalid_cdp: "unverified_listener",
 	listener_mismatch: "unverified_listener",
@@ -208,6 +214,9 @@ type WarmChromeOkEnvelope = {
 		web_socket_debugger_url: string;
 		contract_id: string;
 		schema_version: string;
+		port: string;
+		browser_pid: number;
+		credential_posture: BrowserConnectProfilePostureProof;
 	};
 };
 
@@ -415,9 +424,9 @@ function parseWarmChromeEnvelope(output: string): ParsedWarmChromeEnvelope {
 			"warm-chrome emitted no JSON envelope on the capture writer.",
 		);
 	}
-	let parsed: ParsedWarmChromeEnvelope;
+	let parsed: unknown;
 	try {
-		parsed = JSON.parse(document) as ParsedWarmChromeEnvelope;
+		parsed = JSON.parse(document);
 	} catch (error) {
 		throw new WarmChromeEnvelopeParseError(
 			`warm-chrome capture was not valid JSON: ${
@@ -425,14 +434,163 @@ function parseWarmChromeEnvelope(output: string): ParsedWarmChromeEnvelope {
 			}`,
 		);
 	}
-	if (parsed.status !== "ok" && parsed.status !== "error") {
+	if (!isRecord(parsed) || (parsed.status !== "ok" && parsed.status !== "error")) {
 		throw new WarmChromeEnvelopeParseError(
 			`warm-chrome envelope carried an unexpected status: ${String(
-				(parsed as { status?: unknown }).status,
+				isRecord(parsed) ? parsed.status : undefined,
 			)}`,
 		);
 	}
-	return parsed;
+	if (parsed.status === "ok") {
+		const data = isRecord(parsed.data) ? parsed.data : undefined;
+		if (
+			data?.contract_id !== WARM_CHROME_CONTRACT_ID ||
+			data.schema_version !== WARM_CHROME_SCHEMA_VERSION
+		) {
+			throw new WarmChromeEnvelopeParseError(
+				"warm-chrome ok envelope carried unrecognized contract provenance.",
+			);
+		}
+		const endpointPort = readBoundEndpointPort(
+			data?.endpoint,
+			data?.web_socket_debugger_url,
+		);
+		const profilePosture = parseLiveCleanProfilePosture(
+			data?.credential_posture,
+			{
+				port:
+					endpointPort !== null && data?.port === endpointPort
+						? endpointPort
+						: null,
+				browserPid: data?.browser_pid,
+			},
+		);
+		if (profilePosture === null) {
+			throw new WarmChromeEnvelopeParseError(
+				"warm-chrome ok envelope lacked exact live-clean profile posture.",
+			);
+		}
+		return {
+			...(parsed as WarmChromeOkEnvelope),
+			data: {
+				...((parsed as WarmChromeOkEnvelope).data),
+				credential_posture: profilePosture,
+			},
+		};
+	}
+	return parsed as WarmChromeErrorEnvelope;
+}
+
+function readBoundEndpointPort(httpValue: unknown, wsValue: unknown): string | null {
+	if (typeof httpValue !== "string" || typeof wsValue !== "string") return null;
+	try {
+		const http = new URL(httpValue);
+		const ws = new URL(wsValue);
+		if (
+			http.protocol !== "http:" ||
+			ws.protocol !== "ws:" ||
+			http.hostname !== "127.0.0.1" ||
+			ws.hostname !== "127.0.0.1" ||
+			!isNumericPort(http.port) ||
+			http.port !== ws.port ||
+			!ws.pathname.startsWith("/devtools/browser/")
+		) {
+			return null;
+		}
+		return http.port;
+	} catch {
+		return null;
+	}
+}
+
+function parseLiveCleanProfilePosture(
+	value: unknown,
+	binding: {
+		port: unknown;
+		browserPid: unknown;
+	},
+): BrowserConnectProfilePostureProof | null {
+	if (
+		!hasExactKeys(value, ["state", "disk", "process", "effective"]) ||
+		value.state !== "live-clean" ||
+		!hasExactKeys(value.disk, [
+			"save_setting",
+			"auto_signin_setting",
+			"sync_setting",
+			"stored_login",
+		]) ||
+		value.disk.save_setting !== "disabled" ||
+		value.disk.auto_signin_setting !== "disabled" ||
+		value.disk.sync_setting !== "disabled" ||
+		value.disk.stored_login !== "live-observed-absent" ||
+		!hasExactKeys(value.process, [
+			"disable_sync_switch",
+			"disable_extensions_switch",
+		]) ||
+		value.process.disable_sync_switch !== "present" ||
+		value.process.disable_extensions_switch !== "present" ||
+		!hasExactKeys(value.effective, [
+			"observation",
+			"save_capability",
+			"fill_exposure",
+			"sync_state",
+			"save_prompt",
+			"observer",
+		]) ||
+		value.effective.observation !== "running-chrome" ||
+		value.effective.save_capability !== "disabled" ||
+		value.effective.fill_exposure !== "no-source" ||
+		value.effective.sync_state !== "disabled" ||
+		value.effective.save_prompt !== "suppressed" ||
+		!hasExactKeys(value.effective.observer, [
+			"source",
+			"browser_pid",
+			"port",
+			"profile_match",
+			"observed_at_ms",
+		]) ||
+		value.effective.observer.source !== "chrome-webui" ||
+		value.effective.observer.profile_match !== "exact" ||
+		!isPositiveInteger(binding.browserPid) ||
+		value.effective.observer.browser_pid !== binding.browserPid ||
+		!isNumericPort(binding.port) ||
+		value.effective.observer.port !== binding.port ||
+		!isNonNegativeFiniteNumber(value.effective.observer.observed_at_ms)
+	) {
+		return null;
+	}
+	return value as BrowserConnectProfilePostureProof;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNumericPort(value: unknown): value is string {
+	if (typeof value !== "string" || !/^\d{1,5}$/.test(value)) return false;
+	const port = Number(value);
+	return port >= 1 && port <= 65_535;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys<K extends string>(
+	value: unknown,
+	keys: readonly K[],
+): value is Record<K, unknown> {
+	if (!isRecord(value)) return false;
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	return (
+		actual.length === expected.length &&
+		actual.every((key, index) => key === expected[index])
+	);
 }
 
 /**
@@ -537,6 +695,7 @@ function verifiedResult(
 			environment_contract_id: envelope.data.contract_id,
 			environment_schema_version: envelope.data.schema_version,
 			route_evidence: AGENT_CHROME_ROUTE_EVIDENCE,
+			profile_posture: envelope.data.credential_posture,
 		},
 	};
 }

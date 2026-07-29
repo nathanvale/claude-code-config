@@ -82,9 +82,38 @@ function warmChromeOkEnvelope(port: string): string {
 			run_id: RUN_ID,
 			data: {
 				contract_id: "warm-chrome.browser-entry",
-				schema_version: "1",
+				schema_version: "2",
 				endpoint: `http://127.0.0.1:${port}`,
 				web_socket_debugger_url: `ws://127.0.0.1:${port}/devtools/browser/u4`,
+				port,
+				browser_pid: 4242,
+				credential_posture: {
+					state: "live-clean",
+					disk: {
+						save_setting: "disabled",
+						auto_signin_setting: "disabled",
+						sync_setting: "disabled",
+						stored_login: "live-observed-absent",
+					},
+					process: {
+						disable_sync_switch: "present",
+						disable_extensions_switch: "present",
+					},
+					effective: {
+						observation: "running-chrome",
+						save_capability: "disabled",
+						fill_exposure: "no-source",
+						sync_state: "disabled",
+						save_prompt: "suppressed",
+						observer: {
+							source: "chrome-webui",
+							browser_pid: 4242,
+							port: String(port),
+							profile_match: "exact",
+							observed_at_ms: 1,
+						},
+					},
+				},
 			},
 		},
 		null,
@@ -1619,7 +1648,7 @@ describe("cause-to-repair matrix drives the projected envelope (U4 R18)", () => 
 			const data = parts.data as unknown as Record<string, unknown>;
 			expect(data.next_action_id).toBe(row.expected.legacy);
 			expect(data.failure_class).toBe(row.context.failure_class);
-			expect(data.schema_version).toBe("2");
+			expect(data.schema_version).toBe("3");
 		});
 	}
 });

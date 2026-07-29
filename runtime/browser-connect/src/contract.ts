@@ -95,6 +95,40 @@ export type BrowserConnectProofEvidence = {
 	environment_contract_id: string;
 	environment_schema_version: string;
 	route_evidence: BrowserConnectRouteEvidenceStatus;
+	profile_posture: BrowserConnectProfilePostureProof;
+};
+
+/**
+ * Exact effective running-Chrome posture required for a verified handoff.
+ * Configuration-only evidence remains Warm Chrome diagnostic state and never
+ * enters a Browser Connect capability.
+ */
+export type BrowserConnectProfilePostureProof = {
+	state: "live-clean";
+	disk: {
+		save_setting: "disabled";
+		auto_signin_setting: "disabled";
+		sync_setting: "disabled";
+		stored_login: "live-observed-absent";
+	};
+	process: {
+		disable_sync_switch: "present";
+		disable_extensions_switch: "present";
+	};
+	effective: {
+		observation: "running-chrome";
+		save_capability: "disabled";
+		fill_exposure: "no-source";
+		sync_state: "disabled";
+		save_prompt: "suppressed";
+		observer: {
+			source: "chrome-webui";
+			browser_pid: number;
+			port: string;
+			profile_match: "exact";
+			observed_at_ms: number;
+		};
+	};
 };
 
 /**

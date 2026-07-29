@@ -9,6 +9,7 @@ import type {
 	BrowserConnectEnvironmentName,
 	BrowserConnectHandoffPayload,
 	BrowserConnectLaunchProvenance,
+	BrowserConnectProfilePostureProof,
 	BrowserConnectRouteEvidenceStatus,
 	BrowserConnectRouteId,
 } from "./contract";
@@ -23,6 +24,7 @@ export type {
 	BrowserConnectEnvironmentName,
 	BrowserConnectHandoffPayload,
 	BrowserConnectLaunchProvenance,
+	BrowserConnectProfilePostureProof,
 	BrowserConnectProofEvidence,
 	BrowserConnectRouteEvidenceStatus,
 	BrowserConnectRouteId,
@@ -52,14 +54,13 @@ export const BROWSER_CONNECT_CONTRACT_ID =
 /**
  * Machine schema version for browser-connect JSON envelopes (R16).
  *
- * Schema 2 (platform plan 2026-07-21-002 U1, KTD13): environment identity
- * carries the named logical `profile` alongside `name`. Consumers pin this
- * version locally and fail closed on an unrevised consumer; the browser-use
- * pin bumps atomically with this constant.
+ * Schema 3 adds the exact effective running-Chrome profile posture proof.
+ * Consumers pin this version locally and fail closed on an unrevised consumer;
+ * the browser-use pin bumps atomically with this constant.
  *
- * @defaultValue "2"
+ * @defaultValue "3"
  */
-export const BROWSER_CONNECT_SCHEMA_VERSION = "2" as const;
+export const BROWSER_CONNECT_SCHEMA_VERSION = "3" as const;
 
 /** Safe observed/pinned version shape for projection (R11): plain x.y.z only. */
 export const BROWSER_CONNECT_SAFE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;

@@ -50,7 +50,7 @@ const warmChromeMain = async (_argv, deps = {}) => {
 		run_id: "playwright-process-proof",
 		data: {
 			contract_id: "warm-chrome.browser-entry",
-			schema_version: "1",
+			schema_version: "2",
 			ok: true,
 			action: "browser_ready",
 			command: "check",
@@ -60,6 +60,33 @@ const warmChromeMain = async (_argv, deps = {}) => {
 			web_socket_debugger_url: ws,
 			browser_pid: 4242,
 			profile_dir: "/redacted/profile",
+			credential_posture: {
+				state: "live-clean",
+				disk: {
+					save_setting: "disabled",
+					auto_signin_setting: "disabled",
+					sync_setting: "disabled",
+					stored_login: "live-observed-absent",
+				},
+				process: {
+					disable_sync_switch: "present",
+					disable_extensions_switch: "present",
+				},
+				effective: {
+					observation: "running-chrome",
+					save_capability: "disabled",
+					fill_exposure: "no-source",
+					sync_state: "disabled",
+					save_prompt: "suppressed",
+					observer: {
+						source: "chrome-webui",
+						browser_pid: 4242,
+						port: new URL(endpoint).port,
+						profile_match: "exact",
+						observed_at_ms: 1,
+					},
+				},
+			},
 		},
 	}) + String.fromCharCode(10));
 	return 0;
@@ -156,7 +183,7 @@ describe("playwright-cdp process-boundary attachment", () => {
 		writeFileSync(executable, fakePlaywrightCliSource());
 		chmodSync(executable, 0o755);
 
-		const endpoint = browser.url;
+		const endpoint = `http://127.0.0.1:${browser.port}`;
 		const result = await runCliProcess({
 			label: "playwright-cdp-process-proof",
 			argv: [
