@@ -20,6 +20,29 @@ skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py
 If `.venv` does not exist, run `skills/teams/scripts/bootstrap.sh` first
 (one-time; needs network + git + Xcode command line tools).
 
+## Searching: use QMD, not `search`
+
+Every message read is saved as a markdown note in `~/.local/share/teams/` and
+indexed as the `teams` QMD collection. **For anything semantic, query QMD** —
+it does BM25 + vector + reranking. The CLI's `search` is a substring match and
+should only be used for exact strings (an id, a URL, a specific error).
+
+```bash
+qmd query "who raised concerns about the deploy" -c teams
+qmd query "bulk print decisions" -c teams -c repo-pos-yellow   # chat + project docs
+```
+
+Scope with `-c teams` for "what did someone say". Repeat the flag to widen;
+comma-separated names do **not** work. Leave it off only for genuine
+cross-source questions — the collection is ~9,000 short chat messages and will
+otherwise outweigh curated docs on general queries.
+
+Frontmatter carries `from_mri`, `conversation`, `sent_at` and `direction`, so
+retrieved notes can be filtered or attributed without re-reading the store.
+
+`sync` re-indexes automatically after writing. If notes seem missing from
+search results, run it — or `cd ~/.local/share/teams && qmd update && qmd embed`.
+
 ## Choosing a Command
 
 Discover the command surface instead of guessing from this file:
@@ -33,7 +56,9 @@ Common routes:
 | Ask | Command |
 |-----|---------|
 | what happened recently | `digest [--hours N]` |
-| find a message | `search "<text>"` |
+| find a message by meaning | **`qmd query "..." -c teams`** (see above) |
+| find an exact string | `search "<text>"` |
+| backfill + reindex the corpus | `sync` |
 | who pinged me | `mentions [--unread]` |
 | what is waiting | `unread` |
 | everything about a ticket | `ticket <KEY>` |
@@ -60,6 +85,18 @@ stderr, so `--json` stdout stays parseable.
 - **`decisions`, `action-items` and `standup` are regex heuristics**, not
   summarizers. They are flagged `heuristic: true` in JSON and carry a caveat in
   text. Treat their output as candidates to check, never as findings.
+
+## The Corpus
+
+Reading is saving. Every command that returns messages writes them as notes:
+
+- corpus: `~/.local/share/teams/YYYY/MM/*.md` (`$XDG_DATA_HOME`), dirs `0700`,
+  files `0600` — this is corporate chat, so it never goes in a repo or in
+  `~/Documents` (which may be iCloud-synced)
+- cursor: `~/.local/state/teams/cursor.json` (`$XDG_STATE_HOME`)
+
+`--no-save` opts a command out; `--save-dir` relocates. The corpus is
+rebuildable from the Teams cache at any time with `sync --full`.
 
 ## Configuration
 

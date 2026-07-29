@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from teams_config import Config, ConfigError, load_config  # noqa: E402
-from teams_corpus import CorpusWriter, Cursor, NoteInput  # noqa: E402
+from teams_corpus import CorpusWriter, Cursor, NoteInput, reindex  # noqa: E402
 from teams_output import (  # noqa: E402
     EXIT_FAILURE,
     EXIT_OK,
@@ -453,9 +453,18 @@ def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     newest = messages[-1].time if messages else since
     cursor.write(newest, writer.written)
 
+    # Re-index so the notes just written are actually searchable. A corpus QMD
+    # has not seen is invisible, which defeats the point of writing it.
+    index = None
+    if writer.written and not args.no_index:
+        index = reindex(writer.dir)
+        if not index["ok"]:
+            warn(f"corpus written but reindex failed: {index.get('reason') or index}")
+
     data = {**writer.summary(), "cursor": str(cursor.path),
             "since": since, "newest_message": newest,
-            "mode": "full" if args.full else "incremental"}
+            "mode": "full" if args.full else "incremental",
+            "reindex": index}
     if not args.json:
         mode = "full" if args.full else "incremental"
         print(f"Synced corpus ({mode})")
@@ -464,8 +473,10 @@ def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
               + (f" (skipped {writer.skipped})" if writer.skipped else ""))
         print(f"  newest  : {fmt_time(newest)}")
         print(f"  cursor  : {cursor.path}")
-        if writer.written:
-            print("\n  Point QMD at the corpus directory to make these searchable.")
+        if index:
+            print(f"  indexed : {'yes' if index['ok'] else 'FAILED'}")
+        elif writer.written:
+            print("  indexed : skipped (--no-index)")
     return data
 
 
@@ -727,6 +738,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("sync", "Backfill every cached message into the markdown corpus.")
     p.add_argument("--full", action="store_true",
                    help="rewrite the whole corpus, ignoring the cursor")
+    p.add_argument("--no-index", action="store_true",
+                   help="skip the QMD reindex after writing")
 
     p = add("unread", "Unread activity-feed items and conversations.")
     p.add_argument("--limit", type=int, default=50)

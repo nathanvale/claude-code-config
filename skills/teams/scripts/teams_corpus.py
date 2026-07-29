@@ -208,6 +208,44 @@ class CorpusWriter:
                 "skipped": self.skipped}
 
 
+def reindex(corpus_dir: Path, *, embed: bool = True) -> dict:
+    """Refresh the QMD index over the corpus so new notes become searchable.
+
+    Run from inside the corpus directory: ``qmd collection add`` resolves paths
+    relative to cwd, and ``qmd update`` scopes its work the same way.
+
+    Note ``qmd update`` re-scans every registered collection, not just this one,
+    which is why this is an explicit step on ``sync`` rather than a silent side
+    effect of every query. Embedding is incremental — only new chunks cost time.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("qmd") is None:
+        return {"ok": False, "reason": "qmd not installed",
+                "hint": "install qmd, or index the corpus with your own tool"}
+    if not corpus_dir.is_dir():
+        return {"ok": False, "reason": f"corpus directory not found: {corpus_dir}"}
+
+    steps: list[dict] = []
+    for name, argv in (("update", ["qmd", "update"]),
+                       ("embed", ["qmd", "embed"]) if embed else (None, None)):
+        if name is None:
+            continue
+        try:
+            proc = subprocess.run(argv, cwd=corpus_dir, capture_output=True,
+                                  text=True, timeout=1800)
+        except (subprocess.SubprocessError, OSError) as exc:
+            steps.append({"step": name, "ok": False, "error": str(exc)})
+            break
+        steps.append({"step": name, "ok": proc.returncode == 0,
+                      "output": (proc.stdout or proc.stderr).strip()[-400:]})
+        if proc.returncode != 0:
+            break
+
+    return {"ok": all(s["ok"] for s in steps) if steps else False, "steps": steps}
+
+
 class Cursor:
     """Sync watermark: the newest message already written to the corpus.
 
