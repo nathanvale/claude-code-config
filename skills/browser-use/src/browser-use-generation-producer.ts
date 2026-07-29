@@ -567,6 +567,14 @@ export async function produceBrowserUseGeneration(
 		);
 	}
 	const generationId = sourceParsed.payload.generation_id;
+	if (!safeEntryName(generationId)) {
+		return failure(
+			"generation_candidate_invalid",
+			"source candidate manifest names an unsafe generation.",
+			"repair_generation_source",
+			"Replace the candidate generation id with one safe path segment.",
+		);
+	}
 	if (!sourceMatchesCandidateClosure(source.files, sourceParsed.payload)) {
 		return failure(
 			"generation_candidate_invalid",

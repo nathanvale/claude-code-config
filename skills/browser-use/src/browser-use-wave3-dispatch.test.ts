@@ -686,6 +686,36 @@ describe("runbook family — live (U4 wiring)", () => {
 		});
 	});
 
+	test("duplicate ordinary runbook input ids are refused without exposing values", async () => {
+		const firstValue = "first-input-secret";
+		const secondValue = "second-input-secret";
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--input",
+				`account=${firstValue}`,
+				"--input",
+				`account=${secondValue}`,
+				"--json",
+			],
+			makeRuntime(),
+		);
+
+		expect(result.exitCode).toBe(2);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_lane_refused",
+			message:
+				"each --input id may be supplied only once; received account=[redacted].",
+		});
+		expect(`${result.stdout}\n${result.stderr}`).not.toContain(firstValue);
+		expect(`${result.stdout}\n${result.stderr}`).not.toContain(secondValue);
+	});
+
 	test("runbook run dispatches the read-only runbook through agent-browser and confirms", async () => {
 		const store = await makeStore();
 		await seedActiveGeneration(store, readOnlyRunbook());

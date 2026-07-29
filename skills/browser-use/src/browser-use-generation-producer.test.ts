@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { shippedCatalogDigest } from "./browser-use-catalog-digest";
 import {
 	BROWSER_USE_GENERATION_SOURCE_LIMITS,
@@ -122,7 +122,7 @@ async function makeFixture(generationId: string) {
 		["corpus-generation-candidate.json", candidateRecord],
 	] as const) {
 		const path = join(sourceRoot, relativePath);
-		await fs.mkdir(path.slice(0, path.lastIndexOf("/")), {
+		await fs.mkdir(dirname(path), {
 			recursive: true,
 			mode: 0o700,
 		});
@@ -267,6 +267,39 @@ describe("produceBrowserUseGeneration", () => {
 				phase: "verified",
 				staged_generation: generationId,
 				activation_state: "unchanged",
+			},
+		});
+	});
+
+	test("rejects an unsafe candidate generation id before immutable adoption", async () => {
+		const fixture = await makeFixture("generation-producer-unsafe-id");
+		await fixture.deps.fs.writeFileDurable(
+			join(fixture.sourceRoot, "corpus-generation-candidate.json"),
+			encodeDurableRecord("corpus-generation-candidate", {
+				...fixture.candidate,
+				generation_id: "../other",
+			}),
+			0o600,
+		);
+
+		expect(
+			await produceBrowserUseGeneration(fixture.deps, {
+				sourceRoot: fixture.sourceRoot,
+			}),
+		).toMatchObject({
+			ok: false,
+			error: { code: "generation_candidate_invalid" },
+			next_safe_action: { id: "repair_generation_source" },
+		});
+		expect(
+			await fixture.deps.fs.lstat(
+				join(fixture.deps.paths.state.generationsDir, "..", "other"),
+			),
+		).toBeUndefined();
+		expect(await readBrowserUseMigrationStatus(fixture.deps)).toMatchObject({
+			ok: true,
+			state: {
+				staged_generation: "generation-migration-apply-fixture",
 			},
 		});
 	});

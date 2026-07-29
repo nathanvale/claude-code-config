@@ -1086,7 +1086,10 @@ async function readGenerationPairs(
 		}
 		return true;
 	}
-	return (await walk(root, "")) ? pairs : undefined;
+	if (!(await walk(root, ""))) return undefined;
+	return pairs.sort(([leftPath], [rightPath]) =>
+		leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0,
+	);
 }
 
 /**

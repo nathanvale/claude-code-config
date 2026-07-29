@@ -1109,14 +1109,16 @@ async function validateCandidateClosure(
 			action.asset_path,
 			action.asset_digest,
 		);
-		if (!recordFile.ok || !assetFile.ok) {
+		if (!recordFile.ok) {
 			return migrationFailure(
 				"migration_manifest_incomplete",
-				!recordFile.ok
-					? recordFile.message
-					: assetFile.ok
-						? ""
-						: assetFile.message,
+				recordFile.message,
+			);
+		}
+		if (!assetFile.ok) {
+			return migrationFailure(
+				"migration_manifest_incomplete",
+				assetFile.message,
 			);
 		}
 		let rawRecord: unknown;

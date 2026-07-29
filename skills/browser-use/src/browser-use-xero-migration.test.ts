@@ -51,6 +51,11 @@ describe("Xero migration — active extraction + staged financial writes (U6, R2
 			["from_date", "date"],
 			["to_date", "date"],
 		]);
+		expect(migrated.extract.runbook.inputs.map((input) => [input.id, input.custody])).toEqual([
+			["bank_account_id", "sensitive"],
+			["from_date", "ordinary"],
+			["to_date", "ordinary"],
+		]);
 	});
 
 	test("marks post-banktransaction and reconcile-batch staged-inactive", () => {

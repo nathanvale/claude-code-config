@@ -241,7 +241,7 @@ function buildExtractRunbook(
 				id: "bank_account_id",
 				summary: "The bank account UUID the statement extraction targets.",
 				required: true,
-				custody: "ordinary",
+				custody: "sensitive",
 				schema: { kind: "uuid" },
 			},
 			{

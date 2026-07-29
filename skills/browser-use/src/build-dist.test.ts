@@ -89,6 +89,9 @@ describe("browser-use dist catalog validation", () => {
 				distRoot,
 				log: () => {},
 			});
+			const expectedRunbooks = proof.relativePaths.map((relativePath) =>
+				relativePath.split("/").slice(0, 2).join("/"),
+			);
 			expect(existsSync(join(installRoot, "runbooks"))).toBe(false);
 
 			const child = Bun.spawn(
@@ -118,12 +121,12 @@ describe("browser-use dist catalog validation", () => {
 				child.exited,
 			]);
 
-			expect(stderr).toBe("");
 			if (exitCode !== 0) {
 				throw new Error(
-					`dist-only runbook list exited ${exitCode}: ${stdout}`,
+					`dist-only runbook list exited ${exitCode}: stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr)}`,
 				);
 			}
+			expect(stderr).toBe("");
 			const envelope = JSON.parse(stdout) as {
 				data: {
 					runbook_count: number;
@@ -135,10 +138,7 @@ describe("browser-use dist catalog validation", () => {
 				envelope.data.runbooks.map(
 					({ service_id, flow_id }) => `${service_id}/${flow_id}`,
 				),
-			).toEqual([
-				"matest/development-snapshot-verify",
-				"oncore/timesheet-snapshot-verify",
-			]);
+			).toEqual(expectedRunbooks);
 		},
 		30_000,
 	);

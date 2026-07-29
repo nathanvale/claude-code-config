@@ -255,7 +255,10 @@ describe("platform family help and discovery", () => {
 	test("migration status exposes active-generation fields in discovery, JSON, and plain output", async () => {
 		const xdg = makeTempXdgEnv();
 		try {
-			const runtime = makeRuntime({ env: xdg.env });
+			const resolved = resolveBrowserUsePaths(xdg.env);
+			if (!resolved.ok) throw new Error(resolved.refusal.code);
+			const tracked = writeTrackingPlatformFs();
+			const runtime = makeRuntime({ env: xdg.env, platformFs: tracked.fs });
 			const discovered = projectCommandDiscoveryTree(
 				Object.entries(browserUseContracts),
 			).commands["migration-status"];
@@ -279,6 +282,8 @@ describe("platform family help and discovery", () => {
 					effect_fence: "not-applicable",
 				},
 			});
+			expect(tracked.writeProbeCount()).toBe(0);
+			expect(existsSync(resolved.resolution.roots.state)).toBe(false);
 
 			const plainResult = await runForTest(
 				["migration", "status", "--plain"],

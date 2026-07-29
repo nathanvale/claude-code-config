@@ -376,6 +376,12 @@ describe("runbook input custody", () => {
 			code: "runbook_input_unknown",
 		},
 		{
+			name: "undeclared private id",
+			publicInputIds: [],
+			privateInputIds: ["missing"],
+			code: "runbook_input_unknown",
+		},
+		{
 			name: "same id from public and private routes",
 			publicInputIds: ["query"],
 			privateInputIds: ["query"],

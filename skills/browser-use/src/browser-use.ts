@@ -3977,10 +3977,13 @@ function emitMigrationState(
  * @returns Process exit code
  */
 async function runMigration(input: PlatformCommandInput): Promise<number> {
-	const store = await openPlatformStore(input, "write");
-	if (!store.ok) return store.exitCode;
 	type MigrationCommand = Extract<BrowserUseCommand, `migration-${string}`>;
 	const command = input.parsed.command as MigrationCommand;
+	const store = await openPlatformStore(
+		input,
+		command === "migration-status" ? "read" : "write",
+	);
+	if (!store.ok) return store.exitCode;
 	// RetentionDeps is structurally RunStoreDeps (fs/paths/clock); the engine
 	// consumes the same admitted-store deps every other U2 command opens.
 	const deps = store.deps;

@@ -634,6 +634,7 @@ function parseRunbookInputs(
 	| { ok: true; inputs: BrowserUseRunbookInputs }
 	| { ok: false; message: string } {
 	const inputs: Record<string, string> = {};
+	const inputIds = new Set<string>();
 	for (const pair of pairs) {
 		const equals = pair.indexOf("=");
 		if (equals <= 0) {
@@ -642,7 +643,15 @@ function parseRunbookInputs(
 				message: `each --input must be <id>=<value>; received ${sanitizeInputPairForError(pair)}.`,
 			};
 		}
-		inputs[pair.slice(0, equals)] = pair.slice(equals + 1);
+		const inputId = pair.slice(0, equals);
+		if (inputIds.has(inputId)) {
+			return {
+				ok: false,
+				message: `each --input id may be supplied only once; received ${sanitizeInputPairForError(pair)}.`,
+			};
+		}
+		inputIds.add(inputId);
+		inputs[inputId] = pair.slice(equals + 1);
 	}
 	return { ok: true, inputs };
 }
