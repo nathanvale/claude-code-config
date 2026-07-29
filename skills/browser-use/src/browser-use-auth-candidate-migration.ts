@@ -16,6 +16,7 @@
 // no Date.now.
 // ---------------------------------------------------------------------------
 
+import { isAbsolute } from "node:path";
 import {
 	type BrowserUseImportCandidate,
 	normalizeOrigin,
@@ -90,7 +91,7 @@ const SECRET_KEY_HINT_PATTERN = /(password|passwd|secret|seed|totp|credential|to
 function sourceRelativePathValid(value: string): boolean {
 	return (
 		value.length > 0 &&
-		!value.startsWith("/") &&
+		!isAbsolute(value) &&
 		!value.split("/").some((segment) => segment === "" || segment === "..")
 	);
 }
@@ -172,6 +173,19 @@ function candidateProse(source: BrowserUseLoginNarrativeSource): string | null {
  * @param source - One already-redacted login narrative or capability source
  * @returns One admissible, secret-free Import Candidate
  * @throws {Error} When the source or its transform output fails redaction/shape
+ *
+ * @example
+ * ```typescript
+ * const candidate = transformLoginNarrativeToCandidate({
+ *   serviceId: "ellucian-sso",
+ *   loginOrigin: "https://sso.example.com",
+ *   methodShapeHint: "password-totp-three-step",
+ *   mfaSelectionStage: true,
+ *   contextProse: null,
+ *   sourceRelativePath: "ellucian-okta/runbook-okta-login.md",
+ * });
+ * // candidate.hint_item_id === null; no credential-source detail crosses.
+ * ```
  */
 export function transformLoginNarrativeToCandidate(
 	source: BrowserUseLoginNarrativeSource,
@@ -220,6 +234,16 @@ export function transformLoginNarrativeToCandidate(
  * @param sources - Already-redacted login narratives and login capabilities
  * @returns Redacted candidates plus one migrated provenance edge per source
  * @throws {Error} When a source fails redaction/shape or ids are not distinct
+ *
+ * @example
+ * ```typescript
+ * const migration = buildAuthCandidateMigration([
+ *   ellucianNarrative,
+ *   monashNarrative,
+ *   confluenceCapability,
+ * ]);
+ * // migration.candidates: one proposed candidate per source; provenance is 1:1.
+ * ```
  */
 export function buildAuthCandidateMigration(
 	sources: readonly BrowserUseLoginNarrativeSource[],

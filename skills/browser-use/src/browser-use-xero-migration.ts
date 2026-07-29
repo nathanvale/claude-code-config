@@ -432,21 +432,36 @@ export function buildXeroMigration(
 	return { extract, stagedInactive, provenance };
 }
 
-// Map one source path to the flow it feeds and its activation disposition. A
-// path naming a reconciliation or bank-transaction source is staged-inactive;
-// the extraction source is the only active edge. An unrecognized source defaults
-// to staged-inactive (fail closed: never silently activate an unknown source).
+// Map one source path to the flow it feeds and its activation disposition. The
+// mapping is a closed, ordered table keyed on exact flow fragments: the single
+// active extraction edge, the staged-inactive bank-transaction post, and the
+// staged-inactive reconciliation family (batch/fill/clear-and-fill). Order is
+// significant only so a compound fragment ("...-and-extract...") resolves to its
+// most specific match; an unrecognized source throws rather than defaulting, so
+// a typo or a new unmapped flow surfaces loudly instead of silently labelling
+// financial provenance active (fail closed on the classifier itself).
+const XERO_SOURCE_FLOW_TABLE: readonly {
+	fragment: string;
+	flow_id: string;
+	activation_state: BrowserUseXeroActivationState;
+}[] = [
+	{ fragment: "post-banktransaction", flow_id: "post-banktransaction", activation_state: "staged-inactive" },
+	{ fragment: "reconcile", flow_id: "reconcile-batch", activation_state: "staged-inactive" },
+	{ fragment: "extract-bankstatementsplus", flow_id: "extract-bankstatementsplus", activation_state: "active" },
+];
+
 function inferFlowForSource(source: string): {
 	flow_id: string;
 	activation_state: BrowserUseXeroActivationState;
 } {
-	if (source.includes("extract-bankstatementsplus")) {
-		return { flow_id: "extract-bankstatementsplus", activation_state: "active" };
+	for (const entry of XERO_SOURCE_FLOW_TABLE) {
+		if (source.includes(entry.fragment)) {
+			return { flow_id: entry.flow_id, activation_state: entry.activation_state };
+		}
 	}
-	if (source.includes("post-banktransaction")) {
-		return { flow_id: "post-banktransaction", activation_state: "staged-inactive" };
-	}
-	return { flow_id: "reconcile-batch", activation_state: "staged-inactive" };
+	throw new Error(
+		`Xero migration cannot classify source provenance path "${source}": it matches no known flow fragment.`,
+	);
 }
 
 // --- Staged-inactive dispatch refusal (R33) ----------------------------------
@@ -467,6 +482,14 @@ export type BrowserUseXeroInactiveRefusal = {
  *
  * @param flow - One migrated flow with its activation state
  * @returns Ok for an active flow, or a typed `runbook_inactive` refusal
+ *
+ * @example
+ * ```typescript
+ * const gate = refuseInactiveXeroRun(migrated.stagedInactive[0]);
+ * if (!gate.ok) {
+ *   // gate.refusal.code === "runbook_inactive"; never dispatched.
+ * }
+ * ```
  */
 export function refuseInactiveXeroRun(
 	flow: BrowserUseXeroMigratedFlow,
@@ -490,7 +513,18 @@ export function refuseInactiveXeroRun(
 
 // --- Reconciliation simulation (R28) -----------------------------------------
 
-/** Typed outcome of one simulated reconciliation batch (no dispatch). */
+/** Typed refusal for a reconciliation batch that fails shape validation (R28). */
+export type BrowserUseXeroReconcileRefusal = {
+	code: "reconcile_variant_invalid" | "reconcile_batch_shape_invalid";
+	message: string;
+};
+
+/**
+ * Typed outcome of one simulated reconciliation batch (no dispatch). The
+ * `ok: false` branch nests its detail under `refusal` to match the union shape
+ * used by {@link refuseInactiveXeroRun} and {@link preflightXeroExtract}, so a
+ * caller pattern-matching `.refusal.code` handles every Xero refusal uniformly.
+ */
 export type BrowserUseXeroReconcileSimulation =
 	| {
 			ok: true;
@@ -503,8 +537,7 @@ export type BrowserUseXeroReconcileSimulation =
 	  }
 	| {
 			ok: false;
-			code: "reconcile_variant_invalid" | "reconcile_batch_shape_invalid";
-			message: string;
+			refusal: BrowserUseXeroReconcileRefusal;
 	  };
 
 /**
@@ -516,6 +549,17 @@ export type BrowserUseXeroReconcileSimulation =
  *
  * @param input - Ordered stable keys and the caller-owned discriminated batch
  * @returns Per-key simulated checkpoints, or a typed shape refusal
+ *
+ * @example
+ * ```typescript
+ * const sim = simulateXeroReconcileBatch({
+ *   itemKeys: ["line-1"],
+ *   batch: [{ kind: "CLICK_OK", line_index: 0 }],
+ * });
+ * if (sim.ok) {
+ *   // sim.checkpoints[0].outcome === "simulated-confirmed" (no dispatch).
+ * }
+ * ```
  */
 export function simulateXeroReconcileBatch(input: {
 	itemKeys: readonly string[];
@@ -528,9 +572,11 @@ export function simulateXeroReconcileBatch(input: {
 	) {
 		return {
 			ok: false,
-			code: "reconcile_batch_shape_invalid",
-			message:
-				"a reconciliation batch requires one distinct stable item key per entry.",
+			refusal: {
+				code: "reconcile_batch_shape_invalid",
+				message:
+					"a reconciliation batch requires one distinct stable item key per entry.",
+			},
 		};
 	}
 	const checkpoints: {
@@ -543,8 +589,10 @@ export function simulateXeroReconcileBatch(input: {
 		if (variant === undefined) {
 			return {
 				ok: false,
-				code: "reconcile_variant_invalid",
-				message: `reconciliation entry ${index} is not a valid CLICK_OK / FILL / CLEAR_AND_FILL variant.`,
+				refusal: {
+					code: "reconcile_variant_invalid",
+					message: `reconciliation entry ${index} is not a valid CLICK_OK / FILL / CLEAR_AND_FILL variant.`,
+				},
 			};
 		}
 		checkpoints.push({
@@ -628,6 +676,18 @@ const UUID_V = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
  *
  * @param input - Bank account UUID plus inclusive from/to dates
  * @returns Ok when the range is admissible, or a typed preflight refusal
+ *
+ * @example
+ * ```typescript
+ * const pre = preflightXeroExtract({
+ *   bankAccountId: "00000000-0000-4000-8000-000000000000",
+ *   fromDate: "2026-01-01",
+ *   toDate: "2026-03-31",
+ * });
+ * if (pre.ok) {
+ *   // pre.range_days <= 366; safe to dispatch the extraction action.
+ * }
+ * ```
  */
 export function preflightXeroExtract(input: {
 	bankAccountId: string;
@@ -735,6 +795,16 @@ export const BROWSER_USE_XERO_STATEMENTS_ENVELOPE_SCHEMA: BrowserUseActionValueS
  *
  * @param input - The raw envelope value, its sensitivity, and a spill minter
  * @returns The bounded structured-result outcome, or a typed capture refusal
+ *
+ * @example
+ * ```typescript
+ * const captured = captureXeroStatementsResult({
+ *   envelope,
+ *   sensitivity: "high",
+ *   spillToGovernedArtifact: (payload) => retention.mint(payload),
+ * });
+ * // A large or high-sensitivity envelope spills; the full payload never inlines.
+ * ```
  */
 export function captureXeroStatementsResult(input: {
 	envelope: unknown;

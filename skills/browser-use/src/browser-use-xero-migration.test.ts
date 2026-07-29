@@ -275,6 +275,30 @@ describe("Xero statements structured result (R21)", () => {
 		}
 	});
 
+	test("a high-sensitivity envelope spills even when small enough to inline", () => {
+		let spilled: string | undefined;
+		const capture = captureXeroStatementsResult({
+			envelope: envelope(2),
+			sensitivity: "high",
+			spillToGovernedArtifact: (payload) => {
+				spilled = payload;
+				return "artifact://run/xero-statements-high";
+			},
+		});
+		expect(capture.ok).toBe(true);
+		if (capture.ok) {
+			// A tiny low-sensitivity envelope inlines; the same size at high
+			// sensitivity must spill so the full financial payload never rides
+			// shared-run state inline.
+			expect(capture.outcome.inline).toBe(false);
+			expect(capture.outcome.governed_artifact_ref).toBe(
+				"artifact://run/xero-statements-high",
+			);
+			expect(spilled).toBeDefined();
+			expect(JSON.stringify(capture.outcome)).not.toContain("line-0");
+		}
+	});
+
 	test("a malformed envelope (missing statements) refuses", () => {
 		const capture = captureXeroStatementsResult({
 			envelope: {
@@ -379,6 +403,6 @@ describe("Xero reconciliation simulation (R28)", () => {
 			batch: badBatch,
 		});
 		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.code).toBe(code);
+		if (!result.ok) expect(result.refusal.code).toBe(code);
 	});
 });
