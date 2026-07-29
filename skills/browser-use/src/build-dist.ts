@@ -37,6 +37,25 @@ const ownedNativeBinaryRoot = join(
 	".build",
 	"release",
 );
+const workspaceRuntimeRoot = join(defaultSkillRoot, "..", "..", "runtime");
+const bundledWorkspaceEntrypoints = new Map<string, string>([
+	[
+		"@side-quest/cli-command-facade",
+		join(workspaceRuntimeRoot, "cli-command-facade", "src", "index.ts"),
+	],
+	[
+		"@side-quest/mcporter-transport",
+		join(workspaceRuntimeRoot, "mcporter-transport", "src", "index.ts"),
+	],
+	[
+		"@side-quest/warm-chrome",
+		join(workspaceRuntimeRoot, "warm-chrome", "src", "index.ts"),
+	],
+	[
+		"@side-quest/warm-chrome/cli",
+		join(workspaceRuntimeRoot, "warm-chrome", "src", "cli.ts"),
+	],
+]);
 const SHIPPED_RUNBOOK_PATH =
 	/^([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/runbook\.json$/;
 
@@ -260,9 +279,24 @@ export async function buildBrowserUseDist(
 		splitting: false,
 		minify: false,
 		sourcemap: "none",
-		// Keep the private workspace package outside the public bundle. An
-		// installation without it degrades through the typed handoff route.
-		external: ["@side-quest/browser-connect/cli"],
+		packages: "bundle",
+		plugins: [
+			{
+				name: "browser-use-package-closure",
+				setup(builder) {
+					builder.onResolve(
+						{
+							filter:
+								/^@side-quest\/(?:cli-command-facade|mcporter-transport|warm-chrome(?:\/cli)?)$/,
+						},
+						({ path }) => {
+							const resolved = bundledWorkspaceEntrypoints.get(path);
+							return resolved === undefined ? undefined : { path: resolved };
+						},
+					);
+				},
+			},
+		],
 	});
 
 	if (!build.success) {

@@ -105,6 +105,19 @@ describe("browser-use dist catalog validation", () => {
 				distRoot,
 				log: () => {},
 			});
+			const bundledCli = readFileSync(
+				join(distRoot, "browser-use.js"),
+				"utf8",
+			);
+			expect(bundledCli).not.toContain(
+				'import("@side-quest/browser-connect/cli")',
+			);
+			expect(bundledCli).not.toContain(
+				'import("@side-quest/warm-chrome/cli")',
+			);
+			expect(bundledCli).not.toContain(
+				'from "@side-quest/warm-chrome"',
+			);
 			const expectedRunbooks = proof.relativePaths.map((relativePath) =>
 				relativePath.split("/").slice(0, 2).join("/"),
 			);
