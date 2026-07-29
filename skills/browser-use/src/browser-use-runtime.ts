@@ -9,23 +9,35 @@
 // capturing runtime.
 // ---------------------------------------------------------------------------
 
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
-import type { BrowserUseAuthLaneAdmission } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseAuthLaneAdmission,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
+import type {
+	BrowserUseNativeConfidentialDeliveryPort,
+	BrowserUseNativeConfidentialDeliveryRequest,
+} from "./browser-use-confidential-field-delivery";
 import {
 	type BrowserUseEnvironmentOpMetadataOperation,
+	buildEnvironmentOpAdmissionInvocation,
 	buildEnvironmentOpMetadataInvocation,
 	createEnvironmentOpTokenRetrievalPort,
+	parseEnvironmentOpAdmissionResult,
 	parseEnvironmentOpMetadataResult,
 } from "./browser-use-environment-op-executor";
 import {
 	type BrowserUseOpExecute,
+	type BrowserUseCredentialCapabilityTarget,
+	type BrowserUseOpCredentialField,
+	type BrowserUseSecretHandle,
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
@@ -91,6 +103,15 @@ export type BrowserUseSecuritySeam = {
 export type BrowserUseAuthAdmissionSnapshot =
 	BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>;
 
+/**
+ * Read-only supporting evidence for composed authentication status.
+ *
+ * The producer owns executable, authority-receipt, Warm Chrome, and binding
+ * proof. Browser Use treats the returned value as untrusted and applies an
+ * exact bounded projection before reporting it.
+ */
+export type BrowserUseAuthStatusSupportPort = () => Promise<unknown>;
+
 /** Secret-free native lifecycle request; input names a channel, never bytes. */
 export type BrowserUseEnvironmentTokenLifecycleRequest = {
 	action: BrowserUseEnvironmentTokenCustodyAction;
@@ -105,6 +126,148 @@ export type BrowserUseEnvironmentTokenLifecyclePort = {
 	): Promise<BrowserUseEnvironmentTokenCustodyState>;
 };
 
+/** One browser-bound view over the command-scoped native delivery owner. */
+export type BrowserUseConfidentialDeliveryRuntimePort = {
+	forBrowser(input: {
+		browser_ws_endpoint: string;
+		browser_pid: number;
+	}): BrowserUseNativeConfidentialDeliveryPort;
+};
+
+type BrowserUseEnvironmentDeferredCapability = {
+	binding: BrowserUseItemBinding;
+	field: BrowserUseOpCredentialField;
+	target: BrowserUseCredentialCapabilityTarget;
+	expires_at_epoch_ms: number;
+};
+
+type BrowserUseEnvironmentPrivateDeliveryInput = {
+	browser_ws_endpoint: string;
+	browser_pid: number;
+	binding: BrowserUseItemBinding;
+	field: BrowserUseOpCredentialField;
+	target: BrowserUseNativeConfidentialDeliveryRequest["target"];
+	locator: BrowserUseNativeConfidentialDeliveryRequest["locator"];
+};
+
+export type BrowserUseEnvironmentPrivateDeliveryProcess = (
+	input: BrowserUseEnvironmentPrivateDeliveryInput,
+) => Promise<unknown>;
+
+/**
+ * Link deferred field minting and one-shot native consumption inside one
+ * command. The map contains secret-free coordinates only; deletion happens
+ * before any validation or process start, so every attempted handle use is
+ * terminal.
+ */
+export function createEnvironmentConfidentialAuthPorts(input: {
+	env: Record<string, string | undefined>;
+	now: () => number;
+	executePrivateDelivery: BrowserUseEnvironmentPrivateDeliveryProcess;
+}): {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	confidentialDelivery: BrowserUseConfidentialDeliveryRuntimePort;
+} {
+	const capabilities = new Map<
+		string,
+		BrowserUseEnvironmentDeferredCapability
+	>();
+	const tokenRetrieval = createNativeEnvironmentTokenRetrievalPort(
+		input.env,
+		input.now,
+		(capability) => {
+			capabilities.set(capability.handle.handle_id, capability.record);
+			return capability.handle;
+		},
+	);
+	return {
+		tokenRetrieval,
+		confidentialDelivery: {
+			forBrowser(browser) {
+				return {
+					async consumePrivatePipeAndDeliver(request) {
+						const record = capabilities.get(request.capability.handle_id);
+						capabilities.delete(request.capability.handle_id);
+						if (
+							record === undefined ||
+							request.capability.field !== record.field ||
+							request.capability.expires_at_epoch_ms !==
+								record.expires_at_epoch_ms ||
+							input.now() >= record.expires_at_epoch_ms ||
+							!credentialTargetsEqual(record.target, request.target) ||
+							request.locator.input_kind !== record.field ||
+							!Number.isSafeInteger(browser.browser_pid) ||
+							browser.browser_pid <= 0 ||
+							!safeLoopbackBrowserWebSocket(browser.browser_ws_endpoint)
+						) {
+							return blockedPrivateDeliveryResult();
+						}
+						try {
+							return await input.executePrivateDelivery({
+								browser_ws_endpoint: browser.browser_ws_endpoint,
+								browser_pid: browser.browser_pid,
+								binding: structuredClone(record.binding),
+								field: record.field,
+								target: { ...request.target },
+								locator: { ...request.locator },
+							});
+						} catch {
+							return unknownPrivateDeliveryResult();
+						}
+					},
+				};
+			},
+		},
+	};
+}
+
+function credentialTargetsEqual(
+	expected: BrowserUseCredentialCapabilityTarget,
+	actual: BrowserUseNativeConfidentialDeliveryRequest["target"],
+): boolean {
+	return (
+		expected.lane_id === actual.lane_id &&
+		expected.run_id === actual.run_id &&
+		expected.target_id === actual.target_id &&
+		expected.page_id === actual.page_id &&
+		expected.frame_id === actual.frame_id &&
+		expected.top_level_origin === actual.top_level_origin &&
+		expected.frame_origin === actual.frame_origin &&
+		expected.target_proof_digest === actual.target_proof_digest
+	);
+}
+
+function safeLoopbackBrowserWebSocket(value: string): boolean {
+	try {
+		const parsed = new URL(value);
+		return (
+			parsed.protocol === "ws:" &&
+			(parsed.hostname === "127.0.0.1" ||
+				parsed.hostname === "::1") &&
+			parsed.username === "" &&
+			parsed.password === "" &&
+			parsed.port !== "" &&
+			parsed.hash === ""
+		);
+	} catch {
+		return false;
+	}
+}
+
+function blockedPrivateDeliveryResult() {
+	return {
+		schema_version: 1,
+		ok: false,
+		write_state: "blocked-before-write",
+		rejection: {
+			code: "invalid-request",
+			message:
+				"confidential field delivery blocked; inspect the typed code.",
+		},
+		protocol_trace: [],
+	} as const;
+}
+
 /**
  * The production security seam: native capability is absent until the signed
  * product exists (ADR 0028). `admission` always reports
@@ -116,6 +279,13 @@ function createNativeAbsentSecuritySeam(
 	runtime: BrowserUseRuntime,
 ): BrowserUseSecuritySeam {
 	const lifecycle = runtime.environmentTokenLifecycle;
+	const environmentAuth = createEnvironmentConfidentialAuthPorts({
+		env: runtime.env,
+		now: runtime.now,
+		executePrivateDelivery: (input) =>
+			executeNativeEnvironmentPrivateDelivery(runtime.env, input),
+	});
+	runtime.authConfidentialDelivery ??= environmentAuth.confidentialDelivery;
 	return {
 		admission: createNativeAbsentRuntime(),
 		createTokenExecutor: () => {
@@ -131,7 +301,19 @@ function createNativeAbsentSecuritySeam(
 				return lifecycle.execute({ action: "status" });
 			},
 			createTokenRetrieval: () =>
-				createNativeEnvironmentTokenRetrievalPort(runtime.env, runtime.now),
+				environmentAuth.tokenRetrieval,
+		},
+	};
+}
+
+function unknownPrivateDeliveryResult() {
+	return {
+		...blockedPrivateDeliveryResult(),
+		write_state: "write-outcome-unknown" as const,
+		rejection: {
+			code: "write-outcome-unknown" as const,
+			message:
+				"confidential field delivery blocked; inspect the typed code." as const,
 		},
 	};
 }
@@ -270,10 +452,24 @@ export type BrowserUseRuntime = {
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 	/**
+	 * Command-scoped one-shot delivery owner paired with the selected
+	 * environment token port. It consumes only opaque capabilities and returns
+	 * the native helper's bounded structural result.
+	 */
+	authConfidentialDelivery?: BrowserUseConfidentialDeliveryRuntimePort;
+	/**
 	 * One admission decision captured during production runtime construction.
 	 * Every consumer receives this same object and selected port.
 	 */
 	authAdmission?: BrowserUseAuthAdmissionSnapshot;
+	/**
+	 * Earned read-only status evidence from runtime owners outside the U4 lane.
+	 *
+	 * Absence is a typed fail-closed state. Tests inject hermetic earned proof;
+	 * production wiring must never fabricate an authority receipt, browser
+	 * posture, executable admission, or live binding.
+	 */
+	authStatusSupport?: BrowserUseAuthStatusSupportPort;
 	/**
 	 * Native local-token lifecycle. Token bytes remain in inherited stdin or
 	 * the native hidden terminal; TypeScript receives only the secret-free
@@ -292,6 +488,7 @@ export type BrowserUseRuntime = {
 	mintHandoff: (input: {
 		adapterId: string;
 		runId?: string;
+		port?: string;
 	}) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 };
 
@@ -341,6 +538,7 @@ export async function createProductionBrowserUseRuntime(
 		runtime.authAdmission.kind === "blocked"
 			? undefined
 			: runtime.authAdmission.tokenRetrieval;
+	runtime.authStatusSupport ??= createProductionAuthStatusSupportPort();
 	return runtime;
 }
 
@@ -406,18 +604,22 @@ export function assertEnvironmentTokenLifecycleExit(
 }
 
 function browserUseNativeBinRoot(): string {
-	return import.meta.dir.endsWith("/dist")
-		? join(import.meta.dir, "bin")
-		: join(
-				import.meta.dir,
-				"..",
-				"..",
-				"..",
-				"runtime",
-				"browser-use-environment-auth",
-				".build",
-				"release",
-			);
+	if (import.meta.dir.endsWith("/dist")) return join(import.meta.dir, "bin");
+	const sourceBuildRoot = join(
+		import.meta.dir,
+		"..",
+		"..",
+		"..",
+		"runtime",
+		"browser-use-environment-auth",
+		".build",
+		"release",
+	);
+	try {
+		return realpathSync(sourceBuildRoot);
+	} catch {
+		return sourceBuildRoot;
+	}
 }
 
 function fixedOpExecutablePath(): string {
@@ -426,6 +628,237 @@ function fixedOpExecutablePath(): string {
 			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
 			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
 	return preferred.find((path) => existsSync(path)) ?? preferred[0];
+}
+
+type BrowserUseAuthStatusExecutableState =
+	| "ready"
+	| "missing"
+	| "unsafe"
+	| "unproven";
+
+type BrowserUseAuthStatusExecutableExpectation =
+	| {
+			kind: "op";
+			approved_path: string;
+			supervisor_path: string;
+	  }
+	| {
+			kind: "owned-native";
+			approved_path: string;
+			expected_identifier: string;
+	  };
+
+async function inspectOwnedNativeIdentity(
+	path: string,
+	expectedIdentifier: string,
+): Promise<BrowserUseAuthStatusExecutableState> {
+	if (process.platform !== "darwin") return "unproven";
+	try {
+		const child = Bun.spawn(
+			["/usr/bin/codesign", "-d", "--verbose=4", path],
+			{ env: {}, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			readBoundedNativeOutput(child.stdout),
+			readBoundedNativeOutput(child.stderr),
+		]);
+		const receipt = `${stdout}\n${stderr}`;
+		return exitCode === 0 &&
+			child.signalCode == null &&
+			receipt.includes(`Identifier=${expectedIdentifier}`) &&
+			receipt.includes("Signature=adhoc")
+			? "ready"
+			: "unsafe";
+	} catch {
+		return "unproven";
+	}
+}
+
+async function inspectNativeEnvironmentOpAdmission(
+	path: string,
+	supervisorPath: string,
+): Promise<BrowserUseAuthStatusExecutableState> {
+	const supervisorState = await inspectBrowserUseAuthStatusExecutable(
+		supervisorPath,
+		{
+			kind: "owned-native",
+			approved_path: supervisorPath,
+			expected_identifier: "browser-use-op-supervisor",
+		},
+	);
+	if (supervisorState !== "ready") return supervisorState;
+	try {
+		const invocation = buildEnvironmentOpAdmissionInvocation({
+			supervisor_path: supervisorPath,
+			op_path: path,
+		});
+		const child = Bun.spawn(
+			[invocation.executable_path, ...invocation.argv],
+			{
+				env: invocation.env,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const stdoutPromise = readBoundedNativeOutput(child.stdout);
+		const stderrPromise = readBoundedNativeOutput(child.stderr);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOut = await Promise.race([
+			child.exited.then(() => false),
+			new Promise<true>((resolve) => {
+				timer = setTimeout(
+					() => resolve(true),
+					NATIVE_LIFECYCLE_TIMEOUT_MS,
+				);
+			}),
+		]);
+		if (timer !== undefined) clearTimeout(timer);
+		if (timedOut) {
+			void Promise.allSettled([stdoutPromise, stderrPromise]);
+			await terminateEnvironmentTokenLifecycleProcess(child);
+			return "unproven";
+		}
+		const exitCode = await child.exited;
+		const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
+		if (child.signalCode != null) return "unproven";
+		const state = parseEnvironmentOpAdmissionResult(JSON.parse(stdout));
+		const expectedExitCode = state === "ready" ? 0 : 20;
+		return exitCode === expectedExitCode ? state : "unproven";
+	} catch {
+		return "unproven";
+	}
+}
+
+/**
+ * Prove one fixed authentication executable before status reports it ready.
+ *
+ * The walk rejects links, foreign owners, writable ancestry, non-regular
+ * files, multiple hard links, and non-executable modes. OP additionally earns
+ * its supported-version result; owned native helpers earn their linker-signed
+ * identifier through the same receipt checked during packaging.
+ *
+ * @param path - Exact absolute executable path selected by the runtime owner
+ * @param expectation - Approved path and role-specific identity expectation
+ * @returns One bounded readiness state with no executable output relay
+ *
+ * @example
+ * ```typescript
+ * await inspectBrowserUseAuthStatusExecutable("/opt/browser-use/bin/helper", {
+ *   kind: "owned-native",
+ *   approved_path: "/opt/browser-use/bin/helper",
+ *   expected_identifier: "browser-use-confidential-delivery",
+ * })
+ * ```
+ */
+export async function inspectBrowserUseAuthStatusExecutable(
+	path: string,
+	expectation: BrowserUseAuthStatusExecutableExpectation,
+): Promise<BrowserUseAuthStatusExecutableState> {
+	if (
+		!isAbsolute(path) ||
+		path !== normalize(path) ||
+		path !== expectation.approved_path
+	) {
+		return "unsafe";
+	}
+	if (expectation.kind === "op") {
+		return inspectNativeEnvironmentOpAdmission(
+			path,
+			expectation.supervisor_path,
+		);
+	}
+	const expectedUid = process.geteuid?.() ?? process.getuid?.();
+	let current = path;
+	let executable = true;
+	try {
+		while (true) {
+			const metadata = await lstat(current);
+			const trustedOwner =
+				metadata.uid === 0 ||
+				(expectedUid !== undefined && metadata.uid === expectedUid);
+			if (
+				metadata.isSymbolicLink() ||
+				!trustedOwner ||
+				(metadata.mode & 0o022) !== 0
+			) {
+				return "unsafe";
+			}
+			if (executable) {
+				if (
+					!metadata.isFile() ||
+					metadata.nlink !== 1 ||
+					(metadata.mode & 0o111) === 0
+				) {
+					return "unsafe";
+				}
+				executable = false;
+			} else if (!metadata.isDirectory()) {
+				return "unsafe";
+			}
+			const parent = dirname(current);
+			if (parent === current) break;
+			current = parent;
+		}
+	} catch (error) {
+		const code =
+			typeof error === "object" && error !== null && "code" in error
+				? String(error.code)
+				: undefined;
+		if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+		if (code === "EACCES" || code === "EPERM") return "unsafe";
+		return "unproven";
+	}
+	return inspectOwnedNativeIdentity(path, expectation.expected_identifier);
+}
+
+/**
+ * Inspect only local packaged executable availability.
+ *
+ * Human authority, running-Chrome posture, and route binding have no
+ * command-independent production proof owner here. Report those states
+ * explicitly as absent/unproven so the status composer can prioritize a
+ * bounded repair without claiming live evidence.
+ */
+function createProductionAuthStatusSupportPort(): BrowserUseAuthStatusSupportPort {
+	return async () => {
+		const nativeBinRoot = browserUseNativeBinRoot();
+		const supervisorPath = join(nativeBinRoot, "browser-use-op-supervisor");
+		const opPath = fixedOpExecutablePath();
+		const [op, wrapper, helper] = await Promise.all([
+			inspectBrowserUseAuthStatusExecutable(opPath, {
+				kind: "op",
+				approved_path: opPath,
+				supervisor_path: supervisorPath,
+			}),
+			inspectBrowserUseAuthStatusExecutable(supervisorPath, {
+				kind: "owned-native",
+				approved_path: supervisorPath,
+				expected_identifier: "browser-use-op-supervisor",
+			}),
+			inspectBrowserUseAuthStatusExecutable(
+				join(nativeBinRoot, "browser-use-confidential-delivery"),
+				{
+					kind: "owned-native",
+					approved_path: join(
+						nativeBinRoot,
+						"browser-use-confidential-delivery",
+					),
+					expected_identifier: "browser-use-confidential-delivery",
+				},
+			),
+		]);
+		return {
+			contract: "browser-use.auth-status-support",
+			schema_version: "1",
+			executables: { op, wrapper, helper },
+			admin_authority: "missing",
+			profile: "unproven",
+			binding: "missing",
+			proof: null,
+		};
+	};
 }
 
 function environmentMetadataFailure() {
@@ -500,18 +933,114 @@ async function executeNativeEnvironmentMetadata(
 	}
 }
 
+async function executeNativeEnvironmentPrivateDelivery(
+	env: Record<string, string | undefined>,
+	input: BrowserUseEnvironmentPrivateDeliveryInput,
+): Promise<unknown> {
+	let started = false;
+	try {
+		const resolved = resolveBrowserUsePaths(env);
+		if (!resolved.ok) return blockedPrivateDeliveryResult();
+		const executable = join(
+			browserUseNativeBinRoot(),
+			"browser-use-confidential-delivery",
+		);
+		const child = Bun.spawn(
+			[
+				executable,
+				"private",
+				"--config-root",
+				resolved.resolution.roots.config,
+				"--op-path",
+				fixedOpExecutablePath(),
+			],
+			{
+				env: { PATH: "/usr/bin:/bin", LANG: "C" },
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		started = true;
+		child.stdin.write(
+			JSON.stringify({
+				schema_version: 1,
+				browser_ws_endpoint: input.browser_ws_endpoint,
+				browser_pid: input.browser_pid,
+				binding: {
+					vault_id: input.binding.vault_id,
+					item_id: input.binding.item_id,
+				},
+				target: input.target,
+				locator: input.locator,
+			}),
+		);
+		child.stdin.end();
+		const stdoutPromise = readBoundedNativeOutput(child.stdout);
+		const stderrPromise = readBoundedNativeOutput(child.stderr);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOut = await Promise.race([
+			child.exited.then(() => false),
+			new Promise<true>((resolve) => {
+				timer = setTimeout(
+					() => resolve(true),
+					NATIVE_LIFECYCLE_TIMEOUT_MS,
+				);
+			}),
+		]);
+		if (timer !== undefined) clearTimeout(timer);
+		if (timedOut) {
+			void Promise.allSettled([stdoutPromise, stderrPromise]);
+			await terminateEnvironmentTokenLifecycleProcess(child);
+			return unknownPrivateDeliveryResult();
+		}
+		const exitCode = await child.exited;
+		const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
+		if (child.signalCode != null) return unknownPrivateDeliveryResult();
+		const parsed: unknown = JSON.parse(stdout);
+		const ok =
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"ok" in parsed &&
+			(parsed as { ok?: unknown }).ok === true;
+		if (exitCode !== (ok ? 0 : 20)) return unknownPrivateDeliveryResult();
+		return parsed;
+	} catch {
+		return started
+			? unknownPrivateDeliveryResult()
+			: blockedPrivateDeliveryResult();
+	}
+}
+
 function createNativeEnvironmentTokenRetrievalPort(
 	env: Record<string, string | undefined>,
 	now: () => number,
+	recordCapability: (input: {
+		handle: BrowserUseSecretHandle;
+		record: BrowserUseEnvironmentDeferredCapability;
+	}) => BrowserUseSecretHandle = ({ handle }) => handle,
 ): BrowserUseTokenRetrievalPort {
 	return createEnvironmentOpTokenRetrievalPort({
 		executeMetadata: (operation) =>
 			executeNativeEnvironmentMetadata(env, operation),
-		mintCapability: ({ field }) => ({
-			handle_id: `environment-${randomUUID()}`,
-			field,
-			expires_at_epoch_ms: now() + 60_000,
-		}),
+		mintCapability: ({ binding, field, target }) => {
+			const expiresAt = now() + 60_000;
+			const handle = {
+				handle_id: `environment-${randomUUID()}`,
+				field,
+				expires_at_epoch_ms: expiresAt,
+			};
+			if (target === undefined) return handle;
+			return recordCapability({
+				handle,
+				record: {
+					binding: structuredClone(binding),
+					field,
+					target: { ...target },
+					expires_at_epoch_ms: expiresAt,
+				},
+			});
+		},
 	});
 }
 
@@ -616,6 +1145,7 @@ function createNativeEnvironmentTokenLifecyclePort(
 async function mintHandoffInProcess(input: {
 	adapterId: string;
 	runId?: string;
+	port?: string;
 }): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	let cli: typeof import("@side-quest/browser-connect/cli");
 	try {
@@ -654,6 +1184,7 @@ async function mintHandoffInProcess(input: {
 				"connect",
 				input.adapterId,
 				"--json",
+				...(input.port === undefined ? [] : ["--port", input.port]),
 				...(input.runId === undefined ? [] : ["--run-id", input.runId]),
 			],
 			{ ...deps, stdout: stdout.writer, stderr: stderr.writer },

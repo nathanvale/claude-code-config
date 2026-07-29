@@ -89,7 +89,16 @@ export type BrowserUseFieldActionOutcome =
 				| "helper-unavailable"
 				| "helper-crash";
 			field_cleared: boolean;
+			/** Native truth about whether the single field write may have landed. */
+			write_state?: "blocked-before-write" | "write-outcome-unknown";
 	  };
+
+/** Semantic field identity admitted by the disposable native writer. */
+export type BrowserUseSemanticFieldLocator = {
+	role: "textbox";
+	accessible_name: string;
+	input_kind: BrowserUseOpCredentialField;
+};
 
 /**
  * The lane executor's DELIVERY HOOK: the single seam onto the disposable
@@ -105,7 +114,377 @@ export type BrowserUseDeliveryHook = (input: {
 	handle: BrowserUseSecretHandle;
 	field: BrowserUseOpCredentialField;
 	target: BrowserUseVerifiedTarget;
+	/** Required by the native U7 lane; legacy injected test hooks may omit it. */
+	semantic_locator?: BrowserUseSemanticFieldLocator;
 }) => Promise<BrowserUseFieldActionOutcome>;
+
+/**
+ * Secret-free request handed across the TypeScript/native boundary.
+ *
+ * `capability` is opaque. Its native owner atomically consumes it and connects
+ * the resulting OP stdout directly to the disposable writer's private
+ * credential descriptor. No credential value or credential descriptor is
+ * representable here.
+ */
+export type BrowserUseNativeConfidentialDeliveryRequest = {
+	schema_version: 1;
+	capability: BrowserUseSecretHandle;
+	target: {
+		lane_id: string;
+		run_id: string;
+		target_id: string;
+		page_id: string;
+		frame_id: string;
+		top_level_origin: string;
+		frame_origin: string;
+		target_proof_digest: string;
+	};
+	locator: BrowserUseSemanticFieldLocator;
+};
+
+const CONFIDENTIAL_PROTOCOL_METHODS = [
+	"Target.getTargetInfo",
+	"Page.getFrameTree",
+	"Accessibility.getFullAXTree",
+	"DOM.describeNode",
+	"DOM.resolveNode",
+	"Runtime.callFunctionOn",
+] as const;
+
+type BrowserUseConfidentialProtocolMethod =
+	(typeof CONFIDENTIAL_PROTOCOL_METHODS)[number];
+
+type BrowserUseNativeConfidentialDeliveryResult =
+	| {
+			schema_version: 1;
+			ok: true;
+			write_state: "delivered";
+			shape: BrowserUseDeliveredFieldShape;
+			protocol_trace: readonly BrowserUseConfidentialProtocolMethod[];
+	  }
+	| {
+			schema_version: 1;
+			ok: false;
+			write_state: "blocked-before-write" | "write-outcome-unknown";
+			rejection: {
+				code:
+					| "invalid-request"
+					| "target-unproven"
+					| "field-missing"
+					| "field-ambiguous"
+					| "field-invalid"
+					| "credential-invalid"
+					| "browser-channel-unavailable"
+					| "write-outcome-unknown";
+				message: "confidential field delivery blocked; inspect the typed code.";
+			};
+			protocol_trace: readonly BrowserUseConfidentialProtocolMethod[];
+	  };
+
+/**
+ * Native U7 owner. It consumes the deferred capability once and owns every
+ * secret-bearing descriptor. TypeScript receives only the bounded result.
+ */
+export type BrowserUseNativeConfidentialDeliveryPort = {
+	consumePrivatePipeAndDeliver(
+		input: BrowserUseNativeConfidentialDeliveryRequest,
+	): Promise<unknown>;
+};
+
+/**
+ * Observation/capture fence surrounding the native helper.
+ *
+ * `resume` is never called before `cleanup`, and unknown-write results remain
+ * quarantined for explicit inspection or fresh-tab repair.
+ */
+export type BrowserUseConfidentialDeliveryQuarantine = {
+	pause(input: {
+		target: BrowserUseVerifiedTarget;
+	}): Promise<{ ok: true } | { ok: false }>;
+	cleanup(input: {
+		target: BrowserUseVerifiedTarget;
+		write_state:
+			| "blocked-before-write"
+			| "write-outcome-unknown"
+			| "delivered";
+	}): Promise<{ ok: true } | { ok: false }>;
+	resume(input: {
+		target: BrowserUseVerifiedTarget;
+	}): Promise<{ ok: true } | { ok: false }>;
+};
+
+function exactKeys(
+	value: Readonly<Record<string, unknown>>,
+	expected: readonly string[],
+): boolean {
+	const actual = Object.keys(value).sort();
+	return (
+		actual.length === expected.length &&
+		actual.every((key, index) => key === [...expected].sort()[index])
+	);
+}
+
+function validProtocolTrace(
+	value: unknown,
+	writeState: "blocked-before-write" | "write-outcome-unknown" | "delivered",
+): value is readonly BrowserUseConfidentialProtocolMethod[] {
+	if (
+		!Array.isArray(value) ||
+		value.some(
+			(method) =>
+				typeof method !== "string" ||
+				!CONFIDENTIAL_PROTOCOL_METHODS.includes(
+					method as BrowserUseConfidentialProtocolMethod,
+				),
+		)
+	) {
+		return false;
+	}
+	const expectedLength =
+		writeState === "delivered" || writeState === "write-outcome-unknown"
+			? CONFIDENTIAL_PROTOCOL_METHODS.length
+			: value.length;
+	return (
+		value.length === expectedLength &&
+		(writeState !== "blocked-before-write" ||
+			value.length < CONFIDENTIAL_PROTOCOL_METHODS.length) &&
+		value.every(
+			(method, index) => method === CONFIDENTIAL_PROTOCOL_METHODS[index],
+		)
+	);
+}
+
+function parseNativeDeliveryResult(
+	value: unknown,
+	expectedField: BrowserUseOpCredentialField,
+): BrowserUseNativeConfidentialDeliveryResult | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const candidate = value as Record<string, unknown>;
+	if (candidate.schema_version !== 1 || typeof candidate.ok !== "boolean") {
+		return undefined;
+	}
+	if (candidate.ok) {
+		if (
+			!exactKeys(candidate, [
+				"schema_version",
+				"ok",
+				"write_state",
+				"shape",
+				"protocol_trace",
+			]) ||
+			candidate.write_state !== "delivered" ||
+			typeof candidate.shape !== "object" ||
+			candidate.shape === null ||
+			Array.isArray(candidate.shape)
+		) {
+			return undefined;
+		}
+		const shape = candidate.shape as Record<string, unknown>;
+		if (
+			!exactKeys(shape, ["field", "byte_length"]) ||
+			shape.field !== expectedField ||
+			typeof shape.byte_length !== "number" ||
+			!Number.isSafeInteger(shape.byte_length) ||
+			shape.byte_length < 1 ||
+			shape.byte_length > 4_096 ||
+			!validProtocolTrace(candidate.protocol_trace, "delivered")
+		) {
+			return undefined;
+		}
+		return candidate as BrowserUseNativeConfidentialDeliveryResult;
+	}
+	if (
+		!exactKeys(candidate, [
+			"schema_version",
+			"ok",
+			"write_state",
+			"rejection",
+			"protocol_trace",
+		]) ||
+		(candidate.write_state !== "blocked-before-write" &&
+			candidate.write_state !== "write-outcome-unknown") ||
+		typeof candidate.rejection !== "object" ||
+		candidate.rejection === null ||
+		Array.isArray(candidate.rejection)
+	) {
+		return undefined;
+	}
+	const rejection = candidate.rejection as Record<string, unknown>;
+	const rejectionCodes = [
+		"invalid-request",
+		"target-unproven",
+		"field-missing",
+		"field-ambiguous",
+		"field-invalid",
+		"credential-invalid",
+		"browser-channel-unavailable",
+		"write-outcome-unknown",
+	] as const;
+	if (
+		!exactKeys(rejection, ["code", "message"]) ||
+		typeof rejection.code !== "string" ||
+		!rejectionCodes.includes(
+			rejection.code as (typeof rejectionCodes)[number],
+		) ||
+		!validProtocolTrace(
+			candidate.protocol_trace,
+			candidate.write_state as
+				| "blocked-before-write"
+				| "write-outcome-unknown",
+		) ||
+		rejection.message !==
+			"confidential field delivery blocked; inspect the typed code."
+	) {
+		return undefined;
+	}
+	return candidate as BrowserUseNativeConfidentialDeliveryResult;
+}
+
+/**
+ * Build the production-shaped secret-free delivery hook.
+ *
+ * The native port owns capability consumption and the private OP-to-helper
+ * pipe. Observation/capture stays paused until native cleanup completes.
+ */
+export function createBrowserUseNativeConfidentialDeliveryHook(input: {
+	quarantine: BrowserUseConfidentialDeliveryQuarantine;
+	consumePrivatePipeAndDeliver: BrowserUseNativeConfidentialDeliveryPort["consumePrivatePipeAndDeliver"];
+}): BrowserUseDeliveryHook {
+	return async (delivery) => {
+		const locator = delivery.semantic_locator;
+		if (
+			locator === undefined ||
+			delivery.handle.field !== delivery.field ||
+			locator.input_kind !== delivery.field ||
+			locator.role !== "textbox" ||
+			locator.accessible_name.length === 0 ||
+			locator.accessible_name.length > 256
+		) {
+			return {
+				ok: false,
+				reason: "helper-unavailable",
+				field_cleared: false,
+				write_state: "blocked-before-write",
+			};
+		}
+		let paused = false;
+		try {
+			paused = (
+				await input.quarantine.pause({ target: delivery.target })
+			).ok;
+		} catch {
+			paused = false;
+		}
+		if (!paused) {
+			return {
+				ok: false,
+				reason: "helper-unavailable",
+				field_cleared: false,
+				write_state: "blocked-before-write",
+			};
+		}
+
+		let native: BrowserUseNativeConfidentialDeliveryResult | undefined;
+		try {
+			native = parseNativeDeliveryResult(
+				await input.consumePrivatePipeAndDeliver({
+					schema_version: 1,
+					capability: { ...delivery.handle },
+					target: {
+						lane_id: delivery.target.lane_id,
+						run_id: delivery.target.run_id,
+						target_id: delivery.target.target_id,
+						page_id: delivery.target.page_id,
+						frame_id: delivery.target.frame_id,
+						top_level_origin: delivery.target.top_level_origin,
+						frame_origin: delivery.target.frame_origin,
+						target_proof_digest: delivery.target.target_proof_digest,
+					},
+					locator: { ...locator },
+				}),
+				delivery.field,
+			);
+		} catch {
+			native = undefined;
+		}
+
+		const writeState = native?.write_state ?? "write-outcome-unknown";
+		let cleaned = false;
+		try {
+			cleaned = (
+				await input.quarantine.cleanup({
+					target: delivery.target,
+					write_state: writeState,
+				})
+			).ok;
+		} catch {
+			cleaned = false;
+		}
+		if (native === undefined || !cleaned) {
+			return {
+				ok: false,
+				reason: "helper-crash",
+				field_cleared: false,
+				write_state:
+					writeState === "blocked-before-write"
+						? "blocked-before-write"
+						: "write-outcome-unknown",
+			};
+		}
+		if (!native.ok) {
+			if (native.write_state === "write-outcome-unknown") {
+				return {
+					ok: false,
+					reason: "field-write-failed",
+					field_cleared: false,
+					write_state: "write-outcome-unknown",
+				};
+			}
+			let resumed = false;
+			try {
+				resumed = (
+					await input.quarantine.resume({ target: delivery.target })
+				).ok;
+			} catch {
+				resumed = false;
+			}
+			return resumed
+				? {
+						ok: false,
+						reason:
+							native.rejection.code === "target-unproven"
+								? "target-drift"
+								: "helper-unavailable",
+						field_cleared: true,
+						write_state: "blocked-before-write",
+					}
+				: {
+						ok: false,
+						reason: "helper-crash",
+						field_cleared: false,
+						write_state: "blocked-before-write",
+					};
+		}
+		let resumed = false;
+		try {
+			resumed = (
+				await input.quarantine.resume({ target: delivery.target })
+			).ok;
+		} catch {
+			resumed = false;
+		}
+		return resumed
+			? { ok: true, shape: native.shape }
+			: {
+					ok: false,
+					reason: "helper-crash",
+					field_cleared: false,
+					write_state: "write-outcome-unknown",
+				};
+	};
+}
 
 /**
  * Re-prove the verified target immediately before a field action (R14). The
@@ -172,6 +551,10 @@ export type BrowserUseDeliveryInput = {
 	binding: BrowserUseItemBinding;
 	target: BrowserUseVerifiedTarget;
 	fields: BrowserUseDeliveryFieldPlan;
+	/** Per-field semantic identity freshly derived from the current snapshot. */
+	semantic_locators?: Readonly<
+		Partial<Record<BrowserUseOpCredentialField, BrowserUseSemanticFieldLocator>>
+	>;
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	deliver: BrowserUseDeliveryHook;
 	reproveTarget: BrowserUseTargetReproof;
@@ -307,6 +690,16 @@ export async function deliverConfidentialFields(
 		const fetched = await input.tokenRetrieval.fetchCredentialField({
 			binding: input.binding,
 			field,
+			target: {
+				lane_id: input.target.lane_id,
+				run_id: input.target.run_id,
+				target_id: input.target.target_id,
+				page_id: input.target.page_id,
+				frame_id: input.target.frame_id,
+				top_level_origin: input.target.top_level_origin,
+				frame_origin: input.target.frame_origin,
+				target_proof_digest: input.target.target_proof_digest,
+			},
 		});
 		if (!fetched.ok) {
 			return blockedOf(blockedCauseForRejection(fetched.rejection.code), false, false);
@@ -317,6 +710,7 @@ export async function deliverConfidentialFields(
 			handle: fetched.handle,
 			field,
 			target: input.target,
+			semantic_locator: input.semantic_locators?.[field],
 		});
 		if (!action.ok) {
 			// (6) Honest external-effect + cleared-field truth (R18/R19). Any
@@ -327,7 +721,10 @@ export async function deliverConfidentialFields(
 			// helper reports whether it cleared the field. Target drift observed
 			// inside the helper is target-proof-invalid; every other helper failure
 			// is capability loss with an honest possible-effect flag.
-			const possible = action.reason !== "helper-unavailable";
+			const possible =
+				action.write_state === "write-outcome-unknown" ||
+				(action.write_state === undefined &&
+					action.reason !== "helper-unavailable");
 			const cause: BrowserUseAuthBlockedCause =
 				action.reason === "target-drift" ? "target-proof-invalid" : "capability-loss";
 			return blockedOf(cause, possible, action.field_cleared);

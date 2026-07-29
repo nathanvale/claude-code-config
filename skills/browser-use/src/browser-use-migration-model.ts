@@ -64,6 +64,30 @@ export type BrowserUseCorpusCensus = {
 };
 
 /**
+ * Sanitized path-set receipt for one reviewed corpus snapshot.
+ *
+ * The digest binds the sorted relative path list. It detects additions,
+ * removals, and renames without retaining source contents or absolute paths.
+ */
+export type BrowserUseCorpusReceipt = {
+	contract: "browser-use.corpus-receipt";
+	schema_version: "1";
+	source_namespace: "browser-automation";
+	source_entry_count: number;
+	relative_path_digest: string;
+	corpus_census: BrowserUseCorpusCensus;
+};
+
+/** One formal or tracker-derived edge from legacy source to catalog authority. */
+export type BrowserUseTargetProvenance = {
+	source_relative_path: string;
+	source_flow_id: string;
+	canonical_target_id: string | null;
+	activation: "canonical" | "inactive";
+	reason: string;
+};
+
+/**
  * One canonical flow and the complete set of source entries that provide its
  * lineage (R4). A canonical target may absorb or supersede multiple sources —
  * the two Oncore fill-timesheet candidates resolve to ONE canonical id — while
@@ -99,6 +123,8 @@ export type BrowserUseMigrationState = {
 	corpus_census: BrowserUseCorpusCensus | null;
 	/** Canonical flow provenance edges (R4); empty until planning. */
 	canonical_targets: readonly BrowserUseCanonicalTarget[];
+	/** 1:N source-flow edges, including inactive auth/submit tracker entries. */
+	target_provenance?: readonly BrowserUseTargetProvenance[];
 	staged_generation: string | null;
 	last_apply_verified_noop: boolean | null;
 	activation_state: "unchanged" | "active";
@@ -160,6 +186,7 @@ export type BrowserUseMigrationDisposition = {
 	canonical_target_id: string | null;
 	disposition:
 		| "stage"
+		| "provenance-only"
 		| "quarantine-backup"
 		| "quarantine-secret"
 		| "quarantine-executable"

@@ -224,6 +224,58 @@ async function replaceProof(
 }
 
 describe("produceBrowserUseGeneration", () => {
+	test("retains safe migrated knowledge inside the exact candidate closure", async () => {
+		const generationId = "generation-producer-knowledge";
+		const fixture = await makeFixture(generationId);
+		const knowledgePath = "knowledge/acme/notes.md";
+		const knowledge = "# Migrated knowledge\n";
+		const candidate = {
+			...fixture.candidate,
+			knowledge: {
+				files: [
+					{
+						source_relative_path: "legacy/acme/notes.md",
+						path: knowledgePath,
+						digest: sha256(knowledge),
+					},
+				],
+			},
+		};
+		const candidateRecord = encodeDurableRecord(
+			"corpus-generation-candidate",
+			candidate,
+		);
+		await fixture.deps.fs.mkdir(
+			dirname(join(fixture.sourceRoot, knowledgePath)),
+			{ recursive: true, mode: 0o700 },
+		);
+		await fixture.deps.fs.writeFileDurable(
+			join(fixture.sourceRoot, knowledgePath),
+			knowledge,
+			0o600,
+		);
+		await fixture.deps.fs.writeFileDurable(
+			join(fixture.sourceRoot, "corpus-generation-candidate.json"),
+			candidateRecord,
+			0o600,
+		);
+
+		const result = await produceBrowserUseGeneration(fixture.deps, {
+			sourceRoot: fixture.sourceRoot,
+		});
+
+		expect(result).toMatchObject({ ok: true });
+		expect(
+			await fixture.deps.fs.readTextFile(
+				generationFilePath(
+					fixture.deps.paths,
+					generationId,
+					knowledgePath,
+				),
+			),
+		).toBe(knowledge);
+	});
+
 	test("stages a complete source bundle and returns a redacted activation continuation", async () => {
 		const generationId = "generation-producer-a";
 		const fixture = await makeFixture(generationId);

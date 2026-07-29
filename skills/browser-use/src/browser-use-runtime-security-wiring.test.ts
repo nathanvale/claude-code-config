@@ -1,4 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, realpathSync } from "node:fs";
+import {
+	chmod,
+	lstat,
+	mkdtemp,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
 import {
 	type AdmissionRuntime,
 	buildAdmittedManifest,
@@ -8,6 +17,7 @@ import {
 import {
 	type BrowserUseSecuritySeam,
 	createProductionBrowserUseRuntime,
+	inspectBrowserUseAuthStatusExecutable,
 	runForTest,
 } from "./browser-use";
 import type {
@@ -168,6 +178,95 @@ function u4Seam(input: {
 }
 
 describe("U4 three-state production lane admission", () => {
+	test("auth status admits the installed fixed Homebrew OP symlink", async () => {
+		const opPath =
+			process.arch === "arm64"
+				? "/opt/homebrew/bin/op"
+				: "/usr/local/bin/op";
+		const supervisorAlias = join(
+			import.meta.dir,
+			"..",
+			"..",
+			"..",
+			"runtime",
+			"browser-use-environment-auth",
+			".build",
+			"release",
+			"browser-use-op-supervisor",
+		);
+		if (!existsSync(opPath) || !existsSync(supervisorAlias)) return;
+		const supervisorPath = realpathSync(supervisorAlias);
+		expect((await lstat(opPath)).isSymbolicLink()).toBe(true);
+		expect(
+			await inspectBrowserUseAuthStatusExecutable(opPath, {
+				kind: "op",
+				approved_path: opPath,
+				supervisor_path: supervisorPath,
+			}),
+		).toBe("ready");
+	});
+
+	test("auth status rejects an executable without the owned native identity", async () => {
+		const directory = await mkdtemp(
+			join(import.meta.dir, ".auth-status-executable-"),
+		);
+		try {
+			await chmod(directory, 0o700);
+			const executable = join(directory, "browser-use-op-supervisor");
+			await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+
+			expect(
+				await inspectBrowserUseAuthStatusExecutable(executable, {
+					kind: "owned-native",
+					approved_path: executable,
+					expected_identifier: "browser-use-op-supervisor",
+				}),
+			).toBe(process.platform === "darwin" ? "unsafe" : "unproven");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("production wires bounded read-only support without inventing human or live-browser proof", async () => {
+		const runtime = await createProductionBrowserUseRuntime({
+			env: {},
+			environmentTokenLifecycle: {
+				inputIsTTY: () => false,
+				execute: async () => ({
+					state: "blocked",
+					cause: "token-unsafe",
+					next_action: "repair-token-custody",
+				}),
+			},
+		});
+
+		expect(runtime.authStatusSupport).toBeFunction();
+		const evidence = (await runtime.authStatusSupport?.()) as {
+			contract: string;
+			schema_version: string;
+			executables: Record<string, string>;
+			admin_authority: string;
+			profile: string;
+			binding: string;
+		};
+		expect(evidence).toMatchObject({
+			contract: "browser-use.auth-status-support",
+			schema_version: "1",
+			admin_authority: "missing",
+			profile: "unproven",
+			binding: "missing",
+			proof: null,
+		});
+		expect(Object.keys(evidence.executables).sort()).toEqual([
+			"helper",
+			"op",
+			"wrapper",
+		]);
+		for (const state of Object.values(evidence.executables)) {
+			expect(["ready", "missing", "unsafe", "unproven"]).toContain(state);
+		}
+	});
+
 	test("signed admission wins without probing the environment lane", async () => {
 		const captured = capturingExecutor();
 		const calls = { nativeExecutor: 0, environmentProbe: 0, environmentPort: 0 };
@@ -261,6 +360,19 @@ describe("U4 three-state production lane admission", () => {
 					};
 				},
 			},
+			authStatusSupport: async () => ({
+				contract: "browser-use.auth-status-support",
+				schema_version: "1",
+				executables: {
+					op: "missing",
+					wrapper: "ready",
+					helper: "ready",
+				},
+				admin_authority: "missing",
+				profile: "unproven",
+				binding: "missing",
+				proof: null,
+			}),
 		});
 
 		expect(runtime.authAdmission).toMatchObject({
@@ -278,17 +390,18 @@ describe("U4 three-state production lane admission", () => {
 				: undefined,
 		);
 		const status = await runForTest(["auth", "status", "--json"], runtime);
+		expect(status.exitCode).toBe(20);
 		const statusEnvelope = JSON.parse(status.stdout) as {
 			data: {
 				selected_lane: string;
 				assurance: string;
-				native_verdict: string;
+				blocked_cause: string;
 			};
 		};
 		expect(statusEnvelope.data).toMatchObject({
 			selected_lane: "environment-injected-op",
 			assurance: "lower-assurance",
-			native_verdict: "native-capability-absent",
+			blocked_cause: "op-missing",
 		});
 		expect(lifecycleCalls).toBe(1);
 	});
@@ -652,10 +765,10 @@ describe("U4 public readiness consumes the captured admission", () => {
 		const status = await runForTest(["auth", "status", "--json"], runtime);
 		expect(status.exitCode).toBe(20);
 		const envelope = JSON.parse(status.stdout) as {
-			data: { admission_code: string; selected_lane: null };
+			data: { blocked_cause: string; selected_lane: null };
 		};
 		expect(envelope.data).toMatchObject({
-			admission_code: "environment-executor-failed",
+			blocked_cause: "environment-executor-failed",
 			selected_lane: null,
 		});
 	});
@@ -693,10 +806,10 @@ describe("U4 public readiness consumes the captured admission", () => {
 		const status = await runForTest(["auth", "status", "--json"], runtime);
 		expect(status.exitCode).toBe(20);
 		const statusEnvelope = JSON.parse(status.stdout) as {
-			data: { admission_code: string; selected_lane: null };
+			data: { blocked_cause: string; selected_lane: null };
 		};
 		expect(statusEnvelope.data).toMatchObject({
-			admission_code: "environment-probe-failed",
+			blocked_cause: "environment-probe-failed",
 			selected_lane: null,
 		});
 	});

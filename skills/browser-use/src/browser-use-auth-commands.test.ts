@@ -137,6 +137,203 @@ function lifecycleRuntime(input: {
 }
 
 describe("environment-token lifecycle public commands", () => {
+	test("status reports the unavailable lower-assurance lane and one install action without OP", async () => {
+		const calls = {
+			identity: 0,
+			vaults: 0,
+			items: 0,
+			item: 0,
+			field: 0,
+		};
+		const unexpectedPort: BrowserUseTokenRetrievalPort = {
+			getServiceAccountIdentity: async () => {
+				calls.identity += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+			listVaults: async () => {
+				calls.vaults += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+			listLoginItems: async () => {
+				calls.items += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+			getLoginItem: async () => {
+				calls.item += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+			fetchCredentialField: async () => {
+				calls.field += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+		};
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			makeRuntime({
+				authAdmission: {
+					kind: "blocked",
+					cause: { code: "environment-token-not-ready" },
+					evidence: {
+						native: { verdict: "native-capability-absent" },
+						environment: {
+							state: "missing",
+							next_action: "install-local-token",
+						},
+					},
+				},
+				authTokenRetrieval: unexpectedPort,
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		const envelope = parseJson(result.stdout) as {
+			data: {
+				contract: string;
+				state: string;
+				selected_lane: string | null;
+				lane_state: string;
+				assurance: string;
+				blocked_cause: string;
+				checks: Record<string, { state: string }>;
+			};
+			runtime_actions: Array<{ id: string }>;
+			continuation: { next_action_id: string };
+		};
+		expect(envelope.data).toMatchObject({
+			contract: "browser-use.auth-status",
+			state: "blocked",
+			selected_lane: null,
+			lane_state: "unavailable",
+			assurance: "lower-assurance",
+			blocked_cause: "missing-token",
+			checks: {
+				token_file: { state: "missing" },
+				op: { state: "not-evaluated" },
+				wrapper: { state: "not-evaluated" },
+				helper: { state: "not-evaluated" },
+				service_account: { state: "not-evaluated" },
+				vault_scope: { state: "not-evaluated" },
+				admin_authority: { state: "not-evaluated" },
+				profile: { state: "not-evaluated" },
+				binding: { state: "not-evaluated" },
+			},
+		});
+		expect(envelope.runtime_actions).toHaveLength(1);
+		expect(envelope.runtime_actions[0]?.id).toBe("install-local-token");
+		expect(envelope.continuation.next_action_id).toBe("install-local-token");
+		expect(calls).toEqual({
+			identity: 0,
+			vaults: 0,
+			items: 0,
+			item: 0,
+			field: 0,
+		});
+	});
+
+	test("status composes admitted metadata and earned supporting evidence without field retrieval", async () => {
+		const calls = { bindingEvidence: 0, field: 0, uncapturedPort: 0 };
+		const port = fakePort({
+			getBindingEvidence: async () => {
+				calls.bindingEvidence += 1;
+				return {
+					ok: true,
+					evidence: {
+						identity: {
+							service_account_id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+						vaults: [{ vault_id: "vault-1" }],
+						item_evidence: null,
+					},
+				};
+			},
+			fetchCredentialField: async () => {
+				calls.field += 1;
+				return { ok: false, rejection: rejection("capability-missing") };
+			},
+		});
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			makeRuntime({
+				authAdmission: {
+					kind: "environment-admitted",
+					evidence: {
+						lane: "environment-injected-op",
+						assurance: "lower-assurance",
+						native: { verdict: "native-capability-absent" },
+						environment: {
+							state: "ready",
+							next_action: "validate-service-account",
+						},
+				},
+				tokenRetrieval: port,
+			},
+				authTokenRetrieval: fakePort({
+					getBindingEvidence: async () => {
+						calls.uncapturedPort += 1;
+						throw new Error("uncaptured token port must never be consulted");
+					},
+				}),
+				authStatusSupport: async () => ({
+					contract: "browser-use.auth-status-support",
+					schema_version: "1",
+					executables: {
+						op: "ready",
+						wrapper: "ready",
+						helper: "ready",
+					},
+					admin_authority: "proven",
+					profile: "live-clean",
+					binding: "ready",
+					proof: AUTH_STATUS_PROOF,
+				}),
+			}),
+		);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseJson(result.stdout) as {
+			data: {
+				contract: string;
+				state: string;
+				selected_lane: string | null;
+				lane_state: string;
+				assurance: string;
+				checks: Record<string, { state: string }>;
+			};
+			runtime_actions: Array<{ id: string }>;
+			continuation: { next_action_id: string };
+		};
+		expect(envelope.data).toMatchObject({
+			contract: "browser-use.auth-status",
+			state: "ready",
+			selected_lane: "environment-injected-op",
+			lane_state: "ready",
+			assurance: "lower-assurance",
+			checks: {
+				token_file: { state: "ready" },
+				op: { state: "ready" },
+				wrapper: { state: "ready" },
+				helper: { state: "ready" },
+				service_account: { state: "active" },
+				vault_scope: { state: "exactly-one" },
+				admin_authority: { state: "proven" },
+				profile: { state: "live-clean" },
+				binding: { state: "ready" },
+			},
+		});
+		expect(envelope.runtime_actions).toHaveLength(1);
+		expect(envelope.runtime_actions[0]?.id).toBe("run-authenticated-runbook");
+		expect(envelope.continuation.next_action_id).toBe(
+			"run-authenticated-runbook",
+		);
+		expect(calls).toEqual({
+			bindingEvidence: 1,
+			field: 0,
+			uncapturedPort: 0,
+		});
+	});
+
 	test("noninteractive install without explicit stdin returns a human gate and never waits", async () => {
 		const fixture = lifecycleRuntime({
 			results: [],
@@ -151,20 +348,29 @@ describe("environment-token lifecycle public commands", () => {
 		expect(result.stdout).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
 	});
 
-	test("status projects missing custody with one install continuation", async () => {
+	test("status fails closed when no command-scoped lane admission was captured", async () => {
 		const fixture = lifecycleRuntime({
 			results: [{ state: "missing", next_action: "install-local-token" }],
 		});
 		const result = await runForTest(["auth", "status", "--json"], fixture.runtime);
-		expect(result.exitCode).toBe(0);
-		expect(fixture.calls).toEqual([{ action: "status" }]);
-		const envelope = envelopeOf(result.stdout);
+		expect(result.exitCode).toBe(20);
+		expect(fixture.calls).toEqual([]);
+		const envelope = parseJson(result.stdout) as {
+			data: {
+				contract: string;
+				state: string;
+				blocked_cause: string;
+			};
+			continuation: { next_action_id: string };
+		};
 		expect(envelope.data).toMatchObject({
-			contract: "browser-use.environment-token-lifecycle",
-			operation: "status",
-			state: "missing",
+			contract: "browser-use.auth-status",
+			state: "blocked",
+			blocked_cause: "admission-unavailable",
 		});
-		expect(envelope.continuation.next_action_id).toBe("install-local-token");
+		expect(envelope.continuation.next_action_id).toBe(
+			"inspect-capability-loss",
+		);
 	});
 
 	test("explicit stdin installs when missing and replaces when already ready", async () => {
@@ -273,6 +479,448 @@ function fakePort(
 		...overrides,
 	};
 }
+
+type AuthStatusSupportFixture = {
+	contract: "browser-use.auth-status-support";
+	schema_version: "1";
+	executables: {
+		op: "ready" | "missing" | "unsafe" | "unproven";
+		wrapper: "ready" | "missing" | "unsafe" | "unproven";
+		helper: "ready" | "missing" | "unsafe" | "unproven";
+	};
+	admin_authority: "proven" | "missing" | "invalid";
+	profile: "live-clean" | "missing" | "unsafe" | "unproven";
+	binding: "ready" | "missing" | "stale" | "invalid";
+	proof: {
+		lane_digest: string;
+		principal_digest: string;
+		vault_digest: string;
+		profile_digest: string;
+		profile_posture_receipt_digest: string;
+		binding_context_digest: string;
+		binding_receipt_digest: string;
+		observed_at_epoch_ms: number;
+		fresh_until_epoch_ms: number;
+	};
+};
+
+const AUTH_STATUS_PROOF = {
+	lane_digest: "10a326413857cc1a7acb1d1cc7d623476aa02b7283085b27b75dff918b265c7d",
+	principal_digest:
+		"5d7c7fff1e59dc18d0d951b5a30859827506e9417c98defe13528623651356c5",
+	vault_digest: "fb3cff3652702c773d0740dc34c2378822ea1be4164eb2d5516c7962125a24af",
+	profile_digest:
+		"897e7115d9aca68c616685a1b387987afeebe245c6aa822345f7049fbba977ac",
+	profile_posture_receipt_digest:
+		"9999999999999999999999999999999999999999999999999999999999999999",
+	binding_context_digest:
+		"01c7c46b5c848478e7d5977ead0a872518734bd30d2ec681307dc2e786b35267",
+	binding_receipt_digest:
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	observed_at_epoch_ms: 900,
+	fresh_until_epoch_ms: 1_100,
+} as const;
+
+function authStatusSupport(
+	overrides: Partial<AuthStatusSupportFixture> = {},
+): AuthStatusSupportFixture {
+	return {
+		contract: "browser-use.auth-status-support",
+		schema_version: "1",
+		executables: { op: "ready", wrapper: "ready", helper: "ready" },
+		admin_authority: "proven",
+		profile: "live-clean",
+		binding: "ready",
+		proof: AUTH_STATUS_PROOF,
+		...overrides,
+	};
+}
+
+function composedStatusRuntime(input: {
+	support?: () => Promise<unknown>;
+	vaultCount?: number;
+	rejection?: BrowserUseTokenRetrievalRejection;
+	metadataEvidence?: unknown;
+}): {
+	runtime: ReturnType<typeof makeRuntime>;
+	calls: { bindingEvidence: number; field: number };
+} {
+	const calls = { bindingEvidence: 0, field: 0 };
+	const port = fakePort({
+		getBindingEvidence: async () => {
+			calls.bindingEvidence += 1;
+			if (input.rejection !== undefined) {
+				return { ok: false, rejection: input.rejection };
+			}
+			return (input.metadataEvidence === undefined
+				? {
+						ok: true,
+						evidence: {
+							identity: {
+								service_account_id: "service-account-1",
+								state: "ACTIVE",
+								type: "SERVICE_ACCOUNT",
+							},
+							vaults: Array.from(
+								{ length: input.vaultCount ?? 1 },
+								(_, index) => ({ vault_id: `vault-${index + 1}` }),
+							),
+							item_evidence: null,
+						},
+					}
+				: {
+						ok: true,
+						evidence: input.metadataEvidence,
+					}) as Awaited<
+				ReturnType<
+					NonNullable<BrowserUseTokenRetrievalPort["getBindingEvidence"]>
+				>
+			>;
+		},
+		fetchCredentialField: async () => {
+			calls.field += 1;
+			return { ok: false, rejection: rejection("capability-missing") };
+		},
+	});
+	return {
+		calls,
+		runtime: makeRuntime({
+			authAdmission: {
+				kind: "environment-admitted",
+				evidence: {
+					lane: "environment-injected-op",
+					assurance: "lower-assurance",
+					native: { verdict: "native-capability-absent" },
+					environment: {
+						state: "ready",
+						next_action: "validate-service-account",
+					},
+				},
+				tokenRetrieval: port,
+			},
+			authTokenRetrieval: port,
+			authStatusSupport:
+				input.support ?? (async () => authStatusSupport()),
+		}),
+	};
+}
+
+describe("composed authentication status gate priority", () => {
+	test.each([
+		{
+			name: "missing wrapper",
+			support: authStatusSupport({
+				executables: { op: "ready", wrapper: "missing", helper: "ready" },
+			}),
+			vaultCount: 1,
+			rejection: undefined,
+			blockedCause: "wrapper-missing",
+			action: "inspect-capability-loss",
+			metadataCalls: 0,
+		},
+		{
+			name: "invalid service account",
+			support: authStatusSupport(),
+			vaultCount: 1,
+			rejection: rejection("output-shape-invalid"),
+			blockedCause: "invalid-service-account",
+			action: "inspect-capability-loss",
+			metadataCalls: 1,
+		},
+		{
+			name: "multiple vaults",
+			support: authStatusSupport(),
+			vaultCount: 2,
+			rejection: undefined,
+			blockedCause: "invalid-vault-scope",
+			action: "repair-vault-grant",
+			metadataCalls: 1,
+		},
+		{
+			name: "missing admin receipt",
+			support: authStatusSupport({ admin_authority: "missing" }),
+			vaultCount: 1,
+			rejection: undefined,
+			blockedCause: "admin-authority-missing",
+			action: "record-admin-authority-receipt",
+			metadataCalls: 1,
+		},
+		{
+			name: "unsafe profile",
+			support: authStatusSupport({ profile: "unsafe" }),
+			vaultCount: 1,
+			rejection: undefined,
+			blockedCause: "profile-unsafe",
+			action: "approve-clean-profile-creation",
+			metadataCalls: 1,
+		},
+		{
+			name: "stale binding",
+			support: authStatusSupport({ binding: "stale" }),
+			vaultCount: 1,
+			rejection: undefined,
+			blockedCause: "binding-stale",
+			action: "repair-item-binding",
+			metadataCalls: 1,
+		},
+	] as const)(
+		"$name emits one prioritized repair without retrieving a field",
+		async (scenario) => {
+			const fixture = composedStatusRuntime({
+				support: async () => scenario.support,
+				vaultCount: scenario.vaultCount,
+				...(scenario.rejection === undefined
+					? {}
+					: { rejection: scenario.rejection }),
+			});
+			const result = await runForTest(
+				["auth", "status", "--json"],
+				fixture.runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			const envelope = parseJson(result.stdout) as {
+				data: { blocked_cause: string };
+				runtime_actions: Array<{ id: string }>;
+				continuation: { next_action_id: string };
+			};
+			expect(envelope.data.blocked_cause).toBe(scenario.blockedCause);
+			expect(envelope.runtime_actions).toHaveLength(1);
+			expect(envelope.runtime_actions[0]?.id).toBe(scenario.action);
+			expect(envelope.continuation.next_action_id).toBe(scenario.action);
+			expect(fixture.calls).toEqual({
+				bindingEvidence: scenario.metadataCalls,
+				field: 0,
+			});
+		},
+	);
+
+	test("hostile supporting evidence is rejected whole before metadata", async () => {
+		const sentinel = "not-a-real-secret-value";
+		const fixture = composedStatusRuntime({
+			support: async () => ({
+				...authStatusSupport(),
+				operator_email: "operator@example.test",
+				notes: sentinel.repeat(10_000),
+			}),
+		});
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			fixture.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const envelope = parseJson(result.stdout) as {
+			data: { blocked_cause: string };
+			runtime_actions: Array<{ id: string }>;
+		};
+		expect(envelope.data.blocked_cause).toBe("support-evidence-unavailable");
+		expect(envelope.runtime_actions).toHaveLength(1);
+		expect(envelope.runtime_actions[0]?.id).toBe("inspect-capability-loss");
+		expect(fixture.calls).toEqual({ bindingEvidence: 0, field: 0 });
+		expect(result.stdout).not.toContain(sentinel);
+		expect(result.stdout).not.toContain("operator@example.test");
+	});
+
+	test.each([
+		{
+			name: "lane",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				lane_digest:
+					"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "principal",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				principal_digest:
+					"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "vault",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				vault_digest:
+					"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "profile",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				profile_digest:
+					"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "binding context",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				binding_context_digest:
+					"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "binding receipt",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				binding_receipt_digest:
+					"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "same logical profile with a different posture receipt",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				profile_posture_receipt_digest:
+					"8888888888888888888888888888888888888888888888888888888888888888",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "freshness",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				fresh_until_epoch_ms: 1_000,
+			},
+			cause: "support-evidence-stale",
+		},
+	] as const)(
+		"a stale $name proof cannot authorize the captured environment lane",
+		async ({ proof, cause }) => {
+		const fixture = composedStatusRuntime({
+			support: async () =>
+				authStatusSupport({
+					proof,
+				}),
+		});
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			fixture.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const envelope = parseJson(result.stdout) as {
+			data: { blocked_cause: string };
+			runtime_actions: Array<{ id: string }>;
+		};
+		expect(envelope.data.blocked_cause).toBe(cause);
+		expect(envelope.runtime_actions).toEqual([
+			expect.objectContaining({ id: "inspect-capability-loss" }),
+		]);
+		expect(fixture.calls).toEqual({ bindingEvidence: 1, field: 0 });
+		},
+	);
+
+	test.each([
+		{
+			name: "an extra secret-shaped top-level field",
+			evidence: {
+				identity: {
+					service_account_id: "service-account-1",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: null,
+				token: "op://hostile-extra-field",
+			},
+		},
+		{
+			name: "an inactive identity",
+			evidence: {
+				identity: {
+					service_account_id: "service-account-1",
+					state: "SUSPENDED",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: null,
+			},
+		},
+		{
+			name: "an oversized identity",
+			evidence: {
+				identity: {
+					service_account_id: "x".repeat(257),
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: null,
+			},
+		},
+		{
+			name: "invalid UTF-8 replacement data",
+			evidence: {
+				identity: {
+					service_account_id: "service\uFFFDaccount",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1" }],
+				item_evidence: null,
+			},
+		},
+		{
+			name: "extra vault metadata",
+			evidence: {
+				identity: {
+					service_account_id: "service-account-1",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: [{ vault_id: "vault-1", name: "Browser Automation" }],
+				item_evidence: null,
+			},
+		},
+		{
+			name: "an oversized vault set",
+			evidence: {
+				identity: {
+					service_account_id: "service-account-1",
+					state: "ACTIVE",
+					type: "SERVICE_ACCOUNT",
+				},
+				vaults: Array.from({ length: 129 }, (_, index) => ({
+					vault_id: `vault-${index}`,
+				})),
+				item_evidence: null,
+			},
+		},
+	] as const)(
+		"hostile OP metadata with $name is rejected whole",
+		async ({ evidence }) => {
+			const fixture = composedStatusRuntime({ metadataEvidence: evidence });
+			const result = await runForTest(
+				["auth", "status", "--json"],
+				fixture.runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			const envelope = parseJson(result.stdout) as {
+				data: { blocked_cause: string };
+				runtime_actions: Array<{ id: string }>;
+			};
+			expect(envelope.data.blocked_cause).toBe("invalid-service-account");
+			expect(envelope.runtime_actions).toEqual([
+				expect.objectContaining({ id: "inspect-capability-loss" }),
+			]);
+			expect(fixture.calls).toEqual({ bindingEvidence: 1, field: 0 });
+			expect(result.stdout).not.toContain("op://hostile-extra-field");
+			expect(result.stdout).not.toContain("Browser Automation");
+		},
+	);
+});
 
 function blockedRun(
 	runId: string,

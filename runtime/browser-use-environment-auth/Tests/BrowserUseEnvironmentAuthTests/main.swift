@@ -1,5 +1,6 @@
 @_spi(Testing) import BrowserUseEnvironmentAuth
 @_spi(Executor) import BrowserUseEnvironmentAuth
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -1082,6 +1083,12 @@ private func runAsFakeOp() {
         return
     }
     if arguments.starts(with: ["item", "get"]) {
+        if arguments.contains("--reveal") {
+            FileHandle.standardOutput.write(
+                Data("U7_PRIVATE_PIPE_PASSWORD_SENTINEL\n".utf8)
+            )
+            return
+        }
         let marker = executable.deletingLastPathComponent()
             .appendingPathComponent(".item-get-invoked")
         FileManager.default.createFile(
@@ -1276,7 +1283,7 @@ private func environmentOpOutputIsBoundedAndProjected() throws {
         let crossVaultItem = EnvironmentOpSupervisor.executeMetadata(
             executablePath: fake.path,
             operation: .itemGet(
-                vaultID: "vault-1",
+                vaultID: "cross-vault-item",
                 itemID: "cross-vault-item"
             ),
             tokenDescriptor: descriptor
@@ -1369,10 +1376,9 @@ private func environmentOpOutputIsBoundedAndProjected() throws {
         )
         let secretPathText = String(decoding: secretPath, as: UTF8.self)
         try check(
-            secretPathText.contains("\"ok\":true")
-                && secretPathText.contains("https:\\/\\/portal.example.com\\/")
+            secretPathText.contains("\"code\":\"output-shape-invalid\"")
                 && !secretPathText.contains("SECRET_PATH"),
-            "secret-bearing URL path crossed the native projection"
+            "secret-bearing URL path was not rejected by the native projection"
         )
     }
 }
@@ -1457,14 +1463,9 @@ private func environmentOpBindingEvidenceUsesOneTotalDeadline() throws {
             .split(separator: "\n")
             .map(String.init)
         try check(
-            phases == [
-                "user-start",
-                "user-done",
-                "vault-start",
-                "vault-done",
-                "item-start",
-            ],
-            "shared deadline did not expire during the cumulative third child: \(phases)"
+            phases.starts(with: ["user-start", "user-done", "vault-start"])
+                && !phases.contains("item-done"),
+            "shared deadline did not stop cumulative binding work: \(phases)"
         )
     }
 }
@@ -1533,6 +1534,242 @@ private func environmentOpOfficialIdentityBlocksUnapprovedBinary() throws {
     }
 }
 
+private func environmentOpFixtureDigest(_ path: String) throws -> String {
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    return SHA256.hash(data: data)
+        .map { String(format: "%02x", $0) }
+        .joined()
+}
+
+private func writeEnvironmentOpFixture(
+    _ path: String,
+    version: String = "2.35.0",
+    mode: Int = 0o700
+) throws {
+    let script = "#!/bin/sh\nprintf '\(version)\\n'\n"
+    guard FileManager.default.createFile(
+        atPath: path,
+        contents: Data(script.utf8),
+        attributes: [.posixPermissions: mode]
+    ) else {
+        throw TestFailure(description: "failed to create OP fixture")
+    }
+}
+
+private func environmentOpTrustedHomebrewSymlinkPasses() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bin = root.appendingPathComponent("bin", isDirectory: true)
+    let cask = root
+        .appendingPathComponent("Caskroom", isDirectory: true)
+        .appendingPathComponent("1password-cli", isDirectory: true)
+        .appendingPathComponent("2.35.0", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: bin,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o770]
+    )
+    try FileManager.default.createDirectory(
+        at: cask,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let target = cask.appendingPathComponent("op")
+    let link = bin.appendingPathComponent("op")
+    try writeEnvironmentOpFixture(target.path)
+    try FileManager.default.createSymbolicLink(
+        atPath: link.path,
+        withDestinationPath: target.path
+    )
+    let digest = try environmentOpFixtureDigest(target.path)
+    let result = EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+        executablePath: link.path,
+        expectedDigest: digest,
+        expectedVersion: "2.35.0"
+    )
+
+    try check(
+        {
+            if case .admitted = result {
+                return true
+            }
+            return false
+        }(),
+        "trusted Homebrew-like OP symlink was not admitted: \(result)"
+    )
+}
+
+private func environmentOpHostileSymlinkShapesBlock() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let target = root.appendingPathComponent("trusted-op")
+    try writeEnvironmentOpFixture(target.path)
+    let digest = try environmentOpFixtureDigest(target.path)
+
+    let relativeDirectory = root.appendingPathComponent(
+        "relative",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+        at: relativeDirectory,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let relative = relativeDirectory.appendingPathComponent("op")
+    try FileManager.default.createSymbolicLink(
+        atPath: relative.path,
+        withDestinationPath: "../trusted-op"
+    )
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: relative.path,
+            expectedDigest: digest,
+            expectedVersion: "2.35.0"
+        ) == .blocked(.pathUnsafe),
+        "relative symlink escape was admitted"
+    )
+
+    let cycleA = root.appendingPathComponent("cycle-a")
+    let cycleB = root.appendingPathComponent("cycle-b")
+    try FileManager.default.createSymbolicLink(
+        atPath: cycleA.path,
+        withDestinationPath: cycleB.path
+    )
+    try FileManager.default.createSymbolicLink(
+        atPath: cycleB.path,
+        withDestinationPath: cycleA.path
+    )
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: cycleA.path,
+            expectedDigest: digest,
+            expectedVersion: "2.35.0"
+        ) == .blocked(.pathUnsafe),
+        "symlink cycle was admitted"
+    )
+
+    let writableDirectory = root.appendingPathComponent(
+        "world-writable",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+        at: writableDirectory,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o777]
+    )
+    let writableLink = writableDirectory.appendingPathComponent("op")
+    try FileManager.default.createSymbolicLink(
+        atPath: writableLink.path,
+        withDestinationPath: target.path
+    )
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: writableLink.path,
+            expectedDigest: digest,
+            expectedVersion: "2.35.0"
+        ) == .blocked(.pathUnsafe),
+        "world-writable symlink ancestry was admitted"
+    )
+
+    let writableTarget = root.appendingPathComponent("writable-target")
+    try writeEnvironmentOpFixture(writableTarget.path, mode: 0o720)
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: writableTarget.path,
+            expectedDigest: try environmentOpFixtureDigest(writableTarget.path),
+            expectedVersion: "2.35.0"
+        ) == .blocked(.pathUnsafe),
+        "group-writable OP target was admitted"
+    )
+
+    let hardLinkedTarget = root.appendingPathComponent("hard-linked-target")
+    let secondLink = root.appendingPathComponent("hard-linked-alias")
+    try writeEnvironmentOpFixture(hardLinkedTarget.path)
+    try FileManager.default.linkItem(at: hardLinkedTarget, to: secondLink)
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: hardLinkedTarget.path,
+            expectedDigest: try environmentOpFixtureDigest(hardLinkedTarget.path),
+            expectedVersion: "2.35.0"
+        ) == .blocked(.pathUnsafe),
+        "hard-linked OP target was admitted"
+    )
+}
+
+private func environmentOpChangedLinkAndStagedBytesBlock() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let first = root.appendingPathComponent("op-first")
+    let second = root.appendingPathComponent("op-second")
+    let link = root.appendingPathComponent("op")
+    try writeEnvironmentOpFixture(first.path)
+    try writeEnvironmentOpFixture(second.path)
+    try FileManager.default.createSymbolicLink(
+        atPath: link.path,
+        withDestinationPath: first.path
+    )
+    let digest = try environmentOpFixtureDigest(first.path)
+
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: link.path,
+            expectedDigest: digest,
+            expectedVersion: "2.35.0",
+            afterSourceResolved: {
+                try? FileManager.default.removeItem(at: link)
+                try? FileManager.default.createSymbolicLink(
+                    atPath: link.path,
+                    withDestinationPath: second.path
+                )
+            }
+        ) == .blocked(.pathUnsafe),
+        "changed OP symlink was admitted"
+    )
+
+    try? FileManager.default.removeItem(at: link)
+    try FileManager.default.createSymbolicLink(
+        atPath: link.path,
+        withDestinationPath: first.path
+    )
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: link.path,
+            expectedDigest: digest,
+            expectedVersion: "2.35.0",
+            afterStagedCopy: { stagedPath in
+                try? Data("changed".utf8).write(
+                    to: URL(fileURLWithPath: stagedPath)
+                )
+            }
+        ) == .blocked(.binaryUntrusted),
+        "changed staged OP bytes were admitted"
+    )
+}
+
+private func environmentOpDigestAndVersionMismatchBlock() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let unsupported = root.appendingPathComponent("op")
+    try writeEnvironmentOpFixture(unsupported.path, version: "2.17.9")
+    let digest = try environmentOpFixtureDigest(unsupported.path)
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: unsupported.path,
+            expectedDigest: digest,
+            expectedVersion: "2.17.9"
+        ) == .blocked(.versionUnsupported),
+        "unsupported OP version was admitted"
+    )
+    try check(
+        EnvironmentOpSupervisor.admitFixtureExecutableForTesting(
+            executablePath: unsupported.path,
+            expectedDigest: String(repeating: "0", count: 64),
+            expectedVersion: "2.17.9"
+        ) == .blocked(.binaryUntrusted),
+        "unpinned OP digest was admitted"
+    )
+}
+
 private func installedOfficialEnvironmentOpPassesPinnedIdentity() throws {
     let candidates = ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
     guard let installed = candidates.first(where: {
@@ -1547,6 +1784,92 @@ private func installedOfficialEnvironmentOpPassesPinnedIdentity() throws {
             description: "installed official OP failed pinned identity admission"
         )
     }
+}
+
+private func environmentOpSupervisorAdmissionSurfaceAligns() throws {
+    let supervisor = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-op-supervisor")
+    try check(
+        FileManager.default.isExecutableFile(atPath: supervisor.path),
+        "packaged supervisor executable is unavailable; run swift build first"
+    )
+
+    func run(_ arguments: [String]) throws -> (Int32, Data) {
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = supervisor
+        process.arguments = arguments
+        process.environment = [:]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return (
+            process.terminationStatus,
+            output.fileHandleForReading.readDataToEndOfFile()
+        )
+    }
+
+    let help = try run(["--help"])
+    let helpText = String(decoding: help.1, as: UTF8.self)
+    try check(help.0 == 0, "supervisor help did not exit successfully")
+    try check(
+        helpText.contains(
+            "browser-use-op-supervisor admit --op-path <absolute-path>"
+        ),
+        "supervisor help omitted the admitted parser shape"
+    )
+
+    let unknown = try run([
+        "admit",
+        "--op-path", "/opt/homebrew/bin/op",
+        "--unknown", "value",
+    ])
+    try check(unknown.0 == 20, "unknown admission option did not fail closed")
+    try check(
+        String(decoding: unknown.1, as: UTF8.self)
+            .contains("\"code\":\"invalid-arguments\""),
+        "unknown admission option returned the wrong rejection"
+    )
+
+    let unapproved = try run(["admit", "--op-path", "/usr/bin/false"])
+    let unapprovedObject = try JSONSerialization.jsonObject(with: unapproved.1)
+        as? [String: Any]
+    let unapprovedRejection = unapprovedObject?["rejection"] as? [String: Any]
+    try check(unapproved.0 == 20, "unapproved admission path exited successfully")
+    try check(
+        Set(unapprovedObject?.keys.map { $0 } ?? []) == [
+            "schema_version", "ok", "state", "rejection",
+        ],
+        "blocked admission envelope keys drifted"
+    )
+    try check(
+        unapprovedObject?["state"] as? String == "unsafe"
+            && unapprovedRejection?["code"] as? String == "op-path-unapproved",
+        "unapproved admission path returned the wrong typed state"
+    )
+
+    let candidates = ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
+    guard let installed = candidates.first(where: {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }) else {
+        return
+    }
+    let admitted = try run(["admit", "--op-path", installed])
+    let admittedObject = try JSONSerialization.jsonObject(with: admitted.1)
+        as? [String: Any]
+    try check(admitted.0 == 0, "installed official OP CLI admission failed")
+    try check(
+        Set(admittedObject?.keys.map { $0 } ?? [])
+            == ["schema_version", "ok", "state"],
+        "ready admission envelope keys drifted"
+    )
+    try check(
+        admittedObject?["ok"] as? Bool == true
+            && admittedObject?["state"] as? String == "ready",
+        "installed official OP CLI admission did not report ready"
+    )
 }
 
 private func environmentOpValidatorUsesReceivedDescriptor() throws {
@@ -1952,6 +2275,1322 @@ private func productionCustodySpawnsValidatorWithoutLeakingToken() throws {
     )
 }
 
+private func confidentialDeliveryHelperIsPackaged() throws {
+    let executableDirectory = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+    let helper = executableDirectory
+        .appendingPathComponent("browser-use-confidential-delivery")
+    try check(
+        FileManager.default.isExecutableFile(atPath: helper.path),
+        "confidential delivery helper executable is missing: \(helper.path)"
+    )
+}
+
+private enum ConfidentialSemanticMatchMode {
+    case exact
+    case missing
+    case multiple
+}
+
+private final class ConfidentialDeliveryTraceBox: @unchecked Sendable {
+    let matchMode: ConfidentialSemanticMatchMode
+    let targetURL: String
+    let suppressInsertResponse: Bool
+    let atomicWriteAllowed: Bool
+    var methods: [String] = []
+    var insertedText: String?
+    var atomicFunctionRechecksOrigins = false
+    var failure: String?
+
+    init(
+        matchMode: ConfidentialSemanticMatchMode = .exact,
+        targetURL: String = "https://oncore.test/login",
+        suppressInsertResponse: Bool = false,
+        atomicWriteAllowed: Bool = true
+    ) {
+        self.matchMode = matchMode
+        self.targetURL = targetURL
+        self.suppressInsertResponse = suppressInsertResponse
+        self.atomicWriteAllowed = atomicWriteAllowed
+    }
+}
+
+private func readConfidentialProtocolLine(
+    _ descriptor: Int32,
+    maximumBytes: Int = 65_536
+) -> Data? {
+    var output = Data()
+    var byte: UInt8 = 0
+    while output.count < maximumBytes {
+        let count = Darwin.read(descriptor, &byte, 1)
+        if count == 0 {
+            return output.isEmpty ? nil : output
+        }
+        if count < 0 {
+            if errno == EINTR { continue }
+            return nil
+        }
+        if byte == 0x0a { return output }
+        output.append(byte)
+    }
+    return nil
+}
+
+private func readConfidentialPipe(_ descriptor: Int32) -> Data {
+    var output = Data()
+    var buffer = [UInt8](repeating: 0, count: 4_096)
+    while true {
+        let capacity = buffer.count
+        let count = buffer.withUnsafeMutableBytes {
+            Darwin.read(descriptor, $0.baseAddress, capacity)
+        }
+        if count == 0 { return output }
+        if count < 0 {
+            if errno == EINTR { continue }
+            return output
+        }
+        output.append(contentsOf: buffer.prefix(count))
+    }
+}
+
+private func writeConfidentialProtocolJSON(
+    _ descriptor: Int32,
+    _ object: [String: Any]
+) -> Bool {
+    guard var bytes = try? JSONSerialization.data(
+        withJSONObject: object,
+        options: [.sortedKeys]
+    ) else {
+        return false
+    }
+    bytes.append(0x0a)
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes {
+            Darwin.write(
+                descriptor,
+                $0.baseAddress!.advanced(by: offset),
+                bytes.count - offset
+            )
+        }
+        if written < 0, errno == EINTR { continue }
+        guard written > 0 else { return false }
+        offset += written
+    }
+    return true
+}
+
+private func readExactTestBytes(
+    _ descriptor: Int32,
+    count: Int
+) -> [UInt8]? {
+    var bytes = [UInt8](repeating: 0, count: count)
+    var offset = 0
+    while offset < count {
+        let received = bytes.withUnsafeMutableBytes {
+            Darwin.read(
+                descriptor,
+                $0.baseAddress!.advanced(by: offset),
+                count - offset
+            )
+        }
+        if received < 0, errno == EINTR { continue }
+        guard received > 0 else { return nil }
+        offset += received
+    }
+    return bytes
+}
+
+private func writeAllTestBytes(
+    _ descriptor: Int32,
+    _ bytes: [UInt8]
+) -> Bool {
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes {
+            Darwin.write(
+                descriptor,
+                $0.baseAddress!.advanced(by: offset),
+                bytes.count - offset
+            )
+        }
+        if written < 0, errno == EINTR { continue }
+        guard written > 0 else { return false }
+        offset += written
+    }
+    return true
+}
+
+private func readTestHTTPHeaders(_ descriptor: Int32) -> String? {
+    var bytes: [UInt8] = []
+    while bytes.count < 16_384 {
+        guard let next = readExactTestBytes(descriptor, count: 1) else {
+            return nil
+        }
+        bytes.append(next[0])
+        if bytes.suffix(4) == [13, 10, 13, 10] {
+            return String(bytes: bytes, encoding: .utf8)
+        }
+    }
+    return nil
+}
+
+private func acceptTestSocket(
+    _ listener: Int32,
+    timeoutMilliseconds: Int32 = 3_000
+) -> Int32? {
+    var polled = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+    guard poll(&polled, 1, timeoutMilliseconds) == 1,
+          polled.revents & Int16(POLLIN) != 0
+    else {
+        return nil
+    }
+    let accepted = Darwin.accept(listener, nil, nil)
+    return accepted >= 0 ? accepted : nil
+}
+
+private func readTestWebSocketFrame(
+    _ descriptor: Int32
+) -> (opcode: UInt8, payload: [UInt8], masked: Bool)? {
+    guard let header = readExactTestBytes(descriptor, count: 2) else {
+        return nil
+    }
+    let opcode = header[0] & 0x0f
+    let masked = header[1] & 0x80 != 0
+    var length = Int(header[1] & 0x7f)
+    if length == 126 {
+        guard let extended = readExactTestBytes(descriptor, count: 2) else {
+            return nil
+        }
+        length = Int(extended[0]) << 8 | Int(extended[1])
+    } else if length == 127 {
+        guard let extended = readExactTestBytes(descriptor, count: 8),
+              extended.prefix(4).allSatisfy({ $0 == 0 })
+        else {
+            return nil
+        }
+        length = extended.suffix(4).reduce(0) {
+            ($0 << 8) | Int($1)
+        }
+    }
+    guard length <= 65_536 else { return nil }
+    let mask = masked ? readExactTestBytes(descriptor, count: 4) : nil
+    guard !masked || mask != nil,
+          var payload = readExactTestBytes(descriptor, count: length)
+    else {
+        return nil
+    }
+    if let mask {
+        for index in payload.indices {
+            payload[index] ^= mask[index % 4]
+        }
+    }
+    return (opcode, payload, masked)
+}
+
+private func writeTestWebSocketFrame(
+    _ descriptor: Int32,
+    opcode: UInt8,
+    payload: [UInt8]
+) -> Bool {
+    var bytes: [UInt8] = [0x80 | opcode]
+    if payload.count < 126 {
+        bytes.append(UInt8(payload.count))
+    } else {
+        bytes.append(126)
+        bytes.append(UInt8((payload.count >> 8) & 0xff))
+        bytes.append(UInt8(payload.count & 0xff))
+    }
+    bytes.append(contentsOf: payload)
+    return writeAllTestBytes(descriptor, bytes)
+}
+
+private func fakeConfidentialCDPResult(
+    method: String,
+    request: [String: Any],
+    trace: ConfidentialDeliveryTraceBox
+) -> [String: Any]? {
+    trace.methods.append(method)
+    switch method {
+    case "Target.getTargetInfo":
+        return [
+            "targetInfo": [
+                "targetId": "target-1",
+                "type": "page",
+                "url": "https://oncore.test/login",
+            ],
+        ]
+    case "Page.getFrameTree":
+        return [
+            "frameTree": [
+                "frame": [
+                    "id": "frame-1",
+                    "url": "https://oncore.test/login",
+                ],
+            ],
+        ]
+    case "Accessibility.getFullAXTree":
+        return [
+            "nodes": [
+                [
+                    "backendDOMNodeId": 42,
+                    "role": ["value": "textbox"],
+                    "name": ["value": "Password"],
+                ],
+            ],
+        ]
+    case "DOM.describeNode":
+        return [
+            "node": [
+                "backendNodeId": 42,
+                "nodeName": "INPUT",
+                "frameId": "frame-1",
+                "attributes": ["type", "password"],
+            ],
+        ]
+    case "DOM.resolveNode":
+        return ["object": ["objectId": "object-42"]]
+    case "Runtime.callFunctionOn":
+        let parameters = request["params"] as? [String: Any]
+        let arguments = parameters?["arguments"] as? [[String: Any]]
+        let declaration = parameters?["functionDeclaration"] as? String ?? ""
+        trace.atomicFunctionRechecksOrigins =
+            declaration.contains("view.location.origin !== expectedFrameOrigin")
+            && declaration.contains(
+                "view.top.location.origin !== expectedTopOrigin"
+            )
+            && declaration.contains("this.isConnected")
+        if trace.atomicWriteAllowed {
+            trace.insertedText = arguments?.last?["value"] as? String
+        }
+        return [
+            "result": [
+                "type": "object",
+                "value": ["written": trace.atomicWriteAllowed],
+            ],
+        ]
+    default:
+        trace.failure = "forbidden method: \(method)"
+        return nil
+    }
+}
+
+private struct ConfidentialWebSocketFixture {
+    let endpoint: String
+    let done: DispatchSemaphore
+    let trace: ConfidentialDeliveryTraceBox
+}
+
+private func startConfidentialWebSocketFixture() throws
+    -> ConfidentialWebSocketFixture
+{
+    let listener = socket(AF_INET, SOCK_STREAM, 0)
+    guard listener >= 0 else { throw POSIXError(.EMFILE) }
+    var reuse: Int32 = 1
+    _ = setsockopt(
+        listener,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &reuse,
+        socklen_t(MemoryLayout.size(ofValue: reuse))
+    )
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(
+                listener,
+                $0,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            )
+        }
+    }
+    guard bound == 0, listen(listener, 2) == 0 else {
+        _ = Darwin.close(listener)
+        throw POSIXError(.EADDRINUSE)
+    }
+    var observed = sockaddr_in()
+    var observedLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let named = withUnsafeMutablePointer(to: &observed) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            getsockname(listener, $0, &observedLength)
+        }
+    }
+    guard named == 0 else {
+        _ = Darwin.close(listener)
+        throw POSIXError(.EINVAL)
+    }
+    let port = Int(UInt16(bigEndian: observed.sin_port))
+    let endpoint = "ws://127.0.0.1:\(port)/devtools/browser/browser-id"
+    let pageEndpoint = "ws://127.0.0.1:\(port)/devtools/page/target-1"
+    let done = DispatchSemaphore(value: 0)
+    let trace = ConfidentialDeliveryTraceBox()
+    DispatchQueue.global().async {
+        defer {
+            _ = Darwin.close(listener)
+            done.signal()
+        }
+        guard let listClient = acceptTestSocket(listener),
+              readTestHTTPHeaders(listClient) != nil
+        else {
+            trace.failure = "json list request missing"
+            return
+        }
+        let list = try! JSONSerialization.data(
+            withJSONObject: [
+                [
+                    "id": "target-1",
+                    "type": "page",
+                    "url": "https://oncore.test/login",
+                    "webSocketDebuggerUrl": pageEndpoint,
+                ],
+            ],
+            options: [.sortedKeys]
+        )
+        let listHeader = [
+            "HTTP/1.1 200 OK",
+            "Content-Type: application/json",
+            "Content-Length: \(list.count)",
+            "Connection: close",
+            "",
+            "",
+        ].joined(separator: "\r\n")
+        _ = writeAllTestBytes(
+            listClient,
+            Array(listHeader.utf8) + Array(list)
+        )
+        _ = Darwin.close(listClient)
+
+        guard let socket = acceptTestSocket(
+            listener,
+            timeoutMilliseconds: 10_000
+        ) else {
+            trace.failure = "websocket connection missing"
+            return
+        }
+        guard let headers = readTestHTTPHeaders(socket) else {
+            trace.failure = "websocket headers missing errno=\(errno)"
+            _ = Darwin.close(socket)
+            return
+        }
+        guard let keyLine = headers
+                .components(separatedBy: "\r\n")
+                .map({
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                })
+                .first(where: {
+                    $0.lowercased().hasPrefix("sec-websocket-key:")
+                })
+        else {
+            trace.failure = "websocket key missing headers=\(headers)"
+            _ = Darwin.close(socket)
+            return
+        }
+        let key = keyLine
+            .split(separator: ":", maxSplits: 1)
+            .last?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        let digest = Insecure.SHA1.hash(
+            data: Data(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8
+            )
+        )
+        let accept = Data(digest).base64EncodedString()
+        let response = [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: \(accept)",
+            "",
+            "",
+        ].joined(separator: "\r\n")
+        guard writeAllTestBytes(socket, Array(response.utf8)) else {
+            trace.failure = "websocket handshake response failed"
+            _ = Darwin.close(socket)
+            return
+        }
+        defer { _ = Darwin.close(socket) }
+        while let frame = readTestWebSocketFrame(socket) {
+            if frame.opcode == 0x8 { return }
+            if frame.opcode == 0x9 {
+                _ = writeTestWebSocketFrame(
+                    socket,
+                    opcode: 0xA,
+                    payload: frame.payload
+                )
+                continue
+            }
+            guard frame.opcode == 0x1,
+                  let request = try? JSONSerialization.jsonObject(
+                    with: Data(frame.payload)
+                  ) as? [String: Any],
+                  let id = request["id"] as? NSNumber,
+                  let method = request["method"] as? String,
+                  let result = fakeConfidentialCDPResult(
+                    method: method,
+                    request: request,
+                    trace: trace
+                  )
+            else {
+                trace.failure = "websocket request invalid"
+                return
+            }
+            if method == "Target.getTargetInfo" {
+                let event = try! JSONSerialization.data(
+                    withJSONObject: [
+                        "method": "Page.lifecycleEvent",
+                        "params": ["name": "init"],
+                    ],
+                    options: [.sortedKeys]
+                )
+                guard writeTestWebSocketFrame(
+                    socket,
+                    opcode: 0x1,
+                    payload: Array(event)
+                ),
+                    writeTestWebSocketFrame(
+                        socket,
+                        opcode: 0x9,
+                        payload: Array("probe".utf8)
+                    ),
+                    let pong = readTestWebSocketFrame(socket),
+                    pong.opcode == 0xA,
+                    pong.masked,
+                    pong.payload == Array("probe".utf8)
+                else {
+                    trace.failure = "client did not send a masked pong"
+                    return
+                }
+            }
+            guard
+                  let bytes = try? JSONSerialization.data(
+                    withJSONObject: ["id": id, "result": result],
+                    options: [.sortedKeys]
+                  ),
+                  writeTestWebSocketFrame(
+                    socket,
+                    opcode: 0x1,
+                    payload: Array(bytes)
+                  )
+            else {
+                trace.failure = "websocket response failed"
+                return
+            }
+            if method == "Runtime.callFunctionOn" { return }
+        }
+    }
+    return ConfidentialWebSocketFixture(
+        endpoint: endpoint,
+        done: done,
+        trace: trace
+    )
+}
+
+private func serveConfidentialBrowserProtocol(
+    descriptor: Int32,
+    trace: ConfidentialDeliveryTraceBox,
+    done: DispatchSemaphore
+) {
+    defer {
+        _ = Darwin.close(descriptor)
+        done.signal()
+    }
+    while let line = readConfidentialProtocolLine(descriptor) {
+        guard let request = try? JSONSerialization.jsonObject(with: line)
+                as? [String: Any],
+              let id = request["id"] as? NSNumber,
+              let method = request["method"] as? String
+        else {
+            trace.failure = "invalid request"
+            return
+        }
+        trace.methods.append(method)
+        let result: [String: Any]
+        switch method {
+        case "Target.getTargetInfo":
+            result = [
+                "targetInfo": [
+                    "targetId": "target-1",
+                    "type": "page",
+                    "url": trace.targetURL,
+                ],
+            ]
+        case "Page.getFrameTree":
+            result = [
+                "frameTree": [
+                    "frame": [
+                        "id": "frame-1",
+                        "url": "https://oncore.test/login",
+                    ],
+                ],
+            ]
+        case "Accessibility.getFullAXTree":
+            let exactNode: [String: Any] = [
+                "backendDOMNodeId": 42,
+                "role": ["value": "textbox"],
+                "name": ["value": "Password"],
+            ]
+            let nodes: [[String: Any]]
+            switch trace.matchMode {
+            case .exact:
+                nodes = [exactNode]
+            case .missing:
+                nodes = []
+            case .multiple:
+                nodes = [
+                    exactNode,
+                    [
+                        "backendDOMNodeId": 43,
+                        "role": ["value": "textbox"],
+                        "name": ["value": "Password"],
+                    ],
+                ]
+            }
+            result = [
+                "nodes": nodes,
+            ]
+        case "DOM.describeNode":
+            result = [
+                "node": [
+                    "backendNodeId": 42,
+                    "nodeName": "INPUT",
+                    "frameId": "frame-1",
+                    "attributes": ["type", "password"],
+                ],
+            ]
+        case "DOM.resolveNode":
+            result = ["object": ["objectId": "object-42"]]
+        case "Runtime.callFunctionOn":
+            let parameters = request["params"] as? [String: Any]
+            let arguments = parameters?["arguments"] as? [[String: Any]]
+            let declaration =
+                parameters?["functionDeclaration"] as? String ?? ""
+            trace.atomicFunctionRechecksOrigins =
+                declaration.contains(
+                    "view.location.origin !== expectedFrameOrigin"
+                )
+                && declaration.contains(
+                    "view.top.location.origin !== expectedTopOrigin"
+                )
+                && declaration.contains("this.isConnected")
+            if trace.atomicWriteAllowed {
+                trace.insertedText = arguments?.last?["value"] as? String
+            }
+            if trace.suppressInsertResponse { return }
+            result = [
+                "result": [
+                    "type": "object",
+                    "value": ["written": trace.atomicWriteAllowed],
+                ],
+            ]
+        default:
+            trace.failure = "forbidden method: \(method)"
+            return
+        }
+        guard writeConfidentialProtocolJSON(
+            descriptor,
+            ["id": id, "result": result]
+        ) else {
+            trace.failure = "response write failed"
+            return
+        }
+        if method == "Runtime.callFunctionOn" { return }
+    }
+}
+
+private struct SpawnedConfidentialDelivery {
+    let pid: pid_t
+    let metadataWriter: Int32
+    let credentialWriter: Int32
+    let browserPeer: Int32
+    let stdoutReader: Int32
+    let stderrReader: Int32
+}
+
+private func spawnConfidentialDeliveryHelper(
+    executable: String
+) throws -> SpawnedConfidentialDelivery {
+    var metadata: [Int32] = [-1, -1]
+    var credential: [Int32] = [-1, -1]
+    var output: [Int32] = [-1, -1]
+    var errorOutput: [Int32] = [-1, -1]
+    var browser: [Int32] = [-1, -1]
+    guard pipe(&metadata) == 0,
+          pipe(&credential) == 0,
+          pipe(&output) == 0,
+          pipe(&errorOutput) == 0,
+          socketpair(AF_UNIX, SOCK_STREAM, 0, &browser) == 0
+    else {
+        throw POSIXError(.EMFILE)
+    }
+
+    var actions: posix_spawn_file_actions_t?
+    guard posix_spawn_file_actions_init(&actions) == 0 else {
+        throw POSIXError(.EINVAL)
+    }
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    for (source, destination) in [
+        (credential[0], Int32(3)),
+        (metadata[0], Int32(4)),
+        (browser[1], Int32(5)),
+        (output[1], STDOUT_FILENO),
+        (errorOutput[1], STDERR_FILENO),
+    ] {
+        guard posix_spawn_file_actions_adddup2(
+            &actions,
+            source,
+            destination
+        ) == 0 else {
+            throw POSIXError(.EINVAL)
+        }
+    }
+
+    var arguments: [UnsafeMutablePointer<CChar>?] = [
+        strdup(executable),
+        strdup("--credential-fd"),
+        strdup("3"),
+        strdup("--metadata-fd"),
+        strdup("4"),
+        strdup("--browser-fd"),
+        strdup("5"),
+        nil,
+    ]
+    var environment: [UnsafeMutablePointer<CChar>?] = [
+        strdup("LANG=C.UTF-8"),
+        strdup("PATH=/usr/bin:/bin"),
+        nil,
+    ]
+    defer {
+        for pointer in arguments.compactMap({ $0 }) { free(pointer) }
+        for pointer in environment.compactMap({ $0 }) { free(pointer) }
+    }
+    var pid: pid_t = 0
+    let spawnResult = arguments.withUnsafeMutableBufferPointer { argv in
+        environment.withUnsafeMutableBufferPointer { envp in
+            posix_spawn(
+                &pid,
+                executable,
+                &actions,
+                nil,
+                argv.baseAddress!,
+                envp.baseAddress!
+            )
+        }
+    }
+    guard spawnResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawnResult) ?? .EINVAL) }
+
+    for descriptor in [
+        metadata[0],
+        credential[0],
+        output[1],
+        errorOutput[1],
+        browser[1],
+    ] {
+        _ = Darwin.close(descriptor)
+    }
+    return SpawnedConfidentialDelivery(
+        pid: pid,
+        metadataWriter: metadata[1],
+        credentialWriter: credential[1],
+        browserPeer: browser[0],
+        stdoutReader: output[0],
+        stderrReader: errorOutput[0]
+    )
+}
+
+private func confidentialDeliveryHelperWritesOneSemanticField() throws {
+    let helper = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-confidential-delivery")
+    let spawned = try spawnConfidentialDeliveryHelper(executable: helper.path)
+    let trace = ConfidentialDeliveryTraceBox()
+    let browserDone = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        serveConfidentialBrowserProtocol(
+            descriptor: spawned.browserPeer,
+            trace: trace,
+            done: browserDone
+        )
+    }
+
+    let metadata: [String: Any] = [
+        "schema_version": 1,
+        "target": [
+            "target_id": "target-1",
+            "frame_id": "frame-1",
+            "top_level_origin": "https://oncore.test",
+            "frame_origin": "https://oncore.test",
+        ],
+        "locator": [
+            "role": "textbox",
+            "accessible_name": "Password",
+            "input_kind": "password",
+        ],
+    ]
+    try check(
+        writeConfidentialProtocolJSON(spawned.metadataWriter, metadata),
+        "metadata write failed"
+    )
+    _ = Darwin.close(spawned.metadataWriter)
+    let sentinel = "U7_HELPER_PASSWORD_SENTINEL"
+    let secretBytes = Array((sentinel + "\n").utf8)
+    let secretWritten = secretBytes.withUnsafeBytes {
+        Darwin.write(
+            spawned.credentialWriter,
+            $0.baseAddress,
+            secretBytes.count
+        )
+    }
+    _ = Darwin.close(spawned.credentialWriter)
+    try check(secretWritten == secretBytes.count, "credential write failed")
+
+    var status: Int32 = 0
+    while waitpid(spawned.pid, &status, 0) < 0, errno == EINTR {}
+    let stdout = readConfidentialPipe(spawned.stdoutReader)
+    let stderr = readConfidentialPipe(spawned.stderrReader)
+    _ = Darwin.close(spawned.stdoutReader)
+    _ = Darwin.close(spawned.stderrReader)
+    try check(
+        browserDone.wait(timeout: .now() + 2) == .success,
+        "fake browser channel did not finish"
+    )
+    let stdoutText = String(decoding: stdout, as: UTF8.self)
+    try check(status == 0, "confidential helper failed: \(stdoutText)")
+    try check(trace.failure == nil, "fake browser rejected helper: \(trace.failure ?? "")")
+    try check(trace.insertedText == sentinel, "helper did not deliver the exact field")
+    try check(
+        trace.methods == [
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Accessibility.getFullAXTree",
+            "DOM.describeNode",
+            "DOM.resolveNode",
+            "Runtime.callFunctionOn",
+        ],
+        "helper method trace drifted: \(trace.methods)"
+    )
+    try check(
+        stdoutText.contains("\"write_state\":\"delivered\"")
+            && stdoutText.contains("\"byte_length\":27"),
+        "helper did not emit structural delivery truth: \(stdoutText)"
+    )
+    try check(!stdout.contains(Data(sentinel.utf8)), "helper stdout leaked credential")
+    try check(!stderr.contains(Data(sentinel.utf8)), "helper stderr leaked credential")
+}
+
+private func confidentialDeliveryHelperRejectsNonUniqueFieldBeforeCredentialRead()
+    throws
+{
+    let helper = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-confidential-delivery")
+    for (mode, expectedCode) in [
+        (ConfidentialSemanticMatchMode.missing, "field-missing"),
+        (ConfidentialSemanticMatchMode.multiple, "field-ambiguous"),
+    ] {
+        let spawned = try spawnConfidentialDeliveryHelper(
+            executable: helper.path
+        )
+        let trace = ConfidentialDeliveryTraceBox(matchMode: mode)
+        let browserDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            serveConfidentialBrowserProtocol(
+                descriptor: spawned.browserPeer,
+                trace: trace,
+                done: browserDone
+            )
+        }
+        let metadata: [String: Any] = [
+            "schema_version": 1,
+            "target": [
+                "target_id": "target-1",
+                "frame_id": "frame-1",
+                "top_level_origin": "https://oncore.test",
+                "frame_origin": "https://oncore.test",
+            ],
+            "locator": [
+                "role": "textbox",
+                "accessible_name": "Password",
+                "input_kind": "password",
+            ],
+        ]
+        try check(
+            writeConfidentialProtocolJSON(spawned.metadataWriter, metadata),
+            "metadata write failed"
+        )
+        _ = Darwin.close(spawned.metadataWriter)
+
+        var status: Int32 = 0
+        while waitpid(spawned.pid, &status, 0) < 0, errno == EINTR {}
+        _ = Darwin.close(spawned.credentialWriter)
+        let stdout = readConfidentialPipe(spawned.stdoutReader)
+        let stderr = readConfidentialPipe(spawned.stderrReader)
+        _ = Darwin.close(spawned.stdoutReader)
+        _ = Darwin.close(spawned.stderrReader)
+        try check(
+            browserDone.wait(timeout: .now() + 2) == .success,
+            "fake browser channel did not finish"
+        )
+        let stdoutText = String(decoding: stdout, as: UTF8.self)
+        try check(
+            status != 0
+                && stdoutText.contains("\"code\":\"\(expectedCode)\"")
+                && stdoutText.contains(
+                    "\"write_state\":\"blocked-before-write\""
+                ),
+            "non-unique semantic field did not block before write: \(stdoutText)"
+        )
+        try check(
+            trace.methods == [
+                "Target.getTargetInfo",
+                "Page.getFrameTree",
+                "Accessibility.getFullAXTree",
+            ],
+            "non-unique field crossed the semantic lookup boundary: \(trace.methods)"
+        )
+        try check(
+            trace.insertedText == nil,
+            "non-unique semantic field received credential text"
+        )
+        try check(stderr.isEmpty, "non-unique field emitted stderr")
+    }
+}
+
+private func confidentialDeliveryHelperClassifiesTargetDriftAndUnknownWrite()
+    throws
+{
+    let helper = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-confidential-delivery")
+    let metadata: [String: Any] = [
+        "schema_version": 1,
+        "target": [
+            "target_id": "target-1",
+            "frame_id": "frame-1",
+            "top_level_origin": "https://oncore.test",
+            "frame_origin": "https://oncore.test",
+        ],
+        "locator": [
+            "role": "textbox",
+            "accessible_name": "Password",
+            "input_kind": "password",
+        ],
+    ]
+
+    do {
+        let spawned = try spawnConfidentialDeliveryHelper(
+            executable: helper.path
+        )
+        let trace = ConfidentialDeliveryTraceBox(
+            targetURL: "https://drift.test/login"
+        )
+        let browserDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            serveConfidentialBrowserProtocol(
+                descriptor: spawned.browserPeer,
+                trace: trace,
+                done: browserDone
+            )
+        }
+        try check(
+            writeConfidentialProtocolJSON(spawned.metadataWriter, metadata),
+            "target-drift metadata write failed"
+        )
+        _ = Darwin.close(spawned.metadataWriter)
+        var status: Int32 = 0
+        while waitpid(spawned.pid, &status, 0) < 0, errno == EINTR {}
+        _ = Darwin.close(spawned.credentialWriter)
+        let stdout = readConfidentialPipe(spawned.stdoutReader)
+        let stderr = readConfidentialPipe(spawned.stderrReader)
+        _ = Darwin.close(spawned.stdoutReader)
+        _ = Darwin.close(spawned.stderrReader)
+        try check(
+            browserDone.wait(timeout: .now() + 2) == .success,
+            "target-drift browser channel did not finish"
+        )
+        let stdoutText = String(decoding: stdout, as: UTF8.self)
+        try check(
+            status != 0
+                && stdoutText.contains("\"code\":\"target-unproven\"")
+                && stdoutText.contains(
+                    "\"write_state\":\"blocked-before-write\""
+                ),
+            "target drift was not blocked before credential read: \(stdoutText)"
+        )
+        try check(
+            trace.methods == ["Target.getTargetInfo"]
+                && trace.insertedText == nil,
+            "target drift crossed the target proof boundary: \(trace.methods)"
+        )
+        try check(stderr.isEmpty, "target drift emitted stderr")
+    }
+
+    do {
+        let spawned = try spawnConfidentialDeliveryHelper(
+            executable: helper.path
+        )
+        let trace = ConfidentialDeliveryTraceBox(
+            suppressInsertResponse: true
+        )
+        let browserDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            serveConfidentialBrowserProtocol(
+                descriptor: spawned.browserPeer,
+                trace: trace,
+                done: browserDone
+            )
+        }
+        try check(
+            writeConfidentialProtocolJSON(spawned.metadataWriter, metadata),
+            "unknown-write metadata write failed"
+        )
+        _ = Darwin.close(spawned.metadataWriter)
+        let sentinel = "U7_UNKNOWN_WRITE_SENTINEL"
+        let credential = Array((sentinel + "\n").utf8)
+        let written = credential.withUnsafeBytes {
+            Darwin.write(
+                spawned.credentialWriter,
+                $0.baseAddress,
+                credential.count
+            )
+        }
+        _ = Darwin.close(spawned.credentialWriter)
+        try check(written == credential.count, "unknown-write credential write failed")
+        var status: Int32 = 0
+        while waitpid(spawned.pid, &status, 0) < 0, errno == EINTR {}
+        let stdout = readConfidentialPipe(spawned.stdoutReader)
+        let stderr = readConfidentialPipe(spawned.stderrReader)
+        _ = Darwin.close(spawned.stdoutReader)
+        _ = Darwin.close(spawned.stderrReader)
+        try check(
+            browserDone.wait(timeout: .now() + 2) == .success,
+            "unknown-write browser channel did not finish"
+        )
+        let stdoutText = String(decoding: stdout, as: UTF8.self)
+        try check(
+            status != 0
+                && stdoutText.contains("\"code\":\"write-outcome-unknown\"")
+                && stdoutText.contains(
+                    "\"write_state\":\"write-outcome-unknown\""
+                ),
+            "missing write response was not classified unknown: \(stdoutText)"
+        )
+        try check(
+            trace.insertedText == sentinel
+                && trace.methods.last == "Runtime.callFunctionOn",
+            "unknown-write fixture did not reach the one allowed write"
+        )
+        try check(
+            !stdout.contains(Data(sentinel.utf8))
+                && !stderr.contains(Data(sentinel.utf8)),
+            "unknown-write result leaked credential"
+        )
+    }
+
+    do {
+        let spawned = try spawnConfidentialDeliveryHelper(
+            executable: helper.path
+        )
+        let trace = ConfidentialDeliveryTraceBox(atomicWriteAllowed: false)
+        let browserDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            serveConfidentialBrowserProtocol(
+                descriptor: spawned.browserPeer,
+                trace: trace,
+                done: browserDone
+            )
+        }
+        try check(
+            writeConfidentialProtocolJSON(spawned.metadataWriter, metadata),
+            "atomic-drift metadata write failed"
+        )
+        _ = Darwin.close(spawned.metadataWriter)
+        let sentinel = "U7_ATOMIC_DRIFT_SENTINEL"
+        _ = writeAllTestBytes(
+            spawned.credentialWriter,
+            Array((sentinel + "\n").utf8)
+        )
+        _ = Darwin.close(spawned.credentialWriter)
+        var status: Int32 = 0
+        while waitpid(spawned.pid, &status, 0) < 0, errno == EINTR {}
+        let stdout = readConfidentialPipe(spawned.stdoutReader)
+        let stderr = readConfidentialPipe(spawned.stderrReader)
+        _ = Darwin.close(spawned.stdoutReader)
+        _ = Darwin.close(spawned.stderrReader)
+        try check(
+            browserDone.wait(timeout: .now() + 2) == .success,
+            "atomic-drift browser channel did not finish"
+        )
+        let stdoutText = String(decoding: stdout, as: UTF8.self)
+        try check(
+            status != 0
+                && stdoutText.contains("\"code\":\"target-unproven\"")
+                && stdoutText.contains(
+                    "\"write_state\":\"blocked-before-write\""
+                ),
+            "atomic navigation drift was not blocked: \(stdoutText)"
+        )
+        try check(
+            trace.atomicFunctionRechecksOrigins
+                && trace.insertedText == nil
+                && trace.methods.last == "Runtime.callFunctionOn",
+            "atomic write did not bind live origins and exact node"
+        )
+        try check(
+            !stdout.contains(Data(sentinel.utf8))
+                && !stderr.contains(Data(sentinel.utf8)),
+            "atomic-drift result leaked credential"
+        )
+    }
+}
+
+private func environmentOpPrivatePipeFeedsOnlyNativeWriter() throws {
+    let fake = try makeFakeOp(name: "browser-use-fake-op-private-delivery")
+    defer {
+        try? FileManager.default.removeItem(
+            at: fake.deletingLastPathComponent()
+        )
+    }
+    try withTokenDescriptor { tokenDescriptor in
+        var browser: [Int32] = [-1, -1]
+        try check(
+            socketpair(AF_UNIX, SOCK_STREAM, 0, &browser) == 0,
+            "private delivery browser socket failed"
+        )
+        defer {
+            _ = Darwin.close(browser[0])
+            _ = Darwin.close(browser[1])
+        }
+        let trace = ConfidentialDeliveryTraceBox()
+        let browserDone = DispatchSemaphore(value: 0)
+        let browserPeer = browser[1]
+        DispatchQueue.global().async {
+            serveConfidentialBrowserProtocol(
+                descriptor: browserPeer,
+                trace: trace,
+                done: browserDone
+            )
+        }
+        let result =
+            EnvironmentOpSupervisor
+                .executeIdentityBoundPrivateFieldForTesting(
+                    executablePath: fake.path,
+                    vaultID: "vault-1",
+                    itemID: "item-1",
+                    field: .password,
+                    tokenDescriptor: tokenDescriptor
+                ) { credentialDescriptor, timeoutMilliseconds in
+                    var metadata: [Int32] = [-1, -1]
+                    guard pipe(&metadata) == 0 else {
+                        return Data()
+                    }
+                    let request: [String: Any] = [
+                        "schema_version": 1,
+                        "target": [
+                            "target_id": "target-1",
+                            "frame_id": "frame-1",
+                            "top_level_origin": "https://oncore.test",
+                            "frame_origin": "https://oncore.test",
+                        ],
+                        "locator": [
+                            "role": "textbox",
+                            "accessible_name": "Password",
+                            "input_kind": "password",
+                        ],
+                    ]
+                    let wrote = writeConfidentialProtocolJSON(
+                        metadata[1],
+                        request
+                    )
+                    _ = Darwin.close(metadata[1])
+                    guard wrote else {
+                        _ = Darwin.close(metadata[0])
+                        return Data()
+                    }
+                    let delivery = ConfidentialFieldDeliveryProcess.run(
+                        metadataDescriptor: metadata[0],
+                        credentialDescriptor: credentialDescriptor,
+                        browserDescriptor: browser[0],
+                        timeoutMilliseconds: timeoutMilliseconds
+                    )
+                    _ = Darwin.close(metadata[0])
+                    return delivery
+                }
+        guard case let .success(output) = result else {
+            throw TestFailure(
+                description: "private OP pipe did not complete"
+            )
+        }
+        try check(
+            browserDone.wait(timeout: .now() + 2) == .success,
+            "private delivery browser did not finish"
+        )
+        let outputText = String(decoding: output, as: UTF8.self)
+        try check(
+            outputText.contains("\"write_state\":\"delivered\""),
+            "private OP pipe did not deliver: \(outputText)"
+        )
+        try check(
+            trace.insertedText == "U7_PRIVATE_PIPE_PASSWORD_SENTINEL",
+            "private OP output did not reach native writer"
+        )
+        try check(
+            !output.contains(
+                Data("U7_PRIVATE_PIPE_PASSWORD_SENTINEL".utf8)
+            ),
+            "private delivery result leaked credential"
+        )
+    }
+}
+
+private func confidentialPrivateModeOwnsAttachedPageWebSocket() throws {
+    let fake = try makeFakeOp(name: "browser-use-fake-op-private-websocket")
+    defer {
+        try? FileManager.default.removeItem(
+            at: fake.deletingLastPathComponent()
+        )
+    }
+    let fixture = try startConfidentialWebSocketFixture()
+    let request: [String: Any] = [
+        "schema_version": 1,
+        "browser_ws_endpoint": fixture.endpoint,
+        "browser_pid": getpid(),
+        "binding": [
+            "vault_id": "vault-1",
+            "item_id": "item-1",
+        ],
+        "target": [
+            "lane_id": "agent-browser",
+            "run_id": "run-u7-native-websocket",
+            "target_id": "target-1",
+            "page_id": "page-1",
+            "frame_id": "frame-1",
+            "top_level_origin": "https://oncore.test",
+            "frame_origin": "https://oncore.test",
+            "target_proof_digest": String(repeating: "d", count: 64),
+        ],
+        "locator": [
+            "role": "textbox",
+            "accessible_name": "Password",
+            "input_kind": "password",
+        ],
+    ]
+    let requestData = try JSONSerialization.data(
+        withJSONObject: request,
+        options: [.sortedKeys]
+    )
+    try withTokenDescriptor { tokenDescriptor in
+        let result = ConfidentialFieldDeliveryProcess.runPrivateForTesting(
+            requestData: requestData,
+            opExecutablePath: fake.path,
+            tokenDescriptor: tokenDescriptor
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "native websocket fixture did not finish"
+        )
+        let text = String(decoding: result, as: UTF8.self)
+        try check(
+            text.contains("\"write_state\":\"delivered\""),
+            "native private websocket delivery failed: \(text); fixture: \(fixture.trace.failure ?? "none")"
+        )
+        try check(
+            fixture.trace.insertedText
+                == "U7_PRIVATE_PIPE_PASSWORD_SENTINEL",
+            "native websocket did not receive exact private OP output"
+        )
+        try check(
+            fixture.trace.methods == [
+                "Target.getTargetInfo",
+                "Page.getFrameTree",
+                "Accessibility.getFullAXTree",
+                "DOM.describeNode",
+                "DOM.resolveNode",
+                "Runtime.callFunctionOn",
+            ],
+            "native websocket method allowlist drifted: \(fixture.trace.methods)"
+        )
+        try check(
+            !result.contains(
+                Data("U7_PRIVATE_PIPE_PASSWORD_SENTINEL".utf8)
+            ),
+            "native websocket result leaked credential"
+        )
+    }
+}
+
+private func confidentialPrivateModeRejectsMismatchedBrowserPID() throws {
+    let fixture = try startConfidentialWebSocketFixture()
+    let request: [String: Any] = [
+        "schema_version": 1,
+        "browser_ws_endpoint": fixture.endpoint,
+        "browser_pid": getppid(),
+        "binding": [
+            "vault_id": "vault-1",
+            "item_id": "item-1",
+        ],
+        "target": [
+            "lane_id": "agent-browser",
+            "run_id": "run-u7-native-pid-mismatch",
+            "target_id": "target-1",
+            "page_id": "page-1",
+            "frame_id": "frame-1",
+            "top_level_origin": "https://oncore.test",
+            "frame_origin": "https://oncore.test",
+            "target_proof_digest": String(repeating: "d", count: 64),
+        ],
+        "locator": [
+            "role": "textbox",
+            "accessible_name": "Password",
+            "input_kind": "password",
+        ],
+    ]
+    let requestData = try JSONSerialization.data(
+        withJSONObject: request,
+        options: [.sortedKeys]
+    )
+    try withTokenDescriptor { tokenDescriptor in
+        let result = ConfidentialFieldDeliveryProcess.runPrivateForTesting(
+            requestData: requestData,
+            opExecutablePath: "/does/not/run",
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: 1_000
+        )
+        let text = String(decoding: result, as: UTF8.self)
+        try check(
+            text.contains("\"code\":\"invalid-request\"")
+                && text.contains("\"write_state\":\"blocked-before-write\""),
+            "mismatched browser PID was not blocked: \(text)"
+        )
+        try check(
+            fixture.trace.methods.isEmpty
+                && fixture.trace.insertedText == nil,
+            "mismatched browser PID reached CDP"
+        )
+    }
+    _ = fixture.done.wait(timeout: .now() + 4)
+}
+
+private func confidentialChromeExecutablePathRejectsLookalike() throws {
+    try check(
+        ConfidentialFieldDeliveryProcess
+            .acceptsChromeExecutablePathForTesting(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ),
+        "canonical Chrome path was rejected"
+    )
+    try check(
+        !ConfidentialFieldDeliveryProcess
+            .acceptsChromeExecutablePathForTesting(
+                "/Users/attacker/com.google.Chrome.code_sign_clone/fake/Google Chrome.app.bundle/Contents/MacOS/Google Chrome"
+            ),
+        "user-created Chrome lookalike path was admitted"
+    )
+}
+
 @main
 enum BrowserUseEnvironmentAuthTests {
     static func main() throws {
@@ -2038,8 +3677,28 @@ enum BrowserUseEnvironmentAuthTests {
                 environmentOpOfficialIdentityBlocksUnapprovedBinary
             ),
             (
+                "environment OP trusted Homebrew symlink passes",
+                environmentOpTrustedHomebrewSymlinkPasses
+            ),
+            (
+                "environment OP hostile symlink shapes block",
+                environmentOpHostileSymlinkShapesBlock
+            ),
+            (
+                "environment OP changed link and staged bytes block",
+                environmentOpChangedLinkAndStagedBytesBlock
+            ),
+            (
+                "environment OP digest and version mismatch block",
+                environmentOpDigestAndVersionMismatchBlock
+            ),
+            (
                 "installed official environment OP passes pinned identity",
                 installedOfficialEnvironmentOpPassesPinnedIdentity
+            ),
+            (
+                "environment OP supervisor admission surface aligns",
+                environmentOpSupervisorAdmissionSurfaceAligns
             ),
             (
                 "environment OP validator uses received descriptor",
@@ -2064,6 +3723,38 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "production custody spawns validator without leaking token",
                 productionCustodySpawnsValidatorWithoutLeakingToken
+            ),
+            (
+                "confidential delivery helper is packaged",
+                confidentialDeliveryHelperIsPackaged
+            ),
+            (
+                "confidential delivery helper writes one semantic field",
+                confidentialDeliveryHelperWritesOneSemanticField
+            ),
+            (
+                "confidential delivery helper rejects non-unique field before credential read",
+                confidentialDeliveryHelperRejectsNonUniqueFieldBeforeCredentialRead
+            ),
+            (
+                "confidential delivery helper classifies target drift and unknown write",
+                confidentialDeliveryHelperClassifiesTargetDriftAndUnknownWrite
+            ),
+            (
+                "environment OP private pipe feeds only native writer",
+                environmentOpPrivatePipeFeedsOnlyNativeWriter
+            ),
+            (
+                "confidential private mode owns attached page websocket",
+                confidentialPrivateModeOwnsAttachedPageWebSocket
+            ),
+            (
+                "confidential private mode rejects mismatched browser pid",
+                confidentialPrivateModeRejectsMismatchedBrowserPID
+            ),
+            (
+                "confidential chrome path rejects lookalike",
+                confidentialChromeExecutablePathRejectsLookalike
             ),
         ]
         for (name, test) in tests {

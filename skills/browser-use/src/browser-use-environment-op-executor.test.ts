@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import {
 	admitEnvironmentOpExecutable,
+	buildEnvironmentOpAdmissionInvocation,
 	buildEnvironmentOpMetadataInvocation,
 	buildEnvironmentOpValidatorInvocation,
 	createEnvironmentOpTokenRetrievalPort,
+	parseEnvironmentOpAdmissionResult,
 	parseEnvironmentOpMetadataResult,
 } from "./browser-use-environment-op-executor";
 
@@ -75,6 +77,57 @@ describe("environment OP executable admission", () => {
 			env: {},
 			inherited_fds: [9],
 		});
+	});
+
+	test("builds and parses the secret-free native admission contract exactly", () => {
+		expect(
+			buildEnvironmentOpAdmissionInvocation({
+				supervisor_path: "/opt/browser-use/bin/browser-use-op-supervisor",
+				op_path: "/opt/homebrew/bin/op",
+			}),
+		).toEqual({
+			executable_path: "/opt/browser-use/bin/browser-use-op-supervisor",
+			argv: ["admit", "--op-path", "/opt/homebrew/bin/op"],
+			env: {},
+			inherited_fds: [],
+		});
+		expect(
+			parseEnvironmentOpAdmissionResult({
+				schema_version: 1,
+				ok: true,
+				state: "ready",
+			}),
+		).toBe("ready");
+		expect(
+			parseEnvironmentOpAdmissionResult({
+				schema_version: 1,
+				ok: false,
+				state: "unsafe",
+				rejection: { code: "op-binary-untrusted" },
+			}),
+		).toBe("unsafe");
+	});
+
+	test("rejects admission envelopes with unknown or secret-shaped fields", () => {
+		expect(
+			parseEnvironmentOpAdmissionResult({
+				schema_version: 1,
+				ok: true,
+				state: "ready",
+				token: "ops_SECRET_SENTINEL",
+			}),
+		).toBe("unproven");
+		expect(
+			parseEnvironmentOpAdmissionResult({
+				schema_version: 1,
+				ok: false,
+				state: "unsafe",
+				rejection: {
+					code: "op-binary-untrusted",
+					message: "ops_SECRET_SENTINEL",
+				},
+			}),
+		).toBe("unproven");
 	});
 
 	test("parses versioned native results without relaying native messages", () => {

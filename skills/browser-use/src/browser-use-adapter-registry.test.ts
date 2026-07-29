@@ -871,7 +871,7 @@ describe("material lane view digest (finding #4)", () => {
 		const view = materialViewOf("chrome-devtools-mcp");
 		const repinned = {
 			...view,
-			handoff: { ...view.handoff, schema_version: "3" },
+			handoff: { ...view.handoff, schema_version: "999" },
 		};
 		expect(adapterLaneViewDigestOf(repinned)).not.toBe(
 			adapterLaneViewDigestOf(view),

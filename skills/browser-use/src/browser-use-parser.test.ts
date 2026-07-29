@@ -262,6 +262,33 @@ describe("U3 parser", () => {
 		).toThrow("unknown option: --generation");
 	});
 
+	test("migration import accepts one absolute legacy corpus root", () => {
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"import",
+				"--source",
+				"/private/tmp/browser-automation",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-import",
+			outputMode: "json",
+			flagValues: {
+				"--source": "/private/tmp/browser-automation",
+			},
+		});
+		for (const argv of [
+			["migration", "import"],
+			["migration", "import", "--source", "relative/browser-automation"],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(
+				"migration import requires --source <path>",
+			);
+		}
+	});
+
 	// Scenario 6: undeclared flags are rejected (exit 2) for every subcommand.
 	test("each subcommand rejects an undeclared flag with a usage error", async () => {
 		const cases: string[][] = [

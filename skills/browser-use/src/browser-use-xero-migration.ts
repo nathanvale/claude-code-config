@@ -8,19 +8,17 @@
 // owns exact bytes, promotion, and postconditions; a runbook here only names an
 // action id plus an expected content digest.
 //
-// Two activation states (R27/R28/R33):
-//   - `active`: the BankStatementsPlus extraction. A read-only flow with typed
-//     UUID/date inputs and a 366-day preflight range bound, whose validated,
-//     redacted response envelope is captured through `captureStructuredResult`
-//     (R21) so a large payload spills to a governed artifact, never inline
-//     shared-run state.
-//   - `staged-inactive`: `post-banktransaction` and the reconciliation batch
-//     (+ its FILL / CLEAR_AND_FILL / CLICK_OK variants). Migrated with full
-//     provenance but NON-DISPATCHABLE: excluded from active list/show/run, they
-//     surface only through migration status and refuse with a typed
-//     `runbook_inactive` refusal BEFORE any handoff or dispatch. Reconciliation
-//     variants are a discriminated union validated/checkpointed in SIMULATION
-//     only — this module never dispatches a live financial mutation.
+// Every migrated Xero flow starts `staged-inactive` (R27/R28/R33):
+//   - BankStatementsPlus extraction is not one read-only effect. It mutates the
+//     API Explorer form, dispatches a request, then observes the response. Those
+//     effects have separate exact candidate assets and require separate review.
+//   - `post-banktransaction` and the reconciliation batch (+ its FILL /
+//     CLEAR_AND_FILL / CLICK_OK variants) are financial writes. They retain full
+//     provenance but remain non-dispatchable without exact action approval,
+//     auth, and separate caller confirmation.
+// All inactive definitions refuse before handoff. Reconciliation variants are
+// validated/checkpointed in simulation only; this module never dispatches a
+// live financial mutation.
 //
 // Pure model + guards only. No Date.now, no Math.random, no fs, no browser, and
 // ZERO live financial write. Structured-result capture, effect audit, promotion
@@ -30,10 +28,14 @@
 import { isAbsolute } from "node:path";
 import {
 	type BrowserUseActionValueSchema,
+	type BrowserUseReviewedActionRecord,
+	actionAssetDigest,
 	actionDigestIsValid,
 	auditActionEffectClass,
 	captureStructuredResult,
 	STRUCTURED_RESULT_MAX_INLINE_BYTES,
+	XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES,
 } from "./browser-use-runbook-actions";
 import {
 	type BrowserUseRunbook,
@@ -62,12 +64,20 @@ export const BROWSER_USE_XERO_EXTRACT_MAX_RANGE_DAYS = 366;
 
 /** Exact reviewed action digests supplied by one staged Xero generation. */
 export type BrowserUseXeroActionDigests = {
-	/** Read-only BankStatementsPlus extraction action. */
-	extractBankStatements: string;
+	/** API Explorer form mutation and request dispatch. */
+	requestBankStatements: string;
+	/** Read-only response observation after the request finishes. */
+	captureBankStatements: string;
 	/** Staged-inactive bank-transaction post (financial mutation). */
 	postBankTransaction: string;
 	/** Staged-inactive reconciliation batch action (financial mutation). */
 	reconcileBatch: string;
+};
+
+/** One exact Xero candidate asset plus its non-authorizing reviewed record. */
+export type BrowserUseXeroActionCandidate = {
+	assetBytes: string;
+	record: BrowserUseReviewedActionRecord;
 };
 
 /** Inputs required to build the Xero migration output. */
@@ -223,7 +233,8 @@ function assertMigrationInput(input: BrowserUseXeroMigrationInput): void {
 
 function buildExtractRunbook(
 	origin: string,
-	digest: string,
+	requestDigest: string,
+	captureDigest: string,
 ): BrowserUseRunbook {
 	return {
 		contract: "browser-use.runbook",
@@ -263,8 +274,8 @@ function buildExtractRunbook(
 			{ kind: "snapshot", interactive: false },
 			{
 				kind: "action",
-				action_id: "xero-extract-bankstatements",
-				expected_digest: digest,
+				action_id: "xero-request-bankstatements",
+				expected_digest: requestDigest,
 				inputs: {
 					bank_account_id: "{{bank_account_id}}",
 					from_date: "{{from_date}}",
@@ -272,8 +283,160 @@ function buildExtractRunbook(
 				},
 			},
 			{ kind: "snapshot", interactive: false },
+			{
+				kind: "action",
+				action_id: "xero-capture-bankstatements",
+				expected_digest: captureDigest,
+				inputs: {},
+			},
+			{ kind: "snapshot", interactive: false },
 		],
 	};
+}
+
+/**
+ * Build exact candidate assets for the two BankStatementsPlus effect classes.
+ *
+ * The legacy flow proves that request driving mutates the page and response
+ * capture observes it. It does not prove the candidate selectors against
+ * current Warm Chrome, so both receipts stay `invalidated` and cannot authorize
+ * activation. A later operator review must replace the record with an approval
+ * bound to the same bytes, origin, and audited effect.
+ *
+ * @param input - Exact origin and migrated source lineage for both candidates
+ * @returns Deterministically ordered candidate assets and reviewed records
+ *
+ * @example
+ * ```typescript
+ * const candidates = buildXeroActionCandidates({
+ *   allowedOrigin: "https://api-explorer.xero.com",
+ *   sourceProvenance: "api-explorer-xero/playbooks/extract-bankstatementsplus.yaml",
+ * })
+ * ```
+ */
+export function buildXeroActionCandidates(input: {
+	allowedOrigin?: string;
+	sourceProvenance: string;
+}): readonly BrowserUseXeroActionCandidate[] {
+	const allowedOrigin = input.allowedOrigin ?? "https://api-explorer.xero.com";
+	if (
+		exactOrigin(allowedOrigin) === undefined ||
+		!sourceRelativePathValid(input.sourceProvenance)
+	) {
+		throw new Error(
+			"Xero action candidates require an exact origin and safe source provenance.",
+		);
+	}
+	const candidate = (
+		actionId: string,
+		assetBytes: string,
+		effectClass: "read" | "mutation",
+		inputSchema: BrowserUseActionValueSchema,
+		resultSchema: BrowserUseActionValueSchema,
+	): BrowserUseXeroActionCandidate => {
+		const digest = actionAssetDigest(assetBytes);
+		return {
+			assetBytes,
+			record: {
+				action_id: actionId,
+				asset_id: digest,
+				expected_digest: digest,
+				allowed_origin: allowedOrigin,
+				effect_class: effectClass,
+				containment:
+					effectClass === "read" ? "read-only-observation" : "none",
+				input_schema: inputSchema,
+				result_schema: resultSchema,
+				result_sensitivity: effectClass === "read" ? "high" : "low",
+				...(effectClass === "mutation"
+					? {
+							required_postcondition: {
+								kind: "element-visible" as const,
+								selector: "pre, code, textarea[readonly]",
+							},
+						}
+					: {}),
+				source_provenance: input.sourceProvenance,
+				promotion_receipt: {
+					approved_digest: digest,
+					disposition: "invalidated",
+					approved_origin: allowedOrigin,
+					approved_effect: effectClass,
+					approver_ref: "migration-evidence-insufficient",
+				},
+			},
+		};
+	};
+	return [
+		candidate(
+			"xero-capture-bankstatements",
+			XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES,
+			"read",
+			{ kind: "object", fields: {} },
+			{
+				kind: "object",
+				fields: {
+					response_text: {
+						required: true,
+						schema: { kind: "string", max_length: 100_000 },
+					},
+					response_bytes: {
+						required: true,
+						schema: {
+							kind: "number",
+							integer: true,
+							minimum: 1,
+							maximum: 100_000,
+						},
+					},
+				},
+			},
+		),
+		candidate(
+			"xero-request-bankstatements",
+			XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES,
+			"mutation",
+			{
+				kind: "object",
+				fields: {
+					bank_account_id: {
+						required: true,
+						schema: {
+							kind: "string",
+							max_length: 36,
+							pattern:
+								"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+						},
+					},
+					from_date: {
+						required: true,
+						schema: {
+							kind: "string",
+							max_length: 10,
+							pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+						},
+					},
+					to_date: {
+						required: true,
+						schema: {
+							kind: "string",
+							max_length: 10,
+							pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+						},
+					},
+				},
+			},
+			{
+				kind: "object",
+				fields: {
+					request_dispatched: {
+						required: true,
+						schema: { kind: "boolean" },
+					},
+				},
+			},
+		),
+	];
 }
 
 function buildPostBankTransactionRunbook(
@@ -377,8 +540,8 @@ function buildReconcileBatchRunbook(
 }
 
 /**
- * Build the Xero migration: one active read-only extraction flow plus the
- * staged-inactive financial-mutation flows, each with reconciled source
+ * Build the Xero migration: one staged split-effect extraction flow plus the
+ * staged financial-mutation flows, each with reconciled source
  * provenance and a per-flow activation state (R27/R28/R33). Pure and total: no
  * script bytes, no dispatch, and ZERO live financial write. The reviewed-action
  * registry owns exact bytes, effect audit, promotion, and postconditions.
@@ -393,7 +556,8 @@ function buildReconcileBatchRunbook(
  *   apiExplorerOrigin: "https://api-explorer.xero.com",
  *   goXeroOrigin: "https://go.xero.com",
  *   actionDigests: {
- *     extractBankStatements: "1".repeat(64),
+ *     requestBankStatements: "1".repeat(64),
+ *     captureBankStatements: "4".repeat(64),
  *     postBankTransaction: "2".repeat(64),
  *     reconcileBatch: "3".repeat(64),
  *   },
@@ -410,9 +574,10 @@ export function buildXeroMigration(
 	const extract: BrowserUseXeroMigratedFlow = {
 		runbook: buildExtractRunbook(
 			input.apiExplorerOrigin,
-			input.actionDigests.extractBankStatements,
+			input.actionDigests.requestBankStatements,
+			input.actionDigests.captureBankStatements,
 		),
-		activation_state: "active",
+		activation_state: "staged-inactive",
 	};
 	const postBankTransaction: BrowserUseXeroMigratedFlow = {
 		runbook: buildPostBankTransactionRunbook(
@@ -458,7 +623,7 @@ const XERO_SOURCE_FLOW_TABLE: readonly {
 }[] = [
 	{ fragment: "post-banktransaction", flow_id: "post-banktransaction", activation_state: "staged-inactive" },
 	{ fragment: "reconcile", flow_id: "reconcile-batch", activation_state: "staged-inactive" },
-	{ fragment: "extract-bankstatementsplus", flow_id: "extract-bankstatementsplus", activation_state: "active" },
+	{ fragment: "extract-bankstatementsplus", flow_id: "extract-bankstatementsplus", activation_state: "staged-inactive" },
 ];
 
 function inferFlowForSource(source: string): {
@@ -517,7 +682,7 @@ export function refuseInactiveXeroRun(
 			service_id: flow.runbook.service_id,
 			flow_id: flow.runbook.flow_id,
 			message:
-				"this financial flow is staged inactive; it is visible through migration status only and requires separate user confirmation before any dispatch.",
+				"this Xero flow is staged inactive; it requires exact action approval and auth, plus separate caller confirmation for financial writes, before dispatch.",
 		},
 	};
 }

@@ -305,6 +305,18 @@ export type BrowserUseSecretHandle = {
 	expires_at_epoch_ms: number;
 };
 
+/** Exact secret-free target coordinates bound into a deferred field capability. */
+export type BrowserUseCredentialCapabilityTarget = {
+	lane_id: string;
+	run_id: string;
+	target_id: string;
+	page_id: string;
+	frame_id: string;
+	top_level_origin: string;
+	frame_origin: string;
+	target_proof_digest: string;
+};
+
 /**
  * Validate one field request and mint only its deferred delivery capability.
  *
@@ -836,6 +848,12 @@ export type BrowserUseTokenRetrievalPort = {
 	fetchCredentialField(input: {
 		binding: BrowserUseItemBinding;
 		field: BrowserUseOpCredentialField;
+		/**
+		 * Production environment custody requires an exact target binding.
+		 * Optional only for legacy signed/test executors that own target binding
+		 * behind their existing opaque handle.
+		 */
+		target?: BrowserUseCredentialCapabilityTarget;
 	}): Promise<
 		| { ok: true; handle: BrowserUseSecretHandle }
 		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }

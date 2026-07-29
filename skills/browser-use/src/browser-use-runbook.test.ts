@@ -25,6 +25,7 @@ import type {
 	BrowserUseTargetReproof,
 	BrowserUseVerifiedTarget,
 } from "./browser-use-confidential-field-delivery";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 import type {
 	BrowserUseOpCredentialField,
 	BrowserUseSecretHandle,
@@ -95,11 +96,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;

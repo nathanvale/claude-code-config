@@ -5,6 +5,7 @@ import {
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	type BrowserUseFamily,
+	browserUseContracts,
 } from "./command-contract";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
@@ -240,6 +241,23 @@ describe("front door: error identity (D6)", () => {
 		);
 		expect(install.stdout).toContain("--stdin");
 		expect(install.stdout).toContain("hidden terminal");
+	});
+
+	test("auth status discovery pins the composed secret-free result contract", async () => {
+		const result = await runForTest(
+			["auth", "status", "--help"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain(
+			"Inspect composed authentication readiness without protected-field retrieval.",
+		);
+		expect(result.stdout).not.toContain("--token");
+		expect(browserUseContracts["auth-status"].resultContract).toEqual({
+			id: "browser-use.auth-status",
+			kind: "Command-scoped authentication readiness with one next safe action.",
+			schema_version: "1",
+		});
 	});
 });
 

@@ -317,6 +317,9 @@ const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_GENERATION_RESULT_CONTRACT_ID =
 	"browser-use.generation-result" as const;
 export const BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_CORPUS_IMPORT_CONTRACT_ID =
+	"browser-use.corpus-import" as const;
+export const BROWSER_USE_CORPUS_IMPORT_SCHEMA_VERSION = "1" as const;
 
 /** Activation-ready immutable generation staged from one complete candidate bundle. */
 export type BrowserUseGenerationResult = CommandResultPayload<{
@@ -350,6 +353,11 @@ const BROWSER_USE_REPAIR_STATUS_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_AUTH_READINESS_CONTRACT_ID =
 	"browser-use.auth-readiness" as const;
 export const BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION = "1" as const;
+/** Public composed status across lane, metadata, profile, and binding owners. */
+export const BROWSER_USE_AUTH_STATUS_CONTRACT_ID =
+	"browser-use.auth-status" as const;
+/** First secret-free composed authentication status schema. */
+export const BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID =
 	"browser-use.environment-token-lifecycle" as const;
 export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION =
@@ -428,14 +436,19 @@ export const BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION = "1" as const;
 
 export const BROWSER_CONNECT_HANDOFF_CONTRACT_ID =
 	"browser-connect.verified-handoff" as const;
-// v2 (platform plan 2026-07-21-002 U1, KTD13): the envelope's environment
-// identity carries the named logical profile. This pin bumps atomically with
-// browser-connect's schema constant; a v1 envelope now fails closed here.
-export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "2" as const;
-/** Exact logical environment identity Browser Connect schema 2 can prove. */
+// v3 (environment-token auth plan U6): the envelope carries exact live-clean
+// profile posture. This pin bumps atomically with browser-connect's schema
+// constant; older envelopes now fail closed here.
+export const BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION = "3" as const;
+/** Exact logical environment identity Browser Connect schema 3 can prove. */
 export const BROWSER_CONNECT_ENVIRONMENT_NAME = "agent-chrome" as const;
-/** Exact logical profile identity Browser Connect schema 2 can prove. */
+/** Exact logical profile identity Browser Connect schema 3 can prove. */
 export const BROWSER_CONNECT_ENVIRONMENT_PROFILE = "default" as const;
+/** Exact nested proof contract Browser Connect schema 3 carries. */
+export const BROWSER_CONNECT_ENVIRONMENT_CONTRACT_ID =
+	"warm-chrome.browser-entry" as const;
+/** Exact nested proof schema Browser Connect schema 3 carries. */
+export const BROWSER_CONNECT_ENVIRONMENT_SCHEMA_VERSION = "2" as const;
 
 // Operation capabilities browser-use's transport can honor per adapter, keyed
 // on the envelope's attachment adapter id verbatim (U4, R4/R5: one adapter
@@ -510,6 +523,7 @@ const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
 	"plan",
 	"apply",
 	"verify",
+	"import",
 	"generate",
 	"activate",
 ] as const;
@@ -645,6 +659,7 @@ export type BrowserUseCommand =
 	| "migration-plan"
 	| "migration-apply"
 	| "migration-verify"
+	| "migration-import"
 	| "migration-generate"
 	| "migration-activate"
 	| "artifact-list"
@@ -1850,7 +1865,7 @@ const browserUseRunbookRunFlags = {
 const browserUseMigrationStatusResultContract = {
 	id: BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	kind:
-		"Legacy corpus migration status projection with active_generation current, prior, retained, activation epoch, pending, and effect-fence fields.",
+		"Legacy corpus migration projection with active_generation authority, compact disposition and provenance summaries for status/activate, and detailed rows for planning phases.",
 	schema_version: BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
@@ -1859,6 +1874,13 @@ const browserUseGenerationResultContract = {
 	kind:
 		"Activation-ready immutable generation result with generation_id, generation_content_hash, candidate_manifest_digest, closure, verified_noop, and one structured next safe action.",
 	schema_version: BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseCorpusImportResultContract = {
+	id: BROWSER_USE_CORPUS_IMPORT_CONTRACT_ID,
+	kind:
+		"Compact verified corpus import receipt with source, generation, target counts, activation state, and one activation continuation.",
+	schema_version: BROWSER_USE_CORPUS_IMPORT_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
 const browserUseArtifactManifestResultContract = {
@@ -1877,6 +1899,12 @@ const browserUseAuthReadinessResultContract = {
 	id: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	kind: "Auth readiness evaluation for one repair continuation.",
 	schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseAuthStatusResultContract = {
+	id: BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+	kind: "Command-scoped authentication readiness with one next safe action.",
+	schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
 const browserUseEnvironmentTokenLifecycleResultContract = {
@@ -2028,6 +2056,35 @@ export const browserUseAuthRepairFailureActions = [
 			"Read the run's own persisted continuation with run status and dispatch that action instead.",
 		sideEffects: ["check"],
 	},
+] as const;
+
+/** Discoverable next actions emitted by composed authentication status. */
+export const browserUseAuthStatusActions = [
+	...browserUseEnvironmentTokenLifecycleActions,
+	...browserUseAuthRepairActions,
+	{
+		id: "record-admin-authority-receipt",
+		summary:
+			"Have an authorized human record the bounded read-authority receipt, then recheck.",
+		sideEffects: ["auth", "write"],
+	},
+	{
+		id: "approve-clean-profile-creation",
+		summary:
+			"Have a human approve creation of a fresh dedicated Warm Chrome profile.",
+		sideEffects: ["browser", "write"],
+	},
+	{
+		id: "run-authenticated-runbook",
+		summary:
+			"Run the intended authenticated workflow through the public runbook front door.",
+		sideEffects: ["auth", "browser"],
+	},
+] as const;
+
+const browserUseAuthStatusFailureActions = [
+	...browserUseAuthStatusActions,
+	...browserUsePlatformStoreFailureActions,
 ] as const;
 
 const browserUseAuthFlags = {
@@ -2487,7 +2544,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"migration-status": {
 			script: "browser-use",
 			summary:
-				"Show legacy corpus migration status: snapshot, dispositions, staged generations, and activation state.",
+				"Show compact legacy corpus migration status: snapshot, disposition summary, staged generations, and activation state.",
 			usage: ["migration status [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "operator",
@@ -2599,6 +2656,32 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
+			flags: browserUseMigrationFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-import": {
+			script: "browser-use",
+			summary:
+				"Import one complete legacy corpus into a verified inactive generation; activation remains explicit.",
+			usage: [
+				"migration import --source <absolute-legacy-corpus> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Import inventories, plans, stages, verifies, and composes an inactive generation without activating it.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseCorpusImportResultContract,
 			actionAffordances: {
 				failure: browserUseMigrationFailureActions,
 			},
@@ -2728,7 +2811,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"auth-status": {
 			script: "browser-use",
 			summary:
-				"Inspect local environment-token custody without reading token bytes.",
+				"Inspect composed authentication readiness without protected-field retrieval.",
 			usage: ["auth status [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
@@ -2738,10 +2821,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
-			resultContract: browserUseEnvironmentTokenLifecycleResultContract,
+			resultContract: browserUseAuthStatusResultContract,
 			actionAffordances: {
-				success: browserUseEnvironmentTokenLifecycleActions,
-				failure: browserUseEnvironmentTokenLifecycleFailureActions,
+				success: browserUseAuthStatusActions,
+				failure: browserUseAuthStatusFailureActions,
 			},
 			flags: browserUseEnvironmentTokenLifecycleFlags,
 			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,

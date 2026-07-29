@@ -285,10 +285,15 @@ export function parseBrowserUseArgv(
 		command === "migration-inventory" ||
 		command === "migration-plan" ||
 		command === "migration-apply" ||
-		command === "migration-verify"
+		command === "migration-verify" ||
+		command === "migration-import"
 	) {
 		const source = stringField(flagValues["--source"]);
-		if (!source || source.startsWith("--")) {
+		if (
+			!source ||
+			source.startsWith("--") ||
+			(command === "migration-import" && !isAbsolute(source))
+		) {
 			throw usageError(`${command.replace("-", " ")} requires --source <path>.`);
 		}
 	}

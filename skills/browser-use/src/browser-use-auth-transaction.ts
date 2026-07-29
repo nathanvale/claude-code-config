@@ -47,6 +47,10 @@ export type BrowserUseAuthTransactionEvent =
 	| { type: "lease-granted" }
 	| { type: "lease-unavailable" }
 	| { type: "method-step-complete"; step: BrowserUseAuthMethodStep }
+	| {
+			type: "confidential-delivery-outcome-observed";
+			outcome: "blocked-before-write" | "possibly-written";
+	  }
 	| { type: "submission-dispatched" }
 	| { type: "submit-outcome-observed"; outcome: BrowserUseAuthSubmitOutcome }
 	| { type: "cleanup-complete" }
@@ -107,6 +111,7 @@ const EVENTS_BY_PHASE: Readonly<
 	"lease-request": ["lease-granted", "lease-unavailable", "blocked"],
 	"sensitive-interval": [
 		"method-step-complete",
+		"confidential-delivery-outcome-observed",
 		"submission-dispatched",
 		"blocked",
 	],
@@ -248,6 +253,7 @@ function next(
 function blockWith(
 	fragment: BrowserUseAuthTransactionFragment,
 	cause: BrowserUseAuthBlockedCause,
+	changes: Partial<BrowserUseAuthTransactionFragment> = {},
 ): BrowserUseAuthTransitionResult {
 	return next(fragment, {
 		status: "blocked",
@@ -256,6 +262,7 @@ function blockWith(
 			...BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].continuation,
 		},
 		method_step: null,
+		...changes,
 	});
 }
 
@@ -411,6 +418,16 @@ export function applyAuthTransition(
 			return blockWith(fragment, "lease-unavailable");
 		case "method-step-complete":
 			return applyMethodStep(fragment, event.step);
+		case "confidential-delivery-outcome-observed":
+			// A delivery that may have written is never mechanically retried.
+			// Capability loss has no automatic resolution path, and the external
+			// effect marker survives cancellation/restart for human inspection.
+			return blockWith(fragment, "capability-loss", {
+				external_effect:
+					event.outcome === "possibly-written"
+						? "possible"
+						: fragment.external_effect,
+			});
 		case "submission-dispatched":
 			return applySubmissionDispatch(fragment);
 		case "submit-outcome-observed":

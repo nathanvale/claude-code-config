@@ -25,6 +25,7 @@ const defaultSkillRoot = join(import.meta.dir, "..");
 const NATIVE_EXECUTABLES = [
 	"browser-use-token-custody",
 	"browser-use-op-supervisor",
+	"browser-use-confidential-delivery",
 ] as const;
 const DESCRIPTOR_IO_SOURCE = "browser-use-auth-binding-io.c";
 const ownedNativeBinaryRoot = join(

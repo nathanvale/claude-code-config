@@ -5,10 +5,11 @@ import type {
 	McporterCommandResult,
 } from "./mcporter-transport";
 import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
+import { isExactLiveCleanHandoffProof } from "./browser-connect-profile-posture";
 import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
-const HANDOFF_SCHEMA_VERSION = "2";
+const HANDOFF_SCHEMA_VERSION = "3";
 const COMMAND_TIMEOUT_MS = 30_000;
 
 /**
@@ -260,13 +261,14 @@ function validateTask(
 		task.handoff.attachment.adapter_id !== "playwright-cdp" ||
 		task.handoff.attachment.route !== "explicit-cdp" ||
 		task.handoff.proof.route_evidence !== "verified-live" ||
+		!isExactLiveCleanHandoffProof(task.handoff) ||
 		!isAbsolute(task.handoff.attachment.probe_executable)
 	) {
 		return {
 			ok: false,
 			failure: failure(
 				"playwright_task_handoff_invalid",
-				"Playwright execution requires a schema-2 verified-live handoff for the playwright-cdp lane.",
+				"Playwright execution requires a schema-3 verified-live handoff with live-clean profile posture for the playwright-cdp lane.",
 			),
 		};
 	}

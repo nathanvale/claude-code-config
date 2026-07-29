@@ -22,6 +22,7 @@
 // module never mints a continuation (R21).
 // ---------------------------------------------------------------------------
 
+import { createHash } from "node:crypto";
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
 import type { AgentBrowserAuthDeliveryContext } from "./browser-use-agent-browser";
 import {
@@ -264,6 +265,302 @@ export type BrowserUseDeliveryContextInput = {
 	/** True only inside the sensitive interval (post lease-granted, pre submit). */
 	in_sensitive_interval: boolean;
 };
+
+/**
+ * Bounded metadata-only facts consumed by composed authentication status.
+ *
+ * No identifiers cross this projection. A failed metadata call reports only a
+ * typed blocked cause and leaves vault scope unevaluated.
+ */
+export type BrowserUseAuthMetadataStatus =
+	| {
+			ok: true;
+			service_account: "active";
+			vault_scope: "exactly-one" | "zero" | "multiple";
+			proof_coordinates: BrowserUseAuthStatusProofCoordinates | null;
+	  }
+	| {
+			ok: false;
+			service_account: "active" | "invalid" | "unavailable";
+			vault_scope: "not-evaluated";
+			blocked_cause: BrowserUseAuthBlockedCause;
+	  };
+
+/** Opaque coordinates binding composed status proof to one captured lane. */
+export type BrowserUseAuthStatusProofCoordinates = {
+	lane_digest: string;
+	principal_digest: string;
+	vault_digest: string;
+	profile_digest: string;
+};
+
+const AUTH_STATUS_PROFILE_ENVIRONMENT = "agent-chrome";
+const AUTH_STATUS_PROFILE_NAME = "default";
+const AUTH_STATUS_METADATA_ROW_LIMIT = 128;
+
+function authStatusDigest(label: string, ...parts: readonly string[]): string {
+	return createHash("sha256")
+		.update([`browser-use.auth-status.${label}.v1`, ...parts].join("\0"))
+		.digest("hex");
+}
+
+function hasExactMetadataKeys(
+	value: unknown,
+	keys: readonly string[],
+): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	return (
+		actual.length === expected.length &&
+		actual.every((key, index) => key === expected[index])
+	);
+}
+
+function isBoundedOpaqueMetadataId(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value.length <= 256 &&
+		!value.includes("\uFFFD") &&
+		secretShapeFindingOf(value) === undefined
+	);
+}
+
+function exactActiveIdentity(
+	value: unknown,
+): BrowserUsePrincipalBoundBindingEvidence["identity"] | undefined {
+	if (
+		!hasExactMetadataKeys(value, [
+			"service_account_id",
+			"state",
+			"type",
+		]) ||
+		!isBoundedOpaqueMetadataId(value.service_account_id) ||
+		value.state !== "ACTIVE" ||
+		value.type !== "SERVICE_ACCOUNT"
+	) {
+		return undefined;
+	}
+	return {
+		service_account_id: value.service_account_id,
+		state: "ACTIVE",
+		type: "SERVICE_ACCOUNT",
+	};
+}
+
+function exactVaults(
+	value: unknown,
+): BrowserUsePrincipalBoundBindingEvidence["vaults"] | undefined {
+	if (!Array.isArray(value) || value.length > AUTH_STATUS_METADATA_ROW_LIMIT) {
+		return undefined;
+	}
+	const vaults: Array<{ vault_id: string }> = [];
+	const seen = new Set<string>();
+	for (const row of value) {
+		if (
+			!hasExactMetadataKeys(row, ["vault_id"]) ||
+			!isBoundedOpaqueMetadataId(row.vault_id) ||
+			seen.has(row.vault_id)
+		) {
+			return undefined;
+		}
+		seen.add(row.vault_id);
+		vaults.push({ vault_id: row.vault_id });
+	}
+	return vaults;
+}
+
+function exactStatusBindingEvidence(value: unknown):
+	| {
+			identity: BrowserUsePrincipalBoundBindingEvidence["identity"];
+			vaults: BrowserUsePrincipalBoundBindingEvidence["vaults"];
+	  }
+	| undefined {
+	if (
+		!hasExactMetadataKeys(value, ["identity", "vaults", "item_evidence"]) ||
+		value.item_evidence !== null
+	) {
+		return undefined;
+	}
+	const identity = exactActiveIdentity(value.identity);
+	const vaults = exactVaults(value.vaults);
+	return identity === undefined || vaults === undefined
+		? undefined
+		: { identity, vaults };
+}
+
+function proofCoordinates(
+	admission: Exclude<
+		BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>,
+		{ kind: "blocked" }
+	>,
+	identity: BrowserUsePrincipalBoundBindingEvidence["identity"],
+	vaultId: string,
+): BrowserUseAuthStatusProofCoordinates {
+	const laneDigest = authStatusDigest(
+		"lane",
+		admission.evidence.lane,
+		admission.evidence.assurance,
+		admission.evidence.native.verdict,
+		...(admission.kind === "signed-admitted"
+			? [admission.evidence.native.product_version]
+			: [
+					admission.evidence.environment.state,
+					admission.evidence.environment.next_action,
+				]),
+	);
+	const principalDigest = authStatusDigest(
+		"principal",
+		identity.service_account_id,
+	);
+	const vaultDigest = authStatusDigest("vault", vaultId);
+	const profileDigest = authStatusDigest(
+		"profile",
+		AUTH_STATUS_PROFILE_ENVIRONMENT,
+		AUTH_STATUS_PROFILE_NAME,
+	);
+	return {
+		lane_digest: laneDigest,
+		principal_digest: principalDigest,
+		vault_digest: vaultDigest,
+		profile_digest: profileDigest,
+	};
+}
+
+/**
+ * Inspect active principal and vault scope without exposing identifiers.
+ *
+ * The environment lane uses its principal-bound metadata batch. The signed
+ * lane retains its executor-owned identity and vault calls. The narrowed port
+ * type makes protected-field retrieval unavailable to this function.
+ *
+ * @param admission - One command-scoped admitted U4 lane snapshot
+ * @returns Bounded identity and vault-scope status with no field values
+ *
+ * @example
+ * ```typescript
+ * const status = await inspectBrowserUseAuthMetadata(admission)
+ * if (status.ok && status.vault_scope === "exactly-one") {
+ *   // Continue composing read-only status evidence.
+ * }
+ * ```
+ */
+export async function inspectBrowserUseAuthMetadata(
+	admission: Exclude<
+		BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>,
+		{ kind: "blocked" }
+	>,
+): Promise<BrowserUseAuthMetadataStatus> {
+	const tokenRetrieval: Pick<
+		BrowserUseTokenRetrievalPort,
+		"getBindingEvidence" | "getServiceAccountIdentity" | "listVaults"
+	> = admission.tokenRetrieval;
+	let identity: Awaited<
+		ReturnType<BrowserUseTokenRetrievalPort["getServiceAccountIdentity"]>
+	>;
+	let vaults: Awaited<ReturnType<BrowserUseTokenRetrievalPort["listVaults"]>>;
+
+	if (admission.kind === "environment-admitted") {
+		if (tokenRetrieval.getBindingEvidence === undefined) {
+			return {
+				ok: false,
+				service_account: "unavailable",
+				vault_scope: "not-evaluated",
+				blocked_cause: "capability-loss",
+			};
+		}
+		const collected = await tokenRetrieval.getBindingEvidence({
+			expected_vault_id: null,
+			item_id: null,
+		});
+		if (!collected.ok) {
+			const block = blockOfRetrievalRejection(collected.rejection);
+			return {
+				ok: false,
+				service_account:
+					collected.rejection.code === "output-shape-invalid"
+						? "invalid"
+						: "unavailable",
+				vault_scope: "not-evaluated",
+				blocked_cause: block.blocked_cause,
+			};
+		}
+		const exact = exactStatusBindingEvidence(collected.evidence);
+		if (exact === undefined) {
+			return {
+				ok: false,
+				service_account: "invalid",
+				vault_scope: "not-evaluated",
+				blocked_cause: "capability-loss",
+			};
+		}
+		identity = { ok: true, identity: exact.identity };
+		vaults = { ok: true, vaults: exact.vaults };
+	} else {
+		identity = await tokenRetrieval.getServiceAccountIdentity();
+		if (!identity.ok) {
+			const block = blockOfRetrievalRejection(identity.rejection);
+			return {
+				ok: false,
+				service_account:
+					identity.rejection.code === "output-shape-invalid"
+						? "invalid"
+						: "unavailable",
+				vault_scope: "not-evaluated",
+				blocked_cause: block.blocked_cause,
+			};
+		}
+		const exactIdentity = exactActiveIdentity(identity.identity);
+		if (exactIdentity === undefined) {
+			return {
+				ok: false,
+				service_account: "invalid",
+				vault_scope: "not-evaluated",
+				blocked_cause: "capability-loss",
+			};
+		}
+		identity = { ok: true, identity: exactIdentity };
+		vaults = await tokenRetrieval.listVaults();
+	}
+
+	if (!vaults.ok) {
+		const block = blockOfRetrievalRejection(vaults.rejection);
+		return {
+			ok: false,
+			service_account: "active",
+			vault_scope: "not-evaluated",
+			blocked_cause: block.blocked_cause,
+		};
+	}
+	const exactListedVaults = exactVaults(vaults.vaults);
+	if (exactListedVaults === undefined) {
+		return {
+			ok: false,
+			service_account: "invalid",
+			vault_scope: "not-evaluated",
+			blocked_cause: "capability-loss",
+		};
+	}
+	vaults = { ok: true, vaults: exactListedVaults };
+	const onlyVault = vaults.vaults.length === 1 ? vaults.vaults[0] : undefined;
+	return {
+		ok: true,
+		service_account: "active",
+		vault_scope:
+			vaults.vaults.length === 1
+				? "exactly-one"
+				: vaults.vaults.length === 0
+					? "zero"
+					: "multiple",
+		proof_coordinates:
+			onlyVault === undefined
+				? null
+				: proofCoordinates(admission, identity.identity, onlyVault.vault_id),
+	};
+}
 
 // --- Internal helpers ---------------------------------------------------------
 

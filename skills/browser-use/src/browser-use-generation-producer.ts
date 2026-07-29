@@ -9,6 +9,7 @@ import {
 } from "./browser-use-generation-activation";
 import type { BrowserUseMigrationFailure } from "./browser-use-migration-model";
 import { adoptBrowserUseGenerationCandidate } from "./browser-use-migration";
+import { actionAssetIsSecretFree } from "./browser-use-runbook-actions";
 import type {
 	RetentionDeps,
 	StageGenerationFile,
@@ -164,11 +165,15 @@ function stagedFileIsRedacted(file: StageGenerationFile): boolean {
 	if (file.contents === undefined) return false;
 	const contents = file.contents;
 	if (
-		SECRET_TEXT_PATTERNS.some((pattern) => pattern.test(contents)) ||
-		findRedactionViolations(contents).length > 0
+		file.relPath.startsWith("actions/assets/") &&
+		file.relPath.endsWith(".js")
 	) {
+		return actionAssetIsSecretFree(contents);
+	}
+	if (SECRET_TEXT_PATTERNS.some((pattern) => pattern.test(contents))) {
 		return false;
 	}
+	if (findRedactionViolations(contents).length > 0) return false;
 	if (!file.relPath.endsWith(".json")) return true;
 	try {
 		const parsed = JSON.parse(contents) as unknown;
@@ -489,6 +494,7 @@ function referencedCandidatePaths(
 		...candidate.auth.candidates.map((authCandidate) => authCandidate.path),
 		...candidate.auth.routes.map((route) => route.path),
 		...candidate.proofs.map((proof) => proof.path),
+		...(candidate.knowledge?.files.map((file) => file.path) ?? []),
 	]);
 }
 

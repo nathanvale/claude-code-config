@@ -13,6 +13,7 @@ import {
 import type { RunStoreDeps } from "./browser-use-runs";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
 // Daily Driver Acceptance Ledger — status-families cluster: typed-unavailable
@@ -39,7 +40,7 @@ afterAll(() => {
 	for (const disposable of disposables) disposable.dispose();
 });
 
-// A verified playwright-cdp handoff `data` payload (schema 2, explicit-cdp,
+// A verified playwright-cdp handoff `data` payload (schema 3, explicit-cdp,
 // verified-live) so acquisition succeeds and routing runs on a matching lane.
 const PLAYWRIGHT_HANDOFF = {
 	status: "ok",
@@ -60,11 +61,12 @@ const PLAYWRIGHT_HANDOFF = {
 		launch: { launched: false },
 		proof: {
 			environment_contract_id: "warm-chrome.browser-entry",
-			environment_schema_version: "1",
+			environment_schema_version: "2",
 			route_evidence: "verified-live",
+			profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 		},
 		contract_id: "browser-connect.verified-handoff",
-		schema_version: "2",
+		schema_version: "3",
 	},
 	error: null,
 } as const;

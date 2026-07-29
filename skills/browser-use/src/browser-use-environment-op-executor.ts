@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import {
 	type BrowserUseOpCredentialField,
+	type BrowserUseCredentialCapabilityTarget,
 	type BrowserUseSecretHandle,
 	type BrowserUseTokenRetrievalPort,
 	mintDeferredCredentialCapability,
@@ -87,6 +88,15 @@ export type BrowserUseEnvironmentOpMetadataInvocation = {
 	inherited_fds: readonly number[];
 };
 
+export type BrowserUseEnvironmentOpAdmissionState =
+	| "ready"
+	| "missing"
+	| "unsafe"
+	| "unproven";
+
+export type BrowserUseEnvironmentOpAdmissionInvocation =
+	BrowserUseEnvironmentOpMetadataInvocation;
+
 export type BrowserUseEnvironmentOpValidatorInvocation = {
 	executable_path: string;
 	argv: readonly string[];
@@ -102,6 +112,21 @@ function assertCoordinate(value: string, label: string): void {
 	if (!SAFE_COORDINATE.test(value)) {
 		throw new TypeError(`${label} must be a bounded safe identifier`);
 	}
+}
+
+/** Build the exact secret-free native admission invocation. */
+export function buildEnvironmentOpAdmissionInvocation(input: {
+	supervisor_path: string;
+	op_path: string;
+}): BrowserUseEnvironmentOpAdmissionInvocation {
+	assertAbsolute(input.supervisor_path, "OP supervisor path");
+	assertAbsolute(input.op_path, "OP executable path");
+	return {
+		executable_path: input.supervisor_path,
+		argv: ["admit", "--op-path", input.op_path],
+		env: {},
+		inherited_fds: [],
+	};
 }
 
 /** Build the exact secret-free supervisor invocation for one metadata operation. */
@@ -169,8 +194,83 @@ export function buildEnvironmentOpValidatorInvocation(input: {
 			input.op_path,
 		],
 		env: {},
-		inherited_fds: [input.validator_fd],
+	inherited_fds: [input.validator_fd],
 	};
+}
+
+const NATIVE_ADMISSION_STATE_BY_CODE = {
+	"op-path-not-absolute": "unsafe",
+	"op-path-unapproved": "unsafe",
+	"op-path-unavailable": "missing",
+	"op-path-unsafe": "unsafe",
+	"op-path-not-executable": "unsafe",
+	"op-binary-untrusted": "unsafe",
+	"op-staging-failed": "unproven",
+	"op-version-invalid": "unsafe",
+	"op-version-unsupported": "unsafe",
+} as const satisfies Record<string, BrowserUseEnvironmentOpAdmissionState>;
+
+function hasExactKeys(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const keys = Object.keys(value);
+	return (
+		keys.length === expected.length &&
+		expected.every((key) => Object.hasOwn(value, key))
+	);
+}
+
+/** Parse the bounded native admission result without relaying native detail. */
+export function parseEnvironmentOpAdmissionResult(
+	value: unknown,
+): BrowserUseEnvironmentOpAdmissionState {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "unproven";
+	}
+	const candidate = value as Record<string, unknown>;
+	if (
+		candidate.ok === true &&
+		candidate.schema_version === 1 &&
+		candidate.state === "ready" &&
+		hasExactKeys(candidate, ["schema_version", "ok", "state"])
+	) {
+		return "ready";
+	}
+	if (
+		candidate.ok !== false ||
+		candidate.schema_version !== 1 ||
+		!hasExactKeys(candidate, [
+			"schema_version",
+			"ok",
+			"state",
+			"rejection",
+		])
+	) {
+		return "unproven";
+	}
+	const rejection = candidate.rejection;
+	if (
+		typeof rejection !== "object" ||
+		rejection === null ||
+		Array.isArray(rejection)
+	) {
+		return "unproven";
+	}
+	const projected = rejection as Record<string, unknown>;
+	if (!hasExactKeys(projected, ["code"]) || typeof projected.code !== "string") {
+		return "unproven";
+	}
+	const expectedState = Object.hasOwn(
+		NATIVE_ADMISSION_STATE_BY_CODE,
+		projected.code,
+	)
+		? NATIVE_ADMISSION_STATE_BY_CODE[
+				projected.code as keyof typeof NATIVE_ADMISSION_STATE_BY_CODE
+			]
+		: undefined;
+	if (expectedState === undefined) return "unproven";
+	return candidate.state === expectedState ? expectedState : "unproven";
 }
 
 export type BrowserUseEnvironmentOpMetadataResult =
@@ -283,6 +383,7 @@ export type BrowserUseEnvironmentOpTokenRetrievalDeps = {
 	mintCapability: (input: {
 		binding: BrowserUseItemBinding;
 		field: BrowserUseOpCredentialField;
+		target?: BrowserUseCredentialCapabilityTarget;
 	}) => BrowserUseSecretHandle;
 };
 
@@ -382,7 +483,12 @@ export function createEnvironmentOpTokenRetrievalPort(
 			return mintDeferredCredentialCapability({
 				binding: input.binding,
 				field: input.field,
-				mint: deps.mintCapability,
+				mint: ({ binding, field }) =>
+					deps.mintCapability({
+						binding,
+						field,
+						...(input.target === undefined ? {} : { target: input.target }),
+					}),
 			});
 		},
 	};

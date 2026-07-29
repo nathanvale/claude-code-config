@@ -35,10 +35,40 @@ private struct StagedEnvironmentOp {
     let expectedVersion: String
 }
 
-private let officialEnvironmentOpPaths = [
-    "/opt/homebrew/bin/op",
-    "/usr/local/bin/op",
-]
+private struct EnvironmentOpStagingPolicy {
+    let approvedPaths: Set<String>
+    let versionsByDigest: [String: String]
+}
+
+private struct EnvironmentOpStagingControls {
+    var afterSourceResolved: () -> Void = {}
+    var afterStagedCopy: (String) -> Void = { _ in }
+}
+
+private struct EnvironmentOpPathIdentity: Equatable {
+    let device: dev_t
+    let inode: ino_t
+    let mode: mode_t
+    let links: nlink_t
+    let owner: uid_t
+    let group: gid_t
+    let size: off_t
+    let changedSeconds: Int
+    let changedNanoseconds: Int
+    let modifiedSeconds: Int
+    let modifiedNanoseconds: Int
+}
+
+private struct EnvironmentOpPathSnapshot: Equatable {
+    let path: String
+    let destination: String?
+    let identity: EnvironmentOpPathIdentity
+}
+
+private struct ResolvedEnvironmentOpSource: Equatable {
+    let targetPath: String
+    let snapshots: [EnvironmentOpPathSnapshot]
+}
 
 private let officialEnvironmentOpDigests = [
     // 1Password CLI 2.35.0, Darwin arm64. Update only from the pinned
@@ -46,6 +76,14 @@ private let officialEnvironmentOpDigests = [
     "1b55776253466a73af55403f1496d85c30ea201e250e89ee01af0c7a59d2f0f6":
         "2.35.0",
 ]
+
+private let officialEnvironmentOpPolicy = EnvironmentOpStagingPolicy(
+    approvedPaths: [
+        "/opt/homebrew/bin/op",
+        "/usr/local/bin/op",
+    ],
+    versionsByDigest: officialEnvironmentOpDigests
+)
 
 private func stringBeforeNull(_ bytes: [CChar]) -> String {
     let end = bytes.firstIndex(of: 0) ?? bytes.endIndex
@@ -78,20 +116,163 @@ private func privateEnvironmentOpStagingRoot() -> String? {
     return path.isEmpty ? nil : path
 }
 
-private func stageOfficialEnvironmentOp(
+private func environmentOpPathIdentity(
+    _ metadata: stat
+) -> EnvironmentOpPathIdentity {
+    EnvironmentOpPathIdentity(
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+        mode: metadata.st_mode,
+        links: metadata.st_nlink,
+        owner: metadata.st_uid,
+        group: metadata.st_gid,
+        size: metadata.st_size,
+        changedSeconds: metadata.st_ctimespec.tv_sec,
+        changedNanoseconds: metadata.st_ctimespec.tv_nsec,
+        modifiedSeconds: metadata.st_mtimespec.tv_sec,
+        modifiedNanoseconds: metadata.st_mtimespec.tv_nsec
+    )
+}
+
+private func environmentOpMetadata(_ path: String) throws -> stat {
+    var metadata = stat()
+    guard lstat(path, &metadata) == 0 else {
+        if errno == ENOENT || errno == ENOTDIR {
+            throw EnvironmentOpAdmissionCause.pathUnavailable
+        }
+        throw EnvironmentOpAdmissionCause.pathUnsafe
+    }
+    return metadata
+}
+
+private func trustedEnvironmentOpOwner(_ owner: uid_t) -> Bool {
+    owner == 0 || owner == geteuid()
+}
+
+private func proveTrustedEnvironmentOpAncestry(_ path: String) throws {
+    var current = URL(fileURLWithPath: path).deletingLastPathComponent()
+    while true {
+        let metadata = try environmentOpMetadata(current.path)
+        guard metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              trustedEnvironmentOpOwner(metadata.st_uid),
+              metadata.st_mode & mode_t(0o002) == 0,
+              metadata.st_mode & mode_t(0o020) == 0
+                || metadata.st_uid == geteuid()
+        else {
+            throw EnvironmentOpAdmissionCause.pathUnsafe
+        }
+        if current.path == "/" { return }
+        let parent = current.deletingLastPathComponent()
+        guard parent.path != current.path else {
+            throw EnvironmentOpAdmissionCause.pathUnsafe
+        }
+        current = parent
+    }
+}
+
+private func readAbsoluteEnvironmentOpLink(_ path: String) throws -> String {
+    var bytes = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = readlink(path, &bytes, bytes.count - 1)
+    guard count > 0, count < bytes.count else {
+        throw EnvironmentOpAdmissionCause.pathUnsafe
+    }
+    let destination = String(
+        bytes: bytes.prefix(count).map { UInt8(bitPattern: $0) },
+        encoding: .utf8
+    )
+    guard let destination,
+          destination.hasPrefix("/"),
+          !destination.contains("\0"),
+          (destination as NSString).standardizingPath == destination
+    else {
+        throw EnvironmentOpAdmissionCause.pathUnsafe
+    }
+    return destination
+}
+
+private func resolveTrustedEnvironmentOpSource(
     _ requestedPath: String
+) throws -> ResolvedEnvironmentOpSource {
+    var current = requestedPath
+    var visited: Set<String> = []
+    var snapshots: [EnvironmentOpPathSnapshot] = []
+    for _ in 0..<8 {
+        guard visited.insert(current).inserted else {
+            throw EnvironmentOpAdmissionCause.pathUnsafe
+        }
+        try proveTrustedEnvironmentOpAncestry(current)
+        let metadata = try environmentOpMetadata(current)
+        let fileType = metadata.st_mode & mode_t(S_IFMT)
+        if fileType == mode_t(S_IFLNK) {
+            guard trustedEnvironmentOpOwner(metadata.st_uid),
+                  metadata.st_nlink == 1,
+                  metadata.st_mode & mode_t(0o022) == 0
+            else {
+                throw EnvironmentOpAdmissionCause.pathUnsafe
+            }
+            let destination = try readAbsoluteEnvironmentOpLink(current)
+            snapshots.append(
+                EnvironmentOpPathSnapshot(
+                    path: current,
+                    destination: destination,
+                    identity: environmentOpPathIdentity(metadata)
+                )
+            )
+            current = destination
+            continue
+        }
+        guard fileType == mode_t(S_IFREG),
+              trustedEnvironmentOpOwner(metadata.st_uid),
+              metadata.st_nlink == 1,
+              metadata.st_mode & mode_t(0o022) == 0
+        else {
+            throw EnvironmentOpAdmissionCause.pathUnsafe
+        }
+        guard metadata.st_mode & mode_t(0o111) != 0,
+              access(current, X_OK) == 0
+        else {
+            throw EnvironmentOpAdmissionCause.pathNotExecutable
+        }
+        snapshots.append(
+            EnvironmentOpPathSnapshot(
+                path: current,
+                destination: nil,
+                identity: environmentOpPathIdentity(metadata)
+            )
+        )
+        return ResolvedEnvironmentOpSource(
+            targetPath: current,
+            snapshots: snapshots
+        )
+    }
+    throw EnvironmentOpAdmissionCause.pathUnsafe
+}
+
+private func proveStagedEnvironmentOp(_ path: String) -> Bool {
+    guard EnvironmentOpExecutableAdmission.proveExecutable(path) == nil,
+          let metadata = try? environmentOpMetadata(path)
+    else {
+        return false
+    }
+    return metadata.st_uid == geteuid()
+        && metadata.st_mode & mode_t(0o022) == 0
+}
+
+private func stageOfficialEnvironmentOp(
+    _ requestedPath: String,
+    policy: EnvironmentOpStagingPolicy = officialEnvironmentOpPolicy,
+    controls: EnvironmentOpStagingControls = EnvironmentOpStagingControls()
 ) throws -> StagedEnvironmentOp {
-    guard officialEnvironmentOpPaths.contains(requestedPath) else {
+    guard requestedPath.hasPrefix("/"), !requestedPath.contains("\0") else {
+        throw EnvironmentOpAdmissionCause.pathNotAbsolute
+    }
+    guard policy.approvedPaths.contains(requestedPath) else {
         throw EnvironmentOpAdmissionCause.pathUnapproved
     }
-    let sourcePath = URL(fileURLWithPath: requestedPath)
-        .resolvingSymlinksInPath()
-        .path
-    guard EnvironmentOpExecutableAdmission.proveExecutable(sourcePath) == nil else {
-        throw EnvironmentOpAdmissionCause.pathUnavailable
-    }
-    guard let sourceDigest = environmentOpDigest(sourcePath),
-          let expectedVersion = officialEnvironmentOpDigests[sourceDigest]
+    let resolved = try resolveTrustedEnvironmentOpSource(requestedPath)
+    controls.afterSourceResolved()
+    guard let sourceDigest = environmentOpDigest(resolved.targetPath),
+          let expectedVersion = policy.versionsByDigest[sourceDigest]
     else {
         throw EnvironmentOpAdmissionCause.binaryUntrusted
     }
@@ -114,19 +295,35 @@ private func stageOfficialEnvironmentOp(
         try? FileManager.default.removeItem(atPath: directory)
         throw EnvironmentOpAdmissionCause.stagingFailed
     }
+    var keepStagedDirectory = false
+    defer {
+        if !keepStagedDirectory {
+            try? FileManager.default.removeItem(atPath: directory)
+        }
+    }
     let stagedPath = (directory as NSString).appendingPathComponent("op")
     guard copyfile(
-        sourcePath,
+        resolved.targetPath,
         stagedPath,
         nil,
         copyfile_flags_t(COPYFILE_ALL)
-    ) == 0,
-        EnvironmentOpExecutableAdmission.proveExecutable(stagedPath) == nil,
-        environmentOpDigest(stagedPath) == sourceDigest
+    ) == 0
     else {
         try? FileManager.default.removeItem(atPath: directory)
         throw EnvironmentOpAdmissionCause.binaryUntrusted
     }
+    controls.afterStagedCopy(stagedPath)
+    guard proveStagedEnvironmentOp(stagedPath),
+          environmentOpDigest(stagedPath) == sourceDigest
+    else {
+        try? FileManager.default.removeItem(atPath: directory)
+        throw EnvironmentOpAdmissionCause.binaryUntrusted
+    }
+    let current = try resolveTrustedEnvironmentOpSource(requestedPath)
+    guard current == resolved else {
+        throw EnvironmentOpAdmissionCause.pathUnsafe
+    }
+    keepStagedDirectory = true
     return StagedEnvironmentOp(
         directory: directory,
         executablePath: stagedPath,
@@ -241,6 +438,11 @@ public struct EnvironmentOpProcessOutput: Equatable, Sendable {
 
 public enum EnvironmentOpProcessResult: Equatable, Sendable {
     case success(EnvironmentOpProcessOutput)
+    case blocked(EnvironmentOpExecutionCause)
+}
+
+public enum EnvironmentOpPrivatePipeResult: Sendable {
+    case success(Data)
     case blocked(EnvironmentOpExecutionCause)
 }
 
@@ -763,6 +965,122 @@ public enum EnvironmentOpProcessRunner {
             _ = poll(&descriptors, 2, 20)
         }
     }
+
+    /// Fork one exact OP process whose stdout is consumed only by a native
+    /// delivery callback. The supervisor never reads or copies stdout bytes.
+    public static func runPrivatePipe(
+        executablePath: String,
+        arguments: [String],
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32 = 10_000,
+        consume: (Int32, Int32) -> Data
+    ) -> EnvironmentOpPrivatePipeResult {
+        guard EnvironmentOpExecutableAdmission.proveExecutable(executablePath) == nil,
+              timeoutMilliseconds > 0
+        else {
+            return .blocked(.executableUnavailable)
+        }
+        let startedAt = opMonotonicMilliseconds()
+        let deadline = startedAt + Int64(timeoutMilliseconds)
+        var stdoutPipe: [Int32] = [-1, -1]
+        let nullError = Darwin.open("/dev/null", O_WRONLY | O_CLOEXEC)
+        guard pipe(&stdoutPipe) == 0, nullError >= 0 else {
+            stdoutPipe.forEach(closeOpDescriptor)
+            closeOpDescriptor(nullError)
+            return .blocked(.ioFailure)
+        }
+        var handledSignals = sigset_t()
+        sigemptyset(&handledSignals)
+        sigaddset(&handledSignals, SIGTERM)
+        sigaddset(&handledSignals, SIGINT)
+        sigaddset(&handledSignals, SIGHUP)
+        var inheritedSignalMask = sigset_t()
+        guard pthread_sigmask(
+            SIG_BLOCK,
+            &handledSignals,
+            &inheritedSignalMask
+        ) == 0 else {
+            stdoutPipe.forEach(closeOpDescriptor)
+            closeOpDescriptor(nullError)
+            return .blocked(.ioFailure)
+        }
+        _ = signal(SIGTERM, environmentOpParentSignalHandler)
+        _ = signal(SIGINT, environmentOpParentSignalHandler)
+        _ = signal(SIGHUP, environmentOpParentSignalHandler)
+        let child = opFork()
+        guard child >= 0 else {
+            _ = pthread_sigmask(SIG_SETMASK, &inheritedSignalMask, nil)
+            stdoutPipe.forEach(closeOpDescriptor)
+            closeOpDescriptor(nullError)
+            return .blocked(.ioFailure)
+        }
+        if child == 0 {
+            opChild(
+                executablePath: executablePath,
+                arguments: arguments,
+                tokenDescriptor: tokenDescriptor,
+                stdoutWrite: stdoutPipe[1],
+                stderrWrite: nullError,
+                stdoutRead: stdoutPipe[0],
+                stderrRead: -1,
+                inheritedSignalMask: inheritedSignalMask
+            )
+        }
+        _ = setpgid(child, child)
+        activeEnvironmentOpProcessGroup = child
+        closeOpDescriptor(stdoutPipe[1])
+        closeOpDescriptor(nullError)
+        guard pthread_sigmask(
+            SIG_SETMASK,
+            &inheritedSignalMask,
+            nil
+        ) == 0 else {
+            var status: Int32 = 0
+            terminateEnvironmentOpGroup(
+                child: child,
+                status: &status,
+                reapChild: true
+            )
+            closeOpDescriptor(stdoutPipe[0])
+            return .blocked(.ioFailure)
+        }
+
+        let delivery = consume(stdoutPipe[0], Int32(max(1, deadline - opMonotonicMilliseconds())))
+        closeOpDescriptor(stdoutPipe[0])
+        var status: Int32 = 0
+        while true {
+            let waited = waitpid(child, &status, WNOHANG)
+            if waited == child {
+                activeEnvironmentOpProcessGroup = 0
+                let signal = status & 0x7f
+                guard signal == 0 else {
+                    return .blocked(.processSignalled)
+                }
+                let exitCode = (status >> 8) & 0xff
+                guard exitCode == 0 else {
+                    return .blocked(exitCode == 124 ? .tokenInvalid : .processFailed)
+                }
+                return .success(delivery)
+            }
+            if waited < 0, errno != EINTR {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                return .blocked(.ioFailure)
+            }
+            if opMonotonicMilliseconds() >= deadline {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                return .blocked(.timeout)
+            }
+            usleep(1_000)
+        }
+    }
 }
 
 public enum EnvironmentOpMetadataOperation: Equatable, Sendable {
@@ -790,6 +1108,24 @@ public enum EnvironmentOpMetadataOperation: Equatable, Sendable {
             ]
         case .bindingEvidence:
             return []
+        }
+    }
+}
+
+public enum EnvironmentOpPrivateField: String, Sendable {
+    case username
+    case password
+    case otpCurrent = "otp-current"
+
+    fileprivate func arguments(vaultID: String, itemID: String) -> [String] {
+        let prefix = ["item", "get", itemID, "--vault", vaultID]
+        switch self {
+        case .username:
+            return prefix + ["--fields", "label=username"]
+        case .password:
+            return prefix + ["--fields", "label=password", "--reveal"]
+        case .otpCurrent:
+            return prefix + ["--otp"]
         }
     }
 }
@@ -1133,26 +1469,73 @@ public enum EnvironmentOpSupervisor {
         ])
     }
 
-    @_spi(Testing)
-    public static func admitOfficialExecutableForTesting(
+    public static func admitOfficialExecutable(
         executablePath: String
+    ) -> EnvironmentOpAdmissionResult {
+        admitStagedEnvironmentOp(executablePath: executablePath)
+    }
+
+    private static func admitStagedEnvironmentOp(
+        executablePath: String,
+        policy: EnvironmentOpStagingPolicy = officialEnvironmentOpPolicy,
+        controls: EnvironmentOpStagingControls = EnvironmentOpStagingControls()
     ) -> EnvironmentOpAdmissionResult {
         let staged: StagedEnvironmentOp
         do {
-            staged = try stageOfficialEnvironmentOp(executablePath)
+            staged = try stageOfficialEnvironmentOp(
+                executablePath,
+                policy: policy,
+                controls: controls
+            )
         } catch let cause as EnvironmentOpAdmissionCause {
             return .blocked(cause)
         } catch {
             return .blocked(.stagingFailed)
         }
         defer { try? FileManager.default.removeItem(atPath: staged.directory) }
-        let admission = admitExecutable(executablePath: staged.executablePath)
-        guard case let .admitted(path, version) = admission,
-              version == staged.expectedVersion
+        switch admitExecutable(executablePath: staged.executablePath) {
+        case let .blocked(cause):
+            return .blocked(cause)
+        case let .admitted(path, version):
+            guard version == staged.expectedVersion else {
+                return .blocked(.binaryUntrusted)
+            }
+            return .admitted(path: path, version: version)
+        }
+    }
+
+    @_spi(Testing)
+    public static func admitFixtureExecutableForTesting(
+        executablePath: String,
+        expectedDigest: String,
+        expectedVersion: String,
+        afterSourceResolved: @escaping () -> Void = {},
+        afterStagedCopy: @escaping (String) -> Void = { _ in }
+    ) -> EnvironmentOpAdmissionResult {
+        guard expectedDigest.count == 64,
+              expectedDigest.allSatisfy({ $0.isHexDigit }),
+              !expectedVersion.isEmpty
         else {
             return .blocked(.binaryUntrusted)
         }
-        return .admitted(path: path, version: version)
+        return admitStagedEnvironmentOp(
+            executablePath: executablePath,
+            policy: EnvironmentOpStagingPolicy(
+                approvedPaths: [executablePath],
+                versionsByDigest: [expectedDigest: expectedVersion]
+            ),
+            controls: EnvironmentOpStagingControls(
+                afterSourceResolved: afterSourceResolved,
+                afterStagedCopy: afterStagedCopy
+            )
+        )
+    }
+
+    @_spi(Testing)
+    public static func admitOfficialExecutableForTesting(
+        executablePath: String
+    ) -> EnvironmentOpAdmissionResult {
+        admitOfficialExecutable(executablePath: executablePath)
     }
 
     private static func executeIdentityBoundMetadata(
@@ -1186,6 +1569,113 @@ public enum EnvironmentOpSupervisor {
             return envelope(cause: .executableUnavailable)
         }
         return result
+    }
+
+    private static func executeIdentityBoundPrivateField(
+        executablePath: String,
+        vaultID: String,
+        itemID: String,
+        field: EnvironmentOpPrivateField,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32,
+        expectedVersion: String? = nil,
+        consume: (Int32, Int32) -> Data
+    ) -> EnvironmentOpPrivatePipeResult {
+        guard boundedString(vaultID) == vaultID,
+              boundedString(itemID) == itemID,
+              let admittedIdentity = environmentOpExecutableIdentity(executablePath)
+        else {
+            return .blocked(.executableUnavailable)
+        }
+        switch admitExecutable(executablePath: executablePath) {
+        case let .blocked(cause):
+            return .blocked(
+                cause == .versionUnsupported
+                    ? .executableUnavailable
+                    : .processFailed
+            )
+        case let .admitted(_, version):
+            guard expectedVersion == nil || version == expectedVersion else {
+                return .blocked(.executableUnavailable)
+            }
+        }
+        guard environmentOpExecutableIdentity(executablePath) == admittedIdentity else {
+            return .blocked(.executableUnavailable)
+        }
+        let deadline = opMonotonicMilliseconds() + Int64(timeoutMilliseconds)
+        let snapshot: Int32
+        switch snapshotEnvironmentTokenDescriptor(
+            tokenDescriptor,
+            absoluteDeadlineMilliseconds: deadline
+        ) {
+        case let .success(descriptor):
+            snapshot = descriptor
+        case let .failure(cause):
+            return .blocked(cause)
+        }
+        defer { closeOpDescriptor(snapshot) }
+        let result = EnvironmentOpProcessRunner.runPrivatePipe(
+            executablePath: executablePath,
+            arguments: field.arguments(vaultID: vaultID, itemID: itemID),
+            tokenDescriptor: snapshot,
+            timeoutMilliseconds: Int32(
+                max(1, deadline - opMonotonicMilliseconds())
+            ),
+            consume: consume
+        )
+        guard environmentOpExecutableIdentity(executablePath) == admittedIdentity else {
+            return .blocked(.executableUnavailable)
+        }
+        return result
+    }
+
+    public static func executeAdmittedPrivateField(
+        executablePath: String,
+        vaultID: String,
+        itemID: String,
+        field: EnvironmentOpPrivateField,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32 = 10_000,
+        consume: (Int32, Int32) -> Data
+    ) -> EnvironmentOpPrivatePipeResult {
+        let staged: StagedEnvironmentOp
+        do {
+            staged = try stageOfficialEnvironmentOp(executablePath)
+        } catch {
+            return .blocked(.executableUnavailable)
+        }
+        defer { try? FileManager.default.removeItem(atPath: staged.directory) }
+        return executeIdentityBoundPrivateField(
+            executablePath: staged.executablePath,
+            vaultID: vaultID,
+            itemID: itemID,
+            field: field,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: timeoutMilliseconds,
+            expectedVersion: staged.expectedVersion,
+            consume: consume
+        )
+    }
+
+    @_spi(Testing)
+    public static func executeIdentityBoundPrivateFieldForTesting(
+        executablePath: String,
+        vaultID: String,
+        itemID: String,
+        field: EnvironmentOpPrivateField,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32 = 10_000,
+        consume: (Int32, Int32) -> Data
+    ) -> EnvironmentOpPrivatePipeResult {
+        executeIdentityBoundPrivateField(
+            executablePath: executablePath,
+            vaultID: vaultID,
+            itemID: itemID,
+            field: field,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: timeoutMilliseconds,
+            consume: consume
+        )
     }
 
     public static func executeAdmittedMetadata(

@@ -6,6 +6,10 @@ import {
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
 	ACTION_ASSET_MAX_BYTES,
+	ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES,
+	actionAssetIsSecretFree,
 	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
@@ -116,6 +120,39 @@ describe("parseReviewedActionRecord", () => {
 			ok: false,
 			message: "reviewed action record does not match its schema.",
 		});
+	});
+});
+
+describe("Oncore timesheet diagnosis action", () => {
+	test("admits reviewed JavaScript regex syntax without weakening secret screening", () => {
+		expect(actionAssetIsSecretFree(ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES)).toBe(
+			true,
+		);
+		expect(
+			actionAssetIsSecretFree(
+				"async () => { const password = 'not-a-real-secret-value'; }",
+			),
+		).toBe(false);
+		expect(actionAssetIsSecretFree("async () => 'op://vault/item/field'")).toBe(
+			false,
+		);
+		expect(
+			actionAssetIsSecretFree("async () => '/Users/example/private-input.json'"),
+		).toBe(false);
+	});
+
+	test("is mechanically admitted as exact read-only observation", () => {
+		expect(auditActionEffectClass(ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES)).toBe(
+			"read",
+		);
+	});
+
+	test("keeps location assignment classified as mutation", () => {
+		expect(
+			auditActionEffectClass(
+				"async () => { location.href = 'https://example.test'; return {}; }",
+			),
+		).toBe("mutation");
 	});
 });
 
@@ -633,6 +670,14 @@ describe("auditActionEffectClass — audited behavior is the authority (R19)", (
 	});
 	test("the exact reviewed Oncore draft-verification action is read", () => {
 		expect(auditActionEffectClass(ONCORE_DRAFT_VERIFICATION_ACTION_BYTES)).toBe("read");
+	});
+	test("Xero extraction separates request mutation from response observation", () => {
+		expect(auditActionEffectClass(XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES)).toBe(
+			"mutation",
+		);
+		expect(auditActionEffectClass(XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES)).toBe(
+			"read",
+		);
 	});
 	test("a bounded JSON proof read from one selected element is read", () => {
 		expect(

@@ -97,6 +97,13 @@ export type BrowserUseCorpusGenerationProofRef = {
 	digest: string;
 };
 
+/** One safe legacy text artifact retained inside the active generation. */
+export type BrowserUseCorpusGenerationKnowledgeRef = {
+	source_relative_path: string;
+	path: string;
+	digest: string;
+};
+
 /**
  * Complete candidate manifest stored inside an immutable generation.
  *
@@ -122,6 +129,10 @@ export type BrowserUseCorpusGenerationCandidatePayload = {
 		routes: readonly BrowserUseCorpusGenerationAuthRouteRef[];
 	};
 	proofs: readonly BrowserUseCorpusGenerationProofRef[];
+	/** Safe staged knowledge retained alongside executable catalog authority. */
+	knowledge?: {
+		files: readonly BrowserUseCorpusGenerationKnowledgeRef[];
+	};
 	shipped_catalog_digest: string;
 };
 
@@ -344,6 +355,20 @@ function generationProofRefProblem(
 	return digestProblem(value.digest, `${at}.digest`);
 }
 
+function generationKnowledgeRefProblem(
+	value: unknown,
+	index: number,
+): string | undefined {
+	const at = `payload.knowledge.files.${index}`;
+	if (!isJsonObject(value)) return `${at} must be a JSON object.`;
+	for (const field of ["source_relative_path", "path"] as const) {
+		if (stringField(value[field]) === undefined) {
+			return `${at}.${field} must be a non-empty string.`;
+		}
+	}
+	return digestProblem(value.digest, `${at}.digest`);
+}
+
 /**
  * Validate a complete Corpus Generation candidate payload.
  *
@@ -462,6 +487,30 @@ export function corpusGenerationCandidateProblem(
 	);
 	if (new Set(proofIds).size !== proofIds.length) {
 		return "payload.proofs must carry unique proof_ref values.";
+	}
+	if (value.knowledge !== undefined) {
+		if (
+			!isJsonObject(value.knowledge) ||
+			!Array.isArray(value.knowledge.files)
+		) {
+			return "payload.knowledge must carry a files array.";
+		}
+		for (const [index, file] of value.knowledge.files.entries()) {
+			const problem = generationKnowledgeRefProblem(file, index);
+			if (problem !== undefined) return problem;
+		}
+		const knowledgePaths = value.knowledge.files.map(
+			(file) => (file as Record<string, unknown>).path,
+		);
+		const sourcePaths = value.knowledge.files.map(
+			(file) => (file as Record<string, unknown>).source_relative_path,
+		);
+		if (
+			new Set(knowledgePaths).size !== knowledgePaths.length ||
+			new Set(sourcePaths).size !== sourcePaths.length
+		) {
+			return "payload.knowledge.files must carry unique source and generation paths.";
+		}
 	}
 	for (const target of value.canonical_targets) {
 		const proofRefs = (target as Record<string, unknown>)

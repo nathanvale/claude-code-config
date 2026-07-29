@@ -40,9 +40,10 @@ import {
 	SAFE_RUN_ID,
 	SAFE_TAB_ID,
 } from "./browser-use-identifiers";
+import { isExactLiveCleanHandoffProof } from "./browser-connect-profile-posture";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
-const HANDOFF_SCHEMA_VERSION = "2";
+const HANDOFF_SCHEMA_VERSION = "3";
 
 // Each delivered credential field maps onto exactly one sensitive-interval
 // method step (R15): a successful field delivery is the lane's evidence that
@@ -548,13 +549,14 @@ function validateExecutionContext(
 		task.handoff.attachment.route !== "explicit-cdp" ||
 		task.handoff.browser_entry_mode !== "explicit-cdp" ||
 		task.handoff.proof.route_evidence !== "verified-live" ||
+		!isExactLiveCleanHandoffProof(task.handoff) ||
 		!isAbsolute(task.handoff.attachment.probe_executable) ||
 		task.handoff.endpoint.ws.length === 0
 	) {
 		return failure(
 			"agent_browser_handoff_invalid",
 			"not-achieved",
-			"Agent Browser execution requires a schema-2 verified-live Browser Connect handoff for the agent-browser lane.",
+			"Agent Browser execution requires a schema-3 verified-live Browser Connect handoff with live-clean profile posture for the agent-browser lane.",
 		);
 	}
 	if (!SAFE_RUN_ID.test(task.run_id)) {
@@ -1040,10 +1042,31 @@ export async function executeAgentBrowserTask(
 					executedSteps,
 				));
 			}
+			const fieldMetadata = currentRefMetadata.get(mutationRef);
+			const semanticLocator =
+				fieldMetadata?.role === "textbox" &&
+				fieldMetadata.name.length > 0 &&
+				fieldMetadata.name.length <= 256
+					? {
+							role: "textbox" as const,
+							accessible_name: fieldMetadata.name,
+							input_kind: field,
+						}
+					: undefined;
+			// Invalidate adapter-local references before the target re-proof and
+			// native capability consumption. The semantic locator is the only
+			// current-snapshot fact allowed across the delivery boundary.
+			currentRefs = new Set();
+			currentRefMetadata = new Map();
+			hasCurrentSnapshot = false;
 			const outcome = await deliverConfidentialFields({
 				binding: delivery.binding,
 				target: delivery.target,
 				fields: [field],
+				semantic_locators:
+					semanticLocator === undefined
+						? undefined
+						: { [field]: semanticLocator },
 				tokenRetrieval: delivery.tokenRetrieval,
 				deliver: delivery.deliver,
 				reproveTarget: delivery.reproveTarget,
@@ -1051,9 +1074,6 @@ export async function executeAgentBrowserTask(
 			// The resume directive demands stale refs be discarded before any
 			// post-auth proof (R15/R22): drop the current snapshot now so the
 			// step's postcondition re-observes fresh structure, never a stale ref.
-			currentRefs = new Set();
-			currentRefMetadata = new Map();
-			hasCurrentSnapshot = false;
 			if (!outcome.ok) {
 				// A blocked delivery is a not-achieved refusal carrying the auth
 				// choreography's own blocked cause; the executor never invents a

@@ -78,6 +78,28 @@ export function actionAssetDigest(bytes: string): string {
 	return createHash("sha256").update(bytes, "utf-8").digest("hex");
 }
 
+const ACTION_ASSET_SECRET_PATTERNS: readonly RegExp[] = [
+	/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+	/\b(?:op|wss?|otpauth):\/\/\S+/i,
+	/\bOP_SERVICE_ACCOUNT_TOKEN\s*=/i,
+	/\b(?:password|passwd|token|secret|cookie|authorization|client_secret|aws_secret_access_key|aws_access_key_id|api[_-]?key|private_key)\s*[:=]\s*['"`]?[A-Za-z0-9._~+/=-]{8,}/i,
+	/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/i,
+	/\beyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+	/\b[A-Z2-7]{32,}\b/i,
+	/['"`](?:~\/|\/Users\/|\/home\/|\/private\/|\/var\/folders\/)/,
+];
+
+/**
+ * Screen reviewed JavaScript bytes for secret material without treating regex
+ * literals or same-origin URL paths as filesystem secrets.
+ */
+export function actionAssetIsSecretFree(bytes: string): boolean {
+	return (
+		Buffer.byteLength(bytes, "utf-8") <= ACTION_ASSET_MAX_BYTES &&
+		!ACTION_ASSET_SECRET_PATTERNS.some((pattern) => pattern.test(bytes))
+	);
+}
+
 /** Whether a value can identify one exact content-addressed action asset. */
 export function actionDigestIsValid(value: string): boolean {
 	return SAFE_DIGEST.test(value);
@@ -107,7 +129,8 @@ export type BrowserUseActionEffectClass =
 // negative would let a mutation bypass it (unsafe), so the set errs toward
 // mutation.
 const MUTATION_BEHAVIOR_FINGERPRINTS: readonly RegExp[] = [
-	/\b(?:location\s*\.\s*(?:href|assign|replace|reload))\b/i,
+	/\blocation\s*\.\s*href\s*=/i,
+	/\blocation\s*\.\s*(?:assign|replace|reload)\s*\(/i,
 	/\bwindow\s*\.\s*open\b/i,
 	/\bhistory\s*\.\s*(?:pushState|replaceState|back|forward|go)\b/i,
 	/\.\s*click\s*\(/i,
@@ -132,6 +155,114 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*\(\s*\{\s*[A-Za-z_$][\w$]*\s*:\s*document\s*\.\s*querySelectorAll\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*length\s*\}\s*\)\s*;?\s*$/,
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*JSON\s*\.\s*parse\s*\(\s*document\s*\.\s*querySelector\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*textContent\s*\)\s*;?\s*$/,
 ];
+
+/**
+ * Exact candidate Xero request-driving action for BankStatementsPlus.
+ *
+ * This action mutates the API Explorer form and dispatches a network request.
+ * Its legacy selectors remain unvalidated, so the migration records it with a
+ * non-authorizing receipt until a recovery-free warm-browser review approves
+ * these exact bytes.
+ */
+export const XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES =
+	`async ({ inputs }) => {
+		const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+		const buttons = () => Array.from(document.querySelectorAll('button'));
+		const clickButton = (label) => {
+			const button = buttons().find((candidate) => normalize(candidate.textContent) === label);
+			if (!button || button.disabled) throw new Error('xero api explorer control unavailable');
+			button.click();
+		};
+		const findInput = (label) => {
+			const labels = Array.from(document.querySelectorAll('label'));
+			const owner = labels.find((candidate) => normalize(candidate.textContent) === label);
+			const byFor = owner?.htmlFor ? document.getElementById(owner.htmlFor) : null;
+			const field = byFor || owner?.querySelector('input') || document.querySelector(\`input[name="\${label}"]\`);
+			if (!(field instanceof HTMLInputElement)) throw new Error('xero api explorer field unavailable');
+			return field;
+		};
+		const fill = (field, value) => {
+			field.focus();
+			field.value = value;
+			field.dispatchEvent(new Event('input', { bubbles: true }));
+			field.dispatchEvent(new Event('change', { bubbles: true }));
+		};
+		clickButton('Select API');
+		clickButton('Xero Finance API');
+		clickButton('Select endpoint');
+		clickButton('BankStatementsPlus');
+		clickButton('Select operation');
+		const readOperation = buttons().find((candidate) =>
+			/read bank statements plus|get bank statements plus/i.test(normalize(candidate.textContent)),
+		);
+		if (!readOperation || readOperation.disabled) throw new Error('xero read operation unavailable');
+		readOperation.click();
+		fill(findInput('BankAccountID'), String(inputs.bank_account_id));
+		fill(findInput('FromDate'), String(inputs.from_date));
+		fill(findInput('ToDate'), String(inputs.to_date));
+		clickButton('Make request');
+		return { request_dispatched: true };
+	}`;
+
+/**
+ * Exact read-only Xero response capture action for BankStatementsPlus.
+ *
+ * The action validates that the visible response is JSON and returns bounded
+ * text plus byte count. The generation marks the result high-sensitivity so
+ * the runtime spills it to governed storage instead of shared-run state.
+ */
+export const XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES =
+	`async ({ inputs }) => {
+		void inputs;
+		const candidates = Array.from(document.querySelectorAll('pre, code, textarea[readonly]'))
+			.map((node) => String(node.value || node.innerText || node.textContent || '').trim())
+			.filter((text) => text.length > 0);
+		const responseText = candidates.find((text) => /^\\s*[\\[{]/.test(text));
+		if (!responseText) throw new Error('xero response body unavailable');
+		JSON.parse(responseText);
+		return {
+			response_text: responseText,
+			response_bytes: new TextEncoder().encode(responseText).length,
+		};
+	}`;
+
+/**
+ * Exact read-only Oncore timesheet diagnosis action.
+ *
+ * It validates the open timesheet without echoing its identifier, then returns
+ * bounded structural state only. Any byte change falls back to conservative
+ * mutation classification until reviewed again.
+ */
+export const ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES =
+	`async ({ inputs }) => {
+		const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+		const expectedTimesheetId = String(inputs.timesheet_id || '').trim();
+		let openTimesheetId = '';
+		try {
+			openTimesheetId = new URL(location.href).searchParams.get('id') || '';
+		} catch {
+			openTimesheetId = '';
+		}
+		if (!expectedTimesheetId || openTimesheetId !== expectedTimesheetId) {
+			throw new Error('oncore timesheet mismatch');
+		}
+		if (document.querySelector("input[type='password']")) {
+			throw new Error('oncore authentication required');
+		}
+		const text = normalize(document.body?.innerText || document.body?.textContent || '');
+		const rows = Array.from(document.querySelectorAll("tr.rgRow, tr.rgAltRow"));
+		const editable =
+			Boolean(document.querySelector("[id$='AddNewRecordButton']")) ||
+			Boolean(document.getElementById('MainContent_btnSubmit'));
+		const submitted = /successfully submitted|submitted for approval/i.test(text);
+		const approved = /approved/i.test(text);
+		return {
+			timesheet_match: true,
+			row_count: rows.length,
+			state: approved ? 'approved' : submitted ? 'submitted' : editable ? 'editable' : 'read-only',
+			submit_available: Boolean(document.getElementById('MainContent_btnSubmit')),
+		};
+	}`;
 
 /**
  * Exact reviewed Oncore draft-verification action.
@@ -184,7 +315,9 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
+	return bytes === ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES ||
+		bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
+		bytes === XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES ||
 		OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
 		? "read"
 		: "mutation";

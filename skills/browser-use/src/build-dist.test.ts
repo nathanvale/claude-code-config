@@ -112,6 +112,9 @@ describe("browser-use dist catalog validation", () => {
 			expect(
 				existsSync(join(distRoot, "bin", "browser-use-op-supervisor")),
 			).toBe(true);
+			expect(
+				existsSync(join(distRoot, "bin", "browser-use-confidential-delivery")),
+			).toBe(true);
 
 			const child = Bun.spawn(
 				[

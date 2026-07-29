@@ -21,6 +21,7 @@ import { leaseKeyForRun, loadSharedRun } from "./browser-use-runs";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
 // Daily Driver Acceptance Ledger — process-hygiene cluster.
@@ -76,11 +77,12 @@ const AGENT_BROWSER_HANDOFF = {
 		launch: { launched: false },
 		proof: {
 			environment_contract_id: "warm-chrome.browser-entry",
-			environment_schema_version: "1",
+			environment_schema_version: "2",
 			route_evidence: "verified-live",
+			profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 		},
 		contract_id: "browser-connect.verified-handoff",
-		schema_version: "2",
+		schema_version: "3",
 	},
 	error: null,
 } as const;
@@ -416,11 +418,12 @@ const CHROME_HANDOFF = {
 		launch: { launched: false },
 		proof: {
 			environment_contract_id: "warm-chrome.browser-entry",
-			environment_schema_version: "1",
+			environment_schema_version: "2",
 			route_evidence: "verified-live",
+			profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 		},
 		contract_id: "browser-connect.verified-handoff",
-		schema_version: "2",
+		schema_version: "3",
 	},
 	error: null,
 } as const;

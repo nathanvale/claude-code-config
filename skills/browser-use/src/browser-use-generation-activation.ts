@@ -254,6 +254,9 @@ function candidateAuthorityPayload(
 		action_registry: candidate.action_registry,
 		auth: candidate.auth,
 		proofs: candidate.proofs,
+		...(candidate.knowledge === undefined
+			? {}
+			: { knowledge: candidate.knowledge }),
 		shipped_catalog_digest: candidate.shipped_catalog_digest,
 	};
 }
@@ -807,6 +810,10 @@ function generationFileBindingProblem(
 			path: proof.path,
 			digest: proof.digest,
 		})),
+		...(candidate.knowledge?.files.map((file) => ({
+			path: file.path,
+			digest: file.digest,
+		})) ?? []),
 	];
 	const verified = new Map(read.generationFiles);
 	for (const reference of declared) {

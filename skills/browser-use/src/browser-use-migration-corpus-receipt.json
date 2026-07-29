@@ -1,0 +1,15 @@
+{
+	"contract": "browser-use.corpus-receipt",
+	"schema_version": "1",
+	"source_namespace": "browser-automation",
+	"source_entry_count": 133,
+	"relative_path_digest": "8ca77e0af88cc34f7e18d187e07e61847d210074e1da9e12447b93ce18247b47",
+	"corpus_census": {
+		"formal_artifacts": 16,
+		"target_flows": 57,
+		"scripts": 38,
+		"auth_narratives": 3,
+		"login_capabilities": 7,
+		"domain_script_actions": 10
+	}
+}

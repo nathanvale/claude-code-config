@@ -7,6 +7,7 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 const HANDOFF = {
 	outcome: "verified",
@@ -24,11 +25,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const;
 
 function task(
@@ -315,6 +317,97 @@ describe("Playwright task lane", () => {
 		});
 		expect(calls).toBe(0);
 	});
+
+	test("forged posture provenance and endpoint binding fail before any process starts", async () => {
+		for (const handoff of [
+			{
+				...HANDOFF,
+				proof: {
+					...HANDOFF.proof,
+					environment_contract_id: "foreign.contract",
+				},
+			},
+			{
+				...HANDOFF,
+				endpoint: {
+					...HANDOFF.endpoint,
+					ws: "ws://127.0.0.1:9243/devtools/browser/foreign",
+				},
+			},
+		]) {
+			let calls = 0;
+			const outcome = await executePlaywrightTask(
+				{
+					runCommand: async () => {
+						calls += 1;
+						return result();
+					},
+				},
+				task({ handoff }),
+			);
+			expect(outcome).toMatchObject({
+				ok: false,
+				code: "playwright_task_handoff_invalid",
+			});
+			expect(calls).toBe(0);
+		}
+	});
+
+	for (const scenario of [
+		{
+			name: "missing",
+			posture: undefined,
+		},
+		{
+			name: "unsafe",
+			posture: {
+				...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
+				effective: {
+					...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE.effective,
+					fill_exposure: "source-present",
+				},
+			},
+		},
+		{
+			name: "unknown-key",
+			posture: {
+				...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
+				untrusted_extension: true,
+			},
+		},
+	] as const) {
+		test(`${scenario.name} profile posture fails before any Playwright process starts`, async () => {
+			let calls = 0;
+			const proof = {
+				...HANDOFF.proof,
+				...(scenario.posture === undefined
+					? {}
+					: { profile_posture: scenario.posture }),
+			} as Record<string, unknown>;
+			if (scenario.posture === undefined) delete proof.profile_posture;
+
+			const outcome = await executePlaywrightTask(
+				{
+					runCommand: async () => {
+						calls += 1;
+						return result();
+					},
+				},
+				task({
+					handoff: {
+						...HANDOFF,
+						proof,
+					} as unknown as PlaywrightTask["handoff"],
+				}),
+			);
+
+			expect(outcome).toMatchObject({
+				ok: false,
+				code: "playwright_task_handoff_invalid",
+			});
+			expect(calls).toBe(0);
+		});
+	}
 
 	test("attach failure is a typed connection result with no browser fallback", async () => {
 		const outcome = await executePlaywrightTask(

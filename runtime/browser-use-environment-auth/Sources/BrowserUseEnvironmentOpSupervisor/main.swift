@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 
 private enum SupervisorArguments {
+    case admit(opPath: String)
     case metadata(
         configRoot: String,
         opPath: String,
@@ -44,6 +45,13 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
         return nil
     }
     switch mode {
+    case "admit":
+        guard options.count == 1,
+              let opPath = options["--op-path"]
+        else {
+            return nil
+        }
+        return .admit(opPath: opPath)
     case "metadata":
         guard let configRoot = options["--config-root"],
               let opPath = options["--op-path"],
@@ -122,6 +130,18 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
     }
 }
 
+private let helpText = """
+Usage:
+  browser-use-op-supervisor admit --op-path <absolute-path>
+  browser-use-op-supervisor metadata --config-root <absolute-path> --op-path <absolute-path> --operation <name>
+  browser-use-op-supervisor validate --validator-fd <fd> --op-path <absolute-path>
+
+Commands:
+  admit      Check the fixed official OP path without reading a token.
+  metadata   Execute one admitted projected metadata operation.
+  validate   Validate one token received through an inherited socket.
+"""
+
 private func rejection(_ code: String) -> Data {
     let object: [String: Any] = [
         "schema_version": 1,
@@ -135,6 +155,40 @@ private func rejection(_ code: String) -> Data {
         withJSONObject: object,
         options: [.sortedKeys]
     )) ?? Data("{\"ok\":false,\"schema_version\":1}".utf8)
+}
+
+private func admissionEnvelope(_ result: EnvironmentOpAdmissionResult) -> Data {
+    let object: [String: Any]
+    switch result {
+    case .admitted:
+        object = [
+            "schema_version": 1,
+            "ok": true,
+            "state": "ready",
+        ]
+    case let .blocked(cause):
+        let state: String
+        switch cause {
+        case .pathUnavailable:
+            state = "missing"
+        case .stagingFailed:
+            state = "unproven"
+        default:
+            state = "unsafe"
+        }
+        object = [
+            "schema_version": 1,
+            "ok": false,
+            "state": state,
+            "rejection": ["code": cause.rawValue],
+        ]
+    }
+    return (try? JSONSerialization.data(
+        withJSONObject: object,
+        options: [.sortedKeys]
+    )) ?? Data(
+        "{\"ok\":false,\"schema_version\":1,\"state\":\"unproven\",\"rejection\":{\"code\":\"op-staging-failed\"}}".utf8
+    )
 }
 
 private func emit(_ data: Data, exitCode: Int32) -> Never {
@@ -152,6 +206,12 @@ private func emitValidator(_ approved: Bool, socket: Int32) -> Never {
 }
 
 _ = signal(SIGPIPE, SIG_IGN)
+let rawArguments = Array(CommandLine.arguments.dropFirst())
+if rawArguments == ["--help"] || rawArguments == ["help"] {
+    FileHandle.standardOutput.write(Data(helpText.utf8))
+    FileHandle.standardOutput.write(Data([0x0a]))
+    Foundation.exit(0)
+}
 do {
     try TokenCustodyProcessSafety.disableCoreDumps()
 } catch {
@@ -171,11 +231,21 @@ guard !forbiddenEnvironmentKeys.contains(where: {
     emit(rejection("ambient-op-environment"), exitCode: 20)
 }
 
-guard let arguments = parseArguments(Array(CommandLine.arguments.dropFirst())) else {
+guard let arguments = parseArguments(rawArguments) else {
     emit(rejection("invalid-arguments"), exitCode: 20)
 }
 
 switch arguments {
+case let .admit(opPath):
+    let result = EnvironmentOpSupervisor.admitOfficialExecutable(
+        executablePath: opPath
+    )
+    switch result {
+    case .admitted:
+        emit(admissionEnvelope(result), exitCode: 0)
+    case .blocked:
+        emit(admissionEnvelope(result), exitCode: 20)
+    }
 case let .metadata(configRoot, opPath, operation):
     do {
         let tokenDescriptor = try openEnvironmentTokenDescriptor(configRoot: configRoot)

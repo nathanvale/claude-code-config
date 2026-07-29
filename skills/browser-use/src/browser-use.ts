@@ -39,9 +39,13 @@ import {
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+	BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
 	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
 	BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
+	BROWSER_USE_CORPUS_IMPORT_CONTRACT_ID,
+	BROWSER_USE_CORPUS_IMPORT_SCHEMA_VERSION,
 	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
 	BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
@@ -62,6 +66,7 @@ import {
 	browserUseAdapterLanesFailureActions,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
+	browserUseAuthStatusActions,
 	browserUseContracts,
 	browserUseEnvironmentTokenLifecycleActions,
 	browserUseGenerationFailureActions,
@@ -94,6 +99,7 @@ import {
 	conformanceEvidenceClaims,
 	runAuthConformanceMatrix,
 } from "./browser-use-auth-conformance";
+import { inspectBrowserUseAuthMetadata } from "./browser-use-auth-provider";
 import {
 	type BrowserAdapterId,
 	BROWSER_USE_LIVE_ADAPTERS,
@@ -167,6 +173,10 @@ import {
 	type BrowserUseGenerationProducerSuccess,
 	produceBrowserUseGeneration,
 } from "./browser-use-generation-producer";
+import {
+	type BrowserUseCorpusImportSuccess,
+	importBrowserUseCorpus,
+} from "./browser-use-corpus-import";
 import {
 	type RunResumeObservedIdentity,
 	type RunStoreDeps,
@@ -1243,7 +1253,7 @@ function platformStoreAction(id: PlatformStoreActionId): RuntimeActionGuidance {
 }
 
 // The observed lane identity the U2 platform can honestly assert at resume
-// time: the pinned Browser Connect schema-2 environment identity plus the one
+// time: the pinned Browser Connect schema-3 environment identity plus the one
 // transport-implemented adapter lane. A ready/running run bound to any other
 // lane cannot resume on this platform, so the U1 same-lane gate refuses it
 // truthfully; live observation replaces this static pin in U4.
@@ -2102,7 +2112,7 @@ function baselineAgentBrowserTask(input: {
 // preferred_adapter), so the `as ChromeTaskIntent` narrowing is safe — a
 // non-chrome intent never reaches here. No caller-supplied reload/insightName is
 // threaded yet, so the compiler's defaults (reload=true, insightName=LCPBreakdown)
-// apply. The executor re-validates its own schema-2 / chrome-devtools-mcp handoff
+// apply. The executor re-validates its own schema-3 / chrome-devtools-mcp handoff
 // guard, so the driver passes the verbatim envelope payload it already parsed.
 // artifact_dir is set only for artifact-producing intents; debug compiles to
 // console+network (no artifact op) and needs none.
@@ -2509,13 +2519,14 @@ function mapAgentBrowserOutcome(
  */
 // R3: the handoff is the only attachment route for task and runbook execution.
 // ONE shared acquisition + validation sequence (CodeRabbit PR 263: the earlier
-// per-command copies drifted on resume semantics): caller-managed --handoff
-// (advanced/back-compat) or the internal in-process mint (design brief D4). A
-// mint failure IS browser-connect's failure envelope, surfaced verbatim with
-// its exit code — one Repair Path, no re-wrapping. Validation is the single
-// parseHandoffFacts path; the raw payload re-parses from the SAME in-memory
-// bytes for the executor's own schema-2 guard. Resume-requires-handoff is
-// enforced uniformly at the parser for both commands, so it needs no flag here.
+// per-command copies drifted on resume semantics): a caller-managed --handoff
+// is a binding hint only; Browser Connect freshly re-proves that exact
+// adapter/run/port before dispatch. A mint failure IS browser-connect's failure
+// envelope, surfaced verbatim with its exit code — one Repair Path, no
+// re-wrapping. Validation is the single parseHandoffFacts path; the raw payload
+// re-parses from the SAME freshly minted in-memory bytes for the executor's own
+// schema-3 guard. Resume-requires-handoff is enforced uniformly at the parser
+// for both commands, so it needs no flag here.
 async function acquireVerifiedHandoff(input: {
 	command: PlatformCommandInput;
 	/** Adapter to mint for when --handoff is absent; undefined fails typed. */
@@ -2539,29 +2550,62 @@ async function acquireVerifiedHandoff(input: {
 		}),
 	});
 	const handoffPath = stringField(flags["--handoff"]);
+	const mint = async (mintInput: {
+		adapterId: string;
+		runId?: string;
+		port?: string;
+	}): Promise<{ ok: true; raw: string } | { ok: false; exitCode: number }> => {
+		const minted = await command.runtime.mintHandoff(mintInput);
+		if (minted.exitCode !== 0) {
+			if (minted.stderr.length > 0) command.stderr.write(minted.stderr);
+			if (minted.stdout.length > 0) command.stdout.write(minted.stdout);
+			return { ok: false, exitCode: minted.exitCode };
+		}
+		return { ok: true, raw: minted.stdout };
+	};
 	let handoffRaw: string;
+	let expectedReproof:
+		| { adapter: string; runId: string; port: string }
+		| undefined;
 	if (handoffPath === undefined) {
 		if (input.mintAdapterId === undefined) {
 			return fail(
 				"no adapter to attach: the intent has no registered preferred lane; pass --lane <id> or --handoff <path>.",
 			);
 		}
-		const minted = await command.runtime.mintHandoff({
+		const minted = await mint({
 			adapterId: input.mintAdapterId,
 			runId: command.runId,
 		});
-		if (minted.exitCode !== 0) {
-			if (minted.stderr.length > 0) command.stderr.write(minted.stderr);
-			if (minted.stdout.length > 0) command.stdout.write(minted.stdout);
-			return { ok: false, exitCode: minted.exitCode };
-		}
-		handoffRaw = minted.stdout;
+		if (!minted.ok) return minted;
+		handoffRaw = minted.raw;
 	} else {
+		let hintRaw: string;
 		try {
-			handoffRaw = await command.runtime.readTextFile(handoffPath);
+			hintRaw = await command.runtime.readTextFile(handoffPath);
 		} catch {
 			return fail("the --handoff file could not be read");
 		}
+		const hint = parseHandoffFacts(hintRaw);
+		if (!hint.ok) return fail(hint.failure.message);
+		if (hint.kind !== "verified") {
+			return fail(
+				`the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running ${input.subject}.`,
+			);
+		}
+		const port = new URL(hint.facts.endpointHttp).port;
+		expectedReproof = {
+			adapter: hint.facts.adapter,
+			runId: hint.facts.runId,
+			port,
+		};
+		const minted = await mint({
+			adapterId: hint.facts.adapter,
+			runId: hint.facts.runId,
+			port,
+		});
+		if (!minted.ok) return minted;
+		handoffRaw = minted.raw;
 	}
 	const parse = parseHandoffFacts(handoffRaw);
 	if (!parse.ok) return fail(parse.failure.message);
@@ -2569,6 +2613,18 @@ async function acquireVerifiedHandoff(input: {
 		return fail(
 			`the supplied handoff is a connect-failure envelope, not a verified attachment; mint a verified handoff before running ${input.subject}.`,
 		);
+	}
+	if (expectedReproof !== undefined) {
+		const mintedPort = new URL(parse.facts.endpointHttp).port;
+		if (
+			parse.facts.adapter !== expectedReproof.adapter ||
+			parse.facts.runId !== expectedReproof.runId ||
+			mintedPort !== expectedReproof.port
+		) {
+			return fail(
+				"Browser Connect re-proof did not preserve the supplied handoff's exact adapter, run, and port binding.",
+			);
+		}
 	}
 	let rawHandoffData: unknown;
 	try {
@@ -2581,6 +2637,36 @@ async function acquireVerifiedHandoff(input: {
 
 async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	const flags = input.parsed.flagValues;
+	const runFlag = stringField(flags["--run"]);
+	const requestedIntent = stringField(flags["--intent"]) as
+		| BrowserUseTaskIntent
+		| undefined;
+
+	// Contract-level unavailability is intent truth, independent of a browser.
+	// Ask the routing owner first so a caller-supplied handoff never triggers a
+	// live re-proof for work no lane can legally perform.
+	if (runFlag === undefined && requestedIntent !== undefined) {
+		const preflight = routeTaskRun({
+			intent: requestedIntent,
+			registry: composedLaneRegistry(input.runtime.now()),
+			handoffAdapter: "agent-browser",
+			...(stringField(flags["--lane"]) === undefined
+				? {}
+				: { laneOverride: stringField(flags["--lane"]) }),
+			capabilityCovers: laneCapabilityCovers,
+		});
+		if (
+			!preflight.ok &&
+			(preflight.refusal.code === "intent_unknown" ||
+				preflight.refusal.code === "intent_unrouted")
+		) {
+			return emitTaskRunFailure(
+				input,
+				undefined,
+				taskRunFailureOfRoutingRefusal(preflight.refusal),
+			);
+		}
+	}
 
 	// Fresh --intent runs mint for the --lane override, else the intent's
 	// preferred adapter (D4); acquisition + validation live in the shared
@@ -2602,7 +2688,6 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
 
-	const runFlag = stringField(flags["--run"]);
 	const targetTabId = stringField(flags["--tab"]) ?? "task-tab";
 	const allowedOrigin = stringField(flags["--allowed-origin"]);
 
@@ -2631,7 +2716,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		existingRun = loaded.run;
 		intent = loaded.run.task_intent;
 	} else {
-		intent = stringField(flags["--intent"]) as BrowserUseTaskIntent;
+		intent = requestedIntent as BrowserUseTaskIntent;
 	}
 
 	// Route (R6, R10, R11) through the pure engine. A resumed run re-routes on its
@@ -3797,6 +3882,49 @@ function emitGenerationResult(
 	return 0;
 }
 
+function emitCorpusImportResult(
+	input: PlatformCommandInput,
+	result: BrowserUseCorpusImportSuccess,
+): number {
+	const data = {
+		contract: BROWSER_USE_CORPUS_IMPORT_CONTRACT_ID,
+		schema_version: BROWSER_USE_CORPUS_IMPORT_SCHEMA_VERSION,
+		...result.generation,
+		activation_state: result.activation_state,
+		next_action: result.next_action,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			[
+				`contract=${data.contract}`,
+				`schema=${data.schema_version}`,
+				`generation_id=${data.generation_id}`,
+				`source_entry_count=${data.source_entry_count}`,
+				`canonical_target_count=${data.canonical_target_count}`,
+				`active_target_count=${data.active_target_count}`,
+				`inactive_target_count=${data.inactive_target_count}`,
+				`auth_candidate_count=${data.auth_candidate_count}`,
+				`auth_route_count=${data.auth_route_count}`,
+				`activation_state=${data.activation_state}`,
+				`next_action=${data.next_action.action_id}`,
+			].join(" ") + "\n",
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data,
+			runtime_actions: [generationSuccessAction()],
+			continuation: { next_action_id: data.next_action.action_id },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
 function migrationFailureActionIdOf(
 	code: BrowserUseMigrationFailure["code"],
 ): MigrationFailureActionId {
@@ -3923,6 +4051,7 @@ function emitMigrationFailure(
 function emitMigrationState(
 	input: PlatformCommandInput,
 	state: BrowserUseMigrationStatus,
+	options: { compactDetails?: boolean } = {},
 ): number {
 	if (input.parsed.outputMode === "plain") {
 		const census = state.corpus_census;
@@ -3973,12 +4102,36 @@ function emitMigrationState(
 		}
 		return 0;
 	}
+	const dispositionSummary = {
+		stage: 0,
+		"provenance-only": 0,
+		"quarantine-backup": 0,
+		"quarantine-secret": 0,
+		"quarantine-executable": 0,
+		"quarantine-obsolete": 0,
+		"quarantine-unsupported": 0,
+	};
+	for (const disposition of state.dispositions) {
+		dispositionSummary[disposition.disposition] += 1;
+	}
+	const targetProvenance = state.target_provenance ?? [];
+	const projectedState = options.compactDetails
+		? {
+				...state,
+				dispositions: [],
+				dispositions_omitted: state.dispositions.length > 0,
+				disposition_summary: dispositionSummary,
+				target_provenance: [],
+				target_provenance_omitted: targetProvenance.length > 0,
+				target_provenance_count: targetProvenance.length,
+			}
+		: state;
 	writeJsonEnvelope(
 		input.stdout,
 		createCliRuntimeSuccessEnvelope({
 			run_id: input.runId,
 			data: {
-				...state,
+				...projectedState,
 				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
 				caller: input.caller,
 			},
@@ -4068,6 +4221,14 @@ async function runMigration(input: PlatformCommandInput): Promise<number> {
 			result = await verifyBrowserUseMigration(deps, source);
 			break;
 		}
+		case "migration-import": {
+			const source = stringField(input.parsed.flagValues["--source"]) ?? "";
+			const imported = await importBrowserUseCorpus(deps, source);
+			if (!imported.ok) {
+				return emitMigrationFailure(input, imported);
+			}
+			return emitCorpusImportResult(input, imported);
+		}
 		default: {
 			const unreachable: never = command;
 			throw new Error(`unhandled migration command: ${unreachable}`);
@@ -4076,7 +4237,10 @@ async function runMigration(input: PlatformCommandInput): Promise<number> {
 	if (!result.ok) return emitMigrationFailure(input, result);
 	const projected = await readBrowserUseMigrationStatus(deps);
 	if (!projected.ok) return emitMigrationFailure(input, projected);
-	return emitMigrationState(input, projected.state);
+	return emitMigrationState(input, projected.state, {
+		compactDetails:
+			command === "migration-status" || command === "migration-activate",
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -4184,29 +4348,274 @@ function emitEnvironmentTokenLifecycleUnavailable(
 	return RUNTIME_FAILURE_EXIT_CODE;
 }
 
-function emitBlockedAuthAdmissionStatus(
-	input: PlatformCommandInput,
-	admission: Extract<
-		NonNullable<BrowserUseRuntime["authAdmission"]>,
-		{ kind: "blocked" }
-	>,
-): number {
-	const message = "Authentication lane admission is blocked.";
-	const data = {
-		contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
-		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
-		operation: "status",
-		state: "blocked",
-		selected_lane: null,
-		admission_code: admission.cause.code,
-		native_verdict: admission.evidence.native?.verdict ?? null,
-		caller: input.caller,
+const authStatusActionById = new Map<
+	string,
+	(typeof browserUseAuthStatusActions)[number]
+>(browserUseAuthStatusActions.map((action) => [action.id, action]));
+
+type BrowserUseAuthStatusActionId =
+	(typeof browserUseAuthStatusActions)[number]["id"];
+
+type BrowserUseAuthStatusSupportingEvidence = {
+	contract: "browser-use.auth-status-support";
+	schema_version: "1";
+	executables: {
+		op: "ready" | "missing" | "unsafe" | "unproven";
+		wrapper: "ready" | "missing" | "unsafe" | "unproven";
+		helper: "ready" | "missing" | "unsafe" | "unproven";
 	};
+	admin_authority: "proven" | "missing" | "invalid";
+	profile: "live-clean" | "missing" | "unsafe" | "unproven";
+	binding: "ready" | "missing" | "stale" | "invalid";
+	proof: {
+		lane_digest: string;
+		principal_digest: string;
+		vault_digest: string;
+		profile_digest: string;
+		profile_posture_receipt_digest: string;
+		binding_context_digest: string;
+		binding_receipt_digest: string;
+		observed_at_epoch_ms: number;
+		fresh_until_epoch_ms: number;
+	} | null;
+};
+
+type BrowserUseAuthStatusData = {
+	contract: typeof BROWSER_USE_AUTH_STATUS_CONTRACT_ID;
+	schema_version: typeof BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION;
+	state: "ready" | "blocked";
+	selected_lane: "signed-native" | "environment-injected-op" | null;
+	lane_state: "ready" | "unavailable" | "blocked";
+	assurance: "signed-native" | "lower-assurance" | null;
+	blocked_cause?: string;
+	checks: {
+		token_file: { state: string };
+		op: { state: string };
+		wrapper: { state: string };
+		helper: { state: string };
+		service_account: { state: string };
+		vault_scope: { state: string };
+		admin_authority: { state: string };
+		profile: { state: string };
+		binding: { state: string };
+	};
+	caller: BrowserUseCallerMetadata;
+};
+
+function authStatusAction(
+	id: BrowserUseAuthStatusActionId,
+): RuntimeActionGuidance {
+	return actionFor(authStatusActionById, id, "authentication status");
+}
+
+function hasExactAuthStatusKeys(
+	value: unknown,
+	keys: readonly string[],
+): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	return (
+		actual.length === expected.length &&
+		actual.every((key, index) => key === expected[index])
+	);
+}
+
+function parseAuthStatusSupportingEvidence(
+	value: unknown,
+): BrowserUseAuthStatusSupportingEvidence | undefined {
+	if (
+		!hasExactAuthStatusKeys(value, [
+			"contract",
+			"schema_version",
+			"executables",
+			"admin_authority",
+			"profile",
+			"binding",
+			"proof",
+		]) ||
+		value.contract !== "browser-use.auth-status-support" ||
+		value.schema_version !== "1" ||
+		!hasExactAuthStatusKeys(value.executables, ["op", "wrapper", "helper"])
+	) {
+		return undefined;
+	}
+	const executableStates = new Set(["ready", "missing", "unsafe", "unproven"]);
+	const adminStates = new Set(["proven", "missing", "invalid"]);
+	const profileStates = new Set(["live-clean", "missing", "unsafe", "unproven"]);
+	const bindingStates = new Set(["ready", "missing", "stale", "invalid"]);
+	if (
+		typeof value.executables.op !== "string" ||
+		!executableStates.has(value.executables.op) ||
+		typeof value.executables.wrapper !== "string" ||
+		!executableStates.has(value.executables.wrapper) ||
+		typeof value.executables.helper !== "string" ||
+		!executableStates.has(value.executables.helper) ||
+		typeof value.admin_authority !== "string" ||
+		!adminStates.has(value.admin_authority) ||
+		typeof value.profile !== "string" ||
+		!profileStates.has(value.profile) ||
+		typeof value.binding !== "string" ||
+		!bindingStates.has(value.binding)
+	) {
+		return undefined;
+	}
+	let proof: BrowserUseAuthStatusSupportingEvidence["proof"] = null;
+	if (value.proof !== null) {
+		if (
+			!hasExactAuthStatusKeys(value.proof, [
+				"lane_digest",
+				"principal_digest",
+				"vault_digest",
+				"profile_digest",
+				"profile_posture_receipt_digest",
+				"binding_context_digest",
+				"binding_receipt_digest",
+				"observed_at_epoch_ms",
+				"fresh_until_epoch_ms",
+			])
+		) {
+			return undefined;
+		}
+		const digestPattern = /^[a-f0-9]{64}$/;
+		for (const field of [
+			"lane_digest",
+			"principal_digest",
+			"vault_digest",
+			"profile_digest",
+			"profile_posture_receipt_digest",
+			"binding_context_digest",
+			"binding_receipt_digest",
+		] as const) {
+			if (
+				typeof value.proof[field] !== "string" ||
+				!digestPattern.test(value.proof[field])
+			) {
+				return undefined;
+			}
+		}
+		if (
+			typeof value.proof.observed_at_epoch_ms !== "number" ||
+			!Number.isSafeInteger(value.proof.observed_at_epoch_ms) ||
+			value.proof.observed_at_epoch_ms < 0 ||
+			typeof value.proof.fresh_until_epoch_ms !== "number" ||
+			!Number.isSafeInteger(value.proof.fresh_until_epoch_ms) ||
+			value.proof.fresh_until_epoch_ms < value.proof.observed_at_epoch_ms ||
+			value.proof.fresh_until_epoch_ms - value.proof.observed_at_epoch_ms >
+				60_000
+		) {
+			return undefined;
+		}
+		proof = {
+			lane_digest: value.proof.lane_digest as string,
+			principal_digest: value.proof.principal_digest as string,
+			vault_digest: value.proof.vault_digest as string,
+			profile_digest: value.proof.profile_digest as string,
+			profile_posture_receipt_digest:
+				value.proof.profile_posture_receipt_digest as string,
+			binding_context_digest: value.proof.binding_context_digest as string,
+			binding_receipt_digest: value.proof.binding_receipt_digest as string,
+			observed_at_epoch_ms: value.proof.observed_at_epoch_ms as number,
+			fresh_until_epoch_ms: value.proof.fresh_until_epoch_ms as number,
+		};
+	}
+	return {
+		contract: "browser-use.auth-status-support",
+		schema_version: "1",
+		executables: {
+			op: value.executables.op as BrowserUseAuthStatusSupportingEvidence["executables"]["op"],
+			wrapper:
+				value.executables
+					.wrapper as BrowserUseAuthStatusSupportingEvidence["executables"]["wrapper"],
+			helper:
+				value.executables
+					.helper as BrowserUseAuthStatusSupportingEvidence["executables"]["helper"],
+		},
+		admin_authority:
+			value.admin_authority as BrowserUseAuthStatusSupportingEvidence["admin_authority"],
+		profile:
+			value.profile as BrowserUseAuthStatusSupportingEvidence["profile"],
+		binding:
+			value.binding as BrowserUseAuthStatusSupportingEvidence["binding"],
+		proof,
+	};
+}
+
+function authStatusProofMatches(
+	supporting: BrowserUseAuthStatusSupportingEvidence,
+	metadata: Extract<
+		Awaited<ReturnType<typeof inspectBrowserUseAuthMetadata>>,
+		{ ok: true }
+	>,
+	now: number,
+): "ready" | "unavailable" | "stale" | "mismatch" {
+	const proof = supporting.proof;
+	const expected = metadata.proof_coordinates;
+	if (proof === null || expected === null) return "unavailable";
+	if (
+		proof.observed_at_epoch_ms > now ||
+		proof.fresh_until_epoch_ms <= now
+	) {
+		return "stale";
+	}
+	const expectedBindingContextDigest = createHash("sha256")
+		.update(
+			[
+				"browser-use.auth-status.binding-context.v1",
+				expected.lane_digest,
+				expected.principal_digest,
+				expected.vault_digest,
+				expected.profile_digest,
+				proof.profile_posture_receipt_digest,
+				proof.binding_receipt_digest,
+			].join("\0"),
+		)
+		.digest("hex");
+	return proof.lane_digest === expected.lane_digest &&
+		proof.principal_digest === expected.principal_digest &&
+		proof.vault_digest === expected.vault_digest &&
+		proof.profile_digest === expected.profile_digest &&
+		proof.binding_context_digest === expectedBindingContextDigest
+		? "ready"
+		: "mismatch";
+}
+
+function emitAuthStatusResult(
+	input: PlatformCommandInput,
+	data: BrowserUseAuthStatusData,
+	actionId: BrowserUseAuthStatusActionId,
+): number {
+	const action = authStatusAction(actionId);
 	if (input.parsed.outputMode === "plain") {
-		input.stderr.write(
-			`browser_use lane_admission_blocked: ${message} admission_code=${admission.cause.code} action=inspect-auth-readiness (run_id=${input.runId})\n`,
+		const line = [
+			`contract=${data.contract}`,
+			`schema=${data.schema_version}`,
+			`state=${data.state}`,
+			`selected_lane=${data.selected_lane ?? "none"}`,
+			`lane_state=${data.lane_state}`,
+			`assurance=${data.assurance ?? "none"}`,
+			...(data.blocked_cause === undefined
+				? []
+				: [`blocked_cause=${data.blocked_cause}`]),
+			`continuation=${action.id}`,
+		].join(" ");
+		(data.state === "ready" ? input.stdout : input.stderr).write(`${line}\n`);
+		return data.state === "ready" ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	if (data.state === "ready") {
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope({
+				run_id: input.runId,
+				data,
+				runtime_actions: [action],
+				continuation: { next_action_id: action.id },
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
 		);
-		return BINDING_FAIL_CLOSED_EXIT_CODE;
+		return 0;
 	}
 	writeJsonEnvelope(
 		input.stdout,
@@ -4214,15 +4623,19 @@ function emitBlockedAuthAdmissionStatus(
 			run_id: input.runId,
 			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 			data,
-			runtime_actions: [authAction("inspect-auth-readiness")],
-			continuation: { next_action_id: "inspect-auth-readiness" },
+			runtime_actions: [action],
+			continuation: { next_action_id: action.id },
 			error: createCliRuntimeError({
 				run_id: input.runId,
-				code: "lane_admission_blocked",
-				message,
+				code: `auth_status_${(data.blocked_cause ?? "blocked").replaceAll("-", "_")}`,
+				message: "Authentication status is blocked at one bounded readiness gate.",
 				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
-				...retryabilityForRecoverability("repair_state"),
+				...retryabilityForRecoverability(
+					data.blocked_cause === "missing-token"
+						? "authenticate"
+						: "repair_state",
+				),
 				failure_domain: "browser_use",
 			}),
 		}),
@@ -4231,40 +4644,292 @@ function emitBlockedAuthAdmissionStatus(
 	return BINDING_FAIL_CLOSED_EXIT_CODE;
 }
 
-function emitSignedAuthAdmissionStatus(
+function emitBlockedAuthAdmissionStatus(
 	input: PlatformCommandInput,
 	admission: Extract<
 		NonNullable<BrowserUseRuntime["authAdmission"]>,
-		{ kind: "signed-admitted" }
+		{ kind: "blocked" }
 	>,
 ): number {
-	const data = {
-		contract: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
-		schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
-		operation: "status",
-		state: "ready",
+	if (
+		admission.cause.code === "environment-token-not-ready" &&
+		admission.evidence.environment?.state === "missing"
+	) {
+		const action = environmentTokenLifecycleAction("install-local-token");
+		const data = {
+			contract: BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+			schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
+			state: "blocked",
+			selected_lane: null,
+			lane_state: "unavailable",
+			assurance: "lower-assurance",
+			blocked_cause: "missing-token",
+			checks: {
+				token_file: { state: "missing" },
+				op: { state: "not-evaluated" },
+				wrapper: { state: "not-evaluated" },
+				helper: { state: "not-evaluated" },
+				service_account: { state: "not-evaluated" },
+				vault_scope: { state: "not-evaluated" },
+				admin_authority: { state: "not-evaluated" },
+				profile: { state: "not-evaluated" },
+				binding: { state: "not-evaluated" },
+			},
+			caller: input.caller,
+		};
+		if (input.parsed.outputMode === "plain") {
+			input.stderr.write(
+				`browser_use auth_status_blocked: lower-assurance authentication is unavailable cause=missing-token action=${action.id} (run_id=${input.runId})\n`,
+			);
+			return BINDING_FAIL_CLOSED_EXIT_CODE;
+		}
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeErrorEnvelope({
+				run_id: input.runId,
+				process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				data,
+				runtime_actions: [action],
+				continuation: { next_action_id: action.id },
+				error: createCliRuntimeError({
+					run_id: input.runId,
+					code: "auth_status_missing_token",
+					message:
+						"The lower-assurance authentication lane has no admitted local token.",
+					exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+					severity: "error",
+					...retryabilityForRecoverability("authenticate"),
+					failure_domain: "browser_use",
+				}),
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	const environment = admission.evidence.environment;
+	const tokenState =
+		environment?.state === "ready"
+			? "ready"
+			: environment === undefined
+				? "not-evaluated"
+				: "unsafe";
+	const actionId =
+		environment?.next_action !== undefined &&
+		authStatusActionById.has(environment.next_action)
+			? (environment.next_action as BrowserUseAuthStatusActionId)
+			: "inspect-capability-loss";
+	return emitAuthStatusResult(
+		input,
+		{
+			contract: BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+			schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
+			state: "blocked",
+			selected_lane: null,
+			lane_state:
+				admission.cause.code === "environment-token-not-ready"
+					? "unavailable"
+					: "blocked",
+			assurance:
+				admission.cause.code === "environment-token-not-ready"
+					? "lower-assurance"
+					: null,
+			blocked_cause: admission.cause.code,
+			checks: {
+				token_file: { state: tokenState },
+				op: { state: "not-evaluated" },
+				wrapper: { state: "not-evaluated" },
+				helper: { state: "not-evaluated" },
+				service_account: { state: "not-evaluated" },
+				vault_scope: { state: "not-evaluated" },
+				admin_authority: { state: "not-evaluated" },
+				profile: { state: "not-evaluated" },
+				binding: { state: "not-evaluated" },
+			},
+			caller: input.caller,
+		},
+		actionId,
+	);
+}
+
+async function emitSignedAuthAdmissionStatus(
+	input: PlatformCommandInput,
+	admission: Exclude<
+		NonNullable<BrowserUseRuntime["authAdmission"]>,
+		{ kind: "blocked" }
+	>,
+): Promise<number> {
+	let supporting: BrowserUseAuthStatusSupportingEvidence | undefined;
+	try {
+		supporting =
+			input.runtime.authStatusSupport === undefined
+				? undefined
+				: parseAuthStatusSupportingEvidence(
+						await input.runtime.authStatusSupport(),
+					);
+	} catch {
+		supporting = undefined;
+	}
+	const tokenFileState =
+		admission.kind === "environment-admitted" ? "ready" : "not-required";
+	const common = {
+		contract: BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+		schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
 		selected_lane: admission.evidence.lane,
+		lane_state: "ready" as const,
 		assurance: admission.evidence.assurance,
-		native_verdict: admission.evidence.native.verdict,
 		caller: input.caller,
 	};
-	if (input.parsed.outputMode === "plain") {
-		input.stdout.write(
-			`contract=${data.contract} schema=${data.schema_version} operation=status state=ready selected_lane=${data.selected_lane} assurance=${data.assurance} continuation=inspect-auth-readiness\n`,
+	if (supporting === undefined) {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: "support-evidence-unavailable",
+				checks: {
+					token_file: { state: tokenFileState },
+					op: { state: "unproven" },
+					wrapper: { state: "unproven" },
+					helper: { state: "unproven" },
+					service_account: { state: "not-evaluated" },
+					vault_scope: { state: "not-evaluated" },
+					admin_authority: { state: "not-evaluated" },
+					profile: { state: "not-evaluated" },
+					binding: { state: "not-evaluated" },
+				},
+			},
+			"inspect-capability-loss",
 		);
-		return 0;
 	}
-	writeJsonEnvelope(
-		input.stdout,
-		createCliRuntimeSuccessEnvelope({
-			run_id: input.runId,
-			data,
-			runtime_actions: [authAction("inspect-auth-readiness")],
-			continuation: { next_action_id: "inspect-auth-readiness" },
-		}),
-		{ runId: input.runId, durationMs: input.durationMs() },
+	for (const executable of ["op", "wrapper", "helper"] as const) {
+		const executableState = supporting.executables[executable];
+		if (executableState !== "ready") {
+			return emitAuthStatusResult(
+				input,
+				{
+					...common,
+					state: "blocked",
+					blocked_cause: `${executable}-${executableState}`,
+					checks: {
+						token_file: { state: tokenFileState },
+						op: { state: supporting.executables.op },
+						wrapper: { state: supporting.executables.wrapper },
+						helper: { state: supporting.executables.helper },
+						service_account: { state: "not-evaluated" },
+						vault_scope: { state: "not-evaluated" },
+						admin_authority: { state: "not-evaluated" },
+						profile: { state: "not-evaluated" },
+						binding: { state: "not-evaluated" },
+					},
+				},
+				"inspect-capability-loss",
+			);
+		}
+	}
+
+	const metadata = await inspectBrowserUseAuthMetadata(admission);
+	const checks = {
+		token_file: { state: tokenFileState },
+		op: { state: supporting.executables.op },
+		wrapper: { state: supporting.executables.wrapper },
+		helper: { state: supporting.executables.helper },
+		service_account: { state: metadata.service_account },
+		vault_scope: { state: metadata.vault_scope },
+		admin_authority: { state: supporting.admin_authority },
+		profile: { state: supporting.profile },
+		binding: { state: supporting.binding },
+	};
+	if (!metadata.ok) {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause:
+					metadata.service_account === "invalid"
+						? "invalid-service-account"
+						: metadata.blocked_cause,
+				checks,
+			},
+			metadata.blocked_cause === "missing-token"
+				? "install-local-token"
+				: "inspect-capability-loss",
+		);
+	}
+	if (metadata.vault_scope !== "exactly-one") {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: "invalid-vault-scope",
+				checks,
+			},
+			"repair-vault-grant",
+		);
+	}
+	if (supporting.admin_authority !== "proven") {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: `admin-authority-${supporting.admin_authority}`,
+				checks,
+			},
+			"record-admin-authority-receipt",
+		);
+	}
+	if (supporting.profile !== "live-clean") {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: `profile-${supporting.profile}`,
+				checks,
+			},
+			"approve-clean-profile-creation",
+		);
+	}
+	if (supporting.binding !== "ready") {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: `binding-${supporting.binding}`,
+				checks,
+			},
+			"repair-item-binding",
+		);
+	}
+	const proofState = authStatusProofMatches(
+		supporting,
+		metadata,
+		input.runtime.now(),
 	);
-	return 0;
+	if (proofState !== "ready") {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: `support-evidence-${proofState}`,
+				checks,
+			},
+			"inspect-capability-loss",
+		);
+	}
+	return emitAuthStatusResult(
+		input,
+		{
+			...common,
+			state: "ready",
+			checks,
+		},
+		"run-authenticated-runbook",
+	);
 }
 
 async function runEnvironmentTokenLifecycle(
@@ -4273,14 +4938,45 @@ async function runEnvironmentTokenLifecycle(
 	const port = input.runtime.environmentTokenLifecycle;
 	const command = input.parsed.command;
 	const admission = input.runtime.authAdmission;
-	if (command === "auth-status" && admission?.kind === "signed-admitted") {
-		return emitSignedAuthAdmissionStatus(input, admission);
+	if (
+		command === "auth-status" &&
+		admission !== undefined &&
+		admission.kind !== "blocked"
+	) {
+		return await emitSignedAuthAdmissionStatus(input, admission);
 	}
 	if (
 		command === "auth-status" &&
 		admission?.kind === "blocked"
 	) {
 		return emitBlockedAuthAdmissionStatus(input, admission);
+	}
+	if (command === "auth-status") {
+		return emitAuthStatusResult(
+			input,
+			{
+				contract: BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
+				schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
+				state: "blocked",
+				selected_lane: null,
+				lane_state: "blocked",
+				assurance: null,
+				blocked_cause: "admission-unavailable",
+				checks: {
+					token_file: { state: "not-evaluated" },
+					op: { state: "not-evaluated" },
+					wrapper: { state: "not-evaluated" },
+					helper: { state: "not-evaluated" },
+					service_account: { state: "not-evaluated" },
+					vault_scope: { state: "not-evaluated" },
+					admin_authority: { state: "not-evaluated" },
+					profile: { state: "not-evaluated" },
+					binding: { state: "not-evaluated" },
+				},
+				caller: input.caller,
+			},
+			"inspect-capability-loss",
+		);
 	}
 	if (command === "auth-install-token") {
 		const explicitStdin = input.parsed.flagValues["--stdin"] !== undefined;
@@ -4293,16 +4989,7 @@ async function runEnvironmentTokenLifecycle(
 	let operation: "status" | "install" | "replace" | "remove";
 	let state: BrowserUseEnvironmentTokenCustodyState;
 	try {
-		if (command === "auth-status") {
-			operation = "status";
-			state =
-				admission?.kind === "environment-admitted"
-					? admission.evidence.environment
-					: admission?.kind === "blocked" &&
-							admission.evidence.environment !== undefined
-						? admission.evidence.environment
-						: await port.execute({ action: "status" });
-		} else if (command === "auth-remove-token") {
+		if (command === "auth-remove-token") {
 			operation = "remove";
 			state = await port.execute({ action: "remove" });
 		} else {
@@ -4441,6 +5128,10 @@ function authContinuationForCause(cause: string): AuthActionId {
 			return "repair-item-binding";
 		case "ambiguous-binding-selection":
 			return "request-binding-selection-grant";
+		case "unsupported-method":
+			return "choose-supported-auth-method";
+		case "capability-loss":
+			return "inspect-capability-loss";
 		default:
 			return "inspect-auth-readiness";
 	}
@@ -4556,6 +5247,13 @@ async function evaluateAuthReadiness(
 		case "repair-item-binding": {
 			const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
 			const itemId = stringField(input.parsed.flagValues["--item-id"]) ?? "";
+			if (vaultId === "" && itemId === "") {
+				return {
+					status: "binding-coordinates-unavailable",
+					blocked_cause: "revoked-binding",
+					continuationId: "inspect-auth-readiness",
+				};
+			}
 			const authority = await proveRequestedVaultAuthority(port, vaultId);
 			if (!authority.ok) return authority.evaluation;
 			const item = await port.getLoginItem({
@@ -4944,6 +5642,7 @@ export {
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
+	inspectBrowserUseAuthStatusExecutable,
 } from "./browser-use-runtime";
 export {
 	type OperationResolution,

@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildOncoreSaveDraftMigration,
+	buildOncoreTimesheetDiagnosisMigration,
 	type BrowserUseOncoreSaveDraftMigrationInput,
+	type BrowserUseOncoreTimesheetDiagnosisMigrationInput,
 } from "./browser-use-oncore-migration";
+import {
+	actionAssetDigest,
+	ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES,
+} from "./browser-use-runbook-actions";
 import { validateRunbook } from "./browser-use-runbook-model";
 
 const DIGESTS = {
@@ -11,6 +17,21 @@ const DIGESTS = {
 	saveDraft: "3".repeat(64),
 	verifyDraft: "4".repeat(64),
 };
+
+const DIAGNOSIS_DIGEST = actionAssetDigest(
+	ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES,
+);
+
+function diagnosisInput(
+	overrides: Partial<BrowserUseOncoreTimesheetDiagnosisMigrationInput> = {},
+): BrowserUseOncoreTimesheetDiagnosisMigrationInput {
+	return {
+		allowedOrigin: "https://portal.example.com",
+		sourceRelativePath: "oncore/domain-script-actions/diagnose-grid-state.js",
+		actionDigest: DIAGNOSIS_DIGEST,
+		...overrides,
+	};
+}
 
 function migrationInput(
 	overrides: Partial<BrowserUseOncoreSaveDraftMigrationInput> = {},
@@ -29,7 +50,7 @@ function migrationInput(
 }
 
 describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
-	test("builds one valid canonical flow from the split-entry winner", () => {
+	test("stages the split-entry winner with a mechanical unsupported-cadence blocker", () => {
 		const migrated = buildOncoreSaveDraftMigration(migrationInput());
 
 		expect(validateRunbook(migrated.runbook)).toEqual([]);
@@ -39,47 +60,25 @@ describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
 			auth_context_ref: "oncore-session",
 			allowed_origins: ["https://portal.example.com"],
 		});
-		expect(migrated.runbook.steps).toEqual([
-			{ kind: "snapshot", interactive: false },
-			expect.objectContaining({
-				kind: "action",
-				action_id: "oncore-reconcile-rows",
-				expected_digest: DIGESTS.reconcileRows,
-			}),
-			expect.objectContaining({
-				kind: "iterate",
-				over_input: "item_keys",
-				step: expect.objectContaining({
-					action_id: "oncore-fill-entry",
-					expected_digest: DIGESTS.fillEntry,
-				}),
-			}),
-			{ kind: "snapshot", interactive: false },
-			expect.objectContaining({
-				kind: "action",
-				action_id: "oncore-save-draft",
-				expected_digest: DIGESTS.saveDraft,
-			}),
-			{
-				kind: "open",
-				url: "https://portal.example.com/timesheets/current",
-				postcondition: {
-					kind: "url-equals",
-					url: "https://portal.example.com/timesheets/current",
-				},
-			},
-			{ kind: "snapshot", interactive: false },
-			expect.objectContaining({
-				kind: "action",
-				action_id: "oncore-verify-draft",
-				expected_digest: DIGESTS.verifyDraft,
-				inputs: {
-					item_keys: "{{item_keys}}",
-					entries: "{{entries}}",
-				},
-			}),
+		expect(migrated.runbook.steps).toHaveLength(8);
+		expect(migrated.runbook.steps[0]).toEqual({
+			kind: "snapshot",
+			interactive: false,
+		});
+		expect(migrated.activation_blocker).toContain(
+			"open-entry, wait, fill-entry, wait",
+		);
+		expect(migrated.legacy_action_digests).toEqual(DIGESTS);
+		expect(JSON.stringify(migrated.runbook.steps)).not.toMatch(/\bsubmit\b/i);
+		expect(migrated.runbook.inputs.map((input) => input.id)).toEqual([
+			"timesheet_run",
 		]);
-		expect(JSON.stringify(migrated.runbook)).not.toMatch(/\bsubmit\b/i);
+		expect(
+			migrated.runbook.steps.find((step) => step.kind === "iterate"),
+		).toMatchObject({
+			over_input: "timesheet_run.payload.item_keys",
+		});
+		expect(JSON.stringify(migrated.runbook.inputs)).toContain("human-submit");
 	});
 
 	test("keeps both candidates inspectable while only one is active", () => {
@@ -160,6 +159,91 @@ describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
 	] as const)("rejects %s", (_label, overrides, message) => {
 		expect(() =>
 			buildOncoreSaveDraftMigration(migrationInput(overrides)),
+		).toThrow(message);
+	});
+});
+
+describe("Oncore read-only timesheet diagnosis migration", () => {
+	test("builds one valid bounded structural diagnosis flow", () => {
+		const migrated = buildOncoreTimesheetDiagnosisMigration(diagnosisInput());
+
+		expect(validateRunbook(migrated.runbook)).toEqual([]);
+		expect(migrated.runbook).toEqual({
+			contract: "browser-use.runbook",
+			schema_version: "2",
+			service_id: "oncore",
+			flow_id: "timesheet-diagnose",
+			flow_name: "timesheet-diagnose",
+			version: "2",
+			summary:
+				"Diagnose bounded structural state for the open Oncore timesheet.",
+			allowed_origins: ["https://portal.example.com"],
+			auth_context_ref: "oncore-session",
+			inputs: [
+				{
+					id: "timesheet_id",
+					summary: "Exact identifier expected for the open timesheet.",
+					required: true,
+					custody: "sensitive",
+					schema: {
+						kind: "string",
+						min_length: 1,
+						max_length: 128,
+						pattern: "^[A-Za-z0-9._:-]+$",
+					},
+				},
+			],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "action",
+					action_id: "oncore-diagnose-timesheet",
+					expected_digest: DIAGNOSIS_DIGEST,
+					inputs: { timesheet_id: "{{timesheet_id}}" },
+				},
+			],
+		});
+		expect(JSON.stringify(migrated.runbook)).not.toMatch(
+			/(?:innerHTML|textContent|row_values|timesheet_id.*result)/i,
+		);
+	});
+
+	test("retains the exact source as migrated provenance", () => {
+		const migrated = buildOncoreTimesheetDiagnosisMigration(diagnosisInput());
+
+		expect(migrated.provenance).toEqual([
+			{
+				source_relative_path:
+					"oncore/domain-script-actions/diagnose-grid-state.js",
+				disposition: "migrated",
+			},
+		]);
+	});
+
+	test.each([
+		[
+			"non-exact origin",
+			{ allowedOrigin: "https://portal.example.com/path" },
+			"exact allowed origin",
+		],
+		[
+			"unsafe source path",
+			{ sourceRelativePath: "../diagnose.js" },
+			"safe relative source",
+		],
+		[
+			"backslash source path",
+			{ sourceRelativePath: "..\\diagnose.js" },
+			"safe relative source",
+		],
+		[
+			"invalid action digest",
+			{ actionDigest: "not-a-digest" },
+			"exact content digest",
+		],
+	] as const)("rejects %s", (_label, overrides, message) => {
+		expect(() =>
+			buildOncoreTimesheetDiagnosisMigration(diagnosisInput(overrides)),
 		).toThrow(message);
 	});
 });

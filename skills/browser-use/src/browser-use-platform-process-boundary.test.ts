@@ -25,6 +25,7 @@ import {
 	createSharedRun,
 	loadSharedRun,
 } from "./browser-use-runs";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
 // U2 process-boundary proof (ledger V4, AE15): a fresh agent process in a
@@ -125,9 +126,37 @@ const seeded = seedStore();
 
 async function spawnBrowserUse(
 	args: readonly string[],
+	trustedHandoffPath?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	await seeded;
-	const child = Bun.spawn([process.execPath, BROWSER_USE_CLI, ...args], {
+	let entrypoint = BROWSER_USE_CLI;
+	if (trustedHandoffPath !== undefined) {
+		entrypoint = join(
+			neutralCwd,
+			`browser-use-reproof-${new Bun.CryptoHasher("sha256")
+				.update(trustedHandoffPath)
+				.digest("hex")
+				.slice(0, 12)}.ts`,
+		);
+		writeFileSync(
+			entrypoint,
+			[
+				'import { readFileSync } from "node:fs";',
+				`import { createDefaultBrowserUseRuntime, runForTest } from ${JSON.stringify(BROWSER_USE_CLI)};`,
+				`const handoffRaw = readFileSync(${JSON.stringify(trustedHandoffPath)}, "utf8");`,
+				"const runtime = createDefaultBrowserUseRuntime({",
+				"  env: { ...process.env },",
+				"  mintHandoff: async () => ({ exitCode: 0, stdout: handoffRaw, stderr: \"\" }),",
+				"});",
+				"const result = await runForTest(process.argv.slice(2), runtime);",
+				"process.stdout.write(result.stdout);",
+				"process.stderr.write(result.stderr);",
+				"process.exit(result.exitCode);",
+			].join("\n"),
+			"utf8",
+		);
+	}
+	const child = Bun.spawn([process.execPath, entrypoint, ...args], {
 		cwd: neutralCwd,
 		// ONLY the temp XDG roots + HOME: the neutral process inherits nothing.
 		env: {
@@ -414,11 +443,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						launch: { launched: false },
 						proof: {
 							environment_contract_id: "warm-chrome.browser-entry",
-							environment_schema_version: "1",
+							environment_schema_version: "2",
 							route_evidence: "verified-live",
+							profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 						},
 						contract_id: "browser-connect.verified-handoff",
-						schema_version: "2",
+						schema_version: "3",
 					},
 					error: null,
 				}),
@@ -435,7 +465,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"--handoff",
 				handoffPath,
 				"--json",
-			]);
+			], handoffPath);
 
 			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
 			const envelope = parse(result.stdout);
@@ -572,11 +602,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 							launch: { launched: false },
 							proof: {
 								environment_contract_id: "warm-chrome.browser-entry",
-								environment_schema_version: "1",
+								environment_schema_version: "2",
 								route_evidence: "verified-live",
+								profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 							},
 							contract_id: "browser-connect.verified-handoff",
-							schema_version: "2",
+							schema_version: "3",
 						},
 						error: null,
 					}),
@@ -592,7 +623,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 					"--handoff",
 					handoffPath,
 					"--json",
-				]);
+				], handoffPath);
 				expect(result.exitCode).toBe(20);
 				expect(parse(result.stdout)).toMatchObject({
 					data: { external_effect: "none" },
@@ -655,11 +686,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						launch: { launched: false },
 						proof: {
 							environment_contract_id: "warm-chrome.browser-entry",
-							environment_schema_version: "1",
+							environment_schema_version: "2",
 							route_evidence: "verified-live",
+							profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 						},
 						contract_id: "browser-connect.verified-handoff",
-						schema_version: "2",
+						schema_version: "3",
 					},
 					error: null,
 				}),
@@ -686,7 +718,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"--expect-visible",
 				"[data-persisted='true']",
 				"--json",
-			]);
+			], handoffPath);
 
 			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
 			const envelope = parse(result.stdout);

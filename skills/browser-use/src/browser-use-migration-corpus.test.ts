@@ -13,7 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BrowserUseCorpusCensus } from "./browser-use-migration-model";
+import type {
+	BrowserUseCorpusCensus,
+	BrowserUseCorpusReceipt,
+} from "./browser-use-migration-model";
 import {
 	applyBrowserUseMigration,
 	inventoryBrowserUseMigration,
@@ -68,6 +71,7 @@ const classificationCorpus = join(FIXTURES, "classification-corpus");
 // canonical flow. Counts are asserted directly rather than against the live
 // corpus, which the plan documents as a moving R3 baseline.
 const corpusBaseline = join(FIXTURES, "corpus-baseline");
+const fullRootCorpus = join(FIXTURES, "full-root-corpus");
 const KNOWN_BASELINE_CENSUS: BrowserUseCorpusCensus = {
 	formal_artifacts: 3,
 	target_flows: 2,
@@ -540,6 +544,219 @@ async function openDeps(
 }
 
 describe("U1 corpus census and classification", () => {
+	test("current Oncore diagnosis action maps to its own canonical runbook", async () => {
+		const source = realpathSync(
+			mkdtempSync(join(tmpdir(), "bu-oncore-diagnosis-")),
+		);
+		mutableCopies.push(source);
+		const actionPath = join(
+			source,
+			"domains",
+			"iteraterecruitment-oncoreservices",
+			"domain-script-actions",
+			"diagnose-grid-state.js",
+		);
+		mkdirSync(dirname(actionPath), { recursive: true });
+		writeFileSync(actionPath, "async () => ({ row_count: 0 })\n");
+
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const deps = await openDeps(xdg.env);
+		expect((await inventoryBrowserUseMigration(deps, source)).ok).toBe(true);
+		const planned = await planBrowserUseMigration(deps, source);
+		expect(planned).toMatchObject({ ok: true });
+		if (!planned.ok) throw new Error("unreachable");
+
+		expect(planned.state.target_provenance).toContainEqual({
+			source_relative_path:
+				"domains/iteraterecruitment-oncoreservices/domain-script-actions/diagnose-grid-state.js",
+			source_flow_id: "timesheet-diagnose",
+			canonical_target_id: "oncore/timesheet-diagnose",
+			activation: "canonical",
+			reason: "reviewed current action supplies bounded diagnosis authority",
+		});
+	});
+
+	test("full browser-automation root resolves domain identities, backup provenance, and 1:N tracker targets", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const deps = await openDeps(xdg.env);
+		const receipt: BrowserUseCorpusReceipt = {
+			contract: "browser-use.corpus-receipt",
+			schema_version: "1",
+			source_namespace: "browser-automation",
+			source_entry_count: 11,
+			relative_path_digest:
+				"eba38696381a09234cc1f6adf3a3dfd5751adcee3f8de45956380de86494cec7",
+			corpus_census: {
+				formal_artifacts: 8,
+				target_flows: 0,
+				scripts: 1,
+				auth_narratives: 0,
+				login_capabilities: 0,
+				domain_script_actions: 1,
+			},
+		};
+
+		expect((await inventoryBrowserUseMigration(deps, fullRootCorpus)).ok).toBe(
+			true,
+		);
+		const planned = await planBrowserUseMigration(
+			deps,
+			fullRootCorpus,
+			receipt,
+		);
+		expect(planned).toMatchObject({ ok: true });
+		if (!planned.ok) throw new Error("unreachable");
+
+		const byPath = new Map(
+			planned.state.dispositions.map((row) => [
+				row.source_relative_path,
+				row,
+			]),
+		);
+		expect(
+			byPath.get(
+				"domains/iteraterecruitment-oncoreservices/domain-script-actions/fill-entry.js",
+			),
+		).toMatchObject({
+			artifact_class: "domain-script-action",
+			disposition: "quarantine-executable",
+		});
+		expect(
+			byPath.get(
+				"backups/domains-before-managed-migration-20260430T160317/api-explorer-xero/playbooks/extract-bankstatementsplus.yaml",
+			),
+		).toMatchObject({ disposition: "quarantine-backup" });
+		expect(
+			byPath.get(
+				"backups/domains-after-managed-migration-20260430T160414/api-explorer-xero/playbooks/extract-bankstatementsplus.yaml",
+			),
+		).toMatchObject({
+			disposition: "provenance-only",
+			formal_flow_id: "xero/extract-bankstatementsplus",
+			canonical_target_id: "xero/extract-bankstatementsplus",
+		});
+
+		expect(
+			planned.state.canonical_targets.map((row) => row.canonical_target_id),
+		).toEqual([
+			"fasttrack/fill-week",
+			"oncore/fill-timesheet",
+			"xero/extract-bankstatementsplus",
+			"xero/post-banktransaction",
+			"xero/reconcile-batch",
+		]);
+		expect(planned.state.target_provenance).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					source_relative_path:
+						"domains/iteraterecruitment-oncoreservices/legacy-runtime-migration.yaml",
+					source_flow_id: "fill-timesheet",
+					canonical_target_id: "oncore/fill-timesheet",
+					activation: "canonical",
+				}),
+				expect.objectContaining({
+					source_relative_path:
+						"domains/iteraterecruitment-oncoreservices/legacy-runtime-migration.yaml",
+					source_flow_id: "authenticate-session",
+					canonical_target_id: null,
+					activation: "inactive",
+				}),
+				expect.objectContaining({
+					source_relative_path:
+						"domains/manpowergroup-fasttrack360/legacy-runtime-migration.yaml",
+					source_flow_id: "add-breaks",
+					canonical_target_id: "fasttrack/fill-week",
+					activation: "canonical",
+				}),
+				expect.objectContaining({
+					source_relative_path:
+						"domains/manpowergroup-fasttrack360/legacy-runtime-migration.yaml",
+					source_flow_id: "submit-timesheet",
+					canonical_target_id: null,
+					activation: "inactive",
+				}),
+			]),
+		);
+	});
+
+	test("path-bound corpus receipt detects additions and removals without source contents", async () => {
+		const receipt: BrowserUseCorpusReceipt = {
+			contract: "browser-use.corpus-receipt",
+			schema_version: "1",
+			source_namespace: "browser-automation",
+			source_entry_count: 11,
+			relative_path_digest:
+				"eba38696381a09234cc1f6adf3a3dfd5751adcee3f8de45956380de86494cec7",
+			corpus_census: {
+				formal_artifacts: 8,
+				target_flows: 0,
+				scripts: 1,
+				auth_narratives: 0,
+				login_capabilities: 0,
+				domain_script_actions: 1,
+			},
+		};
+		for (const mutate of [
+			(source: string) =>
+				writeFileSync(join(source, "domains", "new-service.md"), "safe\n"),
+			(source: string) =>
+				rmSync(
+					join(
+						source,
+						"domains",
+						"iteraterecruitment-oncoreservices",
+						"playbooks",
+						"fill-timesheet.json",
+					),
+				),
+		]) {
+			const source = mutableCopyOf(fullRootCorpus);
+			mutate(source);
+			const xdg = makeTempXdgEnv();
+			disposables.push(xdg);
+			const deps = await openDeps(xdg.env);
+			expect((await inventoryBrowserUseMigration(deps, source)).ok).toBe(true);
+			expect(
+				await planBrowserUseMigration(deps, source, receipt),
+			).toMatchObject({
+				ok: false,
+				code: "migration_count_drift",
+			});
+		}
+		expect(JSON.stringify(receipt)).not.toContain("document.querySelector");
+	});
+
+	test("a single domain root still classifies domain-script-actions as overlapping scripts", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const deps = await openDeps(xdg.env);
+		const source = join(
+			fullRootCorpus,
+			"domains",
+			"iteraterecruitment-oncoreservices",
+		);
+		expect((await inventoryBrowserUseMigration(deps, source)).ok).toBe(true);
+		const planned = await planBrowserUseMigration(deps, source);
+		expect(planned).toMatchObject({
+			ok: true,
+			state: {
+				corpus_census: {
+					scripts: 1,
+					domain_script_actions: 1,
+				},
+			},
+		});
+		if (!planned.ok) throw new Error("unreachable");
+		expect(
+			planned.state.dispositions.find(
+				(row) =>
+					row.source_relative_path === "domain-script-actions/fill-entry.js",
+			),
+		).toMatchObject({ artifact_class: "domain-script-action" });
+	});
+
 	test("known baseline produces the expected overlapping census, per-class dispositions, and canonical provenance edges", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
@@ -689,7 +906,7 @@ describe("U1 corpus census and classification", () => {
 		expect(drifted.message).toMatch(/formal_artifacts expected 3, found 4/);
 	});
 
-	test("production CLI source enforces the code-owned R3 census baseline", async () => {
+	test("production CLI source enforces the sanitized path-bound corpus receipt", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const source = join(
@@ -720,10 +937,10 @@ describe("U1 corpus census and classification", () => {
 		});
 		expect(
 			(parseJson(planned.stdout).error as { message: string }).message,
-		).toMatch(/formal_artifacts expected 12, found 3/);
+		).toMatch(/path receipt expected 133 entries/);
 	});
 
-	test("production CLI source symlink alias enforces the code-owned R3 census baseline", async () => {
+	test("production CLI source symlink alias enforces the path-bound corpus receipt", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const legacySource = join(

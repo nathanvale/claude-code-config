@@ -13,6 +13,10 @@ let package = Package(
             name: "browser-use-op-supervisor",
             targets: ["BrowserUseEnvironmentOpSupervisor"]
         ),
+        .executable(
+            name: "browser-use-confidential-delivery",
+            targets: ["BrowserUseConfidentialFieldDelivery"]
+        ),
     ],
     targets: [
         .target(
@@ -25,6 +29,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "BrowserUseEnvironmentOpSupervisor",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .executableTarget(
+            name: "BrowserUseConfidentialFieldDelivery",
             dependencies: ["BrowserUseEnvironmentAuth"]
         ),
         .executableTarget(

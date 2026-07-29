@@ -4,6 +4,30 @@ import {
 	type BrowserUseRunbook,
 	runbookExactOriginIsValid,
 } from "./browser-use-runbook-model";
+import { BROWSER_USE_ONCORE_TIMESHEET_RUN_SCHEMA } from "./browser-use-timesheet-run-contract";
+
+/** Inputs required to build the read-only Oncore timesheet diagnosis flow. */
+export type BrowserUseOncoreTimesheetDiagnosisMigrationInput = {
+	/** Exact portal origin admitted by the reviewed diagnosis action. */
+	allowedOrigin: string;
+	/** Legacy source retained as inspectable provenance. */
+	sourceRelativePath: string;
+	/** Exact content identity of the reviewed read-only diagnosis action. */
+	actionDigest: string;
+};
+
+/** Read-only diagnosis flow plus its source lineage. */
+export type BrowserUseOncoreTimesheetDiagnosisMigration = {
+	/** Canonical bounded structural diagnosis runbook. */
+	runbook: BrowserUseRunbook;
+	/** Exact source edge without copied legacy bytes. */
+	provenance: readonly [
+		{
+			source_relative_path: string;
+			disposition: "migrated";
+		},
+	];
+};
 
 /** Exact action digests supplied by one staged generation. */
 export type BrowserUseOncoreSaveDraftActionDigests = {
@@ -45,11 +69,18 @@ export type BrowserUseOncoreSaveDraftProvenance =
 
 /** Staged Oncore flow plus its reconciled source lineage. */
 export type BrowserUseOncoreSaveDraftMigration = {
-	/** The only canonical executable definition produced for this intent. */
+	/** The canonical staged definition; activation remains blocked until sequencing exists. */
 	runbook: BrowserUseRunbook;
+	/** Exact legacy source identities retained for later reviewed-action promotion. */
+	legacy_action_digests: BrowserUseOncoreSaveDraftActionDigests;
+	/** Mechanical blocker preventing a false executable claim. */
+	activation_blocker: string;
 	/** Winner and superseded candidates without copied legacy bytes. */
 	provenance: readonly BrowserUseOncoreSaveDraftProvenance[];
 };
+
+const ONCORE_SPLIT_CADENCE_BLOCKER =
+	"Oncore draft fill requires the proven open-entry, wait, fill-entry, wait cadence per item; the current runbook step vocabulary cannot represent that sequence.";
 
 function exactOrigin(value: string): string | undefined {
 	return runbookExactOriginIsValid(value) ? value : undefined;
@@ -66,6 +97,26 @@ function sourceRelativePathValid(value: string): boolean {
 		!isAbsolute(value) &&
 		!value.split("/").some((segment) => segment === "" || segment === "..")
 	);
+}
+
+function assertDiagnosisMigrationInput(
+	input: BrowserUseOncoreTimesheetDiagnosisMigrationInput,
+): void {
+	if (exactOrigin(input.allowedOrigin) === undefined) {
+		throw new Error(
+			"Oncore diagnosis migration requires one exact allowed origin.",
+		);
+	}
+	if (!sourceRelativePathValid(input.sourceRelativePath)) {
+		throw new Error(
+			"Oncore diagnosis migration requires one safe relative source provenance path.",
+		);
+	}
+	if (!actionDigestIsValid(input.actionDigest)) {
+		throw new Error(
+			"Oncore diagnosis migration requires the exact content digest of the reviewed action.",
+		);
+	}
 }
 
 function assertMigrationInput(input: BrowserUseOncoreSaveDraftMigrationInput): void {
@@ -108,6 +159,65 @@ function assertMigrationInput(input: BrowserUseOncoreSaveDraftMigrationInput): v
 }
 
 /**
+ * Build the read-only Oncore timesheet diagnosis flow.
+ *
+ * Result containment remains owned by the reviewed action registry. The bound
+ * action emits only row count, state, submit availability, and a match sentinel.
+ *
+ * @param input - Exact origin, source lineage, and reviewed action identity
+ * @returns One canonical diagnosis runbook plus its migrated source edge
+ * @throws {Error} When origin, digest, or source-lineage invariants are invalid
+ */
+export function buildOncoreTimesheetDiagnosisMigration(
+	input: BrowserUseOncoreTimesheetDiagnosisMigrationInput,
+): BrowserUseOncoreTimesheetDiagnosisMigration {
+	assertDiagnosisMigrationInput(input);
+	return {
+		runbook: {
+			contract: "browser-use.runbook",
+			schema_version: "2",
+			service_id: "oncore",
+			flow_id: "timesheet-diagnose",
+			flow_name: "timesheet-diagnose",
+			version: "2",
+			summary:
+				"Diagnose bounded structural state for the open Oncore timesheet.",
+			allowed_origins: [input.allowedOrigin],
+			auth_context_ref: "oncore-session",
+			inputs: [
+				{
+					id: "timesheet_id",
+					summary: "Exact identifier expected for the open timesheet.",
+					required: true,
+					custody: "sensitive",
+					schema: {
+						kind: "string",
+						min_length: 1,
+						max_length: 128,
+						pattern: "^[A-Za-z0-9._:-]+$",
+					},
+				},
+			],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "action",
+					action_id: "oncore-diagnose-timesheet",
+					expected_digest: input.actionDigest,
+					inputs: { timesheet_id: "{{timesheet_id}}" },
+				},
+			],
+		},
+		provenance: [
+			{
+				source_relative_path: input.sourceRelativePath,
+				disposition: "migrated",
+			},
+		],
+	};
+}
+
+/**
  * Build the single staged Oncore fill/save-draft flow and reconcile its sources.
  *
  * The builder owns only declarative orchestration and provenance. Exact action
@@ -145,51 +255,18 @@ export function buildOncoreSaveDraftMigration(
 		flow_id: "fill-timesheet",
 		flow_name: "fill-timesheet",
 		version: "2",
-		summary: "Reconcile rows, fill checkpointed entries, and preserve a controlled draft.",
+		summary:
+			"Prepare and verify human-authored Oncore entries as a draft; final Submit stays human-controlled.",
 		allowed_origins: [input.allowedOrigin],
 		auth_context_ref: "oncore-session",
 		inputs: [
 			{
-				id: "item_keys",
-				summary: "Ordered stable keys for the entries to reconcile and fill.",
+				id: "timesheet_run",
+				summary:
+					"Shared run envelope plus the Oncore timesheet, rate, unit, and client-state payload.",
 				required: true,
 				custody: "sensitive",
-				schema: {
-					kind: "array",
-					min_items: 1,
-					max_items: 31,
-					items: {
-						kind: "string",
-						min_length: 1,
-						max_length: 128,
-						pattern: "^[A-Za-z0-9._:-]+$",
-					},
-				},
-			},
-			{
-				id: "entries",
-				summary: "Expected draft rows keyed to the ordered checkpoint sequence.",
-				required: true,
-				custody: "sensitive",
-				schema: {
-					kind: "array",
-					min_items: 1,
-					max_items: 31,
-					items: {
-						kind: "object",
-						fields: {
-							item_key: {
-								required: true,
-								schema: { kind: "string", min_length: 1, max_length: 128 },
-							},
-							date: { required: true, schema: { kind: "date" } },
-							units: {
-								required: true,
-								schema: { kind: "number", minimum: 0, maximum: 24 },
-							},
-						},
-					},
-				},
+				schema: BROWSER_USE_ONCORE_TIMESHEET_RUN_SCHEMA,
 			},
 		],
 		steps: [
@@ -198,16 +275,20 @@ export function buildOncoreSaveDraftMigration(
 				kind: "action",
 				action_id: "oncore-reconcile-rows",
 				expected_digest: input.actionDigests.reconcileRows,
-				inputs: { entries: "{{entries}}" },
+				inputs: {
+					entries: "{{timesheet_run.payload.entries}}",
+				},
 			},
 			{
 				kind: "iterate",
-				over_input: "item_keys",
+				over_input: "timesheet_run.payload.item_keys",
 				step: {
 					kind: "action",
 					action_id: "oncore-fill-entry",
 					expected_digest: input.actionDigests.fillEntry,
-					inputs: { entries: "{{entries}}" },
+					inputs: {
+						entries: "{{timesheet_run.payload.entries}}",
+					},
 				},
 			},
 			{ kind: "snapshot", interactive: false },
@@ -228,14 +309,16 @@ export function buildOncoreSaveDraftMigration(
 				action_id: "oncore-verify-draft",
 				expected_digest: input.actionDigests.verifyDraft,
 				inputs: {
-					item_keys: "{{item_keys}}",
-					entries: "{{entries}}",
+					item_keys: "{{timesheet_run.payload.item_keys}}",
+					entries: "{{timesheet_run.payload.entries}}",
 				},
 			},
 		],
 	};
 	return {
 		runbook,
+		legacy_action_digests: { ...input.actionDigests },
+		activation_blocker: ONCORE_SPLIT_CADENCE_BLOCKER,
 		provenance: [
 			{
 				source_relative_path: input.activeSourceRelativePath,

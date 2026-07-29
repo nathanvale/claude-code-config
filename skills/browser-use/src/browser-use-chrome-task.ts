@@ -41,11 +41,12 @@ import {
 	type EnvelopeAdapterCall,
 	runEnvelopeAdapterCall,
 } from "./browser-use-transport";
+import { isExactLiveCleanHandoffProof } from "./browser-connect-profile-posture";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { SAFE_RUN_ID } from "./browser-use-identifiers";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
-const HANDOFF_SCHEMA_VERSION = "2";
+const HANDOFF_SCHEMA_VERSION = "3";
 const SAFE_INSIGHT_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
@@ -545,13 +546,14 @@ function validateTask(
 		task.handoff.attachment.route !== "explicit-cdp" ||
 		task.handoff.browser_entry_mode !== "explicit-cdp" ||
 		task.handoff.proof.route_evidence !== "verified-live" ||
+		!isExactLiveCleanHandoffProof(task.handoff) ||
 		task.handoff.attachment.probe_executable.length === 0 ||
 		task.handoff.endpoint.http.length === 0
 	) {
 		return failure(
 			"chrome_task_handoff_invalid",
 			"not-achieved",
-			"Chrome DevTools MCP execution requires a schema-2 verified-live Browser Connect handoff for the chrome-devtools-mcp lane.",
+			"Chrome DevTools MCP execution requires a schema-3 verified-live Browser Connect handoff with live-clean profile posture for the chrome-devtools-mcp lane.",
 		);
 	}
 	if (

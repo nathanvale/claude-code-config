@@ -238,6 +238,77 @@ describe("U1 target discovery — handoff-bound mode", () => {
 		});
 	});
 
+	for (const scenario of [
+		{
+			name: "missing",
+			mutate: (envelope: Record<string, any>) => {
+				delete envelope.data.proof.profile_posture;
+			},
+		},
+		{
+			name: "configuration-only",
+			mutate: (envelope: Record<string, any>) => {
+				envelope.data.proof.profile_posture = {
+					state: "configuration-only",
+					disk: envelope.data.proof.profile_posture.disk,
+					process: envelope.data.proof.profile_posture.process,
+					effective: { observation: "not-observed" },
+				};
+			},
+		},
+		{
+			name: "unknown-key",
+			mutate: (envelope: Record<string, any>) => {
+				envelope.data.proof.profile_posture.untrusted_extension = true;
+			},
+		},
+		{
+			name: "observer-port-mismatch",
+			mutate: (envelope: Record<string, any>) => {
+				envelope.data.proof.profile_posture.effective.observer.port = "9444";
+			},
+		},
+		{
+			name: "foreign-environment-contract",
+			mutate: (envelope: Record<string, any>) => {
+				envelope.data.proof.environment_contract_id = "foreign.contract";
+			},
+		},
+		{
+			name: "foreign-environment-schema",
+			mutate: (envelope: Record<string, any>) => {
+				envelope.data.proof.environment_schema_version = "999";
+			},
+		},
+	] as const) {
+		test(`${scenario.name} profile posture is rejected before adapter dispatch`, async () => {
+			const { runtime, calls } = discoveryRuntime({
+				files: {
+					"/h.json": verifiedHandoffEnvelope(scenario.mutate),
+				},
+			});
+
+			const result = await runForTest(
+				[
+					"targets",
+					"list",
+					"--mode",
+					"handoff-bound",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_discovery_handoff_invalid",
+			});
+			expect(calls).toEqual([]);
+		});
+	}
+
 	test("a superseded schema-1 envelope fails closed (KTD13 atomic pin bump)", async () => {
 		// The exact old-consumer shape: schema_version "1" with no environment
 		// profile — a stale browser-connect build. The pin rejects it before any
