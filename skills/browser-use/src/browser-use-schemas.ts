@@ -23,6 +23,20 @@ import {
 	stringField,
 } from "./browser-use-core";
 import {
+	activationPendingProblem,
+	corpusGenerationCandidateProblem,
+	corpusGenerationManifestProblem,
+	generationEffectFenceProblem,
+	generationProblem,
+} from "./browser-use-generation-schemas";
+import type {
+	BrowserUseActivationPendingPayload,
+	BrowserUseCorpusGenerationCandidatePayload,
+	BrowserUseCorpusGenerationManifestPayload,
+	BrowserUseGenerationEffectFencePayload,
+	BrowserUseGenerationPayload,
+} from "./browser-use-generation-schemas";
+import {
 	type BrowserUseArtifactRetentionClass,
 	type BrowserUseRunIssueCode,
 	type BrowserUseRunReceipt,
@@ -41,6 +55,26 @@ import {
 } from "./browser-use-auth-model";
 import type { BrowserAdapterId } from "./discovery-model";
 
+export {
+	BROWSER_USE_CORPUS_TARGET_ACTIVATIONS,
+	BROWSER_USE_GENERATION_EFFECT_KINDS,
+} from "./browser-use-generation-schemas";
+export type {
+	BrowserUseActivationPendingPayload,
+	BrowserUseCorpusGenerationActionRef,
+	BrowserUseCorpusGenerationAuthCandidateRef,
+	BrowserUseCorpusGenerationAuthRouteRef,
+	BrowserUseCorpusGenerationCandidatePayload,
+	BrowserUseCorpusGenerationIdentity,
+	BrowserUseCorpusGenerationManifestPayload,
+	BrowserUseCorpusGenerationProofRef,
+	BrowserUseCorpusGenerationTarget,
+	BrowserUseCorpusTargetActivation,
+	BrowserUseGenerationEffectFencePayload,
+	BrowserUseGenerationEffectKind,
+	BrowserUseGenerationPayload,
+} from "./browser-use-generation-schemas";
+
 // --- Record envelope (R10) ---------------------------------------------------
 
 /**
@@ -52,6 +86,10 @@ export const BROWSER_USE_DURABLE_RECORD_KINDS = [
 	"run-lease",
 	"activation-epoch",
 	"generation",
+	"corpus-generation-candidate",
+	"corpus-generation-manifest",
+	"generation-effect-fence",
+	"activation-pending",
 	"source-snapshot",
 	"artifact-manifest",
 	"tombstone",
@@ -121,15 +159,6 @@ export type BrowserUseLeasePayload = {
 
 /** Activation-epoch record (R27). The epoch starts at 1 and only advances. */
 export type BrowserUseActivationEpochPayload = { epoch: number };
-
-/** Immutable corpus generation record (R29 substrate; activation lands in U3). */
-export type BrowserUseGenerationPayload = {
-	generation_id: string;
-	/** sha256 over sorted (relPath, fileHash) pairs. */
-	content_hash: string;
-	status: "staged" | "active" | "retired";
-	staged_at_epoch_ms: number;
-};
 
 /** Source snapshot record (R14 fields, consumed by U3). */
 export type BrowserUseSourceSnapshotPayload = {
@@ -202,6 +231,10 @@ type BrowserUseDurablePayloadMap = {
 	"run-lease": BrowserUseLeasePayload;
 	"activation-epoch": BrowserUseActivationEpochPayload;
 	generation: BrowserUseGenerationPayload;
+	"corpus-generation-candidate": BrowserUseCorpusGenerationCandidatePayload;
+	"corpus-generation-manifest": BrowserUseCorpusGenerationManifestPayload;
+	"generation-effect-fence": BrowserUseGenerationEffectFencePayload;
+	"activation-pending": BrowserUseActivationPendingPayload;
 	"source-snapshot": BrowserUseSourceSnapshotPayload;
 	"artifact-manifest": BrowserUseArtifactManifestPayload;
 	tombstone: BrowserUseTombstonePayload;
@@ -590,6 +623,10 @@ const PAYLOAD_PROBLEMS: Record<
 	"run-lease": leaseProblem,
 	"activation-epoch": activationEpochProblem,
 	generation: generationProblem,
+	"corpus-generation-candidate": corpusGenerationCandidateProblem,
+	"corpus-generation-manifest": corpusGenerationManifestProblem,
+	"generation-effect-fence": generationEffectFenceProblem,
+	"activation-pending": activationPendingProblem,
 	"source-snapshot": snapshotProblem,
 	"artifact-manifest": manifestProblem,
 	tombstone: tombstoneProblem,
@@ -828,25 +865,6 @@ function activationEpochProblem(value: unknown): string | undefined {
 	}
 	if (!isPositiveInteger(value.epoch)) {
 		return "payload.epoch must be an integer >= 1.";
-	}
-	return undefined;
-}
-
-const GENERATION_STATUSES = ["staged", "active", "retired"] as const;
-
-function generationProblem(value: unknown): string | undefined {
-	if (!isJsonObject(value)) return "generation payload must be a JSON object.";
-	if (stringField(value.generation_id) === undefined) {
-		return "payload.generation_id must be a non-empty string.";
-	}
-	if (stringField(value.content_hash) === undefined) {
-		return "payload.content_hash must be a non-empty string.";
-	}
-	if (!(GENERATION_STATUSES as readonly unknown[]).includes(value.status)) {
-		return "payload.status must be staged, active, or retired.";
-	}
-	if (!isNonNegativeNumber(value.staged_at_epoch_ms)) {
-		return "payload.staged_at_epoch_ms must be a non-negative number.";
 	}
 	return undefined;
 }

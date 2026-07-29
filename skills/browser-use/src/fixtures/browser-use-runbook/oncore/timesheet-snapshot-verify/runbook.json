@@ -13,6 +13,7 @@
       "id": "week_ending",
       "summary": "ISO week-ending date the verification targets.",
       "required": false,
+      "custody": "ordinary",
       "schema": { "kind": "date" }
     }
   ],

@@ -1,131 +1,280 @@
 #!/usr/bin/env bun
 
-import { chmod, cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+	chmod,
+	cp,
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	rm,
+} from "node:fs/promises";
 import { basename, join, relative } from "node:path";
+import {
+	type BrowserUseCatalogDigestPort,
+	shippedCatalogDigestFromFiles,
+	shippedCatalogFiles,
+} from "./browser-use-catalog-digest";
+import {
+	parseRunbookRecord,
+	validateRunbook,
+} from "./browser-use-runbook-model";
 
-const skillRoot = join(import.meta.dir, "..");
-const distRoot = join(skillRoot, "dist");
-// The shipped runbook catalog. Published tarballs include only `dist/` (see
-// package.json `files`), and the packaged bin runs from `dist/browser-use.js`,
-// so the shipped catalog must travel INSIDE dist as `dist/runbooks/` — a
-// sibling `<skill>/runbooks/` exists only in the repo checkout, never in an
-// install. `shippedRunbooksRoot()` (browser-use-runbook.ts) probes the
-// dist-adjacent copy first, then the repo-local `../runbooks` fallback.
-const shippedRunbooksSource = join(skillRoot, "runbooks");
-const shippedRunbooksDist = join(distRoot, "runbooks");
-const entrypoints = [
-	"browser-use.ts",
-].map((entrypoint) => join(import.meta.dir, entrypoint));
-const expectedDistFiles = new Set(
-	entrypoints.map((entrypoint) => `${basename(entrypoint, ".ts")}.js`),
-);
+const defaultSkillRoot = join(import.meta.dir, "..");
+const SHIPPED_RUNBOOK_PATH =
+	/^([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/runbook\.json$/;
 
-await rm(distRoot, { recursive: true, force: true });
-await mkdir(distRoot, { recursive: true });
+const nodeCatalogPort: BrowserUseCatalogDigestPort = {
+	async lstat(path) {
+		try {
+			const stats = await lstat(path);
+			return {
+				kind: stats.isFile()
+					? "file"
+					: stats.isDirectory()
+						? "directory"
+						: stats.isSymbolicLink()
+							? "symlink"
+							: "other",
+			};
+		} catch (error) {
+			const code = (error as { code?: string }).code;
+			if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+			throw error;
+		}
+	},
+	async readDirectory(path) {
+		return await readdir(path);
+	},
+	async hashFile(path) {
+		return createHash("sha256").update(await readFile(path)).digest("hex");
+	},
+};
 
-const build = await Bun.build({
-	entrypoints,
-	outdir: distRoot,
-	target: "bun",
-	splitting: false,
-	minify: false,
-	sourcemap: "none",
-	// The internal envelope mint (design brief D4) reaches browser-connect
-	// through a lazy dynamic import. Keep it EXTERNAL: bundling would inline the
-	// private workspace package (and its workspace-only markers) into the public
-	// payload. Repo-local runs resolve it through the workspace; an installation
-	// without the module degrades to the typed "pass --handoff" failure the
-	// runtime seam already owns.
-	external: ["@side-quest/browser-connect/cli"],
-});
+/**
+ * Result of validating one complete shipped Browser Runbook catalog.
+ */
+export type ShippedRunbookCatalogValidation = {
+	/** Deterministic digest over every shipped file path and exact byte hash. */
+	digest: string;
+	/** Number of validated runbooks in the catalog. */
+	runbookCount: number;
+	/** Sorted catalog-relative runbook paths bound by the digest. */
+	relativePaths: readonly string[];
+};
 
-if (!build.success) {
-	for (const log of build.logs) {
-		console.error(log);
+/**
+ * Validate every file in a shipped catalog against the Browser Runbook model.
+ *
+ * The catalog is closed: each regular file must occupy the exact
+ * `<service>/<flow>/runbook.json` path, its declared ids must match that path,
+ * and the complete parsed record must pass v2 model validation.
+ *
+ * @param catalogRoot - Filesystem root containing shipped runbooks
+ * @returns Validated count, sorted paths, and deterministic catalog digest
+ * @throws When the root is empty, contains a non-runbook entry, or any runbook
+ * fails parsing, model validation, or path identity
+ *
+ * @example
+ * ```typescript
+ * const proof = await validateShippedRunbookCatalog("./runbooks");
+ * ```
+ */
+export async function validateShippedRunbookCatalog(
+	catalogRoot: string,
+): Promise<ShippedRunbookCatalogValidation> {
+	const files = await shippedCatalogFiles(catalogRoot, nodeCatalogPort);
+	if (files.length === 0) {
+		throw new Error("Shipped runbook catalog is empty.");
 	}
-	process.exit(1);
+
+	for (const { relativePath } of files) {
+		const pathMatch = SHIPPED_RUNBOOK_PATH.exec(relativePath);
+		if (pathMatch === null) {
+			throw new Error(
+				`Unexpected shipped catalog file ${relativePath}; expected <service>/<flow>/runbook.json.`,
+			);
+		}
+		const [, serviceId, flowId] = pathMatch;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(
+				await readFile(
+					join(catalogRoot, ...relativePath.split("/")),
+					"utf8",
+				),
+			);
+		} catch {
+			throw new Error(
+				`Invalid shipped runbook ${relativePath}: runbook_record_corrupt.`,
+			);
+		}
+		const shaped = parseRunbookRecord(parsed);
+		if (!shaped.ok) {
+			throw new Error(
+				`Invalid shipped runbook ${relativePath}: ${shaped.issue.code}.`,
+			);
+		}
+		const issues = validateRunbook(shaped.runbook);
+		if (issues.length > 0) {
+			throw new Error(
+				`Invalid shipped runbook ${relativePath}: ${issues
+					.map(({ code }) => code)
+					.join(",")}.`,
+			);
+		}
+		if (
+			shaped.runbook.service_id !== serviceId ||
+			shaped.runbook.flow_id !== flowId
+		) {
+			throw new Error(
+				`Invalid shipped runbook ${relativePath}: declared service_id/flow_id must match its catalog path.`,
+			);
+		}
+	}
+
+	return {
+		digest: shippedCatalogDigestFromFiles(files),
+		runbookCount: files.length,
+		relativePaths: files.map(({ relativePath }) => relativePath),
+	};
 }
 
-// Copy the shipped runbook catalog into dist so it travels with the packaged
-// bin. Fail closed if the source is missing — a build that dropped the seed
-// catalog would ship a `browser-use` whose `runbook list` is silently empty.
-const shippedSourceStat = await stat(shippedRunbooksSource).catch(() => null);
-if (shippedSourceStat === null || !shippedSourceStat.isDirectory()) {
-	throw new Error(
-		`Shipped runbook catalog missing at ${relative(skillRoot, shippedRunbooksSource)}; expected a directory to copy into dist.`,
+/**
+ * Optional roots and logger for the Browser Use dist build.
+ */
+export type BrowserUseDistBuildOptions = {
+	/** Source package root. @defaultValue the parent of this source directory */
+	skillRoot?: string;
+	/** Output directory. @defaultValue `<skillRoot>/dist` */
+	distRoot?: string;
+	/** Build receipt logger. @defaultValue `console.log` */
+	log?: (message: string) => void;
+};
+
+/**
+ * Build and prove the complete Browser Use package payload.
+ *
+ * Validates the source catalog before copying it, rebuilds the executable,
+ * validates the copied dist catalog, and requires source/dist catalog digests
+ * to match exactly.
+ *
+ * @param options - Optional source root, output root, and receipt logger
+ * @returns Dist root plus the shipped catalog closure proof
+ * @throws When bundling or any package-closure check fails
+ *
+ * @example
+ * ```typescript
+ * const proof = await buildBrowserUseDist({ distRoot: "/tmp/package/dist" });
+ * ```
+ */
+export async function buildBrowserUseDist(
+	options: BrowserUseDistBuildOptions = {},
+): Promise<ShippedRunbookCatalogValidation & { distRoot: string }> {
+	const skillRoot = options.skillRoot ?? defaultSkillRoot;
+	const distRoot = options.distRoot ?? join(skillRoot, "dist");
+	const log = options.log ?? console.log;
+	const shippedRunbooksSource = join(skillRoot, "runbooks");
+	const shippedRunbooksDist = join(distRoot, "runbooks");
+	const entrypoints = ["browser-use.ts"].map((entrypoint) =>
+		join(skillRoot, "src", entrypoint),
 	);
-}
-await cp(shippedRunbooksSource, shippedRunbooksDist, { recursive: true });
+	const expectedDistFiles = new Set(
+		entrypoints.map(
+			(entrypoint) => `${basename(entrypoint, ".ts")}.js`,
+		),
+	);
 
-await verifyDist();
+	const sourceCatalog = await validateShippedRunbookCatalog(
+		shippedRunbooksSource,
+	);
 
-async function verifyDist(): Promise<void> {
-	// The compiled entrypoints plus the copied shipped-runbook catalog directory.
-	const SHIPPED_RUNBOOKS_DIRNAME = "runbooks";
+	await rm(distRoot, { recursive: true, force: true });
+	await mkdir(distRoot, { recursive: true });
+
+	const build = await Bun.build({
+		entrypoints,
+		outdir: distRoot,
+		target: "bun",
+		splitting: false,
+		minify: false,
+		sourcemap: "none",
+		// Keep the private workspace package outside the public bundle. An
+		// installation without it degrades through the typed handoff route.
+		external: ["@side-quest/browser-connect/cli"],
+	});
+
+	if (!build.success) {
+		throw new Error(
+			`Browser Use dist bundle failed:\n${build.logs.map(String).join("\n")}`,
+		);
+	}
+
+	await cp(shippedRunbooksSource, shippedRunbooksDist, {
+		recursive: true,
+	});
+	const distCatalog = await validateShippedRunbookCatalog(
+		shippedRunbooksDist,
+	);
+	if (distCatalog.digest !== sourceCatalog.digest) {
+		throw new Error(
+			`Shipped runbook catalog digest changed during dist copy. source=${sourceCatalog.digest} dist=${distCatalog.digest}`,
+		);
+	}
+
 	const distEntries = await readdir(distRoot);
 	const unexpected = distEntries.filter(
-		(entry) =>
-			!expectedDistFiles.has(entry) && entry !== SHIPPED_RUNBOOKS_DIRNAME,
+		(entry) => !expectedDistFiles.has(entry) && entry !== "runbooks",
 	);
 	const missing = [...expectedDistFiles].filter(
 		(entry) => !distEntries.includes(entry),
 	);
-	if (!distEntries.includes(SHIPPED_RUNBOOKS_DIRNAME)) {
-		missing.push(SHIPPED_RUNBOOKS_DIRNAME);
-	}
-
+	if (!distEntries.includes("runbooks")) missing.push("runbooks");
 	if (missing.length > 0 || unexpected.length > 0) {
 		throw new Error(
 			`Unexpected browser-use dist payload. missing=${missing.join(",") || "none"} unexpected=${unexpected.join(",") || "none"}`,
 		);
 	}
 
-	// Prove the copied catalog actually carries the shipped seed runbook, so a
-	// packaged `runbook list` finds it rather than scanning an empty directory.
-	const seedRunbook = join(
-		shippedRunbooksDist,
-		"oncore",
-		"timesheet-snapshot-verify",
-		"runbook.json",
-	);
-	const seedStat = await stat(seedRunbook).catch(() => null);
-	if (seedStat === null || !seedStat.isFile()) {
-		throw new Error(
-			`Shipped seed runbook missing from dist at ${relative(skillRoot, seedRunbook)}.`,
-		);
-	}
-
 	for (const entry of distEntries) {
-		if (entry === SHIPPED_RUNBOOKS_DIRNAME) continue;
+		if (entry === "runbooks") continue;
 		const distPath = join(distRoot, entry);
-		const stats = await stat(distPath);
-
+		const stats = await lstat(distPath);
 		if (!stats.isFile()) {
 			throw new Error(`Dist payload entry is not a file: ${entry}`);
 		}
-
 		const text = await readFile(distPath, "utf8");
 		const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
-
 		if (firstLine !== "#!/usr/bin/env bun") {
 			throw new Error(`${entry} must keep a Bun shebang.`);
 		}
-
 		if (
 			text.includes("@side-quest/cli-command-facade") ||
 			text.includes("bun:test") ||
 			text.includes(".test.ts") ||
 			text.includes("/fixtures/")
 		) {
-			throw new Error(`${entry} includes source-only test, fixture, or workspace markers.`);
+			throw new Error(
+				`${entry} includes source-only test, fixture, or workspace markers.`,
+			);
 		}
-
 		await chmod(distPath, 0o755);
 	}
 
-	console.log(
+	log(
 		`Built browser-use dist: ${[...expectedDistFiles]
 			.map((entry) => relative(skillRoot, join(distRoot, entry)))
-			.join(", ")}`,
+			.join(", ")} runbooks=${distCatalog.runbookCount} catalog_sha256=${distCatalog.digest}`,
 	);
+	return { ...distCatalog, distRoot };
+}
+
+if (import.meta.main) {
+	try {
+		await buildBrowserUseDist();
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	}
 }

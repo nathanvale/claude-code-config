@@ -1,11 +1,18 @@
-// Clean-break migration engine. Inventory freezes the source snapshot before
-// later phases may assign dispositions or stage outputs. All five public
-// commands read and write BrowserUseMigrationState; activation is outside this
-// module and remains unchanged until U7.
+// Clean-break migration phase engine. Inventory freezes the source snapshot
+// before later phases may assign dispositions or stage outputs. This module
+// owns phase-state persistence and delegates generation authority to the plain
+// activation owner.
 
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 import { redactUnsafeText } from "./browser-use-core";
+import {
+	activateBrowserUseGeneration,
+	projectActiveGenerationStatus,
+	type BrowserUseGenerationCandidateClosureRead,
+	validateBrowserUseGenerationCandidateClosure,
+	validateBrowserUseGenerationCandidateForMigrationState,
+} from "./browser-use-generation-activation";
 import { BROWSER_USE_ARTIFACT_CLASSES } from "./browser-use-migration-model";
 import type {
 	BrowserUseArtifactClass,
@@ -14,18 +21,45 @@ import type {
 	BrowserUseMigrationDisposition,
 	BrowserUseMigrationFailure,
 	BrowserUseMigrationState,
+	BrowserUseMigrationStatus,
 } from "./browser-use-migration-model";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
-import type { BrowserUseSourceSnapshotPayload } from "./browser-use-schemas";
+import type {
+	BrowserUseCorpusGenerationCandidatePayload,
+	BrowserUseSourceSnapshotPayload,
+} from "./browser-use-schemas";
 import type { RetentionDeps } from "./browser-use-retention";
 import {
 	generationFilePath,
 	stageGeneration,
+	type StageGenerationFile,
 	writeSourceSnapshot,
 } from "./browser-use-retention";
-import { readDurableFile, writeDurableFile } from "./browser-use-store";
+import {
+	readDurableFile,
+	replaceDurableFileIfUnchanged,
+	withExclusiveFileLock,
+	writeDurableFile,
+} from "./browser-use-store";
 
 const MIGRATION_STATE_FILE = "migration-state.json";
+const MIGRATION_OWNER_LOCK_FILE = "migration-owner.lock";
+const MIGRATION_OWNER_LOCK_STALE_AFTER_MS = 30 * 60 * 1_000;
+
+export {
+	CORPUS_GENERATION_CANDIDATE_MANIFEST_PATH,
+	readActiveCorpusManifest,
+	readRetainedCorpusGenerationManifest,
+	tripActiveGenerationEffectFence,
+	validateBrowserUseGenerationCandidateClosure,
+	validateBrowserUseGenerationCandidateForMigrationState,
+} from "./browser-use-generation-activation";
+export type {
+	BrowserUseActiveCorpusManifestRead,
+	BrowserUseGenerationCandidateClosureRead,
+	BrowserUseRetainedCorpusGenerationRead,
+} from "./browser-use-generation-activation";
+
 const CORPUS_CENSUS_FIELDS = [
 	"formal_artifacts",
 	"target_flows",
@@ -48,6 +82,26 @@ function migrationFailure(
 
 function migrationStatePath(deps: RetentionDeps): string {
 	return join(deps.paths.state.migrationsDir, MIGRATION_STATE_FILE);
+}
+
+function migrationOwnerLockPath(deps: RetentionDeps): string {
+	return join(deps.paths.runtime.locksDir, MIGRATION_OWNER_LOCK_FILE);
+}
+
+function durableMigrationState(
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+): BrowserUseMigrationState {
+	if ("active_generation" in state) {
+		const { active_generation: _projection, ...durable } = state;
+		return durable;
+	}
+	return state;
+}
+
+function encodeMigrationState(
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+): string {
+	return `${JSON.stringify(durableMigrationState(state), null, 2)}\n`;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -85,20 +139,87 @@ function isCanonicalTarget(value: unknown): value is BrowserUseCanonicalTarget {
 
 async function writeMigrationState(
 	deps: RetentionDeps,
-	state: BrowserUseMigrationState,
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	const durableState = durableMigrationState(state);
 	await deps.fs.mkdir(deps.paths.state.migrationsDir, {
 		recursive: true,
 		mode: 0o700,
 	});
 	const written = await writeDurableFile(deps.fs, {
 		path: migrationStatePath(deps),
-		contents: `${JSON.stringify(state, null, 2)}\n`,
+		contents: encodeMigrationState(durableState),
 	});
 	if (!written.ok) {
 		return migrationFailure("store_flush_failed", written.failure.message);
 	}
-	return { ok: true, state };
+	return { ok: true, state: durableState };
+}
+
+async function writeMigrationStateIfUnchanged(
+	deps: RetentionDeps,
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+	expectedRaw: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	const durableState = durableMigrationState(state);
+	const written = await replaceDurableFileIfUnchanged(deps.fs, {
+		path: migrationStatePath(deps),
+		expectedRaw,
+		contents: encodeMigrationState(durableState),
+	});
+	if (!written.ok) {
+		return migrationFailure(
+			written.failure.code === "store_record_conflict" ||
+				written.failure.code === "store_record_missing"
+				? "migration_activation_conflict"
+				: written.failure.code === "store_record_corrupt"
+					? "migration_state_corrupt"
+					: "store_flush_failed",
+			written.failure.message,
+		);
+	}
+	return { ok: true, state: durableState };
+}
+
+async function withMigrationOwnerLock<
+	T extends { ok: true } | BrowserUseMigrationFailure,
+>(
+	deps: RetentionDeps,
+	holderId: string,
+	body: () => Promise<T>,
+): Promise<T | BrowserUseMigrationFailure> {
+	try {
+		await deps.fs.mkdir(deps.paths.runtime.locksDir, {
+			recursive: true,
+			mode: 0o700,
+		});
+	} catch {
+		return migrationFailure(
+			"store_flush_failed",
+			"migration owner lock directory could not be created.",
+		);
+	}
+	const outcome = await withExclusiveFileLock<T>(
+		deps.fs,
+		{
+			lockPath: migrationOwnerLockPath(deps),
+			holderId,
+			staleAfterMs: MIGRATION_OWNER_LOCK_STALE_AFTER_MS,
+			clock: deps.clock,
+		},
+		body,
+	);
+	if (!outcome.ok && "failure" in outcome) {
+		return migrationFailure(
+			outcome.failure.code === "store_lock_contended"
+				? "store_lock_contended"
+				: "store_flush_failed",
+			outcome.failure.message,
+		);
+	}
+	return outcome;
 }
 
 async function inventoryEntries(
@@ -179,12 +300,27 @@ export async function inventoryBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-inventory",
+		async () => await inventoryBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function inventoryBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	if (!isAbsolute(sourceRoot)) {
 		return migrationFailure(
 			"migration_source_invalid",
 			"migration source must be an absolute path.",
 		);
 	}
+	const standing = await readBrowserUseMigrationStatus(deps);
+	if (!standing.ok) return standing;
 	const normalizedRoot = normalize(sourceRoot);
 	const inventoried = await inventoryEntries(deps.fs, normalizedRoot);
 	if (!inventoried.ok) return inventoried;
@@ -221,7 +357,7 @@ export async function inventoryBrowserUseMigration(
 		canonical_targets: [],
 		staged_generation: null,
 		last_apply_verified_noop: null,
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
 	};
 	return await writeMigrationState(deps, state);
 }
@@ -239,9 +375,11 @@ export async function inventoryBrowserUseMigration(
  */
 export async function readBrowserUseMigrationStatus(
 	deps: RetentionDeps,
-): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+): Promise<{ ok: true; state: BrowserUseMigrationStatus } | BrowserUseMigrationFailure> {
 	const read = await readDurableFile(deps.fs, migrationStatePath(deps));
 	if (read.status === "missing") {
+		const projected = await projectActiveGenerationStatus(deps, "unchanged");
+		if (!projected.ok) return projected;
 		return {
 			ok: true,
 			state: {
@@ -258,7 +396,11 @@ export async function readBrowserUseMigrationStatus(
 				canonical_targets: [],
 				staged_generation: null,
 				last_apply_verified_noop: null,
-				activation_state: "unchanged",
+				activation_state:
+					projected.activeGeneration.current === null
+						? "unchanged"
+						: "active",
+				active_generation: projected.activeGeneration,
 			},
 		};
 	}
@@ -279,14 +421,30 @@ export async function readBrowserUseMigrationStatus(
 			!("corpus_census" in state) ||
 			(state.corpus_census !== null && !isCorpusCensus(state.corpus_census)) ||
 			!state.canonical_targets.every(isCanonicalTarget) ||
-			state.activation_state !== "unchanged"
+			(state.activation_state !== "unchanged" &&
+				state.activation_state !== "active")
 		) {
 			return migrationFailure(
 				"migration_state_corrupt",
 				"migration state does not match schema version 2.",
 			);
 		}
-		return { ok: true, state };
+		const projected = await projectActiveGenerationStatus(
+			deps,
+			state.activation_state,
+		);
+		if (!projected.ok) return projected;
+		return {
+			ok: true,
+			state: {
+				...state,
+				activation_state:
+					projected.activeGeneration.current === null
+						? "unchanged"
+						: "active",
+				active_generation: projected.activeGeneration,
+			},
+		};
 	} catch {
 		return migrationFailure(
 			"migration_state_corrupt",
@@ -702,6 +860,25 @@ export async function planBrowserUseMigration(
 	sourceRoot: string,
 	expectedCensus?: BrowserUseCorpusCensus,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-plan",
+		async () =>
+			await planBrowserUseMigrationUnderLock(
+				deps,
+				sourceRoot,
+				expectedCensus,
+			),
+	);
+}
+
+async function planBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+	expectedCensus?: BrowserUseCorpusCensus,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	if (!isAbsolute(sourceRoot)) {
 		return migrationFailure(
 			"migration_source_invalid",
@@ -787,7 +964,7 @@ export async function planBrowserUseMigration(
 		canonical_targets: canonicalTargetsFor(dispositions),
 		staged_generation: null,
 		last_apply_verified_noop: null,
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
 	};
 	return await writeMigrationState(deps, state);
 }
@@ -901,6 +1078,19 @@ export async function applyBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-apply",
+		async () => await applyBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function applyBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	const standing = await readBrowserUseMigrationStatus(deps);
 	if (!standing.ok) return standing;
 	const frozen = await validateFrozenSource(deps, standing.state, sourceRoot);
@@ -965,7 +1155,7 @@ export async function applyBrowserUseMigration(
 		phase: "staged",
 		staged_generation: staged.record.generation_id,
 		last_apply_verified_noop: staged.verified_noop,
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
 	});
 }
 
@@ -985,6 +1175,19 @@ export async function verifyBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-verify",
+		async () => await verifyBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function verifyBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	const standing = await readBrowserUseMigrationStatus(deps);
 	if (!standing.ok) return standing;
 	const frozen = await validateFrozenSource(deps, standing.state, sourceRoot);
@@ -1019,6 +1222,201 @@ export async function verifyBrowserUseMigration(
 	return await writeMigrationState(deps, {
 		...standing.state,
 		phase: "verified",
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
+	});
+}
+
+/**
+ * Adopt one generated candidate into the exact verified migration state.
+ *
+ * The migration owner serializes preflight, immutable staging, closure
+ * validation, and authoritative state adoption. The final exact-byte compare
+ * refuses a non-cooperative state change before the authoritative write.
+ *
+ * @param deps - Admitted migration-store dependencies
+ * @param input - Candidate payload and exact immutable files to stage
+ * @returns Adopted verified state plus committed closure, or one typed refusal
+ *
+ * @example
+ * ```typescript
+ * const adopted = await adoptBrowserUseGenerationCandidate(deps, {
+ *   candidate,
+ *   files,
+ * })
+ * ```
+ */
+export async function adoptBrowserUseGenerationCandidate(
+	deps: RetentionDeps,
+	input: {
+		candidate: BrowserUseCorpusGenerationCandidatePayload;
+		files: readonly StageGenerationFile[];
+	},
+): Promise<
+	| {
+			ok: true;
+			state: BrowserUseMigrationState;
+			closure: Extract<
+				BrowserUseGenerationCandidateClosureRead,
+				{ ok: true }
+			>;
+			verified_noop: boolean;
+	  }
+	| BrowserUseMigrationFailure
+> {
+	return await withMigrationOwnerLock(
+		deps,
+		`migration-adopt-${input.candidate.generation_id}`,
+		async () => {
+			const statePath = migrationStatePath(deps);
+			const before = await readDurableFile(deps.fs, statePath);
+			if (before.status === "missing") {
+				return migrationFailure(
+					"migration_state_missing",
+					"generation adoption requires verified migration state.",
+				);
+			}
+			if (before.status === "unreadable") {
+				return migrationFailure(
+					"migration_state_corrupt",
+					"migration state is unreadable.",
+				);
+			}
+			const standing = await readBrowserUseMigrationStatus(deps);
+			if (!standing.ok) return standing;
+			const preflightState = await readDurableFile(deps.fs, statePath);
+			if (
+				preflightState.status !== "present" ||
+				preflightState.raw !== before.raw
+			) {
+				return migrationFailure(
+					"migration_activation_conflict",
+					"verified migration state changed before candidate preflight.",
+				);
+			}
+			const preflight =
+				await validateBrowserUseGenerationCandidateForMigrationState(
+					deps,
+					input.candidate,
+					standing.state,
+				);
+			if (!preflight.ok) return preflight;
+			let staged: Awaited<ReturnType<typeof stageGeneration>>;
+			try {
+				staged = await stageGeneration(deps, {
+					generationId: input.candidate.generation_id,
+					files: input.files,
+				});
+			} catch {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"generation staging could not be completed safely.",
+				);
+			}
+			if (!staged.ok) {
+				return migrationFailure(
+					staged.code === "retention_collision"
+						? "retention_collision"
+						: staged.code === "store_lock_contended"
+							? "store_lock_contended"
+							: staged.code === "store_record_corrupt"
+								? "migration_generation_corrupt"
+								: "store_flush_failed",
+					staged.message,
+				);
+			}
+			let closure: BrowserUseGenerationCandidateClosureRead;
+			try {
+				closure = await validateBrowserUseGenerationCandidateClosure(
+					deps,
+					input.candidate.generation_id,
+				);
+			} catch {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"staged generation could not be read back safely.",
+				);
+			}
+			if (!closure.ok) return closure;
+			const committedBinding =
+				await validateBrowserUseGenerationCandidateForMigrationState(
+					deps,
+					closure.candidate,
+					standing.state,
+				);
+			if (!committedBinding.ok) return committedBinding;
+			const observed = await readDurableFile(deps.fs, statePath);
+			if (observed.status !== "present" || observed.raw !== before.raw) {
+				return migrationFailure(
+					"migration_activation_conflict",
+					"verified migration state changed before candidate adoption.",
+				);
+			}
+			const adopted = await writeMigrationStateIfUnchanged(
+				deps,
+				{
+					...standing.state,
+					phase: "verified",
+					staged_generation: input.candidate.generation_id,
+					last_apply_verified_noop: staged.verified_noop,
+					activation_state: standing.state.activation_state,
+				},
+				before.raw,
+			);
+			if (!adopted.ok) return adopted;
+			return {
+				ok: true,
+				state: adopted.state,
+				closure,
+				verified_noop: staged.verified_noop,
+			};
+		},
+	);
+}
+
+/**
+ * Activate a complete verified corpus generation through the activation owner.
+ *
+ * Migration retains phase-state loading while the generation owner performs
+ * closure validation and the fenced authority transaction.
+ *
+ * @param deps - Admitted migration-store dependencies
+ * @param input - Optional explicit immediate-prior generation for pre-effect rollback
+ * @returns Activated migration state, or one typed refusal
+ *
+ * @example
+ * ```typescript
+ * const result = await activateBrowserUseMigration(deps, {})
+ * ```
+ */
+export async function activateBrowserUseMigration(
+	deps: RetentionDeps,
+	input: { generationId?: string },
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	return await withMigrationOwnerLock(
+		deps,
+		`migration-activate-${input.generationId ?? "staged"}`,
+		async () => await activateBrowserUseMigrationUnderLock(deps, input),
+	);
+}
+
+async function activateBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	input: { generationId?: string },
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	const standing = await readBrowserUseMigrationStatus(deps);
+	if (!standing.ok) return standing;
+	const activated = await activateBrowserUseGeneration(
+		deps,
+		input,
+		standing.state,
+	);
+	if (!activated.ok) return activated;
+	return await writeMigrationState(deps, {
+		...standing.state,
+		activation_state: "active",
 	});
 }

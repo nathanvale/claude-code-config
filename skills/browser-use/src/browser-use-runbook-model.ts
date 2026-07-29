@@ -294,7 +294,8 @@ export type BrowserUseRunbookStep =
 
 /**
  * One typed input the runbook declares (R9). `required` inputs must be supplied
- * at execution; `schema` is the recursive value schema the supplied value is
+ * at execution; `custody` binds the input id to the public argv or private-file
+ * route; `schema` is the recursive value schema the supplied value is
  * runtime-validated against. Inputs are substituted into `{{id}}` tokens in
  * ordinary fill values only — never into a confidential field.
  */
@@ -302,6 +303,7 @@ export type BrowserUseRunbookInput = {
 	id: string;
 	summary: string;
 	required: boolean;
+	custody: "ordinary" | "sensitive";
 	schema: BrowserUseRunbookValueSchema;
 };
 
@@ -813,6 +815,12 @@ export function validateRunbook(
 			});
 			continue;
 		}
+		if (input.custody !== "ordinary" && input.custody !== "sensitive") {
+			issues.push({
+				code: "runbook_input_invalid",
+				message: `input ${input.id} must declare ordinary or sensitive custody.`,
+			});
+		}
 		validateValueSchema(input.schema, `input ${input.id}`, 1, issues);
 		inputIds.add(input.id);
 	}
@@ -1206,13 +1214,20 @@ function parseInput(raw: unknown): BrowserUseRunbookInput | undefined {
 	if (
 		typeof raw.id !== "string" ||
 		typeof raw.summary !== "string" ||
-		typeof raw.required !== "boolean"
+		typeof raw.required !== "boolean" ||
+		(raw.custody !== "ordinary" && raw.custody !== "sensitive")
 	) {
 		return undefined;
 	}
 	const schema = parseValueSchema(raw.schema, 1);
 	if (schema === undefined) return undefined;
-	return { id: raw.id, summary: raw.summary, required: raw.required, schema };
+	return {
+		id: raw.id,
+		summary: raw.summary,
+		required: raw.required,
+		custody: raw.custody,
+		schema,
+	};
 }
 
 /**

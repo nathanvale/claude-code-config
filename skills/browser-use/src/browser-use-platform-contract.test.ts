@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { projectCommandDiscoveryTree } from "@side-quest/cli-command-facade";
 import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
@@ -6,6 +8,7 @@ import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
+	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
@@ -13,11 +16,39 @@ import {
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	browserUseContracts,
+	browserUseGenerationFailureActions,
+	browserUseMigrationFailureActions,
 } from "./command-contract";
 import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
+import type { BrowserUseRunbook } from "./browser-use-runbook-model";
 import { renderHelp } from "./browser-use-parser";
+import {
+	type BrowserUsePlatformFs,
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+	resolveBrowserUsePaths,
+} from "./browser-use-paths";
+import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+
+function writeTrackingPlatformFs(): {
+	fs: BrowserUsePlatformFs;
+	writeProbeCount: () => number;
+} {
+	const base = createDefaultPlatformFs();
+	let writeProbes = 0;
+	return {
+		fs: {
+			...base,
+			async writeFile(path, contents, mode) {
+				writeProbes += 1;
+				await base.writeFile(path, contents, mode);
+			},
+		},
+		writeProbeCount: () => writeProbes,
+	};
+}
 
 // =========================================================================
 // Platform command families (platform plan 2026-07-21-002 U1).
@@ -96,6 +127,12 @@ describe("platform family help and discovery", () => {
 			"runbook-show": BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 			"runbook-run": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+			"migration-inventory": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+			"migration-plan": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+			"migration-apply": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+			"migration-verify": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
+			"migration-generate": BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
+			"migration-activate": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 			"repair-apply": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
@@ -131,6 +168,13 @@ describe("platform family help and discovery", () => {
 			"runbook-list",
 			"runbook-show",
 			"runbook-run",
+			"migration-status",
+			"migration-inventory",
+			"migration-plan",
+			"migration-apply",
+			"migration-verify",
+			"migration-generate",
+			"migration-activate",
 			// R27 auth repair commands read the run store when --run binds the
 			// evaluation to a blocked run (auth plan U3a).
 			"auth-enroll-browser-automation-token",
@@ -142,11 +186,230 @@ describe("platform family help and discovery", () => {
 			const discovered = tree.commands[command];
 			expect(discovered?.result_contract?.id).toBe(contractId);
 			expect(discovered?.result_contract?.schema_version).toBe(
-				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ? "2" : "1",
+				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ||
+					contractId === BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID
+					? "2"
+					: "1",
 			);
 			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
 				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,
 			);
+		}
+	});
+
+	test("migration generate discovery describes one activation-ready immutable generation", () => {
+		const help = renderHelp("migration", "migration-generate");
+		expect(help).toContain(
+			"migration generate --source <absolute-candidate-bundle>",
+		);
+		expect(help).toContain("complete activation-ready candidate bundle");
+		expect(help).toContain("Not a legacy corpus root");
+		expect(help).not.toContain("--generation");
+
+		const contract = browserUseContracts["migration-generate"];
+		expect(contract.audience).toBe("agent");
+		expect(contract.sideEffects).toEqual(["check", "write"]);
+		expect(contract.interactivity).toBe("none");
+		expect(contract.outputModes).toEqual(["json", "plain"]);
+		expect(contract.previewExemption?.reason).toContain(
+			"inactive immutable generation",
+		);
+		expect(Object.keys(contract.flags).sort()).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+			"--source",
+		]);
+			expect(typeof contract.exitCodes["0"]).toBe("string");
+			expect(typeof contract.exitCodes["2"]).toBe("string");
+			expect(typeof contract.exitCodes["20"]).toBe("string");
+		expect(
+			contract.actionAffordances?.failure.map((action) => action.id),
+		).toEqual(browserUseGenerationFailureActions.map((action) => action.id));
+
+		const discovered = projectCommandDiscoveryTree(
+			Object.entries(browserUseContracts),
+		).commands["migration-generate"];
+		expect(discovered?.result_contract).toEqual({
+			id: BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
+			kind: expect.stringContaining("generation_id"),
+			schema_version: "1",
+		});
+		expect(discovered?.mutation).toBe("write");
+		expect(discovered?.side_effects).toEqual(["check", "write"]);
+		expect(discovered?.output_modes).toEqual(["json", "plain"]);
+	});
+
+	test("migration activate help advertises generation without source", () => {
+		const help = renderHelp("migration", "migration-activate");
+		expect(help).toContain("migration activate");
+		expect(help).toContain("--generation");
+		expect(help).not.toContain("--source");
+		const discovered = projectCommandDiscoveryTree(
+			Object.entries(browserUseContracts),
+		).commands["migration-activate"];
+		expect(discovered?.mutation).toBe("write");
+		expect(discovered?.side_effects).toEqual(["check", "write"]);
+	});
+
+	test("migration status exposes active-generation fields in discovery, JSON, and plain output", async () => {
+		const xdg = makeTempXdgEnv();
+		try {
+			const runtime = makeRuntime({ env: xdg.env });
+			const discovered = projectCommandDiscoveryTree(
+				Object.entries(browserUseContracts),
+			).commands["migration-status"];
+			expect(discovered?.result_contract?.kind).toContain(
+				"active_generation",
+			);
+
+			const jsonResult = await runForTest(
+				["migration", "status", "--json"],
+				runtime,
+			);
+			expect(jsonResult.exitCode).toBe(0);
+			expect(parseJson(jsonResult.stdout).data).toMatchObject({
+				active_generation: {
+					state: "never-activated",
+					current: null,
+					prior: null,
+					retained: [],
+					activation_epoch: null,
+					pending: "none",
+					effect_fence: "not-applicable",
+				},
+			});
+
+			const plainResult = await runForTest(
+				["migration", "status", "--plain"],
+				runtime,
+			);
+			expect(plainResult.exitCode).toBe(0);
+			expect(plainResult.stdout).toContain(
+				"active_generation_state=never-activated",
+			);
+			expect(plainResult.stdout).toContain("active_generation_current=none");
+			expect(plainResult.stdout).toContain("active_generation_prior=none");
+			expect(plainResult.stdout).toContain("active_generation_retained=none");
+			expect(plainResult.stdout).toContain("activation_epoch=none");
+			expect(plainResult.stdout).toContain("pending_activation=none");
+			expect(plainResult.stdout).toContain(
+				"active_generation_effect_fence=not-applicable",
+			);
+
+			const fs = createDefaultPlatformFs();
+			const opened = await openBrowserUsePaths(fs, xdg.env);
+			if (!opened.ok) throw new Error(opened.refusal.code);
+			await fs.mkdir(opened.paths.state.migrationsDir, {
+				recursive: true,
+				mode: 0o700,
+			});
+			await fs.writeFileDurable(
+				join(opened.paths.state.migrationsDir, "migration-state.json"),
+				'{"contract":',
+				0o600,
+			);
+			const corruptResult = await runForTest(
+				["migration", "status", "--json"],
+				runtime,
+			);
+			expect(corruptResult.exitCode).toBe(20);
+			const corruptEnvelope = parseJson(corruptResult.stdout);
+			expect(corruptEnvelope.error).toMatchObject({
+				code: "migration_state_corrupt",
+				recoverability: "repair_state",
+				retryable: false,
+			});
+			expect(corruptEnvelope.runtime_actions).toMatchObject([
+				{ id: "inspect_migration_state" },
+			]);
+			expect(corruptEnvelope.runtime_actions).toHaveLength(1);
+			expect(corruptEnvelope.continuation).toEqual({
+				next_action_id: "inspect_migration_state",
+			});
+		} finally {
+			xdg.dispose();
+		}
+	});
+
+	test("migration activate dispatches its activation engine and preserves output channels", async () => {
+		const xdg = makeTempXdgEnv();
+		try {
+			const runtime = makeRuntime({ env: xdg.env });
+			const jsonResult = await runForTest(
+				[
+					"migration",
+					"activate",
+					"--generation",
+					"generation-not-staged",
+					"--json",
+				],
+				runtime,
+			);
+			expect(jsonResult.exitCode).toBe(20);
+			expect(jsonResult.stderr).toBe("");
+			const envelope = parseJson(jsonResult.stdout);
+			expect(envelope.data).toMatchObject({ command: "migration-activate" });
+			const error = envelope.error as Record<string, unknown>;
+			expect(error).toMatchObject({
+				code: "migration_not_verified",
+				recoverability: "repair_state",
+				retryable: false,
+			});
+			expect(envelope.runtime_actions).toMatchObject([
+				{ id: "inspect_migration_state" },
+			]);
+			expect(envelope.continuation).toEqual({
+				next_action_id: "inspect_migration_state",
+			});
+			const migrationFailureActionIds = browserUseMigrationFailureActions.map(
+				(action) => action.id,
+			);
+			for (const command of [
+				"migration-status",
+				"migration-inventory",
+				"migration-plan",
+				"migration-apply",
+				"migration-verify",
+				"migration-activate",
+			] as const) {
+				expect(
+					browserUseContracts[command].actionAffordances?.failure.map(
+						(action) => action.id,
+					),
+				).toEqual(migrationFailureActionIds);
+			}
+
+			const plainResult = await runForTest(
+				[
+					"migration",
+					"activate",
+					"--generation",
+					"generation-not-staged",
+					"--plain",
+				],
+				runtime,
+			);
+			expect(plainResult.exitCode).toBe(20);
+			expect(plainResult.stdout).toBe("");
+			expect(plainResult.stderr).toContain(String(error.code));
+			expect(plainResult.stderr).toContain(
+				"action=inspect_migration_state",
+			);
+
+			const defaultTarget = await runForTest(
+				["migration", "activate", "--json"],
+				runtime,
+			);
+			expect(defaultTarget.exitCode).toBe(20);
+			expect(defaultTarget.stderr).toBe("");
+			expect(parseJson(defaultTarget.stdout).error).toMatchObject({
+				code: "migration_not_verified",
+				recoverability: "repair_state",
+				retryable: false,
+			});
+		} finally {
+			xdg.dispose();
 		}
 	});
 });
@@ -349,4 +612,305 @@ describe("platform families reject undeclared flags", () => {
 			});
 		});
 	}
+});
+
+describe("runbook input custody CLI boundary", () => {
+	test("a missing runbook refuses before private-file reads or write admission", async () => {
+		const xdg = makeTempXdgEnv();
+		const resolved = resolveBrowserUsePaths(xdg.env);
+		if (!resolved.ok) throw new Error(resolved.refusal.code);
+		const tracked = writeTrackingPlatformFs();
+		try {
+			const result = await runForTest(
+				[
+					"runbook",
+					"run",
+					"--service",
+					"missing",
+					"--flow",
+					"missing",
+					"--input-file",
+					`payload=${join(
+						resolved.resolution.roots.runtime,
+						"private-inputs",
+						"missing.json",
+					)}`,
+					"--json",
+				],
+				makeRuntime({ env: xdg.env, platformFs: tracked.fs }),
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "runbook_not_found",
+			});
+			expect(tracked.writeProbeCount()).toBe(0);
+			expect(existsSync(resolved.resolution.roots.state)).toBe(false);
+		} finally {
+			xdg.dispose();
+		}
+	});
+
+	async function fixture() {
+		const xdg = makeTempXdgEnv();
+		const runtime = makeRuntime({ env: xdg.env });
+		const fs = createDefaultPlatformFs();
+		const opened = await openBrowserUsePaths(fs, xdg.env);
+		if (!opened.ok) throw new Error(opened.refusal.code);
+		const runbook: BrowserUseRunbook = {
+			contract: "browser-use.runbook",
+			schema_version: "2",
+			service_id: "custody",
+			flow_id: "check",
+			flow_name: "check-input-custody",
+			version: "1",
+			summary: "Check public and private input custody.",
+			allowed_origins: ["https://example.test"],
+			inputs: [
+				{
+					id: "query",
+					summary: "Ordinary query.",
+					required: false,
+					custody: "ordinary",
+					schema: { kind: "string" },
+				},
+				{
+					id: "payload",
+					summary: "Sensitive structured payload.",
+					required: false,
+					custody: "sensitive",
+					schema: {
+						kind: "object",
+						fields: {
+							name: {
+								schema: { kind: "string" },
+								required: true,
+							},
+						},
+					},
+				},
+			],
+			steps: [{ kind: "snapshot", interactive: false }],
+		};
+		const runbookDirectory = join(
+			opened.paths.data.root,
+			"runbooks",
+			runbook.service_id,
+			runbook.flow_id,
+		);
+		await fs.mkdir(runbookDirectory, { recursive: true, mode: 0o700 });
+		await fs.writeFileDurable(
+			join(runbookDirectory, "runbook.json"),
+			`${JSON.stringify(runbook)}\n`,
+			0o600,
+		);
+		const privateRoot = join(
+			opened.paths.resolution.roots.runtime,
+			"private-inputs",
+			);
+			await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
+			const sentinel = "custody-secret-sentinel";
+			const privateQueryPath = join(privateRoot, "query.json");
+			const privatePayloadPath = join(privateRoot, "payload.json");
+			const invalidPrivatePayloadPath = join(
+				privateRoot,
+				"invalid-payload.json",
+			);
+			await fs.writeFileDurable(
+				privateQueryPath,
+				`${JSON.stringify(sentinel)}\n`,
+				0o600,
+			);
+			await fs.writeFileDurable(
+				privatePayloadPath,
+				`${JSON.stringify({ name: sentinel })}\n`,
+				0o600,
+			);
+			await fs.writeFileDurable(
+				invalidPrivatePayloadPath,
+				"{invalid-json\n",
+				0o600,
+			);
+			return {
+				xdg,
+				runtime,
+				opened,
+				sentinel,
+				privateQueryPath,
+				privatePayloadPath,
+				invalidPrivatePayloadPath,
+			};
+		}
+
+	const baseArgv = [
+		"runbook",
+		"run",
+		"--service",
+		"custody",
+		"--flow",
+		"check",
+	] as const;
+
+	for (const scenario of [
+		{
+			name: "sensitive value supplied through public argv",
+			args: (input: Awaited<ReturnType<typeof fixture>>) => [
+				"--input",
+				`payload=${input.sentinel}`,
+			],
+			code: "runbook_input_custody_mismatch",
+		},
+		{
+			name: "unknown public input id",
+			args: (input: Awaited<ReturnType<typeof fixture>>) => [
+				"--input",
+				`missing=${input.sentinel}`,
+			],
+			code: "runbook_input_unknown",
+		},
+		{
+			name: "same id supplied through public and private sources",
+			args: (input: Awaited<ReturnType<typeof fixture>>) => [
+				"--input",
+				`query=${input.sentinel}`,
+				"--input-file",
+				`query=${input.privateQueryPath}`,
+			],
+			code: "runbook_input_source_conflict",
+		},
+	] as const) {
+		test(`${scenario.name} refuses before durable writes`, async () => {
+			const input = await fixture();
+			try {
+				const result = await runForTest(
+					[
+						...baseArgv,
+						...scenario.args(input),
+						"--verbose",
+						"--json",
+					],
+					input.runtime,
+				);
+				expect(result.exitCode).toBe(20);
+				const envelope = parseJson(result.stdout);
+				expect(envelope.error).toMatchObject({
+					code: scenario.code,
+					recoverability: "change_input",
+					retryable: false,
+				});
+				expect(envelope.runtime_actions).toMatchObject([
+					{ id: "change_runbook_input" },
+				]);
+				expect(envelope.continuation).toEqual({
+					next_action_id: "change_runbook_input",
+				});
+				expect(`${result.stdout}\n${result.stderr}`).not.toContain(
+					input.sentinel,
+				);
+				expect(
+					existsSync(input.opened.paths.state.runsDir)
+						? readdirSync(input.opened.paths.state.runsDir)
+						: [],
+				).toEqual([]);
+			} finally {
+				input.xdg.dispose();
+			}
+		});
+	}
+
+	test("plain refusal keeps code/action parity without the value", async () => {
+		const input = await fixture();
+		try {
+			const result = await runForTest(
+				[
+					...baseArgv,
+					"--input",
+					`payload=${input.sentinel}`,
+					"--plain",
+				],
+				input.runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain(
+				"runbook_input_custody_mismatch",
+			);
+			expect(result.stderr).toContain("action=change_runbook_input");
+			expect(result.stderr).not.toContain(input.sentinel);
+		} finally {
+			input.xdg.dispose();
+		}
+	});
+
+	test("private path refusal uses the declared input-correction action in JSON", async () => {
+		const input = await fixture();
+		try {
+			const result = await runForTest(
+				[
+					...baseArgv,
+					"--input-file",
+					`payload=${join(input.xdg.base, "outside.json")}`,
+					"--json",
+				],
+				input.runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout)).toMatchObject({
+				error: { code: "private_input_path_unsafe" },
+				runtime_actions: [{ id: "change_runbook_input" }],
+				continuation: { next_action_id: "change_runbook_input" },
+			});
+		} finally {
+			input.xdg.dispose();
+		}
+	});
+
+	test("private JSON refusal keeps plain code/action parity", async () => {
+		const input = await fixture();
+		try {
+			const result = await runForTest(
+				[
+					...baseArgv,
+					"--input-file",
+					`payload=${input.invalidPrivatePayloadPath}`,
+					"--plain",
+				],
+				input.runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("private_input_json_invalid");
+			expect(result.stderr).toContain("action=change_runbook_input");
+		} finally {
+			input.xdg.dispose();
+		}
+	});
+
+	test("correct private custody advances without value disclosure", async () => {
+		const input = await fixture();
+		try {
+			const result = await runForTest(
+				[
+					...baseArgv,
+					"--input-file",
+					`payload=${input.privatePayloadPath}`,
+					"--json",
+				],
+				input.runtime,
+			);
+			expect(result.exitCode).not.toBe(2);
+			const envelope = parseJson(result.stdout);
+			expect([
+				"runbook_input_unknown",
+				"runbook_input_source_conflict",
+				"runbook_input_custody_mismatch",
+			]).not.toContain(
+				(envelope.error as Record<string, unknown> | undefined)?.code,
+			);
+			expect(`${result.stdout}\n${result.stderr}`).not.toContain(
+				input.sentinel,
+			);
+		} finally {
+			input.xdg.dispose();
+		}
+	});
 });

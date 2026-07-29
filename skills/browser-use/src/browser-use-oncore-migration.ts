@@ -153,6 +153,7 @@ export function buildOncoreSaveDraftMigration(
 				id: "item_keys",
 				summary: "Ordered stable keys for the entries to reconcile and fill.",
 				required: true,
+				custody: "sensitive",
 				schema: {
 					kind: "array",
 					min_items: 1,
@@ -169,6 +170,7 @@ export function buildOncoreSaveDraftMigration(
 				id: "entries",
 				summary: "Expected draft rows keyed to the ordered checkpoint sequence.",
 				required: true,
+				custody: "sensitive",
 				schema: {
 					kind: "array",
 					min_items: 1,

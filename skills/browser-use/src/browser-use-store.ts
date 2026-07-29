@@ -79,6 +79,63 @@ async function unlinkBestEffort(
 	}
 }
 
+type StoreWriteResult =
+	| { ok: true }
+	| { ok: false; failure: StoreFailure };
+
+async function flushDurableTemp(
+	fs: BrowserUsePlatformFs,
+	input: { path: string; contents: string; mode: number },
+): Promise<
+	| { ok: true; tempPath: string }
+	| { ok: false; failure: StoreFailure }
+> {
+	tempSequence += 1;
+	const tempPath = `${input.path}.tmp-${process.pid}-${tempSequence}`;
+	try {
+		await fs.writeFileDurable(tempPath, input.contents, input.mode);
+		return { ok: true, tempPath };
+	} catch (error) {
+		return storeFailure(
+			"store_flush_failed",
+			`durable write failed during the content flush (${errorCode(error)}).`,
+		);
+	}
+}
+
+async function publishDurableTemp(
+	fs: BrowserUsePlatformFs,
+	path: string,
+	tempPath: string,
+): Promise<StoreWriteResult> {
+	try {
+		await fs.rename(tempPath, path);
+	} catch (error) {
+		if (errorCode(error) === "EXDEV") {
+			// No crash happened, so the flushed temp is reclaimable now instead
+			// of waiting for the orphan repair sweep.
+			await unlinkBestEffort(fs, tempPath);
+			return storeFailure(
+				"store_cross_device",
+				"rename crossed filesystem devices (EXDEV); R13 refuses cross-device durable writes and copy-verify-commit is deliberately not implemented in U2.",
+			);
+		}
+		return storeFailure(
+			"store_flush_failed",
+			`durable write failed at the rename step (${errorCode(error)}).`,
+		);
+	}
+	try {
+		await fs.syncDirectory(dirname(path));
+	} catch (error) {
+		return storeFailure(
+			"store_flush_failed",
+			`durable write failed at the parent-directory flush (${errorCode(error)}).`,
+		);
+	}
+	return { ok: true };
+}
+
 // --- Durable write (R13) -----------------------------------------------------
 
 /**
@@ -97,42 +154,76 @@ export async function writeDurableFile(
 	input: { path: string; contents: string; mode?: number },
 ): Promise<{ ok: true } | { ok: false; failure: StoreFailure }> {
 	const mode = input.mode ?? PRIVATE_FILE_MODE;
-	tempSequence += 1;
-	const tempPath = `${input.path}.tmp-${process.pid}-${tempSequence}`;
-	try {
-		await fs.writeFileDurable(tempPath, input.contents, mode);
-	} catch (error) {
+	const flushed = await flushDurableTemp(fs, {
+		path: input.path,
+		contents: input.contents,
+		mode,
+	});
+	if (!flushed.ok) return flushed;
+	return await publishDurableTemp(fs, input.path, flushed.tempPath);
+}
+
+/**
+ * Replace one durable record only when its exact standing bytes are unchanged.
+ *
+ * The next bytes are flushed to a complete temp sibling first. The expected
+ * raw record is then re-read immediately before rename, closing the wider
+ * read-to-temp-write window for callers that carry an earlier snapshot.
+ *
+ * @remarks
+ * Cooperative writers must still share the caller's owner lock. A writer that
+ * ignores both that lock and this conditional primitive can race in the final
+ * check-to-rename syscall interval; ordinary filesystem rename has no portable
+ * compare-and-exchange predicate.
+ *
+ * @param fs - Platform fs port
+ * @param input - Target path, exact expected raw bytes, replacement, and mode
+ * @returns Ok, or a typed conflict, corruption, missing-record, or flush failure
+ *
+ * @example
+ * ```typescript
+ * const replaced = await replaceDurableFileIfUnchanged(fs, {
+ *   path,
+ *   expectedRaw: standing.raw,
+ *   contents: nextRaw,
+ * })
+ * ```
+ */
+export async function replaceDurableFileIfUnchanged(
+	fs: BrowserUsePlatformFs,
+	input: {
+		path: string;
+		expectedRaw: string;
+		contents: string;
+		mode?: number;
+	},
+): Promise<{ ok: true } | { ok: false; failure: StoreFailure }> {
+	const flushed = await flushDurableTemp(fs, {
+		path: input.path,
+		contents: input.contents,
+		mode: input.mode ?? PRIVATE_FILE_MODE,
+	});
+	if (!flushed.ok) return flushed;
+	const current = await readDurableFile(fs, input.path);
+	if (current.status !== "present") {
+		await unlinkBestEffort(fs, flushed.tempPath);
 		return storeFailure(
-			"store_flush_failed",
-			`durable write failed during the content flush (${errorCode(error)}).`,
+			current.status === "missing"
+				? "store_record_missing"
+				: "store_record_corrupt",
+			current.status === "missing"
+				? "record vanished before conditional durable replacement."
+				: "record became unreadable before conditional durable replacement.",
 		);
 	}
-	try {
-		await fs.rename(tempPath, input.path);
-	} catch (error) {
-		if (errorCode(error) === "EXDEV") {
-			// No crash happened, so the flushed temp is reclaimable now instead
-			// of waiting for the orphan repair sweep.
-			await unlinkBestEffort(fs, tempPath);
-			return storeFailure(
-				"store_cross_device",
-				"rename crossed filesystem devices (EXDEV); R13 refuses cross-device durable writes and copy-verify-commit is deliberately not implemented in U2.",
-			);
-		}
+	if (current.raw !== input.expectedRaw) {
+		await unlinkBestEffort(fs, flushed.tempPath);
 		return storeFailure(
-			"store_flush_failed",
-			`durable write failed at the rename step (${errorCode(error)}).`,
+			"store_record_conflict",
+			"record bytes changed before conditional durable replacement.",
 		);
 	}
-	try {
-		await fs.syncDirectory(dirname(input.path));
-	} catch (error) {
-		return storeFailure(
-			"store_flush_failed",
-			`durable write failed at the parent-directory flush (${errorCode(error)}).`,
-		);
-	}
-	return { ok: true };
+	return await publishDurableTemp(fs, input.path, flushed.tempPath);
 }
 
 // --- Record read (missing vs unreadable vs present) --------------------------

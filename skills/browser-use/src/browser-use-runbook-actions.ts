@@ -609,6 +609,132 @@ export type BrowserUseReviewedActionRecord = {
 	promotion_receipt: BrowserUsePromotionReceipt;
 };
 
+export type BrowserUseReviewedActionRecordParse =
+	| { ok: true; record: BrowserUseReviewedActionRecord }
+	| { ok: false; message: string };
+
+function reviewedActionPostconditionIsValid(
+	value: unknown,
+): value is BrowserUseRunbookPostcondition {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	switch (record.kind) {
+		case "url-equals":
+			return (
+				objectHasOnlyKeys(record, ["kind", "url"]) &&
+				typeof record.url === "string" &&
+				record.url.length > 0
+			);
+		case "value-equals":
+			return (
+				objectHasOnlyKeys(record, ["kind", "selector", "value"]) &&
+				typeof record.selector === "string" &&
+				typeof record.value === "string" &&
+				postconditionValid(record as BrowserUseRunbookPostcondition)
+			);
+		case "element-visible":
+			return (
+				objectHasOnlyKeys(record, ["kind", "selector"]) &&
+				typeof record.selector === "string" &&
+				postconditionValid(record as BrowserUseRunbookPostcondition)
+			);
+		default:
+			return false;
+	}
+}
+
+/**
+ * Parse an untrusted reviewed-action registry value into its total runtime shape.
+ *
+ * @param value - JSON-decoded candidate record
+ * @returns A validated record or a stable schema refusal
+ */
+export function parseReviewedActionRecord(
+	value: unknown,
+): BrowserUseReviewedActionRecordParse {
+	const invalid: BrowserUseReviewedActionRecordParse = {
+		ok: false,
+		message: "reviewed action record does not match its schema.",
+	};
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return invalid;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		!objectHasOnlyKeys(record, [
+			"action_id",
+			"asset_id",
+			"expected_digest",
+			"allowed_origin",
+			"effect_class",
+			"containment",
+			"input_schema",
+			"result_schema",
+			"result_sensitivity",
+			"required_postcondition",
+			"source_provenance",
+			"promotion_receipt",
+		]) ||
+		typeof record.action_id !== "string" ||
+		!SAFE_ACTION_ID.test(record.action_id) ||
+		typeof record.asset_id !== "string" ||
+		!actionDigestIsValid(record.asset_id) ||
+		typeof record.expected_digest !== "string" ||
+		!actionDigestIsValid(record.expected_digest) ||
+		typeof record.allowed_origin !== "string" ||
+		!exactOriginValid(record.allowed_origin) ||
+		(record.effect_class !== "read" && record.effect_class !== "mutation") ||
+		!(
+			BROWSER_USE_ACTION_CONTAINMENT_POLICIES as readonly unknown[]
+		).includes(record.containment) ||
+		!isValueSchema(record.input_schema) ||
+		!isValueSchema(record.result_schema) ||
+		(record.result_sensitivity !== "low" &&
+			record.result_sensitivity !== "high") ||
+		typeof record.source_provenance !== "string" ||
+		record.source_provenance.length === 0 ||
+		(record.required_postcondition !== undefined &&
+			!reviewedActionPostconditionIsValid(record.required_postcondition)) ||
+		(record.effect_class === "mutation" &&
+			record.required_postcondition === undefined)
+	) {
+		return invalid;
+	}
+	if (
+		typeof record.promotion_receipt !== "object" ||
+		record.promotion_receipt === null ||
+		Array.isArray(record.promotion_receipt)
+	) {
+		return invalid;
+	}
+	const receipt = record.promotion_receipt as Record<string, unknown>;
+	if (
+		!objectHasOnlyKeys(receipt, [
+			"approved_digest",
+			"disposition",
+			"approved_origin",
+			"approved_effect",
+			"approver_ref",
+		]) ||
+		typeof receipt.approved_digest !== "string" ||
+		!actionDigestIsValid(receipt.approved_digest) ||
+		!(
+			BROWSER_USE_PROMOTION_DISPOSITIONS as readonly unknown[]
+		).includes(receipt.disposition) ||
+		typeof receipt.approved_origin !== "string" ||
+		!exactOriginValid(receipt.approved_origin) ||
+		(receipt.approved_effect !== "read" &&
+			receipt.approved_effect !== "mutation") ||
+		typeof receipt.approver_ref !== "string" ||
+		receipt.approver_ref.length === 0
+	) {
+		return invalid;
+	}
+	return { ok: true, record: value as BrowserUseReviewedActionRecord };
+}
+
 // --- Resolution seam (R16, R38) ----------------------------------------------
 
 /**

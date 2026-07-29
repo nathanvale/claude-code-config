@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { type BrowserUseCommand, browserUseContracts } from "./command-contract";
+import { parseBrowserUseArgv } from "./browser-use-parser";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -128,6 +129,106 @@ describe("U3 parser", () => {
 		const operate = await runForTest(["operate", "--json"], makeRuntime());
 		expect(operate.exitCode).toBe(2);
 		expect(`${operate.stdout}\n${operate.stderr}`).toContain("missing subcommand");
+	});
+
+	test("migration activate accepts an optional generation and never accepts source", async () => {
+		for (const argv of [
+			["migration", "activate", "--json"],
+			[
+				"migration",
+				"activate",
+				"--generation",
+				"generation-verified",
+				"--caller",
+				"codex",
+				"--plain",
+			],
+		]) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).not.toBe(2);
+			expect(`${result.stdout}\n${result.stderr}`).not.toContain("usage_error");
+		}
+
+		const rejected = await runForTest(
+			["migration", "activate", "--source", "/legacy", "--json"],
+			makeRuntime(),
+		);
+		expect(rejected.exitCode).toBe(2);
+		expect(parseJson(rejected.stdout).error).toMatchObject({
+			code: "usage_error",
+		});
+		expect(`${rejected.stdout}\n${rejected.stderr}`).toContain(
+			"unknown option: --source",
+		);
+	});
+
+	test("migration activate rejects a generation flag without an id", async () => {
+		for (const argv of [
+			["migration", "activate", "--generation", "--json"],
+			["migration", "activate", "--generation=", "--json"],
+		]) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).toBe(2);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "usage_error",
+			});
+			expect(`${result.stdout}\n${result.stderr}`).toContain(
+				"migration activate --generation requires <id>",
+			);
+		}
+	});
+
+	test("migration generate requires an absolute candidate bundle and defaults to JSON", () => {
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source",
+				"/private/tmp/candidate-bundle",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-generate",
+			outputMode: "json",
+			flagValues: {
+				"--source": "/private/tmp/candidate-bundle",
+			},
+		});
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source=/private/tmp/candidate-bundle",
+				"--plain",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-generate",
+			outputMode: "plain",
+		});
+
+		for (const argv of [
+			["migration", "generate"],
+			["migration", "generate", "--source", "relative/candidate"],
+			["migration", "generate", "--source=", "--json"],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(
+				"migration generate requires --source <absolute-candidate-bundle>",
+			);
+		}
+	});
+
+	test("migration generate rejects caller-supplied generation ids", () => {
+		expect(() =>
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source",
+				"/private/tmp/candidate-bundle",
+				"--generation",
+				"generation-override",
+			]),
+		).toThrow("unknown option: --generation");
 	});
 
 	// Scenario 6: undeclared flags are rejected (exit 2) for every subcommand.

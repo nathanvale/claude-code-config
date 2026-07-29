@@ -1,7 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { shippedCatalogDigest } from "./browser-use-catalog-digest";
 import {
+	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
 } from "./browser-use-paths";
@@ -12,8 +15,22 @@ import {
 import type { RunStoreDeps } from "./browser-use-runs";
 import { createSharedRun, loadSharedRun } from "./browser-use-runs";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
-import { runbooksRoot } from "./browser-use-runbook";
+import {
+	itemKeySequenceDigest,
+	normalizedInputDigest,
+} from "./browser-use-runbook-actions";
+import {
+	runbooksRoot,
+	shippedRunbooksRoot,
+} from "./browser-use-runbook";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
+import { stageGeneration } from "./browser-use-retention";
+import {
+	encodeDurableRecord,
+	type BrowserUseCorpusGenerationCandidatePayload,
+	type BrowserUseCorpusGenerationManifestPayload,
+} from "./browser-use-schemas";
+import { writeDurableFile } from "./browser-use-store";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
@@ -33,6 +50,24 @@ const disposables: { dispose(): void }[] = [];
 afterAll(() => {
 	for (const disposable of disposables) disposable.dispose();
 });
+
+function writeTrackingPlatformFs(): {
+	fs: BrowserUsePlatformFs;
+	writeProbeCount: () => number;
+} {
+	const base = createDefaultPlatformFs();
+	let writeProbes = 0;
+	return {
+		fs: {
+			...base,
+			async writeFile(path, contents, mode) {
+				writeProbes += 1;
+				await base.writeFile(path, contents, mode);
+			},
+		},
+		writeProbeCount: () => writeProbes,
+	};
+}
 
 // --- Handoff fixtures --------------------------------------------------------
 
@@ -125,6 +160,173 @@ function seedRunbook(dataRoot: string, runbook: BrowserUseRunbook): void {
 	writeFileSync(join(dir, "runbook.json"), JSON.stringify(runbook), "utf-8");
 }
 
+function sha256(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+async function seedActiveGeneration(
+	store: Awaited<ReturnType<typeof makeStore>>,
+	runbook: BrowserUseRunbook,
+	activation: "active" | "inactive" = "active",
+	activationEpoch = 2,
+): Promise<BrowserUseCorpusGenerationManifestPayload> {
+	const generationId = `generation-${runbook.flow_id}`;
+	const runbookRaw = `${JSON.stringify(runbook)}\n`;
+	const registryRaw = `${JSON.stringify({ actions: [] })}\n`;
+	const proofRaw = `${JSON.stringify({ proof: "wave3" })}\n`;
+	const runbookPath = `runbooks/${runbook.service_id}/${runbook.flow_id}/runbook.json`;
+	const shippedDigest = await shippedCatalogDigest(
+		shippedRunbooksRoot(),
+		store.deps.fs,
+	);
+	const target = {
+		canonical_target_id: `${runbook.service_id}/${runbook.flow_id}`,
+		activation,
+		runbook_path: runbookPath,
+		runbook_digest: sha256(runbookRaw),
+		source_relative_paths: ["fixture/runbook.json"],
+		proof_refs: ["proof-wave3"],
+		inactive_reason:
+			activation === "inactive"
+				? "financial mutation remains staged"
+				: null,
+	} as const;
+	const candidate = {
+		contract: "browser-use.corpus-generation-candidate",
+		schema_version: "1",
+		generation_id: generationId,
+		source_snapshot: {
+			snapshot_id: "snapshot-wave3",
+			snapshot_digest: "b".repeat(64),
+		},
+		canonical_targets: [target],
+		action_registry: {
+			registry_path: "actions/registry.json",
+			registry_digest: sha256(registryRaw),
+			actions: [],
+		},
+		auth: { candidates: [], routes: [] },
+		proofs: [
+			{
+				proof_ref: "proof-wave3",
+				path: "proofs/wave3.json",
+				digest: sha256(proofRaw),
+			},
+		],
+		shipped_catalog_digest: shippedDigest,
+	} satisfies BrowserUseCorpusGenerationCandidatePayload;
+	const candidateRaw = encodeDurableRecord(
+		"corpus-generation-candidate",
+		candidate,
+	);
+	const staged = await stageGeneration(store.deps, {
+		generationId,
+		files: [
+			{ relPath: runbookPath, contents: runbookRaw },
+			{ relPath: "actions/registry.json", contents: registryRaw },
+			{ relPath: "proofs/wave3.json", contents: proofRaw },
+			{
+				relPath: "corpus-generation-candidate.json",
+				contents: candidateRaw,
+			},
+		],
+	});
+	if (!staged.ok) throw new Error(staged.message);
+	const manifest: BrowserUseCorpusGenerationManifestPayload = {
+		contract: "browser-use.corpus-generation-manifest",
+		schema_version: "1",
+		generation_id: generationId,
+		generation_content_hash: staged.record.content_hash,
+		candidate_manifest_digest: sha256(candidateRaw),
+		activation_epoch: activationEpoch,
+		activated_at_epoch_ms: 100,
+		source_snapshot: candidate.source_snapshot,
+		canonical_targets: candidate.canonical_targets,
+		action_registry: candidate.action_registry,
+		auth: candidate.auth,
+		proofs: candidate.proofs,
+		shipped_catalog_digest: candidate.shipped_catalog_digest,
+		prior_generation: null,
+		retained_generations: [],
+	};
+	await store.deps.fs.mkdir(store.deps.paths.state.migrationsDir, {
+		recursive: true,
+		mode: 0o700,
+	});
+	const manifestWrite = await writeDurableFile(store.deps.fs, {
+		path: join(
+			store.deps.paths.state.migrationsDir,
+			"active-corpus-manifest.json",
+		),
+		contents: encodeDurableRecord("corpus-generation-manifest", manifest),
+	});
+	if (!manifestWrite.ok) throw new Error(manifestWrite.failure.message);
+	await store.deps.fs.mkdir(
+		join(store.deps.paths.state.migrationsDir, "effect-fences"),
+		{ recursive: true, mode: 0o700 },
+	);
+	const fenceWrite = await writeDurableFile(store.deps.fs, {
+		path: join(
+			store.deps.paths.state.migrationsDir,
+			"effect-fences",
+			`${activationEpoch}.json`,
+		),
+		contents: encodeDurableRecord("generation-effect-fence", {
+			generation_id: generationId,
+			activation_epoch: activationEpoch,
+			state: "untripped",
+			tripped_at_epoch_ms: null,
+			first_effect: null,
+		}),
+	});
+	if (!fenceWrite.ok) throw new Error(fenceWrite.failure.message);
+	const pendingWrite = await writeDurableFile(store.deps.fs, {
+		path: join(
+			store.deps.paths.state.migrationsDir,
+			"activation-pending.json",
+		),
+		contents: encodeDurableRecord("activation-pending", {
+			expected_epoch: activationEpoch - 1,
+			target_generation_id: generationId,
+			generation_content_hash: manifest.generation_content_hash,
+			candidate_manifest_digest: manifest.candidate_manifest_digest,
+		}),
+	});
+	if (!pendingWrite.ok) throw new Error(pendingWrite.failure.message);
+	const epochWrite = await writeDurableFile(store.deps.fs, {
+		path: store.deps.paths.state.epochFile,
+		contents: encodeDurableRecord("activation-epoch", {
+			epoch: activationEpoch,
+		}),
+	});
+	if (!epochWrite.ok) throw new Error(epochWrite.failure.message);
+	const stateWrite = await writeDurableFile(store.deps.fs, {
+		path: join(store.deps.paths.state.migrationsDir, "migration-state.json"),
+		contents: `${JSON.stringify(
+			{
+				contract: "browser-use.migration-status",
+				schema_version: "2",
+				phase: "verified",
+				snapshot_id: candidate.source_snapshot.snapshot_id,
+				snapshot_digest: candidate.source_snapshot.snapshot_digest,
+				source_root_identity: "a".repeat(64),
+				source_entry_count: 0,
+				disposition_count: 0,
+				dispositions: [],
+				corpus_census: null,
+				canonical_targets: [],
+				staged_generation: generationId,
+				last_apply_verified_noop: false,
+				activation_state: "active",
+			},
+			null,
+			"\t",
+		)}\n`,
+	});
+	if (!stateWrite.ok) throw new Error(stateWrite.failure.message);
+	return manifest;
+}
+
 // A read-only seed runbook: one open + one snapshot, no confidential input, no
 // declared inputs (so a fresh run reaches total_steps and confirms).
 function readOnlyRunbook(): BrowserUseRunbook {
@@ -153,6 +355,7 @@ function readOnlyRunbook(): BrowserUseRunbook {
 function scriptedRuntime(
 	env: Record<string, string | undefined>,
 	responses: readonly { stdout?: string; exitCode?: number; timedOut?: boolean }[],
+	platformFs: BrowserUsePlatformFs = createDefaultPlatformFs(),
 ) {
 	let index = 0;
 	const calls: Array<readonly string[]> = [];
@@ -161,7 +364,7 @@ function scriptedRuntime(
 		runtime: makeRuntime({
 			env,
 			now: () => 1_000,
-			platformFs: createDefaultPlatformFs(),
+			platformFs,
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((m) => m.readFile(path, "utf-8")),
 			// Real disk write seams so the chrome executor's native-artifact write
@@ -394,6 +597,83 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(runbook.service_id).toBe("oncore");
 	});
 
+	test("active generation wins the same list/show shadow matrix", async () => {
+		const store = await makeStore();
+		const activeRunbook: BrowserUseRunbook = {
+			...readOnlyRunbook(),
+			summary: "Active generation summary.",
+		};
+		await seedActiveGeneration(store, activeRunbook);
+		seedRunbook(store.dataRoot, {
+			...activeRunbook,
+			summary: "Compatibility override summary.",
+		});
+		const listed = await runForTest(
+			["runbook", "list", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(listed.exitCode).toBe(0);
+		const rows = (
+			parseJson(listed.stdout).data as {
+				runbooks: Array<Record<string, unknown>>;
+			}
+		).runbooks;
+		expect(
+			rows.find(
+				(row) =>
+					row.service_id === activeRunbook.service_id &&
+					row.flow_id === activeRunbook.flow_id,
+			),
+		).toMatchObject({ summary: activeRunbook.summary });
+		const shown = await runForTest(
+			[
+				"runbook",
+				"show",
+				"--service",
+				activeRunbook.service_id,
+				"--flow",
+				activeRunbook.flow_id,
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+		expect(shown.exitCode).toBe(0);
+		expect(
+			(parseJson(shown.stdout).data as {
+				runbook: { summary: string };
+			}).runbook.summary,
+		).toBe(activeRunbook.summary);
+	});
+
+	test("completed activation with a missing manifest never falls back to compatibility", async () => {
+		const store = await makeStore();
+		const activeRunbook: BrowserUseRunbook = {
+			...readOnlyRunbook(),
+			summary: "Active generation summary.",
+		};
+		await seedActiveGeneration(store, activeRunbook);
+		seedRunbook(store.dataRoot, {
+			...activeRunbook,
+			summary: "Compatibility override summary.",
+		});
+		await store.deps.fs.unlink(
+			join(
+				store.deps.paths.state.migrationsDir,
+				"active-corpus-manifest.json",
+			),
+		);
+
+		const listed = await runForTest(
+			["runbook", "list", "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(listed.exitCode).toBe(20);
+		expect(parseJson(listed.stdout).error).toMatchObject({
+			code: "runbook_catalog_drift",
+		});
+		expect(listed.stdout).not.toContain("Compatibility override summary.");
+	});
+
 	test("runbook show for a missing runbook fails closed with a typed refusal", async () => {
 		const store = await makeStore();
 		const result = await runForTest(
@@ -408,7 +688,7 @@ describe("runbook family — live (U4 wiring)", () => {
 
 	test("runbook run dispatches the read-only runbook through agent-browser and confirms", async () => {
 		const store = await makeStore();
-		seedRunbook(store.dataRoot, readOnlyRunbook());
+		await seedActiveGeneration(store, readOnlyRunbook());
 		const handoffPath = writeHandoff(store.base, "agent-browser", "run-runbook-1");
 		// agent-browser executor sequence for open + snapshot: tab list, tab select,
 		// open, get-url (open postcondition), snapshot.
@@ -436,6 +716,7 @@ describe("runbook family — live (U4 wiring)", () => {
 				"--flow", "snapshot-verify",
 				"--handoff", handoffPath,
 				"--tab", "t1",
+				"--run-id", "invocation-runbook-1",
 				"--json",
 			],
 			runtime,
@@ -450,7 +731,217 @@ describe("runbook family — live (U4 wiring)", () => {
 		// The run is durable and readable back as confirmed truth.
 		const loaded = await loadSharedRun(store.deps, "run-runbook-1");
 		expect(loaded.ok).toBe(true);
-		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+		if (loaded.ok) {
+			expect(loaded.run.state).toBe("confirmed");
+			expect(loaded.run.run_execution_binding).toMatchObject({
+				generation_id: "generation-snapshot-verify",
+				activation_epoch: 2,
+				service_id: "oncore",
+				flow_id: "snapshot-verify",
+			});
+		}
+		const fence = JSON.parse(
+			readFileSync(
+				join(
+					store.deps.paths.state.migrationsDir,
+					"effect-fences",
+					"2.json",
+				),
+				"utf8",
+			),
+		) as {
+			payload: {
+				state: string;
+				first_effect: { effect_kind: string; effect_ref: string };
+			};
+		};
+		expect(fence.payload).toMatchObject({
+			state: "tripped",
+			first_effect: {
+				effect_kind: "external-dispatch",
+				effect_ref: "run-runbook-1",
+			},
+		});
+	});
+
+	test("inactive generation target refuses before handoff acquisition", async () => {
+		const store = await makeStore();
+		await seedActiveGeneration(store, readOnlyRunbook(), "inactive");
+		const tracked = writeTrackingPlatformFs();
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--input-file",
+				`payload=${join(
+					store.deps.paths.resolution.roots.runtime,
+					"private-inputs",
+					"missing.json",
+				)}`,
+				"--handoff",
+				join(store.base, "missing-handoff.json"),
+				"--json",
+			],
+			makeRuntime({ env: store.env, platformFs: tracked.fs }),
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "runbook_inactive",
+		});
+		expect(tracked.writeProbeCount()).toBe(0);
+	});
+
+	test("active generation wrong-lane handoff refuses before tripping the effect fence", async () => {
+		const store = await makeStore();
+		await seedActiveGeneration(store, readOnlyRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"chrome-devtools-mcp",
+			"run-wrong-lane",
+		);
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"snapshot-verify",
+				"--handoff",
+				handoffPath,
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_handoff_lane_mismatch",
+		});
+		const fence = JSON.parse(
+			readFileSync(
+				join(
+					store.deps.paths.state.migrationsDir,
+					"effect-fences",
+					"2.json",
+				),
+				"utf8",
+			),
+		) as { payload: { state: string } };
+		expect(fence.payload.state).toBe("untripped");
+	});
+
+	test("private structured input stays out of output and persists only its binding digest", async () => {
+		const store = await makeStore();
+		const runbook: BrowserUseRunbook = {
+			...readOnlyRunbook(),
+			flow_id: "private-input",
+			inputs: [
+				{
+					id: "payload",
+					summary: "Private structured payload.",
+					required: true,
+					custody: "sensitive",
+					schema: {
+						kind: "object",
+						fields: {
+							name: {
+								schema: { kind: "string" },
+								required: true,
+							},
+						},
+					},
+				},
+			],
+		};
+		await seedActiveGeneration(store, runbook);
+		const privateRoot = join(
+			store.deps.paths.resolution.roots.runtime,
+			"private-inputs",
+		);
+		mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
+		const privatePath = join(privateRoot, "payload.json");
+		const sentinel = "private-sentinel-wave3";
+		writeFileSync(
+			privatePath,
+			JSON.stringify({ name: sentinel }),
+			{ encoding: "utf8", mode: 0o600 },
+		);
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-private-input",
+		);
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ opened: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{
+				stdout: agentSuccess({
+					snapshot: "@e1 button",
+					refs: { "@e1": {} },
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				"oncore",
+				"--flow",
+				"private-input",
+				"--input-file",
+				`payload=${privatePath}`,
+				"--handoff",
+				handoffPath,
+				"--tab",
+				"t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).not.toContain(sentinel);
+		expect(result.stderr).not.toContain(sentinel);
+		expect(JSON.stringify(calls)).not.toContain(sentinel);
+		const loaded = await loadSharedRun(store.deps, "run-private-input");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.run_execution_binding).toMatchObject({
+				generation_id: "generation-private-input",
+				normalized_input_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+			});
+			expect(JSON.stringify(loaded.run)).not.toContain(sentinel);
+		}
 	});
 
 	test("runbook run on a chrome handoff fails closed, never substitutes the lane (R11)", async () => {
@@ -726,9 +1217,9 @@ describe("runbook family — live (U4 wiring)", () => {
 			[
 				"runbook", "run",
 				"--service", "oncore",
-				"--flow", "snapshot-verify",
-				"--run", runId,
-				"--handoff", handoffPath,
+					"--flow", "snapshot-verify",
+					"--run", runId,
+					"--handoff", handoffPath,
 				"--json",
 			],
 			runtime,
@@ -736,6 +1227,200 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(result.exitCode).toBe(0);
 		expect(calls).toHaveLength(5);
 		expect(calls.some((call) => call.includes("open"))).toBe(false);
+	});
+
+	test("a retained read-only run resumes only from its pinned generation", async () => {
+		const store = await makeStore();
+		const runbookA = readOnlyRunbook();
+		const manifestA = await seedActiveGeneration(
+			store,
+			runbookA,
+			"active",
+			2,
+		);
+		const runId = "run-retained-generation-a";
+		const envelope = handoffEnvelope("agent-browser", runId);
+		const handoffPath = join(store.base, "handoff-retained-a.json");
+		writeFileSync(handoffPath, JSON.stringify(envelope), "utf-8");
+		const parsed = parseHandoffFacts(JSON.stringify(envelope));
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: parsed.facts.handoffEvidenceId,
+		});
+		const runbookRaw = `${JSON.stringify(runbookA)}\n`;
+		const postcondition = runbookA.steps[0];
+		if (postcondition?.kind !== "open") {
+			throw new Error("fixture postcondition missing");
+		}
+		const seeded = await createSharedRun(store.deps, {
+			run_id: runId,
+			state: "needs-human",
+			task_intent: "runbook-execution",
+			environment_profile: {
+				environment: "agent-chrome",
+				profile: "default",
+			},
+			adapter_id: "agent-browser",
+			handoff_evidence_id: parsed.facts.handoffEvidenceId,
+			runbook_target_binding: {
+				schema_version: "1",
+				mode: "automatic",
+				binding_id: candidateIdOf(targetEnvelopeId, [
+					"adapter_page_id",
+					"t1",
+				]),
+			},
+			runbook_progress: {
+				schema_version: "1",
+				service_id: runbookA.service_id,
+				flow_id: runbookA.flow_id,
+				runbook_version: runbookA.version,
+				next_step: 1,
+				total_steps: runbookA.steps.length,
+			},
+			run_execution_binding: {
+				schema_version: "1",
+				generation_id: manifestA.generation_id,
+				activation_epoch: manifestA.activation_epoch,
+				service_id: runbookA.service_id,
+				flow_id: runbookA.flow_id,
+				runbook_version: runbookA.version,
+				runbook_digest: sha256(runbookRaw),
+				action_registry_digest:
+					manifestA.action_registry.registry_digest,
+				normalized_input_digest: normalizedInputDigest({}),
+				item_key_digest: itemKeySequenceDigest([]),
+				target_scope: JSON.stringify(
+					[...runbookA.allowed_origins].sort(),
+				),
+				postcondition: {
+					id: sha256(
+						JSON.stringify(postcondition.postcondition),
+					),
+					summary:
+						"Complete the bound url-equals postcondition.",
+				},
+			},
+			mutation_dispatched: false,
+			artifacts: [],
+			continuation: {
+				next_action_id: "runbook-resume:1",
+				summary: "Resume from the first unproven step.",
+			},
+		});
+		expect(seeded.ok).toBe(true);
+
+		const runbookB: BrowserUseRunbook = {
+			...readOnlyRunbook(),
+			flow_id: "snapshot-next",
+		};
+		const manifestB = await seedActiveGeneration(
+			store,
+			runbookB,
+			"active",
+			3,
+		);
+		const identityA = {
+			generation_id: manifestA.generation_id,
+			generation_content_hash:
+				manifestA.generation_content_hash,
+			candidate_manifest_digest:
+				manifestA.candidate_manifest_digest,
+			activation_epoch: manifestA.activation_epoch,
+		};
+		const retainedManifest: BrowserUseCorpusGenerationManifestPayload = {
+			...manifestB,
+			prior_generation: identityA,
+			retained_generations: [identityA],
+		};
+		const activeWrite = await writeDurableFile(store.deps.fs, {
+			path: join(
+				store.deps.paths.state.migrationsDir,
+				"active-corpus-manifest.json",
+			),
+			contents: encodeDurableRecord(
+				"corpus-generation-manifest",
+				retainedManifest,
+			),
+		});
+		expect(activeWrite.ok).toBe(true);
+
+		const { runtime, calls } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{
+				stdout: agentSuccess({
+					snapshot: "@e1 button",
+					refs: { "@e1": {} },
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook",
+				"run",
+				"--service",
+				runbookA.service_id,
+				"--flow",
+				runbookA.flow_id,
+				"--run",
+				runId,
+				"--handoff",
+				handoffPath,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls.some((call) => call.includes("open"))).toBe(false);
+		const loaded = await loadSharedRun(store.deps, runId);
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) {
+			expect(loaded.run.state).toBe("confirmed");
+			expect(loaded.run.run_execution_binding?.generation_id).toBe(
+				manifestA.generation_id,
+			);
+		}
+		const fenceB = JSON.parse(
+			readFileSync(
+				join(
+					store.deps.paths.state.migrationsDir,
+					"effect-fences",
+					"3.json",
+				),
+				"utf8",
+			),
+		) as { payload: { state: string } };
+		expect(fenceB.payload.state).toBe("untripped");
 	});
 
 	test("concurrent bound resumes produce one executor dispatch", async () => {
@@ -889,13 +1574,20 @@ describe("runbook family — live (U4 wiring)", () => {
 				})
 			).ok,
 		).toBe(true);
-		const { runtime, calls } = scriptedRuntime(store.env, []);
+		const tracked = writeTrackingPlatformFs();
+		const { runtime, calls } = scriptedRuntime(store.env, [], tracked.fs);
 		const result = await runForTest(
 			[
 				"runbook", "run",
 				"--service", "oncore",
 				"--flow", "snapshot-verify",
 				"--run", runId,
+				"--input-file",
+				`payload=${join(
+					store.deps.paths.resolution.roots.runtime,
+					"private-inputs",
+					"missing.json",
+				)}`,
 				"--handoff", handoffPath,
 				"--json",
 			],
@@ -911,6 +1603,7 @@ describe("runbook family — live (U4 wiring)", () => {
 			},
 		});
 		expect(calls).toHaveLength(0);
+		expect(tracked.writeProbeCount()).toBe(0);
 		const loaded = await loadSharedRun(store.deps, runId);
 		expect(loaded.ok).toBe(true);
 		if (loaded.ok) expect(loaded.run.revision).toBe(1);

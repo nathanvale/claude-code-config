@@ -8,6 +8,7 @@
 // selection, operations, and the driver. Public entry: parseBrowserUseArgv.
 // ---------------------------------------------------------------------------
 
+import { isAbsolute } from "node:path";
 import {
 	type CliWriter,
 	createCliRuntimeSuccessEnvelope,
@@ -282,6 +283,27 @@ export function parseBrowserUseArgv(
 		const source = stringField(flagValues["--source"]);
 		if (!source || source.startsWith("--")) {
 			throw usageError(`${command.replace("-", " ")} requires --source <path>.`);
+		}
+	}
+	// Generation consumes a complete activation-ready candidate bundle, not the
+	// legacy corpus source used by the four migration phases above. Absolute
+	// source identity is enforced at parse time; the producer then applies the
+	// directory, symlink, size, manifest, staging, and closure admission checks.
+	if (command === "migration-generate") {
+		const source = stringField(flagValues["--source"]);
+		if (!source || source.startsWith("--") || !isAbsolute(source)) {
+			throw usageError(
+				"migration generate requires --source <absolute-candidate-bundle>.",
+			);
+		}
+	}
+	if (command === "migration-activate") {
+		const generationSupplied = rest.some(
+			(arg) => arg === "--generation" || arg.startsWith("--generation="),
+		);
+		const generation = stringField(flagValues["--generation"]);
+		if (generationSupplied && (!generation || generation.startsWith("--"))) {
+			throw usageError("migration activate --generation requires <id>.");
 		}
 	}
 	// R11: binding repair and selection projection are targeted reads of exact

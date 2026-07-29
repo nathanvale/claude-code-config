@@ -101,7 +101,46 @@ export type BrowserUseMigrationState = {
 	canonical_targets: readonly BrowserUseCanonicalTarget[];
 	staged_generation: string | null;
 	last_apply_verified_noop: boolean | null;
-	activation_state: "unchanged";
+	activation_state: "unchanged" | "active";
+};
+
+/**
+ * Redacted activation identity exposed by migration status.
+ *
+ * Immutable content and candidate digests remain internal; operators need only
+ * the generation id plus historical epoch to select or inspect rollback state.
+ */
+export type BrowserUseMigrationGenerationIdentity = {
+	generation_id: string;
+	activation_epoch: number;
+};
+
+/**
+ * Authoritative read-only projection of current generation and rollback state.
+ *
+ * `activation-interrupted` distinguishes a durable pending epoch from a clean
+ * machine that has never activated a generation.
+ */
+export type BrowserUseMigrationActiveGeneration = {
+	state:
+		| "never-activated"
+		| "active"
+		| "activation-prepared"
+		| "activation-interrupted";
+	current: BrowserUseMigrationGenerationIdentity | null;
+	prior: BrowserUseMigrationGenerationIdentity | null;
+	retained: readonly BrowserUseMigrationGenerationIdentity[];
+	activation_epoch: number | null;
+	pending: "none" | "prepared" | "committed" | "interrupted";
+	effect_fence: "not-applicable" | "untripped" | "tripped";
+};
+
+/**
+ * Migration status response with activation authority derived from durable
+ * manifest, pending, epoch, and fence records.
+ */
+export type BrowserUseMigrationStatus = BrowserUseMigrationState & {
+	active_generation: BrowserUseMigrationActiveGeneration;
 };
 
 /**
@@ -148,6 +187,19 @@ export type BrowserUseMigrationFailure = {
 		| "migration_count_drift"
 		| "migration_collision"
 		| "migration_verify_failed"
+		| "migration_not_verified"
+		| "migration_generation_missing"
+		| "migration_generation_corrupt"
+		| "migration_candidate_missing"
+		| "migration_candidate_corrupt"
+		| "migration_manifest_incomplete"
+		| "migration_shipped_catalog_drift"
+		| "migration_activation_conflict"
+		| "migration_active_manifest_corrupt"
+		| "migration_effect_fence_corrupt"
+		| "migration_effect_fence_tripped"
+		| "migration_rollback_refused"
+		| "migration_prior_run_active"
 		| "store_flush_failed"
 		| "store_lock_contended"
 		| "retention_collision";

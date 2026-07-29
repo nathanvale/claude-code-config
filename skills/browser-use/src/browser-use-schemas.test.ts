@@ -79,8 +79,50 @@ const RUNBOOK_PROGRESS = {
 	total_steps: 2,
 } as const;
 
+const CORPUS_CANDIDATE = {
+	contract: "browser-use.corpus-generation-candidate",
+	schema_version: "1",
+	generation_id: "generation-1",
+	source_snapshot: {
+		snapshot_id: "snapshot-1",
+		snapshot_digest: "c".repeat(64),
+	},
+	canonical_targets: [
+		{
+			canonical_target_id: "example/read",
+			activation: "active",
+			runbook_path: "runbooks/example/read/runbook.json",
+			runbook_digest: "1".repeat(64),
+			source_relative_paths: ["example/playbooks/read.json"],
+			proof_refs: ["proof-example-read"],
+			inactive_reason: null,
+		},
+	],
+	action_registry: {
+		registry_path: "actions/registry.json",
+		registry_digest: "2".repeat(64),
+		actions: [],
+	},
+	auth: { candidates: [], routes: [] },
+	proofs: [
+		{
+			proof_ref: "proof-example-read",
+			path: "proofs/example-read.json",
+			digest: "3".repeat(64),
+		},
+	],
+	shipped_catalog_digest: "4".repeat(64),
+} as const;
+
+function firstRecord(value: unknown): Record<string, unknown> {
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new Error("fixture array is empty");
+	}
+	return value[0] as Record<string, unknown>;
+}
+
 // One valid sample per record kind: encode → parse must round-trip for all
-// eight kinds through the same envelope.
+// durable kinds through the same envelope.
 const SAMPLE_PAYLOADS: { [K in BrowserUseDurableRecordKind]: PayloadOf<K> } = {
 	"shared-run": basePayload(),
 	"run-lease": {
@@ -104,6 +146,30 @@ const SAMPLE_PAYLOADS: { [K in BrowserUseDurableRecordKind]: PayloadOf<K> } = {
 		content_hash: "a".repeat(64),
 		status: "staged",
 		staged_at_epoch_ms: 1_000,
+	},
+	"corpus-generation-candidate": CORPUS_CANDIDATE,
+	"corpus-generation-manifest": {
+		...CORPUS_CANDIDATE,
+		contract: "browser-use.corpus-generation-manifest",
+		generation_content_hash: "5".repeat(64),
+		candidate_manifest_digest: "6".repeat(64),
+		activation_epoch: 2,
+		activated_at_epoch_ms: 2_000,
+		prior_generation: null,
+		retained_generations: [],
+	},
+	"generation-effect-fence": {
+		generation_id: "generation-1",
+		activation_epoch: 2,
+		state: "untripped",
+		tripped_at_epoch_ms: null,
+		first_effect: null,
+	},
+	"activation-pending": {
+		expected_epoch: 1,
+		target_generation_id: "generation-1",
+		generation_content_hash: "5".repeat(64),
+		candidate_manifest_digest: "6".repeat(64),
 	},
 	"source-snapshot": {
 		snapshot_id: "snapshot-1",
@@ -172,12 +238,16 @@ const SAMPLE_PAYLOADS: { [K in BrowserUseDurableRecordKind]: PayloadOf<K> } = {
 };
 
 describe("durable record envelope (R10)", () => {
-	test("the kind vocabulary carries the nine durable record kinds", () => {
+	test("the kind vocabulary carries every durable record kind", () => {
 		expect(BROWSER_USE_DURABLE_RECORD_KINDS).toEqual([
 			"shared-run",
 			"run-lease",
 			"activation-epoch",
 			"generation",
+			"corpus-generation-candidate",
+			"corpus-generation-manifest",
+			"generation-effect-fence",
+			"activation-pending",
 			"source-snapshot",
 			"artifact-manifest",
 			"tombstone",
@@ -443,6 +513,198 @@ describe("per-kind payload invariants", () => {
 				p.status = "promoted";
 			},
 			label: "an unknown generation status",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				firstRecord(p.canonical_targets).inactive_reason = "blocked";
+			},
+			label: "an active target with an inactive reason",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				firstRecord(p.canonical_targets).activation = "inactive";
+			},
+			label: "an inactive target without an inactive reason",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				const targets = p.canonical_targets as Array<Record<string, unknown>>;
+				targets.push(structuredClone(firstRecord(targets)));
+			},
+			label: "duplicate canonical target ids",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				firstRecord(p.canonical_targets).proof_refs = ["missing-proof"];
+			},
+			label: "a target proof reference absent from the proof index",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				firstRecord(p.canonical_targets).proof_refs = [];
+			},
+			label: "a target without proof closure",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				firstRecord(p.canonical_targets).proof_refs = [
+					"proof-example-read",
+					"proof-example-read",
+				];
+			},
+			label: "duplicate proof ids within one target",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				const registry = p.action_registry as Record<string, unknown>;
+				const action = {
+					action_id: "action-1",
+					record_path: "actions/action-1.json",
+					record_digest: "7".repeat(64),
+					asset_path: "actions/action-1.js",
+					asset_digest: "8".repeat(64),
+				};
+				registry.actions = [action, structuredClone(action)];
+			},
+			label: "duplicate reviewed action ids",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				const proofs = p.proofs as Array<Record<string, unknown>>;
+				proofs.push(structuredClone(firstRecord(proofs)));
+			},
+			label: "duplicate proof ids",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				const auth = p.auth as Record<string, unknown>;
+				const candidate = {
+					candidate_id: "auth-1",
+					path: "auth/candidate.json",
+					digest: "7".repeat(64),
+				};
+				auth.candidates = [candidate, structuredClone(candidate)];
+			},
+			label: "duplicate auth candidate ids",
+		},
+		{
+			kind: "corpus-generation-candidate",
+			mutate: (p) => {
+				const auth = p.auth as Record<string, unknown>;
+				auth.candidates = [
+					{
+						candidate_id: "auth-1",
+						path: "auth/candidate.json",
+						digest: "7".repeat(64),
+					},
+				];
+				auth.routes = [
+					{
+						auth_context_ref: "auth-context-1",
+						candidate_id: "missing",
+						path: "auth/route.json",
+						digest: "8".repeat(64),
+					},
+				];
+			},
+			label: "an auth route pointing to an unknown candidate",
+		},
+		{
+			kind: "corpus-generation-manifest",
+			mutate: (p) => {
+				p.prior_generation = {
+					generation_id: "generation-0",
+					generation_content_hash: "7".repeat(64),
+					candidate_manifest_digest: "8".repeat(64),
+					activation_epoch: 1,
+				};
+			},
+			label: "a prior identity absent from retained generations",
+		},
+		{
+			kind: "corpus-generation-manifest",
+			mutate: (p) => {
+				p.retained_generations = [
+					{
+						generation_id: "generation-1",
+						generation_content_hash: "5".repeat(64),
+						candidate_manifest_digest: "6".repeat(64),
+						activation_epoch: 2,
+					},
+				];
+			},
+			label: "the current identity repeated as retained",
+		},
+		{
+			kind: "corpus-generation-manifest",
+			mutate: (p) => {
+				p.retained_generations = [
+					{
+						generation_id: "generation-0",
+						generation_content_hash: "7".repeat(64),
+						candidate_manifest_digest: "8".repeat(64),
+						activation_epoch: 1,
+					},
+					{
+						generation_id: "generation-0",
+						generation_content_hash: "9".repeat(64),
+						candidate_manifest_digest: "a".repeat(64),
+						activation_epoch: 1,
+					},
+				];
+			},
+			label: "duplicate retained generation and epoch identities",
+		},
+		{
+			kind: "corpus-generation-manifest",
+			mutate: (p) => {
+				p.activation_epoch = 0;
+			},
+			label: "a non-positive current activation identity",
+		},
+		{
+			kind: "generation-effect-fence",
+			mutate: (p) => {
+				p.tripped_at_epoch_ms = 2_001;
+			},
+			label: "an untripped fence carrying trip metadata",
+		},
+		{
+			kind: "generation-effect-fence",
+			mutate: (p) => {
+				p.state = "tripped";
+			},
+			label: "a tripped fence missing effect metadata",
+		},
+		{
+			kind: "activation-pending",
+			mutate: (p) => {
+				p.expected_epoch = 0;
+			},
+			label: "a non-positive expected epoch",
+		},
+		{
+			kind: "activation-pending",
+			mutate: (p) => {
+				p.generation_content_hash = "not-a-digest";
+			},
+			label: "an invalid generation content digest",
+		},
+		{
+			kind: "activation-pending",
+			mutate: (p) => {
+				p.candidate_manifest_digest = "not-a-digest";
+			},
+			label: "an invalid candidate manifest digest",
 		},
 		{
 			kind: "source-snapshot",

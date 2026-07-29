@@ -1,4 +1,5 @@
 import {
+	type CommandResultPayload,
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
@@ -9,6 +10,7 @@ import {
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
 import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
+import type { BrowserUseRunbookPrivateInputRefusal } from "./browser-use-runbook";
 
 // The Warm Chrome browser-entry proof contract id + schema version are owned by
 // @side-quest/warm-chrome (WARM_CHROME_CONTRACT_ID / WARM_CHROME_SCHEMA_VERSION);
@@ -309,7 +311,33 @@ export const BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID =
 const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
 	"browser-use.migration-status" as const;
-const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
+// The durable migration status is schema v2. Keep facade discovery aligned
+// with the payload emitted by every migration command.
+const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "2" as const;
+export const BROWSER_USE_GENERATION_RESULT_CONTRACT_ID =
+	"browser-use.generation-result" as const;
+export const BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION = "1" as const;
+
+/** Activation-ready immutable generation staged from one complete candidate bundle. */
+export type BrowserUseGenerationResult = CommandResultPayload<{
+	generation_id: string;
+	generation_content_hash: string;
+	candidate_manifest_digest: string;
+	closure: {
+		canonical_target_count: number;
+		active_target_count: number;
+		action_count: number;
+		auth_candidate_count: number;
+		auth_route_count: number;
+		proof_count: number;
+	};
+	verified_noop: boolean;
+	next_safe_action: {
+		id: "activate_staged_generation";
+		command: "migration";
+		args: readonly ["activate", "--generation", string, "--json"];
+	};
+}>;
 export const BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID =
 	"browser-use.artifact-manifest" as const;
 const BROWSER_USE_ARTIFACT_MANIFEST_SCHEMA_VERSION = "1" as const;
@@ -422,6 +450,8 @@ const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
 	"plan",
 	"apply",
 	"verify",
+	"generate",
+	"activate",
 ] as const;
 export type BrowserUseMigrationSubcommand =
 	(typeof BROWSER_USE_MIGRATION_SUBCOMMANDS)[number];
@@ -509,7 +539,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	lanes: "Browser Use Adapter Lane Registry discovery.",
 	run: "Shared Browser Use run status, resume, and cancel.",
 	runbook: "Browser Runbook catalog.",
-	migration: "Legacy corpus migration status.",
+	migration: "Legacy corpus migration and immutable generation staging.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
 	auth: "Auth readiness checks: the blocked-cause repair continuations as commands.",
@@ -549,6 +579,8 @@ export type BrowserUseCommand =
 	| "migration-plan"
 	| "migration-apply"
 	| "migration-verify"
+	| "migration-generate"
+	| "migration-activate"
 	| "artifact-list"
 	| "repair-status"
 	| "repair-apply"
@@ -556,6 +588,19 @@ export type BrowserUseCommand =
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
 	| "auth-request-binding-selection-grant";
+
+/** Private-input refusal codes reachable through the public runbook command. */
+export const BROWSER_USE_PRIVATE_INPUT_DIAGNOSTIC_CODES = [
+	"private_input_path_unsafe",
+	"private_input_open_failed",
+	"private_input_not_regular",
+	"private_input_wrong_owner",
+	"private_input_mode_loose",
+	"private_input_multiple_links",
+	"private_input_oversize",
+	"private_input_json_invalid",
+	"private_input_shape_invalid",
+] as const satisfies readonly BrowserUseRunbookPrivateInputRefusal["code"][];
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -670,6 +715,44 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"migration_count_drift",
 	"migration_collision",
 	"migration_verify_failed",
+	// Immutable generation producer refusals. The candidate manifest owns the
+	// generation id; generation staging validates the complete candidate bundle
+	// locally without browser, network, auth, or prompt work.
+	"generation_source_invalid",
+	"generation_candidate_missing",
+	"generation_candidate_invalid",
+	"generation_stage_failed",
+	"generation_staged_copy_corrupt",
+	"generation_closure_invalid",
+	// Complete-generation activation refusals (U8). Activation is distinct from
+	// source-bound verification: closure, shipped package drift, manifest CAS,
+	// generation-effect fencing, and a live prior-generation mutation each keep
+	// the current complete generation authoritative.
+	"migration_not_verified",
+	"migration_generation_missing",
+	"migration_generation_corrupt",
+	"migration_candidate_missing",
+	"migration_candidate_corrupt",
+	"migration_manifest_incomplete",
+	"migration_shipped_catalog_drift",
+	"migration_activation_conflict",
+	"migration_active_manifest_corrupt",
+	"migration_effect_fence_corrupt",
+	"migration_effect_fence_tripped",
+	"migration_rollback_refused",
+	"migration_prior_run_active",
+	// Active-generation runbook/private-input/resume refusals emitted by the
+	// U8 runbook driver. Keep the diagnostics registry aligned with every
+	// reachable stable error.code.
+	"runbook_catalog_drift",
+	"runbook_inactive",
+	"runbook_input_unknown",
+	"runbook_input_source_conflict",
+	"runbook_input_custody_mismatch",
+	...BROWSER_USE_PRIVATE_INPUT_DIAGNOSTIC_CODES,
+	"resume_generation_drift",
+	"resume_generation_unavailable",
+	"resume_binding_invalid",
 	// R27 auth repair surface (auth plan U3a): dispatching a repair command
 	// against a run whose persisted continuation names a DIFFERENT next safe
 	// action fails closed — the run's own continuation stays the one truth.
@@ -975,6 +1058,74 @@ export const browserUsePlatformStoreSuccessActions = [
 	},
 ] as const;
 
+// Migration recovery actions are command-contract affordances, not prose-only
+// hints. Every typed migration refusal maps to exactly one of these ids.
+export const browserUseMigrationFailureActions = [
+	{
+		id: "change_migration_source",
+		summary:
+			"Correct the migration source path or malformed source content, then restart the migration phase.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_migration_inventory",
+		summary:
+			"Run browser-use migration inventory again to freeze the current source tree.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "retry_migration_operation",
+		summary:
+			"Wait for the conflicting migration operation or live prior run to finish, then retry.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "select_migration_generation",
+		summary:
+			"Inspect migration status and pass an existing verified generation id.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_migration_state",
+		summary:
+			"Run browser-use migration status and repair the reported durable migration state before retrying.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+// Immutable generation producer recoveries. These ids mirror the total
+// producer failure continuation vocabulary; callers never need to infer a
+// repair from free text.
+export const browserUseGenerationSuccessActions = [
+	{
+		id: "activate_staged_generation",
+		summary:
+			"Validate and activate the staged generation through browser-use migration activate.",
+		sideEffects: ["check", "write"],
+	},
+] as const;
+
+export const browserUseGenerationFailureActions = [
+	{
+		id: "repair_generation_source",
+		summary:
+			"Repair the complete candidate bundle and its manifest, then generate again.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "choose_new_generation_id",
+		summary:
+			"Publish the candidate manifest with a new generation id, then generate again.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "inspect_generation_store",
+		summary:
+			"Inspect the immutable generation store and repair the reported staging failure before retrying.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 // Runbook target repair ids are shared by task-run and runbook-run discovery.
 export const browserUseRunbookTargetRepairActions = [
 	{
@@ -993,6 +1144,16 @@ export const browserUseRunbookTargetRepairActions = [
 		id: "restore_bound_runbook_target",
 		summary:
 			"Restore the runbook's bound tab in the verified session, or start a new run; never rebind the existing run.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+/** Input-custody correction advertised by runbook-run discovery and failures. */
+export const browserUseRunbookInputFailureActions = [
+	{
+		id: "change_runbook_input",
+		summary:
+			"Correct the runbook input ids and use each input's declared public or private source, then retry.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1069,7 +1230,7 @@ export const browserUseTaskRunSuccessActions = [
 ] as const;
 
 type BrowserUseAudience = "agent" | "operator";
-type BrowserUseMutation = "check" | "browser";
+type BrowserUseMutation = "check" | "write" | "browser";
 type BrowserUseCommandContract = CommandFacadeContract<
 	BrowserUseCommand,
 	BrowserUseAudience,
@@ -1450,11 +1611,44 @@ const browserUseMigrationFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+// Generation accepts a complete activation-ready candidate bundle. This source
+// is not the legacy corpus root consumed by inventory/plan/apply/verify. The
+// candidate manifest owns generation_id, so no --generation flag exists here.
+const browserUseMigrationGenerateFlags = {
+	"--source": {
+		type: "path",
+		required: true,
+		description:
+			"Absolute path to one complete activation-ready candidate bundle, including its candidate manifest. Not a legacy corpus root.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// Activation selects one verified complete Corpus Generation. It never reads
+// the legacy source root: --generation optionally targets an exact verified
+// generation; omitted means the migration engine selects the staged generation
+// recorded in the durable migration state.
+const browserUseMigrationActivateFlags = {
+	"--generation": {
+		type: "string",
+		description:
+			"Exact verified Corpus Generation id to activate. Omit to select the staged generation recorded by migration status.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 const browserUsePlatformExitCodes = {
 	"0": "Command completed.",
 	"1": "Runtime dependency failed or live logic is not implemented.",
 	"2": "Usage error.",
 	"20": "Run, binding, or evidence state failed closed.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
+
+const browserUseGenerationExitCodes = {
+	"0": "Immutable generation staged or verified as an exact no-op.",
+	"1": "Unexpected facade runtime failure.",
+	"2": "Usage error.",
+	"20": "Candidate admission, staging, or closure validation refused.",
 } as const satisfies BrowserUseCommandContract["exitCodes"];
 
 const browserUseTaskIntentsResultContract = {
@@ -1550,7 +1744,12 @@ const browserUseRunbookRunFlags = {
 	"--input": {
 		type: "string",
 		description:
-			"Runbook input binding as <id>=<value>. Repeatable; one per declared runbook input.",
+			"Ordinary public runbook input as <id>=<value>. Repeatable; sensitive inputs are refused.",
+	},
+	"--input-file": {
+		type: "string",
+		description:
+			"Sensitive private runbook input as <id>=<absolute-path>. Repeatable; files must be owner-only beneath the admitted runtime input root.",
 	},
 	"--handoff": {
 		type: "path",
@@ -1572,8 +1771,16 @@ const browserUseRunbookRunFlags = {
 
 const browserUseMigrationStatusResultContract = {
 	id: BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
-	kind: "Legacy corpus migration status projection.",
+	kind:
+		"Legacy corpus migration status projection with active_generation current, prior, retained, activation epoch, pending, and effect-fence fields.",
 	schema_version: BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseGenerationResultContract = {
+	id: BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
+	kind:
+		"Activation-ready immutable generation result with generation_id, generation_content_hash, candidate_manifest_digest, closure, verified_noop, and one structured next safe action.",
+	schema_version: BROWSER_USE_GENERATION_RESULT_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
 const browserUseArtifactManifestResultContract = {
@@ -2069,7 +2276,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Compile one Browser Runbook and dispatch it through the agent-browser lane against a verified handoff; returns the shared run, external-effect state, and next safe action.",
 			usage: [
-				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
+				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--input-file <id>=<absolute-path>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -2088,6 +2295,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 				success: browserUsePlatformStoreSuccessActions,
 				failure: [
 					...browserUsePlatformStoreFailureActions,
+					...browserUseRunbookInputFailureActions,
 					...browserUseRunbookTargetRepairActions,
 				],
 			},
@@ -2106,8 +2314,11 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUsePlatformEnvVars,
+			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -2130,6 +2341,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
 			flags: browserUseMigrationFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -2152,6 +2366,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
 			flags: browserUseMigrationFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -2175,6 +2392,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
 			flags: browserUseMigrationFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
@@ -2197,7 +2417,63 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
 			flags: browserUseMigrationFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"migration-generate": {
+			script: "browser-use",
+			summary:
+				"Publish one activation-ready immutable generation from a complete activation-ready candidate bundle; the candidate manifest supplies generation_id.",
+			usage: [
+				"migration generate --source <absolute-candidate-bundle> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Generate stages an inactive immutable generation and never activates it or performs an external effect.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseGenerationResultContract,
+			actionAffordances: {
+				success: browserUseGenerationSuccessActions,
+				failure: browserUseGenerationFailureActions,
+			},
+			flags: browserUseMigrationGenerateFlags,
+			exitCodes: browserUseGenerationExitCodes,
+		},
+		"migration-activate": {
+			script: "browser-use",
+			summary:
+				"Validate one complete verified Corpus Generation and select it through the fenced manifest compare-and-swap.",
+			usage: [
+				"migration activate [--generation <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Activate is the explicit write command; status and verify are its read/check preparation surfaces.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseMigrationStatusResultContract,
+			actionAffordances: {
+				failure: browserUseMigrationFailureActions,
+			},
+			flags: browserUseMigrationActivateFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"artifact-list": {

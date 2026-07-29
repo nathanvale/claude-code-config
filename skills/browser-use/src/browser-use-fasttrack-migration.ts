@@ -172,6 +172,7 @@ export function buildFasttrackSaveDraftMigration(
 				id: "day_keys",
 				summary: "Ordered stable day keys (Mon..Sun) to fill and break.",
 				required: true,
+				custody: "sensitive",
 				schema: {
 					kind: "array",
 					min_items: 1,
@@ -188,6 +189,7 @@ export function buildFasttrackSaveDraftMigration(
 				id: "days",
 				summary: "Expected per-day rows keyed to the ordered day-key sequence.",
 				required: true,
+				custody: "sensitive",
 				schema: {
 					kind: "array",
 					min_items: 1,

@@ -13,6 +13,7 @@ import {
 	itemKeysAreValid,
 	itemKeySequenceDigest,
 	normalizedInputDigest,
+	parseReviewedActionRecord,
 	recordItemCheckpoint,
 	resolveNextBatchItem,
 	resolveResumeAgainstBinding,
@@ -103,6 +104,20 @@ function seamFor(
 }
 
 const READ_BYTES_STORE = { [READ_DIGEST]: READ_ASSET_BYTES };
+
+describe("parseReviewedActionRecord", () => {
+	test("rejects a malformed nested promotion receipt without throwing", () => {
+		const raw = {
+			...readRecord(),
+			promotion_receipt: "not-an-object",
+		};
+
+		expect(parseReviewedActionRecord(raw)).toEqual({
+			ok: false,
+			message: "reviewed action record does not match its schema.",
+		});
+	});
+});
 
 // --- Happy paths -------------------------------------------------------------
 
