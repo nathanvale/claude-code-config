@@ -619,6 +619,34 @@ describe("platform families reject undeclared flags", () => {
 	}
 });
 
+describe("environment token custody platform boundary", () => {
+	test("the path owner fixes native custody below the admitted config root", async () => {
+		const xdg = makeTempXdgEnv();
+		try {
+			const opened = await openBrowserUsePaths(
+				createDefaultPlatformFs(),
+				xdg.env,
+			);
+			expect(opened.ok).toBe(true);
+			if (!opened.ok) throw new Error(opened.refusal.code);
+			expect(opened.paths.config).toEqual({
+				root: opened.paths.resolution.roots.config,
+				tokenCustodyDir: join(
+					opened.paths.resolution.roots.config,
+					"auth.nosync",
+				),
+				environmentTokenFile: join(
+					opened.paths.resolution.roots.config,
+					"auth.nosync",
+					"op-service-account-token",
+				),
+			});
+		} finally {
+			xdg.dispose();
+		}
+	});
+});
+
 describe("runbook input custody CLI boundary", () => {
 	test("a missing runbook refuses before private-file reads or write admission", async () => {
 		const xdg = makeTempXdgEnv();

@@ -739,7 +739,13 @@ export type BrowserUseAdmittedPaths = {
 	cache: { indexesDir: string; compiledDir: string; probesDir: string };
 	/** Under the runtime root OR the warned fallback (R11). */
 	runtime: { locksDir: string; socketsDir: string };
-	config: { root: string };
+	config: {
+		root: string;
+		/** Fixed native-custody directory; TypeScript never reads its contents. */
+		tokenCustodyDir: string;
+		/** Fixed token pathname passed only to native executables. */
+		environmentTokenFile: string;
+	};
 	data: { root: string };
 };
 
@@ -812,7 +818,15 @@ function deriveAdmittedPaths(
 			locksDir: join(roots.runtime, "locks"),
 			socketsDir: join(roots.runtime, "sockets"),
 		},
-		config: { root: roots.config },
+		config: {
+			root: roots.config,
+			tokenCustodyDir: join(roots.config, "auth.nosync"),
+			environmentTokenFile: join(
+				roots.config,
+				"auth.nosync",
+				"op-service-account-token",
+			),
+		},
 		data: { root: roots.data },
 	};
 }
