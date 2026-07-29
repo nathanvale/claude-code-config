@@ -37,8 +37,8 @@ Read `.out-of-scope/*.md` during context gathering.
 Write only after the maintainer rejects an enhancement as `wontfix`.
 
 1. Find a matching concept file.
-2. Append the issue link when one exists.
-3. Otherwise create a concept file with reasoning and the first issue link.
+2. Append the current issue link to an existing concept file.
+3. Otherwise create a concept file with reasoning and the current issue link.
 4. Link the record from the issue comment.
 5. Apply the mapped `wontfix` role and close the issue after confirmation.
 

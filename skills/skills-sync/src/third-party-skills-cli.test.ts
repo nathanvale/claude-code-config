@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdtemp,
+	mkdir,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -306,6 +314,7 @@ describe("third-party-skills CLI", () => {
 	});
 
 	test("prune reports exact partial progress when a later removal fails", async () => {
+		if (process.getuid?.() === 0) return;
 		const root = await makeFixture({ ref: FIXTURE_REF, selected: false });
 		const isolatedHome = await mkdtemp(join(tmpdir(), "third-party-skills-home-"));
 		fixtureRoots.push(isolatedHome);
@@ -369,6 +378,21 @@ describe("third-party-skills CLI", () => {
 
 	test("check fails when installed bytes differ from the reviewed hash", async () => {
 		const root = await makeFixture({ ref: FIXTURE_REF, installedContent: `${FIXTURE_SKILL}\ndrift\n` });
+
+		const result = await runCli(["check", "--repo", root, "--scope", "project", "--json"]);
+
+		expect(result.exitCode).toBe(5);
+		expect(result.json?.diagnostics).toEqual([
+			expect.objectContaining({ code: "hash_mismatch", skill: "sample" }),
+		]);
+	});
+
+	test("check detects a symlink added to a reviewed projection", async () => {
+		const root = await makeFixture({ ref: FIXTURE_REF });
+		await symlink(
+			"SKILL.md",
+			join(root, ".agents", "skills", "sample", "linked-skill.md"),
+		);
 
 		const result = await runCli(["check", "--repo", root, "--scope", "project", "--json"]);
 
@@ -461,6 +485,7 @@ providers:
 				},
 			},
 		});
+		expect((await stat(join(root, "skills-lock.json"))).mode & 0o777).toBe(0o644);
 	});
 
 	test("lock hashes distinct directory trees to distinct values", async () => {
@@ -515,16 +540,26 @@ providers:
 		expect(lockResult.exitCode).toBe(0);
 		const expectedLock = await Bun.file(join(root, "skills-lock.json")).text();
 		await rm(join(root, ".agents"), { recursive: true });
+		const fakeBin = await mkdtemp(join(tmpdir(), "third-party-skills-bin-"));
+		fixtureRoots.push(fakeBin);
+		await writeFile(
+			join(fakeBin, "bunx"),
+			'#!/bin/sh\nset -eu\ncheckout="$3"\nmkdir -p .agents/skills\ncp -R "$checkout/skills/sample" .agents/skills/sample\n',
+			{ mode: 0o755 },
+		);
 
-		const result = await runCli([
-			"restore",
-			"--repo",
-			root,
-			"--scope",
-			"project",
-			"--execute",
-			"--json",
-		]);
+		const result = await runCli(
+			[
+				"restore",
+				"--repo",
+				root,
+				"--scope",
+				"project",
+				"--execute",
+				"--json",
+			],
+			{ PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+		);
 
 		expect(result.exitCode).toBe(0);
 		expect(result.json?.status).toBe("ok");

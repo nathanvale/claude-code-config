@@ -61,6 +61,7 @@ Describe the required behavior, including edge cases and errors.
 Reject a brief that lacks any of:
 
 - category
+- summary
 - current and desired behavior
 - durable interface-level guidance
 - testable acceptance criteria

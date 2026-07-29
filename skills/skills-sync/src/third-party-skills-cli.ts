@@ -1,7 +1,16 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+	lstat,
+	mkdtemp,
+	readdir,
+	readFile,
+	readlink,
+	rename,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { YAML } from "bun";
@@ -66,7 +75,7 @@ interface PruneTarget extends ProjectionTarget {
 }
 
 interface ResultEnvelope {
-	changed_state: "lock" | "none" | "projections";
+	changed_state: "lock" | "none" | "projections" | "unknown";
 	command: Command;
 	data: Record<string, unknown>;
 	diagnostics: Diagnostic[];
@@ -431,7 +440,12 @@ function validateLock(value: unknown, manifest: SourcesManifest): {
 }
 
 async function computeSkillHash(skillDirectory: string): Promise<string> {
-	const files: Array<{ content: Buffer; executableMode: number; path: string }> = [];
+	const files: Array<{
+		content: Buffer;
+		executableMode: number;
+		kind: "file" | "symlink";
+		path: string;
+	}> = [];
 
 	async function collect(currentDirectory: string): Promise<void> {
 		const entries = await readdir(currentDirectory, { withFileTypes: true });
@@ -446,6 +460,14 @@ async function computeSkillHash(skillDirectory: string): Promise<string> {
 					files.push({
 						content: await readFile(entryPath),
 						executableMode: metadata.mode & 0o111,
+						kind: "file",
+						path: relative(skillDirectory, entryPath).split("\\").join("/"),
+					});
+				} else if (entry.isSymbolicLink()) {
+					files.push({
+						content: Buffer.from(await readlink(entryPath), "utf8"),
+						executableMode: 0,
+						kind: "symlink",
 						path: relative(skillDirectory, entryPath).split("\\").join("/"),
 					});
 				}
@@ -454,12 +476,14 @@ async function computeSkillHash(skillDirectory: string): Promise<string> {
 	}
 
 	await collect(skillDirectory);
-	files.sort((left, right) => left.path.localeCompare(right.path));
+	files.sort((left, right) =>
+		Buffer.compare(Buffer.from(left.path, "utf8"), Buffer.from(right.path, "utf8")),
+	);
 	const hash = createHash("sha256");
 	hash.update("third-party-skill-tree-v2\0");
 	for (const file of files) {
 		const path = Buffer.from(file.path, "utf8");
-		hash.update("file\0");
+		hash.update(`${file.kind}\0`);
 		hash.update(`${file.executableMode}\0${path.byteLength}\0`);
 		hash.update(path);
 		hash.update(`${file.content.byteLength}\0`);
@@ -628,14 +652,25 @@ async function generateLock(manifest: SourcesManifest): Promise<{
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 	const temporaryPath = `${path}.${randomUUID()}.tmp`;
-	await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+	const mode = await existingFileMode(path);
+	await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode });
 	await rename(temporaryPath, path);
 }
 
 async function writeTextAtomic(path: string, value: string): Promise<void> {
 	const temporaryPath = `${path}.${randomUUID()}.tmp`;
-	await writeFile(temporaryPath, value, { mode: 0o600 });
+	const mode = await existingFileMode(path);
+	await writeFile(temporaryPath, value, { mode });
 	await rename(temporaryPath, path);
+}
+
+async function existingFileMode(path: string): Promise<number> {
+	try {
+		return (await lstat(path)).mode & 0o777;
+	} catch (error) {
+		if (isRecord(error) && error.code === "ENOENT") return 0o600;
+		throw error;
+	}
 }
 
 async function checkProjection(
@@ -702,6 +737,7 @@ async function installCheckout(
 		"skills@1.5.14",
 		"add",
 		checkout,
+		...(global ? ["--global"] : []),
 		"--copy",
 		"--skill",
 		...plan.skills,
@@ -710,7 +746,6 @@ async function installCheckout(
 		"codex",
 		"-y",
 	];
-	if (global) command.splice(4, 0, "--global");
 	await runProcess(command, repo);
 }
 
@@ -1411,4 +1446,29 @@ async function main(): Promise<never> {
 	);
 }
 
-await main();
+try {
+	await main();
+} catch {
+	const command = Bun.argv[2] as Command;
+	const envelope: ResultEnvelope = {
+		changed_state: "unknown",
+		command,
+		data: {},
+		diagnostics: [
+			{
+				code: "unexpected_failure",
+				message: "Unexpected runtime failure; managed state may be partial.",
+			},
+		],
+		run_id: randomUUID(),
+		status: "error",
+	};
+	if (Bun.argv.includes("--json")) {
+		process.stdout.write(`${JSON.stringify(envelope)}\n`);
+	} else {
+		process.stderr.write(
+			"unexpected_failure: Unexpected runtime failure; managed state may be partial.\n",
+		);
+	}
+	process.exit(4);
+}

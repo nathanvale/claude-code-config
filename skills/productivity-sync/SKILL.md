@@ -108,7 +108,7 @@ For each connector in `.productivity.yml`:
 | Connector value | Probe (cheap, <1s each) |
 |---|---|
 | `microsoft-365` (calendar/email) | Confirm an `mcp__*` Microsoft Graph tool is loaded; if not → ❌ |
-| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account resolves in `gog --client <name> auth list --json --no-input` when a client is set, otherwise in `gog auth list --json --no-input` → ❌ if any fails |
+| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account resolves in `gog --client <name> auth list --check --json --no-input` when a client is set, otherwise in `gog auth list --check --json --no-input` → ❌ if any fails |
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
 | `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |

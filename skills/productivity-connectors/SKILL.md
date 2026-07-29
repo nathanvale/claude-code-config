@@ -257,9 +257,11 @@ return `unauthorized_client`. Pin `<connector>-client` in `.productivity.yml`
 when repository routing must not depend on machine-local account/domain maps.
 
 ### Auth preflight
-Use `gog --client <name> auth list --check --json --no-input` for the selected
-token bucket. If it fails, run
-`gog --client <name> auth doctor --check --json --no-input`. Branch on exit
+For a pinned or resolved client, use
+`gog --client <name> auth list --check --json --no-input` for the selected token
+bucket. If no client is selected, use
+`gog auth list --check --json --no-input`. On failure, run the matching
+`gog [--client <name>] auth doctor --check --json --no-input`. Branch on exit
 code 4 for unusable auth and 10 for missing local configuration.
 
 ### Multi-client multi-terminal safety
@@ -307,8 +309,9 @@ Before any `gog` command, verify the account and client are configured:
 ### 4. Auth error recovery
 If stderr mentions token expiry or auth failure:
 - Skip the current source with a clear message
-- Suggest: "Run `gog --client <name> auth doctor --check --json --no-input`,
-  then re-run `gog --client <name> auth add <email>` if repair is required"
+- Suggest the matching client-aware or default-client doctor command, then the
+  matching `gog [--client <name>] auth add <email>` command when repair is
+  required
 - Continue to next source — never fail the entire sync for one connector
 
 ### 5. Wrong-account detection
