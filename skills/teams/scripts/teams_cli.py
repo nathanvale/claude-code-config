@@ -66,6 +66,13 @@ COMMANDS: list[dict] = [
     {"name": "code", "group": "extract", "heuristic": False,
      "summary": "Messages containing code or pre blocks.",
      "usage": "code [--channel NAME] [--limit N]"},
+    {"name": "unread", "group": "read", "heuristic": False,
+     "summary": "Unread activity-feed items and conversations. Note: the cache "
+                "keeps no per-message read horizon.",
+     "usage": "unread [--limit N]"},
+    {"name": "reactions", "group": "extract", "heuristic": False,
+     "summary": "Emoji reaction counts and the most-reacted messages.",
+     "usage": "reactions [--channel NAME] [--since YYYY-MM-DD] [--limit N]"},
     {"name": "people", "group": "identity", "heuristic": False,
      "summary": "Directory of everyone in the local profile cache.",
      "usage": "people [--limit N]"},
@@ -344,6 +351,46 @@ def cmd_code(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     return items
 
 
+def cmd_unread(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    result = reader.unread(limit=args.limit)
+    if not args.json:
+        print(result["note"] + "\n")
+        acts = result["activities"]
+        print(f"Unread activity ({len(acts)})")
+        for a in acts:
+            label = a["activity_subtype"] or a["activity_type"] or "activity"
+            where = a["conversation_name"] or a["conversation_id"] or "?"
+            print(f"  [{fmt_time(a['time'])}] {label} · {where}")
+            if a["content"]:
+                print(f"    {a['author']}: {truncate(a['content'], 130)}")
+        convs = result["conversations"]
+        print(f"\nUnread conversations ({len(convs)})")
+        for c in convs:
+            print(f"  [{fmt_time(c['last'])}] {c['type']:<10} {c['name']}")
+    return result
+
+
+def cmd_reactions(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    conv_id = one_channel(reader, args.channel) if args.channel else None
+    result = reader.reactions(conv_id, since=parse_date(args.since), limit=args.limit)
+    if not args.json:
+        print(f"Reactions across {result['messages_with_reactions']} messages\n")
+        by_emoji = result["by_emoji"]
+        top_emoji = list(by_emoji.items())[:10]
+        print("  By emoji: " + ", ".join(f"{k} x{v}" for k, v in top_emoji))
+        print("  Top reactors: " + ", ".join(
+            f"{r['display_name'] or r['mri'][:20]} ({r['count']})"
+            for r in result["top_reactors"][:5]))
+        print(f"\nMost-reacted messages ({len(result['most_reacted'])})")
+        for m in result["most_reacted"]:
+            emojis = ", ".join(f"{k} x{v}" for k, v in m["reactions"].items())
+            where = m["conversation_name"] or m["conversation_id"]
+            print(f"  [{fmt_time(m['time'])}] {m['total_reactions']} reactions "
+                  f"({emojis}) · {where}")
+            print(f"    {m['author']}: {truncate(m['content'], 130)}")
+    return result
+
+
 def cmd_people(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     ppl = sorted(reader.people().values(), key=lambda p: (p["displayName"] or "").lower())
     ppl = ppl[: args.limit]
@@ -449,6 +496,8 @@ HANDLERS = {
     "ticket": cmd_ticket,
     "links": cmd_links,
     "code": cmd_code,
+    "unread": cmd_unread,
+    "reactions": cmd_reactions,
     "people": cmd_people,
     "whois": cmd_whois,
     "whoami": cmd_whoami,
@@ -590,6 +639,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("code", "Messages containing code or pre blocks.")
     p.add_argument("--channel", default=None)
     p.add_argument("--limit", type=int, default=30)
+
+    p = add("unread", "Unread activity-feed items and conversations.")
+    p.add_argument("--limit", type=int, default=50)
+
+    p = add("reactions", "Emoji reaction counts and most-reacted messages.")
+    p.add_argument("--channel", default=None)
+    p.add_argument("--since", default=None)
+    p.add_argument("--limit", type=int, default=25)
 
     p = add("people", "Directory of everyone in the local profile cache.")
     p.add_argument("--limit", type=int, default=100)

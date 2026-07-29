@@ -155,6 +155,9 @@ class Conversation:
     name: str | None
     last: datetime | None
     n_members: int | None = None
+    # threadProperties.isRead inverted. None where Teams keeps no read flag at
+    # all, which is the case for channel/topic threads.
+    unread: bool | None = None
 
 
 @dataclass
@@ -326,9 +329,11 @@ class TeamsReader:
                 if last:
                     break
             members = v.get("members")
+            is_read = undef(tp.get("isRead"))
             existing = out.get(cid)
             conv = Conversation(cid, v.get("type"), name, last,
-                                len(members) if isinstance(members, list) else None)
+                                len(members) if isinstance(members, list) else None,
+                                unread=(not is_read) if isinstance(is_read, bool) else None)
             # keep the record with the newest last-activity (dedupe LevelDB versions)
             if not existing or (conv.last and (not existing.last or conv.last > existing.last)):
                 out[cid] = conv
@@ -650,6 +655,169 @@ class TeamsReader:
             if t not in seen:
                 seen.add(t); uniq.append((t, m))
         return {"since": since, "mine": mine, "questions_to_me": questions, "tickets": uniq}
+
+    # ---- CAP14: unread catch-up ----------------------------------------------
+    def unread(self, limit: int = 50) -> dict:
+        """What is waiting for you, from the read-state the store actually keeps.
+
+        NOT a message-level unread list. A spike against the real store found no
+        per-message read horizon: ``oldConsumptionHorizonKeys`` is always empty,
+        and there is no ``lastReadMessageId``. What exists is:
+
+        * ``activity-manager/feed-items`` — the activity feed (mentions,
+          reactions, meeting changes), each with ``isRead`` and a pointer to its
+          source message. This is the useful signal.
+        * ``threadProperties.isRead`` — a single bool per conversation, present
+          on chats and meetings but absent on channel/topic threads.
+
+        So this returns unread *activities* and unread *conversations*, which is
+        what "unread" can honestly mean here.
+        """
+        by_id = {m.message_id: m for m in self.iter_messages()}
+        convs = self.conversations()
+
+        activities = []
+        am = self._find_db("activity-manager")
+        if am is not None:
+            newest: dict[str, dict] = {}
+            for rec in am["feed-items"].iterate_records(
+                    live_only=True, bad_deserializer_data_handler=self._skip_bad):
+                v = rec.value
+                if not isinstance(v, dict) or not v.get("activityId"):
+                    continue
+                # isRead flips false->true in place; keep the newest version.
+                prev = newest.get(v["activityId"])
+                if not prev or str(v.get("version", "")) > str(prev.get("version", "")):
+                    newest[v["activityId"]] = v
+            for v in newest.values():
+                if v.get("isRead"):
+                    continue
+                msg = by_id.get(str(undef(v.get("sourceMessageId")) or ""))
+                conv = convs.get(undef(v.get("sourceThreadId")))
+                activities.append({
+                    "activity_type": undef(v.get("activityType")),
+                    "activity_subtype": undef(v.get("activitySubtype")),
+                    "time": ms_to_dt(v.get("timestamp")),
+                    "conversation_id": undef(v.get("sourceThreadId")),
+                    "conversation_name": conv.name if conv else None,
+                    "author": msg.author if msg else None,
+                    "content": msg.content if msg else None,
+                })
+            activities.sort(key=lambda x: x["time"] or datetime.min.replace(tzinfo=timezone.utc),
+                            reverse=True)
+
+        conversations = []
+        for conv in convs.values():
+            if conv.unread is True:
+                conversations.append({
+                    "conversation_id": conv.id, "name": conv.name,
+                    "type": conv.type, "last": conv.last,
+                })
+        conversations.sort(key=lambda x: x["last"] or datetime.min.replace(tzinfo=timezone.utc),
+                           reverse=True)
+
+        return {
+            "activities": activities[:limit],
+            "conversations": conversations[:limit],
+            "note": (
+                "The Teams cache keeps no per-message read horizon. 'Unread' here "
+                "means unread activity-feed items (mentions, reactions, meeting "
+                "changes) and conversations flagged unread. Channel/topic threads "
+                "carry no read flag at all."
+            ),
+        }
+
+    # ---- CAP15: reaction summary ----------------------------------------------
+    def reactions(self, conversation_id: str | None = None,
+                  since: datetime | None = None, limit: int = 25) -> dict:
+        """Aggregate emoji reactions and surface the most-reacted messages.
+
+        Reactions live inline on the messages we already traverse, at
+        ``properties.emotions``: ``[{key, users: [{mri, time}]}]``.
+
+        Emoji counts only — no sentiment inference is attempted.
+        """
+        store = self._find_db("replychain-manager")["replychains"]
+        want = {conversation_id} if conversation_id else None
+        convs = self.conversations()
+        people = self.people()
+
+        totals: dict[str, int] = {}
+        by_reactor: dict[str, int] = {}
+        messages: dict[str, dict] = {}
+
+        for rec in store.iterate_records(live_only=True,
+                                         bad_deserializer_data_handler=self._skip_bad):
+            v = rec.value
+            if not isinstance(v, dict):
+                continue
+            cid = v.get("conversationId")
+            if want is not None and cid not in want:
+                continue
+            mm = v.get("messageMap")
+            if not isinstance(mm, dict):
+                continue
+            for mid, m in mm.items():
+                if not isinstance(m, dict):
+                    continue
+                props = m.get("properties")
+                if not isinstance(props, dict):
+                    continue
+                emotions = undef(props.get("emotions"))
+                if not isinstance(emotions, list) or not emotions:
+                    continue
+                when = msg_time(m)
+                if since and (not when or when < since):
+                    continue
+
+                per_message: dict[str, int] = {}
+                total = 0
+                for emotion in emotions:
+                    if not isinstance(emotion, dict):
+                        continue
+                    key = undef(emotion.get("key"))
+                    users = undef(emotion.get("users")) or []
+                    if not key or not isinstance(users, list) or not users:
+                        continue
+                    per_message[key] = per_message.get(key, 0) + len(users)
+                    totals[key] = totals.get(key, 0) + len(users)
+                    total += len(users)
+                    for user in users:
+                        if isinstance(user, dict):
+                            mri = undef(user.get("mri"))
+                            if mri:
+                                by_reactor[mri] = by_reactor.get(mri, 0) + 1
+                if not total:
+                    continue
+
+                # Dedupe LevelDB record versions: keep the richest reaction set.
+                key_id = str(undef(m.get("id")) or mid)
+                prev = messages.get(key_id)
+                if prev and prev["total_reactions"] >= total:
+                    continue
+                conv = convs.get(cid)
+                messages[key_id] = {
+                    "time": when,
+                    "author": undef(m.get("imDisplayName")) or "(unknown)",
+                    "conversation_id": cid,
+                    "conversation_name": conv.name if conv else None,
+                    "content": clean(m.get("content")),
+                    "reactions": per_message,
+                    "total_reactions": total,
+                }
+
+        top = sorted(messages.values(), key=lambda x: -x["total_reactions"])[:limit]
+        top_reactors = [
+            {"mri": mri, "display_name": (people.get(mri) or {}).get("displayName"),
+             "count": n}
+            for mri, n in sorted(by_reactor.items(), key=lambda kv: -kv[1])[:10]
+        ]
+        return {
+            "messages_with_reactions": len(messages),
+            "by_emoji": dict(sorted(totals.items(), key=lambda kv: -kv[1])),
+            "top_reactors": top_reactors,
+            "most_reacted": top,
+        }
 
     # ---- CAP12: people directory (feature 16) ---------------------------------
     def people(self) -> dict[str, dict]:
