@@ -7,6 +7,12 @@ import {
 	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
 import { candidateIdOf } from "./browser-use-core";
+import type { McporterCommandInput } from "./mcporter-transport";
+import {
+	type BrowserUseItemBatchState,
+	recordItemCheckpoint,
+	resolveNextBatchItem,
+} from "./browser-use-runbook-actions";
 
 const HANDOFF = {
 	outcome: "verified",
@@ -63,15 +69,21 @@ function runtimeFor(
 		timedOut?: boolean;
 	}[],
 	options: Readonly<{ selectedUrlProof?: string }> = {},
-): AgentBrowserExecutionRuntime & { calls: Array<readonly string[]> } {
+): AgentBrowserExecutionRuntime & {
+	calls: Array<readonly string[]>;
+	commandInputs: McporterCommandInput[];
+} {
 	const calls: Array<readonly string[]> = [];
+	const commandInputs: McporterCommandInput[] = [];
 	let responseIndex = 0;
 	let listedUrls = new Map<string, string>();
 	let selectedUrlProof: string | undefined;
 	return {
 		calls,
+		commandInputs,
 		beforeMutationDispatch: async () => ({ ok: true }),
 		runCommand: async (input) => {
+			commandInputs.push(input);
 			calls.push([input.command, ...input.args]);
 			const semanticArgs = input.args.slice(4);
 			if (
@@ -131,6 +143,17 @@ function runtimeFor(
 			return result;
 		},
 	};
+}
+
+function argvAndDecodedArguments(calls: readonly (readonly string[])[]): string {
+	return calls
+		.flatMap((call) =>
+			call.flatMap((argument) => [
+				argument,
+				Buffer.from(argument, "base64").toString("utf-8"),
+			]),
+		)
+		.join("\n");
 }
 
 describe("Agent Browser native task lane", () => {
@@ -654,7 +677,18 @@ describe("Agent Browser native task lane", () => {
 	});
 
 	test("runs only hash-bound reviewed evaluate actions and verifies mutations", async () => {
-		const script = "async ({ inputs }) => ({ saved: inputs.expected === 8 })";
+		const script =
+			"async ({ inputs }) => ({ saved: inputs.entries[0].units === 7.375 })";
+		const reviewedInputs = {
+			entries: [
+				{
+					item_key: "entry-private-monday",
+					date: "2026-07-27",
+					units: 7.375,
+					source_path: "oncore/private/reviewed-entry.json",
+				},
+			],
+		};
 		const runtime = runtimeFor([
 			{
 				stdout: json({
@@ -691,7 +725,7 @@ describe("Agent Browser native task lane", () => {
 					review_status: "approved",
 					allowed_origin: "https://example.test",
 					effect: "mutation",
-					inputs: { expected: 8 },
+					inputs: reviewedInputs,
 					postcondition: {
 						kind: "element-visible",
 						selector: "[data-state=saved]",
@@ -707,8 +741,272 @@ describe("Agent Browser native task lane", () => {
 		});
 		const evaluate = runtime.calls[5] ?? [];
 		expect(evaluate).toContain("eval");
-		expect(evaluate).toContain("-b");
-		expect(evaluate.join(" ")).not.toContain(script);
+		expect(evaluate).toContain("--stdin");
+		expect(evaluate).not.toContain("-b");
+		const argvSurfaces = argvAndDecodedArguments(runtime.calls);
+		for (const reviewedValue of [
+			script,
+			"entry-private-monday",
+			"2026-07-27",
+			"7.375",
+			"oncore/private/reviewed-entry.json",
+		]) {
+			expect(argvSurfaces).not.toContain(reviewedValue);
+			expect(JSON.stringify(result)).not.toContain(reviewedValue);
+		}
+		const evaluatedInput = runtime.commandInputs[5];
+		expect(evaluatedInput?.stdinText).toContain(script);
+		expect(evaluatedInput?.stdinText).toContain(JSON.stringify(reviewedInputs));
+	});
+
+	test("refuses an iterated mutation before dispatch without durable item checkpoints", async () => {
+		const script = "async ({ inputs }) => { document.querySelector('#save').click() }";
+		const runtime = runtimeFor([]);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-item-checkpoint-required",
+			target_tab_id: "t8",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet-fill-entry",
+					item_key: "monday",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "mutation",
+					inputs: {},
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-entry=monday]",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_item_checkpoint_unavailable",
+			outcome: "not-achieved",
+			mutation_dispatched: false,
+		});
+		expect(runtime.calls).toEqual([]);
+	});
+
+	test("a failed durable item checkpoint becomes unknown and runs no later item", async () => {
+		const script = "async ({ inputs }) => { document.querySelector('#save').click() }";
+		const runtime = Object.assign(
+			runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t8",
+								active: true,
+								type: "page",
+								url: "https://example.test/week",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ stdout: json({ result: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ stdout: json({ visible: true }) },
+			]),
+			{
+				afterItemCheckpoint: async () => ({ ok: false as const }),
+			},
+		);
+		const evaluate = (item_key: string) =>
+			({
+				kind: "evaluate",
+				action_id: "timesheet-fill-entry",
+				item_key,
+				script,
+				script_sha256: createHash("sha256").update(script).digest("hex"),
+				review_status: "approved",
+				allowed_origin: "https://example.test",
+				effect: "mutation",
+				inputs: {},
+				postcondition: {
+					kind: "element-visible",
+					selector: `[data-entry=${item_key}]`,
+				},
+			}) as const;
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-item-checkpoint-failed",
+			target_tab_id: "t8",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				evaluate("monday"),
+				{ kind: "snapshot", interactive: false },
+				evaluate("tuesday"),
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_mutation_effect_unknown",
+			outcome: "unknown",
+			mutation_dispatched: true,
+		});
+		expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+	});
+
+	test("a timed-out iterated mutation checkpoints unknown", async () => {
+		const script = "async ({ inputs }) => { document.querySelector('#save').click() }";
+		const checkpoints: string[] = [];
+		const runtime = Object.assign(
+			runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t8",
+								active: true,
+								type: "page",
+								url: "https://example.test/week",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ exitCode: 1, timedOut: true },
+			]),
+			{
+				afterItemCheckpoint: async (checkpoint: { outcome: string }) => {
+					checkpoints.push(checkpoint.outcome);
+					return { ok: true as const };
+				},
+			},
+		);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-item-timeout",
+			target_tab_id: "t8",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet-fill-entry",
+					item_key: "monday",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "mutation",
+					inputs: {},
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-entry=monday]",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_mutation_effect_unknown",
+			outcome: "unknown",
+		});
+		expect(checkpoints).toEqual(["unknown"]);
+	});
+
+	test("a false iterated mutation postcondition records unknown and blocks resume", async () => {
+		const script = "async ({ inputs }) => { document.querySelector('#save').click() }";
+		let durableBatch: BrowserUseItemBatchState = {
+			schema_version: "1",
+			item_keys: ["monday"],
+			checkpoints: [],
+		};
+		const runtime = Object.assign(
+			runtimeFor([
+				{
+					stdout: json({
+						tabs: [
+							{
+								tabId: "t8",
+								active: true,
+								type: "page",
+								url: "https://example.test/week",
+							},
+						],
+					}),
+				},
+				{ stdout: json({}) },
+				{ stdout: json({ refs: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ stdout: json({ result: {} }) },
+				{ stdout: json({ url: "https://example.test/week" }) },
+				{ stdout: json({ visible: false }) },
+			]),
+			{
+				afterItemCheckpoint: async (checkpoint: {
+					item_key: string;
+					outcome: "confirmed" | "unknown";
+				}) => {
+					const recorded = recordItemCheckpoint(durableBatch, {
+						itemKey: checkpoint.item_key,
+						outcome: checkpoint.outcome,
+					});
+					if (!recorded.ok) return { ok: false as const };
+					durableBatch = recorded.state;
+					return { ok: true as const };
+				},
+			},
+		);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-item-postcondition-false",
+			target_tab_id: "t8",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet-fill-entry",
+					item_key: "monday",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "mutation",
+					inputs: {},
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-entry=monday]",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_postcondition_not_achieved",
+			outcome: "not-achieved",
+			mutation_dispatched: true,
+		});
+		expect(durableBatch.checkpoints).toEqual([
+			{ item_key: "monday", outcome: "unknown" },
+		]);
+		expect(resolveNextBatchItem(durableBatch)).toEqual({
+			kind: "blocked",
+			item_key: "monday",
+			item_index: 0,
+			reason: "unknown",
+		});
+		expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
 	});
 
 	test.each([

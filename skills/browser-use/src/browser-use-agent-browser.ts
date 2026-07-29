@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
+import { TRANSPORT_STDIN_MAX_BYTES } from "@side-quest/mcporter-transport";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import type { BrowserUseAuthMethodStep } from "./browser-use-auth-model";
 import {
@@ -246,7 +247,38 @@ export type AgentBrowserExecutionRuntime = {
 	beforeMutationDispatch?(
 		input: Readonly<{ run_id: string }>,
 	): Promise<{ ok: true } | { ok: false }>;
+	/**
+	 * Persist one iterated mutation's structural outcome before a later item.
+	 *
+	 * Structurally false postconditions collapse to `unknown` for durable retry
+	 * safety because the mutation may already have changed browser state.
+	 *
+	 * A confirmed mutation whose checkpoint cannot be recorded becomes unknown;
+	 * the executor stops so no later item can pass uncommitted truth.
+	 */
+	afterItemCheckpoint?(
+		input: Readonly<{
+			run_id: string;
+			item_key: string;
+			outcome: "confirmed" | "unknown";
+		}>,
+	): Promise<{ ok: true } | { ok: false }>;
 };
+
+async function checkpointItem(
+	runtime: AgentBrowserExecutionRuntime,
+	input: Readonly<{
+		run_id: string;
+		item_key: string;
+		outcome: "confirmed" | "unknown";
+	}>,
+): Promise<boolean> {
+	try {
+		return (await runtime.afterItemCheckpoint?.(input))?.ok === true;
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Stable native lane refusal codes.
@@ -268,6 +300,7 @@ export type AgentBrowserExecutionFailureCode =
 	| "agent_browser_action_target_refused"
 	| "agent_browser_action_read_not_achieved"
 	| "agent_browser_mutation_marker_unavailable"
+	| "agent_browser_item_checkpoint_unavailable"
 	| "agent_browser_mutation_effect_unknown"
 	| "agent_browser_postcondition_not_achieved";
 
@@ -438,8 +471,10 @@ function actionIntegrityIsValid(
 		return false;
 	}
 	try {
-		JSON.stringify(step.inputs);
-		return true;
+		return (
+			Buffer.byteLength(reviewedActionPayload(step), "utf-8") <=
+			TRANSPORT_STDIN_MAX_BYTES
+		);
 	} catch {
 		return false;
 	}
@@ -448,11 +483,10 @@ function actionIntegrityIsValid(
 function reviewedActionPayload(
 	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>,
 ): string {
-	const wrapper = [
+	return [
 		`const action = (${step.script});`,
 		`await action({ inputs: ${JSON.stringify(step.inputs)} });`,
 	].join("\n");
-	return Buffer.from(wrapper, "utf-8").toString("base64");
 }
 
 type AgentBrowserCommandContext = Pick<
@@ -473,11 +507,13 @@ async function runNative(
 	runtime: AgentBrowserExecutionRuntime,
 	task: AgentBrowserCommandContext,
 	args: readonly string[],
+	stdinText?: string,
 ): Promise<McporterCommandResult | undefined> {
 	try {
 		return await runtime.runCommand({
 			command: task.handoff.attachment.probe_executable,
 			args: [...baseArgs(task), ...args],
+			...(stdinText === undefined ? {} : { stdinText }),
 			timeoutMs: COMMAND_TIMEOUT_MS,
 		});
 	} catch {
@@ -655,6 +691,21 @@ export async function executeAgentBrowserTask(
 ): Promise<AgentBrowserExecutionResult> {
 	const validation = validateTask(task);
 	if (!validation.ok) return validation;
+	if (
+		task.steps.some(
+			(step) =>
+				step.kind === "evaluate" &&
+				step.effect === "mutation" &&
+				step.item_key !== undefined,
+		) &&
+		runtime.afterItemCheckpoint === undefined
+	) {
+		return failure(
+			"agent_browser_item_checkpoint_unavailable",
+			"not-achieved",
+			"An iterated mutation requires a durable per-item checkpoint seam before browser dispatch.",
+		);
+	}
 	const nativeCommand = (args: readonly string[]) =>
 		runNative(runtime, task, args);
 	const targetFailure = await selectAgentBrowserTarget(
@@ -815,12 +866,12 @@ export async function executeAgentBrowserTask(
 				if (markerFailure !== undefined) return withDelivery(markerFailure);
 				mutationDispatched = true;
 			}
-			const evaluated = await runNative(runtime, task, [
-				"eval",
-				"-b",
+			const evaluated = await runNative(
+				runtime,
+				task,
+				["eval", "--stdin", "--json"],
 				reviewedActionPayload(step),
-				"--json",
-			]);
+			);
 			currentRefs = new Set();
 			currentRefMetadata = new Map();
 			hasCurrentSnapshot = false;
@@ -828,6 +879,16 @@ export async function executeAgentBrowserTask(
 				// A mutation that may have dispatched is `unknown` (no retry). A read
 				// dispatches no browser effect, so its failure is a clean
 				// `not-achieved` — it never manufactures a possible mutation (R21).
+				if (
+					step.effect === "mutation" &&
+					step.item_key !== undefined
+				) {
+					await checkpointItem(runtime, {
+						run_id: task.run_id,
+						item_key: step.item_key,
+						outcome: "unknown",
+					});
+				}
 				return withDelivery(
 					step.effect === "mutation"
 						? failure(
@@ -863,6 +924,15 @@ export async function executeAgentBrowserTask(
 					validation.allowedOrigins,
 				);
 				if (verified !== "confirmed") {
+					if (
+						step.item_key !== undefined
+					) {
+						await checkpointItem(runtime, {
+							run_id: task.run_id,
+							item_key: step.item_key,
+							outcome: "unknown",
+						});
+					}
 					return withDelivery(failure(
 						verified === "unavailable"
 							? "agent_browser_mutation_effect_unknown"
@@ -874,6 +944,22 @@ export async function executeAgentBrowserTask(
 						executedSteps + 1,
 						mutationDispatched,
 					));
+				}
+				if (step.item_key !== undefined) {
+					const checkpointed = await checkpointItem(runtime, {
+						run_id: task.run_id,
+						item_key: step.item_key,
+						outcome: "confirmed",
+					});
+					if (!checkpointed) {
+						return withDelivery(failure(
+							"agent_browser_mutation_effect_unknown",
+							"unknown",
+							"The iterated mutation confirmed structurally, but its durable item checkpoint could not be recorded; inspect before retry.",
+							executedSteps + 1,
+							mutationDispatched,
+						));
+					}
 				}
 			}
 			executedSteps += 1;

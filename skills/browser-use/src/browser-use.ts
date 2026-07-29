@@ -206,7 +206,10 @@ import {
 	prepareRunbookExecution,
 	showRunbook,
 } from "./browser-use-runbook";
-import type { BrowserUseRunbookInputs } from "./browser-use-runbook-model";
+import {
+	type BrowserUseRunbookInputs,
+	nextRunbookStepAfterExecution,
+} from "./browser-use-runbook-model";
 import {
 	type BrowserUseGovernedSurface,
 	type BrowserUseSensitiveRunGuard,
@@ -3925,9 +3928,9 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		);
 	}
 	const mapping = mapRunbookAgentBrowserOutcome(outcome.result);
-	const nextStep = Math.min(
-		outcome.plan.total_steps,
-		outcome.plan.resume_from_step + outcome.result.executed_steps,
+	const nextStep = nextRunbookStepAfterExecution(
+		outcome.plan,
+		outcome.result.executed_steps,
 	);
 	return await recordTaskRunOutcome(
 		input,

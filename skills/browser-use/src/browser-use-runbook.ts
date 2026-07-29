@@ -39,6 +39,7 @@ import { redactUnsafeText } from "./browser-use-core";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
 import {
 	type BrowserUseRunbook,
+	type BrowserUseRunbookActionResolution,
 	type BrowserUseRunbookCatalogRow,
 	type BrowserUseRunbookHealth,
 	type BrowserUseRunbookInputs,
@@ -46,6 +47,7 @@ import {
 	type BrowserUseRunbookReadActionMeta,
 	type BrowserUseRunbookStep,
 	materializeRunbookInputs,
+	nextRunbookStepAfterExecution,
 	parseRunbookRecord,
 	projectRunbookCatalogRow,
 	planRunbookExecution,
@@ -53,10 +55,12 @@ import {
 } from "./browser-use-runbook-model";
 import {
 	type BrowserUseActionGenerationSeam,
+	type BrowserUseItemBatchState,
 	type BrowserUseResolvedReviewedAction,
 	type BrowserUseReviewedActionRefusal,
 	captureStructuredResult,
 	itemKeysAreValid,
+	resolveNextBatchItem,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
@@ -540,6 +544,7 @@ type BrowserUseRunbookExecutionPlan = Pick<
 	| "version"
 	| "resume_from_step"
 	| "total_steps"
+	| "compiled_step_runbook_indices"
 	| "pending_item_bindings"
 >;
 
@@ -552,6 +557,7 @@ function executionPlanOf(
 		version: plan.version,
 		resume_from_step: plan.resume_from_step,
 		total_steps: plan.total_steps,
+		compiled_step_runbook_indices: plan.compiled_step_runbook_indices,
 		pending_item_bindings: plan.pending_item_bindings,
 	};
 }
@@ -611,10 +617,11 @@ async function resolveRunbookActionSteps(
 	runbook: BrowserUseRunbook,
 	inputs: BrowserUseRunbookInputs,
 	seam: BrowserUseActionGenerationSeam,
+	itemBatchStates?: ReadonlyMap<number, BrowserUseItemBatchState>,
 ): Promise<
 	| {
 			ok: true;
-			resolved: ReadonlyMap<number, readonly AgentBrowserTaskStep[]>;
+			resolved: ReadonlyMap<number, BrowserUseRunbookActionResolution>;
 			readActionMeta: Readonly<
 				Record<string, BrowserUseRunbookReadActionMeta>
 			>;
@@ -622,7 +629,7 @@ async function resolveRunbookActionSteps(
 	| { ok: false; refusal: BrowserUseReviewedActionRefusal }
 > {
 	const origin = singleAllowedOrigin(runbook);
-	const resolved = new Map<number, readonly AgentBrowserTaskStep[]>();
+	const resolved = new Map<number, BrowserUseRunbookActionResolution>();
 	// Result schema + sensitivity for each read action execution, keyed by its
 	// action + optional item identity so iterated reads cannot overwrite one
 	// another's capture policy (R21, R24). A mutation contributes nothing here.
@@ -660,7 +667,7 @@ async function resolveRunbookActionSteps(
 			});
 			if (!one.ok) return { ok: false, refusal: one.refusal };
 			recordReadMeta(one.resolved);
-			resolved.set(index, [one.resolved.step]);
+			resolved.set(index, { kind: "steps", steps: [one.resolved.step] });
 			continue;
 		}
 		// iterate: one verified action per stable item key from `over_input`.
@@ -675,7 +682,41 @@ async function resolveRunbookActionSteps(
 				},
 			};
 		}
-		const itemKeys = overRaw;
+		let itemKeys = overRaw;
+		const itemBatchState = itemBatchStates?.get(index);
+		if (itemBatchState !== undefined) {
+			if (
+				itemBatchState.item_keys.length !== overRaw.length ||
+				itemBatchState.item_keys.some((key, itemIndex) => key !== overRaw[itemIndex])
+			) {
+				return {
+					ok: false,
+					refusal: {
+						code: "action_input_rejected",
+						message:
+							"the durable item-batch key sequence does not match the runbook iteration input.",
+					},
+				};
+			}
+			const next = resolveNextBatchItem(itemBatchState);
+			if (next.kind === "invalid") {
+				return {
+					ok: false,
+					refusal: { code: "action_input_rejected", message: next.message },
+				};
+			}
+			if (next.kind === "blocked") {
+				return {
+					ok: false,
+					refusal: {
+						code: "action_item_batch_blocked",
+						message: `item ${next.item_key} has unknown mutation truth; reconcile it before any redispatch or later item.`,
+					},
+				};
+			}
+			itemKeys =
+				next.kind === "complete" ? [] : overRaw.slice(next.item_index);
+		}
 		const steps: AgentBrowserTaskStep[] = [];
 		for (const key of itemKeys) {
 			const perItemInputs = resolveActionInputs(step.step.inputs, inputs);
@@ -696,7 +737,12 @@ async function resolveRunbookActionSteps(
 				{ ...one.resolved.step, item_key: key },
 			);
 		}
-		resolved.set(index, steps);
+		resolved.set(
+			index,
+			steps.length === 0
+				? { kind: "completed-iterate" }
+				: { kind: "steps", steps },
+		);
 	}
 	return { ok: true, resolved, readActionMeta };
 }
@@ -717,6 +763,8 @@ export async function prepareRunbookExecution(
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
 		actionSeam?: BrowserUseActionGenerationSeam;
+		/** Durable per-item truth keyed by absolute iterate step index. */
+		itemBatchStates?: ReadonlyMap<number, BrowserUseItemBatchState>;
 	},
 ): Promise<BrowserUsePreparedRunbookExecution> {
 	const shown = await showRunbook(fs, dataRoot, {
@@ -729,7 +777,7 @@ export async function prepareRunbookExecution(
 		input.inputs,
 	);
 	let resolvedActionSteps:
-		| ReadonlyMap<number, readonly AgentBrowserTaskStep[]>
+		| ReadonlyMap<number, BrowserUseRunbookActionResolution>
 		| undefined;
 	let readActionMeta:
 		| Readonly<Record<string, BrowserUseRunbookReadActionMeta>>
@@ -743,6 +791,7 @@ export async function prepareRunbookExecution(
 			shown.runbook,
 			normalizedInputs,
 			input.actionSeam,
+			input.itemBatchStates,
 		);
 		if (!resolution.ok) {
 			return {
@@ -827,7 +876,7 @@ export async function executePreparedRunbook(
 			};
 		}
 		const checkpointed = await deps.afterNeutralOpen(
-			plan.resume_from_step + 1,
+			nextRunbookStepAfterExecution(plan, 1),
 		);
 		if (!checkpointed) {
 			return {
@@ -1028,9 +1077,9 @@ function captureRunbookReadResults(
  *
  * The caller (the CLI driver) owns durable shared-run state: it records the
  * executor's terminal/blocked truth through the fenced run-store pipeline, and
- * on a confirmed partial run advances the persisted resume index by
- * `resume_from_step + executed_steps` so a later resume replays only unproven
- * steps.
+ * on a partial run advances the persisted resume index to the first unexecuted
+ * compiled step's absolute runbook index, so expanded iterations replay from
+ * the iterate while durable item checkpoints skip confirmed items.
  *
  * A caller starting a confidential runbook from `about:blank` supplies both
  * `expectedTargetUrl` and `afterNeutralOpen`. The hook must durably checkpoint
@@ -1073,6 +1122,8 @@ export async function runRunbook(
 		expectedTargetUrl?: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
+		/** Durable per-item truth keyed by absolute iterate step index. */
+		itemBatchStates?: ReadonlyMap<number, BrowserUseItemBatchState>;
 	},
 ): Promise<BrowserUseRunbookExecutionResult> {
 	const prepared = await prepareRunbookExecution(deps.fs, deps.dataRoot, {
@@ -1081,6 +1132,9 @@ export async function runRunbook(
 		inputs: input.inputs,
 		resumeFromStep: input.resumeFromStep,
 		...(deps.actionSeam !== undefined ? { actionSeam: deps.actionSeam } : {}),
+		...(input.itemBatchStates !== undefined
+			? { itemBatchStates: input.itemBatchStates }
+			: {}),
 	});
 	if (!prepared.ok) return prepared;
 	return await executePreparedRunbook(

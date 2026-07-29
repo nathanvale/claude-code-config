@@ -6,6 +6,7 @@ import {
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
 	ACTION_ASSET_MAX_BYTES,
+	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
 	captureStructuredResult,
@@ -614,6 +615,16 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 describe("auditActionEffectClass — audited behavior is the authority (R19)", () => {
 	test("a pure observation is read", () => {
 		expect(auditActionEffectClass(READ_ASSET_BYTES)).toBe("read");
+	});
+	test("the exact reviewed Oncore draft-verification action is read", () => {
+		expect(auditActionEffectClass(ONCORE_DRAFT_VERIFICATION_ACTION_BYTES)).toBe("read");
+	});
+	test("a bounded JSON proof read from one selected element is read", () => {
+		expect(
+			auditActionEffectClass(
+				"async ({ inputs }) => JSON.parse(document.querySelector('#draft-proof').textContent)",
+			),
+		).toBe("read");
 	});
 	test.each([
 		["arbitrary expression", "async () => Math.random()"],

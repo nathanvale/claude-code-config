@@ -81,6 +81,11 @@ export type TransportCommandChannel = {
 export type TransportCommandInput = {
 	command: string;
 	args: readonly string[];
+	/**
+	 * Optional UTF-8 text delivered through a private pipe. Absent by default,
+	 * so commands cannot inherit or wait on the parent's stdin.
+	 */
+	stdinText?: string;
 	env?: Record<string, string | undefined>;
 	cwd?: string;
 	/**
@@ -97,6 +102,9 @@ export type TransportCommandInput = {
 	detached?: boolean;
 	timeoutMs: number;
 };
+
+/** Maximum UTF-8 payload accepted by the structured stdin channel. */
+export const TRANSPORT_STDIN_MAX_BYTES = 128 * 1024;
 
 /**
  * Result of a bounded command invocation. `exitCode` 127 (or a
@@ -285,6 +293,14 @@ export function transportOverrideInvalidHintText(
 export async function spawnTransportCommand(
 	input: TransportCommandInput,
 ): Promise<TransportCommandResult> {
+	if (
+		input.stdinText !== undefined &&
+		Buffer.byteLength(input.stdinText, "utf-8") > TRANSPORT_STDIN_MAX_BYTES
+	) {
+		throw new Error(
+			`spawnTransportCommand: stdinText exceeds ${TRANSPORT_STDIN_MAX_BYTES} UTF-8 bytes`,
+		);
+	}
 	if (input.exactEnv === true && input.env === undefined) {
 		// Fail closed (R28): exactEnv with no env would fall through to full
 		// process.env inheritance — the exact leak the flag exists to prevent.
@@ -300,14 +316,15 @@ export async function spawnTransportCommand(
 			// An isolated installer passes a neutral cwd and an EXACT allowlisted
 			// environment (`exactEnv`, R28) — never merged over process.env, so no
 			// inherited registry, auth, or proxy value can leak. Probes keep the
-			// merge-over-inherited behavior. stdin is never inherited: no prompt.
+			// merge-over-inherited behavior. stdin is ignored unless the caller
+			// supplies bounded text for a private pipe; it is never inherited.
 			...(input.cwd === undefined ? {} : { cwd: input.cwd }),
 			env: input.env
 				? input.exactEnv === true
 					? stripUndefined(input.env)
 					: { ...process.env, ...stripUndefined(input.env) }
 				: undefined,
-			stdin: "ignore",
+			stdin: input.stdinText === undefined ? "ignore" : "pipe",
 			// Own process group (POSIX `setsid` via Bun >= 1.3 `detached`): the
 			// timeout kill below can then reap the ENTIRE group — an installer's
 			// own children included — so no straggler outlives the SIGKILL and
@@ -358,32 +375,44 @@ export async function spawnTransportCommand(
 		new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
 		proc.exited,
 	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
+	if (input.stdinText !== undefined) {
+		try {
+			const stdin = proc.stdin;
+			if (stdin === undefined || typeof stdin === "number") {
+				throw new Error(
+					"spawnTransportCommand: piped stdin was not writable",
+				);
+			}
+			await stdin.write(input.stdinText);
+			await stdin.end();
+		} catch (error) {
+			killTransportProcess(proc, input.detached === true);
+			let cleanupTimeout: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await Promise.race([
+					completion.catch(() => undefined),
+					new Promise((settle) => {
+						cleanupTimeout = setTimeout(settle, KILL_CONFIRM_GRACE_MS);
+					}),
+				]);
+			} finally {
+				if (cleanupTimeout) clearTimeout(cleanupTimeout);
+			}
+			const message =
+				error instanceof Error ? error.message : String(error ?? "");
+			return {
+				exitCode: 126,
+				stdout: "",
+				stderr: `${input.command}: could not deliver stdin: ${message}`,
+			};
+		}
+	}
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let timedOut = false;
 	const timeoutResult = new Promise<TransportCommandResult>((resolve) => {
 		timeout = setTimeout(async () => {
 			timedOut = true;
-			if (input.detached === true) {
-				// The child is its own process-group leader (`detached` above), so
-				// signal the GROUP (negative pid): the child's own children die with
-				// it instead of surviving a direct-child-only SIGKILL. Fall back to
-				// the direct child if the group signal fails (already exited).
-				try {
-					process.kill(-proc.pid, "SIGKILL");
-				} catch {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// Best effort. Timeout result still preserves bounded CLI behavior.
-					}
-				}
-			} else {
-				try {
-					proc.kill("SIGKILL");
-				} catch {
-					// Best effort. Timeout result still preserves bounded CLI behavior.
-				}
-			}
+			killTransportProcess(proc, input.detached === true);
 			// Wait for CONFIRMED termination (bounded): a caller that begins
 			// cleanup while the killed child is still exiting can race its final
 			// writes. The grace bound keeps the CLI's bounded behavior if an
@@ -411,6 +440,27 @@ export async function spawnTransportCommand(
 // Bounded post-SIGKILL wait for the child's confirmed exit before the timeout
 // result is returned to the caller.
 const KILL_CONFIRM_GRACE_MS = 2_000;
+
+function killTransportProcess(
+	proc: ReturnType<typeof Bun.spawn>,
+	detached: boolean,
+): void {
+	if (detached) {
+		// The child is its own process-group leader, so signal the group. Fall
+		// back to the direct child if the group is already unavailable.
+		try {
+			process.kill(-proc.pid, "SIGKILL");
+			return;
+		} catch {
+			// Fall through to direct-child termination.
+		}
+	}
+	try {
+		proc.kill("SIGKILL");
+	} catch {
+		// Best effort. Callers preserve their bounded failure result.
+	}
+}
 
 function errnoCode(error: unknown): string | undefined {
 	if (error && typeof error === "object") {

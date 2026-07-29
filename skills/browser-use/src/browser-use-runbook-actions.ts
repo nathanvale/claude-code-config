@@ -78,6 +78,11 @@ export function actionAssetDigest(bytes: string): string {
 	return createHash("sha256").update(bytes, "utf-8").digest("hex");
 }
 
+/** Whether a value can identify one exact content-addressed action asset. */
+export function actionDigestIsValid(value: string): boolean {
+	return SAFE_DIGEST.test(value);
+}
+
 // --- Audited effect class (R19, KTD7) ----------------------------------------
 
 /**
@@ -125,7 +130,45 @@ const MUTATION_BEHAVIOR_FINGERPRINTS: readonly RegExp[] = [
 // only for a reviewed, mechanically bounded source shape.
 const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*\(\s*\{\s*[A-Za-z_$][\w$]*\s*:\s*document\s*\.\s*querySelectorAll\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*length\s*\}\s*\)\s*;?\s*$/,
+	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*JSON\s*\.\s*parse\s*\(\s*document\s*\.\s*querySelector\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*textContent\s*\)\s*;?\s*$/,
 ];
+
+/**
+ * Exact reviewed Oncore draft-verification action.
+ *
+ * Its byte identity is the mechanical read proof: any edit falls back to the
+ * conservative mutation audit until reviewed and represented here again. The
+ * action emits only a schema-pinned sentinel after exact draft semantics pass.
+ */
+export const ONCORE_DRAFT_VERIFICATION_ACTION_BYTES =
+	`async ({ inputs }) => {
+		const raw = document.querySelector('#draft-proof')?.textContent;
+		let proof;
+		try {
+			proof = JSON.parse(raw ?? '');
+		} catch {
+			throw new Error('draft verification failed');
+		}
+		const expectedKeys = inputs.item_keys;
+		const expectedTotal = inputs.entries.reduce((total, entry) => total + entry.units, 0);
+		const exactShape =
+			proof !== null &&
+			typeof proof === 'object' &&
+			!Array.isArray(proof) &&
+			Object.keys(proof).sort().join(',') === 'editable,persisted_entries,submitted,total_units';
+		const orderedKeysMatch =
+			Array.isArray(proof?.persisted_entries) &&
+			proof.persisted_entries.length === expectedKeys.length &&
+			proof.persisted_entries.every((key, index) => key === expectedKeys[index]);
+		const valid =
+			exactShape &&
+			orderedKeysMatch &&
+			proof.total_units === expectedTotal &&
+			proof.editable === true &&
+			proof.submitted === false;
+		if (!valid) throw new Error('draft verification failed');
+		return { verification: 'oncore-draft-preserved-v1' };
+	}`;
 
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
@@ -141,7 +184,8 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
+	return bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
+		OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
 		? "read"
 		: "mutation";
 }
@@ -608,6 +652,7 @@ export type BrowserUseReviewedActionRefusalCode =
 	| "action_input_schema_invalid"
 	| "action_result_schema_invalid"
 	| "action_input_rejected"
+	| "action_item_batch_blocked"
 	| "action_postcondition_missing"
 	| "action_receipt_not_approved"
 	| "action_receipt_digest_mismatch"
@@ -717,7 +762,7 @@ export async function resolveReviewedAction(input: {
 	// The caller pins the reviewed digest from the compiled runbook. Resolve no
 	// asset bytes until that digest matches this generation's registry record.
 	if (
-		!SAFE_DIGEST.test(input.expectedDigest) ||
+		!actionDigestIsValid(input.expectedDigest) ||
 		input.expectedDigest !== record.expected_digest
 	) {
 		return refuse(
@@ -727,7 +772,10 @@ export async function resolveReviewedAction(input: {
 	}
 
 	// Content addressing (R18): resolve the exact bytes and prove the digest.
-	if (!SAFE_DIGEST.test(record.expected_digest) || !SAFE_DIGEST.test(record.asset_id)) {
+	if (
+		!actionDigestIsValid(record.expected_digest) ||
+		!actionDigestIsValid(record.asset_id)
+	) {
 		return refuse(
 			"action_digest_mismatch",
 			"the record's asset id or expected digest is not a 64-hex content digest.",

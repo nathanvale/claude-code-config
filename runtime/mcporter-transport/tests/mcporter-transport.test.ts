@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
 	isMissingTransportCommandResult,
 	resolveTransportCommandVector,
 	runTransportCommand,
 	spawnTransportCommand,
+	TRANSPORT_STDIN_MAX_BYTES,
 	transportDependencyHintText,
 	transportOverrideInvalidHintText,
 	type TransportCommandChannel,
@@ -275,6 +276,100 @@ describe("spawnTransportCommand", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout.trim()).toBe("$(rm -rf /); `whoami`");
+	});
+
+	test("keeps stdin ignored by default", async () => {
+		const result = await spawnTransportCommand({
+			command: process.execPath,
+			args: [
+				"-e",
+				"for await (const chunk of Bun.stdin.stream()) process.stdout.write(chunk)",
+			],
+			timeoutMs: 5000,
+		});
+
+		expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+	});
+
+	test("delivers optional stdin text without adding it to argv", async () => {
+		const stdinText = '{"entry":"2026-07-27","units":8}';
+		const args = [
+			"-e",
+			"for await (const chunk of Bun.stdin.stream()) process.stdout.write(chunk)",
+		];
+		const result = await spawnTransportCommand({
+			command: process.execPath,
+			args,
+			stdinText,
+			timeoutMs: 5000,
+		});
+
+		expect(args.join("\n")).not.toContain(stdinText);
+		expect(result).toEqual({ exitCode: 0, stdout: stdinText, stderr: "" });
+	});
+
+	test("kills and reaps a spawned child when stdin delivery fails", async () => {
+		let killed = false;
+		let exited = false;
+		let resolveExit: ((exitCode: number) => void) | undefined;
+		const exitPromise = new Promise<number>((resolve) => {
+			resolveExit = resolve;
+		}).then((exitCode) => {
+			exited = true;
+			return exitCode;
+		});
+		const emptyStream = () =>
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.close();
+				},
+			});
+		const spawn = spyOn(Bun, "spawn").mockReturnValue({
+			pid: 42_424,
+			stdin: {
+				write() {
+					throw new Error("broken pipe");
+				},
+				end() {},
+			},
+			stdout: emptyStream(),
+			stderr: emptyStream(),
+			exited: exitPromise,
+			kill() {
+				killed = true;
+				resolveExit?.(1);
+			},
+		} as never);
+
+		try {
+			const result = await spawnTransportCommand({
+				command: "fake-transport",
+				args: [],
+				stdinText: "{}",
+				timeoutMs: 5000,
+			});
+
+			expect(result).toEqual({
+				exitCode: 126,
+				stdout: "",
+				stderr: "fake-transport: could not deliver stdin: broken pipe",
+			});
+			expect(killed).toBe(true);
+			expect(exited).toBe(true);
+		} finally {
+			spawn.mockRestore();
+		}
+	});
+
+	test("rejects stdin text above the shared byte ceiling before spawn", async () => {
+		await expect(
+			spawnTransportCommand({
+				command: process.execPath,
+				args: ["-e", "process.exit(99)"],
+				stdinText: "é".repeat(TRANSPORT_STDIN_MAX_BYTES),
+				timeoutMs: 5000,
+			}),
+		).rejects.toThrow(`exceeds ${TRANSPORT_STDIN_MAX_BYTES} UTF-8 bytes`);
 	});
 
 	test("exactEnv without an env allowlist fails closed", async () => {
