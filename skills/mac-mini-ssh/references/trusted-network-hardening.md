@@ -85,6 +85,13 @@ If a future rule blocks both trusted paths, use the Mini console:
 1. Confirm Remote Login remains on in **System Settings → General → Sharing**.
 2. List `/var/backups/com.nathanvale.ssh-hardening.*`; select the intended
    backup explicitly.
-3. Restore that backup's `pf.conf` to `/etc/pf.conf`.
-4. Run `sudo pfctl -nf /etc/pf.conf`, then `sudo pfctl -f /etc/pf.conf`.
+3. Restore that backup's `pf.conf` to `/etc/pf.conf` **and** its
+   `com.nathanvale.ssh` anchor rules to the anchor's source file — reloading
+   the main file alone can leave a broken anchor active if the bad rule lives
+   in `com.nathanvale.ssh`.
+4. Run `sudo pfctl -nf /etc/pf.conf`, then `sudo pfctl -f /etc/pf.conf`, then
+   reload the anchor: `sudo pfctl -a com.nathanvale.ssh -f <restored-anchor-file>`.
+   If the anchor's source is unrecoverable, flush it (`sudo pfctl -a
+   com.nathanvale.ssh -F rules`) so no stale rule blocks the trusted paths, or
+   invoke the `mac-mini-home-server` repo's rollback procedure.
 5. Prove a fresh SSH session before changing another setting.

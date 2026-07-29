@@ -43,7 +43,7 @@ cannot repair authentication or firewall failures.
 ssh mac-mini 'tmux_path=$(command -v tmux) &&
   test -f "$tmux_path" && test -x "$tmux_path" &&
   printf "TMUX=%s\n" "$tmux_path" && tmux -V &&
-  tmux list-sessions'
+  { tmux list-sessions 2>/dev/null || printf "NO_SESSIONS\n"; }'
 ```
 
 If `command -v tmux` resolves a directory such as `~/bin/tmux`, repair the

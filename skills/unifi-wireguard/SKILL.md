@@ -18,6 +18,10 @@ scutil --nc list
 scutil --nwi
 /sbin/route -n get 192.168.1.100 |
   grep -E 'destination|gateway|interface'
+route_src=$(ifconfig "$(/sbin/route -n get 192.168.1.100 |
+  awk '/interface:/{print $2}')" 2>/dev/null |
+  awk '/inet /{print $2; exit}')
+printf 'source=%s\n' "$route_src"
 ```
 
 Select the one enabled service whose provider is `com.wireguard.macos`.
@@ -43,6 +47,10 @@ scutil --nc start "$wireguard_service_id"
 scutil --nc status "$wireguard_service_id"
 /sbin/route -n get 192.168.1.100 |
   grep -E 'destination|gateway|interface'
+route_src=$(ifconfig "$(/sbin/route -n get 192.168.1.100 |
+  awk '/interface:/{print $2}')" 2>/dev/null |
+  awk '/inet /{print $2; exit}')
+printf 'source=%s\n' "$route_src"
 ```
 
 Poll status for at most 10 seconds. `Connected` is necessary but not

@@ -82,13 +82,13 @@ Remote SSH does not automatically attach the cmux session.
 From a Remote SSH integrated terminal, already running on the Mini:
 
 ```bash
-tmux attach-session -t mac-mini-home-server
+tmux attach-session -t mac-mini
 ```
 
 From a local VS Code integrated terminal:
 
 ```bash
-ssh -t mac-mini 'tmux attach-session -t mac-mini-home-server'
+ssh -t mac-mini 'tmux attach-session -t mac-mini'
 ```
 
 Do not nest `ssh mac-mini` inside a Remote SSH terminal. Detach with
@@ -101,7 +101,7 @@ Inspect shared clients without changing them:
 
 ```bash
 ssh mac-mini \
-  'tmux list-clients -t mac-mini-home-server \
+  'tmux list-clients -t mac-mini \
    -F "client=#{client_name} terminal=#{client_termname}"'
 ```
 
