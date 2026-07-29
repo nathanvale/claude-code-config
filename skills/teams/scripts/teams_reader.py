@@ -847,7 +847,7 @@ class TeamsReader:
                 if (p["displayName"] and ql in p["displayName"].lower())
                 or (p["email"] and ql in p["email"].lower())]
 
-    # ---- CAP13: two-Nathans disambiguation (feature 18) -----------------------
+    # ---- CAP13: same-display-name disambiguation (feature 18) -----------------
     def disambiguate(self, display_name: str) -> dict[str, dict]:
         """Given a display name, return every distinct MRI using it + identity from profiles.
         Solves the Vale-vs-Liu problem: attribute messages by creator_mri, not name."""
