@@ -223,6 +223,30 @@ describe("login-narrative auth candidate migration (U7, R29-R30/AE10)", () => {
 		);
 	});
 
+	test("rejects duplicate source provenance paths even when ids differ", () => {
+		// Distinct service ids clear the candidate-id guard, so this exercises the
+		// separate sourceRelativePath uniqueness check in buildAuthCandidateMigration.
+		const duplicatePathSource: BrowserUseLoginNarrativeSource = {
+			...JIRA,
+			serviceId: "monash-jira-2",
+			sourceRelativePath: CONFLUENCE.sourceRelativePath,
+		};
+		expect(() =>
+			buildAuthCandidateMigration([CONFLUENCE, duplicatePathSource]),
+		).toThrow("distinct source provenance paths");
+	});
+
+	test("rejects a backslash-bearing source path (POSIX traversal bypass)", () => {
+		// C:\... and ..\secret pass node:path isAbsolute on POSIX and carry no "/"
+		// segment, so the explicit backslash reject is what holds the invariant.
+		expect(() =>
+			transformLoginNarrativeToCandidate({
+				...CONFLUENCE,
+				sourceRelativePath: "..\\secret\\pointer.md",
+			}),
+		).toThrow("safe relative source");
+	});
+
 	test.each([
 		[
 			"non-lowercase service id",

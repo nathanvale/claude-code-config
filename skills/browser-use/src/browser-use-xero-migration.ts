@@ -162,6 +162,11 @@ function exactOrigin(value: string): string | undefined {
 function sourceRelativePathValid(value: string): boolean {
 	return (
 		value.length > 0 &&
+		// `isAbsolute` is platform-specific: on POSIX it ignores a Windows drive
+		// path (`C:\foo`) or a backslash escape (`..\secret`), which then survive
+		// the `/`-split `..` check as a single segment. Reject any backslash so the
+		// safe-relative invariant holds on non-Windows CI/dev hosts too.
+		!value.includes("\\") &&
 		!isAbsolute(value) &&
 		!value.split("/").some((segment) => segment === "" || segment === "..")
 	);
@@ -819,7 +824,8 @@ export function captureXeroStatementsResult(input: {
 	});
 }
 
-// The reviewed-action registry owns exact action bytes and their effect audit;
-// this re-export lets a test prove a migrated Xero read action's bytes audit as
-// `read` without re-declaring the audit (R19/KTD7), never embedding bytes here.
+// The reviewed-action registry owns exact action bytes and their effect audit
+// (R19/KTD7); this module never embeds action bytes. Re-export the registry's
+// audit helper and inline-byte ceiling so a caller (or test) can classify a
+// migrated Xero action's effect class without re-declaring the audit here.
 export { auditActionEffectClass, STRUCTURED_RESULT_MAX_INLINE_BYTES };
