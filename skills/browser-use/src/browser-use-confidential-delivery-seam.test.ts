@@ -12,16 +12,22 @@ import {
 } from "./browser-use-agent-browser";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import { createBrowserUseAuthProvider } from "./browser-use-auth-provider";
+import {
+	applyAuthTransition,
+	beginAuthTransaction,
+} from "./browser-use-auth-transaction";
 import type {
 	BrowserUseDeliveryHook,
 	BrowserUseTargetReproof,
 	BrowserUseVerifiedTarget,
 } from "./browser-use-confidential-field-delivery";
+import { createBrowserUseNativeConfidentialDeliveryHook } from "./browser-use-confidential-field-delivery";
 import type {
 	BrowserUseOpCredentialField,
 	BrowserUseSecretHandle,
 	BrowserUseTokenRetrievalPort,
 } from "./browser-use-op";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -91,11 +97,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;
@@ -127,11 +134,13 @@ function runtimeFor(
 
 const BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://oncore.test"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -173,6 +182,14 @@ function leakHelper(
 // An opaque-handle-only TokenRetrievalPort (never bytes) — supplied to the
 // provider builder so the delivery context carries a real port.
 const fakePort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({
@@ -213,7 +230,19 @@ function buildContext(
 ): AgentBrowserAuthDeliveryContext {
 	const provider = createBrowserUseAuthProvider({
 		store: deps,
-		tokenRetrieval: fakePort,
+		admission: {
+			kind: "environment-admitted",
+			evidence: {
+				lane: "environment-injected-op",
+				assurance: "lower-assurance",
+				native: { verdict: "native-capability-absent" },
+				environment: {
+					state: "ready",
+					next_action: "validate-service-account",
+				},
+			},
+			tokenRetrieval: fakePort,
+		},
 		attestationByDigest: () => undefined,
 	});
 	return provider.buildAgentBrowserDeliveryContext({
@@ -242,7 +271,10 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 		{
 			stdout: adapterSuccess({
 				snapshot: "@e2 textbox password @e3 textbox otp",
-				refs: { e2: {}, e3: {} },
+				refs: {
+					e2: { role: "textbox", name: "Password" },
+					e3: { role: "textbox", name: "One-time code" },
+				},
 			}),
 		},
 		{ stdout: adapterSuccess({ url: "https://oncore.test/login" }) },
@@ -250,6 +282,248 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 }
 
 describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
+	test("opaque capability crosses only the native delivery port and an unknown write keeps capture quarantined after cleanup", async () => {
+		const events: string[] = [];
+		const nativeInputs: unknown[] = [];
+		const sentinel = "U7_RAW_CREDENTIAL_MUST_NOT_REACH_TYPESCRIPT";
+		const hook = createBrowserUseNativeConfidentialDeliveryHook({
+			quarantine: {
+				pause: async () => {
+					events.push("pause");
+					return { ok: true };
+				},
+				cleanup: async () => {
+					events.push("cleanup");
+					return { ok: true };
+				},
+				resume: async () => {
+					events.push("resume");
+					return { ok: true };
+				},
+			},
+			consumePrivatePipeAndDeliver: async (input) => {
+				events.push("native");
+				nativeInputs.push(input);
+				return {
+					schema_version: 1,
+					ok: false,
+					write_state: "write-outcome-unknown",
+					rejection: {
+						code: "write-outcome-unknown",
+						message:
+							"confidential field delivery blocked; inspect the typed code.",
+					},
+					protocol_trace: [
+						"Target.getTargetInfo",
+						"Page.getFrameTree",
+						"Accessibility.getFullAXTree",
+						"DOM.describeNode",
+						"DOM.resolveNode",
+						"Runtime.callFunctionOn",
+					],
+				};
+			},
+		});
+
+		const result = await hook({
+			handle: {
+				handle_id: "environment-capability-1",
+				field: "password",
+				expires_at_epoch_ms: 9_999_999,
+			},
+			field: "password",
+			target: verifiedTarget("run-u7-private-pipe"),
+			semantic_locator: {
+				role: "textbox",
+				accessible_name: "Password",
+				input_kind: "password",
+			},
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			reason: "field-write-failed",
+			field_cleared: false,
+			write_state: "write-outcome-unknown",
+		});
+		expect(events).toEqual(["pause", "native", "cleanup"]);
+		expect(JSON.stringify(nativeInputs)).not.toContain(sentinel);
+		expect(nativeInputs).toEqual([
+			{
+				schema_version: 1,
+				capability: {
+					handle_id: "environment-capability-1",
+					field: "password",
+					expires_at_epoch_ms: 9_999_999,
+				},
+				target: {
+					lane_id: "agent-browser",
+					run_id: "run-u7-private-pipe",
+					target_id: "target-1",
+					page_id: "page-1",
+					frame_id: "frame-1",
+					top_level_origin: "https://oncore.test",
+					frame_origin: "https://oncore.test",
+					target_proof_digest: "d".repeat(32),
+				},
+				locator: {
+					role: "textbox",
+					accessible_name: "Password",
+					input_kind: "password",
+				},
+			},
+		]);
+	});
+
+	test("agent-browser invalidates its snapshot ref and sends one semantic locator through the native-only hook", async () => {
+		const store = await makeStore();
+		const journal: string[] = [];
+		const nativeInputs: unknown[] = [];
+		const hook = createBrowserUseNativeConfidentialDeliveryHook({
+			quarantine: {
+				pause: async () => {
+					journal.push("pause");
+					return { ok: true };
+				},
+				cleanup: async () => {
+					journal.push("cleanup");
+					return { ok: true };
+				},
+				resume: async () => {
+					journal.push("resume");
+					return { ok: true };
+				},
+			},
+			consumePrivatePipeAndDeliver: async (input) => {
+				journal.push("native");
+				nativeInputs.push(input);
+				return {
+					schema_version: 1,
+					ok: true,
+					write_state: "delivered",
+					shape: { field: "password", byte_length: 17 },
+					protocol_trace: [
+						"Target.getTargetInfo",
+						"Page.getFrameTree",
+						"Accessibility.getFullAXTree",
+						"DOM.describeNode",
+						"DOM.resolveNode",
+						"Runtime.callFunctionOn",
+					],
+				};
+			},
+		});
+		const runtime = runtimeFor([
+			...attachAndSnapshot(),
+			{ stdout: adapterSuccess({ value: "•••" }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-u7-semantic-native",
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: buildContext(
+				store.deps,
+				"run-u7-semantic-native",
+				hook,
+				true,
+			),
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		expect(journal).toEqual(["pause", "native", "cleanup"]);
+		expect(nativeInputs).toMatchObject([
+			{
+				locator: {
+					role: "textbox",
+					accessible_name: "Password",
+					input_kind: "password",
+				},
+			},
+		]);
+		expect(runtime.calls.some((call) => call.includes("fill"))).toBe(false);
+	});
+
+	test("a possibly-written confidential delivery blocks the auth transaction without any automatic retry path", () => {
+		const started = beginAuthTransaction({
+			binding: {
+				run_id: "run-u7-possibly-written",
+				handoff_evidence_id: "handoff-1",
+				lane_id: "agent-browser",
+				environment: "agent-chrome",
+				profile: "default",
+				service_id: "oncore",
+				auth_context: "interactive-login",
+				origin: "https://oncore.test",
+				target_id: "target-1",
+				page_id: "page-1",
+				frame_id: "frame-1",
+			},
+			method: "password",
+			attempt_limit: 3,
+			attempts_already_consumed: 0,
+		});
+		expect(started.ok).toBe(true);
+		if (!started.ok) return;
+		let fragment = started.fragment;
+		for (const event of [
+			{ type: "pre-auth-proved" as const },
+			{ type: "preparation-complete" as const },
+			{ type: "lease-granted" as const },
+		]) {
+			const next = applyAuthTransition(fragment, event);
+			expect(next.ok).toBe(true);
+			if (!next.ok) return;
+			fragment = next.fragment;
+		}
+
+		const blocked = applyAuthTransition(fragment, {
+			type: "confidential-delivery-outcome-observed",
+			outcome: "possibly-written",
+		});
+		expect(blocked).toMatchObject({
+			ok: true,
+			fragment: {
+				status: "blocked",
+				blocked_cause: "capability-loss",
+				external_effect: "possible",
+				submission_started: false,
+			},
+		});
+		if (!blocked.ok) return;
+		expect(
+			applyAuthTransition(blocked.fragment, {
+				type: "blocked-cause-resolved",
+			}),
+		).toMatchObject({
+			ok: false,
+			rejection: { code: "auth_cause_not_resolvable" },
+		});
+		expect(
+			applyAuthTransition(blocked.fragment, {
+				type: "human-retry-approved",
+			}),
+		).toMatchObject({
+			ok: false,
+			rejection: { code: "auth_retry_requires_human" },
+		});
+	});
+
 	test("delivery context inside the sensitive interval routes a confidential fill through the choreography and marks the run sensitive over clean on-disk bytes", async () => {
 		const NONCE_RUN = "run-cfd-seam-ok";
 		const store = await makeStore();

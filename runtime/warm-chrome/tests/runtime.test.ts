@@ -1,14 +1,27 @@
+import Database from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
-import { mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createDefaultProofDeps } from "../src/proof.ts";
 import {
 	DEFAULT_FETCH_ABORT_MS,
+	chromeLaunchArgs,
+	consumeProfileCreationApproval,
 	createDefaultRuntime,
+	createOneUseProfileCreationApprovalOwner,
 	findListenerWithSystemTools,
 	isDefaultChromeProfilePath,
 	isRealGoogleChromeBinary,
@@ -19,6 +32,408 @@ import {
 	WarmChromeRuntimeError,
 } from "../src/runtime.ts";
 import { WARM_CHROME_ATTACH_TIMEOUT_MS } from "../src/proof.ts";
+
+async function withTemporaryProfile(
+	run: (profileDir: string) => Promise<void>,
+): Promise<void> {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "warm-chrome-posture-")),
+	);
+	const profileDir = join(root, "Default");
+	await mkdir(profileDir, { mode: 0o700 });
+	try {
+		await run(profileDir);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+}
+
+async function writeCredentialPreferences(
+	profileDir: string,
+	overrides: Record<string, unknown> = {},
+): Promise<void> {
+	await writeFile(
+		join(profileDir, "Preferences"),
+		JSON.stringify({
+			credentials_enable_service: false,
+			credentials_enable_autosignin: false,
+			profile: { password_manager_enabled: false },
+			sync: { requested: false, has_setup_completed: false },
+			...overrides,
+		}),
+		"utf8",
+	);
+}
+
+function writeSlowLoginDatabase(path: string): void {
+	const db = new Database(path);
+	db.run(
+		"CREATE VIEW logins AS WITH RECURSIVE cnt(x) AS (VALUES(0) UNION ALL SELECT x + 1 FROM cnt WHERE x < 5000000) SELECT x FROM cnt WHERE x = 5000000",
+	);
+	db.close();
+}
+
+describe("credential-clean profile runtime (U6 R8)", () => {
+	test("production approval owner binds exact facts and permits one concurrent consumer", async () => {
+		const expected = {
+			command: "launch",
+			port: "9243",
+			profileDir: "/Users/warm/.agent-warm-profile-u6",
+		} as const;
+		const owner = createOneUseProfileCreationApprovalOwner(expected);
+
+		const wrongProfile = await owner({
+			...expected,
+			profileDir: "/Users/warm/other-profile",
+		});
+		expect(
+			consumeProfileCreationApproval(wrongProfile, {
+				...expected,
+				profileDir: "/Users/warm/other-profile",
+			}),
+		).toBe(false);
+
+		const [first, second] = await Promise.all([owner(expected), owner(expected)]);
+		expect(
+			[
+				consumeProfileCreationApproval(first, expected),
+				consumeProfileCreationApproval(second, expected),
+			].filter(Boolean),
+		).toHaveLength(1);
+		expect(
+			consumeProfileCreationApproval(first, expected) ||
+				consumeProfileCreationApproval(second, expected),
+		).toBe(false);
+	});
+
+	test("public runtime never treats a caller-created terminal as human approval", async () => {
+		const runtime = createDefaultRuntime();
+
+		await expect(
+			runtime.requestCredentialCleanProfileCreationApproval({
+				command: "launch",
+				port: "9243",
+				profileDir: "/Users/warm/.agent-warm-profile-u6",
+			}),
+		).resolves.toBe("unavailable");
+	});
+
+	test("dedicated launch argv disables sync mechanically", () => {
+		const argv = chromeLaunchArgs({
+			chromeBin: REAL_GOOGLE_CHROME_BINARY,
+			port: "9242",
+			profileDir: "/Users/warm/.agent-warm-profile",
+			startupUrl: "https://example.com/",
+			disableSync: true,
+			disableExtensions: true,
+		});
+		expect(argv).toContain("--disable-sync");
+		expect(argv).toContain("--disable-extensions");
+		expect(argv).toContain("--profile-directory=Default");
+	});
+
+	test("safe disk and process evidence remains configuration-only", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const runtime = createDefaultRuntime();
+
+			await expect(
+				runtime.inspectCredentialPosture({
+					activeProfileDir: profileDir,
+					syncDisabledByLaunch: true,
+					extensionsDisabledByLaunch: true,
+				}),
+			).resolves.toEqual({
+				disk: {
+					saveSetting: "disabled",
+					autoSignInSetting: "disabled",
+					syncSetting: "disabled",
+					storedLogin: "absent",
+				},
+				process: {
+					disableSyncSwitch: "present",
+					disableExtensionsSwitch: "present",
+				},
+				effective: {
+					observation: "not-observed",
+				},
+			});
+		});
+	});
+
+	test("missing or altered controls and sync evidence fail closed", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			const runtime = createDefaultRuntime();
+			await writeCredentialPreferences(profileDir, {
+				credentials_enable_service: true,
+				credentials_enable_autosignin: true,
+				sync: { requested: true, has_setup_completed: true },
+			});
+			const altered = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+			expect(altered.disk.saveSetting).toBe("enabled");
+			expect(altered.disk.autoSignInSetting).toBe("enabled");
+			expect(altered.disk.syncSetting).toBe("enabled");
+
+			await rm(join(profileDir, "Preferences"));
+			const missing = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+			expect(missing.disk.saveSetting).toBe("unproven");
+			expect(missing.disk.autoSignInSetting).toBe("unproven");
+			expect(missing.disk.syncSetting).toBe("unproven");
+			expect(missing.effective).toEqual({ observation: "not-observed" });
+		});
+	});
+
+	test("Login Data inspection reads existence only and detects a stored row", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const db = new Database(join(profileDir, "Login Data"));
+			db.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			db.run("INSERT INTO logins (id) VALUES (1)");
+			db.close();
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(posture.disk.storedLogin).toBe("present");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("account-only Login Data detects a stored row", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const db = new Database(join(profileDir, "Login Data For Account"));
+			db.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			db.run("INSERT INTO logins (id) VALUES (1)");
+			db.close();
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(posture.disk.storedLogin).toBe("present");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("an indeterminate existing account store fails closed", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const db = new Database(join(profileDir, "Login Data"));
+			db.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			db.close();
+			await writeFile(
+				join(profileDir, "Login Data For Account"),
+				"not a sqlite database",
+				"utf8",
+			);
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(posture.disk.storedLogin).toBe("unproven");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("profile posture never follows Preferences or Login Data symlinks", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			const rawPreferences = join(profileDir, "raw-preferences");
+			await writeFile(
+				rawPreferences,
+				JSON.stringify({
+					credentials_enable_service: false,
+					credentials_enable_autosignin: false,
+				}),
+				"utf8",
+			);
+			await symlink(rawPreferences, join(profileDir, "Preferences"));
+			const rawLoginData = join(profileDir, "raw-login-data");
+			const db = new Database(rawLoginData);
+			db.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			db.close();
+			await symlink(rawLoginData, join(profileDir, "Login Data"));
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(posture.disk.saveSetting).toBe("unproven");
+			expect(posture.disk.storedLogin).toBe("unproven");
+			expect(posture.disk.autoSignInSetting).toBe("unproven");
+		});
+	});
+
+	test("Login Data path replacement during inspection fails closed", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const loginDataPath = join(profileDir, "Login Data");
+			const replacementPath = join(profileDir, "Login Data.replacement");
+			writeSlowLoginDatabase(loginDataPath);
+			const replacement = new Database(replacementPath);
+			replacement.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			replacement.close();
+			const swap = Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					'import { renameSync } from "node:fs"; await Bun.sleep(75); renameSync(process.argv[1], process.argv[1] + ".queried"); renameSync(process.argv[2], process.argv[1]);',
+					loginDataPath,
+					replacementPath,
+				],
+				{ stderr: "pipe", stdout: "ignore" },
+			);
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(await swap.exited).toBe(0);
+			expect(posture.disk.storedLogin).toBe("unproven");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("Login Data disappearance during inspection fails closed", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const loginDataPath = join(profileDir, "Login Data");
+			writeSlowLoginDatabase(loginDataPath);
+			const removal = Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					'import { unlinkSync } from "node:fs"; await Bun.sleep(75); unlinkSync(process.argv[1]);',
+					loginDataPath,
+				],
+				{ stderr: "pipe", stdout: "ignore" },
+			);
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+
+			expect(await removal.exited).toBe(0);
+			expect(posture.disk.storedLogin).toBe("unproven");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("Login Data swap-away and restore during inspection still fails closed", async () => {
+		await withTemporaryProfile(async (profileDir) => {
+			await writeCredentialPreferences(profileDir);
+			const loginDataPath = join(profileDir, "Login Data");
+			const replacementPath = join(profileDir, "Login Data.replacement");
+			writeSlowLoginDatabase(loginDataPath);
+			const replacement = new Database(replacementPath);
+			replacement.run("CREATE TABLE logins (id INTEGER PRIMARY KEY)");
+			replacement.close();
+			const swap = Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					'import { renameSync } from "node:fs"; await Bun.sleep(75); const parked = process.argv[1] + ".parked"; renameSync(process.argv[1], parked); renameSync(process.argv[2], process.argv[1]); await Bun.sleep(150); renameSync(process.argv[1], process.argv[2]); renameSync(parked, process.argv[1]);',
+					loginDataPath,
+					replacementPath,
+				],
+				{ stderr: "pipe", stdout: "ignore" },
+			);
+			const runtime = createDefaultRuntime();
+
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: profileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+			await swap.exited;
+
+			expect(posture.disk.storedLogin).toBe("unproven");
+			expect(posture.disk.autoSignInSetting).toBe("disabled");
+		});
+	});
+
+	test("fresh-profile initializer creates bounded controls once and never overwrites", async () => {
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "warm-chrome-init-")),
+		);
+		try {
+			const profileDir = join(root, "fresh");
+			const runtime = createDefaultRuntime();
+			await runtime.initializeCredentialCleanProfile(profileDir);
+			const activeProfileDir = join(profileDir, "Default");
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir,
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+			expect(posture).toEqual({
+				disk: {
+					saveSetting: "disabled",
+					autoSignInSetting: "disabled",
+					syncSetting: "disabled",
+					storedLogin: "absent",
+				},
+				process: {
+					disableSyncSwitch: "present",
+					disableExtensionsSwitch: "present",
+				},
+				effective: {
+					observation: "not-observed",
+				},
+			});
+			const before = await readFile(
+				join(activeProfileDir, "Preferences"),
+				"utf8",
+			);
+			await expect(
+				runtime.initializeCredentialCleanProfile(profileDir),
+			).rejects.toThrow();
+			expect(
+				await readFile(join(activeProfileDir, "Preferences"), "utf8"),
+			).toBe(before);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("fresh-profile initializer refuses the everyday Chrome profile directly", async () => {
+		const home = "/Users/warm";
+		const runtime = createDefaultRuntime({ env: { HOME: home } });
+		await expect(
+			runtime.initializeCredentialCleanProfile(
+				`${home}/Library/Application Support/Google/Chrome`,
+			),
+		).rejects.toThrow("refusing to initialize");
+	});
+});
 
 // A scriptable fake of the ChildProcess slice terminateChild drives. `kill`
 // records the signals it received; `signalExits` decides which signal (if any)

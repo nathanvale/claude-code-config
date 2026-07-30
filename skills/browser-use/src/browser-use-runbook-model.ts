@@ -280,7 +280,7 @@ export type BrowserUseRunbookStep =
 	  }
 	| {
 			kind: "iterate";
-			/** Input id naming the bounded item-key array (U3 checkpoints). */
+			/** Input id or object-field path naming the bounded item-key array. */
 			over_input: string;
 			/** The per-item step (an `action`) U3 checkpoints per stable key. */
 			step: {
@@ -294,7 +294,8 @@ export type BrowserUseRunbookStep =
 
 /**
  * One typed input the runbook declares (R9). `required` inputs must be supplied
- * at execution; `schema` is the recursive value schema the supplied value is
+ * at execution; `custody` binds the input id to the public argv or private-file
+ * route; `schema` is the recursive value schema the supplied value is
  * runtime-validated against. Inputs are substituted into `{{id}}` tokens in
  * ordinary fill values only — never into a confidential field.
  */
@@ -302,6 +303,7 @@ export type BrowserUseRunbookInput = {
 	id: string;
 	summary: string;
 	required: boolean;
+	custody: "ordinary" | "sensitive";
 	schema: BrowserUseRunbookValueSchema;
 };
 
@@ -358,7 +360,11 @@ export type BrowserUseRunbookIssue = {
 
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_INPUT_ID = /^[a-z0-9][a-z0-9_]{0,63}$/;
+const SAFE_INPUT_PATH =
+	/^[a-z0-9][a-z0-9_]{0,63}(?:\.[a-z0-9][a-z0-9_]{0,63})*$/;
 const INPUT_TOKEN = /\{\{([a-z0-9_]+)\}\}/g;
+const EXACT_INPUT_PATH_TOKEN =
+	/^\{\{([a-z0-9][a-z0-9_]{0,63}(?:\.[a-z0-9][a-z0-9_]{0,63})*)\}\}$/;
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
 // A secret-shaped value an author might paste into a confidential field. The
 // confidential variant has no `value` field at the type level, so this is a
@@ -417,6 +423,30 @@ function semanticTargetValid(target: BrowserUseRunbookSemanticTarget): boolean {
 		target.role.trim().length > 0 &&
 		typeof target.name === "string" &&
 		target.name.trim().length > 0
+	);
+}
+
+function schemaAtInputPath(
+	path: string,
+	inputSchemas: ReadonlyMap<string, BrowserUseRunbookValueSchema>,
+): BrowserUseRunbookValueSchema | undefined {
+	if (!SAFE_INPUT_PATH.test(path)) return undefined;
+	const [root, ...segments] = path.split(".");
+	if (root === undefined) return undefined;
+	let schema = inputSchemas.get(root);
+	for (const segment of segments) {
+		if (schema?.kind !== "object") return undefined;
+		schema = schema.fields[segment]?.schema;
+	}
+	return schema;
+}
+
+function itemKeyArraySchemaValid(
+	schema: BrowserUseRunbookValueSchema | undefined,
+): boolean {
+	return (
+		schema?.kind === "array" &&
+		schema.items.kind === "string"
 	);
 }
 
@@ -804,17 +834,23 @@ export function validateRunbook(
 			allowed.add(origin);
 		}
 	}
-	const inputIds = new Set<string>();
+	const inputSchemas = new Map<string, BrowserUseRunbookValueSchema>();
 	for (const input of runbook.inputs) {
-		if (!SAFE_INPUT_ID.test(input.id) || inputIds.has(input.id)) {
+		if (!SAFE_INPUT_ID.test(input.id) || inputSchemas.has(input.id)) {
 			issues.push({
 				code: "runbook_input_invalid",
 				message: `input id ${input.id} is invalid or duplicated.`,
 			});
 			continue;
 		}
+		if (input.custody !== "ordinary" && input.custody !== "sensitive") {
+			issues.push({
+				code: "runbook_input_invalid",
+				message: `input ${input.id} must declare ordinary or sensitive custody.`,
+			});
+		}
 		validateValueSchema(input.schema, `input ${input.id}`, 1, issues);
-		inputIds.add(input.id);
+		inputSchemas.set(input.id, input.schema);
 	}
 	if (runbook.steps.length === 0) {
 		issues.push({
@@ -823,7 +859,7 @@ export function validateRunbook(
 		});
 	}
 	for (const [index, step] of runbook.steps.entries()) {
-		validateStep(step, index, allowed, inputIds, issues);
+		validateStep(step, index, allowed, inputSchemas, issues);
 	}
 	return issues;
 }
@@ -832,7 +868,7 @@ function validateStep(
 	step: BrowserUseRunbookStep,
 	index: number,
 	allowed: ReadonlySet<string>,
-	inputIds: ReadonlySet<string>,
+	inputSchemas: ReadonlyMap<string, BrowserUseRunbookValueSchema>,
 	issues: BrowserUseRunbookIssue[],
 ): void {
 	const at = `step ${index}`;
@@ -865,11 +901,28 @@ function validateStep(
 				message: `${at}: reviewed action requires a safe action id and a 64-hex expected digest.`,
 			});
 		}
-		if (step.kind === "iterate" && !inputIds.has(step.over_input)) {
+		if (
+			step.kind === "iterate" &&
+			!itemKeyArraySchemaValid(
+				schemaAtInputPath(step.over_input, inputSchemas),
+			)
+		) {
 			issues.push({
 				code: "runbook_input_reference_unknown",
-				message: `${at}: iterate references undeclared input ${step.over_input}.`,
+				message: `${at}: iterate path ${step.over_input} must resolve to a declared bounded string array.`,
 			});
+		}
+		for (const token of Object.values(inner.inputs)) {
+			const match = EXACT_INPUT_PATH_TOKEN.exec(token);
+			if (
+				match?.[1] !== undefined &&
+				schemaAtInputPath(match[1], inputSchemas) === undefined
+			) {
+				issues.push({
+					code: "runbook_input_reference_unknown",
+					message: `${at}: action references undeclared input path ${match[1]}.`,
+				});
+			}
 		}
 		if (inner.postcondition !== undefined && !validatePostcondition(inner.postcondition)) {
 			issues.push({
@@ -922,7 +975,7 @@ function validateStep(
 		});
 	}
 	for (const id of referencedInputs(step.value)) {
-		if (!inputIds.has(id)) {
+		if (!inputSchemas.has(id)) {
 			issues.push({
 				code: "runbook_input_reference_unknown",
 				message: `${at}: references undeclared input {{${id}}}.`,
@@ -1206,13 +1259,20 @@ function parseInput(raw: unknown): BrowserUseRunbookInput | undefined {
 	if (
 		typeof raw.id !== "string" ||
 		typeof raw.summary !== "string" ||
-		typeof raw.required !== "boolean"
+		typeof raw.required !== "boolean" ||
+		(raw.custody !== "ordinary" && raw.custody !== "sensitive")
 	) {
 		return undefined;
 	}
 	const schema = parseValueSchema(raw.schema, 1);
 	if (schema === undefined) return undefined;
-	return { id: raw.id, summary: raw.summary, required: raw.required, schema };
+	return {
+		id: raw.id,
+		summary: raw.summary,
+		required: raw.required,
+		custody: raw.custody,
+		schema,
+	};
 }
 
 /**

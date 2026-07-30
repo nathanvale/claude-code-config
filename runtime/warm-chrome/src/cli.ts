@@ -363,7 +363,6 @@ function parseWarmChromeArgv(
 			? runtime.env.WARM_CHROME_PROFILE_DIR
 			: undefined;
 	let chromeBin = runtime.env.CHROME_BIN ?? REAL_GOOGLE_CHROME_BINARY;
-
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		switch (arg) {

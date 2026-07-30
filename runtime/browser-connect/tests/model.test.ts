@@ -39,6 +39,7 @@ import {
 	type BrowserConnectFailurePayload,
 	type BrowserConnectHandoffPayload,
 	type BrowserConnectLaunchProvenance,
+	type BrowserConnectProfilePostureProof,
 	type BrowserConnectProofEvidence,
 	type BrowserConnectRepairContext,
 	type BrowserConnectVerifiedEndpoint,
@@ -76,8 +77,35 @@ function verifiedHandoffPayload(): BrowserConnectHandoffPayload {
 		launch: { launched: false },
 		proof: {
 			environment_contract_id: "warm-chrome.browser-entry",
-			environment_schema_version: "1",
+			environment_schema_version: "2",
 			route_evidence: "verified-live",
+			profile_posture: {
+				state: "live-clean",
+				disk: {
+					save_setting: "disabled",
+					auto_signin_setting: "disabled",
+					sync_setting: "disabled",
+					stored_login: "live-observed-absent",
+				},
+				process: {
+					disable_sync_switch: "present",
+					disable_extensions_switch: "present",
+				},
+				effective: {
+					observation: "running-chrome",
+					save_capability: "disabled",
+					fill_exposure: "no-source",
+					sync_state: "disabled",
+					save_prompt: "suppressed",
+					observer: {
+						source: "chrome-webui",
+						browser_pid: 4242,
+						port: "53712",
+						profile_match: "exact",
+						observed_at_ms: 1,
+					},
+				},
+			},
 		},
 	};
 }
@@ -100,7 +128,7 @@ describe("browser-connect model vocabulary", () => {
 	test("contract constants are stable package-owned literals", () => {
 		expect(BROWSER_CONNECT_CLI_NAME).toBe("browser-connect");
 		expect(BROWSER_CONNECT_CONTRACT_ID).toBe("browser-connect.verified-handoff");
-		expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("2");
+		expect(BROWSER_CONNECT_SCHEMA_VERSION).toBe("3");
 		expect(BROWSER_CONNECT_RESULT_CONTRACT.id).toBe(
 			BROWSER_CONNECT_CONTRACT_ID,
 		);
@@ -378,6 +406,38 @@ const HANDOFF_PROOF_KEYS = [
 	"environment_contract_id",
 	"environment_schema_version",
 	"route_evidence",
+	"profile_posture",
+] as const;
+const HANDOFF_PROFILE_POSTURE_KEYS = [
+	"state",
+	"disk",
+	"process",
+	"effective",
+] as const;
+const HANDOFF_PROFILE_DISK_KEYS = [
+	"save_setting",
+	"auto_signin_setting",
+	"sync_setting",
+	"stored_login",
+] as const;
+const HANDOFF_PROFILE_PROCESS_KEYS = [
+	"disable_sync_switch",
+	"disable_extensions_switch",
+] as const;
+const HANDOFF_PROFILE_EFFECTIVE_KEYS = [
+	"observation",
+	"save_capability",
+	"fill_exposure",
+	"sync_state",
+	"save_prompt",
+	"observer",
+] as const;
+const HANDOFF_PROFILE_OBSERVER_KEYS = [
+	"source",
+	"browser_pid",
+	"port",
+	"profile_match",
+	"observed_at_ms",
 ] as const;
 
 const handoffManifestsExact: [
@@ -387,7 +447,27 @@ const handoffManifestsExact: [
 	ExactKeys<BrowserConnectVerifiedEndpoint, typeof HANDOFF_ENDPOINT_KEYS>,
 	ExactKeys<BrowserConnectLaunchProvenance, typeof HANDOFF_LAUNCH_KEYS>,
 	ExactKeys<BrowserConnectProofEvidence, typeof HANDOFF_PROOF_KEYS>,
-] = [true, true, true, true, true, true];
+	ExactKeys<
+		BrowserConnectProfilePostureProof,
+		typeof HANDOFF_PROFILE_POSTURE_KEYS
+	>,
+	ExactKeys<
+		BrowserConnectProfilePostureProof["disk"],
+		typeof HANDOFF_PROFILE_DISK_KEYS
+	>,
+	ExactKeys<
+		BrowserConnectProfilePostureProof["process"],
+		typeof HANDOFF_PROFILE_PROCESS_KEYS
+	>,
+	ExactKeys<
+		BrowserConnectProfilePostureProof["effective"],
+		typeof HANDOFF_PROFILE_EFFECTIVE_KEYS
+	>,
+	ExactKeys<
+		BrowserConnectProfilePostureProof["effective"]["observer"],
+		typeof HANDOFF_PROFILE_OBSERVER_KEYS
+	>,
+] = [true, true, true, true, true, true, true, true, true, true, true];
 
 const ALL_DECLARED_HANDOFF_KEYS = [
 	...HANDOFF_PAYLOAD_KEYS,
@@ -396,6 +476,11 @@ const ALL_DECLARED_HANDOFF_KEYS = [
 	...HANDOFF_ENDPOINT_KEYS,
 	...HANDOFF_LAUNCH_KEYS,
 	...HANDOFF_PROOF_KEYS,
+	...HANDOFF_PROFILE_POSTURE_KEYS,
+	...HANDOFF_PROFILE_DISK_KEYS,
+	...HANDOFF_PROFILE_PROCESS_KEYS,
+	...HANDOFF_PROFILE_EFFECTIVE_KEYS,
+	...HANDOFF_PROFILE_OBSERVER_KEYS,
 ] as const;
 
 // Recursive completeness: EVERY key name reachable anywhere in the payload

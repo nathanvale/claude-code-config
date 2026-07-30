@@ -1,21 +1,25 @@
+import Database from "bun:sqlite";
 import { request } from "node:http";
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import {
 	chmod,
 	lstat,
 	mkdir,
+	open,
 	readlink,
 	realpath,
 	stat,
 	writeFile,
 } from "node:fs/promises";
 import { hostname, userInfo } from "node:os";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE,
 	type WarmChromeRuntimeActionId,
 } from "./model.ts";
+import type { WarmChromeEffectiveCredentialPosture } from "./effective-posture.ts";
 
 /**
  * Numeric browser-entry exit code (plan U2 R3).
@@ -157,6 +161,125 @@ export type ProfileStat = {
 };
 
 /**
+ * Redacted credential-clean posture proof. Only bounded states cross this
+ * seam; raw Preferences, account metadata, and Login Data rows stay inside
+ * the Warm Chrome runtime owner.
+ */
+export type WarmChromeCredentialPosture = {
+	disk: {
+		saveSetting: "disabled" | "enabled" | "unproven";
+		autoSignInSetting: "disabled" | "enabled" | "unproven";
+		syncSetting: "disabled" | "enabled" | "unproven";
+		storedLogin:
+			| "absent"
+			| "present"
+			| "unproven"
+			| "live-observed-absent";
+	};
+	process: {
+		disableSyncSwitch: "present" | "absent" | "unproven";
+		disableExtensionsSwitch: "present" | "absent" | "unproven";
+	};
+	effective: WarmChromeEffectiveCredentialPosture;
+};
+
+/**
+ * Inputs needed to prove credential posture without exposing profile data.
+ */
+export type WarmChromeCredentialPostureInput = {
+	/** Resolved active Chrome profile directory, for example `<root>/Default`. */
+	activeProfileDir: string;
+	/** True only when the observed Chrome process carries `--disable-sync`. */
+	syncDisabledByLaunch: boolean;
+	/** True only when the observed Chrome process carries `--disable-extensions`. */
+	extensionsDisabledByLaunch: boolean;
+};
+
+/**
+ * External human-continuation result for fresh profile creation.
+ */
+export type WarmChromeProfileCreationApproval =
+	| { readonly decision: "approved" }
+	| "cancelled"
+	| "unavailable";
+
+/**
+ * Exact operation facts an external approval owner must bind before allowing
+ * one fresh profile creation.
+ */
+export type WarmChromeProfileCreationApprovalRequest = {
+	command: "launch" | "repair";
+	port: string;
+	profileDir: string;
+};
+
+/**
+ * Trusted coordinator callback for one fresh profile-creation request.
+ */
+export type WarmChromeProfileCreationApprovalOwner = (
+	request: WarmChromeProfileCreationApprovalRequest,
+) => Promise<WarmChromeProfileCreationApproval>;
+
+const pendingProfileCreationApprovals = new WeakMap<
+	object,
+	WarmChromeProfileCreationApprovalRequest
+>();
+
+/**
+ * Build one process-local approval owner after a trusted coordinator observes
+ * the human decision. Mismatched requests do not consume the capability; the
+ * first exact request issues one opaque approval object.
+ *
+ * @param expected - Exact command, port, and canonical profile approved
+ * @returns Single-use approval owner for the runtime seam
+ */
+export function createOneUseProfileCreationApprovalOwner(
+	expected: WarmChromeProfileCreationApprovalRequest,
+): WarmChromeProfileCreationApprovalOwner {
+	let issued = false;
+	return async (request) => {
+		if (issued || !sameProfileCreationRequest(request, expected)) {
+			return "unavailable";
+		}
+		issued = true;
+		const approval = Object.freeze({ decision: "approved" as const });
+		pendingProfileCreationApprovals.set(approval, { ...expected });
+		return approval;
+	};
+}
+
+/**
+ * Consume one opaque approval for the exact request that minted it.
+ *
+ * @param approval - Result returned by the trusted approval owner
+ * @param request - Current command, port, and profile facts
+ * @returns True exactly once for a matching package-minted approval
+ */
+export function consumeProfileCreationApproval(
+	approval: WarmChromeProfileCreationApproval,
+	request: WarmChromeProfileCreationApprovalRequest,
+): boolean {
+	if (typeof approval !== "object" || approval === null) return false;
+	const expected = pendingProfileCreationApprovals.get(approval);
+	if (expected === undefined || !sameProfileCreationRequest(request, expected)) {
+		return false;
+	}
+	pendingProfileCreationApprovals.delete(approval);
+	return true;
+}
+
+function sameProfileCreationRequest(
+	left: WarmChromeProfileCreationApprovalRequest,
+	right: WarmChromeProfileCreationApprovalRequest,
+): boolean {
+	return (
+		left.command === right.command &&
+		left.port === right.port &&
+		left.profileDir === right.profileDir
+	);
+}
+
+/**
  * Handle for a Chrome the runtime spawned (plan U4 seam extension).
  */
 export type SpawnedChrome = {
@@ -191,6 +314,8 @@ export type LaunchChromeInput = {
 	port: string;
 	profileDir: string;
 	startupUrl: string;
+	disableSync: true;
+	disableExtensions: true;
 };
 
 /**
@@ -209,6 +334,13 @@ export type WarmChromeRuntime = {
 	findListener: (port: string) => Promise<ListenerProcess | null>;
 	currentUser: () => Promise<string>;
 	statProfile: (path: string) => Promise<ProfileStat>;
+	inspectCredentialPosture: (
+		input: WarmChromeCredentialPostureInput,
+	) => Promise<WarmChromeCredentialPosture>;
+	initializeCredentialCleanProfile: (profileDir: string) => Promise<void>;
+	requestCredentialCleanProfileCreationApproval: (
+		request: WarmChromeProfileCreationApprovalRequest,
+	) => Promise<WarmChromeProfileCreationApproval>;
 	ensureProfileDir: (path: string) => Promise<string>;
 	chmod: (path: string, mode: number) => Promise<void>;
 	writeTextFile: (path: string, content: string) => Promise<void>;
@@ -242,6 +374,14 @@ export function createDefaultRuntime(
 		findListener: async (port: string) => findListenerWithSystemTools(port),
 		currentUser: async () => String(userInfo().uid),
 		statProfile: async (path: string) => statProfile(path),
+		inspectCredentialPosture: async (input) =>
+			inspectCredentialPosture(input),
+		initializeCredentialCleanProfile: async (profileDir: string) =>
+			initializeCredentialCleanProfile(profileDir, env),
+		// The public CLI has no self-attested approval route. A trusted
+		// coordinator may replace this process-local seam with one exact,
+		// single-use human continuation.
+		requestCredentialCleanProfileCreationApproval: async () => "unavailable",
 		ensureProfileDir: async (path: string) => ensureProfileDir(path),
 		chmod: async (path: string, mode: number) => {
 			await chmod(path, mode);
@@ -252,13 +392,7 @@ export function createDefaultRuntime(
 		spawnChrome: async (input: LaunchChromeInput) => {
 			const child = spawn(
 				input.chromeBin,
-				[
-					`--remote-debugging-port=${input.port}`,
-					`--user-data-dir=${input.profileDir}`,
-					"--no-first-run",
-					"--no-default-browser-check",
-					input.startupUrl,
-				],
+				chromeLaunchArgs(input),
 				{ detached: true, stdio: "ignore" },
 			);
 			await awaitChromeSpawn(child);
@@ -286,6 +420,22 @@ export function createDefaultRuntime(
 			path.startsWith("/private/var/folders/"),
 		...overrides,
 	};
+}
+
+/**
+ * Exact Chrome argv for the dedicated profile launch.
+ */
+export function chromeLaunchArgs(input: LaunchChromeInput): string[] {
+	return [
+		`--remote-debugging-port=${input.port}`,
+		`--user-data-dir=${input.profileDir}`,
+		"--profile-directory=Default",
+		"--no-first-run",
+		"--no-default-browser-check",
+		...(input.disableSync ? ["--disable-sync"] : []),
+		...(input.disableExtensions ? ["--disable-extensions"] : []),
+		input.startupUrl,
+	];
 }
 
 /**
@@ -356,6 +506,308 @@ async function ensureProfileDir(path: string): Promise<string> {
 	const realPath = await realpath(path);
 	await chmod(realPath, 0o700);
 	return realPath;
+}
+
+const MAX_CHROME_PREFERENCES_BYTES = 8 * 1024 * 1024;
+
+type ChromeCredentialPreferences = {
+	credentials_enable_service?: unknown;
+	credentials_enable_autosignin?: unknown;
+	profile?: { password_manager_enabled?: unknown };
+	sync?: {
+		requested?: unknown;
+		has_setup_completed?: unknown;
+	};
+};
+
+async function inspectCredentialPosture(
+	input: WarmChromeCredentialPostureInput,
+): Promise<WarmChromeCredentialPosture> {
+	const preferences = await readChromeCredentialPreferences(
+		join(input.activeProfileDir, "Preferences"),
+	);
+	const storedLogin = aggregateSavedCredentialStates(
+		await Promise.all([
+			inspectSavedCredentials(join(input.activeProfileDir, "Login Data")),
+			inspectSavedCredentials(
+				join(input.activeProfileDir, "Login Data For Account"),
+			),
+		]),
+	);
+
+	const legacySavingEnabled = preferences?.profile?.password_manager_enabled;
+	const savingValue = preferences?.credentials_enable_service;
+	const saveSetting =
+		savingValue === false && legacySavingEnabled !== true
+			? "disabled"
+			: savingValue === true || legacySavingEnabled === true
+				? "enabled"
+				: "unproven";
+
+	const autoSignInValue = preferences?.credentials_enable_autosignin;
+	const autoSignInSetting =
+		autoSignInValue === false
+			? "disabled"
+			: autoSignInValue === true
+				? "enabled"
+				: "unproven";
+	const syncSetting =
+		preferences?.sync?.requested === true ||
+		preferences?.sync?.has_setup_completed === true
+			? "enabled"
+			: preferences?.sync?.requested === false &&
+					preferences?.sync?.has_setup_completed === false
+				? "disabled"
+				: "unproven";
+	const disableSyncSwitch = input.syncDisabledByLaunch ? "present" : "absent";
+	const disableExtensionsSwitch = input.extensionsDisabledByLaunch
+		? "present"
+		: "absent";
+
+	return {
+		disk: {
+			saveSetting,
+			autoSignInSetting,
+			syncSetting,
+			storedLogin,
+		},
+		process: {
+			disableSyncSwitch,
+			disableExtensionsSwitch,
+		},
+		// Disk preferences and argv prove configuration only. Effective
+		// running-Chrome behavior needs a separate observer at the live gate.
+		effective: {
+			observation: "not-observed",
+		},
+	};
+}
+
+async function readChromeCredentialPreferences(
+	path: string,
+): Promise<ChromeCredentialPreferences | null> {
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+		const before = await handle.stat();
+		const pathBefore = await lstat(path);
+		const parentBefore = await lstat(dirname(path));
+		if (
+			!before.isFile() ||
+			before.nlink !== 1 ||
+			before.size > MAX_CHROME_PREFERENCES_BYTES ||
+			!pathBefore.isFile() ||
+			pathBefore.isSymbolicLink() ||
+			pathBefore.nlink !== 1 ||
+			pathBefore.dev !== before.dev ||
+			pathBefore.ino !== before.ino ||
+			!parentBefore.isDirectory() ||
+			parentBefore.isSymbolicLink()
+		) {
+			return null;
+		}
+		const text = await readBoundedUtf8(
+			handle,
+			MAX_CHROME_PREFERENCES_BYTES,
+		);
+		if (text === null) return null;
+		const after = await handle.stat();
+		const pathAfter = await lstat(path);
+		const parentAfter = await lstat(dirname(path));
+		if (
+			!after.isFile() ||
+			after.nlink !== 1 ||
+			after.size !== Buffer.byteLength(text) ||
+			after.size > MAX_CHROME_PREFERENCES_BYTES ||
+			after.mtimeMs !== before.mtimeMs ||
+			after.ctimeMs !== before.ctimeMs ||
+			!pathAfter.isFile() ||
+			pathAfter.isSymbolicLink() ||
+			pathAfter.nlink !== 1 ||
+			pathAfter.dev !== after.dev ||
+			pathAfter.ino !== after.ino ||
+			!sameDirectorySnapshot(parentBefore, parentAfter)
+		) {
+			return null;
+		}
+		const parsed: unknown = JSON.parse(text);
+		return isPlainRecord(parsed)
+			? (parsed as ChromeCredentialPreferences)
+			: null;
+	} catch {
+		return null;
+	} finally {
+		await handle?.close().catch(() => undefined);
+	}
+}
+
+async function readBoundedUtf8(
+	handle: Awaited<ReturnType<typeof open>>,
+	maxBytes: number,
+): Promise<string | null> {
+	const chunks: Buffer[] = [];
+	let total = 0;
+	while (total <= maxBytes) {
+		const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
+		const { bytesRead } = await handle.read(
+			chunk,
+			0,
+			chunk.length,
+			total,
+		);
+		if (bytesRead === 0) break;
+		chunks.push(chunk.subarray(0, bytesRead));
+		total += bytesRead;
+	}
+	if (total > maxBytes) return null;
+	return Buffer.concat(chunks, total).toString("utf8");
+}
+
+async function inspectSavedCredentials(
+	path: string,
+): Promise<WarmChromeCredentialPosture["disk"]["storedLogin"]> {
+	let before: Awaited<ReturnType<typeof lstat>>;
+	try {
+		before = await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "absent";
+		return "unproven";
+	}
+	if (!before.isFile() || before.isSymbolicLink()) return "unproven";
+	if (before.nlink !== 1) return "unproven";
+
+	try {
+		const parentBefore = await lstat(dirname(path));
+		if (!parentBefore.isDirectory() || parentBefore.isSymbolicLink()) {
+			return "unproven";
+		}
+		const db = new Database(path, { readonly: true, strict: true });
+		let state: WarmChromeCredentialPosture["disk"]["storedLogin"];
+		try {
+			const row = db
+				.query<{ present: number }, []>(
+					"SELECT 1 AS present FROM logins LIMIT 1",
+				)
+				.get();
+			state = row === null ? "absent" : "present";
+		} finally {
+			db.close();
+		}
+		const after = await lstat(path);
+		const parentAfter = await lstat(dirname(path));
+		if (
+			!after.isFile() ||
+			after.isSymbolicLink() ||
+			after.nlink !== 1 ||
+			!sameFileSnapshot(before, after) ||
+			!sameDirectorySnapshot(parentBefore, parentAfter)
+		) {
+			return "unproven";
+		}
+		return state;
+	} catch {
+		return "unproven";
+	}
+}
+
+function sameFileSnapshot(
+	before: Awaited<ReturnType<typeof lstat>>,
+	after: Awaited<ReturnType<typeof lstat>>,
+): boolean {
+	return (
+		after.dev === before.dev &&
+		after.ino === before.ino &&
+		after.size === before.size &&
+		after.mtimeMs === before.mtimeMs &&
+		after.ctimeMs === before.ctimeMs
+	);
+}
+
+function sameDirectorySnapshot(
+	before: Awaited<ReturnType<typeof lstat>>,
+	after: Awaited<ReturnType<typeof lstat>>,
+): boolean {
+	return (
+		after.isDirectory() &&
+		!after.isSymbolicLink() &&
+		after.dev === before.dev &&
+		after.ino === before.ino &&
+		after.mtimeMs === before.mtimeMs &&
+		after.ctimeMs === before.ctimeMs
+	);
+}
+
+function aggregateSavedCredentialStates(
+	states: WarmChromeCredentialPosture["disk"]["storedLogin"][],
+): WarmChromeCredentialPosture["disk"]["storedLogin"] {
+	if (states.includes("present")) return "present";
+	if (states.includes("unproven")) return "unproven";
+	return "absent";
+}
+
+async function initializeCredentialCleanProfile(
+	profileDir: string,
+	env: Record<string, string | undefined>,
+): Promise<void> {
+	if (isDefaultChromeProfilePath(profileDir, env)) {
+		throw new Error("refusing to initialize the everyday Chrome profile");
+	}
+	await assertNoProfileSymlinkComponents(dirname(profileDir));
+	await mkdir(profileDir, { mode: 0o700 });
+	const resolvedProfileDir = await realpath(profileDir);
+	if (isDefaultChromeProfilePath(resolvedProfileDir, env)) {
+		throw new Error("refusing to initialize the everyday Chrome profile");
+	}
+	await chmod(resolvedProfileDir, 0o700);
+	const activeProfileDir = await ensureProfileDir(
+		join(resolvedProfileDir, "Default"),
+	);
+	const preferencesPath = join(activeProfileDir, "Preferences");
+	const preferences = JSON.stringify(
+		{
+			credentials_enable_autosignin: false,
+			credentials_enable_service: false,
+			profile: { password_manager_enabled: false },
+			signin: { allowed: false },
+			sync: { has_setup_completed: false, requested: false },
+		},
+		null,
+		2,
+	);
+	const handle = await open(
+		preferencesPath,
+		fsConstants.O_WRONLY |
+			fsConstants.O_CREAT |
+			fsConstants.O_EXCL |
+			fsConstants.O_NOFOLLOW,
+		0o600,
+	);
+	try {
+		const opened = await handle.stat();
+		if (!opened.isFile() || opened.nlink !== 1) {
+			throw new Error("Preferences is not a private regular file");
+		}
+		await handle.writeFile(`${preferences}\n`, "utf8");
+		await handle.sync();
+		const finalHandle = await handle.stat();
+		const finalPath = await lstat(preferencesPath);
+		if (
+			!finalHandle.isFile() ||
+			finalHandle.nlink !== 1 ||
+			!finalPath.isFile() ||
+			finalPath.isSymbolicLink() ||
+			finalPath.dev !== finalHandle.dev ||
+			finalPath.ino !== finalHandle.ino
+		) {
+			throw new Error("Preferences path changed during initialization");
+		}
+	} finally {
+		await handle.close();
+	}
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function assertNoProfileSymlinkComponents(path: string): Promise<void> {

@@ -7,6 +7,7 @@ import type { McporterCommandInput } from "./mcporter-transport";
 import { runForTest } from "./browser-use";
 import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
 import { makeRuntime, okCommand } from "./browser-use-test-helpers";
+import { BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION } from "./command-contract";
 
 // =========================================================================
 // Security-seam guards (Daily Driver Acceptance Ledger, cluster sec-seams):
@@ -259,9 +260,9 @@ describe("DDA-F25 hostile run ids rejected incl. via BROWSER_USE_RUN_ID", () => 
 // guidance naming expected + found.
 // -------------------------------------------------------------------------
 describe("DDA-C16 unknown envelope schema version refused naming versions", () => {
-	test("schema_version '3' refusal names expected and found versions", async () => {
+	test("schema_version '999' refusal names expected and found versions", async () => {
 		const handoff = verifiedHandoffEnvelope((env) => {
-			env.data.schema_version = "3";
+			env.data.schema_version = "999";
 		});
 		const { runtime, spawns } = handoffRuntime(handoff);
 		const result = await runForTest(
@@ -281,9 +282,11 @@ describe("DDA-C16 unknown envelope schema version refused naming versions", () =
 		const error = envelope.error as Record<string, unknown>;
 		expect(error.code).toBe("target_discovery_handoff_invalid");
 		// Found version named.
-		expect(String(error.message)).toContain("3");
+		expect(String(error.message)).toContain("999");
 		// Expected/pinned version named.
-		expect(String(error.message)).toContain("2");
+		expect(String(error.message)).toContain(
+			BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
+		);
 		// Refused before any adapter dispatch.
 		expect(spawns).toHaveLength(0);
 	});

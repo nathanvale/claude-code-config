@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { type BrowserUseCommand, browserUseContracts } from "./command-contract";
+import { parseBrowserUseArgv } from "./browser-use-parser";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -104,11 +105,96 @@ describe("U3 help and version", () => {
 	});
 });
 
+describe("R16 continuation resume surface alignment", () => {
+	test("parser, contract usage, and rendered help accept the same exact run resume action", async () => {
+		expect(
+			parseBrowserUseArgv([
+				"run",
+				"resume",
+				"--run",
+				"run-auth-1",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "run-resume",
+			flagValues: { "--run": "run-auth-1" },
+			outputMode: "json",
+		});
+		expect(browserUseContracts["run-resume"].usage).toContain(
+			"run resume --run <id> [--caller <label>] [--json|--plain]",
+		);
+		const help = await runForTest(
+			["run", "resume", "--help"],
+			makeRuntime(),
+		);
+		expect(help.exitCode).toBe(0);
+		expect(help.stdout).toContain("run resume --run <id>");
+		expect(help.stdout).toContain("--run");
+	});
+});
+
 // =========================================================================
 // Parser acceptance / rejection
 // =========================================================================
 
 describe("U3 parser", () => {
+	test("auth token lifecycle accepts only the contract-owned input form", () => {
+		expect(parseBrowserUseArgv(["auth", "status", "--json"])).toMatchObject({
+			kind: "command",
+			command: "auth-status",
+			outputMode: "json",
+		});
+		expect(
+			parseBrowserUseArgv(["auth", "install-token", "--stdin", "--plain"]),
+		).toMatchObject({
+			kind: "command",
+			command: "auth-install-token",
+			outputMode: "plain",
+			flagValues: { "--stdin": "" },
+		});
+		expect(parseBrowserUseArgv(["auth", "remove-token", "--json"])).toMatchObject({
+			kind: "command",
+			command: "auth-remove-token",
+			outputMode: "json",
+		});
+		expect(
+			parseBrowserUseArgv([
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "auth-record-admin-authority-receipt",
+			outputMode: "json",
+			flagValues: { "--confirm-read-item-only": "" },
+		});
+
+		for (const argv of [
+			["auth", "install-token", "raw-token"],
+			["auth", "install-token", "--token", "raw-token"],
+			["auth", "install-token", "--token-env", "OP_SERVICE_ACCOUNT_TOKEN"],
+			["auth", "status", "--stdin"],
+			["auth", "remove-token", "--stdin"],
+			["auth", "record-admin-authority-receipt"],
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"forged",
+			],
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only=false",
+			],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow();
+		}
+	});
+
 	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
 	// door smoke tests). A PRESENT but unregistered family token stays a usage
 	// error naming the invalid value (D6).
@@ -128,6 +214,133 @@ describe("U3 parser", () => {
 		const operate = await runForTest(["operate", "--json"], makeRuntime());
 		expect(operate.exitCode).toBe(2);
 		expect(`${operate.stdout}\n${operate.stderr}`).toContain("missing subcommand");
+	});
+
+	test("migration activate accepts an optional generation and never accepts source", async () => {
+		for (const argv of [
+			["migration", "activate", "--json"],
+			[
+				"migration",
+				"activate",
+				"--generation",
+				"generation-verified",
+				"--caller",
+				"codex",
+				"--plain",
+			],
+		]) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).not.toBe(2);
+			expect(`${result.stdout}\n${result.stderr}`).not.toContain("usage_error");
+		}
+
+		const rejected = await runForTest(
+			["migration", "activate", "--source", "/legacy", "--json"],
+			makeRuntime(),
+		);
+		expect(rejected.exitCode).toBe(2);
+		expect(parseJson(rejected.stdout).error).toMatchObject({
+			code: "usage_error",
+		});
+		expect(`${rejected.stdout}\n${rejected.stderr}`).toContain(
+			"unknown option: --source",
+		);
+	});
+
+	test("migration activate rejects a generation flag without an id", async () => {
+		for (const argv of [
+			["migration", "activate", "--generation", "--json"],
+			["migration", "activate", "--generation=", "--json"],
+		]) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).toBe(2);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "usage_error",
+			});
+			expect(`${result.stdout}\n${result.stderr}`).toContain(
+				"migration activate --generation requires <id>",
+			);
+		}
+	});
+
+	test("migration generate requires an absolute candidate bundle and defaults to JSON", () => {
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source",
+				"/private/tmp/candidate-bundle",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-generate",
+			outputMode: "json",
+			flagValues: {
+				"--source": "/private/tmp/candidate-bundle",
+			},
+		});
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source=/private/tmp/candidate-bundle",
+				"--plain",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-generate",
+			outputMode: "plain",
+		});
+
+		for (const argv of [
+			["migration", "generate"],
+			["migration", "generate", "--source", "relative/candidate"],
+			["migration", "generate", "--source=", "--json"],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(
+				"migration generate requires --source <absolute-candidate-bundle>",
+			);
+		}
+	});
+
+	test("migration generate rejects caller-supplied generation ids", () => {
+		expect(() =>
+			parseBrowserUseArgv([
+				"migration",
+				"generate",
+				"--source",
+				"/private/tmp/candidate-bundle",
+				"--generation",
+				"generation-override",
+			]),
+		).toThrow("unknown option: --generation");
+	});
+
+	test("migration import accepts one absolute legacy corpus root", () => {
+		expect(
+			parseBrowserUseArgv([
+				"migration",
+				"import",
+				"--source",
+				"/private/tmp/browser-automation",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "migration-import",
+			outputMode: "json",
+			flagValues: {
+				"--source": "/private/tmp/browser-automation",
+			},
+		});
+		for (const argv of [
+			["migration", "import"],
+			["migration", "import", "--source", "relative/browser-automation"],
+		]) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(
+				"migration import requires --source <path>",
+			);
+		}
 	});
 
 	// Scenario 6: undeclared flags are rejected (exit 2) for every subcommand.

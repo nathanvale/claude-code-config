@@ -4,6 +4,7 @@ import {
 	type BrowserUseDeliveryHook,
 	type BrowserUseTargetReproof,
 	type BrowserUseVerifiedTarget,
+	createBrowserUseNativeConfidentialDeliveryHook,
 	deliverConfidentialFields,
 } from "./browser-use-confidential-field-delivery";
 import type {
@@ -74,11 +75,13 @@ const TARGET: BrowserUseVerifiedTarget = {
 
 const BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://oncore.test"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -89,6 +92,14 @@ const reproveOk: BrowserUseTargetReproof = async ({ target }) => ({
 });
 
 const fakePort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({
@@ -145,6 +156,65 @@ function sweepAndRelease(
 }
 
 describe("delivery-level leak harness (AE5)", () => {
+	test("a secret-bearing or shape-invalid native result is discarded and keeps capture quarantined", async () => {
+		const journal: string[] = [];
+		const hook = createBrowserUseNativeConfidentialDeliveryHook({
+			quarantine: {
+				pause: async () => {
+					journal.push("pause");
+					return { ok: true };
+				},
+				cleanup: async () => {
+					journal.push("cleanup");
+					return { ok: true };
+				},
+				resume: async () => {
+					journal.push("resume");
+					return { ok: true };
+				},
+			},
+			consumePrivatePipeAndDeliver: async () => ({
+				schema_version: 1,
+				ok: true,
+				write_state: "delivered",
+				shape: { field: "password", byte_length: SENTINEL_VALUE.password.length },
+				protocol_trace: [
+					"Target.getTargetInfo",
+					"Page.getFrameTree",
+					"Accessibility.getFullAXTree",
+					"DOM.describeNode",
+					"DOM.resolveNode",
+					"Runtime.callFunctionOn",
+				],
+				leaked: SENTINEL_VALUE.password,
+			}),
+		});
+
+		const result = await hook({
+			handle: {
+				handle_id: "opaque-password",
+				field: "password",
+				expires_at_epoch_ms: 9_999_999,
+			},
+			field: "password",
+			target: TARGET,
+			semantic_locator: {
+				role: "textbox",
+				accessible_name: "Password",
+				input_kind: "password",
+			},
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			reason: "helper-crash",
+			field_cleared: false,
+			write_state: "write-outcome-unknown",
+		});
+		expect(journal).toEqual(["pause", "cleanup"]);
+		expect(JSON.stringify(result)).not.toContain(SENTINEL_VALUE.password);
+	});
+
 	test("a full password+OTP delivery leaves every choreography surface sentinel-free", async () => {
 		const { hook, observed } = leakHelper({});
 		const result = await deliverConfidentialFields({

@@ -13,6 +13,7 @@ import type {
 	McporterCommandInput,
 	McporterCommandResult,
 } from "./mcporter-transport";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 const HANDOFF = {
 	outcome: "verified",
@@ -30,11 +31,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;
@@ -215,6 +217,85 @@ describe("Chrome DevTools MCP task lane", () => {
 		});
 		expect(runtime.calls).toEqual([]);
 	});
+
+	test("refuses forged posture provenance and endpoint binding before dispatch", async () => {
+		for (const handoff of [
+			{
+				...HANDOFF,
+				proof: {
+					...HANDOFF.proof,
+					environment_contract_id: "foreign.contract",
+				},
+			},
+			{
+				...HANDOFF,
+				endpoint: {
+					...HANDOFF.endpoint,
+					ws: "ws://127.0.0.1:9243/devtools/browser/foreign",
+				},
+			},
+		]) {
+			const runtime = runtimeFor([]);
+			const result = await executeChromeTask(runtime, {
+				...baseTask(),
+				handoff,
+			} as ChromeTask);
+			expect(result).toMatchObject({
+				ok: false,
+				code: "chrome_task_handoff_invalid",
+			});
+			expect(runtime.calls).toEqual([]);
+		}
+	});
+
+	for (const scenario of [
+		{
+			name: "missing",
+			posture: undefined,
+		},
+		{
+			name: "unsafe",
+			posture: {
+				...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
+				effective: {
+					...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE.effective,
+					save_capability: "enabled",
+				},
+			},
+		},
+		{
+			name: "unknown-key",
+			posture: {
+				...LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
+				untrusted_extension: true,
+			},
+		},
+	] as const) {
+		test(`${scenario.name} profile posture fails before any Chrome adapter call`, async () => {
+			const runtime = runtimeFor([]);
+			const proof = {
+				...HANDOFF.proof,
+				...(scenario.posture === undefined
+					? {}
+					: { profile_posture: scenario.posture }),
+			} as Record<string, unknown>;
+			if (scenario.posture === undefined) delete proof.profile_posture;
+
+			const result = await executeChromeTask(runtime, {
+				...baseTask(),
+				handoff: {
+					...HANDOFF,
+					proof,
+				} as unknown as ChromeTask["handoff"],
+			});
+
+			expect(result).toMatchObject({
+				ok: false,
+				code: "chrome_task_handoff_invalid",
+			});
+			expect(runtime.calls).toEqual([]);
+		});
+	}
 
 	test("performance trace writes native evidence bytes to the derived artifact path, never inlined into the envelope", async () => {
 		const runtime = runtimeFor([
@@ -632,11 +713,12 @@ const REAL_HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;

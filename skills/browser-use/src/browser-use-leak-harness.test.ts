@@ -21,6 +21,7 @@ import type {
 	BrowserUseTokenRetrievalPort,
 } from "./browser-use-op";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 import {
 	type BrowserUseAuthTransactionEvent,
 	applyAuthTransition,
@@ -83,7 +84,7 @@ afterAll(() => {
 });
 
 // Verbatim verified-handoff shape (agent-browser lane) reused from wave 1
-// (browser-use-agent-browser.test.ts): schema 2, explicit-cdp, verified-live.
+// (browser-use-agent-browser.test.ts): schema 3, explicit-cdp, verified-live.
 const HANDOFF = {
 	outcome: "verified",
 	environment: { name: "agent-chrome", profile: "default" },
@@ -100,11 +101,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;
@@ -136,13 +138,14 @@ type DeliveryHelperFake = {
 function runRepresentativeAuthFlow(
 	helper: DeliveryHelperFake,
 	events: readonly BrowserUseAuthTransactionEvent[],
+	runId = "run-leak-harness",
 ): BrowserUseAuthTransactionFragment {
 	const begun = beginAuthTransaction({
 		method: "password",
 		attempt_limit: 3,
 		attempts_already_consumed: 0,
 		binding: {
-			run_id: "run-leak-harness",
+			run_id: runId,
 			handoff_evidence_id: "evidence-1",
 			lane_id: "agent-browser",
 			environment: "agent-chrome",
@@ -327,11 +330,13 @@ const {
 
 const CRASH_BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://oncore.test"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -357,6 +362,14 @@ const crashReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
 
 // An opaque-handle-only TokenRetrievalPort (never bytes).
 const crashPort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({
@@ -403,7 +416,19 @@ function buildCrashContext(
 ): AgentBrowserAuthDeliveryContext {
 	const provider = createBrowserUseAuthProvider({
 		store: deps,
-		tokenRetrieval: crashPort,
+		admission: {
+			kind: "environment-admitted",
+			evidence: {
+				lane: "environment-injected-op",
+				assurance: "lower-assurance",
+				native: { verdict: "native-capability-absent" },
+				environment: {
+					state: "ready",
+					next_action: "validate-service-account",
+				},
+			},
+			tokenRetrieval: crashPort,
+		},
 		attestationByDigest: () => undefined,
 	});
 	return provider.buildAgentBrowserDeliveryContext({
@@ -616,7 +641,7 @@ describe("value-aware leak harness (AE5)", () => {
 			{ type: "method-step-complete", step: "reprove-target" },
 			{ type: "method-step-complete", step: "fill-password" },
 			{ type: "submission-dispatched" },
-		]);
+		], RUN);
 		await persistAndReadStoreBytes(deps, RUN, fragment);
 
 		// Sweep bytes the SUT emitted on the real failure: the returned failure

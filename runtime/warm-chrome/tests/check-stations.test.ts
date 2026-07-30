@@ -43,12 +43,14 @@ import {
 	type ListenerProcess,
 	type ProfileStat,
 	REAL_GOOGLE_CHROME_BINARY,
+	type WarmChromeCredentialPosture,
 	type WarmChromeRuntime,
 	WarmChromeRuntimeError,
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
 const DEDICATED_PROFILE = `${HOME}/.agent-warm-profile`;
+const DEFAULT_ACTIVE_PROFILE = `${DEDICATED_PROFILE}/Default`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
@@ -67,7 +69,7 @@ function chromeCommand(
 			? ""
 			: ` --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE}`;
 	const extra = overrides.extraArgs ? ` ${overrides.extraArgs}` : "";
-	return `${REAL_GOOGLE_CHROME_BINARY}${port}${profile} --no-first-run${extra}`;
+	return `${REAL_GOOGLE_CHROME_BINARY}${port}${profile} --profile-directory=Default --no-first-run --disable-sync --disable-extensions${extra}`;
 }
 
 function chromeListener(
@@ -128,6 +130,36 @@ function healthyCdp(overrides: Record<string, CdpEntry> = {}): Record<string, Cd
 
 type VersionStep = Record<string, unknown> | Error | "hang";
 
+type CredentialPostureFixture = WarmChromeCredentialPosture &
+	Record<string, unknown>;
+
+const CLEAN_CREDENTIAL_POSTURE = {
+	disk: {
+		saveSetting: "disabled",
+		autoSignInSetting: "disabled",
+		syncSetting: "disabled",
+		storedLogin: "absent",
+	},
+	process: {
+		disableSyncSwitch: "present",
+		disableExtensionsSwitch: "present",
+	},
+	effective: {
+		observation: "running-chrome",
+		saveCapability: "disabled",
+		fillExposure: "no-source",
+		syncState: "disabled",
+		savePrompt: "suppressed",
+		observer: {
+			source: "chrome-webui",
+			browserPid: 4242,
+			port: WARM_CHROME_DEFAULT_CDP_PORT,
+			profileMatch: "exact",
+			observedAtMs: 0,
+		},
+	},
+} as const satisfies CredentialPostureFixture;
+
 type FixtureOptions = {
 	/** Per-port listener answers. Arrays play per call; the last entry repeats. */
 	listeners?: Record<string, ListenerProcess | null | ReadonlyArray<ListenerProcess | null>>;
@@ -142,6 +174,8 @@ type FixtureOptions = {
 	profiles?: Record<string, ProfileStat>;
 	/** DevToolsActivePort file content; null means the file is absent. */
 	activePort?: { port: string; wsPath: string } | null;
+	/** Redacted credential-clean posture; raw profile data never leaves the seam. */
+	credentialPosture?: CredentialPostureFixture;
 };
 
 type Fixture = {
@@ -155,6 +189,9 @@ type Fixture = {
 		writeTextFile: number;
 		chmod: number;
 		ensureProfileDir: number;
+		inspectCredentialPosture: number;
+		credentialPostureInputs: string[];
+		statProfileInputs: string[];
 	};
 };
 
@@ -171,6 +208,9 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 		writeTextFile: 0,
 		chmod: 0,
 		ensureProfileDir: 0,
+		inspectCredentialPosture: 0,
+		credentialPostureInputs: [],
+		statProfileInputs: [],
 	};
 	const versionScript: readonly VersionStep[] = Array.isArray(options.version)
 		? options.version
@@ -182,6 +222,7 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 	const listenerCursor = new Map<string, number>();
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+		[DEFAULT_ACTIVE_PROFILE]: profileStat(DEFAULT_ACTIVE_PROFILE),
 	};
 	const cdp = options.cdp ?? healthyCdp();
 	const errorPort = options.findListenerErrorPort ?? WARM_CHROME_DEFAULT_CDP_PORT;
@@ -214,6 +255,7 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 		},
 		currentUser: async () => "501",
 		statProfile: async (path) => {
+			calls.statProfileInputs.push(path);
 			const stat = profiles[path];
 			if (!stat) throw new Error(`no profile directory at ${path}`);
 			return stat;
@@ -233,10 +275,27 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 			return { pid: 1, kill: async () => true };
 		},
 		readSingletonLock: async () => null,
+		inspectCredentialPosture: async (input) => {
+			calls.inspectCredentialPosture += 1;
+			calls.credentialPostureInputs.push(input.activeProfileDir);
+			return (
+				options.credentialPosture ?? {
+					...CLEAN_CREDENTIAL_POSTURE,
+					process: {
+						disableSyncSwitch: input.syncDisabledByLaunch
+							? "present"
+							: "absent",
+						disableExtensionsSwitch: input.extensionsDisabledByLaunch
+							? "present"
+							: "absent",
+					},
+				}
+			);
+		},
 		// Small real timer: an immediate fetch always beats it; a hanging fetch
 		// trips the attach-timeout race quickly instead of after 3s.
 		sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
-	});
+	} as Partial<WarmChromeRuntime>);
 
 	const deps: WarmChromeProofDeps = {
 		cdpRoundTrip: async (_wsUrl, method) => {
@@ -245,6 +304,23 @@ function warmChromeFixture(options: FixtureOptions = {}): Fixture {
 			if (!entry) throw new Error(`unexpected CDP method: ${method}`);
 			if (entry instanceof Error) throw entry;
 			return entry;
+		},
+		observeEffectiveCredentialPosture: async (input) => {
+			const effective =
+				options.credentialPosture?.effective ??
+				CLEAN_CREDENTIAL_POSTURE.effective;
+			return effective.observation === "not-observed"
+				? effective
+				: {
+						...effective,
+						observer: {
+							source: "chrome-webui",
+							browserPid: input.browserPid,
+							port: input.port,
+							profileMatch: "exact",
+							observedAtMs: Date.now(),
+						},
+					};
 		},
 		readDevToolsActivePort: async () => options.activePort ?? null,
 	};
@@ -663,16 +739,16 @@ const failureScenarios: readonly FailureScenario[] = [
 		reason: "invalid_profile_path",
 	},
 	{
-		label: "resolved profile path remaps outside the dedicated user-data-dir (Chrome 136+)",
+		label: "explicit Default profile remaps outside the verified user-data root (Chrome 136+)",
 		fixture: () =>
 			warmChromeFixture({
 				listeners: {
-					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ extraArgs: "--profile-directory=Work" }),
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener(),
 				},
 				profiles: {
 					[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
-					[`${DEDICATED_PROFILE}/Work`]: profileStat(`${DEDICATED_PROFILE}/Work`, {
-						realPath: "/Users/warm/elsewhere/Work",
+					[DEFAULT_ACTIVE_PROFILE]: profileStat(DEFAULT_ACTIVE_PROFILE, {
+						realPath: "/Users/warm/elsewhere/Default",
 					}),
 				},
 			}),
@@ -695,6 +771,7 @@ const failureScenarios: readonly FailureScenario[] = [
 			warmChromeFixture({
 				profiles: {
 					[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+					[DEFAULT_ACTIVE_PROFILE]: profileStat(DEFAULT_ACTIVE_PROFILE),
 					"/Users/warm/other-profile": profileStat("/Users/warm/other-profile"),
 				},
 			}),
@@ -772,6 +849,213 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		});
 	}
 
+	test("saved credentials block the read-only proof without profile mutation (U6 R8)", async () => {
+		const fixture = warmChromeFixture({
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					storedLogin: "present",
+				},
+			},
+		});
+		const run = await runWarmChrome(
+			["check", "--run-id", "posture-run"],
+			fixture,
+		);
+
+		expectProofFailure(
+			run,
+			{ code: "profile_posture_unsafe", reason: "stored_login_present" },
+			"saved credentials",
+		);
+		expect(fixture.calls.inspectCredentialPosture).toBe(1);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.chmod).toBe(0);
+		expect(fixture.calls.writeTextFile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("configuration-only posture never authorizes a live credential-clean profile (U6 R8)", async () => {
+		const fixture = warmChromeFixture({
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: { observation: "not-observed" },
+			},
+		});
+		const run = await runWarmChrome(
+			["check", "--run-id", "configuration-only-run"],
+			fixture,
+		);
+
+		const envelope = expectProofFailure(
+			run,
+			{ code: "profile_posture_unsafe", reason: "controls_unproven" },
+			"configuration-only profile posture",
+		);
+		expect(envelope.data?.credential_posture).toEqual({
+			state: "configuration-only",
+			disk: {
+				save_setting: "disabled",
+				auto_signin_setting: "disabled",
+				sync_setting: "disabled",
+				stored_login: "absent",
+			},
+			process: {
+				disable_sync_switch: "present",
+				disable_extensions_switch: "present",
+			},
+			effective: {
+				observation: "not-observed",
+			},
+		});
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.chmod).toBe(0);
+		expect(fixture.calls.writeTextFile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	for (const scenario of [
+		{
+			label: "password saving enabled",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					saveSetting: "enabled" as const,
+				},
+			},
+			reason: "save_control_enabled" as const,
+		},
+		{
+			label: "credential autofill enabled",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					autoSignInSetting: "enabled" as const,
+				},
+			},
+			reason: "autofill_control_enabled" as const,
+		},
+		{
+			label: "sync evidence present",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					syncSetting: "enabled" as const,
+				},
+			},
+			reason: "sync_enabled" as const,
+		},
+		{
+			label: "save prompt observed",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: {
+					...CLEAN_CREDENTIAL_POSTURE.effective,
+					savePrompt: "observed" as const,
+				},
+			},
+			reason: "save_prompt_observed" as const,
+		},
+		{
+			label: "effective save capability enabled",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: {
+					...CLEAN_CREDENTIAL_POSTURE.effective,
+					saveCapability: "enabled" as const,
+				},
+			},
+			reason: "save_control_enabled" as const,
+		},
+		{
+			label: "effective credential source present",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: {
+					...CLEAN_CREDENTIAL_POSTURE.effective,
+					fillExposure: "source-present" as const,
+				},
+			},
+			reason: "stored_login_present" as const,
+		},
+		{
+			label: "effective sync state enabled",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: {
+					...CLEAN_CREDENTIAL_POSTURE.effective,
+					syncState: "enabled" as const,
+				},
+			},
+			reason: "sync_enabled" as const,
+		},
+		{
+			label: "effective observation incomplete",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: {
+					...CLEAN_CREDENTIAL_POSTURE.effective,
+					fillExposure: "unproven" as const,
+				},
+			},
+			reason: "controls_unproven" as const,
+		},
+		{
+			label: "required control missing",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					saveSetting: "unproven" as const,
+				},
+			},
+			reason: "controls_unproven" as const,
+		},
+		{
+			label: "stored-login inspection unproven",
+			posture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					storedLogin: "unproven" as const,
+				},
+				effective: { observation: "not-observed" },
+			},
+			reason: "controls_unproven" as const,
+		},
+	] satisfies readonly {
+		label: string;
+		posture: CredentialPostureFixture;
+		reason: WarmChromeCheckReason;
+	}[]) {
+		test(`${scenario.label} blocks with one clean-profile action and no mutation (U6 R8)`, async () => {
+			const fixture = warmChromeFixture({
+				credentialPosture: scenario.posture,
+			});
+			const run = await runWarmChrome(["check"], fixture);
+			const envelope = expectProofFailure(
+				run,
+				{ code: "profile_posture_unsafe", reason: scenario.reason },
+				scenario.label,
+			);
+
+			expect(envelope.runtime_actions?.map((action) => action.id)).toEqual([
+				"create_clean_profile",
+			]);
+			expect(envelope.continuation?.next_action_id).toBe(
+				"create_clean_profile",
+			);
+			expect(fixture.calls.ensureProfileDir).toBe(0);
+			expect(fixture.calls.chmod).toBe(0);
+			expect(fixture.calls.writeTextFile).toBe(0);
+			expect(fixture.calls.spawnChrome).toBe(0);
+		});
+	}
+
 	test("healthy fixed-port Chrome verifies from live evidence despite a stale DevToolsActivePort hint (R8/R17)", async () => {
 		const fixture = warmChromeFixture({
 			activePort: { port: "9222", wsPath: "/devtools/browser/stale-token" },
@@ -793,6 +1077,33 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		);
 		expect(envelope.data?.browser_pid).toBe(4242);
 		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+		expect(envelope.data?.credential_posture).toEqual({
+			state: "live-clean",
+			disk: {
+				save_setting: "disabled",
+				auto_signin_setting: "disabled",
+				sync_setting: "disabled",
+				stored_login: "live-observed-absent",
+			},
+			process: {
+				disable_sync_switch: "present",
+				disable_extensions_switch: "present",
+			},
+			effective: {
+				observation: "running-chrome",
+				save_capability: "disabled",
+				fill_exposure: "no-source",
+				sync_state: "disabled",
+				save_prompt: "suppressed",
+				observer: {
+					source: "chrome-webui",
+					browser_pid: 4242,
+					port: WARM_CHROME_DEFAULT_CDP_PORT,
+					profile_match: "exact",
+					observed_at_ms: expect.any(Number),
+				},
+			},
+		});
 		const action = envelope.runtime_actions?.[0];
 		expect(action?.id).toBe("use_verified_endpoint");
 		// R8: guidance carries the ACTUAL endpoint, never the 9222 convention.
@@ -809,7 +1120,7 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 			listeners: {
 				[WARM_CHROME_DEFAULT_CDP_PORT]: {
 					pid: 4242,
-					command: `${cloneBinary} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --no-first-run`,
+					command: `${cloneBinary} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --profile-directory=Default --no-first-run --disable-sync --disable-extensions`,
 				},
 			},
 		});
@@ -820,6 +1131,111 @@ describe("warm-chrome check stations (U5): canonical codes and reason details", 
 		expect(envelope.status).toBe("ok");
 		expect(envelope.data?.browser_pid).toBe(4242);
 		expect(envelope.data?.profile_dir).toBe(DEDICATED_PROFILE);
+	});
+
+	test("credential posture inspects the resolved --profile-directory rather than the user-data root", async () => {
+		const activeProfile = `${DEDICATED_PROFILE}/Work`;
+		const fixture = warmChromeFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
+					extraArgs: "--profile-directory=Work",
+				}),
+			},
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+				[activeProfile]: profileStat(activeProfile),
+			},
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(fixture.calls.credentialPostureInputs).toEqual([activeProfile]);
+	});
+
+	test("missing explicit --profile-directory leaves active profile posture unproven", async () => {
+		const fixture = warmChromeFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: {
+					pid: 4242,
+					command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --no-first-run --disable-sync`,
+				},
+			},
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expectProofFailure(
+			run,
+			{ code: "profile_posture_unsafe", reason: "controls_unproven" },
+			"missing profile-directory",
+		);
+		expect(fixture.calls.inspectCredentialPosture).toBe(0);
+	});
+
+	test("explicit Default profile resolves from the verified user-data root", async () => {
+		const observedUserDataDir = `${HOME}/warm-profile-link`;
+		const fixture = warmChromeFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
+					profile: observedUserDataDir,
+					extraArgs: "--profile-directory=Default",
+				}),
+			},
+			profiles: {
+				[observedUserDataDir]: profileStat(DEDICATED_PROFILE),
+				[DEFAULT_ACTIVE_PROFILE]: profileStat(DEFAULT_ACTIVE_PROFILE),
+			},
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(fixture.calls.statProfileInputs).toEqual([
+			observedUserDataDir,
+			DEFAULT_ACTIVE_PROFILE,
+		]);
+		expect(fixture.calls.credentialPostureInputs).toEqual([
+			DEFAULT_ACTIVE_PROFILE,
+		]);
+	});
+
+	test("missing --disable-sync launch control leaves sync posture unproven", async () => {
+		const fixture = warmChromeFixture({
+			listeners: {
+				[WARM_CHROME_DEFAULT_CDP_PORT]: {
+					pid: 4242,
+					command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --profile-directory=Default --no-first-run`,
+				},
+			},
+		});
+		const run = await runWarmChrome(["check"], fixture);
+
+		expectProofFailure(
+			run,
+			{ code: "profile_posture_unsafe", reason: "controls_unproven" },
+			"missing disable-sync",
+		);
+	});
+
+	test("disable-sync lookalikes and quoted values leave sync posture unproven", async () => {
+		for (const extraArg of [
+			"--disable-syncing",
+			'--diagnostic-label="--disable-sync"',
+		]) {
+			const fixture = warmChromeFixture({
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: {
+						pid: 4242,
+						command: `${REAL_GOOGLE_CHROME_BINARY} --remote-debugging-port=${WARM_CHROME_DEFAULT_CDP_PORT} --user-data-dir=${DEDICATED_PROFILE} --profile-directory=Default --no-first-run ${extraArg}`,
+					},
+				},
+			});
+			const run = await runWarmChrome(["check"], fixture);
+
+			expectProofFailure(
+				run,
+				{ code: "profile_posture_unsafe", reason: "controls_unproven" },
+				extraArg,
+			);
+		}
 	});
 
 	test("healthy warm Chrome can verify with no open page targets", async () => {
@@ -1090,6 +1506,53 @@ describe("warm-chrome suggested explicit port (U5 R7)", () => {
 });
 
 describe("warm-chrome check redaction boundary (U5 R13)", () => {
+	test("credential posture projection drops raw preference and account material", async () => {
+		const hostilePosture = {
+			...CLEAN_CREDENTIAL_POSTURE,
+			disk: {
+				...CLEAN_CREDENTIAL_POSTURE.disk,
+				storedLogin: "present" as const,
+			},
+			rawPreference: "posture-private-sentinel",
+			accountName: "account-private-sentinel",
+		} as CredentialPostureFixture;
+		const run = await runWarmChrome(
+			["check"],
+			warmChromeFixture({ credentialPosture: hostilePosture }),
+		);
+
+		expect(run.exitCode).toBe(20);
+		expect(run.stdout).not.toContain("posture-private-sentinel");
+		expect(run.stdout).not.toContain("account-private-sentinel");
+		expect(parseEnvelope(run).data?.credential_posture).toEqual({
+			state: "unsafe",
+			disk: {
+				save_setting: "disabled",
+				auto_signin_setting: "disabled",
+				sync_setting: "disabled",
+				stored_login: "present",
+			},
+			process: {
+				disable_sync_switch: "present",
+				disable_extensions_switch: "present",
+			},
+			effective: {
+				observation: "running-chrome",
+				save_capability: "disabled",
+				fill_exposure: "no-source",
+				sync_state: "disabled",
+				save_prompt: "suppressed",
+				observer: {
+					source: "chrome-webui",
+					browser_pid: 4242,
+					port: WARM_CHROME_DEFAULT_CDP_PORT,
+					profile_match: "exact",
+					observed_at_ms: expect.any(Number),
+				},
+			},
+		});
+	});
+
 	test("a hostile foreign listener cmdline never leaks beyond pid and basename", async () => {
 		const secrets = RUNTIME_CONTRACT_REDACTION_FIXTURES.map((entry) => entry.value);
 		const fixture = warmChromeFixture({
@@ -1201,6 +1664,30 @@ describe("warm-chrome status context parity (U5)", () => {
 		expect(plainRun.exitCode).toBe(jsonRun.exitCode);
 		expect(plainRun.stderr).toContain(envelope.error?.code ?? "");
 	});
+
+	test("status reports one fresh-profile action without mutating unsafe posture", async () => {
+		const fixture = warmChromeFixture({
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					storedLogin: "present",
+				},
+			},
+		});
+		const run = await runWarmChrome(["status", "--json"], fixture);
+		const envelope = parseEnvelope(run);
+
+		expect(run.exitCode).toBe(20);
+		expect(envelope.error?.code).toBe("profile_posture_unsafe");
+		expect(envelope.runtime_actions?.map((action) => action.id)).toEqual([
+			"create_clean_profile",
+		]);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.chmod).toBe(0);
+		expect(fixture.calls.writeTextFile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
 });
 
 describe("warm-chrome cold-agent envelopes (U5 R12)", () => {
@@ -1224,6 +1711,21 @@ describe("warm-chrome cold-agent envelopes (U5 R12)", () => {
 				run: await runWarmChrome(scenario.argv ?? ["check"], scenario.fixture()),
 			});
 		}
+		runs.push({
+			label: "profile posture",
+			run: await runWarmChrome(
+				["check"],
+				warmChromeFixture({
+					credentialPosture: {
+						...CLEAN_CREDENTIAL_POSTURE,
+						disk: {
+							...CLEAN_CREDENTIAL_POSTURE.disk,
+							storedLogin: "present",
+						},
+					},
+				}),
+			),
+		});
 		runs.push({
 			label: "invalid usage",
 			run: await runWarmChrome(["check", "--bogus"], warmChromeFixture()),
@@ -1259,8 +1761,8 @@ describe("warm-chrome cold-agent envelopes (U5 R12)", () => {
 	});
 });
 
-describe("warm-chrome check station evidence (U5)", () => {
-	test("all ten check stations attach evidence and stop being missing", async () => {
+describe("warm-chrome check station evidence (U5/U6)", () => {
+	test("all eleven check stations attach evidence and stop being missing", async () => {
 		const evidence: WarmChromeBranchStationEvidence[] = [];
 
 		const proofStationRuns: Array<{
@@ -1309,6 +1811,19 @@ describe("warm-chrome check station evidence (U5)", () => {
 				}),
 			},
 			{
+				stationId: "check.profile_posture_unsafe",
+				argv: ["check"],
+				fixture: warmChromeFixture({
+					credentialPosture: {
+						...CLEAN_CREDENTIAL_POSTURE,
+						disk: {
+							...CLEAN_CREDENTIAL_POSTURE.disk,
+							storedLogin: "present",
+						},
+					},
+				}),
+			},
+			{
 				stationId: "check.non_loopback",
 				argv: ["check", "--endpoint", "http://localhost:9222"],
 				fixture: warmChromeFixture(),
@@ -1326,6 +1841,7 @@ describe("warm-chrome check station evidence (U5)", () => {
 				fixture: warmChromeFixture({
 					profiles: {
 						[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+						[DEFAULT_ACTIVE_PROFILE]: profileStat(DEFAULT_ACTIVE_PROFILE),
 						"/Users/warm/other-profile": profileStat("/Users/warm/other-profile"),
 					},
 				}),
@@ -1356,9 +1872,11 @@ describe("warm-chrome check station evidence (U5)", () => {
 		expect(listMissingWarmChromeBranchStationEvidence(evidence)).toEqual(
 			[
 				"launch.already_verified",
+				"launch.human-action-required",
 				"launch.launched",
 				"launch.port_occupied_foreign",
 				"launch.spawned_unverified",
+				"repair.human-action-required",
 				"repair.repaired",
 				"repair.unrepairable",
 			].sort(),
@@ -1368,7 +1886,7 @@ describe("warm-chrome check station evidence (U5)", () => {
 		const checkFindings = stationMap.findings.filter((finding) =>
 			finding.station_id.startsWith("check."),
 		);
-		// All ten check stations reconcile clean: every envelope carries the
+		// All eleven check stations reconcile clean: every envelope carries the
 		// result contract metadata, including the chassis-owned stations.
 		expect(checkFindings).toEqual([]);
 	});

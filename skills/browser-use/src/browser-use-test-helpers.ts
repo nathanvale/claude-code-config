@@ -3,6 +3,7 @@ import {
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 } from "./browser-use";
+import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 import type {
 	McporterCommandInput,
@@ -40,19 +41,37 @@ export function makeRuntime(
 		// and can PROVE-OR-LAUNCH a real browser — never acceptable from a unit
 		// test. Default to a typed fail-closed stub; mint tests inject their own
 		// fixture-backed fake.
-		mintHandoff: async () => ({
-			exitCode: 20,
-			stdout: JSON.stringify({
-				status: "error",
-				data: { outcome: "failed", failure_class: "environment-unavailable" },
-				error: {
-					code: "mint_not_faked",
-					message:
-						"mintHandoff was not faked in this test; inject a fixture-backed mint or pass --handoff.",
-				},
-			}),
-			stderr: "",
-		}),
+		mintHandoff: async (input) =>
+			input.port === undefined
+				? {
+						exitCode: 20,
+						stdout: JSON.stringify({
+							status: "error",
+							data: {
+								outcome: "failed",
+								failure_class: "environment-unavailable",
+							},
+							error: {
+								code: "mint_not_faked",
+								message:
+									"mintHandoff was not faked in this test; inject a fixture-backed mint.",
+							},
+						}),
+						stderr: "",
+					}
+				: {
+						exitCode: 0,
+						stdout: verifiedHandoffEnvelope((envelope) => {
+							envelope.run_id = input.runId ?? "fixture-run";
+							envelope.data.attachment.adapter_id = input.adapterId;
+							envelope.data.endpoint.http = `http://127.0.0.1:${input.port}`;
+							envelope.data.endpoint.ws =
+								`ws://127.0.0.1:${input.port}/devtools/browser/reproved-fixture`;
+							envelope.data.proof.profile_posture.effective.observer.port =
+								input.port;
+						}),
+						stderr: "",
+					},
 		...overrides,
 	});
 }

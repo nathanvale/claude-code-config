@@ -13,7 +13,10 @@ evidence, not browser-control permission.
 - Proves the current Warm Chrome endpoint through `check`.
 - Renders human posture through `status`.
 - Starts Chrome through `launch` only after no-spawn guards pass.
-- Repairs dedicated-profile proof state through `repair`.
+- Separates safe profile configuration from observed running-Chrome behavior.
+- Refuses credential-clean admission until the effective state is observed.
+- Preserves dirty profiles; initializes a fresh profile only after approval.
+- Repairs safe dedicated-profile proof state through `repair`.
 - Emits facade-backed JSON envelopes for agents.
 - Keeps station ids, reason unions, flags, and result contracts in code.
 
@@ -56,6 +59,7 @@ flowchart TD
   Verified -- "Yes" --> Endpoint["ok envelope<br/>use verified endpoint"]
   Verified -- "No listener" --> Launch["launch"]
   Verified -- "Profile repairable" --> Repair["repair"]
+  Verified -- "Profile posture unsafe" --> Fresh["create fresh profile<br/>human approval"]
   Verified -- "Foreign or unsafe" --> Inspect["inspect station action"]
   Launch --> Check
   Repair --> Check
@@ -72,8 +76,8 @@ from the `9222` convention.
 | --- | --- | --- | --- |
 | `check` | JSON default, plain available | Agent proof chain | read-only |
 | `status` | plain default, JSON available | Human alias of `check` | read-only |
-| `launch` | JSON/plain | Spawn plus verify | may write browser state |
-| `repair` | JSON/plain | Profile proof repair plus verify | may write profile proof state |
+| `launch` | JSON/plain | Approved profile creation, spawn, verify | may write browser state |
+| `repair` | JSON/plain | Safe profile proof repair plus verify | may write profile proof state |
 
 No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
 help as `--help`.
@@ -88,6 +92,7 @@ bun run runtime/warm-chrome/src/cli.ts status
 # Lifecycle
 bun run runtime/warm-chrome/src/cli.ts launch --json
 bun run runtime/warm-chrome/src/cli.ts repair --json
+bun run runtime/warm-chrome/src/cli.ts launch --profile <fresh-dir> --json
 
 # Discovery
 bun run runtime/warm-chrome/src/cli.ts help check
@@ -103,8 +108,14 @@ runtime failure, `2` invalid usage.
 - `--port`: CDP port. Mutually exclusive with `--endpoint`.
 - `--endpoint`: numeric loopback endpoint, `http://127.0.0.1:<port>`.
 - `--profile`: dedicated profile. `check` and `status` verify it. `launch`
-  may create or chmod it. `repair` may create, chmod, or rewrite proof state
-  inside it.
+  and `repair` preserve an existing dirty profile and may initialize a missing
+  profile only with explicit approval.
+- A missing profile makes the public `launch` or `repair` command return
+  `human-action-required` without writing or waiting.
+- A trusted coordinator may resume one exact create operation with a
+  process-local, single-use human continuation bound to command, profile, and
+  port. No CLI flag, environment variable, stdin text, or receipt file can
+  supply that authority.
 - `--chrome`: `launch` only; accepted binary path is
   `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`.
 - Global diagnostics: `--run-id`, `--quiet`, `--verbose`, `--debug`.
@@ -147,6 +158,7 @@ cleanup U5/KTD6).
 - Do not terminate a listener unless proof verified it as Warm Chrome.
 - Keep foreign-listener diagnostics to pid and process basename.
 - Preview lifecycle posture with `check` before `launch` or `repair`.
+- Never scrub an unsafe profile in place; create a fresh path after approval.
 - Route browser entry through `runtime/browser-connect` and the Verified
   Handoff Envelope; keep proof behavior in this package.
 

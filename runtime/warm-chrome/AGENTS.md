@@ -120,7 +120,7 @@ owner paths exist.
 Stale-phrase inspection aid:
 
 ```bash
-rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifteen|seventeen)\b stations|derive the endpoint from.*9222|authoritative package|TASKS.archive.md once it exists' runtime/warm-chrome --glob '!AGENTS.md'
+rg -ni 'runners/warm-chrome-runner|(fifteen|sixteen|seventeen|15|16|17)[ -]station|\b(fifteen|sixteen|seventeen)\b stations|derive the endpoint from.*9222|authoritative package|TASKS.archive.md once it exists' runtime/warm-chrome --glob '!AGENTS.md'
 ```
 
 ## Drift Anti-Patterns

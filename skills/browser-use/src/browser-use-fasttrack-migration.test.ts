@@ -7,11 +7,10 @@ import { auditActionEffectClass } from "./browser-use-runbook-actions";
 import { validateRunbook } from "./browser-use-runbook-model";
 
 const DIGESTS = {
-	diagnoseRoute: "1".repeat(64),
-	fillDay: "2".repeat(64),
-	addBreaks: "3".repeat(64),
-	saveDraft: "4".repeat(64),
-	verifySavedDraft: "5".repeat(64),
+	fillWeek: "1".repeat(64),
+	verifyFilledWeek: "2".repeat(64),
+	saveDraft: "3".repeat(64),
+	verifySavedDraft: "4".repeat(64),
 };
 
 // Representative shape of the legacy `diagnose_route` / `verify_saved_draft`
@@ -25,7 +24,6 @@ function migrationInput(
 ): BrowserUseFasttrackSaveDraftMigrationInput {
 	return {
 		allowedOrigin: "https://portal.example.com",
-		timesheetUrl: "https://portal.example.com/timesheets/current",
 		activeSourceRelativePath:
 			"fasttrack/playbooks/fill-week-per-day-2026-05-25.json",
 		supersededSourceRelativePaths: [
@@ -51,24 +49,13 @@ describe("FastTrack save-draft staged migration (U5, R19/R26/AE6/AE8)", () => {
 			{ kind: "snapshot", interactive: false },
 			expect.objectContaining({
 				kind: "action",
-				action_id: "fasttrack-diagnose-route",
-				expected_digest: DIGESTS.diagnoseRoute,
+				action_id: "fasttrack-fill-week",
+				expected_digest: DIGESTS.fillWeek,
 			}),
 			expect.objectContaining({
-				kind: "iterate",
-				over_input: "day_keys",
-				step: expect.objectContaining({
-					action_id: "fasttrack-fill-day",
-					expected_digest: DIGESTS.fillDay,
-				}),
-			}),
-			expect.objectContaining({
-				kind: "iterate",
-				over_input: "day_keys",
-				step: expect.objectContaining({
-					action_id: "fasttrack-add-breaks",
-					expected_digest: DIGESTS.addBreaks,
-				}),
+				kind: "action",
+				action_id: "fasttrack-verify-filled-week",
+				expected_digest: DIGESTS.verifyFilledWeek,
 			}),
 			{ kind: "snapshot", interactive: false },
 			expect.objectContaining({
@@ -76,22 +63,17 @@ describe("FastTrack save-draft staged migration (U5, R19/R26/AE6/AE8)", () => {
 				action_id: "fasttrack-save-draft",
 				expected_digest: DIGESTS.saveDraft,
 			}),
-			{
-				kind: "open",
-				url: "https://portal.example.com/timesheets/current",
-				postcondition: {
-					kind: "url-equals",
-					url: "https://portal.example.com/timesheets/current",
-				},
-			},
 			{ kind: "snapshot", interactive: false },
 			expect.objectContaining({
 				kind: "action",
 				action_id: "fasttrack-verify-saved-draft",
 				expected_digest: DIGESTS.verifySavedDraft,
 				inputs: {
-					day_keys: "{{day_keys}}",
-					days: "{{days}}",
+					week_start: "{{timesheet_run.envelope.period_start}}",
+					week_end: "{{timesheet_run.envelope.period_end}}",
+					rows: "{{timesheet_run.payload.rows}}",
+					expected_total_hours:
+						"{{timesheet_run.envelope.expected_aggregate.value}}",
 				},
 			}),
 		]);
@@ -118,16 +100,17 @@ describe("FastTrack save-draft staged migration (U5, R19/R26/AE6/AE8)", () => {
 		).toHaveLength(1);
 	});
 
-	test("splits fill and breaks by stable day key with per-item checkpoints", () => {
+	test("uses one shared envelope with a FastTrack-owned whole-week payload", () => {
 		const migrated = buildFasttrackSaveDraftMigration(migrationInput());
 
-		const iterations = migrated.runbook.steps.filter(
-			(step) => step.kind === "iterate",
+		expect(migrated.runbook.steps.some((step) => step.kind === "iterate")).toBe(
+			false,
 		);
-		expect(iterations).toHaveLength(2);
-		for (const step of iterations) {
-			expect(step).toMatchObject({ kind: "iterate", over_input: "day_keys" });
-		}
+		expect(migrated.runbook.inputs.map((input) => input.id)).toEqual([
+			"timesheet_run",
+		]);
+		expect(JSON.stringify(migrated.runbook.inputs)).toContain("fasttrack");
+		expect(JSON.stringify(migrated.runbook.inputs)).toContain("human-submit");
 	});
 
 	test("rejects duplicate or self-superseding source lineage", () => {
@@ -147,26 +130,6 @@ describe("FastTrack save-draft staged migration (U5, R19/R26/AE6/AE8)", () => {
 			"non-exact origin",
 			{ allowedOrigin: "https://portal.example.com/path" },
 			"exact allowed origin",
-		],
-		[
-			"cross-origin URL",
-			{ timesheetUrl: "https://other.example.com/timesheets/current" },
-			"exact allowed origin",
-		],
-		[
-			"malformed URL",
-			{ timesheetUrl: "not-a-url" },
-			"exact HTTP(S) timesheet URL",
-		],
-		[
-			"file URL",
-			{ timesheetUrl: "file:///tmp/timesheet.html" },
-			"exact HTTP(S) timesheet URL",
-		],
-		[
-			"FTP URL",
-			{ timesheetUrl: "ftp://portal.example.com/timesheets/current" },
-			"exact HTTP(S) timesheet URL",
 		],
 		[
 			"unsafe source path",
@@ -211,7 +174,8 @@ describe("FastTrack Submit exclusion (R26/AE8)", () => {
 	test("no step targets a final submission boundary", () => {
 		const migrated = buildFasttrackSaveDraftMigration(migrationInput());
 
-		expect(JSON.stringify(migrated.runbook)).not.toMatch(/\bsubmit\b/i);
+		expect(JSON.stringify(migrated.runbook.steps)).not.toMatch(/\bsubmit\b/i);
+		expect(JSON.stringify(migrated.runbook.inputs)).toContain("human-submit");
 	});
 
 	test("save-draft is present but no submit action id exists", () => {

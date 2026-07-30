@@ -8,6 +8,7 @@
 // selection, operations, and the driver. Public entry: parseBrowserUseArgv.
 // ---------------------------------------------------------------------------
 
+import { isAbsolute } from "node:path";
 import {
 	type CliWriter,
 	createCliRuntimeSuccessEnvelope,
@@ -207,6 +208,22 @@ export function parseBrowserUseArgv(
 	// flag check and the dry-run/live split — so an unregistered enum value fails
 	// closed for dry-run and live alike (R27, api-contract parity).
 	validateEnumFlagValues(flagValues, flags);
+	if (
+		command === "auth-status" ||
+		command === "auth-record-admin-authority-receipt" ||
+		command === "auth-install-token" ||
+		command === "auth-remove-token"
+	) {
+		rejectUnexpectedPositionals(rest, flags);
+	}
+	if (
+		command === "auth-record-admin-authority-receipt" &&
+		!Object.hasOwn(flagValues, "--confirm-read-item-only")
+	) {
+		throw usageError(
+			"auth record-admin-authority-receipt requires --confirm-read-item-only.",
+		);
+	}
 	if (command === "run-resume" || command === "run-cancel") {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
@@ -277,30 +294,59 @@ export function parseBrowserUseArgv(
 		command === "migration-inventory" ||
 		command === "migration-plan" ||
 		command === "migration-apply" ||
-		command === "migration-verify"
+		command === "migration-verify" ||
+		command === "migration-import"
 	) {
 		const source = stringField(flagValues["--source"]);
-		if (!source || source.startsWith("--")) {
+		if (
+			!source ||
+			source.startsWith("--") ||
+			(command === "migration-import" && !isAbsolute(source))
+		) {
 			throw usageError(`${command.replace("-", " ")} requires --source <path>.`);
+		}
+	}
+	// Generation consumes a complete activation-ready candidate bundle, not the
+	// legacy corpus source used by the four migration phases above. Absolute
+	// source identity is enforced at parse time; the producer then applies the
+	// directory, symlink, size, manifest, staging, and closure admission checks.
+	if (command === "migration-generate") {
+		const source = stringField(flagValues["--source"]);
+		if (!source || source.startsWith("--") || !isAbsolute(source)) {
+			throw usageError(
+				"migration generate requires --source <absolute-candidate-bundle>.",
+			);
+		}
+	}
+	if (command === "migration-activate") {
+		const generationSupplied = rest.some(
+			(arg) => arg === "--generation" || arg.startsWith("--generation="),
+		);
+		const generation = stringField(flagValues["--generation"]);
+		if (generationSupplied && (!generation || generation.startsWith("--"))) {
+			throw usageError("migration activate --generation requires <id>.");
 		}
 	}
 	// R11: binding repair and selection projection are targeted reads of exact
 	// coordinates, never scans, so their coordinates are hard-required.
 	if (command === "auth-repair-item-binding") {
-		for (const flag of ["--vault-id", "--item-id"] as const) {
-			const value = stringField(flagValues[flag]);
-			if (!value || value.startsWith("--")) {
-				throw usageError(
-					`auth repair-item-binding requires ${flag} <id>.`,
-				);
-			}
+		const vaultId = stringField(flagValues["--vault-id"]);
+		const itemId = stringField(flagValues["--item-id"]);
+		const runId = stringField(flagValues["--run"]);
+		const hasVaultId = vaultId !== undefined && !vaultId.startsWith("--");
+		const hasItemId = itemId !== undefined && !itemId.startsWith("--");
+		if (hasVaultId !== hasItemId || (!hasVaultId && runId === undefined)) {
+			throw usageError(
+				"auth repair-item-binding requires both --vault-id <id> and --item-id <id>, or a blocked --run <id>.",
+			);
 		}
 	}
 	if (command === "auth-request-binding-selection-grant") {
 		const vaultId = stringField(flagValues["--vault-id"]);
-		if (!vaultId || vaultId.startsWith("--")) {
+		const runId = stringField(flagValues["--run"]);
+		if ((!vaultId || vaultId.startsWith("--")) && runId === undefined) {
 			throw usageError(
-				"auth request-binding-selection-grant requires --vault-id <id>.",
+				"auth request-binding-selection-grant requires --vault-id <id> or a blocked --run <id>.",
 			);
 		}
 	}
@@ -378,6 +424,35 @@ function toCommand(
 }
 
 type FlagSpec = { type?: string; values?: readonly string[] };
+
+function rejectUnexpectedPositionals(
+	argv: readonly string[],
+	flags: Readonly<Record<string, FlagSpec>>,
+): void {
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("--")) {
+			throw usageError(
+				"auth token lifecycle accepts no positional values; use --stdin or hidden terminal entry.",
+			);
+		}
+		const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+		const spec = flags[name];
+		if (spec?.type === "boolean" && arg.includes("=")) {
+			throw usageError(
+				`boolean flag ${name} accepts no assigned value; pass the flag alone.`,
+			);
+		}
+		if (
+			spec !== undefined &&
+			!arg.includes("=") &&
+			spec.type !== "boolean" &&
+			index + 1 < argv.length
+		) {
+			index += 1;
+		}
+	}
+}
 
 // Validate every enum-typed flag's supplied VALUE against the contract's
 // declared `values`, contract-derived so dry-run and live agree (R27): an

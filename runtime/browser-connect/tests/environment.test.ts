@@ -21,19 +21,62 @@ import {
 // Chrome.
 // ---------------------------------------------------------------------------
 
-function okEnvelope(input: { endpoint: string; ws: string }): string {
+function liveCleanProfilePosture(port: string, browserPid = 4242) {
+	return {
+		state: "live-clean",
+		disk: {
+			save_setting: "disabled",
+			auto_signin_setting: "disabled",
+			sync_setting: "disabled",
+			stored_login: "live-observed-absent",
+		},
+		process: {
+			disable_sync_switch: "present",
+			disable_extensions_switch: "present",
+		},
+		effective: {
+			observation: "running-chrome",
+			save_capability: "disabled",
+			fill_exposure: "no-source",
+			sync_state: "disabled",
+			save_prompt: "suppressed",
+			observer: {
+				source: "chrome-webui",
+				browser_pid: browserPid,
+				port,
+				profile_match: "exact",
+				observed_at_ms: 1,
+			},
+		},
+	} as const;
+}
+
+function okEnvelope(input: {
+	endpoint: string;
+	ws: string;
+	profilePosture?: unknown;
+	reportedPort?: string;
+	contractId?: string;
+	schemaVersion?: string;
+}): string {
+	const port = input.reportedPort ?? new URL(input.endpoint).port;
+	const browserPid = 4242;
 	return `${JSON.stringify(
 		{
 			status: "ok",
 			run_id: RUN_ID,
 			data: {
-				contract_id: "warm-chrome.browser-entry",
-				schema_version: "1",
+				contract_id: input.contractId ?? "warm-chrome.browser-entry",
+				schema_version: input.schemaVersion ?? "2",
 				ok: true,
 				action: "browser_ready",
 				command: "check",
 				endpoint: input.endpoint,
+				port,
+				browser_pid: browserPid,
 				web_socket_debugger_url: input.ws,
+				credential_posture:
+					input.profilePosture ?? liveCleanProfilePosture(port, browserPid),
 			},
 		},
 		null,
@@ -60,7 +103,7 @@ function errorEnvelope(input: {
 			},
 			data: {
 				contract_id: "warm-chrome.browser-entry",
-				schema_version: "1",
+				schema_version: "2",
 				reason: input.reason,
 				...(input.suggestedExplicitPort === undefined
 					? {}
@@ -150,6 +193,126 @@ const okStep = (port: string) =>
 	}) as const;
 
 describe("environment gateway explicit-port forwarding (U3 R15/KTD4/KTD7)", () => {
+	test("configuration-only posture cannot mint a verified handoff", async () => {
+		const { main } = scriptedWarmChromeMain([
+			{
+				envelope: okEnvelope({
+					endpoint: "http://127.0.0.1:9333",
+					ws: "ws://127.0.0.1:9333/devtools/browser/id",
+					profilePosture: {
+						...liveCleanProfilePosture("9333"),
+						state: "configuration-only",
+						effective: { observation: "not-observed" },
+					},
+				}),
+				exitCode: 0,
+			},
+		]);
+
+		const failed = expectFailed(
+			await proveAgentChromeEnvironment(
+				baseDeps(main, { explicitPort: 9333 }),
+			),
+		);
+
+		expect(failed.failure_class).toBe("foreign-listener");
+		expect(failed.repair_context.cause).toBe("unverified_listener");
+	});
+
+	test("posture with an unknown key cannot mint a verified handoff", async () => {
+		const { main } = scriptedWarmChromeMain([
+			{
+				envelope: okEnvelope({
+					endpoint: "http://127.0.0.1:9333",
+					ws: "ws://127.0.0.1:9333/devtools/browser/id",
+					profilePosture: {
+						...liveCleanProfilePosture("9333"),
+						untrusted_extension: true,
+					},
+				}),
+				exitCode: 0,
+			},
+		]);
+
+		const failed = expectFailed(
+			await proveAgentChromeEnvironment(
+				baseDeps(main, { explicitPort: 9333 }),
+			),
+		);
+
+		expect(failed.failure_class).toBe("foreign-listener");
+		expect(failed.repair_context.cause).toBe("unverified_listener");
+	});
+
+	test("foreign Warm Chrome contract provenance cannot mint a handoff", async () => {
+		for (const override of [
+			{ contractId: "foreign.contract" },
+			{ schemaVersion: "999" },
+		]) {
+			const { main } = scriptedWarmChromeMain([
+				{
+					envelope: okEnvelope({
+						endpoint: "http://127.0.0.1:9333",
+						ws: "ws://127.0.0.1:9333/devtools/browser/id",
+						...override,
+					}),
+					exitCode: 0,
+				},
+			]);
+
+			const failed = expectFailed(
+				await proveAgentChromeEnvironment(
+					baseDeps(main, { explicitPort: 9333 }),
+				),
+			);
+			expect(failed.repair_context.cause).toBe("unverified_listener");
+		}
+	});
+
+	test("posture observer must match the enclosing browser pid and port", async () => {
+		for (const profilePosture of [
+			liveCleanProfilePosture("9444"),
+			liveCleanProfilePosture("9333", 5252),
+		]) {
+			const { main } = scriptedWarmChromeMain([
+				{
+					envelope: okEnvelope({
+						endpoint: "http://127.0.0.1:9333",
+						ws: "ws://127.0.0.1:9333/devtools/browser/id",
+						profilePosture,
+					}),
+					exitCode: 0,
+				},
+			]);
+
+			const failed = expectFailed(
+				await proveAgentChromeEnvironment(
+					baseDeps(main, { explicitPort: 9333 }),
+				),
+			);
+
+			expect(failed.failure_class).toBe("foreign-listener");
+			expect(failed.repair_context.cause).toBe("unverified_listener");
+		}
+
+		const { main } = scriptedWarmChromeMain([
+			{
+				envelope: okEnvelope({
+					endpoint: "http://127.0.0.1:9333",
+					ws: "ws://127.0.0.1:9333/devtools/browser/id",
+					reportedPort: "9444",
+					profilePosture: liveCleanProfilePosture("9444"),
+				}),
+				exitCode: 0,
+			},
+		]);
+		expectFailed(
+			await proveAgentChromeEnvironment(
+				baseDeps(main, { explicitPort: 9333 }),
+			),
+		);
+	});
+
 	test("forwards the validated explicit port to check and takes the endpoint verbatim", async () => {
 		const { main, calls } = scriptedWarmChromeMain([okStep("9333")]);
 

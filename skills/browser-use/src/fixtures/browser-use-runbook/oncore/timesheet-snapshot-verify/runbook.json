@@ -3,26 +3,27 @@
   "schema_version": "2",
   "service_id": "oncore",
   "flow_id": "timesheet-snapshot-verify",
-  "flow_name": "verify-timesheet-loaded",
+  "flow_name": "verify-oncore-portal-loaded",
   "version": "2",
-  "summary": "Read-only Oncore proof: navigate to the timesheet portal, observe fresh structure, and verify the timesheet surface is present. Dispatches no mutation.",
-  "allowed_origins": ["https://oncoreservices.expr365.com.au"],
-  "auth_context_ref": "oncore-portal-session",
+  "summary": "Read-only Oncore proof: navigate to the current contractor portal and observe fresh structure. Dispatches no mutation.",
+  "allowed_origins": ["https://iteraterecruitment.oncoreservices.com"],
+  "auth_context_ref": "oncore-session",
   "inputs": [
     {
       "id": "week_ending",
       "summary": "ISO week-ending date the verification targets.",
       "required": false,
+      "custody": "ordinary",
       "schema": { "kind": "date" }
     }
   ],
   "steps": [
     {
       "kind": "open",
-      "url": "https://oncoreservices.expr365.com.au/timesheets",
+      "url": "https://iteraterecruitment.oncoreservices.com/pages/ContractorSummary.aspx",
       "postcondition": {
         "kind": "url-equals",
-        "url": "https://oncoreservices.expr365.com.au/timesheets"
+        "url": "https://iteraterecruitment.oncoreservices.com/pages/ContractorSummary.aspx"
       }
     },
     { "kind": "snapshot", "interactive": true }

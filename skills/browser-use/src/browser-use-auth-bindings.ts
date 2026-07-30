@@ -12,11 +12,14 @@
 // ---------------------------------------------------------------------------
 
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
+import type { BrowserUseEnvironmentTokenCustodyState } from "./browser-use-environment-token";
+import type { BrowserUseGenerationAuthRouteRecord } from "./browser-use-generation-schemas";
 import {
 	type BrowserUseAuthBlockedCause,
 	type BrowserUseAuthContinuation,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 } from "./browser-use-auth-model";
+import type { ProductAdmissionResult } from "@side-quest/browser-use-security";
 
 // --- Vocabularies (ADR 0029) ----------------------------------------------------
 
@@ -44,11 +47,61 @@ export const BROWSER_USE_BINDING_STALE_STATES = [
 	"revoked",
 	"expired",
 	"out-of-scope",
+	"revision-changed",
 ] as const;
 
 /** Stale state union. */
 export type BrowserUseBindingStaleState =
 	(typeof BROWSER_USE_BINDING_STALE_STATES)[number];
+
+/**
+ * One immutable command's selected credential lane.
+ *
+ * The port remains attached to the evidence that admitted it, so status and
+ * execution cannot independently re-probe or select different lanes.
+ */
+export type BrowserUseAuthLaneAdmission<Port> =
+	| {
+			kind: "signed-admitted";
+			evidence: {
+				lane: "signed-native";
+				assurance: "signed-native";
+				native: Extract<ProductAdmissionResult, { verdict: "admitted" }>;
+			};
+			tokenRetrieval: Port;
+	  }
+	| {
+			kind: "environment-admitted";
+			evidence: {
+				lane: "environment-injected-op";
+				assurance: "lower-assurance";
+				native: Extract<
+					ProductAdmissionResult,
+					{ verdict: "native-capability-absent" }
+				>;
+				environment: Extract<
+					BrowserUseEnvironmentTokenCustodyState,
+					{ state: "ready" }
+				>;
+			};
+			tokenRetrieval: Port;
+	  }
+	| {
+			kind: "blocked";
+			cause: {
+				code:
+					| "native-not-admitted"
+					| "native-probe-failed"
+					| "native-executor-failed"
+					| "environment-token-not-ready"
+					| "environment-probe-failed"
+					| "environment-executor-failed";
+			};
+			evidence: {
+				native?: ProductAdmissionResult;
+				environment?: BrowserUseEnvironmentTokenCustodyState;
+			};
+	  };
 
 // --- Secret-shape guard (D3: single public owner for all U3a modules) -----------
 
@@ -114,6 +167,8 @@ export function secretShapeFindingOf(
 /** One approved Item Binding: opaque ids plus live-derived authorization data. */
 export type BrowserUseItemBinding = {
 	service_id: string;
+	/** Live-proven service-account principal; a changed principal invalidates the cache. */
+	service_account_id: string;
 	auth_context: BrowserUseAuthContext;
 	/** Normalized origins only; live-derived + grant-approved aliases. */
 	allowed_origins: readonly string[];
@@ -122,6 +177,8 @@ export type BrowserUseItemBinding = {
 	/** Observed binding context, never a second permission system (R9). */
 	vault_id: string;
 	item_id: string;
+	/** Live 1Password item revision; any edit invalidates the cached binding. */
+	item_revision: number;
 	allowed_auth_methods: readonly BrowserUseBindingAuthMethod[];
 	binding_revision: number;
 };
@@ -129,14 +186,36 @@ export type BrowserUseItemBinding = {
 /** The exact Item Binding key set. */
 export const BROWSER_USE_ITEM_BINDING_KEYS = [
 	"service_id",
+	"service_account_id",
 	"auth_context",
 	"allowed_origins",
 	"allowed_login_paths",
 	"vault_id",
 	"item_id",
+	"item_revision",
 	"allowed_auth_methods",
 	"binding_revision",
 ] as const satisfies readonly (keyof BrowserUseItemBinding)[];
+
+/** Canonical binding equality derived from the schema-owned exact key set. */
+export function itemBindingsEqual(
+	left: BrowserUseItemBinding,
+	right: BrowserUseItemBinding,
+): boolean {
+	return BROWSER_USE_ITEM_BINDING_KEYS.every((key) => {
+		const leftValue = left[key];
+		const rightValue = right[key];
+		if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
+			return (
+				Array.isArray(leftValue) &&
+				Array.isArray(rightValue) &&
+				leftValue.length === rightValue.length &&
+				leftValue.every((value, index) => value === rightValue[index])
+			);
+		}
+		return leftValue === rightValue;
+	});
+}
 
 // --- Import Candidate (proposes, never binds) -----------------------------------
 
@@ -157,6 +236,37 @@ export type BrowserUseImportCandidate = {
 	provenance: "legacy-auth-pointer";
 };
 
+/** One candidate resolved only from a command's captured immutable generation. */
+export type BrowserUseResolvedAuthCandidate = {
+	generation_id: string;
+	activation_epoch: number;
+	auth_context_ref: string;
+	route_digest: string;
+	candidate_digest: string;
+	/** Exact parsed route policy; absent only for legacy in-memory callers. */
+	route?: BrowserUseGenerationAuthRouteRecord;
+	candidate: BrowserUseImportCandidate;
+};
+
+/** Secret-free generation lookup failure; callers must not fall back to legacy paths. */
+export type BrowserUseAuthGenerationFailure = {
+	code:
+		| "auth_route_not_found"
+		| "auth_generation_record_corrupt"
+		| "auth_generation_record_invalid";
+	message: string;
+};
+
+/** Read-only auth authority captured beside the other immutable generation seams. */
+export type BrowserUseAuthGenerationSeam = {
+	loadAuthCandidate(
+		authContextRef: string,
+	): Promise<
+		| { ok: true; resolution: BrowserUseResolvedAuthCandidate }
+		| { ok: false; failure: BrowserUseAuthGenerationFailure }
+	>;
+};
+
 /** The exact Import Candidate key set. */
 export const BROWSER_USE_IMPORT_CANDIDATE_KEYS = [
 	"candidate_id",
@@ -175,6 +285,7 @@ export const BROWSER_USE_IMPORT_CANDIDATE_KEYS = [
 export type BrowserUseVaultItemEvidence = {
 	item_id: string;
 	vault_id: string;
+	item_revision: number;
 	/** Normalized, derived live. */
 	origins: readonly string[];
 	login_paths: readonly string[];
@@ -186,6 +297,7 @@ export type BrowserUseVaultItemEvidence = {
 export const BROWSER_USE_VAULT_ITEM_EVIDENCE_KEYS = [
 	"item_id",
 	"vault_id",
+	"item_revision",
 	"origins",
 	"login_paths",
 	"supported_methods",
@@ -379,7 +491,12 @@ export function validateItemBindingShape(
 	if (keyIssue !== undefined) return [keyIssue];
 
 	const issues: BrowserUseBindingIssue[] = [];
-	for (const field of ["service_id", "vault_id", "item_id"] as const) {
+	for (const field of [
+		"service_id",
+		"service_account_id",
+		"vault_id",
+		"item_id",
+	] as const) {
 		const issue = stringIssueAt(`binding.${field}`, value[field], BINDING_CODES);
 		if (issue !== undefined) {
 			issues.push(issue);
@@ -436,6 +553,17 @@ export function validateItemBindingShape(
 			BINDING_CODES,
 		),
 	);
+	if (
+		typeof value.item_revision !== "number" ||
+		!Number.isSafeInteger(value.item_revision) ||
+		value.item_revision < 1
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding.item_revision",
+			message: "expected a positive safe integer.",
+		});
+	}
 	if (
 		typeof value.binding_revision !== "number" ||
 		!Number.isSafeInteger(value.binding_revision) ||
@@ -582,6 +710,17 @@ export function validateVaultItemEvidenceShape(
 			EVIDENCE_CODES,
 		),
 	);
+	if (
+		typeof value.item_revision !== "number" ||
+		!Number.isSafeInteger(value.item_revision) ||
+		value.item_revision < 1
+	) {
+		issues.push({
+			code: "evidence_field_invalid",
+			path: "evidence.item_revision",
+			message: "expected a positive safe integer.",
+		});
+	}
 	if (
 		typeof value.state !== "string" ||
 		!EVIDENCE_STATES.includes(value.state)
@@ -759,6 +898,8 @@ export type BrowserUseBindingRepairHint = {
 /** Input to the single-owner match policy; the R8 vault proof MUST precede. */
 export type BrowserUseBindingMatchInput = {
 	service_id: string;
+	/** Principal proved active before vault discovery. */
+	service_account_id: string;
 	auth_context: BrowserUseAuthContext;
 	/** Runtime passes one; import passes normalized proposed_origins. */
 	target_origins: readonly string[];
@@ -842,6 +983,12 @@ export function matchItemBinding(
 		return matchInputRefusal("service_id");
 	}
 	if (
+		typeof input.service_account_id !== "string" ||
+		input.service_account_id.length === 0
+	) {
+		return matchInputRefusal("service_account_id");
+	}
+	if (
 		!(BROWSER_USE_AUTH_CONTEXTS as readonly string[]).includes(
 			input.auth_context,
 		)
@@ -889,11 +1036,13 @@ export function matchItemBinding(
 			kind: "bound",
 			binding: {
 				service_id: input.service_id,
+				service_account_id: input.service_account_id,
 				auth_context: input.auth_context,
 				allowed_origins: [...single.item.origins],
 				allowed_login_paths: [...single.item.login_paths],
 				vault_id: single.item.vault_id,
 				item_id: single.item.item_id,
+				item_revision: single.item.item_revision,
 				allowed_auth_methods: [...single.item.supported_methods],
 				binding_revision: 1,
 			},
@@ -979,6 +1128,7 @@ export type BrowserUseCandidateImportResult =
  */
 export function importCandidates(input: {
 	candidates: readonly unknown[];
+	service_account_id: string;
 	vault_id: string;
 	items: readonly BrowserUseVaultItemEvidence[];
 }): readonly BrowserUseCandidateImportResult[] {
@@ -1030,6 +1180,7 @@ export function importCandidates(input: {
 		}
 		const match = matchItemBinding({
 			service_id: candidate.service_id,
+			service_account_id: input.service_account_id,
 			auth_context: candidate.auth_context,
 			target_origins: normalizedOrigins,
 			login_path: null,
@@ -1125,6 +1276,9 @@ export function assessBindingUsability(
 	// happens to share origins never substitutes for it (R11).
 	if (live.item.item_id !== binding.item_id) return staleUsability("moved");
 	if (live.item.vault_id !== binding.vault_id) return staleUsability("moved");
+	if (live.item.item_revision !== binding.item_revision) {
+		return staleUsability("revision-changed");
+	}
 	if (live.item.state !== "active") return staleUsability(live.item.state);
 	// KTD11/SD2 derivation check: every cached allowed_origin must re-derive
 	// from the live evidence — a cache edit that widens the origin set fails

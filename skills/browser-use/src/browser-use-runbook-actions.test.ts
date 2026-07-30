@@ -6,6 +6,10 @@ import {
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
 	ACTION_ASSET_MAX_BYTES,
+	ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES,
+	actionAssetIsSecretFree,
 	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
@@ -13,7 +17,9 @@ import {
 	itemKeysAreValid,
 	itemKeySequenceDigest,
 	normalizedInputDigest,
+	parseReviewedActionRecord,
 	recordItemCheckpoint,
+	reviewedActionPostconditionDigest,
 	resolveNextBatchItem,
 	resolveResumeAgainstBinding,
 	resolveReviewedAction,
@@ -28,6 +34,10 @@ const READ_DIGEST = actionAssetDigest(READ_ASSET_BYTES);
 // A mutation asset: clicks + fills.
 const MUTATION_ASSET_BYTES = "async ({ inputs }) => { document.querySelector('#save').click(); return { saved: true } }";
 const MUTATION_DIGEST = actionAssetDigest(MUTATION_ASSET_BYTES);
+const MUTATION_POSTCONDITION = {
+	kind: "element-visible",
+	selector: "#saved-banner",
+} as const;
 
 function readRecord(
 	overrides: Partial<BrowserUseReviewedActionRecord> = {},
@@ -70,7 +80,7 @@ function mutationRecord(
 		input_schema: { kind: "object", fields: {} },
 		result_schema: { kind: "object", fields: {} },
 		result_sensitivity: "low",
-		required_postcondition: { kind: "element-visible", selector: "#saved-banner" },
+		required_postcondition: MUTATION_POSTCONDITION,
 		source_provenance: "oncore/save-draft.js",
 		promotion_receipt: {
 			approved_digest: MUTATION_DIGEST,
@@ -104,6 +114,123 @@ function seamFor(
 
 const READ_BYTES_STORE = { [READ_DIGEST]: READ_ASSET_BYTES };
 
+describe("parseReviewedActionRecord", () => {
+	test("accepts the closed auth-submit purpose on a reviewed mutation", () => {
+		const raw = {
+			...mutationRecord(),
+			purpose: "runbook-auth-submit" as const,
+			promotion_receipt: {
+				...mutationRecord().promotion_receipt,
+				approved_purpose: "runbook-auth-submit" as const,
+				approved_postcondition_digest:
+					reviewedActionPostconditionDigest(MUTATION_POSTCONDITION),
+			},
+		};
+
+		expect(parseReviewedActionRecord(raw)).toEqual({
+			ok: true,
+			record: raw,
+		});
+	});
+
+	test("rejects auth-submit relabelling without an exact receipt purpose", () => {
+		const businessMutation = mutationRecord();
+
+		for (const raw of [
+			{ ...businessMutation, purpose: "runbook-auth-submit" },
+			{
+				...businessMutation,
+				purpose: "runbook-auth-submit",
+				promotion_receipt: {
+					...businessMutation.promotion_receipt,
+					approved_purpose: "business-submit",
+				},
+			},
+			{
+				...businessMutation,
+				promotion_receipt: {
+					...businessMutation.promotion_receipt,
+					approved_purpose: "runbook-auth-submit",
+				},
+			},
+		]) {
+			expect(parseReviewedActionRecord(raw)).toEqual({
+				ok: false,
+				message: "reviewed action record does not match its schema.",
+			});
+		}
+	});
+
+	test("rejects an undeclared reviewed-action purpose", () => {
+		expect(
+			parseReviewedActionRecord({
+				...mutationRecord(),
+				purpose: "business-submit",
+			}),
+		).toEqual({
+			ok: false,
+			message: "reviewed action record does not match its schema.",
+		});
+	});
+
+	test("rejects the auth-submit purpose on a read action", () => {
+		expect(
+			parseReviewedActionRecord({
+				...readRecord(),
+				purpose: "runbook-auth-submit",
+			}),
+		).toEqual({
+			ok: false,
+			message: "reviewed action record does not match its schema.",
+		});
+	});
+
+	test("rejects a malformed nested promotion receipt without throwing", () => {
+		const raw = {
+			...readRecord(),
+			promotion_receipt: "not-an-object",
+		};
+
+		expect(parseReviewedActionRecord(raw)).toEqual({
+			ok: false,
+			message: "reviewed action record does not match its schema.",
+		});
+	});
+});
+
+describe("Oncore timesheet diagnosis action", () => {
+	test("admits reviewed JavaScript regex syntax without weakening secret screening", () => {
+		expect(actionAssetIsSecretFree(ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES)).toBe(
+			true,
+		);
+		expect(
+			actionAssetIsSecretFree(
+				"async () => { const password = 'not-a-real-secret-value'; }",
+			),
+		).toBe(false);
+		expect(actionAssetIsSecretFree("async () => 'op://vault/item/field'")).toBe(
+			false,
+		);
+		expect(
+			actionAssetIsSecretFree("async () => '/Users/example/private-input.json'"),
+		).toBe(false);
+	});
+
+	test("is mechanically admitted as exact read-only observation", () => {
+		expect(auditActionEffectClass(ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES)).toBe(
+			"read",
+		);
+	});
+
+	test("keeps location assignment classified as mutation", () => {
+		expect(
+			auditActionEffectClass(
+				"async () => { location.href = 'https://example.test'; return {}; }",
+			),
+		).toBe("mutation");
+	});
+});
+
 // --- Happy paths -------------------------------------------------------------
 
 describe("resolveReviewedAction — approved happy paths", () => {
@@ -130,12 +257,24 @@ describe("resolveReviewedAction — approved happy paths", () => {
 			expectedDigest: MUTATION_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
-			seam: seamFor(mutationRecord(), { [MUTATION_DIGEST]: MUTATION_ASSET_BYTES }),
+			seam: seamFor(
+				mutationRecord({
+					purpose: "runbook-auth-submit",
+					promotion_receipt: {
+						...mutationRecord().promotion_receipt,
+						approved_purpose: "runbook-auth-submit",
+						approved_postcondition_digest:
+							reviewedActionPostconditionDigest(MUTATION_POSTCONDITION),
+					},
+				}),
+				{ [MUTATION_DIGEST]: MUTATION_ASSET_BYTES },
+			),
 		});
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.resolved.step.effect).toBe("mutation");
 			expect(result.resolved.step.postcondition).toBeDefined();
+			expect(result.resolved.purpose).toBe("runbook-auth-submit");
 		}
 	});
 });
@@ -608,6 +747,62 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_effect_mismatch");
 	});
+
+	test("editing a business mutation purpose cannot relabel it as auth-submit", async () => {
+		for (const approvedPurpose of [undefined, "business-submit"] as const) {
+			const record = mutationRecord({
+				purpose: "runbook-auth-submit",
+				promotion_receipt: {
+					...mutationRecord().promotion_receipt,
+					...(approvedPurpose === undefined
+						? {}
+						: { approved_purpose: approvedPurpose as never }),
+				},
+			});
+			const result = await resolveReviewedAction({
+				actionId: "save-draft",
+				expectedDigest: MUTATION_DIGEST,
+				requestedOrigin: ORIGIN,
+				inputs: {},
+				seam: seamFor(record, { [MUTATION_DIGEST]: MUTATION_ASSET_BYTES }),
+			});
+
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.refusal.code).toBe("action_receipt_purpose_mismatch");
+			}
+		}
+	});
+
+	test("editing an approved auth-submit postcondition refuses before dispatch", async () => {
+		const record = mutationRecord({
+			purpose: "runbook-auth-submit",
+			required_postcondition: {
+				kind: "element-visible",
+				selector: "#different-outcome",
+			},
+			promotion_receipt: {
+				...mutationRecord().promotion_receipt,
+				approved_purpose: "runbook-auth-submit",
+				approved_postcondition_digest:
+					reviewedActionPostconditionDigest(MUTATION_POSTCONDITION),
+			},
+		});
+		const result = await resolveReviewedAction({
+			actionId: "save-draft",
+			expectedDigest: MUTATION_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(record, { [MUTATION_DIGEST]: MUTATION_ASSET_BYTES }),
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.refusal.code).toBe(
+				"action_receipt_postcondition_mismatch",
+			);
+		}
+	});
 });
 
 // --- Effect-class audit (R19) ------------------------------------------------
@@ -618,6 +813,14 @@ describe("auditActionEffectClass — audited behavior is the authority (R19)", (
 	});
 	test("the exact reviewed Oncore draft-verification action is read", () => {
 		expect(auditActionEffectClass(ONCORE_DRAFT_VERIFICATION_ACTION_BYTES)).toBe("read");
+	});
+	test("Xero extraction separates request mutation from response observation", () => {
+		expect(auditActionEffectClass(XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES)).toBe(
+			"mutation",
+		);
+		expect(auditActionEffectClass(XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES)).toBe(
+			"read",
+		);
 	});
 	test("a bounded JSON proof read from one selected element is read", () => {
 		expect(

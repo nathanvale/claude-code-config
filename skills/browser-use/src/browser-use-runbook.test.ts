@@ -25,6 +25,7 @@ import type {
 	BrowserUseTargetReproof,
 	BrowserUseVerifiedTarget,
 } from "./browser-use-confidential-field-delivery";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 import type {
 	BrowserUseOpCredentialField,
 	BrowserUseSecretHandle,
@@ -38,7 +39,9 @@ import {
 	type BrowserUseRunbookExecutionResult,
 	BrowserUseShippedRunbooksMissingError,
 	RUNBOOK_PRIVATE_INPUT_MAX_BYTES,
+	enforceRunbookInputCustody,
 	executePreparedRunbook,
+	listEffectiveRunbooks,
 	listRunbooks,
 	prepareRunbookExecution,
 	readPrivateStructuredInput,
@@ -63,6 +66,8 @@ import {
 import {
 	actionAssetDigest,
 	actionValueMatchesSchema,
+	itemKeySequenceDigest,
+	normalizedInputDigest,
 	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	recordItemCheckpoint,
 } from "./browser-use-runbook-actions";
@@ -91,11 +96,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;
@@ -321,12 +327,94 @@ describe("runbook model validation (v2)", () => {
 	});
 });
 
+// --- Runbook input custody ---------------------------------------------------
+
+describe("runbook input custody", () => {
+	const runbook = baseRunbook({
+		inputs: [
+			{
+				id: "query",
+				summary: "Public search query.",
+				required: false,
+				custody: "ordinary",
+				schema: { kind: "string" },
+			},
+			{
+				id: "account",
+				summary: "Private account selector.",
+				required: false,
+				custody: "sensitive",
+				schema: { kind: "string" },
+			},
+		],
+	});
+
+	test("admits ordinary public ids and sensitive private ids", () => {
+		expect(
+			enforceRunbookInputCustody(runbook, {
+				publicInputIds: ["query"],
+				privateInputIds: ["account"],
+			}),
+		).toEqual({ ok: true });
+	});
+
+	test.each([
+		{
+			name: "sensitive id from public argv",
+			publicInputIds: ["account"],
+			privateInputIds: [],
+			code: "runbook_input_custody_mismatch",
+		},
+		{
+			name: "ordinary id from private file",
+			publicInputIds: [],
+			privateInputIds: ["query"],
+			code: "runbook_input_custody_mismatch",
+		},
+		{
+			name: "undeclared public id",
+			publicInputIds: ["missing"],
+			privateInputIds: [],
+			code: "runbook_input_unknown",
+		},
+		{
+			name: "undeclared private id",
+			publicInputIds: [],
+			privateInputIds: ["missing"],
+			code: "runbook_input_unknown",
+		},
+		{
+			name: "same id from public and private routes",
+			publicInputIds: ["query"],
+			privateInputIds: ["query"],
+			code: "runbook_input_source_conflict",
+		},
+	] as const)("$name", ({ publicInputIds, privateInputIds, code }) => {
+		const result = enforceRunbookInputCustody(runbook, {
+			publicInputIds,
+			privateInputIds,
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.refusal.code).toBe(code);
+		expect(result.refusal).not.toHaveProperty("value");
+	});
+});
+
 // --- Model: recursive typed-input value schemas (R9) -------------------------
 
 describe("v2 typed-input value schemas (R9)", () => {
 	function inputSchema(schema: BrowserUseRunbookValueSchema): BrowserUseRunbook {
 		return baseRunbook({
-			inputs: [{ id: "value", summary: "s", required: true, schema }],
+			inputs: [
+				{
+					id: "value",
+					summary: "s",
+					required: true,
+					custody: "ordinary",
+					schema,
+				},
+			],
 		});
 	}
 
@@ -483,6 +571,29 @@ describe("runbook total parsing (drop-v1)", () => {
 		expect(result.runbook.schema_version).toBe("2");
 	});
 
+	test("rejects an input without explicit custody", () => {
+		const record = JSON.parse(
+			JSON.stringify(
+				baseRunbook({
+					inputs: [
+						{
+							id: "query",
+							summary: "Search query.",
+							required: true,
+							custody: "ordinary",
+							schema: { kind: "string" },
+						},
+					],
+				}),
+			),
+		);
+		delete record.inputs[0].custody;
+		const result = parseRunbookRecord(record);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+
 	test("rejects a retired v1 record with a schema-unsupported issue", () => {
 		const v1 = {
 			contract: "browser-use.runbook",
@@ -523,7 +634,15 @@ describe("runbook total parsing (drop-v1)", () => {
 	test("rejects a malformed input value schema", () => {
 		const bad = {
 			...JSON.parse(JSON.stringify(baseRunbook())),
-			inputs: [{ id: "v", summary: "s", required: true, schema: { kind: "nope" } }],
+			inputs: [
+				{
+					id: "v",
+					summary: "s",
+					required: true,
+					custody: "ordinary",
+					schema: { kind: "nope" },
+				},
+			],
 		};
 		const result = parseRunbookRecord(bad);
 		expect(result.ok).toBe(false);
@@ -588,6 +707,7 @@ describe("runbook execution planning (v2, F7)", () => {
 					id: "item_keys",
 					summary: "Stable item keys.",
 					required: true,
+					custody: "sensitive",
 					schema: {
 						kind: "array",
 						items: { kind: "string" },
@@ -637,7 +757,13 @@ describe("runbook execution planning (v2, F7)", () => {
 	test("substitutes a declared input into an ordinary fill value", () => {
 		const runbook = baseRunbook({
 			inputs: [
-				{ id: "week_ending", summary: "w", required: true, schema: { kind: "date" } },
+				{
+					id: "week_ending",
+					summary: "w",
+					required: true,
+					custody: "ordinary",
+					schema: { kind: "date" },
+				},
 			],
 			steps: [
 				{
@@ -670,6 +796,7 @@ describe("runbook execution planning (v2, F7)", () => {
 					id: "page_size",
 					summary: "p",
 					required: false,
+					custody: "ordinary",
 					schema: { kind: "number", integer: true, default: 25 },
 				},
 			],
@@ -700,7 +827,13 @@ describe("runbook execution planning (v2, F7)", () => {
 	test("refuses a missing required input", () => {
 		const runbook = baseRunbook({
 			inputs: [
-				{ id: "week_ending", summary: "w", required: true, schema: { kind: "date" } },
+				{
+					id: "week_ending",
+					summary: "w",
+					required: true,
+					custody: "ordinary",
+					schema: { kind: "date" },
+				},
 			],
 		});
 		const planned = planRunbookExecution(runbook, {
@@ -719,6 +852,7 @@ describe("runbook execution planning (v2, F7)", () => {
 					id: "week_ending",
 					summary: "w",
 					required: true,
+					custody: "ordinary",
 					schema: { kind: "date" },
 				},
 			],
@@ -772,6 +906,7 @@ describe("runbook execution planning (v2, F7)", () => {
 					id: "item_keys",
 					summary: "i",
 					required: true,
+					custody: "sensitive",
 					schema: {
 						kind: "array",
 						items: { kind: "string" },
@@ -1559,11 +1694,13 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 				in_sensitive_interval: false,
 				binding: {
 					service_id: "oncore",
+					service_account_id: "service-account-1",
 					auth_context: "interactive-login",
 					allowed_origins: ["https://portal.example.com"],
 					allowed_login_paths: [],
 					vault_id: "vault-1",
 					item_id: "item-1",
+					item_revision: 7,
 					allowed_auth_methods: ["password"],
 					binding_revision: 1,
 				},
@@ -1579,6 +1716,14 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					target_proof_digest: "d".repeat(32),
 				},
 				tokenRetrieval: {
+					getServiceAccountIdentity: async () => ({
+						ok: true,
+						identity: {
+							service_account_id: "service-account-1",
+							state: "ACTIVE",
+							type: "SERVICE_ACCOUNT",
+						},
+					}),
 					listVaults: async () => ({ ok: true, vaults: [] }),
 					listLoginItems: async () => ({ ok: true, items: [] }),
 					getLoginItem: async () => ({
@@ -1716,11 +1861,13 @@ const CONFIDENTIAL_RUNBOOK = baseRunbook({
 
 const CONFIDENTIAL_BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://portal.example.com"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };
@@ -1747,6 +1894,14 @@ const confidentialReproveOk: BrowserUseTargetReproof = async ({ target }) => ({
 // An opaque-handle-only TokenRetrievalPort (never bytes): the ONLY place the
 // port boundary is faked. Its handle names the field, carrying no value.
 const confidentialFakePort: BrowserUseTokenRetrievalPort = {
+	getServiceAccountIdentity: async () => ({
+		ok: true,
+		identity: {
+			service_account_id: "service-account-1",
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+	}),
 	listVaults: async () => ({ ok: true, vaults: [] }),
 	listLoginItems: async () => ({ ok: true, items: [] }),
 	getLoginItem: async () => ({
@@ -2035,6 +2190,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 				ok: false,
 				message:
 					"the runbook lane's live sensitive-interval delivery is not wired yet.",
+				admission_code: "native-not-admitted",
 			});
 			const outcome = await runRunbook(
 				{ fs: createDefaultPlatformFs(), runtime, dataRoot, authDelivery: seam },
@@ -2053,6 +2209,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			expect(outcome.refusal.code).toBe(
 				"runbook_confidential_delivery_unavailable",
 			);
+			expect(outcome.refusal.admission_code).toBe("native-not-admitted");
 			// No browser command dispatched: the engine refused before the executor.
 			expect(runtime.calls).toHaveLength(0);
 		}),
@@ -2129,6 +2286,115 @@ describe("effective-catalog resolver shadow matrix (R7)", () => {
 			expect(resolved?.ok).toBe(true);
 			if (resolved?.ok !== true) return;
 			expect(resolved.runbook.flow_name).toBe("generation-wins");
+		}),
+	);
+
+	test(
+		"show and execution preparation resolve the same active-generation record",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "snapshot-verify",
+					flow_name: "compat-record",
+				}),
+			);
+			const active = baseRunbook({
+				flow_id: "snapshot-verify",
+				flow_name: "active-record",
+				version: "active-v2",
+			});
+			const seam = seamFor({
+				valid: { "oncore/snapshot-verify": active },
+			});
+
+			const shown = await showRunbook(
+				fs,
+				dataRoot,
+				{ serviceId: "oncore", flowId: "snapshot-verify" },
+				seam,
+			);
+			expect(shown.ok).toBe(true);
+			if (!shown.ok) return;
+			expect(shown.runbook.flow_name).toBe("active-record");
+
+			const prepared = await prepareRunbookExecution(fs, dataRoot, {
+				serviceId: "oncore",
+				flowId: "snapshot-verify",
+				inputs: {},
+				resumeFromStep: 0,
+				activeGenerationSeam: seam,
+				generationBinding: {
+					generation_id: "generation-active",
+					activation_epoch: 7,
+					runbook_digest: "a".repeat(64),
+					action_registry_digest: "b".repeat(64),
+				},
+			});
+			expect(prepared.ok).toBe(true);
+			if (!prepared.ok) return;
+			expect(prepared.plan.version).toBe("active-v2");
+			expect(prepared.execution_binding).toMatchObject({
+				generation_id: "generation-active",
+				activation_epoch: 7,
+				service_id: "oncore",
+				flow_id: "snapshot-verify",
+				runbook_version: "active-v2",
+				runbook_digest: "a".repeat(64),
+				action_registry_digest: "b".repeat(64),
+				normalized_input_digest: normalizedInputDigest({}),
+				item_key_digest: itemKeySequenceDigest([]),
+				target_scope: '["https://portal.example.com"]',
+			});
+			expect(prepared.execution_binding?.postcondition.summary).toBe(
+				"Complete the bound url-equals postcondition.",
+			);
+		}),
+	);
+
+	test(
+		"effective list projects active records and surfaces corrupt active records",
+		withDataRoot(async (dataRoot) => {
+			const fs = createDefaultPlatformFs();
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "snapshot-verify",
+					flow_name: "compat-record",
+				}),
+			);
+			const active = seamFor({
+				valid: {
+					"oncore/snapshot-verify": baseRunbook({
+						flow_id: "snapshot-verify",
+						flow_name: "active-record",
+					}),
+				},
+			});
+			const listed = await listEffectiveRunbooks(fs, dataRoot, active);
+			expect(listed.ok).toBe(true);
+			if (!listed.ok) return;
+			expect(
+				listed.rows.find(
+					(row) =>
+						row.service_id === "oncore" &&
+						row.flow_id === "snapshot-verify",
+				)?.flow_name,
+			).toBe("active-record");
+
+			const corrupt = await listEffectiveRunbooks(
+				fs,
+				dataRoot,
+				seamFor({ corrupt: ["oncore/snapshot-verify"] }),
+			);
+			expect(corrupt).toEqual({
+				ok: false,
+				failure: {
+					code: "runbook_record_corrupt",
+					message: "active-generation record is corrupt.",
+				},
+			});
 		}),
 	);
 
@@ -2497,6 +2763,7 @@ function iterateRunbook(
 				id: "items",
 				summary: "Stable item keys.",
 				required: true,
+				custody: "sensitive",
 				schema: {
 					kind: "array",
 					min_items: 1,
@@ -2621,6 +2888,7 @@ describe("engine reviewed-action step resolution (U3)", () => {
 							id: "filter",
 							summary: "Optional filter.",
 							required: false,
+							custody: "ordinary",
 							schema: { kind: "string" },
 						},
 					],
@@ -3253,6 +3521,14 @@ const ONCORE_ENTRY_SCHEMA = {
 				required: true,
 				schema: { kind: "number", minimum: 0, maximum: 24 },
 			},
+			rate_value: {
+				required: true,
+				schema: { kind: "string", max_length: 256 },
+			},
+			client_state: {
+				required: true,
+				schema: { kind: "string", max_length: 8_192 },
+			},
 		},
 	},
 } as const;
@@ -3406,9 +3682,41 @@ function oncoreStagedRunbook(): BrowserUseRunbook {
 }
 
 const ONCORE_ENTRIES = [
-	{ item_key: "mon", date: "2026-07-27", units: 1 },
-	{ item_key: "tue", date: "2026-07-28", units: 1 },
+	{
+		item_key: "mon",
+		date: "2026-07-27",
+		units: 1,
+		rate_value: "STANDARD",
+		client_state: "2026-07-27-00-00-00",
+	},
+	{
+		item_key: "tue",
+		date: "2026-07-28",
+		units: 1,
+		rate_value: "STANDARD",
+		client_state: "2026-07-28-00-00-00",
+	},
 ] as const;
+
+const ONCORE_TIMESHEET_RUN = {
+	envelope: {
+		target_account: "worker@example.com",
+		period_start: "2026-07-27",
+		period_end: "2026-08-02",
+		selected_work_dates: ["2026-07-27", "2026-07-28"],
+		expected_aggregate: { unit: "units", value: 2 },
+		mutation_mode: "prepare-draft",
+		final_action: "human-submit",
+	},
+	payload: {
+		portal: "oncore",
+		timesheet_id: "TS-123",
+		empty_grid_policy: "require-empty",
+		item_keys: ["mon", "tue"],
+		entries: ONCORE_ENTRIES,
+		expected_row_count: 2,
+	},
+} as const;
 
 async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
 	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
@@ -3443,6 +3751,39 @@ function itemBatch(
 }
 
 describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
+	test(
+		"rejects portal-incompatible timesheet intent before action resolution",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(dataRoot, oncoreStagedRunbook());
+			const invalid = {
+				...ONCORE_TIMESHEET_RUN,
+				envelope: {
+					...ONCORE_TIMESHEET_RUN.envelope,
+					expected_aggregate: {
+						...ONCORE_TIMESHEET_RUN.envelope.expected_aggregate,
+						value: 3,
+					},
+				},
+			};
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				dataRoot,
+				{
+					serviceId: "oncore",
+					flowId: "fill-timesheet",
+					inputs: { timesheet_run: invalid },
+					resumeFromStep: 0,
+					actionSeam: oncoreActionSeam(),
+				},
+			);
+
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) return;
+			expect(prepared.refusal.code).toBe("runbook_input_rejected");
+			expect(prepared.refusal.message).toContain("expected units");
+		}),
+	);
+
 	test.each([
 		[
 			"submitted is true",
@@ -3487,8 +3828,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),
@@ -3558,8 +3898,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),
@@ -3704,8 +4043,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					runId: "run-oncore-save-draft",
 					targetTabId: "t1",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					expectedTargetUrl: ONCORE_STAGED_URL,
@@ -3736,7 +4074,9 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 			expect(
 				runtime.calls.filter((call) => call.includes("eval")),
 			).toHaveLength(5);
-			expect(JSON.stringify(runtime.calls)).not.toMatch(/\bsubmit\b/i);
+			expect(JSON.stringify(runtime.calls)).not.toMatch(
+				/(?:requestSubmit|\.submit\s*\(|#submit|submit-button)/i,
+			);
 		}),
 	);
 
@@ -3751,8 +4091,7 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 					serviceId: "oncore",
 					flowId: "fill-timesheet",
 					inputs: {
-						item_keys: ["mon", "tue"],
-						entries: ONCORE_ENTRIES,
+						timesheet_run: ONCORE_TIMESHEET_RUN,
 					},
 					resumeFromStep: 0,
 					actionSeam: oncoreActionSeam(),

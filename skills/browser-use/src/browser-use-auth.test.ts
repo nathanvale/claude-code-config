@@ -14,6 +14,7 @@ import {
 } from "./browser-use-auth";
 import {
 	applyAuthCommit,
+	type BrowserUseAuthRunContinuation,
 	type BrowserUseRunIntegrationPort,
 	type BrowserUseSharedRun,
 } from "./browser-use-run-model";
@@ -66,6 +67,46 @@ function baseFragment(
 		identity_basis_digest: null,
 		attestation_digest: null,
 		fresh_until_epoch_ms: null,
+		...overrides,
+	};
+}
+
+function authContinuation(
+	overrides: Partial<BrowserUseAuthRunContinuation> = {},
+): BrowserUseAuthRunContinuation {
+	return {
+		schema_version: "1",
+		kind: "auth",
+		continuation_id: "continuation-1",
+		run_id: "run-1",
+		state: "pending",
+		reason: "login-required",
+		required_actor: "agent",
+		safe_to_retry: false,
+		checkpoint: "before-auth-delivery",
+		expires_at_epoch_ms: 10_000,
+		resume_action: {
+			command: "run",
+			args: ["resume", "--run", "run-1", "--json"],
+		},
+		bindings: {
+			generation_id: "generation-1",
+			activation_epoch: 2,
+			route_digest: "a".repeat(64),
+			lane_id: "agent-browser",
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "evidence-1",
+			environment: "agent-chrome",
+			profile: "default",
+			target_binding_id: "target-binding-1",
+			expected_identity: {
+				subject_ref: "subject-1",
+				account_ref: "account-1",
+				tenant_ref: "tenant-1",
+			},
+		},
+		next_action_id: "resume-auth-continuation",
+		summary: "Resume the exact authentication continuation.",
 		...overrides,
 	};
 }
@@ -304,6 +345,117 @@ describe("authCommitSummaryOf (R6/R21)", () => {
 		}
 	});
 
+	test("an active fragment atomically carries its versioned continuation", () => {
+		const continuation = authContinuation();
+		const result = authCommitSummaryOf(baseFragment(), continuation);
+		expect(result).toEqual({
+			ok: true,
+			summary: {
+				state: "awaiting-auth",
+				continuation,
+			},
+		});
+	});
+
+	test("a versioned continuation bound to another run is rejected", () => {
+		const result = authCommitSummaryOf(
+			baseFragment(),
+			authContinuation({
+				run_id: "run-other",
+				resume_action: {
+					command: "run",
+					args: ["resume", "--run", "run-other", "--json"],
+				},
+			}),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("auth_fragment_not_committable");
+		}
+	});
+
+	test("a versioned continuation carrying secret-shaped summary text is rejected", () => {
+		const result = authCommitSummaryOf(
+			baseFragment(),
+			authContinuation({ summary: "password=hunter2" }),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("auth_fragment_not_committable");
+		}
+	});
+
+	test("a versioned continuation cannot switch the adapter authority", () => {
+		const result = authCommitSummaryOf(
+			baseFragment(),
+			authContinuation({
+				bindings: {
+					...authContinuation().bindings,
+					adapter_id: "chrome-devtools-mcp",
+				},
+			}),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("auth_fragment_not_committable");
+		}
+	});
+
+	test("an active fragment cannot persist a terminal continuation lifecycle", () => {
+		const result = authCommitSummaryOf(
+			baseFragment(),
+			authContinuation({ state: "completed" }),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("auth_fragment_not_committable");
+		}
+	});
+
+	test("a blocked cause cannot be paired with a contradictory agent continuation", () => {
+		const result = authCommitSummaryOf(
+			baseFragment({
+				status: "blocked",
+				blocked_cause: "wrong-password",
+				continuation: {
+					...BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["wrong-password"]
+						.continuation,
+				},
+			}),
+			authContinuation(),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.rejection.code).toBe("auth_fragment_not_committable");
+		}
+	});
+
+	test("a blocked cause admits its exact human-gated versioned continuation", () => {
+		const continuation = authContinuation({
+			reason: "human-action-required",
+			required_actor: "human",
+			checkpoint: "blocked-wrong-password",
+		});
+		const result = authCommitSummaryOf(
+			baseFragment({
+				status: "blocked",
+				blocked_cause: "wrong-password",
+				continuation: {
+					...BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["wrong-password"]
+						.continuation,
+				},
+			}),
+			continuation,
+		);
+		expect(result).toEqual({
+			ok: true,
+			summary: {
+				state: "needs-human",
+				continuation,
+			},
+		});
+	});
+
 	test("a cancelled fragment is not committable as an auth outcome", () => {
 		const result = authCommitSummaryOf(
 			baseFragment({
@@ -389,6 +541,64 @@ describe("commitAuthTransaction (R6, KTD10)", () => {
 		});
 		expect(called).toBe(false);
 		expect(result.ok).toBe(false);
+	});
+
+	test("a commit run id that differs from the fragment binding never reaches the Port", async () => {
+		let called = false;
+		const port: BrowserUseRunIntegrationPort = {
+			async commitAuthOutcome() {
+				called = true;
+				throw new Error("unreachable");
+			},
+		};
+		const result = await commitAuthTransaction(port, {
+			run_id: "run-other",
+			expected_revision: 1,
+			fragment: baseFragment(),
+		});
+		expect(called).toBe(false);
+		expect(result).toEqual({
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message: "the commit run id does not match the auth fragment binding.",
+			},
+		});
+	});
+
+	test("the fragment and versioned continuation reach the Port atomically", async () => {
+		const calls: unknown[] = [];
+		const port: BrowserUseRunIntegrationPort = {
+			async commitAuthOutcome(input) {
+				calls.push(input);
+				return {
+					ok: false,
+					rejection: { code: "run_revision_stale", message: "stale." },
+				};
+			},
+		};
+		const fragment = baseFragment();
+		const continuation = authContinuation();
+		await commitAuthTransaction(port, {
+			run_id: "run-1",
+			expected_revision: 7,
+			fragment,
+			continuation,
+		});
+		expect(calls).toEqual([
+			{
+				run_id: "run-1",
+				expected_revision: 7,
+				fragment: {
+					schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+					fragment,
+				},
+				summary: {
+					state: "awaiting-auth",
+					continuation,
+				},
+			},
+		]);
 	});
 
 	test("end-to-end against the platform reducer: a blocked outcome commits atomically", async () => {

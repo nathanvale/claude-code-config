@@ -5,15 +5,27 @@ import {
 	projectCommandDiscoveryTree,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_USE_GENERATION_RESULT_CONTRACT_ID,
+	BROWSER_USE_CONTINUATION_CLAIM_RESULTS,
+	BROWSER_USE_CONTINUATION_REQUIRED_ACTORS,
+	BROWSER_USE_CONTINUATION_STATES,
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
+	BROWSER_USE_DIAGNOSTIC_CODES,
+	BROWSER_USE_PRIVATE_INPUT_DIAGNOSTIC_CODES,
 	BROWSER_USE_TARGETS_CONTRACT_ID,
 	BROWSER_USE_TARGETS_SCHEMA_VERSION,
 	type BrowserUseCommand,
+	type BrowserUseSecretFreeContinuation,
 	browserUseContracts,
+	browserUseGenerationFailureActions,
+	browserUseGenerationSuccessActions,
+	browserUseEnvironmentTokenLifecycleActions,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
+	browserUseRunbookAuthFailureActions,
 } from "./command-contract";
+import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
 import { contractFlags } from "./browser-use-test-helpers";
 
 const ALL_COMMANDS: BrowserUseCommand[] = [
@@ -44,14 +56,24 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"migration-plan",
 	"migration-apply",
 	"migration-verify",
+	"migration-import",
+	"migration-generate",
+	"migration-activate",
 	"artifact-list",
 	"repair-status",
 	"repair-apply",
-	// R27 auth repair surface (auth plan 2026-07-21-003 U3a).
+	// Environment-token lifecycle plus R27 auth repair surface.
+	"auth-status",
+	"auth-record-admin-authority-receipt",
+	"auth-install-token",
+	"auth-remove-token",
 	"auth-enroll-browser-automation-token",
 	"auth-repair-vault-grant",
 	"auth-repair-item-binding",
 	"auth-request-binding-selection-grant",
+	"auth-choose-supported-auth-method",
+	"auth-inspect-capability-loss",
+	"auth-inspect-auth-readiness",
 ];
 
 function discoveryTree() {
@@ -84,6 +106,144 @@ describe("U3 command contract", () => {
 		}
 	});
 
+	test("every command declares each runtime action id once per outcome", () => {
+		for (const command of ALL_COMMANDS) {
+			for (const outcome of ["success", "failure"] as const) {
+				const ids =
+					browserUseContracts[command].actionAffordances?.[outcome]?.map(
+						(action) => action.id,
+					) ?? [];
+				expect(ids, `${command} ${outcome}`).toEqual([...new Set(ids)]);
+			}
+		}
+	});
+
+	test("vault-scope repair wording stays human-gated across persisted and CLI continuations", () => {
+		const persisted =
+			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["invalid-vault-scope"].continuation;
+		const lifecycle = browserUseEnvironmentTokenLifecycleActions.find(
+			(action) => action.id === persisted.next_action_id,
+		);
+
+		expect(lifecycle).toMatchObject({
+			id: "repair-vault-grant",
+			summary: persisted.summary,
+			sideEffects: ["auth", "write"],
+		});
+		expect(persisted.summary).toContain("Have a human");
+		expect(persisted.summary).toContain("rerun auth install-token");
+	});
+
+	test("registers every runbook, private-input, and resume diagnostic emitted by the driver", () => {
+		for (const code of [
+			"runbook_catalog_drift",
+			"runbook_inactive",
+			"runbook_input_unknown",
+			"runbook_input_source_conflict",
+			"runbook_input_custody_mismatch",
+			...BROWSER_USE_PRIVATE_INPUT_DIAGNOSTIC_CODES,
+			"resume_generation_drift",
+			"resume_generation_unavailable",
+			"resume_binding_invalid",
+		] as const) {
+			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
+		}
+	});
+
+	test("registers every admin authority receipt diagnostic emitted by the driver", () => {
+		for (const code of [
+			"admin_authority_lane_unavailable",
+			"admin_authority_metadata_unavailable",
+			"admin_authority_vault_scope_invalid",
+			"admin_authority_receipt_unavailable",
+		] as const) {
+			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
+		}
+	});
+
+	test("registers every generation producer refusal and recovery", () => {
+		for (const code of [
+			"generation_source_invalid",
+			"generation_candidate_missing",
+			"generation_candidate_invalid",
+			"generation_stage_failed",
+			"generation_staged_copy_corrupt",
+			"generation_closure_invalid",
+		] as const) {
+			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
+		}
+		expect(browserUseGenerationFailureActions.map((action) => action.id)).toEqual([
+			"repair_generation_source",
+			"choose_new_generation_id",
+			"inspect_generation_store",
+		]);
+		expect(browserUseGenerationFailureActions.map((action) => action.sideEffects)).toEqual([
+			["write"],
+			["write"],
+			["check"],
+		]);
+		expect(
+			browserUseContracts["migration-generate"].actionAffordances?.success,
+		).toEqual(browserUseGenerationSuccessActions);
+		expect(
+			discoveryTree().commands["migration-generate"]?.action_affordances?.success,
+		).toEqual([
+			{
+				id: "activate_staged_generation",
+				summary:
+					"Validate and activate the staged generation through browser-use migration activate.",
+				side_effects: ["check", "write"],
+			},
+		]);
+	});
+
+	test("runbook discovery declares the input-correction continuation", () => {
+		expect(
+			browserUseContracts["runbook-run"].actionAffordances?.failure.map(
+				(action) => action.id,
+			),
+		).toContain("change_runbook_input");
+	});
+
+	test("runbook discovery declares every runtime auth-repair continuation", () => {
+		const expected = browserUseRunbookAuthFailureActions.map(
+			(action) => action.id,
+		);
+		const declared =
+			browserUseContracts["runbook-run"].actionAffordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+		const discovered =
+			discoveryTree().commands["runbook-run"]?.action_affordances?.failure.map(
+				(action) => action.id,
+			) ?? [];
+
+		expect(declared).toEqual(expect.arrayContaining(expected));
+		expect(discovered).toEqual(expect.arrayContaining(expected));
+	});
+
+	test("run-bound auth continuations conservatively advertise shared-run writes", () => {
+		for (const command of [
+			"auth-enroll-browser-automation-token",
+			"auth-repair-vault-grant",
+			"auth-repair-item-binding",
+			"auth-request-binding-selection-grant",
+			"auth-choose-supported-auth-method",
+			"auth-inspect-capability-loss",
+			"auth-inspect-auth-readiness",
+		] as const) {
+			expect(browserUseContracts[command]).toMatchObject({
+				mutation: "write",
+				sideEffects: ["check", "write"],
+				executionModes: ["normal"],
+			});
+			expect(discoveryTree().commands[command]).toMatchObject({
+				mutation: "write",
+				side_effects: ["check", "write"],
+			});
+		}
+	});
+
 	test("subcommands expose only their declared flags", () => {
 		expect(contractFlags("targets-status")).toEqual([
 			"--json",
@@ -92,6 +252,115 @@ describe("U3 command contract", () => {
 		]);
 		expect(contractFlags("operate-screenshot")).toContain("--out");
 		expect(contractFlags("operate-emulate")).toContain("--width");
+		expect(contractFlags("runbook-run")).toContain("--input-file");
+		expect(
+			browserUseContracts["runbook-run"].flags?.["--input"]?.description,
+		).toContain("sensitive inputs are refused");
+		expect(
+			browserUseContracts["runbook-run"].flags?.["--input-file"]?.description,
+		).toContain("Sensitive private");
+		expect(contractFlags("migration-activate")).toEqual([
+			"--caller",
+			"--generation",
+			"--json",
+			"--plain",
+		]);
+		expect(contractFlags("migration-generate")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+			"--source",
+		]);
+		expect(contractFlags("auth-status")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+		]);
+		expect(contractFlags("auth-install-token")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+			"--stdin",
+		]);
+		expect(contractFlags("auth-remove-token")).toEqual([
+			"--caller",
+			"--json",
+			"--plain",
+		]);
+	});
+
+	test("token lifecycle discovery exposes the accepted input channel and human gate", () => {
+		const tree = discoveryTree();
+		expect(tree.commands["auth-install-token"]).toMatchObject({
+			interactivity: "optional",
+			result_contract: {
+				id: "browser-use.environment-token-lifecycle",
+				schema_version: "1",
+			},
+		});
+		expect(tree.commands["auth-install-token"]?.flags["--stdin"]).toMatchObject({
+			type: "boolean",
+		});
+		expect(tree.commands["auth-status"]?.interactivity).toBe("none");
+		expect(tree.commands["auth-remove-token"]?.interactivity).toBe("none");
+	});
+
+	test("R16 continuation schema and stable claim exits stay code-owned", () => {
+			const fixture = {
+				schema_version: "1",
+				kind: "auth",
+				continuation_id: "continuation-1",
+				run_id: "run-1",
+			state: "pending",
+			reason: "user-presence-required",
+			required_actor: "human",
+			safe_to_retry: false,
+			checkpoint: "before-auth-submit",
+			expires_at_epoch_ms: 2_000,
+				resume_action: {
+					command: "run",
+					args: ["resume", "--run", "run-1", "--json"],
+				},
+				bindings: {
+					generation_id: "generation-1",
+					activation_epoch: 3,
+					route_digest: "e".repeat(64),
+					lane_id: "daily-work",
+					adapter_id: "agent-browser",
+					handoff_evidence_id: "handoff-1",
+					target_binding_id: "target-1",
+					environment: "agent-chrome",
+					profile: "default",
+					expected_identity: {
+						subject_ref: "subject-oncore-primary",
+						account_ref: "account-oncore-primary",
+						tenant_ref: "tenant-monash",
+					},
+				},
+				next_action_id: "resume-auth-continuation",
+				summary: "Claim and re-prove this auth continuation before resuming.",
+			} as const satisfies BrowserUseSecretFreeContinuation;
+		expect(fixture.required_actor).toBe("human");
+		expect(BROWSER_USE_CONTINUATION_REQUIRED_ACTORS).toEqual(["agent", "human"]);
+		expect(BROWSER_USE_CONTINUATION_STATES).toEqual([
+			"pending",
+			"claimed",
+			"in-progress",
+			"completed",
+			"expired",
+			"invalidated",
+		]);
+		expect(BROWSER_USE_CONTINUATION_CLAIM_RESULTS).toEqual([
+			"claimed",
+			"already-claimed",
+				"in-progress",
+				"terminal",
+				"mismatch",
+			]);
+		expect(browserUseContracts["run-resume"].exitCodes).toMatchObject({
+			"21": expect.stringContaining("human"),
+			"22": expect.stringContaining("claimed"),
+		});
 	});
 
 	// Scenario 5: command discovery exposes both result contracts with versions.
@@ -111,6 +380,9 @@ describe("U3 command contract", () => {
 		}
 		expect(BROWSER_USE_TARGETS_CONTRACT_ID).toBe("browser-use.browser-targets");
 		expect(BROWSER_USE_OPERATION_CONTRACT_ID).toBe("browser-use.browser-operation");
+		expect(
+			discoveryTree().commands["migration-generate"]?.result_contract?.id,
+		).toBe(BROWSER_USE_GENERATION_RESULT_CONTRACT_ID);
 	});
 
 	test("operate command discovery exposes runtime action affordances", () => {

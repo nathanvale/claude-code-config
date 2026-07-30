@@ -13,6 +13,7 @@ import {
 	recordItemCheckpoint,
 	resolveNextBatchItem,
 } from "./browser-use-runbook-actions";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 const HANDOFF = {
 	outcome: "verified",
@@ -30,11 +31,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const satisfies BrowserConnectHandoffPayload & {
 	contract_id: string;
 	schema_version: string;
@@ -157,6 +159,65 @@ function argvAndDecodedArguments(calls: readonly (readonly string[])[]): string 
 }
 
 describe("Agent Browser native task lane", () => {
+	test("rejects a handoff without live-clean profile posture before any native command", async () => {
+		const runtime = runtimeFor([]);
+		const badHandoff = {
+			...HANDOFF,
+			proof: {
+				environment_contract_id: "warm-chrome.browser-entry",
+				environment_schema_version: "2",
+				route_evidence: "verified-live",
+			},
+		} as unknown as typeof HANDOFF;
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: badHandoff,
+			run_id: "run-profile-posture-missing",
+			target_tab_id: "t7",
+			allowed_origins: ["https://example.test"],
+			steps: [{ kind: "snapshot", interactive: true }],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			code: "agent_browser_handoff_invalid",
+		});
+		expect(runtime.calls).toEqual([]);
+	});
+
+	test("rejects forged posture provenance and endpoint binding before any native command", async () => {
+		for (const handoff of [
+			{
+				...HANDOFF,
+				proof: {
+					...HANDOFF.proof,
+					environment_contract_id: "foreign.contract",
+				},
+			},
+			{
+				...HANDOFF,
+				endpoint: {
+					...HANDOFF.endpoint,
+					ws: "ws://127.0.0.1:9243/devtools/browser/foreign",
+				},
+			},
+		]) {
+			const runtime = runtimeFor([]);
+			const result = await executeAgentBrowserTask(runtime, {
+				handoff,
+				run_id: "run-forged-posture",
+				target_tab_id: "t7",
+				allowed_origins: ["https://example.test"],
+				steps: [{ kind: "snapshot", interactive: true }],
+			});
+			expect(result).toMatchObject({
+				ok: false,
+				code: "agent_browser_handoff_invalid",
+			});
+			expect(runtime.calls).toEqual([]);
+		}
+	});
+
 	test("selects one proven tab, observes, mutates, and freshly verifies structure", async () => {
 		const runtime = runtimeFor([
 			{
@@ -1766,11 +1827,12 @@ describe("Agent Browser connection robustness (no flaky CDP connections)", () =>
 		launch: { launched: false },
 		proof: {
 			environment_contract_id: "warm-chrome.browser-entry",
-			environment_schema_version: "1",
+			environment_schema_version: "2",
 			route_evidence: "verified-live",
+			profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 		},
 		contract_id: "browser-connect.verified-handoff",
-		schema_version: "2",
+		schema_version: "3",
 	} as const satisfies BrowserConnectHandoffPayload & {
 		contract_id: string;
 		schema_version: string;

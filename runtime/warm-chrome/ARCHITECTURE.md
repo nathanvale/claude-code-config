@@ -21,8 +21,8 @@ Its interface is:
   and `schema_version` for agents; plain output for humans (`status`).
 - Package-owned exit code `20` (browser-entry failure, never adapter
   fallback) beside the facade baseline `0`/`1`/`2`.
-- No generated local state from `check`/`status`; `launch` may start local
-  Chrome and `repair` may mutate dedicated-profile proof state.
+- No generated local state from `check`/`status`; `launch` and `repair` may
+  initialize a missing profile only with explicit human approval.
 
 The Module Map below is the single per-module owner list. `AGENTS.md` and
 `README.md` point here instead of repeating it; `tests/docs-drift.test.ts`
@@ -69,8 +69,8 @@ flowchart TD
 | --- | --- | --- |
 | `check` | Read-only proof chain; JSON default; every failure is a canonical station | `src/proof.ts`, `src/cli.ts` |
 | `status` | Presentation alias of `check`; plain default; no stations of its own | `src/command-contract.ts`, `src/cli.ts` |
-| `launch` | Spawns real Chrome only when nothing listens; fail-closed classification; race policy | `src/launch.ts`, `src/cli.ts` |
-| `repair` | Profile-state repair (dir, chmod 0o700, DevToolsActivePort hygiene), then re-prove; refusal, never termination | `src/repair.ts`, `src/cli.ts` |
+| `launch` | Spawns real Chrome only when nothing listens; proves configuration posture; approval-gated fresh-profile initialization; race policy | `src/launch.ts`, `src/cli.ts` |
+| `repair` | Refuses dirty profiles in place; approval-gated fresh-profile initialization; safe proof-state repair, then re-prove | `src/repair.ts`, `src/cli.ts` |
 
 Exit codes are contract-owned: `0` verified, `1` runtime failure, `2` invalid
 usage, `20` browser entry required (`no_adapter_fallback` rides every exit-20
@@ -90,25 +90,32 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `src/command-contract.ts`: facade contract entries per command, flags,
   exit-code meanings, result contract, action affordances, preview notes,
   Command Discovery Tree projection.
-- `src/branch-station-catalog.ts`: the sixteen-station Branch Station Catalog
+- `src/branch-station-catalog.ts`: the nineteen-station Branch Station Catalog
   (station = canonical code = primary action = mutation pin), the re-emit map
   for proof failures reached via `launch`/`repair`, and the drift gate.
 - `src/branch-station-evidence.ts`: evidence manifest — station tests attach
   envelope evidence; missing or contradicting evidence is a drift finding.
 - `src/runtime.ts`: the injectable runtime seam (env, listener probe, profile
-  stat, spawn handle, SingletonLock probe), `WarmChromeRuntimeError`, process
-  command parsing, and the websocket/listener redaction helpers.
+  stat, redacted credential-posture inspection, fresh-profile initialization,
+  spawn handle, SingletonLock probe), `WarmChromeRuntimeError`, process command
+  parsing, and the websocket/listener redaction helpers.
+- `src/effective-posture.ts`: bounded, read-only Chrome WebUI observation of
+  exact browser/profile binding plus redacted save, source, sync, and prompt
+  posture; credential values and identity metadata never cross the CDP seam.
 - `src/proof.ts`: the single check proof chain — loopback assertion, bounded
   attach probe, listener identity, default-profile foreignness (R6c),
   payload validation, CDP round-trips (headless and isolated-context rejects),
-  profile posture, final listener consistency, and the suggested-explicit-port
-  scan. `DevToolsActivePort` is non-authoritative hint material.
+  structural profile posture, configuration posture, external effective-state
+  admission, final listener consistency, and the suggested-explicit-port scan.
+  `DevToolsActivePort` is non-authoritative hint material.
 - `src/launch.ts`: launch lifecycle — pre-spawn short-circuit, competing
   9222-instance guard, fail-closed classification, SingletonLock pre-bind
-  refusal, bounded readiness poll, and the own-child race policy.
-- `src/repair.ts`: repair lifecycle — foreign-listener refusal (R11), profile
-  dir creation, ownership-gated chmod, diagnosed DevToolsActivePort hygiene
-  with the never-follow-symlink guard, and the mutation pin.
+  refusal, explicit creation approval, bounded readiness poll, and the
+  own-child race policy.
+- `src/repair.ts`: repair lifecycle — foreign-listener refusal (R11), dirty
+  profile preservation, approval-gated fresh initialization, ownership-gated
+  chmod, diagnosed DevToolsActivePort hygiene with the never-follow-symlink
+  guard, and the mutation pin.
 - `src/cli.ts`: argv parsing, dispatch, diagnostics configuration and the
   R13 redaction chokepoints, station envelope emission, error normalization,
   and runtime-action guidance.
@@ -131,7 +138,9 @@ flowchart TD
   DefaultProfile --> Payload["payload + websocket validation"]
   Payload --> Cdp["Browser.getVersion + context round-trips<br/>(headless / isolated rejects)"]
   Cdp --> Profile["profile posture: dedicated, persistent, 0700, no remap"]
-  Profile --> Final["final listener consistency (pid re-check)"]
+  Profile --> Config["configuration posture: safe disk settings; disable-sync and disable-extensions switches"]
+  Config --> Clean["live posture: exact profile; saving off; zero credential sources; sign-in off"]
+  Clean --> Final["final listener consistency (pid re-check)"]
   Final --> Verified["ok envelope: the only endpoint authority (R8)"]
 ```
 

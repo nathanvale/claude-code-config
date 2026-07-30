@@ -43,12 +43,16 @@ import {
 } from "../src/proof.ts";
 import {
 	createDefaultRuntime,
+	createOneUseProfileCreationApprovalOwner,
 	type LaunchChromeInput,
 	type ListenerProcess,
 	type ProfileStat,
 	REAL_GOOGLE_CHROME_BINARY,
 	type SingletonLock,
 	type SpawnedChrome,
+	type WarmChromeCredentialPosture,
+	type WarmChromeProfileCreationApproval,
+	type WarmChromeProfileCreationApprovalRequest,
 	type WarmChromeRuntime,
 } from "../src/runtime.ts";
 
@@ -63,6 +67,38 @@ const FOREIGN_LISTENER: ListenerProcess = {
 	pid: 6001,
 	command: "/usr/local/bin/node /srv/dev-server.js",
 };
+const CLEAN_CREDENTIAL_POSTURE: WarmChromeCredentialPosture = {
+	disk: {
+		saveSetting: "disabled",
+		autoSignInSetting: "disabled",
+		syncSetting: "disabled",
+		storedLogin: "absent",
+	},
+	process: {
+		disableSyncSwitch: "present",
+		disableExtensionsSwitch: "present",
+	},
+	effective: {
+		observation: "running-chrome",
+		saveCapability: "disabled",
+		fillExposure: "no-source",
+		syncState: "disabled",
+		savePrompt: "suppressed",
+		observer: {
+			source: "chrome-webui",
+			browserPid: SPAWNED_PID,
+			port: WARM_CHROME_DEFAULT_CDP_PORT,
+			profileMatch: "exact",
+			observedAtMs: 0,
+		},
+	},
+};
+
+function oneUseProfileCreationApproval(
+	expected: WarmChromeProfileCreationApprovalRequest,
+) {
+	return createOneUseProfileCreationApprovalOwner(expected);
+}
 
 function wsFor(port: string): string {
 	return `ws://127.0.0.1:${port}/devtools/browser/warm-chrome-token`;
@@ -74,7 +110,7 @@ function chromeCommand(
 	const port = ` --remote-debugging-port=${overrides.port ?? WARM_CHROME_DEFAULT_CDP_PORT}`;
 	const profile = ` --user-data-dir=${overrides.profile ?? DEDICATED_PROFILE}`;
 	const extra = overrides.extraArgs ? ` ${overrides.extraArgs}` : "";
-	return `${REAL_GOOGLE_CHROME_BINARY}${port}${profile} --no-first-run${extra}`;
+	return `${REAL_GOOGLE_CHROME_BINARY}${port}${profile} --profile-directory=Default --no-first-run --disable-sync --disable-extensions${extra}`;
 }
 
 function chromeListener(
@@ -142,6 +178,8 @@ type LaunchFixtureOptions = {
 	cdp?: Record<string, CdpEntry>;
 	/** statProfile answers keyed by requested path; unknown paths throw. */
 	profiles?: Record<string, ProfileStat>;
+	/** Explicit statProfile failures keyed by requested path. */
+	statProfileErrors?: Record<string, Error>;
 	/** SingletonLock answers keyed by profile dir; absent means no lock. Arrays play per read; the last entry repeats. */
 	singletonLocks?: Record<string, Script<SingletonLock | null | Error>>;
 	/** Process-liveness answers keyed by pid; absent means alive. */
@@ -156,6 +194,15 @@ type LaunchFixtureOptions = {
 	activePort?: Script<{ port: string; wsPath: string } | null>;
 	/** Spawn behavior; the default binds a healthy Warm Chrome on the port. */
 	spawn?: (input: LaunchChromeInput, controls: FixtureControls) => SpawnedChrome;
+	credentialPosture?: WarmChromeCredentialPosture;
+	initializeProfileError?: Error;
+	profileCreationApproval?:
+		| WarmChromeProfileCreationApproval
+		| ((
+				request: WarmChromeProfileCreationApprovalRequest,
+		  ) =>
+				| WarmChromeProfileCreationApproval
+				| Promise<WarmChromeProfileCreationApproval>);
 };
 
 type Fixture = {
@@ -170,6 +217,10 @@ type Fixture = {
 		writeTextFile: number;
 		chmod: number;
 		ensureProfileDir: number;
+		initializeCredentialCleanProfile: number;
+		inspectCredentialPosture: number;
+		requestProfileCreationApproval: number;
+		profileCreationApprovalRequests: unknown[];
 		readDevToolsActivePort: number;
 	};
 	/** Virtual milliseconds consumed through runtime.now()/runtime.sleep. */
@@ -199,6 +250,10 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 		writeTextFile: 0,
 		chmod: 0,
 		ensureProfileDir: 0,
+		initializeCredentialCleanProfile: 0,
+		inspectCredentialPosture: 0,
+		requestProfileCreationApproval: 0,
+		profileCreationApprovalRequests: [],
 		readDevToolsActivePort: 0,
 	};
 	const toScript = <T,>(value: Script<T>): readonly T[] =>
@@ -235,6 +290,13 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 	const profiles = options.profiles ?? {
 		[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
 	};
+	for (const profileRoot of Object.keys(profiles)) {
+		if (!profileRoot.endsWith("/Default")) {
+			profiles[`${profileRoot}/Default`] ??= profileStat(
+				`${profileRoot}/Default`,
+			);
+		}
+	}
 	const cdp = options.cdp ?? healthyCdp();
 	const errorPort =
 		options.findListenerErrorPort ?? WARM_CHROME_DEFAULT_CDP_PORT;
@@ -279,13 +341,49 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 		},
 		currentUser: async () => "501",
 		statProfile: async (path) => {
+			const explicitError = options.statProfileErrors?.[path];
+			if (explicitError) throw explicitError;
 			const stat = profiles[path];
-			if (!stat) throw new Error(`no profile directory at ${path}`);
+			if (!stat) {
+				const error = new Error(`no profile directory at ${path}`);
+				Object.assign(error, { code: "ENOENT" });
+				throw error;
+			}
 			return stat;
 		},
 		ensureProfileDir: async (path) => {
 			calls.ensureProfileDir += 1;
+			profiles[path] ??= profileStat(path);
 			return path;
+		},
+		inspectCredentialPosture: async (input) => {
+			calls.inspectCredentialPosture += 1;
+			return options.credentialPosture ?? {
+				...CLEAN_CREDENTIAL_POSTURE,
+				process: {
+					disableSyncSwitch: input.syncDisabledByLaunch
+						? "present"
+						: "absent",
+					disableExtensionsSwitch: input.extensionsDisabledByLaunch
+						? "present"
+						: "absent",
+				},
+			};
+		},
+		initializeCredentialCleanProfile: async (profileRoot) => {
+			calls.initializeCredentialCleanProfile += 1;
+			if (options.initializeProfileError) throw options.initializeProfileError;
+			profiles[profileRoot] ??= profileStat(profileRoot);
+			profiles[`${profileRoot}/Default`] ??= profileStat(
+				`${profileRoot}/Default`,
+			);
+		},
+		requestCredentialCleanProfileCreationApproval: async (request) => {
+			calls.requestProfileCreationApproval += 1;
+			calls.profileCreationApprovalRequests.push(request);
+			return typeof options.profileCreationApproval === "function"
+				? options.profileCreationApproval(request)
+				: (options.profileCreationApproval ?? "unavailable");
 		},
 		chmod: async () => {
 			calls.chmod += 1;
@@ -324,6 +422,23 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 			if (!entry) throw new Error(`unexpected CDP method: ${method}`);
 			if (entry instanceof Error) throw entry;
 			return entry;
+		},
+		observeEffectiveCredentialPosture: async (input) => {
+			const effective =
+				options.credentialPosture?.effective ??
+				CLEAN_CREDENTIAL_POSTURE.effective;
+			return effective.observation === "not-observed"
+				? effective
+				: {
+						...effective,
+						observer: {
+							source: "chrome-webui",
+							browserPid: input.browserPid,
+							port: input.port,
+							profileMatch: "exact",
+							observedAtMs: clock,
+						},
+					};
 		},
 		readDevToolsActivePort: async () => {
 			calls.readDevToolsActivePort += 1;
@@ -501,6 +616,229 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.spawnChrome).toBe(1);
 		expect(fixture.calls.ensureProfileDir).toBe(1);
 		expect(envelope.status).toBe("ok");
+	});
+
+	test("noninteractive missing profile returns the human gate before any write or spawn (U6 R8/R12)", async () => {
+		const fixture = launchFixture({ profiles: {} });
+		const argv = ["launch"] as const;
+		const run = await runWarmChrome(argv, fixture);
+		const parsed = parseEnvelope(run);
+
+		expect(run.exitCode).toBe(21);
+		assertStationEnvelope(
+			stationById("launch.human-action-required"),
+			toProcessResult("launch.human-action-required", argv, run),
+		);
+		expect(parsed.error?.code).toBe("human-action-required");
+		expect(parsed.data?.reason).toBe("profile_creation_requires_human");
+		expect(parsed.runtime_actions?.map((action) => action.id)).toEqual([
+			"create_clean_profile",
+		]);
+		expect(fixture.calls.requestProfileCreationApproval).toBe(1);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("exact external human continuation initializes bounded controls before launch (U6 R8/R12)", async () => {
+		const fixture = launchFixture({
+			profiles: {},
+			profileCreationApproval: oneUseProfileCreationApproval({
+				command: "launch",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			}),
+		});
+		const run = await runWarmChrome(
+			["launch", "--run-id", "creation-run"],
+			fixture,
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(fixture.calls.requestProfileCreationApproval).toBe(1);
+		expect(fixture.calls.profileCreationApprovalRequests).toEqual([
+			{
+				command: "launch",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			},
+		]);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(1);
+		expect(fixture.calls.spawnChrome).toBe(1);
+		expect(fixture.calls.spawnInputs[0]?.disableSync).toBe(true);
+	});
+
+	test("one-use approval is bound to launch, profile, and port, then rejects replay", async () => {
+		const approval = oneUseProfileCreationApproval({
+			command: "launch",
+			port: "9243",
+			profileDir: DEDICATED_PROFILE,
+		});
+		const mismatch = launchFixture({
+			profiles: {},
+			profileCreationApproval: approval,
+		});
+		const wrongPortRun = await runWarmChrome(
+			["launch", "--port", "9244"],
+			mismatch,
+		);
+
+		expect(wrongPortRun.exitCode).toBe(21);
+		expect(mismatch.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(mismatch.calls.spawnChrome).toBe(0);
+
+		const admitted = launchFixture({
+			profiles: {},
+			profileCreationApproval: approval,
+		});
+		const admittedRun = await runWarmChrome(
+			["launch", "--port", "9243"],
+			admitted,
+		);
+
+		expect(admittedRun.exitCode).toBe(0);
+		expect(admitted.calls.initializeCredentialCleanProfile).toBe(1);
+		expect(admitted.calls.spawnChrome).toBe(1);
+
+		const replay = launchFixture({
+			profiles: {},
+			profileCreationApproval: approval,
+		});
+		const replayRun = await runWarmChrome(
+			["launch", "--port", "9243"],
+			replay,
+		);
+
+		expect(replayRun.exitCode).toBe(21);
+		expect(replay.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(replay.calls.spawnChrome).toBe(0);
+	});
+
+	test("profile initialization failure consumes the one-use approval", async () => {
+		const approval = oneUseProfileCreationApproval({
+			command: "launch",
+			port: WARM_CHROME_DEFAULT_CDP_PORT,
+			profileDir: DEDICATED_PROFILE,
+		});
+		const failed = launchFixture({
+			profiles: {},
+			initializeProfileError: new Error("exclusive create failed"),
+			profileCreationApproval: approval,
+		});
+		const failedRun = await runWarmChrome(["launch"], failed);
+
+		expect(failedRun.exitCode).toBe(20);
+		expect(failed.calls.initializeCredentialCleanProfile).toBe(1);
+		expect(failed.calls.spawnChrome).toBe(0);
+
+		const replay = launchFixture({
+			profiles: {},
+			profileCreationApproval: approval,
+		});
+		const replayRun = await runWarmChrome(["launch"], replay);
+
+		expect(replayRun.exitCode).toBe(21);
+		expect(replay.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(replay.calls.spawnChrome).toBe(0);
+	});
+
+	test("cancelled human confirmation never creates or launches", async () => {
+		const fixture = launchFixture({
+			profiles: {},
+			profileCreationApproval: "cancelled",
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(21);
+		expect(parseEnvelope(run).data?.reason).toBe(
+			"profile_creation_cancelled",
+		);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("an uninspectable profile is never treated as fresh or sent to the human gate", async () => {
+		const fixture = launchFixture({
+			profiles: {},
+			statProfileErrors: {
+				[DEDICATED_PROFILE]: Object.assign(new Error("permission denied"), {
+					code: "EACCES",
+				}),
+			},
+			profileCreationApproval: oneUseProfileCreationApproval({
+				command: "launch",
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileDir: DEDICATED_PROFILE,
+			}),
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(20);
+		expect(parseEnvelope(run).data?.reason).toBe("controls_unproven");
+		expect(fixture.calls.requestProfileCreationApproval).toBe(0);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("existing dirty profile stays untouched without requesting creation approval (U6 R8)", async () => {
+		const fixture = launchFixture({
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				disk: {
+					...CLEAN_CREDENTIAL_POSTURE.disk,
+					storedLogin: "present",
+				},
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+		const parsed = parseEnvelope(run);
+
+		expect(run.exitCode).toBe(20);
+		expect(parsed.error?.code).toBe("profile_posture_unsafe");
+		expect(parsed.data?.reason).toBe("stored_login_present");
+		expect(fixture.calls.requestProfileCreationApproval).toBe(0);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(fixture.calls.chmod).toBe(0);
+		expect(fixture.calls.writeTextFile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
+	});
+
+	test("configuration-only posture may launch but never verifies as live-clean", async () => {
+		const fixture = launchFixture({
+			credentialPosture: {
+				...CLEAN_CREDENTIAL_POSTURE,
+				effective: { observation: "not-observed" },
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+
+		expect(run.exitCode).toBe(20);
+		expect(fixture.calls.spawnChrome).toBe(1);
+		expect(parseEnvelope(run).error?.code).toBe("spawned_unverified");
+	});
+
+	test("an existing Default profile escaping its dedicated root blocks before inspection or spawn", async () => {
+		const escapedDefault = `${DEFAULT_PROFILE_ROOT}/Default`;
+		const fixture = launchFixture({
+			profiles: {
+				[DEDICATED_PROFILE]: profileStat(DEDICATED_PROFILE),
+				[`${DEDICATED_PROFILE}/Default`]: profileStat(escapedDefault),
+			},
+		});
+		const run = await runWarmChrome(["launch"], fixture);
+		const envelope = parseEnvelope(run);
+
+		expect(run.exitCode).toBe(20);
+		expect(envelope.error?.code).toBe("profile_posture_unsafe");
+		expect(envelope.data?.reason).toBe("controls_unproven");
+		expect(fixture.calls.inspectCredentialPosture).toBe(0);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+		expect(fixture.calls.initializeCredentialCleanProfile).toBe(0);
+		expect(fixture.calls.spawnChrome).toBe(0);
 	});
 
 	test("launch.already_verified: healthy Warm Chrome short-circuits and the spawn seam is never touched (no_spawn pin)", async () => {
@@ -1289,7 +1627,7 @@ describe("warm-chrome launch re-emit rule (U6 via U3 map)", () => {
 });
 
 describe("warm-chrome launch station evidence (U6)", () => {
-	test("all four launch stations attach evidence and stop being missing", async () => {
+	test("all five launch stations attach evidence and stop being missing", async () => {
 		const evidence: WarmChromeBranchStationEvidence[] = [];
 		const stationRuns: Array<{
 			stationId: string;
@@ -1314,6 +1652,11 @@ describe("warm-chrome launch station evidence (U6)", () => {
 					spawn: () => ({ pid: 777, kill: async () => true }),
 				}),
 			},
+			{
+				stationId: "launch.human-action-required",
+				argv: ["launch"],
+				fixture: launchFixture({ profiles: {} }),
+			},
 		];
 
 		for (const { stationId, argv, fixture } of stationRuns) {
@@ -1332,11 +1675,13 @@ describe("warm-chrome launch station evidence (U6)", () => {
 				"check.listener_mismatch",
 				"check.non_loopback",
 				"check.port_occupied_foreign",
+				"check.profile_posture_unsafe",
 				"check.runtime_failure",
 				"check.unsafe_profile",
 				"check.verified",
 				"check.wrong_browser",
 				"repair.repaired",
+				"repair.human-action-required",
 				"repair.unrepairable",
 			].sort(),
 		);

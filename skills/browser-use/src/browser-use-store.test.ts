@@ -16,6 +16,7 @@ import {
 	casReplaceRecord,
 	listOrphanTempFiles,
 	readDurableFile,
+	replaceDurableFileIfUnchanged,
 	withExclusiveFileLock,
 	writeDurableFile,
 } from "./browser-use-store";
@@ -37,6 +38,7 @@ const overlays: VolatileOverlayFs[] = [];
 
 const OLD_RECORD = '{"revision":1,"value":"old"}\n';
 const NEW_RECORD = '{"revision":2,"value":"new"}\n';
+const INTRUDER_RECORD = '{"revision":2,"value":"intruder"}\n';
 
 function makeOverlay(): VolatileOverlayFs {
 	const overlay = makeVolatileOverlayFs();
@@ -147,6 +149,44 @@ describe("writeDurableFile crash truth table (R13; S7)", () => {
 		expect(result).toEqual({ ok: true });
 		overlay.crash();
 		expect(await overlay.fs.readTextFile(path)).toBe(NEW_RECORD);
+		expect(await listOrphanTempFiles(overlay.fs, "/store")).toEqual([]);
+	});
+});
+
+describe("replaceDurableFileIfUnchanged exact-byte CAS", () => {
+	test("rechecks after the replacement temp flush and preserves a late conflicting writer", async () => {
+		const { overlay, path } = await seedOverlayStore();
+		let injected = false;
+		const racingFs = {
+			...overlay.fs,
+			async writeFileDurable(
+				writePath: string,
+				contents: string,
+				mode: number,
+			): Promise<void> {
+				if (writePath.startsWith(`${path}.tmp-`) && !injected) {
+					injected = true;
+					await overlay.fs.writeFileDurable(
+						path,
+						INTRUDER_RECORD,
+						0o600,
+					);
+				}
+				await overlay.fs.writeFileDurable(writePath, contents, mode);
+			},
+		};
+
+		expect(
+			await replaceDurableFileIfUnchanged(racingFs, {
+				path,
+				expectedRaw: OLD_RECORD,
+				contents: NEW_RECORD,
+			}),
+		).toMatchObject({
+			ok: false,
+			failure: { code: "store_record_conflict" },
+		});
+		expect(await overlay.fs.readTextFile(path)).toBe(INTRUDER_RECORD);
 		expect(await listOrphanTempFiles(overlay.fs, "/store")).toEqual([]);
 	});
 });

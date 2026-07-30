@@ -1,0 +1,11 @@
+entries:
+  - domain: manpowergroup-fasttrack360
+    flow: save-timesheet
+    status: untrusted-label
+    risk_class: read_only
+  - domain: manpowergroup-fasttrack360
+    flow: add-breaks
+    status: untrusted-label
+  - domain: manpowergroup-fasttrack360
+    flow: submit-timesheet
+    status: trusted

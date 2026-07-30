@@ -1,0 +1,11 @@
+{
+	"name": "@side-quest/browser-use-environment-auth",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Unsigned native owner for Browser Use environment-token custody, exact execution, and disposable delivery.",
+	"scripts": {
+		"build": "swift build",
+		"build:release": "swift build -c release --disable-sandbox",
+		"test": "swift run BrowserUseEnvironmentAuthTests"
+	}
+}

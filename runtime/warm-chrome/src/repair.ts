@@ -18,7 +18,9 @@ import {
 } from "./cli.ts";
 import {
 	createDefaultProofDeps,
+	resolveProfileConfigurationReason,
 	runWarmChromeCheckProof,
+	type ProfilePostureReason,
 	type WarmChromeCheckProofInput,
 	type WarmChromeProofDeps,
 	type WarmChromeVerifiedProof,
@@ -27,14 +29,17 @@ import {
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
 } from "./model.ts";
 import {
+	consumeProfileCreationApproval,
 	expandHome,
 	extractUserDataDir,
 	isDefaultChromeProfilePath,
 	type ListenerProcess,
 	parseProcessCommand,
 	type ProfileStat,
+	readCommandFlagValue,
 	REAL_GOOGLE_CHROME_BINARY,
 	redactListenerDetail,
+	tokenizeCommandArgs,
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
 	type WarmChromeRuntime,
 	WarmChromeRuntimeError,
@@ -151,6 +156,54 @@ function unrepairableError(
 	});
 }
 
+function profilePostureError(
+	reason: ProfilePostureReason,
+	message: string,
+	context: RepairErrorContext,
+	data: Record<string, unknown> = {},
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError("profile_posture_unsafe", message, {
+		exitCode: WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
+		recoverability: "repair_state",
+		hintAction: "repair_state",
+		hintSummary:
+			"Create a fresh isolated Warm Chrome profile after explicit human approval; preserve the prior profile.",
+		primaryActionId: "create_clean_profile",
+		data: { reason, ...context, ...data },
+	});
+}
+
+function profileCreationHumanGateError(
+	profileDir: string,
+	approval: "cancelled" | "unavailable",
+	context: RepairErrorContext,
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError(
+		"human-action-required",
+		"A human must confirm creation of the fresh Warm Chrome profile.",
+		{
+			exitCode: 21,
+			recoverability: "repair_state",
+			hintAction: "repair_state",
+			hintSummary:
+				"Obtain an exact external human continuation for the fresh profile.",
+			primaryActionId: "create_clean_profile",
+			data: {
+				reason:
+					approval === "cancelled"
+						? "profile_creation_cancelled"
+						: "profile_creation_requires_human",
+				...context,
+				profile_dir: profileDir,
+			},
+		},
+	);
+}
+
+function isMissingProfileError(error: unknown): boolean {
+	return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
+
 /**
  * Build the `repair` command handler (plan U7).
  *
@@ -248,8 +301,98 @@ export function createRepairCommandHandler(
 		let profile: ProfileStat | null = null;
 		try {
 			profile = await runtime.statProfile(target);
-		} catch {
-			profile = null;
+		} catch (error) {
+			if (!isMissingProfileError(error)) {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome could not prove whether the repair profile is absent.",
+					context,
+					{ profile_dir: target },
+				);
+			}
+			if (targetSafeToMutate(target)) {
+				const approvalRequest = {
+					command: "repair",
+					port: invocation.port,
+					profileDir: target,
+				} as const;
+				const approval =
+					await runtime.requestCredentialCleanProfileCreationApproval(
+						approvalRequest,
+					);
+				if (!consumeProfileCreationApproval(approval, approvalRequest)) {
+					throw profileCreationHumanGateError(
+						target,
+						approval === "cancelled" ? "cancelled" : "unavailable",
+						context,
+					);
+				}
+			}
+		}
+		if (profile !== null) {
+			const parsedListenerCommand =
+				listener === null ? null : parseProcessCommand(listener.command);
+			const profileDirectory =
+				parsedListenerCommand === null
+					? "Default"
+					: readCommandFlagValue(
+							parsedListenerCommand.args,
+							"--profile-directory",
+						);
+			if (profileDirectory === null) {
+				throw profilePostureError(
+					"controls_unproven",
+					"Listener active profile cannot be proven without an explicit --profile-directory.",
+					context,
+					{ profile_dir: profile.realPath },
+				);
+			}
+			let activeProfile: ProfileStat;
+			try {
+				activeProfile = await runtime.statProfile(
+					join(profile.realPath, profileDirectory),
+				);
+			} catch {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome could not resolve the active repair profile.",
+					context,
+					{ profile_dir: profile.realPath },
+				);
+			}
+			if (
+				activeProfile.realPath !== profile.realPath &&
+				!activeProfile.realPath.startsWith(`${profile.realPath}/`)
+			) {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome active repair profile escapes its dedicated root.",
+					context,
+					{ profile_dir: profile.realPath },
+				);
+			}
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir: activeProfile.realPath,
+				syncDisabledByLaunch:
+					parsedListenerCommand === null ||
+					tokenizeCommandArgs(parsedListenerCommand.args).includes(
+						"--disable-sync",
+					),
+				extensionsDisabledByLaunch:
+					parsedListenerCommand === null ||
+					tokenizeCommandArgs(parsedListenerCommand.args).includes(
+						"--disable-extensions",
+					),
+			});
+			const reason = resolveProfileConfigurationReason(posture);
+			if (reason !== null) {
+				throw profilePostureError(
+					reason,
+					"Existing Warm Chrome profile posture is not clean; repair refuses to change it.",
+					context,
+					{ profile_dir: profile.realPath },
+				);
+			}
 		}
 
 		// Gate on the RESOLVED path too: statProfile returns the realpath, so a
@@ -261,11 +404,11 @@ export function createRepairCommandHandler(
 			(profile === null || targetSafeToMutate(profile.realPath));
 
 		if (mutationsAllowed) {
-			// 3. Profile dir creation (ported: preflight launch ensureProfileDir).
+			// 3. Fresh-only profile creation after an external human continuation.
 			if (profile === null) {
 				try {
-					const realPath = await runtime.ensureProfileDir(target);
-					profile = await runtime.statProfile(realPath);
+					await runtime.initializeCredentialCleanProfile(target);
+					profile = await runtime.statProfile(target);
 				} catch {
 					throw unrepairableError(
 						"profile_dir_uncreatable",
@@ -274,9 +417,8 @@ export function createRepairCommandHandler(
 						{ profile_dir: target },
 					);
 				}
-				// ensureProfileDir resolves symlinks: re-check the created path
-				// before recording the mutation, in case the target symlinked into
-				// a profile repair must not own.
+				// Re-check the exclusively created path before recording the
+				// mutation, in case its resolved identity is outside our owner.
 				if (!targetSafeToMutate(profile.realPath)) {
 					throw unrepairableError(
 						"profile_not_owned",

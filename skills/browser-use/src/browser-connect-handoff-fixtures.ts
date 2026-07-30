@@ -21,15 +21,42 @@
 //   fixture-connect-failure` spawn that failed closed (exit 20), captured
 //   2026-07-16.
 //
-// Both were captured against browser-connect schema_version 1 and then
-// updated shape-for-shape to schema_version 2 (platform plan 2026-07-21-002
-// U1, KTD13): `data.schema_version` became "2" and `data.environment` gained
-// the named logical `profile` the producer now emits — the exact two-field
-// delta of that schema rev; every other byte is the capture's own. The
-// process-boundary test (browser-connect-process-boundary.test.ts) re-proves
-// the failure shape against the live CLI on every run, so drift between these
-// captures and the real binary cannot go unnoticed.
+// Both were captured against browser-connect schema_version 1, updated to
+// schema 2 for the logical profile identity, then updated to schema 3 for the
+// exact live-clean profile posture proof. Every other byte is the capture's
+// own. The process-boundary test
+// (browser-connect-process-boundary.test.ts) re-proves the failure shape
+// against the live CLI on every run, so drift between these captures and the
+// real binary cannot go unnoticed.
 // ---------------------------------------------------------------------------
+
+export const LIVE_CLEAN_PROFILE_POSTURE_FIXTURE = {
+	state: "live-clean",
+	disk: {
+		save_setting: "disabled",
+		auto_signin_setting: "disabled",
+		sync_setting: "disabled",
+		stored_login: "live-observed-absent",
+	},
+	process: {
+		disable_sync_switch: "present",
+		disable_extensions_switch: "present",
+	},
+	effective: {
+		observation: "running-chrome",
+		save_capability: "disabled",
+		fill_exposure: "no-source",
+		sync_state: "disabled",
+		save_prompt: "suppressed",
+		observer: {
+			source: "chrome-webui",
+			browser_pid: 4242,
+			port: "9222",
+			profile_match: "exact",
+			observed_at_ms: 1,
+		},
+	},
+} as const;
 
 export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
   "status": "ok",
@@ -55,11 +82,38 @@ export const REAL_VERIFIED_HANDOFF_ENVELOPE = `{
     },
     "proof": {
       "environment_contract_id": "warm-chrome.browser-entry",
-      "environment_schema_version": "1",
-      "route_evidence": "verified-live"
+      "environment_schema_version": "2",
+      "route_evidence": "verified-live",
+      "profile_posture": {
+        "state": "live-clean",
+        "disk": {
+          "save_setting": "disabled",
+          "auto_signin_setting": "disabled",
+          "sync_setting": "disabled",
+          "stored_login": "live-observed-absent"
+        },
+        "process": {
+          "disable_sync_switch": "present",
+          "disable_extensions_switch": "present"
+        },
+        "effective": {
+          "observation": "running-chrome",
+          "save_capability": "disabled",
+          "fill_exposure": "no-source",
+          "sync_state": "disabled",
+          "save_prompt": "suppressed",
+          "observer": {
+            "source": "chrome-webui",
+            "browser_pid": 4242,
+            "port": "9222",
+            "profile_match": "exact",
+            "observed_at_ms": 1
+          }
+        }
+      }
     },
     "contract_id": "browser-connect.verified-handoff",
-    "schema_version": "2"
+    "schema_version": "3"
   },
   "runtime_actions": [
     {
@@ -93,7 +147,7 @@ export const REAL_CONNECT_FAILURE_ENVELOPE = `{
     },
     "detail": "Stop and inspect the foreign listener before adapter work.",
     "contract_id": "browser-connect.verified-handoff",
-    "schema_version": "2"
+    "schema_version": "3"
   },
   "error": {
     "run_id": "fixture-connect-failure",

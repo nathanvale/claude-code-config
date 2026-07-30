@@ -1,31 +1,116 @@
-// Clean-break migration engine. Inventory freezes the source snapshot before
-// later phases may assign dispositions or stage outputs. All five public
-// commands read and write BrowserUseMigrationState; activation is outside this
-// module and remains unchanged until U7.
+// Clean-break migration phase engine. Inventory freezes the source snapshot
+// before later phases may assign dispositions or stage outputs. This module
+// owns phase-state persistence and delegates generation authority to the plain
+// activation owner.
 
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 import { redactUnsafeText } from "./browser-use-core";
+import {
+	BROWSER_USE_CORPUS_LEDGER_PROOF_PATH,
+	BROWSER_USE_CORPUS_LEDGER_PROOF_REF,
+	browserUseCorpusDispositionLedgerContents,
+} from "./browser-use-corpus-generation-builder";
+import currentCorpusReceipt from "./browser-use-migration-corpus-receipt.json";
+import {
+	activateBrowserUseGeneration,
+	projectActiveGenerationStatus,
+	type BrowserUseGenerationCandidateClosureRead,
+	validateBrowserUseGenerationCandidateClosure,
+	validateBrowserUseGenerationCandidateForMigrationState,
+} from "./browser-use-generation-activation";
 import { BROWSER_USE_ARTIFACT_CLASSES } from "./browser-use-migration-model";
 import type {
 	BrowserUseArtifactClass,
 	BrowserUseCanonicalTarget,
 	BrowserUseCorpusCensus,
+	BrowserUseCorpusReceipt,
 	BrowserUseMigrationDisposition,
 	BrowserUseMigrationFailure,
 	BrowserUseMigrationState,
+	BrowserUseMigrationStatus,
+	BrowserUseTargetProvenance,
 } from "./browser-use-migration-model";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
-import type { BrowserUseSourceSnapshotPayload } from "./browser-use-schemas";
+import {
+	type BrowserUseCorpusGenerationCandidatePayload,
+	type BrowserUseSourceSnapshotPayload,
+	parseDurableRecord,
+} from "./browser-use-schemas";
 import type { RetentionDeps } from "./browser-use-retention";
 import {
 	generationFilePath,
+	sourceSnapshotPath,
 	stageGeneration,
+	type StageGenerationFile,
 	writeSourceSnapshot,
 } from "./browser-use-retention";
-import { readDurableFile, writeDurableFile } from "./browser-use-store";
+import {
+	readDurableFile,
+	replaceDurableFileIfUnchanged,
+	withExclusiveFileLock,
+	writeDurableFile,
+} from "./browser-use-store";
 
 const MIGRATION_STATE_FILE = "migration-state.json";
+const LEGACY_MIGRATION_STATE_DIR = "legacy-state";
+const MIGRATION_OWNER_LOCK_FILE = "migration-owner.lock";
+const MIGRATION_OWNER_LOCK_STALE_AFTER_MS = 30 * 60 * 1_000;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const LEGACY_GENERATION_ID_PATTERN = /^generation-[0-9a-f]{16}$/;
+const MIGRATION_PHASES = [
+	"empty",
+	"inventoried",
+	"planned",
+	"staged",
+	"verified",
+] as const;
+const LEGACY_DISPOSITIONS = [
+	"stage",
+	"quarantine-backup",
+	"quarantine-secret",
+	"quarantine-executable",
+	"quarantine-obsolete",
+	"quarantine-unsupported",
+] as const;
+const LEGACY_STATE_KEYS = [
+	"contract",
+	"schema_version",
+	"phase",
+	"snapshot_id",
+	"snapshot_digest",
+	"source_root_identity",
+	"source_entry_count",
+	"disposition_count",
+	"dispositions",
+	"staged_generation",
+	"last_apply_verified_noop",
+	"activation_state",
+] as const;
+const LEGACY_DISPOSITION_KEYS = [
+	"source_relative_path",
+	"source_content_hash",
+	"disposition",
+	"reason",
+	"transform_version",
+	"logical_destination_id",
+	"expected_hash",
+] as const;
+
+export {
+	CORPUS_GENERATION_CANDIDATE_MANIFEST_PATH,
+	readActiveCorpusManifest,
+	readRetainedCorpusGenerationManifest,
+	tripActiveGenerationEffectFence,
+	validateBrowserUseGenerationCandidateClosure,
+	validateBrowserUseGenerationCandidateForMigrationState,
+} from "./browser-use-generation-activation";
+export type {
+	BrowserUseActiveCorpusManifestRead,
+	BrowserUseGenerationCandidateClosureRead,
+	BrowserUseRetainedCorpusGenerationRead,
+} from "./browser-use-generation-activation";
+
 const CORPUS_CENSUS_FIELDS = [
 	"formal_artifacts",
 	"target_flows",
@@ -39,6 +124,37 @@ function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
 }
 
+/** Prove one retained snapshot is the exact source evidence for a state. */
+export function browserUseSourceSnapshotMatchesMigrationState(
+	state: BrowserUseMigrationState,
+	snapshot: BrowserUseSourceSnapshotPayload,
+): boolean {
+	if (
+		state.snapshot_id === null ||
+		state.snapshot_digest === null ||
+		state.source_root_identity === null
+	) {
+		return false;
+	}
+	const entriesByPath = new Map(
+		snapshot.entries.map((entry) => [entry.relative_path, entry]),
+	);
+	return (
+		snapshot.snapshot_id === state.snapshot_id &&
+		snapshot.snapshot_digest === state.snapshot_digest &&
+		snapshot.root_identity === state.source_root_identity &&
+		snapshot.entries.length === state.source_entry_count &&
+		state.source_entry_count === state.dispositions.length &&
+		entriesByPath.size === snapshot.entries.length &&
+		sha256(JSON.stringify(snapshot.entries)) === state.snapshot_digest &&
+		state.dispositions.every(
+			(row) =>
+				entriesByPath.get(row.source_relative_path)?.content_hash ===
+				row.source_content_hash,
+		)
+	);
+}
+
 function migrationFailure(
 	code: BrowserUseMigrationFailure["code"],
 	message: string,
@@ -48,6 +164,273 @@ function migrationFailure(
 
 function migrationStatePath(deps: RetentionDeps): string {
 	return join(deps.paths.state.migrationsDir, MIGRATION_STATE_FILE);
+}
+
+function migrationOwnerLockPath(deps: RetentionDeps): string {
+	return join(deps.paths.runtime.locksDir, MIGRATION_OWNER_LOCK_FILE);
+}
+
+type BrowserUseLegacyMigrationDisposition = {
+	source_relative_path: string;
+	source_content_hash: string;
+	disposition: (typeof LEGACY_DISPOSITIONS)[number];
+	reason: string;
+	transform_version: string;
+	logical_destination_id: string | null;
+	expected_hash: string | null;
+};
+
+type BrowserUseLegacyMigrationState = {
+	contract: "browser-use.migration-status";
+	schema_version: "1";
+	phase: (typeof MIGRATION_PHASES)[number];
+	snapshot_id: string | null;
+	snapshot_digest: string | null;
+	source_root_identity: string | null;
+	source_entry_count: number;
+	disposition_count: number;
+	dispositions: readonly BrowserUseLegacyMigrationDisposition[];
+	staged_generation: string | null;
+	last_apply_verified_noop: boolean | null;
+	activation_state: "unchanged";
+};
+
+function hasExactKeys(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const keys = Object.keys(value).sort();
+	const sortedExpected = [...expected].sort();
+	return (
+		keys.length === sortedExpected.length &&
+		keys.every((key, index) => key === sortedExpected[index])
+	);
+}
+
+function isLegacyRelativePath(value: unknown): value is string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.startsWith("/") ||
+		value.includes("\0")
+	) {
+		return false;
+	}
+	const segments = value.split("/");
+	return (
+		segments.length > 0 &&
+		segments.every(
+			(segment) => segment !== "" && segment !== "." && segment !== "..",
+		)
+	);
+}
+
+function isLegacyMigrationDisposition(
+	value: unknown,
+): value is BrowserUseLegacyMigrationDisposition {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		!hasExactKeys(record, LEGACY_DISPOSITION_KEYS) ||
+		!isLegacyRelativePath(record.source_relative_path) ||
+		typeof record.source_content_hash !== "string" ||
+		!SHA256_PATTERN.test(record.source_content_hash) ||
+		!LEGACY_DISPOSITIONS.includes(
+			record.disposition as (typeof LEGACY_DISPOSITIONS)[number],
+		) ||
+		typeof record.reason !== "string" ||
+		record.reason.length === 0 ||
+		record.transform_version !== "copy-v1"
+	) {
+		return false;
+	}
+	if (record.disposition === "stage") {
+		return (
+			record.logical_destination_id ===
+				`knowledge/${record.source_relative_path}` &&
+			record.expected_hash === record.source_content_hash
+		);
+	}
+	return record.logical_destination_id === null && record.expected_hash === null;
+}
+
+function parseLegacyMigrationState(
+	raw: string,
+): BrowserUseLegacyMigrationState | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return undefined;
+	}
+	const record = parsed as Record<string, unknown>;
+	if (
+		!hasExactKeys(record, LEGACY_STATE_KEYS) ||
+		record.contract !== "browser-use.migration-status" ||
+		record.schema_version !== "1" ||
+		!MIGRATION_PHASES.includes(
+			record.phase as (typeof MIGRATION_PHASES)[number],
+		) ||
+		!isNonNegativeSafeInteger(record.source_entry_count) ||
+		!isNonNegativeSafeInteger(record.disposition_count) ||
+		!Array.isArray(record.dispositions) ||
+		!record.dispositions.every(isLegacyMigrationDisposition) ||
+		record.disposition_count !== record.dispositions.length ||
+		record.activation_state !== "unchanged"
+	) {
+		return undefined;
+	}
+	const sourcePaths = record.dispositions.map(
+		(disposition) => disposition.source_relative_path,
+	);
+	if (new Set(sourcePaths).size !== sourcePaths.length) return undefined;
+
+	const phase = record.phase as BrowserUseLegacyMigrationState["phase"];
+	const hasSnapshot =
+		typeof record.snapshot_id === "string" &&
+		typeof record.snapshot_digest === "string" &&
+		typeof record.source_root_identity === "string" &&
+		SHA256_PATTERN.test(record.snapshot_digest) &&
+		SHA256_PATTERN.test(record.source_root_identity) &&
+		record.snapshot_id === `snapshot-${record.snapshot_digest.slice(0, 16)}`;
+	const hasCompletePlan =
+		record.disposition_count === record.source_entry_count;
+	const hasGeneration =
+		typeof record.staged_generation === "string" &&
+		LEGACY_GENERATION_ID_PATTERN.test(record.staged_generation);
+	const generationMatchesSnapshot =
+		typeof record.snapshot_digest === "string" &&
+		record.staged_generation ===
+			`generation-${record.snapshot_digest.slice(0, 16)}`;
+	const validPhase =
+		(phase === "empty" &&
+			record.snapshot_id === null &&
+			record.snapshot_digest === null &&
+			record.source_root_identity === null &&
+			record.source_entry_count === 0 &&
+			record.disposition_count === 0 &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		(phase === "inventoried" &&
+			hasSnapshot &&
+			record.disposition_count === 0 &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		(phase === "planned" &&
+			hasSnapshot &&
+			hasCompletePlan &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		((phase === "staged" || phase === "verified") &&
+			hasSnapshot &&
+			hasCompletePlan &&
+			hasGeneration &&
+			generationMatchesSnapshot &&
+			typeof record.last_apply_verified_noop === "boolean");
+	if (!validPhase) return undefined;
+	return record as BrowserUseLegacyMigrationState;
+}
+
+async function archiveLegacyMigrationState(
+	deps: RetentionDeps,
+	raw: string,
+): Promise<{ ok: true } | BrowserUseMigrationFailure> {
+	const archiveDir = join(
+		deps.paths.state.migrationsDir,
+		LEGACY_MIGRATION_STATE_DIR,
+	);
+	const archivePath = join(
+		archiveDir,
+		`migration-state-v1-${sha256(raw)}.json`,
+	);
+	try {
+		await deps.fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
+		await deps.fs.syncDirectory(deps.paths.state.migrationsDir);
+	} catch {
+		return migrationFailure(
+			"store_flush_failed",
+			"legacy migration archive directory could not be durably created.",
+		);
+	}
+	const archiveDirStat = await deps.fs.lstat(archiveDir);
+	if (
+		archiveDirStat?.kind !== "directory" ||
+		(archiveDirStat.mode & 0o077) !== 0
+	) {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"legacy migration archive directory is not private.",
+		);
+	}
+	const standing = await readDurableFile(deps.fs, archivePath);
+	if (standing.status === "unreadable") {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"legacy migration archive is unreadable.",
+		);
+	}
+	if (standing.status === "present") {
+		const archiveStat = await deps.fs.lstat(archivePath);
+		if (
+			archiveStat?.kind !== "file" ||
+			(archiveStat.mode & 0o077) !== 0 ||
+			standing.raw !== raw
+		) {
+			return migrationFailure(
+				"migration_collision",
+				"legacy migration archive conflicts with private standing bytes.",
+			);
+		}
+		try {
+			await deps.fs.syncDirectory(archiveDir);
+		} catch {
+			return migrationFailure(
+				"store_flush_failed",
+				"standing legacy migration archive could not be made durable.",
+			);
+		}
+		return { ok: true };
+	}
+	const written = await writeDurableFile(deps.fs, {
+		path: archivePath,
+		contents: raw,
+		mode: 0o600,
+	});
+	if (!written.ok) {
+		return migrationFailure("store_flush_failed", written.failure.message);
+	}
+	const verified = await readDurableFile(deps.fs, archivePath);
+	const verifiedStat = await deps.fs.lstat(archivePath);
+	return verified.status === "present" &&
+		verifiedStat?.kind === "file" &&
+		(verifiedStat.mode & 0o077) === 0 &&
+		verified.raw === raw
+		? { ok: true }
+		: migrationFailure(
+				"store_flush_failed",
+				"legacy migration archive could not be verified.",
+			);
+}
+
+function durableMigrationState(
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+): BrowserUseMigrationState {
+	if ("active_generation" in state) {
+		const { active_generation: _projection, ...durable } = state;
+		return durable;
+	}
+	return state;
+}
+
+function encodeMigrationState(
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+): string {
+	return `${JSON.stringify(durableMigrationState(state), null, 2)}\n`;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -83,22 +466,104 @@ function isCanonicalTarget(value: unknown): value is BrowserUseCanonicalTarget {
 	);
 }
 
+function isTargetProvenance(value: unknown): value is BrowserUseTargetProvenance {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record.source_relative_path === "string" &&
+		typeof record.source_flow_id === "string" &&
+		(record.canonical_target_id === null ||
+			typeof record.canonical_target_id === "string") &&
+		(record.activation === "canonical" || record.activation === "inactive") &&
+		typeof record.reason === "string"
+	);
+}
+
 async function writeMigrationState(
 	deps: RetentionDeps,
-	state: BrowserUseMigrationState,
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	const durableState = durableMigrationState(state);
 	await deps.fs.mkdir(deps.paths.state.migrationsDir, {
 		recursive: true,
 		mode: 0o700,
 	});
 	const written = await writeDurableFile(deps.fs, {
 		path: migrationStatePath(deps),
-		contents: `${JSON.stringify(state, null, 2)}\n`,
+		contents: encodeMigrationState(durableState),
 	});
 	if (!written.ok) {
 		return migrationFailure("store_flush_failed", written.failure.message);
 	}
-	return { ok: true, state };
+	return { ok: true, state: durableState };
+}
+
+async function writeMigrationStateIfUnchanged(
+	deps: RetentionDeps,
+	state: BrowserUseMigrationState | BrowserUseMigrationStatus,
+	expectedRaw: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	const durableState = durableMigrationState(state);
+	const written = await replaceDurableFileIfUnchanged(deps.fs, {
+		path: migrationStatePath(deps),
+		expectedRaw,
+		contents: encodeMigrationState(durableState),
+	});
+	if (!written.ok) {
+		return migrationFailure(
+			written.failure.code === "store_record_conflict" ||
+				written.failure.code === "store_record_missing"
+				? "migration_activation_conflict"
+				: written.failure.code === "store_record_corrupt"
+					? "migration_state_corrupt"
+					: "store_flush_failed",
+			written.failure.message,
+		);
+	}
+	return { ok: true, state: durableState };
+}
+
+async function withMigrationOwnerLock<
+	T extends { ok: true } | BrowserUseMigrationFailure,
+>(
+	deps: RetentionDeps,
+	holderId: string,
+	body: () => Promise<T>,
+): Promise<T | BrowserUseMigrationFailure> {
+	try {
+		await deps.fs.mkdir(deps.paths.runtime.locksDir, {
+			recursive: true,
+			mode: 0o700,
+		});
+	} catch {
+		return migrationFailure(
+			"store_flush_failed",
+			"migration owner lock directory could not be created.",
+		);
+	}
+	const outcome = await withExclusiveFileLock<T>(
+		deps.fs,
+		{
+			lockPath: migrationOwnerLockPath(deps),
+			holderId,
+			staleAfterMs: MIGRATION_OWNER_LOCK_STALE_AFTER_MS,
+			clock: deps.clock,
+		},
+		body,
+	);
+	if (!outcome.ok && "failure" in outcome) {
+		return migrationFailure(
+			outcome.failure.code === "store_lock_contended"
+				? "store_lock_contended"
+				: "store_flush_failed",
+			outcome.failure.message,
+		);
+	}
+	return outcome;
 }
 
 async function inventoryEntries(
@@ -179,6 +644,19 @@ export async function inventoryBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-inventory",
+		async () => await inventoryBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function inventoryBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	if (!isAbsolute(sourceRoot)) {
 		return migrationFailure(
 			"migration_source_invalid",
@@ -186,6 +664,64 @@ export async function inventoryBrowserUseMigration(
 		);
 	}
 	const normalizedRoot = normalize(sourceRoot);
+	const standingRaw = await readDurableFile(deps.fs, migrationStatePath(deps));
+	if (standingRaw.status === "unreadable") {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"migration state is unreadable.",
+		);
+	}
+	let legacy:
+		| { state: BrowserUseLegacyMigrationState; raw: string }
+		| undefined;
+	if (standingRaw.status === "present") {
+		let schemaVersion: unknown;
+		try {
+			schemaVersion = (
+				JSON.parse(standingRaw.raw) as { schema_version?: unknown }
+			).schema_version;
+		} catch {
+			schemaVersion = undefined;
+		}
+		if (schemaVersion === "1") {
+			const parsed = parseLegacyMigrationState(standingRaw.raw);
+			if (parsed === undefined) {
+				return migrationFailure(
+					"migration_state_corrupt",
+					"migration state does not match schema version 1.",
+				);
+			}
+			if (
+				parsed.phase !== "empty" &&
+				parsed.source_root_identity !==
+					sha256(`root:${normalizedRoot}`)
+			) {
+				return migrationFailure(
+					"migration_source_drift",
+					"migration source root differs from the legacy inventory.",
+				);
+			}
+			legacy = { state: parsed, raw: standingRaw.raw };
+		}
+	}
+	// `migration inventory --source` is the explicit operator re-freeze
+	// checkpoint. A valid v1 ledger proves the source root identity only; its
+	// obsolete snapshot and dispositions are archived, never promoted into v2.
+	const standing =
+		legacy === undefined ? await readBrowserUseMigrationStatus(deps) : undefined;
+	if (standing !== undefined && !standing.ok) return standing;
+	let activationState: BrowserUseMigrationState["activation_state"];
+	if (legacy === undefined) {
+		activationState = standing?.state.activation_state ?? "unchanged";
+	} else {
+		const projected = await projectActiveGenerationStatus(
+			deps,
+			legacy.state.activation_state,
+		);
+		if (!projected.ok) return projected;
+		activationState =
+			projected.activeGeneration.current === null ? "unchanged" : "active";
+	}
 	const inventoried = await inventoryEntries(deps.fs, normalizedRoot);
 	if (!inventoried.ok) return inventoried;
 	const snapshotDigest = sha256(JSON.stringify(inventoried.entries));
@@ -219,10 +755,16 @@ export async function inventoryBrowserUseMigration(
 		dispositions: [],
 		corpus_census: null,
 		canonical_targets: [],
+		target_provenance: [],
 		staged_generation: null,
 		last_apply_verified_noop: null,
-		activation_state: "unchanged",
+		activation_state: activationState,
 	};
+	if (legacy !== undefined) {
+		const archived = await archiveLegacyMigrationState(deps, legacy.raw);
+		if (!archived.ok) return archived;
+		return await writeMigrationStateIfUnchanged(deps, state, legacy.raw);
+	}
 	return await writeMigrationState(deps, state);
 }
 
@@ -239,9 +781,11 @@ export async function inventoryBrowserUseMigration(
  */
 export async function readBrowserUseMigrationStatus(
 	deps: RetentionDeps,
-): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+): Promise<{ ok: true; state: BrowserUseMigrationStatus } | BrowserUseMigrationFailure> {
 	const read = await readDurableFile(deps.fs, migrationStatePath(deps));
 	if (read.status === "missing") {
+		const projected = await projectActiveGenerationStatus(deps, "unchanged");
+		if (!projected.ok) return projected;
 		return {
 			ok: true,
 			state: {
@@ -256,9 +800,14 @@ export async function readBrowserUseMigrationStatus(
 				dispositions: [],
 				corpus_census: null,
 				canonical_targets: [],
+				target_provenance: [],
 				staged_generation: null,
 				last_apply_verified_noop: null,
-				activation_state: "unchanged",
+				activation_state:
+					projected.activeGeneration.current === null
+						? "unchanged"
+						: "active",
+				active_generation: projected.activeGeneration,
 			},
 		};
 	}
@@ -279,14 +828,34 @@ export async function readBrowserUseMigrationStatus(
 			!("corpus_census" in state) ||
 			(state.corpus_census !== null && !isCorpusCensus(state.corpus_census)) ||
 			!state.canonical_targets.every(isCanonicalTarget) ||
-			state.activation_state !== "unchanged"
+			(state.target_provenance !== undefined &&
+				(!Array.isArray(state.target_provenance) ||
+					!state.target_provenance.every(isTargetProvenance))) ||
+			(state.activation_state !== "unchanged" &&
+				state.activation_state !== "active")
 		) {
 			return migrationFailure(
 				"migration_state_corrupt",
 				"migration state does not match schema version 2.",
 			);
 		}
-		return { ok: true, state };
+		const projected = await projectActiveGenerationStatus(
+			deps,
+			state.activation_state,
+		);
+		if (!projected.ok) return projected;
+		return {
+			ok: true,
+			state: {
+				...state,
+				target_provenance: state.target_provenance ?? [],
+				activation_state:
+					projected.activeGeneration.current === null
+						? "unchanged"
+						: "active",
+				active_generation: projected.activeGeneration,
+			},
+		};
 	} catch {
 		return migrationFailure(
 			"migration_state_corrupt",
@@ -371,6 +940,10 @@ function hasSecretMaterial(contents: string): boolean {
 		// Bounded JWT: three base64url segments separated by dots, each of a
 		// plausible length (header/payload >= 10 chars, signature >= 10).
 		/\beyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+		// Auth pointers and live browser endpoints never enter durable knowledge.
+		/\b(?:op|wss?|otpauth):\/\/\S+/i,
+		// Plausible base32 TOTP seed.
+		/\b[A-Z2-7]{32,}\b/i,
 	].some((pattern) => pattern.test(contents));
 }
 
@@ -383,6 +956,41 @@ const SCRIPT_EXTENSION = /\.(?:js|cjs|mjs|ts|tsx|sh|bash|zsh|py|rb|pl)$/;
 function isAuthNarrative(relativeOrBase: string): boolean {
 	const base = relativeOrBase.split("/").at(-1) ?? relativeOrBase;
 	return /(?:^|[-_])(?:okta|login|sign-?in|sso)(?:[-_.]|$)/.test(base);
+}
+
+type DomainPath = {
+	domain: string;
+	backup_root: string | null;
+};
+
+// Resolve a service identity from either the full browser-automation namespace,
+// a domains-root invocation, or a recognized historical domain backup root.
+function domainPathFor(relativePath: string): DomainPath {
+	const parts = relativePath.split("/");
+	if (parts[0] === "domains" && parts.length > 1) {
+		return { domain: parts[1] ?? "", backup_root: null };
+	}
+	if (
+		parts[0] === "backups" &&
+		/^domains-(?:before|after)-/.test(parts[1] ?? "") &&
+		parts.length > 2
+	) {
+		return {
+			domain: parts[2] ?? "",
+			backup_root: `backups/${parts[1]}`,
+		};
+	}
+	if (/^domains-(?:before|after)-/.test(parts[0] ?? "") && parts.length > 1) {
+		return { domain: parts[1] ?? "", backup_root: parts[0] ?? null };
+	}
+	return { domain: parts[0] ?? relativePath, backup_root: null };
+}
+
+function isBackupPath(relativePath: string): boolean {
+	return (
+		domainPathFor(relativePath).backup_root !== null ||
+		relativePath.split("/")[0] === "backups"
+	);
 }
 
 // Classify one source entry into its artifact class (R2/R3). Classification is
@@ -400,7 +1008,7 @@ function artifactClassFor(
 	// (R3: "10 domain-script actions that are also scripts"). Only the .js/.ts
 	// asset counts as an action; the registry JSON itself is supporting.
 	if (
-		lower.includes("/domain-script-actions/") &&
+		lower.split("/").includes("domain-script-actions") &&
 		isScript &&
 		SCRIPT_EXTENSION.test(lower)
 	) {
@@ -419,7 +1027,7 @@ function artifactClassFor(
 	if (base.includes("selector")) return "selector-asset";
 	// A domain's OWN notes file (`<domain>/<domain>.md`) is domain prose even when
 	// the domain name contains an auth token (e.g. `ellucian-okta/ellucian-okta.md`).
-	const domain = lower.split("/")[0] ?? lower;
+	const domain = domainPathFor(lower).domain;
 	const baseName = base.replace(/\.[^.]+$/, "");
 	const isDomainNotes = baseName === domain;
 	if (!isDomainNotes && isAuthNarrative(base) && /\.(?:md|txt)$/.test(lower)) {
@@ -431,7 +1039,49 @@ function artifactClassFor(
 
 // The domain segment is the first path component of a domain-rooted corpus.
 function domainOf(relativePath: string): string {
-	return relativePath.split("/")[0] ?? relativePath;
+	return domainPathFor(relativePath).domain;
+}
+
+const SERVICE_ID_BY_LEGACY_DOMAIN: Readonly<Record<string, string>> = {
+	"iteraterecruitment-oncoreservices": "oncore",
+	"manpowergroup-fasttrack360": "fasttrack",
+	"api-explorer-xero": "xero",
+	"go-xero": "xero",
+};
+
+function canonicalFlowId(domain: string, flow: string): string | null {
+	const service = SERVICE_ID_BY_LEGACY_DOMAIN[domain] ?? domain;
+	if (service === "oncore") {
+		if (flow === "authenticate-session" || flow === "submit-timesheet") return null;
+		if (
+			flow === "fill-timesheet" ||
+			flow === "list-timesheets" ||
+			flow.startsWith("fill-timesheet-")
+		) {
+			return "oncore/fill-timesheet";
+		}
+	}
+	if (service === "fasttrack") {
+		if (flow === "submit-timesheet") return null;
+		if (
+			flow === "fill-week" ||
+			flow === "add-breaks" ||
+			flow === "save-timesheet" ||
+			flow === "list-timesheets"
+		) {
+			return "fasttrack/fill-week";
+		}
+	}
+	if (service === "xero") {
+		if (flow === "extract-bankstatementsplus") {
+			return "xero/extract-bankstatementsplus";
+		}
+		if (flow === "post-banktransaction") {
+			return "xero/post-banktransaction";
+		}
+		if (flow.startsWith("reconcile")) return "xero/reconcile-batch";
+	}
+	return `${service}/${flow}`;
 }
 
 // Extract the declared flow id from a formal artifact's parsed body (R4).
@@ -479,13 +1129,35 @@ function formalFlowIdFor(
 			// validity is enforced separately in dispositionFor.
 		}
 	}
-	return `${domain}/${flow ?? base}`;
+	return canonicalFlowId(domain, flow ?? base);
 }
 
 // The canonical target id collapses many candidates of the same intent into one
 // flow (R4): both Oncore fill-timesheet candidates share `<domain>/fill-timesheet`.
 function canonicalTargetIdFor(formalFlowId: string | null): string | null {
 	return formalFlowId;
+}
+
+function reviewedActionProvenanceFor(
+	relativePath: string,
+	artifactClass: BrowserUseArtifactClass,
+): BrowserUseTargetProvenance[] {
+	if (
+		artifactClass === "domain-script-action" &&
+		domainOf(relativePath) === "iteraterecruitment-oncoreservices" &&
+		relativePath.endsWith("/domain-script-actions/diagnose-grid-state.js")
+	) {
+		return [
+			{
+				source_relative_path: relativePath,
+				source_flow_id: "timesheet-diagnose",
+				canonical_target_id: "oncore/timesheet-diagnose",
+				activation: "canonical",
+				reason: "reviewed current action supplies bounded diagnosis authority",
+			},
+		];
+	}
+	return [];
 }
 
 // Count `### Flow: <name>` headings inside domain prose (R3 Target Flows). The
@@ -537,13 +1209,17 @@ function censusFor(
 // every source that feeds it, so two candidates of one intent (both Oncore
 // fill-timesheet playbooks) resolve to ONE canonical flow with two sources.
 function canonicalTargetsFor(
-	dispositions: readonly BrowserUseMigrationDisposition[],
+	provenance: readonly BrowserUseTargetProvenance[],
 ): BrowserUseCanonicalTarget[] {
 	const byCanonical = new Map<string, string[]>();
-	for (const row of dispositions) {
-		if (row.canonical_target_id === null) continue;
+	for (const row of provenance) {
+		if (row.activation !== "canonical" || row.canonical_target_id === null) {
+			continue;
+		}
 		const sources = byCanonical.get(row.canonical_target_id) ?? [];
-		sources.push(row.source_relative_path);
+		if (!sources.includes(row.source_relative_path)) {
+			sources.push(row.source_relative_path);
+		}
 		byCanonical.set(row.canonical_target_id, sources);
 	}
 	return [...byCanonical.entries()]
@@ -554,9 +1230,98 @@ function canonicalTargetsFor(
 		}));
 }
 
+function backupTimestamp(backupRoot: string): string {
+	return backupRoot.match(/(\d{8}T\d{6})/)?.[1] ?? "";
+}
+
+// Preserve only the newest copy of formal artifacts whose canonical target has
+// no current formal source. All other backup entries remain quarantined.
+function preservedBackupFormalPaths(
+	entries: readonly BrowserUseSourceSnapshotPayload["entries"][number][],
+	contentsByPath: ReadonlyMap<string, string>,
+): Set<string> {
+	const formal = entries.flatMap((entry) => {
+		const artifactClass = artifactClassFor(entry);
+		if (
+			artifactClass !== "formal-playbook" &&
+			artifactClass !== "formal-runbook"
+		) {
+			return [];
+		}
+		const target = formalFlowIdFor(
+			entry,
+			artifactClass,
+			contentsByPath.get(entry.relative_path),
+		);
+		return target === null ? [] : [{ entry, target }];
+	});
+	const currentTargets = new Set(
+		formal
+			.filter(({ entry }) => !isBackupPath(entry.relative_path))
+			.map(({ target }) => target),
+	);
+	const newestRootByTarget = new Map<string, string>();
+	for (const { entry, target } of formal) {
+		const root = domainPathFor(entry.relative_path).backup_root;
+		if (root === null || currentTargets.has(target)) continue;
+		const existing = newestRootByTarget.get(target);
+		if (
+			existing === undefined ||
+			backupTimestamp(root) > backupTimestamp(existing)
+		) {
+			newestRootByTarget.set(target, root);
+		}
+	}
+	return new Set(
+		formal.flatMap(({ entry, target }) =>
+			domainPathFor(entry.relative_path).backup_root ===
+			newestRootByTarget.get(target)
+				? [entry.relative_path]
+				: [],
+		),
+	);
+}
+
+function trackerProvenanceFor(
+	relativePath: string,
+	contents: string,
+): BrowserUseTargetProvenance[] {
+	if (!relativePath.endsWith("/legacy-runtime-migration.yaml")) return [];
+	let parsed: unknown;
+	try {
+		parsed = Bun.YAML.parse(contents);
+	} catch {
+		return [];
+	}
+	if (parsed === null || typeof parsed !== "object") return [];
+	const entries = (parsed as Record<string, unknown>).entries;
+	if (!Array.isArray(entries)) return [];
+	const provenance: BrowserUseTargetProvenance[] = [];
+	for (const value of entries) {
+		if (value === null || typeof value !== "object") continue;
+		const record = value as Record<string, unknown>;
+		if (typeof record.domain !== "string" || typeof record.flow !== "string") {
+			continue;
+		}
+		const canonicalTargetId = canonicalFlowId(record.domain, record.flow);
+		provenance.push({
+			source_relative_path: relativePath,
+			source_flow_id: record.flow,
+			canonical_target_id: canonicalTargetId,
+			activation: canonicalTargetId === null ? "inactive" : "canonical",
+			reason:
+				canonicalTargetId === null
+					? "auth and submit tracker entries remain non-executable provenance"
+					: "legacy tracker flow maps to an existing catalog builder identity",
+		});
+	}
+	return provenance;
+}
+
 function dispositionFor(
 	entry: BrowserUseSourceSnapshotPayload["entries"][number],
 	contents: string | undefined,
+	preservedBackupFormal: ReadonlySet<string> = new Set(),
 ):
 	| { ok: true; disposition: BrowserUseMigrationDisposition }
 	| BrowserUseMigrationFailure {
@@ -590,7 +1355,28 @@ function dispositionFor(
 			},
 		};
 	}
-	if (/(?:~|\.bak|\.backup|\.old|\.orig)$/.test(lower)) {
+	if (
+		isBackupPath(relativePath) ||
+		/(?:~|\.bak|\.backup|\.old|\.orig)(?:\.|$)/.test(lower)
+	) {
+		if (
+			preservedBackupFormal.has(relativePath) &&
+			formalFlowId !== null &&
+			(artifactClass === "formal-playbook" ||
+				artifactClass === "formal-runbook")
+		) {
+			return {
+				ok: true,
+				disposition: {
+					...base,
+					disposition: "provenance-only",
+					reason:
+						"latest unique formal backup retained as inactive provenance only",
+					logical_destination_id: null,
+					expected_hash: null,
+				},
+			};
+		}
 		return quarantined("quarantine-backup", "backup artifacts remain inactive");
 	}
 	if (
@@ -611,6 +1397,15 @@ function dispositionFor(
 		return quarantined(
 			"quarantine-secret",
 			"secret-shaped material remains inactive",
+		);
+	}
+	if (
+		artifactClass === "auth-narrative" ||
+		artifactClass === "login-capability"
+	) {
+		return quarantined(
+			"provenance-only",
+			"authentication source is retained as redacted candidate provenance only",
 		);
 	}
 	if (
@@ -658,18 +1453,28 @@ function dispositionFor(
 	};
 }
 
-// The known R3 corpus baseline. Count drift against this blocks planning until
-// the new entries receive dispositions. It is an optional guard: callers with a
-// deliberately different corpus (hermetic fixtures) pass their own baseline or
-// none, but the production dotfiles corpus is checked against these numbers.
-export const BROWSER_USE_R3_CORPUS_BASELINE: BrowserUseCorpusCensus = {
-	formal_artifacts: 12,
-	target_flows: 52,
-	scripts: 24,
-	auth_narratives: 3,
-	login_capabilities: 2,
-	domain_script_actions: 10,
-};
+// The sanitized current-corpus receipt binds the reviewed relative path set and
+// its overlapping census without retaining absolute paths or private contents.
+const BROWSER_USE_CURRENT_CORPUS_RECEIPT =
+	currentCorpusReceipt as BrowserUseCorpusReceipt;
+
+/** @deprecated Use the path-bound current corpus receipt. */
+export const BROWSER_USE_R3_CORPUS_BASELINE =
+	BROWSER_USE_CURRENT_CORPUS_RECEIPT;
+
+function isCorpusReceipt(
+	value: BrowserUseCorpusCensus | BrowserUseCorpusReceipt,
+): value is BrowserUseCorpusReceipt {
+	return "contract" in value && value.contract === "browser-use.corpus-receipt";
+}
+
+function relativePathDigest(
+	entries: readonly BrowserUseSourceSnapshotPayload["entries"][number][],
+): string {
+	return sha256(
+		JSON.stringify(entries.map((entry) => entry.relative_path).sort()),
+	);
+}
 
 function censusDrift(
 	expected: BrowserUseCorpusCensus,
@@ -689,7 +1494,7 @@ function censusDrift(
  *
  * @param deps - Admitted platform store dependencies
  * @param sourceRoot - Absolute source root matching the frozen identity
- * @param expectedCensus - Optional R3 baseline; count drift blocks planning
+ * @param expectedCensus - Optional fixture census or sanitized corpus receipt
  * @returns Planned shared migration state or one typed refusal
  *
  * @example
@@ -700,8 +1505,27 @@ function censusDrift(
 export async function planBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
-	expectedCensus?: BrowserUseCorpusCensus,
+	expectedCensus?: BrowserUseCorpusCensus | BrowserUseCorpusReceipt,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-plan",
+		async () =>
+			await planBrowserUseMigrationUnderLock(
+				deps,
+				sourceRoot,
+				expectedCensus,
+			),
+	);
+}
+
+async function planBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+	expectedCensus?: BrowserUseCorpusCensus | BrowserUseCorpusReceipt,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	if (!isAbsolute(sourceRoot)) {
 		return migrationFailure(
 			"migration_source_invalid",
@@ -737,26 +1561,35 @@ export async function planBrowserUseMigration(
 			"source bytes changed after the frozen snapshot.",
 		);
 	}
+	const contentsByPath = new Map<string, string>();
+	for (const entry of inventoried.entries) {
+		if (entry.type !== "file") continue;
+		try {
+			contentsByPath.set(
+				entry.relative_path,
+				await deps.fs.readTextFile(join(normalizedRoot, entry.relative_path)),
+			);
+		} catch {
+			return migrationFailure(
+				"migration_source_drift",
+				"a source file became unreadable after the frozen snapshot.",
+			);
+		}
+	}
+	const preservedBackupFormal = preservedBackupFormalPaths(
+		inventoried.entries,
+		contentsByPath,
+	);
 	const dispositions: BrowserUseMigrationDisposition[] = [];
+	const targetProvenance: BrowserUseTargetProvenance[] = [];
 	let targetFlows = 0;
 	for (const entry of inventoried.entries) {
-		let contents: string | undefined;
-		if (entry.type === "file") {
-			try {
-				contents = await deps.fs.readTextFile(
-					join(normalizedRoot, entry.relative_path),
-				);
-			} catch {
-				// A source file readable at snapshot time became unreadable
-				// (ENOENT/EACCES/EISDIR) before this loop: return the typed drift
-				// refusal instead of letting the throw escape the contract.
-				return migrationFailure(
-					"migration_source_drift",
-					"a source file became unreadable after the frozen snapshot.",
-				);
-			}
-		}
-		const classified = dispositionFor(entry, contents);
+		const contents = contentsByPath.get(entry.relative_path);
+		const classified = dispositionFor(
+			entry,
+			contents,
+			preservedBackupFormal,
+		);
 		if (!classified.ok) return classified;
 		// Target Flows are declared as headings inside domain prose (R3); only
 		// domain-prose markdown contributes to the flow tally.
@@ -767,10 +1600,63 @@ export async function planBrowserUseMigration(
 			targetFlows += targetFlowCount(contents);
 		}
 		dispositions.push(classified.disposition);
+		if (
+			classified.disposition.formal_flow_id !== null &&
+			!isBackupPath(entry.relative_path)
+		) {
+			targetProvenance.push({
+				source_relative_path: entry.relative_path,
+				source_flow_id:
+					classified.disposition.formal_flow_id.split("/").at(-1) ?? "",
+				canonical_target_id: classified.disposition.canonical_target_id,
+				activation: "canonical",
+				reason: "current formal artifact maps to catalog authority",
+			});
+		}
+		if (
+			classified.disposition.disposition === "provenance-only" &&
+			classified.disposition.formal_flow_id !== null
+		) {
+			targetProvenance.push({
+				source_relative_path: entry.relative_path,
+				source_flow_id:
+					classified.disposition.formal_flow_id.split("/").at(-1) ?? "",
+				canonical_target_id: classified.disposition.canonical_target_id,
+				activation: "canonical",
+				reason: "latest unique formal backup supplies provenance only",
+			});
+		}
+		if (contents !== undefined) {
+			targetProvenance.push(
+				...trackerProvenanceFor(entry.relative_path, contents),
+			);
+		}
+		targetProvenance.push(
+			...reviewedActionProvenanceFor(
+				entry.relative_path,
+				classified.disposition.artifact_class,
+			),
+		);
 	}
 	const census = censusFor(dispositions, targetFlows);
-	if (expectedCensus !== undefined) {
-		const drift = censusDrift(expectedCensus, census);
+	const sourceBasename = normalizedRoot.split("/").filter(Boolean).at(-1);
+	const expectedContract =
+		expectedCensus ??
+		(sourceBasename === "browser-automation"
+			? BROWSER_USE_CURRENT_CORPUS_RECEIPT
+			: undefined);
+	if (expectedContract !== undefined) {
+		const expected = isCorpusReceipt(expectedContract)
+			? expectedContract.corpus_census
+			: expectedContract;
+		const pathDrift = isCorpusReceipt(expectedContract)
+			? expectedContract.source_entry_count !== inventoried.entries.length ||
+				expectedContract.relative_path_digest !==
+					relativePathDigest(inventoried.entries)
+				? `path receipt expected ${expectedContract.source_entry_count} entries at ${expectedContract.relative_path_digest}, found ${inventoried.entries.length} entries at ${relativePathDigest(inventoried.entries)}`
+				: undefined
+			: undefined;
+		const drift = pathDrift ?? censusDrift(expected, census);
 		if (drift !== undefined) {
 			return migrationFailure(
 				"migration_count_drift",
@@ -784,10 +1670,11 @@ export async function planBrowserUseMigration(
 		disposition_count: dispositions.length,
 		dispositions,
 		corpus_census: census,
-		canonical_targets: canonicalTargetsFor(dispositions),
+		canonical_targets: canonicalTargetsFor(targetProvenance),
+		target_provenance: targetProvenance,
 		staged_generation: null,
 		last_apply_verified_noop: null,
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
 	};
 	return await writeMigrationState(deps, state);
 }
@@ -901,6 +1788,19 @@ export async function applyBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-apply",
+		async () => await applyBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function applyBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	const standing = await readBrowserUseMigrationStatus(deps);
 	if (!standing.ok) return standing;
 	const frozen = await validateFrozenSource(deps, standing.state, sourceRoot);
@@ -965,7 +1865,7 @@ export async function applyBrowserUseMigration(
 		phase: "staged",
 		staged_generation: staged.record.generation_id,
 		last_apply_verified_noop: staged.verified_noop,
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
 	});
 }
 
@@ -985,6 +1885,19 @@ export async function verifyBrowserUseMigration(
 	deps: RetentionDeps,
 	sourceRoot: string,
 ): Promise<{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure> {
+	return await withMigrationOwnerLock(
+		deps,
+		"migration-verify",
+		async () => await verifyBrowserUseMigrationUnderLock(deps, sourceRoot),
+	);
+}
+
+async function verifyBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	sourceRoot: string,
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
 	const standing = await readBrowserUseMigrationStatus(deps);
 	if (!standing.ok) return standing;
 	const frozen = await validateFrozenSource(deps, standing.state, sourceRoot);
@@ -1019,6 +1932,505 @@ export async function verifyBrowserUseMigration(
 	return await writeMigrationState(deps, {
 		...standing.state,
 		phase: "verified",
-		activation_state: "unchanged",
+		activation_state: standing.state.activation_state,
+	});
+}
+
+function verifiedStateExtensionProblem(
+	base: BrowserUseMigrationState,
+	extension: BrowserUseMigrationState,
+): string | undefined {
+	if (
+		base.phase !== "verified" ||
+		extension.contract !== base.contract ||
+		extension.schema_version !== base.schema_version ||
+		extension.phase !== "verified" ||
+		extension.activation_state !== base.activation_state ||
+		extension.staged_generation !== base.staged_generation ||
+		extension.last_apply_verified_noop !== base.last_apply_verified_noop ||
+		extension.snapshot_id === null ||
+		extension.snapshot_digest === null ||
+		extension.source_root_identity === null ||
+		!SHA256_PATTERN.test(extension.snapshot_digest) ||
+		!SHA256_PATTERN.test(extension.source_root_identity) ||
+		extension.snapshot_id !==
+			`snapshot-${extension.snapshot_digest.slice(0, 16)}` ||
+		extension.source_entry_count !== extension.disposition_count ||
+		extension.disposition_count !== extension.dispositions.length ||
+		extension.source_entry_count <= base.source_entry_count
+	) {
+		return "verified corpus extension changes base authority or has inconsistent counts.";
+	}
+	const dispositionsByPath = new Map(
+		extension.dispositions.map((row) => [row.source_relative_path, row]),
+	);
+	if (
+		dispositionsByPath.size !== extension.dispositions.length ||
+		base.dispositions.some(
+			(row) =>
+				JSON.stringify(dispositionsByPath.get(row.source_relative_path)) !==
+				JSON.stringify(row),
+		)
+	) {
+		return "verified corpus extension removes or changes a base disposition.";
+	}
+	const targetsById = new Map(
+		extension.canonical_targets.map((target) => [
+			target.canonical_target_id,
+			target,
+		]),
+	);
+	const baseTargetsById = new Map(
+		base.canonical_targets.map((target) => [
+			target.canonical_target_id,
+			target,
+		]),
+	);
+	if (
+		targetsById.size !== extension.canonical_targets.length ||
+		extension.canonical_targets.some(
+			(target) =>
+				target.source_relative_paths.length === 0 ||
+				new Set(target.source_relative_paths).size !==
+					target.source_relative_paths.length ||
+				target.source_relative_paths.some(
+					(path) => !dispositionsByPath.has(path),
+				),
+		) ||
+		base.canonical_targets.some((target) => {
+			const extended = targetsById.get(target.canonical_target_id);
+			return (
+				extended === undefined ||
+				target.source_relative_paths.some(
+					(path) => !extended.source_relative_paths.includes(path),
+				)
+			);
+		})
+	) {
+		return "verified corpus extension removes or changes base target provenance.";
+	}
+	const extensionProvenance = extension.target_provenance ?? [];
+	const baseProvenance = base.target_provenance ?? [];
+	const provenance = new Set(
+		extensionProvenance.map((row) => JSON.stringify(row)),
+	);
+	const baseProvenanceIdentities = new Set(
+		baseProvenance.map(
+			(row) => `${row.source_relative_path}\0${row.source_flow_id}`,
+		),
+	);
+	const provenanceIdentities = new Set(
+		extensionProvenance.map(
+			(row) => `${row.source_relative_path}\0${row.source_flow_id}`,
+		),
+	);
+	const appendedProvenance = extensionProvenance.filter(
+		(row) =>
+			!baseProvenanceIdentities.has(
+				`${row.source_relative_path}\0${row.source_flow_id}`,
+			),
+	);
+	if (
+		provenanceIdentities.size !== extensionProvenance.length ||
+		baseProvenance.some(
+			(row) => !provenance.has(JSON.stringify(row)),
+		) ||
+		extensionProvenance.some(
+			(row) =>
+				!dispositionsByPath.has(row.source_relative_path) ||
+				(row.canonical_target_id !== null &&
+					!targetsById
+						.get(row.canonical_target_id)
+						?.source_relative_paths.includes(row.source_relative_path)),
+		) ||
+		extension.canonical_targets.some((target) => {
+			const baseTarget = baseTargetsById.get(
+				target.canonical_target_id,
+			);
+			const appendedSources = target.source_relative_paths.filter(
+				(path) =>
+					!baseTarget?.source_relative_paths.includes(path),
+			);
+			return (
+				appendedSources.length > 0 &&
+				!appendedProvenance.some(
+					(row) =>
+						row.canonical_target_id ===
+							target.canonical_target_id &&
+						appendedSources.includes(row.source_relative_path),
+				)
+			);
+		})
+	) {
+		return "verified corpus extension does not preserve exact provenance.";
+	}
+	const baseCensus = base.corpus_census;
+	const extensionCensus = extension.corpus_census;
+	const baseDispositionPaths = new Set(
+		base.dispositions.map((row) => row.source_relative_path),
+	);
+	const appendedDispositions = extension.dispositions.filter(
+		(row) => !baseDispositionPaths.has(row.source_relative_path),
+	);
+	const censusDelta: BrowserUseCorpusCensus = {
+		formal_artifacts: appendedDispositions.filter(
+			(row) =>
+				row.artifact_class === "formal-runbook" ||
+				row.artifact_class === "formal-playbook",
+		).length,
+		target_flows: appendedProvenance.length,
+		scripts: appendedDispositions.filter(
+			(row) =>
+				row.artifact_class === "script" ||
+				row.artifact_class === "domain-script-action",
+		).length,
+		auth_narratives: appendedDispositions.filter(
+			(row) => row.artifact_class === "auth-narrative",
+		).length,
+		login_capabilities: appendedDispositions.filter(
+			(row) => row.artifact_class === "login-capability",
+		).length,
+		domain_script_actions: appendedDispositions.filter(
+			(row) => row.artifact_class === "domain-script-action",
+		).length,
+	};
+	if (
+		baseCensus === null ||
+		extensionCensus === null ||
+		CORPUS_CENSUS_FIELDS.some(
+			(field) =>
+				extensionCensus[field] !==
+				baseCensus[field] + censusDelta[field],
+		)
+	) {
+		return "verified corpus extension census does not match appended evidence.";
+	}
+	return undefined;
+}
+
+async function verifiedStateExtensionEvidenceProblem(
+	deps: RetentionDeps,
+	candidate: BrowserUseCorpusGenerationCandidatePayload,
+	files: readonly StageGenerationFile[],
+	base: BrowserUseMigrationState,
+	extension: BrowserUseMigrationState,
+): Promise<string | undefined> {
+	if (
+		extension.snapshot_id === null ||
+		extension.snapshot_digest === null ||
+		extension.source_root_identity === null
+	) {
+		return "verified corpus extension lacks exact source snapshot authority.";
+	}
+	const snapshotRead = await readDurableFile(
+		deps.fs,
+		sourceSnapshotPath(deps.paths, extension.snapshot_id),
+	);
+	if (snapshotRead.status !== "present") {
+		return "verified corpus extension source snapshot is missing.";
+	}
+	const snapshot = parseDurableRecord(
+		snapshotRead.raw,
+		"source-snapshot",
+	);
+	if (!snapshot.ok) {
+		return "verified corpus extension source snapshot is corrupt.";
+	}
+	if (
+		base.snapshot_id === null ||
+		base.snapshot_digest === null ||
+		base.source_root_identity === null
+	) {
+		return "verified corpus extension lacks retained base snapshot authority.";
+	}
+	const baseSnapshotRead = await readDurableFile(
+		deps.fs,
+		sourceSnapshotPath(deps.paths, base.snapshot_id),
+	);
+	if (baseSnapshotRead.status !== "present") {
+		return "verified corpus extension retained base snapshot is missing.";
+	}
+	const baseSnapshot = parseDurableRecord(
+		baseSnapshotRead.raw,
+		"source-snapshot",
+	);
+	if (!baseSnapshot.ok) {
+		return "verified corpus extension retained base snapshot is corrupt.";
+	}
+	const entriesByPath = new Map(
+		snapshot.payload.entries.map((entry) => [
+			entry.relative_path,
+			entry,
+		]),
+	);
+	if (
+		!browserUseSourceSnapshotMatchesMigrationState(
+			base,
+			baseSnapshot.payload,
+		) ||
+		!browserUseSourceSnapshotMatchesMigrationState(
+			extension,
+			snapshot.payload,
+		) ||
+		baseSnapshot.payload.entries.some(
+			(entry) =>
+				JSON.stringify(entriesByPath.get(entry.relative_path)) !==
+				JSON.stringify(entry),
+		)
+	) {
+		return "verified corpus extension does not match its exact source snapshot.";
+	}
+	const ledgerProof = candidate.proofs.find(
+		(proof) =>
+			proof.proof_ref === BROWSER_USE_CORPUS_LEDGER_PROOF_REF,
+	);
+	const ledgerFile =
+		ledgerProof === undefined
+			? undefined
+			: files.find((file) => file.relPath === ledgerProof.path);
+	const expectedLedger =
+		browserUseCorpusDispositionLedgerContents(extension);
+	if (
+		ledgerProof === undefined ||
+		ledgerProof.path !== BROWSER_USE_CORPUS_LEDGER_PROOF_PATH ||
+		ledgerFile?.contents !== expectedLedger ||
+		sha256(expectedLedger) !== ledgerProof.digest
+	) {
+		return "verified corpus extension does not match its generation ledger.";
+	}
+	return undefined;
+}
+
+/**
+ * Adopt one generated candidate into the exact verified migration state.
+ *
+ * The migration owner serializes preflight, immutable staging, closure
+ * validation, and authoritative state adoption. The final exact-byte compare
+ * refuses a non-cooperative state change before the authoritative write.
+ *
+ * @param deps - Admitted migration-store dependencies
+ * @param input - Candidate payload and exact immutable files to stage
+ * @returns Adopted verified state plus committed closure, or one typed refusal
+ *
+ * @example
+ * ```typescript
+ * const adopted = await adoptBrowserUseGenerationCandidate(deps, {
+ *   candidate,
+ *   files,
+ * })
+ * ```
+ */
+export async function adoptBrowserUseGenerationCandidate(
+	deps: RetentionDeps,
+	input: {
+		candidate: BrowserUseCorpusGenerationCandidatePayload;
+		files: readonly StageGenerationFile[];
+		verifiedStateExtension?: BrowserUseMigrationState;
+	},
+): Promise<
+	| {
+			ok: true;
+			state: BrowserUseMigrationState;
+			closure: Extract<
+				BrowserUseGenerationCandidateClosureRead,
+				{ ok: true }
+			>;
+			verified_noop: boolean;
+	  }
+	| BrowserUseMigrationFailure
+> {
+	return await withMigrationOwnerLock(
+		deps,
+		`migration-adopt-${input.candidate.generation_id}`,
+		async () => {
+			const statePath = migrationStatePath(deps);
+			const before = await readDurableFile(deps.fs, statePath);
+			if (before.status === "missing") {
+				return migrationFailure(
+					"migration_state_missing",
+					"generation adoption requires verified migration state.",
+				);
+			}
+			if (before.status === "unreadable") {
+				return migrationFailure(
+					"migration_state_corrupt",
+					"migration state is unreadable.",
+				);
+			}
+			const standing = await readBrowserUseMigrationStatus(deps);
+			if (!standing.ok) return standing;
+			const standingState = durableMigrationState(standing.state);
+			const candidateState =
+				input.verifiedStateExtension ?? standingState;
+			if (input.verifiedStateExtension !== undefined) {
+				const extensionProblem = verifiedStateExtensionProblem(
+					standingState,
+					input.verifiedStateExtension,
+				);
+				if (extensionProblem !== undefined) {
+					return migrationFailure(
+						"migration_manifest_incomplete",
+						extensionProblem,
+					);
+				}
+				const evidenceProblem =
+					await verifiedStateExtensionEvidenceProblem(
+						deps,
+						input.candidate,
+						input.files,
+						standingState,
+						input.verifiedStateExtension,
+					);
+				if (evidenceProblem !== undefined) {
+					return migrationFailure(
+						"migration_manifest_incomplete",
+						evidenceProblem,
+					);
+				}
+			}
+			const preflightState = await readDurableFile(deps.fs, statePath);
+			if (
+				preflightState.status !== "present" ||
+				preflightState.raw !== before.raw
+			) {
+				return migrationFailure(
+					"migration_activation_conflict",
+					"verified migration state changed before candidate preflight.",
+				);
+			}
+			const preflight =
+				await validateBrowserUseGenerationCandidateForMigrationState(
+					deps,
+					input.candidate,
+					candidateState,
+				);
+			if (!preflight.ok) return preflight;
+			let staged: Awaited<ReturnType<typeof stageGeneration>>;
+			try {
+				staged = await stageGeneration(deps, {
+					generationId: input.candidate.generation_id,
+					files: input.files,
+				});
+			} catch {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"generation staging could not be completed safely.",
+				);
+			}
+			if (!staged.ok) {
+				return migrationFailure(
+					staged.code === "retention_collision"
+						? "retention_collision"
+						: staged.code === "store_lock_contended"
+							? "store_lock_contended"
+							: staged.code === "store_record_corrupt"
+								? "migration_generation_corrupt"
+								: "store_flush_failed",
+					staged.message,
+				);
+			}
+			let closure: BrowserUseGenerationCandidateClosureRead;
+			try {
+				closure = await validateBrowserUseGenerationCandidateClosure(
+					deps,
+					input.candidate.generation_id,
+				);
+			} catch {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"staged generation could not be read back safely.",
+				);
+			}
+			if (!closure.ok) return closure;
+			if (
+				JSON.stringify(closure.candidate) !==
+				JSON.stringify(input.candidate)
+			) {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"staged generation candidate differs from preflight authority.",
+				);
+			}
+			const committedBinding =
+				await validateBrowserUseGenerationCandidateForMigrationState(
+					deps,
+					closure.candidate,
+					candidateState,
+				);
+			if (!committedBinding.ok) return committedBinding;
+			const observed = await readDurableFile(deps.fs, statePath);
+			if (observed.status !== "present" || observed.raw !== before.raw) {
+				return migrationFailure(
+					"migration_activation_conflict",
+					"verified migration state changed before candidate adoption.",
+				);
+			}
+			const adopted = await writeMigrationStateIfUnchanged(
+				deps,
+				{
+					...candidateState,
+					phase: "verified",
+					staged_generation: input.candidate.generation_id,
+					last_apply_verified_noop: staged.verified_noop,
+					activation_state: standingState.activation_state,
+				},
+				before.raw,
+			);
+			if (!adopted.ok) return adopted;
+			return {
+				ok: true,
+				state: adopted.state,
+				closure,
+				verified_noop: staged.verified_noop,
+			};
+		},
+	);
+}
+
+/**
+ * Activate a complete verified corpus generation through the activation owner.
+ *
+ * Migration retains phase-state loading while the generation owner performs
+ * closure validation and the fenced authority transaction.
+ *
+ * @param deps - Admitted migration-store dependencies
+ * @param input - Optional explicit immediate-prior generation for pre-effect rollback
+ * @returns Activated migration state, or one typed refusal
+ *
+ * @example
+ * ```typescript
+ * const result = await activateBrowserUseMigration(deps, {})
+ * ```
+ */
+export async function activateBrowserUseMigration(
+	deps: RetentionDeps,
+	input: { generationId?: string },
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	return await withMigrationOwnerLock(
+		deps,
+		`migration-activate-${input.generationId ?? "staged"}`,
+		async () => await activateBrowserUseMigrationUnderLock(deps, input),
+	);
+}
+
+async function activateBrowserUseMigrationUnderLock(
+	deps: RetentionDeps,
+	input: { generationId?: string },
+): Promise<
+	{ ok: true; state: BrowserUseMigrationState } | BrowserUseMigrationFailure
+> {
+	const standing = await readBrowserUseMigrationStatus(deps);
+	if (!standing.ok) return standing;
+	const activated = await activateBrowserUseGeneration(
+		deps,
+		input,
+		standing.state,
+	);
+	if (!activated.ok) return activated;
+	return await writeMigrationState(deps, {
+		...standing.state,
+		activation_state: "active",
 	});
 }

@@ -17,16 +17,207 @@ import type {
 	BrowserUseAuthCommitResult,
 	BrowserUseAuthCommitSummary,
 	BrowserUseAuthContractPort,
+	BrowserUseAuthRunContinuation,
 	BrowserUseRunIntegrationPort,
 } from "./browser-use-run-model";
+import { isBrowserUseAuthRunContinuation } from "./browser-use-run-model";
 import {
 	type BrowserUseAuthAttestation,
+	type BrowserUseAuthBlockedCause,
+	type BrowserUseSessionIdentityObservationV1,
 	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 	BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
 	authAttestationDigestOf,
+	isBrowserUseSessionIdentityObservationV1,
+	sessionIdentityObservationDigestOf,
 	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
+import { secretShapeFindingOf } from "./browser-use-auth-bindings";
+
+/** Every expected coordinate pinned by the Session Identity Proof consumer. */
+export type BrowserUseSessionIdentityExpectation = {
+	verifier_action_id: string;
+	verifier_action_digest: string;
+	lane_id: BrowserUseSessionIdentityObservationV1["lane_id"];
+	run_id: string;
+	handoff_evidence_id: string;
+	environment: string;
+	profile: string;
+	target_id: string;
+	page_id: string;
+	frame_id: string;
+	top_level_origin: string;
+	frame_origin: string;
+	target_proof_digest: string;
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+	observed_at_epoch_ms: number;
+	fresh_until_epoch_ms: number;
+	implementation_integrity_key: string;
+	service_id: string;
+	auth_context: string;
+	at_epoch_ms: number;
+};
+
+/** Typed result of verifying one observed authenticated browser session. */
+export type BrowserUseSessionIdentityVerificationResult =
+	| {
+			ok: true;
+			identity_basis_digest: string;
+			attestation: BrowserUseAuthAttestation;
+			attestation_digest: string;
+	  }
+	| {
+			ok: false;
+			cause:
+				| "observation-invalid"
+				| "observation-stale"
+				| "expectation-invalid"
+				| "verifier-mismatch"
+				| "binding-mismatch"
+				| "identity-mismatch";
+	  };
+
+const SESSION_EXPECTATION_REFERENCE =
+	/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
+const SESSION_EXPECTATION_DIGEST = /^[0-9a-f]{64}$/;
+
+function sessionExpectationOriginIsExact(value: string): boolean {
+	try {
+		const origin = new URL(value);
+		return (
+			(origin.protocol === "https:" || origin.protocol === "http:") &&
+			origin.origin === value
+		);
+	} catch {
+		return false;
+	}
+}
+
+function sessionIdentityExpectationIsValid(
+	expected: BrowserUseSessionIdentityExpectation,
+): boolean {
+	for (const key of [
+		"verifier_action_id",
+		"run_id",
+		"handoff_evidence_id",
+		"environment",
+		"profile",
+		"target_id",
+		"page_id",
+		"frame_id",
+		"subject_reference",
+		"account_reference",
+		"tenant_reference",
+		"implementation_integrity_key",
+		"service_id",
+		"auth_context",
+	] as const) {
+		if (!SESSION_EXPECTATION_REFERENCE.test(expected[key])) return false;
+	}
+	return (
+		SESSION_EXPECTATION_DIGEST.test(expected.verifier_action_digest) &&
+		SESSION_EXPECTATION_DIGEST.test(expected.target_proof_digest) &&
+		sessionExpectationOriginIsExact(expected.top_level_origin) &&
+		sessionExpectationOriginIsExact(expected.frame_origin) &&
+		Number.isSafeInteger(expected.observed_at_epoch_ms) &&
+		expected.observed_at_epoch_ms >= 0 &&
+		Number.isSafeInteger(expected.fresh_until_epoch_ms) &&
+		expected.fresh_until_epoch_ms > expected.observed_at_epoch_ms &&
+		expected.fresh_until_epoch_ms - expected.observed_at_epoch_ms <=
+			60_000 &&
+		Number.isSafeInteger(expected.at_epoch_ms) &&
+		expected.at_epoch_ms >= expected.observed_at_epoch_ms
+	);
+}
+
+/**
+ * Verify one closed Session Identity Proof and mint its bounded attestation.
+ *
+ * The verifier compares the reviewed action, every run/handoff/browser
+ * binding, both origins, the native target digest, and all redacted identity
+ * references. Only the full observation digest can become the identity basis.
+ */
+export function verifyBrowserUseSessionIdentityObservation(
+	value: unknown,
+	expected: BrowserUseSessionIdentityExpectation,
+): BrowserUseSessionIdentityVerificationResult {
+	if (!isBrowserUseSessionIdentityObservationV1(value)) {
+		return { ok: false, cause: "observation-invalid" };
+	}
+	if (!sessionIdentityExpectationIsValid(expected)) {
+		return { ok: false, cause: "expectation-invalid" };
+	}
+	if (expected.at_epoch_ms < value.observed_at_epoch_ms) {
+		return { ok: false, cause: "expectation-invalid" };
+	}
+	if (expected.at_epoch_ms > value.fresh_until_epoch_ms) {
+		return { ok: false, cause: "observation-stale" };
+	}
+	if (
+		value.verifier_action_id !== expected.verifier_action_id ||
+		value.verifier_action_digest !== expected.verifier_action_digest
+	) {
+		return { ok: false, cause: "verifier-mismatch" };
+	}
+	for (const key of [
+		"lane_id",
+		"run_id",
+		"handoff_evidence_id",
+		"environment",
+		"profile",
+		"target_id",
+		"page_id",
+		"frame_id",
+		"top_level_origin",
+		"frame_origin",
+		"target_proof_digest",
+		"observed_at_epoch_ms",
+		"fresh_until_epoch_ms",
+	] as const) {
+		if (value[key] !== expected[key]) {
+			return { ok: false, cause: "binding-mismatch" };
+		}
+	}
+	for (const key of [
+		"subject_reference",
+		"account_reference",
+		"tenant_reference",
+	] as const) {
+		if (value[key] !== expected[key]) {
+			return { ok: false, cause: "identity-mismatch" };
+		}
+	}
+	const identityBasisDigest = sessionIdentityObservationDigestOf(value);
+	const attestation: BrowserUseAuthAttestation = {
+		run_id: value.run_id,
+		handoff_evidence_id: value.handoff_evidence_id,
+		lane_id: value.lane_id,
+		implementation_integrity_key: expected.implementation_integrity_key,
+		environment: value.environment,
+		profile: value.profile,
+		target_id: value.target_id,
+		page_id: value.page_id,
+		frame_id: value.frame_id,
+		service_id: expected.service_id,
+		auth_context: expected.auth_context,
+		subject_reference: value.subject_reference,
+		account_reference: value.account_reference,
+		tenant_reference: value.tenant_reference,
+		identity_basis: "session-identity-proof",
+		identity_basis_digest: identityBasisDigest,
+		observed_at_epoch_ms: value.observed_at_epoch_ms,
+		fresh_until_epoch_ms: value.fresh_until_epoch_ms,
+	};
+	return {
+		ok: true,
+		identity_basis_digest: identityBasisDigest,
+		attestation,
+		attestation_digest: authAttestationDigestOf(attestation),
+	};
+}
 
 // --- The auth contract Port implementation (R6, R30) ------------------------------
 
@@ -116,6 +307,82 @@ const CONTINUE_TRANSACTION_CONTINUATION = {
 	next_action_id: "continue-auth-transaction",
 	summary: "The authentication transaction is mid-flight; continue it.",
 } as const;
+const CONTINUATION_SECRET_ASSIGNMENT =
+	/\b(?:password|passwd|secret|seed|totp|credential|token)\b["']?\s*[:=]\s*["']?\S+/i;
+const CONTINUATION_AUTHORIZATION_VALUE = /\bBearer\s+\S+/i;
+
+function continuationCarriesSecretShape(
+	continuation: BrowserUseAuthRunContinuation,
+): boolean {
+	const strings = [
+		continuation.summary,
+		continuation.continuation_id,
+		continuation.run_id,
+		continuation.checkpoint,
+		continuation.bindings.generation_id,
+		continuation.bindings.lane_id,
+		continuation.bindings.handoff_evidence_id,
+		continuation.bindings.environment,
+		continuation.bindings.profile,
+		continuation.bindings.target_binding_id,
+		continuation.bindings.expected_identity.subject_ref,
+		continuation.bindings.expected_identity.account_ref,
+		continuation.bindings.expected_identity.tenant_ref,
+		continuation.claim?.claimant_id,
+	];
+	return strings.some(
+		(value) =>
+			value !== undefined &&
+			(secretShapeFindingOf(value) !== undefined ||
+				CONTINUATION_SECRET_ASSIGNMENT.test(value) ||
+				CONTINUATION_AUTHORIZATION_VALUE.test(value)),
+	);
+}
+
+export function browserUseAuthBlockedContinuationFacts(
+	cause: BrowserUseAuthBlockedCause,
+): {
+	reason: BrowserUseAuthRunContinuation["reason"];
+	required_actor: BrowserUseAuthRunContinuation["required_actor"];
+	checkpoint: string;
+} {
+	const runState = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state;
+	const reason =
+		cause === "user-presence-required" ||
+		cause === "challenge-escalation"
+			? "user-presence-required"
+			: cause === "unknown-post-submit-state"
+				? "submission-outcome-unknown"
+				: cause ===
+							"session-identity-proof-unavailable" ||
+						cause ===
+							"human-identity-attestation-required"
+					? "session-identity-unproven"
+					: runState === "awaiting-auth"
+						? "login-required"
+						: "human-action-required";
+	return {
+		reason,
+		required_actor:
+			runState === "awaiting-auth" ? "agent" : "human",
+		checkpoint: `blocked-${cause}`,
+	};
+}
+
+function versionedBlockedContinuationMatches(
+	cause: BrowserUseAuthBlockedCause,
+	continuation: BrowserUseAuthRunContinuation,
+): boolean {
+	const expected = browserUseAuthBlockedContinuationFacts(cause);
+	return (
+		continuation.state === "pending" &&
+		continuation.claim === undefined &&
+		continuation.safe_to_retry === false &&
+		continuation.required_actor === expected.required_actor &&
+		continuation.reason === expected.reason &&
+		continuation.checkpoint === expected.checkpoint
+	);
+}
 
 /**
  * Map one fragment onto the platform commit summary (R6). Terminal
@@ -131,6 +398,7 @@ const CONTINUE_TRANSACTION_CONTINUATION = {
  */
 export function authCommitSummaryOf(
 	fragment: BrowserUseAuthTransactionFragment,
+	continuation?: BrowserUseAuthRunContinuation,
 ): BrowserUseAuthSummaryResult {
 	const issues = validateAuthFragmentShape(fragment);
 	const firstIssue = issues[0];
@@ -143,7 +411,38 @@ export function authCommitSummaryOf(
 			},
 		};
 	}
+	if (
+		continuation !== undefined &&
+		(!isBrowserUseAuthRunContinuation(continuation) ||
+			continuation.run_id !== fragment.binding.run_id ||
+			continuation.bindings.lane_id !== fragment.binding.lane_id ||
+			continuation.bindings.adapter_id !== fragment.binding.lane_id ||
+			continuation.bindings.handoff_evidence_id !==
+				fragment.binding.handoff_evidence_id ||
+			continuation.bindings.environment !== fragment.binding.environment ||
+			continuation.bindings.profile !== fragment.binding.profile ||
+			continuationCarriesSecretShape(continuation))
+	) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message:
+					"the versioned continuation is invalid or does not match the auth fragment binding.",
+			},
+		};
+	}
 	if (fragment.terminal_outcome === "authenticated") {
+		if (continuation !== undefined) {
+			return {
+				ok: false,
+				rejection: {
+					code: "auth_fragment_not_committable",
+					message:
+						"an authenticated fragment cannot retain a blocked-state continuation.",
+				},
+			};
+		}
 		if (
 			fragment.attestation_digest === null ||
 			fragment.fresh_until_epoch_ms === null
@@ -179,11 +478,40 @@ export function authCommitSummaryOf(
 	}
 	if (fragment.status === "blocked" && fragment.blocked_cause !== null) {
 		const entry = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[fragment.blocked_cause];
+		if (
+			continuation !== undefined &&
+			!versionedBlockedContinuationMatches(
+				fragment.blocked_cause,
+				continuation,
+			)
+		) {
+			return {
+				ok: false,
+				rejection: {
+					code: "auth_fragment_not_committable",
+					message:
+						"the versioned continuation contradicts the blocked auth cause.",
+				},
+			};
+		}
 		return {
 			ok: true,
 			summary: {
 				state: entry.run_state,
-				continuation: { ...entry.continuation },
+				continuation: continuation ?? { ...entry.continuation },
+			},
+		};
+	}
+	if (
+		continuation !== undefined &&
+		!["pending", "claimed", "in-progress"].includes(continuation.state)
+	) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message:
+					"an active auth fragment requires a live continuation lifecycle.",
 			},
 		};
 	}
@@ -191,7 +519,7 @@ export function authCommitSummaryOf(
 		ok: true,
 		summary: {
 			state: "awaiting-auth",
-			continuation: { ...CONTINUE_TRANSACTION_CONTINUATION },
+			continuation: continuation ?? { ...CONTINUE_TRANSACTION_CONTINUATION },
 		},
 	};
 }
@@ -219,9 +547,19 @@ export async function commitAuthTransaction(
 		run_id: string;
 		expected_revision: number;
 		fragment: BrowserUseAuthTransactionFragment;
+		continuation?: BrowserUseAuthRunContinuation;
 	},
 ): Promise<BrowserUseAuthCommitResult | BrowserUseAuthCommitRefusal> {
-	const mapped = authCommitSummaryOf(input.fragment);
+	if (input.run_id !== input.fragment.binding.run_id) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message: "the commit run id does not match the auth fragment binding.",
+			},
+		};
+	}
+	const mapped = authCommitSummaryOf(input.fragment, input.continuation);
 	if (!mapped.ok) return mapped;
 	return await port.commitAuthOutcome({
 		run_id: input.run_id,

@@ -15,6 +15,7 @@
 // secondary affordance so the agent never loses a known-good repair path.
 
 import type { BranchStation } from "@side-quest/cli-command-facade";
+import { join } from "node:path";
 
 import { warmChromeBranchStationCatalog } from "./branch-station-catalog.ts";
 import {
@@ -29,12 +30,15 @@ import {
 } from "./model.ts";
 import {
 	createDefaultProofDeps,
+	resolveProfileConfigurationReason,
 	runWarmChromeCheckProof,
+	type ProfilePostureReason,
 	type WarmChromeCheckProofInput,
 	type WarmChromeProofDeps,
 	type WarmChromeVerifiedProof,
 } from "./proof.ts";
 import {
+	consumeProfileCreationApproval,
 	expandHome,
 	isDefaultChromeProfilePath,
 	REAL_GOOGLE_CHROME_BINARY,
@@ -249,13 +253,39 @@ export function createLaunchCommandHandler(
 		// rejected here, BEFORE ensureProfileDir chmods the resolved dir. (A
 		// symlink to a not-yet-existing path has nothing to resolve; the
 		// post-ensureProfileDir re-check below covers create-through-symlink.)
+		let existingProfileDir: string | null = null;
 		try {
 			const resolved = await runtime.statProfile(expandedProfile);
 			assertLaunchProfilePosture(resolved.realPath, runtime, context);
+			existingProfileDir = resolved.realPath;
 		} catch (error) {
 			if (error instanceof WarmChromeRuntimeError) throw error;
-			// statProfile threw because the path does not exist yet — fine; the
-			// dir is created fresh below and re-checked after resolution.
+			if (!isMissingProfileError(error)) {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome could not prove whether the requested profile is absent.",
+					context,
+					{ profile_dir: expandedProfile },
+				);
+			}
+		}
+		if (existingProfileDir === null) {
+			const approvalRequest = {
+				command: "launch",
+				port: invocation.port,
+				profileDir: expandedProfile,
+			} as const;
+			const approval =
+				await runtime.requestCredentialCleanProfileCreationApproval(
+					approvalRequest,
+				);
+			if (!consumeProfileCreationApproval(approval, approvalRequest)) {
+				throw profileCreationHumanGateError(
+					expandedProfile,
+					approval === "cancelled" ? "cancelled" : "unavailable",
+					context,
+				);
+			}
 		}
 		const lock = await runtime.readSingletonLock(expandedProfile);
 		// A foreign-host lock (synced/NFS home shared across a fleet) names a pid
@@ -280,22 +310,75 @@ export function createLaunchCommandHandler(
 			}
 		}
 
-		// 5. Spawn through the seam's handle-returning spawnChrome.
+		if (existingProfileDir !== null) {
+			let activeProfileDir: string;
+			try {
+				activeProfileDir = (
+					await runtime.statProfile(join(existingProfileDir, "Default"))
+				).realPath;
+			} catch {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome could not resolve the active launch profile.",
+					context,
+					{ profile_dir: existingProfileDir },
+				);
+			}
+			if (!activeProfileDir.startsWith(`${existingProfileDir}/`)) {
+				throw profilePostureError(
+					"controls_unproven",
+					"Warm Chrome active launch profile escapes its dedicated root.",
+					context,
+					{ profile_dir: existingProfileDir },
+				);
+			}
+			const posture = await runtime.inspectCredentialPosture({
+				activeProfileDir,
+				// The default spawn path below always carries --disable-sync.
+				syncDisabledByLaunch: true,
+				extensionsDisabledByLaunch: true,
+			});
+			const reason = resolveProfileConfigurationReason(posture);
+			if (reason !== null) {
+				throw profilePostureError(
+					reason,
+					"Existing Warm Chrome profile posture is not clean; launch refuses to change it.",
+					context,
+					{ profile_dir: existingProfileDir },
+				);
+			}
+		}
+
+		// 5. Create only a directly approved, still-absent profile, then spawn.
 		let profileDir: string;
-		try {
-			profileDir = await runtime.ensureProfileDir(expandedProfile);
-		} catch {
-			throw new WarmChromeRuntimeError(
-				"unsafe_profile",
-				"Warm Chrome launch profile must be a directory path that can be created.",
-				{
-					recoverability: "repair_state",
-					hintAction: "repair_state",
-					hintSummary:
-						"Choose a dedicated persistent Warm Chrome profile directory.",
-					data: { reason: "invalid_profile_path", ...context },
-				},
-			);
+		if (existingProfileDir === null) {
+			try {
+				await runtime.initializeCredentialCleanProfile(expandedProfile);
+				profileDir = (await runtime.statProfile(expandedProfile)).realPath;
+			} catch {
+				throw profilePostureError(
+					"controls_unproven",
+					"Fresh Warm Chrome profile creation lost its fresh-only filesystem proof.",
+					context,
+					{ profile_dir: expandedProfile },
+				);
+			}
+		} else {
+			try {
+				profileDir = await runtime.ensureProfileDir(existingProfileDir);
+			} catch {
+				throw new WarmChromeRuntimeError(
+					"unsafe_profile",
+					"Warm Chrome launch profile must be a directory path that can be created.",
+					{
+						recoverability: "repair_state",
+						hintAction: "repair_state",
+						hintSummary:
+							"Choose a dedicated persistent Warm Chrome profile directory.",
+						data: { reason: "invalid_profile_path", ...context },
+					},
+				);
+			}
 		}
 		// Re-assert posture against the RESOLVED profile path: the pre-spawn
 		// guard above checks the caller's textual path, but ensureProfileDir
@@ -310,6 +393,8 @@ export function createLaunchCommandHandler(
 				port: invocation.port,
 				profileDir,
 				startupUrl: WARM_CHROME_LAUNCH_STARTUP_URL,
+				disableSync: true,
+				disableExtensions: true,
 			});
 		} catch {
 			throw spawnedUnverifiedError({
@@ -485,6 +570,54 @@ type SpawnedUnverifiedInput = {
 	data: Record<string, unknown>;
 	secondaryActionIds?: readonly WarmChromeRuntimeActionId[];
 };
+
+function profilePostureError(
+	reason: ProfilePostureReason,
+	message: string,
+	context: LaunchContext,
+	data: Record<string, unknown> = {},
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError("profile_posture_unsafe", message, {
+		exitCode: WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
+		recoverability: "repair_state",
+		hintAction: "repair_state",
+		hintSummary:
+			"Create a fresh isolated Warm Chrome profile after explicit human approval; preserve the prior profile.",
+		primaryActionId: "create_clean_profile",
+		data: { reason, ...context, ...data },
+	});
+}
+
+function profileCreationHumanGateError(
+	profileDir: string,
+	approval: "cancelled" | "unavailable",
+	context: LaunchContext,
+): WarmChromeRuntimeError {
+	return new WarmChromeRuntimeError(
+		"human-action-required",
+		"A human must confirm creation of the fresh Warm Chrome profile.",
+		{
+			exitCode: 21,
+			recoverability: "repair_state",
+			hintAction: "repair_state",
+			hintSummary:
+				"Obtain an exact external human continuation for the fresh profile.",
+			primaryActionId: "create_clean_profile",
+			data: {
+				reason:
+					approval === "cancelled"
+						? "profile_creation_cancelled"
+						: "profile_creation_requires_human",
+				...context,
+				profile_dir: profileDir,
+			},
+		},
+	);
+}
+
+function isMissingProfileError(error: unknown): boolean {
+	return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
 
 // launch.spawned_unverified builder. The catalog pins inspect_diagnostics as
 // this station's primary action; the chassis routes the runtime_diagnostics

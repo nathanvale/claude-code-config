@@ -162,6 +162,12 @@ export type BrowserUseAuthContinuation = {
 	summary: string;
 };
 
+export const BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION = {
+	next_action_id: "repair-vault-grant",
+	summary:
+		"Have a human replace the service account with read-item access to exactly one Browser Automation vault, then rerun auth install-token.",
+} as const satisfies BrowserUseAuthContinuation;
+
 /**
  * Code-owned cause table (R21): each blocked cause maps to exactly one
  * platform blocked run state and exactly one continuation. One owner — the
@@ -183,10 +189,7 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 	},
 	"invalid-vault-scope": {
 		run_state: "awaiting-auth",
-		continuation: {
-			next_action_id: "repair-vault-grant",
-			summary: "Repair the token's vault grant to exactly one visible vault.",
-		},
+		continuation: BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION,
 	},
 	"ambiguous-binding-selection": {
 		run_state: "awaiting-approval",
@@ -353,6 +356,188 @@ export const BROWSER_USE_AUTH_IDENTITY_BASES = [
 /** Identity basis union. */
 export type BrowserUseAuthIdentityBasis =
 	(typeof BROWSER_USE_AUTH_IDENTITY_BASES)[number];
+
+// --- Session Identity Proof ------------------------------------------------------
+
+/**
+ * Version of the closed Session Identity Proof observation produced from one
+ * reviewed read action and exact pre/post browser target proof.
+ */
+export const BROWSER_USE_SESSION_IDENTITY_OBSERVATION_SCHEMA_VERSION =
+	"1" as const;
+
+/**
+ * One bounded authenticated-session observation.
+ *
+ * The reviewed action supplies only the three redacted identity references.
+ * The trusted target-proof owner supplies every lane, handoff, profile,
+ * target, origin, digest, and time coordinate.
+ */
+export type BrowserUseSessionIdentityObservationV1 = {
+	schema_version: typeof BROWSER_USE_SESSION_IDENTITY_OBSERVATION_SCHEMA_VERSION;
+	verifier_action_id: string;
+	verifier_action_digest: string;
+	lane_id: BrowserUseAdapterLaneId;
+	run_id: string;
+	handoff_evidence_id: string;
+	environment: string;
+	profile: string;
+	target_id: string;
+	page_id: string;
+	frame_id: string;
+	top_level_origin: string;
+	frame_origin: string;
+	target_proof_digest: string;
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+	observed_at_epoch_ms: number;
+	fresh_until_epoch_ms: number;
+};
+
+/**
+ * Exact key order covered by the Session Identity Proof digest.
+ *
+ * The manifest prevents a later field from escaping the canonical digest.
+ */
+export const BROWSER_USE_SESSION_IDENTITY_OBSERVATION_KEYS = [
+	"schema_version",
+	"verifier_action_id",
+	"verifier_action_digest",
+	"lane_id",
+	"run_id",
+	"handoff_evidence_id",
+	"environment",
+	"profile",
+	"target_id",
+	"page_id",
+	"frame_id",
+	"top_level_origin",
+	"frame_origin",
+	"target_proof_digest",
+	"subject_reference",
+	"account_reference",
+	"tenant_reference",
+	"observed_at_epoch_ms",
+	"fresh_until_epoch_ms",
+] as const satisfies readonly (keyof BrowserUseSessionIdentityObservationV1)[];
+
+const SESSION_IDENTITY_SAFE_REFERENCE =
+	/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
+const SESSION_IDENTITY_FULL_DIGEST = /^[0-9a-f]{64}$/;
+const SESSION_IDENTITY_MAX_FRESHNESS_MS = 60_000;
+
+function sessionIdentityOriginIsExact(value: string): boolean {
+	try {
+		const origin = new URL(value);
+		return (
+			(origin.protocol === "https:" || origin.protocol === "http:") &&
+			origin.origin === value
+		);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Admit one untrusted Session Identity Proof observation.
+ *
+ * Unknown keys, malformed digests/references/origins, invalid lane vocabulary,
+ * and freshness outside the one-minute producer bound all fail closed.
+ */
+export function isBrowserUseSessionIdentityObservationV1(
+	value: unknown,
+): value is BrowserUseSessionIdentityObservationV1 {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	if (
+		keySetIssue(
+			"session_identity",
+			value,
+			BROWSER_USE_SESSION_IDENTITY_OBSERVATION_KEYS,
+		) !== undefined
+	) {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	if (
+		candidate.schema_version !==
+			BROWSER_USE_SESSION_IDENTITY_OBSERVATION_SCHEMA_VERSION ||
+		!isMemberOf(BROWSER_USE_ADAPTER_LANE_IDS, candidate.lane_id)
+	) {
+		return false;
+	}
+	for (const key of [
+		"verifier_action_id",
+		"run_id",
+		"handoff_evidence_id",
+		"environment",
+		"profile",
+		"target_id",
+		"page_id",
+		"frame_id",
+		"subject_reference",
+		"account_reference",
+		"tenant_reference",
+	] as const) {
+		if (
+			typeof candidate[key] !== "string" ||
+			!SESSION_IDENTITY_SAFE_REFERENCE.test(candidate[key])
+		) {
+			return false;
+		}
+	}
+	for (const key of [
+		"verifier_action_digest",
+		"target_proof_digest",
+	] as const) {
+		if (
+			typeof candidate[key] !== "string" ||
+			!SESSION_IDENTITY_FULL_DIGEST.test(candidate[key])
+		) {
+			return false;
+		}
+	}
+	if (
+		typeof candidate.top_level_origin !== "string" ||
+		typeof candidate.frame_origin !== "string" ||
+		!sessionIdentityOriginIsExact(candidate.top_level_origin) ||
+		!sessionIdentityOriginIsExact(candidate.frame_origin)
+	) {
+		return false;
+	}
+	if (
+		!Number.isSafeInteger(candidate.observed_at_epoch_ms) ||
+		(candidate.observed_at_epoch_ms as number) < 0 ||
+		!Number.isSafeInteger(candidate.fresh_until_epoch_ms) ||
+		(candidate.fresh_until_epoch_ms as number) <=
+			(candidate.observed_at_epoch_ms as number) ||
+		(candidate.fresh_until_epoch_ms as number) -
+			(candidate.observed_at_epoch_ms as number) >
+			SESSION_IDENTITY_MAX_FRESHNESS_MS
+	) {
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Bind one exact Session Identity Proof observation to a deterministic digest.
+ *
+ * @param observation - Closed redacted observation to bind
+ * @returns Full lowercase sha256 over every observation coordinate
+ */
+export function sessionIdentityObservationDigestOf(
+	observation: BrowserUseSessionIdentityObservationV1,
+): string {
+	const canonical = JSON.stringify(
+		BROWSER_USE_SESSION_IDENTITY_OBSERVATION_KEYS.map(
+			(key) => observation[key],
+		),
+	);
+	return createHash("sha256").update(canonical).digest("hex");
+}
 
 // --- The secret-free transaction fragment (R6) ----------------------------------
 

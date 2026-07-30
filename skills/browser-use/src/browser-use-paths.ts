@@ -731,6 +731,12 @@ export type BrowserUseAdmittedPaths = {
 		leasesDir: string;
 		/** <state>/attestations — durable bounded auth attestation records. */
 		attestationsDir: string;
+		/** <state>/auth-bindings — host-lifetime secret-free binding cache. */
+		authBindingsDir: string;
+		/** <state>/auth-bindings/<candidate-id>.json */
+		authBindingFile(candidateId: string): string;
+		/** <state>/admin-authority-receipt.json */
+		authAuthorityReceiptFile: string;
 		/** <state>/attestations/<full-64-hex-digest>.json */
 		attestationFile(digest: string): string;
 		/** <state>/activation-epoch.json */
@@ -739,7 +745,13 @@ export type BrowserUseAdmittedPaths = {
 	cache: { indexesDir: string; compiledDir: string; probesDir: string };
 	/** Under the runtime root OR the warned fallback (R11). */
 	runtime: { locksDir: string; socketsDir: string };
-	config: { root: string };
+	config: {
+		root: string;
+		/** Fixed native-custody directory; TypeScript never reads its contents. */
+		tokenCustodyDir: string;
+		/** Fixed token pathname passed only to native executables. */
+		environmentTokenFile: string;
+	};
 	data: { root: string };
 };
 
@@ -779,6 +791,7 @@ function deriveAdmittedPaths(
 	const runsDir = join(roots.state, "runs");
 	const artifactsDir = join(roots.state, "artifacts");
 	const attestationsDir = join(roots.state, "attestations");
+	const authBindingsDir = join(roots.state, "auth-bindings");
 	return {
 		resolution,
 		state: {
@@ -797,6 +810,15 @@ function deriveAdmittedPaths(
 			generationsDir: join(roots.state, "generations"),
 			leasesDir: join(roots.state, "leases"),
 			attestationsDir,
+			authBindingsDir,
+			authBindingFile(candidateId: string): string {
+				assertSafePathSegment(candidateId);
+				return join(authBindingsDir, `${candidateId}.json`);
+			},
+			authAuthorityReceiptFile: join(
+				roots.state,
+				"admin-authority-receipt.json",
+			),
 			attestationFile(digest: string): string {
 				assertAttestationDigestShape(digest);
 				return join(attestationsDir, `${digest}.json`);
@@ -812,7 +834,15 @@ function deriveAdmittedPaths(
 			locksDir: join(roots.runtime, "locks"),
 			socketsDir: join(roots.runtime, "sockets"),
 		},
-		config: { root: roots.config },
+		config: {
+			root: roots.config,
+			tokenCustodyDir: join(roots.config, "auth.nosync"),
+			environmentTokenFile: join(
+				roots.config,
+				"auth.nosync",
+				"op-service-account-token",
+			),
+		},
 		data: { root: roots.data },
 	};
 }

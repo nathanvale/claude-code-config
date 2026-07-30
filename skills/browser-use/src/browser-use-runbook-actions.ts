@@ -43,7 +43,10 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import type { AgentBrowserPostcondition, AgentBrowserTaskStep } from "./browser-use-agent-browser";
+import type {
+	AgentBrowserPostcondition,
+	AgentBrowserTaskStep,
+} from "./browser-use-agent-browser";
 import { redactUnsafeText } from "./browser-use-core";
 import { SAFE_BATCH_ITEM_KEY } from "./browser-use-identifiers";
 import {
@@ -78,6 +81,37 @@ export function actionAssetDigest(bytes: string): string {
 	return createHash("sha256").update(bytes, "utf-8").digest("hex");
 }
 
+/** Bind operator approval to one exact reviewed action postcondition. */
+export function reviewedActionPostconditionDigest(
+	postcondition: AgentBrowserPostcondition,
+): string {
+	return createHash("sha256")
+		.update(canonicalJson(postcondition), "utf-8")
+		.digest("hex");
+}
+
+const ACTION_ASSET_SECRET_PATTERNS: readonly RegExp[] = [
+	/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+	/\b(?:op|wss?|otpauth):\/\/\S+/i,
+	/\bOP_SERVICE_ACCOUNT_TOKEN\s*=/i,
+	/\b(?:password|passwd|token|secret|cookie|authorization|client_secret|aws_secret_access_key|aws_access_key_id|api[_-]?key|private_key)\s*[:=]\s*['"`]?[A-Za-z0-9._~+/=-]{8,}/i,
+	/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/i,
+	/\beyJ[A-Za-z0-9_-]{9,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+	/\b[A-Z2-7]{32,}\b/i,
+	/['"`](?:~\/|\/Users\/|\/home\/|\/private\/|\/var\/folders\/)/,
+];
+
+/**
+ * Screen reviewed JavaScript bytes for secret material without treating regex
+ * literals or same-origin URL paths as filesystem secrets.
+ */
+export function actionAssetIsSecretFree(bytes: string): boolean {
+	return (
+		Buffer.byteLength(bytes, "utf-8") <= ACTION_ASSET_MAX_BYTES &&
+		!ACTION_ASSET_SECRET_PATTERNS.some((pattern) => pattern.test(bytes))
+	);
+}
+
 /** Whether a value can identify one exact content-addressed action asset. */
 export function actionDigestIsValid(value: string): boolean {
 	return SAFE_DIGEST.test(value);
@@ -107,7 +141,8 @@ export type BrowserUseActionEffectClass =
 // negative would let a mutation bypass it (unsafe), so the set errs toward
 // mutation.
 const MUTATION_BEHAVIOR_FINGERPRINTS: readonly RegExp[] = [
-	/\b(?:location\s*\.\s*(?:href|assign|replace|reload))\b/i,
+	/\blocation\s*\.\s*href\s*=/i,
+	/\blocation\s*\.\s*(?:assign|replace|reload)\s*\(/i,
 	/\bwindow\s*\.\s*open\b/i,
 	/\bhistory\s*\.\s*(?:pushState|replaceState|back|forward|go)\b/i,
 	/\.\s*click\s*\(/i,
@@ -132,6 +167,114 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*\(\s*\{\s*[A-Za-z_$][\w$]*\s*:\s*document\s*\.\s*querySelectorAll\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*length\s*\}\s*\)\s*;?\s*$/,
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*JSON\s*\.\s*parse\s*\(\s*document\s*\.\s*querySelector\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*textContent\s*\)\s*;?\s*$/,
 ];
+
+/**
+ * Exact candidate Xero request-driving action for BankStatementsPlus.
+ *
+ * This action mutates the API Explorer form and dispatches a network request.
+ * Its legacy selectors remain unvalidated, so the migration records it with a
+ * non-authorizing receipt until a recovery-free warm-browser review approves
+ * these exact bytes.
+ */
+export const XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES =
+	`async ({ inputs }) => {
+		const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+		const buttons = () => Array.from(document.querySelectorAll('button'));
+		const clickButton = (label) => {
+			const button = buttons().find((candidate) => normalize(candidate.textContent) === label);
+			if (!button || button.disabled) throw new Error('xero api explorer control unavailable');
+			button.click();
+		};
+		const findInput = (label) => {
+			const labels = Array.from(document.querySelectorAll('label'));
+			const owner = labels.find((candidate) => normalize(candidate.textContent) === label);
+			const byFor = owner?.htmlFor ? document.getElementById(owner.htmlFor) : null;
+			const field = byFor || owner?.querySelector('input') || document.querySelector(\`input[name="\${label}"]\`);
+			if (!(field instanceof HTMLInputElement)) throw new Error('xero api explorer field unavailable');
+			return field;
+		};
+		const fill = (field, value) => {
+			field.focus();
+			field.value = value;
+			field.dispatchEvent(new Event('input', { bubbles: true }));
+			field.dispatchEvent(new Event('change', { bubbles: true }));
+		};
+		clickButton('Select API');
+		clickButton('Xero Finance API');
+		clickButton('Select endpoint');
+		clickButton('BankStatementsPlus');
+		clickButton('Select operation');
+		const readOperation = buttons().find((candidate) =>
+			/read bank statements plus|get bank statements plus/i.test(normalize(candidate.textContent)),
+		);
+		if (!readOperation || readOperation.disabled) throw new Error('xero read operation unavailable');
+		readOperation.click();
+		fill(findInput('BankAccountID'), String(inputs.bank_account_id));
+		fill(findInput('FromDate'), String(inputs.from_date));
+		fill(findInput('ToDate'), String(inputs.to_date));
+		clickButton('Make request');
+		return { request_dispatched: true };
+	}`;
+
+/**
+ * Exact read-only Xero response capture action for BankStatementsPlus.
+ *
+ * The action validates that the visible response is JSON and returns bounded
+ * text plus byte count. The generation marks the result high-sensitivity so
+ * the runtime spills it to governed storage instead of shared-run state.
+ */
+export const XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES =
+	`async ({ inputs }) => {
+		void inputs;
+		const candidates = Array.from(document.querySelectorAll('pre, code, textarea[readonly]'))
+			.map((node) => String(node.value || node.innerText || node.textContent || '').trim())
+			.filter((text) => text.length > 0);
+		const responseText = candidates.find((text) => /^\\s*[\\[{]/.test(text));
+		if (!responseText) throw new Error('xero response body unavailable');
+		JSON.parse(responseText);
+		return {
+			response_text: responseText,
+			response_bytes: new TextEncoder().encode(responseText).length,
+		};
+	}`;
+
+/**
+ * Exact read-only Oncore timesheet diagnosis action.
+ *
+ * It validates the open timesheet without echoing its identifier, then returns
+ * bounded structural state only. Any byte change falls back to conservative
+ * mutation classification until reviewed again.
+ */
+export const ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES =
+	`async ({ inputs }) => {
+		const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+		const expectedTimesheetId = String(inputs.timesheet_id || '').trim();
+		let openTimesheetId = '';
+		try {
+			openTimesheetId = new URL(location.href).searchParams.get('id') || '';
+		} catch {
+			openTimesheetId = '';
+		}
+		if (!expectedTimesheetId || openTimesheetId !== expectedTimesheetId) {
+			throw new Error('oncore timesheet mismatch');
+		}
+		if (document.querySelector("input[type='password']")) {
+			throw new Error('oncore authentication required');
+		}
+		const text = normalize(document.body?.innerText || document.body?.textContent || '');
+		const rows = Array.from(document.querySelectorAll("tr.rgRow, tr.rgAltRow"));
+		const editable =
+			Boolean(document.querySelector("[id$='AddNewRecordButton']")) ||
+			Boolean(document.getElementById('MainContent_btnSubmit'));
+		const submitted = /successfully submitted|submitted for approval/i.test(text);
+		const approved = /approved/i.test(text);
+		return {
+			timesheet_match: true,
+			row_count: rows.length,
+			state: approved ? 'approved' : submitted ? 'submitted' : editable ? 'editable' : 'read-only',
+			submit_available: Boolean(document.getElementById('MainContent_btnSubmit')),
+		};
+	}`;
 
 /**
  * Exact reviewed Oncore draft-verification action.
@@ -184,7 +327,9 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
+	return bytes === ONCORE_TIMESHEET_DIAGNOSIS_ACTION_BYTES ||
+		bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
+		bytes === XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES ||
 		OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
 		? "read"
 		: "mutation";
@@ -559,8 +704,9 @@ export type BrowserUsePromotionDisposition =
 /**
  * An operator-approved promotion RECEIPT (R17). It binds an approval to the
  * EXACT asset digest (an approval for other bytes never carries over) plus the
- * exact allowed origin and audited effect class the operator approved. A
- * runbook can never author this — it is generation/registry-owned (KTD5).
+ * exact allowed origin, audited effect class, and optional closed purpose the
+ * operator approved. A runbook can never author this — it is
+ * generation/registry-owned (KTD5).
  */
 export type BrowserUsePromotionReceipt = {
 	/** The exact asset digest this receipt approved; must match the record. */
@@ -570,6 +716,10 @@ export type BrowserUsePromotionReceipt = {
 	approved_origin: string;
 	/** The audited effect class the operator approved. */
 	approved_effect: BrowserUseActionEffectClass;
+	/** Closed mutation purpose the operator approved, when purpose-scoped. */
+	approved_purpose?: "runbook-auth-submit";
+	/** Exact postcondition digest approved for a purpose-scoped mutation. */
+	approved_postcondition_digest?: string;
 	/** Opaque operator identity; audit only, never an authority branch. */
 	approver_ref: string;
 };
@@ -593,6 +743,8 @@ export type BrowserUseReviewedActionRecord = {
 	allowed_origin: string;
 	/** Audited effect class (R19); MUST match the asset audit at resolution. */
 	effect_class: BrowserUseActionEffectClass;
+	/** Closed mutation purpose for reviewed login-form submission. */
+	purpose?: "runbook-auth-submit";
 	/** Enforced containment policy (R23); an unenforceable claim is refused. */
 	containment: BrowserUseActionContainmentPolicy;
 	/** Typed input schema (R17); the runbook's substituted inputs must satisfy it. */
@@ -608,6 +760,152 @@ export type BrowserUseReviewedActionRecord = {
 	/** The operator-approved promotion receipt (R17); a runbook can't author it. */
 	promotion_receipt: BrowserUsePromotionReceipt;
 };
+
+export type BrowserUseReviewedActionRecordParse =
+	| { ok: true; record: BrowserUseReviewedActionRecord }
+	| { ok: false; message: string };
+
+function reviewedActionPostconditionIsValid(
+	value: unknown,
+): value is BrowserUseRunbookPostcondition {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	switch (record.kind) {
+		case "url-equals":
+			return (
+				objectHasOnlyKeys(record, ["kind", "url"]) &&
+				typeof record.url === "string" &&
+				record.url.length > 0
+			);
+		case "value-equals":
+			return (
+				objectHasOnlyKeys(record, ["kind", "selector", "value"]) &&
+				typeof record.selector === "string" &&
+				typeof record.value === "string" &&
+				postconditionValid(record as BrowserUseRunbookPostcondition)
+			);
+		case "element-visible":
+			return (
+				objectHasOnlyKeys(record, ["kind", "selector"]) &&
+				typeof record.selector === "string" &&
+				postconditionValid(record as BrowserUseRunbookPostcondition)
+			);
+		default:
+			return false;
+	}
+}
+
+/**
+ * Parse an untrusted reviewed-action registry value into its total runtime shape.
+ *
+ * @param value - JSON-decoded candidate record
+ * @returns A validated record or a stable schema refusal
+ */
+export function parseReviewedActionRecord(
+	value: unknown,
+): BrowserUseReviewedActionRecordParse {
+	const invalid: BrowserUseReviewedActionRecordParse = {
+		ok: false,
+		message: "reviewed action record does not match its schema.",
+	};
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return invalid;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		!objectHasOnlyKeys(record, [
+			"action_id",
+			"asset_id",
+			"expected_digest",
+			"allowed_origin",
+			"effect_class",
+			"purpose",
+			"containment",
+			"input_schema",
+			"result_schema",
+			"result_sensitivity",
+			"required_postcondition",
+			"source_provenance",
+			"promotion_receipt",
+		]) ||
+		typeof record.action_id !== "string" ||
+		!SAFE_ACTION_ID.test(record.action_id) ||
+		typeof record.asset_id !== "string" ||
+		!actionDigestIsValid(record.asset_id) ||
+		typeof record.expected_digest !== "string" ||
+		!actionDigestIsValid(record.expected_digest) ||
+		typeof record.allowed_origin !== "string" ||
+		!exactOriginValid(record.allowed_origin) ||
+		(record.effect_class !== "read" && record.effect_class !== "mutation") ||
+		(record.purpose !== undefined &&
+			(record.purpose !== "runbook-auth-submit" ||
+				record.effect_class !== "mutation")) ||
+		!(
+			BROWSER_USE_ACTION_CONTAINMENT_POLICIES as readonly unknown[]
+		).includes(record.containment) ||
+		!isValueSchema(record.input_schema) ||
+		!isValueSchema(record.result_schema) ||
+		(record.result_sensitivity !== "low" &&
+			record.result_sensitivity !== "high") ||
+		typeof record.source_provenance !== "string" ||
+		record.source_provenance.length === 0 ||
+		(record.required_postcondition !== undefined &&
+			!reviewedActionPostconditionIsValid(record.required_postcondition)) ||
+		(record.effect_class === "mutation" &&
+			record.required_postcondition === undefined)
+	) {
+		return invalid;
+	}
+	if (
+		typeof record.promotion_receipt !== "object" ||
+		record.promotion_receipt === null ||
+		Array.isArray(record.promotion_receipt)
+	) {
+		return invalid;
+	}
+	const receipt = record.promotion_receipt as Record<string, unknown>;
+	if (
+		!objectHasOnlyKeys(receipt, [
+			"approved_digest",
+			"disposition",
+			"approved_origin",
+			"approved_effect",
+			"approved_purpose",
+			"approved_postcondition_digest",
+			"approver_ref",
+		]) ||
+		typeof receipt.approved_digest !== "string" ||
+		!actionDigestIsValid(receipt.approved_digest) ||
+		!(
+			BROWSER_USE_PROMOTION_DISPOSITIONS as readonly unknown[]
+		).includes(receipt.disposition) ||
+		typeof receipt.approved_origin !== "string" ||
+		!exactOriginValid(receipt.approved_origin) ||
+		(receipt.approved_effect !== "read" &&
+			receipt.approved_effect !== "mutation") ||
+		(receipt.approved_purpose !== undefined &&
+			(receipt.approved_purpose !== "runbook-auth-submit" ||
+				receipt.approved_effect !== "mutation")) ||
+		receipt.approved_purpose !== record.purpose ||
+		(receipt.approved_postcondition_digest !== undefined &&
+			(typeof receipt.approved_postcondition_digest !== "string" ||
+				!actionDigestIsValid(receipt.approved_postcondition_digest))) ||
+		(record.purpose === "runbook-auth-submit" &&
+			receipt.approved_postcondition_digest !==
+				reviewedActionPostconditionDigest(
+					record.required_postcondition as AgentBrowserPostcondition,
+				)) ||
+		(record.purpose === undefined &&
+			receipt.approved_postcondition_digest !== undefined) ||
+		typeof receipt.approver_ref !== "string" ||
+		receipt.approver_ref.length === 0
+	) {
+		return invalid;
+	}
+	return { ok: true, record: value as BrowserUseReviewedActionRecord };
+}
 
 // --- Resolution seam (R16, R38) ----------------------------------------------
 
@@ -657,7 +955,9 @@ export type BrowserUseReviewedActionRefusalCode =
 	| "action_receipt_not_approved"
 	| "action_receipt_digest_mismatch"
 	| "action_receipt_origin_mismatch"
-	| "action_receipt_effect_mismatch";
+	| "action_receipt_effect_mismatch"
+	| "action_receipt_purpose_mismatch"
+	| "action_receipt_postcondition_mismatch";
 
 /** One typed reviewed-action refusal. Never carries asset bytes or a value. */
 export type BrowserUseReviewedActionRefusal = {
@@ -701,6 +1001,8 @@ function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
 export type BrowserUseResolvedReviewedAction = {
 	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>;
 	effect_class: BrowserUseActionEffectClass;
+	/** Closed mutation purpose propagated from the reviewed registry record. */
+	purpose?: "runbook-auth-submit";
 	result_schema: BrowserUseActionValueSchema;
 	result_sensitivity: "low" | "high";
 };
@@ -725,7 +1027,7 @@ export type BrowserUseReviewedActionResolution =
  *      satisfy the input schema (R17);
  *   8. a mutation declares a required postcondition (R17);
  *   9. an operator-approved promotion receipt whose approved digest, origin,
- *      and effect all match the record EXACTLY (R17/R18/R42).
+ *      effect, and purpose all match the record EXACTLY (R17/R18/R42).
  *
  * @param input - Action id, requested origin, substituted inputs, and the seam
  * @returns The verified `evaluate` step plus result metadata, or a typed refusal
@@ -908,6 +1210,24 @@ export async function resolveReviewedAction(input: {
 			"the promotion receipt approved a different effect class than the record's.",
 		);
 	}
+	if (receipt.approved_purpose !== record.purpose) {
+		return refuse(
+			"action_receipt_purpose_mismatch",
+			"the promotion receipt approved a different purpose than the record's.",
+		);
+	}
+	if (
+		record.purpose === "runbook-auth-submit" &&
+		receipt.approved_postcondition_digest !==
+			reviewedActionPostconditionDigest(
+				record.required_postcondition as AgentBrowserPostcondition,
+			)
+	) {
+		return refuse(
+			"action_receipt_postcondition_mismatch",
+			"the promotion receipt approved a different auth-submit postcondition than the record's.",
+		);
+	}
 
 	// Every invariant proven: build the executor's approved evaluate step. The
 	// executor RE-PROVES origin, digest, approval, and postcondition itself, so
@@ -930,6 +1250,7 @@ export async function resolveReviewedAction(input: {
 		resolved: {
 			step,
 			effect_class: record.effect_class,
+			...(record.purpose === undefined ? {} : { purpose: record.purpose }),
 			result_schema: record.result_schema,
 			result_sensitivity: record.result_sensitivity,
 		},

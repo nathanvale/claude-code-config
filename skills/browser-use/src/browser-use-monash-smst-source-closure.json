@@ -1,0 +1,146 @@
+{
+	"contract": "browser-use.monash-smst-source-fixture",
+	"schema_version": "1",
+	"artifacts": [
+		{
+			"source_relative_path": ".claude/agent-memory/timesheet-browser-agent/MEMORY.md",
+			"source_content_hash": "b41a801557f526305abd8d4c137ab24394c6fe11fa842c5830db9383b6cc7759",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "FastTrack operational memory remains non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/agent-memory/timesheet-browser-agent/feedback_angularjs-navigation.md",
+			"source_content_hash": "434cb4d24ac6c06179cfd5ee004a5045b3537663f7b8df7a335e8004b73c8e8b",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "AngularJS navigation evidence remains non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/agent-memory/timesheet-browser-agent/feedback_break-modal-structure.md",
+			"source_content_hash": "00dbec2ffe5674e85746a9cd9bad96b12ab049137ad954839d460694aef7b077",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Break-modal structure evidence remains non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/agent-memory/timesheet-browser-agent/feedback_break-modal-trigger.md",
+			"source_content_hash": "899f8b79e7617b20f3e572234df82c187cd906b06bbb8b52f142e642a495abc2",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Break-modal trigger evidence remains non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/agent-memory/timesheet-browser-agent/feedback_save-via-scope-apply.md",
+			"source_content_hash": "0578fe12c9cda24ddaddb7fbdfd42896b16fbf10e45d69506c498b79162d1394",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Save-workaround evidence remains non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/agents/timesheet-browser-agent.md",
+			"source_content_hash": "686eb3b20e8a85f0554a75468a4ec2708405f9946ee14cc6a8f1846910614238",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "The retired agent procedure becomes Browser Use supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/config.fasttrack360.yaml",
+			"source_content_hash": "c9c663aea05ff262af093537f50c1e97d3db64c655cbd0a01701cbf8bef0afee",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Legacy adapter configuration remains provenance and supporting knowledge."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/add-breaks.yaml",
+			"source_content_hash": "337eabfff21243c89a2fa4ec2d8bf813870d9de40059ddbd4c0387902bd6f0ca",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Adding breaks is part of fill-week, not a duplicate user-flow runbook."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/fill-week.yaml",
+			"source_content_hash": "9cc919baa28a74b004fc77c0f9558ce9ab9c3ddda959ea310425819460fb5db2",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "The playbook supports the existing FastTrack fill-week target."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/scripts/add-breaks.js",
+			"source_content_hash": "4fcb64ed9ed43adcf4ad4eccd43c48b526c5a2c1992969c44926b2aefd4407be",
+			"tracking_state": "tracked-clean",
+			"disposition": "action-candidate",
+			"reason": "Executable bytes require separate reviewed-action promotion."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/scripts/fill-week.js",
+			"source_content_hash": "bb5543e91d8cb71c1d22b05ca07047d386c714662783c7c56496f277e43463cc",
+			"tracking_state": "tracked-clean",
+			"disposition": "action-candidate",
+			"reason": "Executable bytes require separate reviewed-action promotion."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/scripts/verify-add-breaks.js",
+			"source_content_hash": "5ab495947128b439136a1f7d7f06d7744c15594daba74f034c0e8d97040764dc",
+			"tracking_state": "tracked-clean",
+			"disposition": "action-candidate",
+			"reason": "Executable bytes require separate reviewed-action promotion."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/playbooks/fasttrack360/scripts/verify-fill-week.js",
+			"source_content_hash": "9e8e3648fe3147a76cb5f19ac980e1256eb9707a92e106cac78b2c02bd9408c6",
+			"tracking_state": "tracked-clean",
+			"disposition": "action-candidate",
+			"reason": "Executable bytes require separate reviewed-action promotion."
+		},
+		{
+			"source_relative_path": ".claude/browser-configs/selectors.fasttrack360.yaml",
+			"source_content_hash": "1fc3f74a6eabfe8240168523b75d0f24b64dcfa814ad46b2b2e1533004f58e0f",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "Selector evidence remains supporting knowledge until recaptured and reviewed."
+		},
+		{
+			"source_relative_path": ".claude/skills/monash-portal-audit/SKILL.md",
+			"source_content_hash": "26763fa99402d8a63cc2cfbb5a9bd0afb3233bacbc388e7a086dc14236a16c79",
+			"tracking_state": "tracked-clean",
+			"disposition": "candidate-source",
+			"reason": "The skill declares seven distinct portal-audit user intents."
+		},
+		{
+			"source_relative_path": ".claude/skills/setup-publishing/SKILL.md",
+			"source_content_hash": "7739f1598a9a03e9aa5f032a969da75ab6964ed0c352ee0d6dbe572aaf386a16",
+			"tracking_state": "tracked-clean",
+			"disposition": "candidate-source",
+			"reason": "The skill declares the npm publishing setup outcome and human gates."
+		},
+		{
+			"source_relative_path": ".claude/skills/timesheet/SKILL.md",
+			"source_content_hash": "8037f003f33f7e77cc60f04d1551fd5603f11671eefd541c3caf8381d627c435",
+			"tracking_state": "tracked-clean",
+			"disposition": "candidate-source",
+			"reason": "The skill routing table declares six FastTrack user intents."
+		},
+		{
+			"source_relative_path": ".claude/skills/zoom-transcript-scraper/SKILL.md",
+			"source_content_hash": "bb3ea6c00e43e817775baa97b9aac87ab670282033721ac26fdf169ab8f8e491",
+			"tracking_state": "tracked-clean",
+			"disposition": "candidate-source",
+			"reason": "The skill declares the Zoom transcript extraction outcome."
+		},
+		{
+			"source_relative_path": "docs/gotchas/browser-agent/manpowergroup-fasttrack360.md",
+			"source_content_hash": "fadc21ccce53360ce9c0ec5cb1854edd36532b2006e8b63e37a8a32ca1b6723f",
+			"tracking_state": "tracked-clean",
+			"disposition": "supporting-knowledge",
+			"reason": "FastTrack portal gotchas remain non-executable supporting knowledge."
+		},
+		{
+			"source_relative_path": "docs/runbooks/context7-add-confluence-library.md",
+			"source_content_hash": "c599442c6b162efd753a9c0e81e657424768cf5e41ec85041973e251f041e23c",
+			"tracking_state": "untracked",
+			"disposition": "candidate-source",
+			"reason": "The untracked current-worktree document declares the Context7 library outcome."
+		}
+	]
+}

@@ -269,6 +269,25 @@ describe("warm-chrome usage errors (U4 R2/R3)", () => {
 		});
 	});
 
+	test("self-attested profile-creation approval is rejected on every command", async () => {
+		for (const command of ["check", "status", "launch", "repair"]) {
+			for (const flag of [
+				"--approve-profile-creation",
+				"--approve-profile-creation=value",
+			]) {
+				const result = await runCli([command, flag, "--json"]);
+
+				expect(result.exitCode, `${command} ${flag}`).toBe(2);
+				assertJsonErrorEnvelope(JSON.parse(result.stdout), {
+					code: "invalid_usage",
+					recoverability: "change_input",
+					errorResultContract: WARM_CHROME_ERROR_RESULT_CONTRACT,
+					processExitCode: 2,
+				});
+			}
+		}
+	});
+
 	test("non-numeric port is rejected with exit 2", async () => {
 		const result = await runCli(["check", "--port", "banana"]);
 

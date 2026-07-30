@@ -21,6 +21,8 @@ import {
 	BROWSER_USE_DISCOVERY_TRANSPORT_ADAPTERS,
 	BROWSER_CONNECT_ENVIRONMENT_NAME,
 	BROWSER_CONNECT_ENVIRONMENT_PROFILE,
+	BROWSER_CONNECT_ENVIRONMENT_CONTRACT_ID,
+	BROWSER_CONNECT_ENVIRONMENT_SCHEMA_VERSION,
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
 	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
@@ -63,6 +65,7 @@ import {
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import { SAFE_RUN_ID } from "./browser-use-identifiers";
+import { isExactLiveCleanProfilePosture } from "./browser-connect-profile-posture";
 
 // ---------------------------------------------------------------------------
 // `browser-use targets list` discovers Browser Target Candidates in two modes:
@@ -566,8 +569,26 @@ export function parseHandoffFacts(raw: string): HandoffParse {
 				contractField<HandoffProof>(proof, "environment_schema_version"),
 			)
 		: undefined;
-	if (!proofContractId || !proofSchemaVersion) {
-		return invalid("proof evidence missing");
+	if (
+		proofContractId !== BROWSER_CONNECT_ENVIRONMENT_CONTRACT_ID ||
+		proofSchemaVersion !== BROWSER_CONNECT_ENVIRONMENT_SCHEMA_VERSION
+	) {
+		return invalid("proof evidence provenance is missing or unrecognized");
+	}
+	const profilePosture = proof
+		? contractField<HandoffProof>(proof, "profile_posture")
+		: undefined;
+	if (!isExactLiveCleanProfilePosture(profilePosture)) {
+		return invalid("profile posture is missing or is not exact live-clean proof");
+	}
+	if (
+		endpointUrl.port === "" ||
+		endpointUrl.port !== endpointWsUrl.port ||
+		profilePosture.effective.observer.port !== endpointUrl.port
+	) {
+		return invalid(
+			"profile posture observer port does not match both verified endpoint forms",
+		);
 	}
 	const runId = stringField(value.run_id);
 	if (!runId) return invalid("run id missing");

@@ -1086,7 +1086,95 @@ async function readGenerationPairs(
 		}
 		return true;
 	}
-	return (await walk(root, "")) ? pairs : undefined;
+	if (!(await walk(root, ""))) return undefined;
+	return pairs.sort(([leftPath], [rightPath]) =>
+		leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0,
+	);
+}
+
+/**
+ * Verified retained-generation classification.
+ *
+ * A present result proves the durable generation record still matches the
+ * complete immutable tree. Runtime resume and activation use this rather than
+ * trusting either record or directory independently.
+ */
+export type BrowserUseGenerationStatus =
+	| { status: "missing" }
+	| {
+			status: "present";
+			record: BrowserUseGenerationPayload;
+			files: readonly (readonly [string, string])[];
+	  }
+	| { status: "corrupt"; message: string };
+
+/**
+ * Read one retained generation and verify its record/tree digest.
+ *
+ * @param deps - Admitted store dependencies
+ * @param generationId - Immutable generation identity
+ * @returns Missing, verified present, or typed corrupt classification
+ *
+ * @example
+ * ```typescript
+ * const status = await readGenerationStatus(deps, "generation-a")
+ * ```
+ */
+export async function readGenerationStatus(
+	deps: RetentionDeps,
+	generationId: string,
+): Promise<BrowserUseGenerationStatus> {
+	if (
+		generationId === "" ||
+		generationId === "." ||
+		generationId === ".." ||
+		generationId.includes("/") ||
+		generationId.includes("\\") ||
+		generationId.includes("\0")
+	) {
+		return {
+			status: "corrupt",
+			message: "generation identity is not a safe path segment.",
+		};
+	}
+	const recordRead = await readDurableFile(
+		deps.fs,
+		generationRecordPath(deps.paths, generationId),
+	);
+	if (recordRead.status === "missing") return { status: "missing" };
+	if (recordRead.status === "unreadable") {
+		return {
+			status: "corrupt",
+			message: redactUnsafeText(
+				`generation ${generationId} record is unreadable.`,
+			),
+		};
+	}
+	const parsed = parseDurableRecord(recordRead.raw, "generation");
+	if (!parsed.ok || parsed.payload.generation_id !== generationId) {
+		return {
+			status: "corrupt",
+			message: redactUnsafeText(
+				`generation ${generationId} record does not match its identity.`,
+			),
+		};
+	}
+	const files = await readGenerationPairs(
+		deps.fs,
+		join(deps.paths.state.generationsDir, generationId),
+	);
+	if (
+		files === undefined ||
+		sha256Hex(JSON.stringify(files)) !== parsed.payload.content_hash
+	) {
+		return {
+			status: "corrupt",
+			message: redactUnsafeText(
+				`generation ${generationId} record does not match its immutable tree.`,
+			),
+		};
+	}
+	return { status: "present", record: parsed.payload, files };
 }
 
 /**

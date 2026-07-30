@@ -4,18 +4,17 @@ import {
 	type BrowserUseRunbook,
 	runbookExactOriginIsValid,
 } from "./browser-use-runbook-model";
+import { BROWSER_USE_FASTTRACK_TIMESHEET_RUN_SCHEMA } from "./browser-use-timesheet-run-contract";
 
 /** Exact action digests supplied by one staged generation. */
 export type BrowserUseFasttrackSaveDraftActionDigests = {
-	/** Route-reconciliation action (a navigating diagnostic, audited as mutation). */
-	diagnoseRoute: string;
-	/** Per-day fill mutation action. */
-	fillDay: string;
-	/** Per-day break-insertion mutation action. */
-	addBreaks: string;
+	/** Whole-week field mutation action. */
+	fillWeek: string;
+	/** Pre-save field verification action (navigates, audited as mutation). */
+	verifyFilledWeek: string;
 	/** Controlled draft-save mutation action (never Submit). */
 	saveDraft: string;
-	/** Post-reload persistence-proof action (navigates, audited as mutation). */
+	/** Post-save persistence-proof action (clicks tabs, audited as mutation). */
 	verifySavedDraft: string;
 };
 
@@ -23,9 +22,7 @@ export type BrowserUseFasttrackSaveDraftActionDigests = {
 export type BrowserUseFasttrackSaveDraftMigrationInput = {
 	/** Exact portal origin admitted by every reviewed action. */
 	allowedOrigin: string;
-	/** Exact timesheet URL re-opened after the controlled draft save. */
-	timesheetUrl: string;
-	/** Winning per-day-split source candidate retained as active provenance. */
+	/** Winning whole-week source candidate retained as active provenance. */
 	activeSourceRelativePath: string;
 	/** Older candidates retained as inspectable superseded provenance. */
 	supersededSourceRelativePaths: readonly string[];
@@ -74,22 +71,9 @@ function assertMigrationInput(
 	input: BrowserUseFasttrackSaveDraftMigrationInput,
 ): void {
 	const origin = exactOrigin(input.allowedOrigin);
-	let timesheet: URL;
-	try {
-		timesheet = new URL(input.timesheetUrl);
-	} catch {
+	if (origin === undefined) {
 		throw new Error(
-			"FastTrack staged migration requires an exact HTTP(S) timesheet URL.",
-		);
-	}
-	if (timesheet.protocol !== "http:" && timesheet.protocol !== "https:") {
-		throw new Error(
-			"FastTrack staged migration requires an exact HTTP(S) timesheet URL.",
-		);
-	}
-	if (origin === undefined || timesheet.origin !== origin) {
-		throw new Error(
-			"FastTrack staged migration requires the timesheet URL and reviewed actions to share one exact allowed origin.",
+			"FastTrack staged migration requires one exact allowed origin.",
 		);
 	}
 	const sources = [
@@ -116,14 +100,14 @@ function assertMigrationInput(
 }
 
 /**
- * Build the single staged FastTrack fill/breaks/save-draft flow and reconcile
+ * Build the single staged FastTrack fill/save-draft flow and reconcile
  * its sources.
  *
  * The builder owns only declarative orchestration and provenance. Exact action
  * bytes, effect audit, promotion receipts, and postconditions remain owned by
  * the generation-scoped reviewed-action registry. The legacy manifest labelled
  * `diagnose_route`, `verify_filled_week`, and `verify_saved_draft` as
- * `read-only`, but every one of those helpers navigates (`$location.path`,
+ * `read-only`, but the verification helpers navigate (`$location.path`,
  * `location.href`), clicks tabs, and mutates through `scope.$apply(...)`. The
  * legacy `risk_class` is NEVER authority here: the reviewed-action registry
  * re-derives each effect class from audited behavior (R19/AE6), so a mislabelled
@@ -139,15 +123,13 @@ function assertMigrationInput(
  * ```typescript
  * const staged = buildFasttrackSaveDraftMigration({
  *   allowedOrigin: "https://portal.example.com",
- *   timesheetUrl: "https://portal.example.com/timesheets/current",
  *   activeSourceRelativePath: "fasttrack/playbooks/fill-week-per-day.json",
  *   supersededSourceRelativePaths: ["fasttrack/playbooks/fill-week-broad.json"],
  *   actionDigests: {
- *     diagnoseRoute: "1".repeat(64),
- *     fillDay: "2".repeat(64),
- *     addBreaks: "3".repeat(64),
- *     saveDraft: "4".repeat(64),
- *     verifySavedDraft: "5".repeat(64),
+ *     fillWeek: "1".repeat(64),
+ *     verifyFilledWeek: "2".repeat(64),
+ *     saveDraft: "3".repeat(64),
+ *     verifySavedDraft: "4".repeat(64),
  *   },
  * })
  * ```
@@ -164,107 +146,39 @@ export function buildFasttrackSaveDraftMigration(
 		flow_name: "fill-week",
 		version: "2",
 		summary:
-			"Reconcile the timesheet route, fill checkpointed days, add per-day breaks, and preserve a controlled draft.",
+			"Prepare and verify one human-authored week as a draft; final Submit stays human-controlled.",
 		allowed_origins: [input.allowedOrigin],
 		auth_context_ref: "fasttrack-session",
 		inputs: [
 			{
-				id: "day_keys",
-				summary: "Ordered stable day keys (Mon..Sun) to fill and break.",
+				id: "timesheet_run",
+				summary:
+					"Shared run envelope plus the FastTrack clock-time and attendance payload.",
 				required: true,
-				schema: {
-					kind: "array",
-					min_items: 1,
-					max_items: 7,
-					items: {
-						kind: "string",
-						min_length: 1,
-						max_length: 16,
-						pattern: "^[A-Za-z0-9._:-]+$",
-					},
-				},
-			},
-			{
-				id: "days",
-				summary: "Expected per-day rows keyed to the ordered day-key sequence.",
-				required: true,
-				schema: {
-					kind: "array",
-					min_items: 1,
-					max_items: 7,
-					items: {
-						kind: "object",
-						fields: {
-							day_key: {
-								required: true,
-								schema: { kind: "string", min_length: 1, max_length: 16 },
-							},
-							start_time: {
-								required: true,
-								schema: {
-									kind: "string",
-									pattern: "^[0-2][0-9]:[0-5][0-9]$",
-								},
-							},
-							end_time: {
-								required: true,
-								schema: {
-									kind: "string",
-									pattern: "^[0-2][0-9]:[0-5][0-9]$",
-								},
-							},
-							attendance_type: {
-								required: true,
-								schema: {
-									kind: "enum",
-									values: ["Standard", "Public Holiday Worked"],
-								},
-							},
-							break_start: {
-								required: false,
-								schema: {
-									kind: "string",
-									pattern: "^[0-2][0-9]:[0-5][0-9]$",
-								},
-							},
-							break_end: {
-								required: false,
-								schema: {
-									kind: "string",
-									pattern: "^[0-2][0-9]:[0-5][0-9]$",
-								},
-							},
-						},
-					},
-				},
+				custody: "sensitive",
+				schema: BROWSER_USE_FASTTRACK_TIMESHEET_RUN_SCHEMA,
 			},
 		],
 		steps: [
 			{ kind: "snapshot", interactive: false },
 			{
 				kind: "action",
-				action_id: "fasttrack-diagnose-route",
-				expected_digest: input.actionDigests.diagnoseRoute,
-				inputs: { days: "{{days}}" },
-			},
-			{
-				kind: "iterate",
-				over_input: "day_keys",
-				step: {
-					kind: "action",
-					action_id: "fasttrack-fill-day",
-					expected_digest: input.actionDigests.fillDay,
-					inputs: { days: "{{days}}" },
+				action_id: "fasttrack-fill-week",
+				expected_digest: input.actionDigests.fillWeek,
+				inputs: {
+					week_start: "{{timesheet_run.envelope.period_start}}",
+					week_end: "{{timesheet_run.envelope.period_end}}",
+					rows: "{{timesheet_run.payload.rows}}",
 				},
 			},
 			{
-				kind: "iterate",
-				over_input: "day_keys",
-				step: {
-					kind: "action",
-					action_id: "fasttrack-add-breaks",
-					expected_digest: input.actionDigests.addBreaks,
-					inputs: { days: "{{days}}" },
+				kind: "action",
+				action_id: "fasttrack-verify-filled-week",
+				expected_digest: input.actionDigests.verifyFilledWeek,
+				inputs: {
+					week_start: "{{timesheet_run.envelope.period_start}}",
+					week_end: "{{timesheet_run.envelope.period_end}}",
+					rows: "{{timesheet_run.payload.rows}}",
 				},
 			},
 			{ kind: "snapshot", interactive: false },
@@ -274,19 +188,17 @@ export function buildFasttrackSaveDraftMigration(
 				expected_digest: input.actionDigests.saveDraft,
 				inputs: {},
 			},
-			{
-				kind: "open",
-				url: input.timesheetUrl,
-				postcondition: { kind: "url-equals", url: input.timesheetUrl },
-			},
 			{ kind: "snapshot", interactive: false },
 			{
 				kind: "action",
 				action_id: "fasttrack-verify-saved-draft",
 				expected_digest: input.actionDigests.verifySavedDraft,
 				inputs: {
-					day_keys: "{{day_keys}}",
-					days: "{{days}}",
+					week_start: "{{timesheet_run.envelope.period_start}}",
+					week_end: "{{timesheet_run.envelope.period_end}}",
+					rows: "{{timesheet_run.payload.rows}}",
+					expected_total_hours:
+						"{{timesheet_run.envelope.expected_aggregate.value}}",
 				},
 			},
 		],

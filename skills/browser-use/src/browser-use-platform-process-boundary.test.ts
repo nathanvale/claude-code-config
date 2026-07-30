@@ -25,6 +25,7 @@ import {
 	createSharedRun,
 	loadSharedRun,
 } from "./browser-use-runs";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
 
 // =========================================================================
 // U2 process-boundary proof (ledger V4, AE15): a fresh agent process in a
@@ -65,9 +66,39 @@ async function seededDeps(): Promise<RunStoreDeps> {
 }
 
 const CONTINUATION = {
-	next_action_id: "prepare_auth_binding",
-	summary: "Prepare the credential binding, then resume this run.",
-};
+	schema_version: "1",
+	kind: "auth",
+	continuation_id: "continuation-auth-process",
+	run_id: "run-blocked",
+	state: "pending",
+	reason: "login-required",
+	required_actor: "agent",
+	safe_to_retry: false,
+	checkpoint: "before-auth-delivery",
+	expires_at_epoch_ms: 4_102_444_800_000,
+	resume_action: {
+		command: "run",
+		args: ["resume", "--run", "run-blocked", "--json"],
+	},
+	bindings: {
+		generation_id: "generation-process",
+		activation_epoch: 3,
+		route_digest: "e".repeat(64),
+		lane_id: "daily-work",
+		adapter_id: "agent-browser",
+		handoff_evidence_id: "handoff-process",
+		environment: "agent-chrome",
+		profile: "default",
+		target_binding_id: "target-process",
+		expected_identity: {
+			subject_ref: "subject-oncore-primary",
+			account_ref: "account-oncore-primary",
+			tenant_ref: "tenant-monash",
+		},
+	},
+	next_action_id: "resume-auth-continuation",
+	summary: "Claim and re-prove this auth continuation before resuming.",
+} as const;
 
 async function seedStore(): Promise<void> {
 	const deps = await seededDeps();
@@ -125,9 +156,37 @@ const seeded = seedStore();
 
 async function spawnBrowserUse(
 	args: readonly string[],
+	trustedHandoffPath?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	await seeded;
-	const child = Bun.spawn([process.execPath, BROWSER_USE_CLI, ...args], {
+	let entrypoint = BROWSER_USE_CLI;
+	if (trustedHandoffPath !== undefined) {
+		entrypoint = join(
+			neutralCwd,
+			`browser-use-reproof-${new Bun.CryptoHasher("sha256")
+				.update(trustedHandoffPath)
+				.digest("hex")
+				.slice(0, 12)}.ts`,
+		);
+		writeFileSync(
+			entrypoint,
+			[
+				'import { readFileSync } from "node:fs";',
+				`import { createDefaultBrowserUseRuntime, runForTest } from ${JSON.stringify(BROWSER_USE_CLI)};`,
+				`const handoffRaw = readFileSync(${JSON.stringify(trustedHandoffPath)}, "utf8");`,
+				"const runtime = createDefaultBrowserUseRuntime({",
+				"  env: { ...process.env },",
+				"  mintHandoff: async () => ({ exitCode: 0, stdout: handoffRaw, stderr: \"\" }),",
+				"});",
+				"const result = await runForTest(process.argv.slice(2), runtime);",
+				"process.stdout.write(result.stdout);",
+				"process.stderr.write(result.stderr);",
+				"process.exit(result.exitCode);",
+			].join("\n"),
+			"utf8",
+		);
+	}
+	const child = Bun.spawn([process.execPath, entrypoint, ...args], {
 		cwd: neutralCwd,
 		// ONLY the temp XDG roots + HOME: the neutral process inherits nothing.
 		env: {
@@ -168,7 +227,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"run-blocked",
 				"run-live",
 			]);
-			expect(receipts[0]?.summary).toContain("next: prepare_auth_binding");
+			expect(receipts[0]?.summary).toContain("next: resume-auth-continuation");
 			expect(
 				(envelope.continuation as Record<string, unknown>).next_action_id,
 			).toBe("inspect_shared_run");
@@ -219,8 +278,11 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 	);
 
 	test(
-		"run resume re-emits the blocked run plus its exactly-one continuation",
+		"run resume delegates without claiming when it cannot continue the effect path",
 		async () => {
+			const deps = await seededDeps();
+			const runFile = deps.paths.state.runFile("run-blocked");
+			const bytesBefore = readFileSync(runFile, "utf8");
 			const result = await spawnBrowserUse([
 				"run",
 				"resume",
@@ -228,14 +290,50 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"run-blocked",
 				"--json",
 			]);
-			expect(result.exitCode).toBe(0);
+			expect(result.exitCode).toBe(20);
 			const envelope = parse(result.stdout);
 			const data = envelope.data as Record<string, unknown>;
-			expect(data.resume).toBe("blocked");
-			expect(data.continuation).toEqual(CONTINUATION);
+			expect(data.resume).toBe("input-resupply-required");
+			expect(data.resupply).toEqual({
+				action_id: "resupply_run_inputs",
+				input_custody: "ordinary",
+				command: "browser-use runbook run",
+				args: ["--run", "run-blocked"],
+				required_flags: ["--handoff", "--input", "--json"],
+			});
+			expect((envelope.runtime_actions as unknown[]).length).toBe(1);
 			expect(
 				(envelope.continuation as Record<string, unknown>).next_action_id,
-			).toBe("prepare_auth_binding");
+			).toBe("resupply_run_inputs");
+			expect(readFileSync(runFile, "utf8")).toBe(bytesBefore);
+			const loaded = await loadSharedRun(deps, "run-blocked");
+			expect(loaded.ok).toBe(true);
+			if (!loaded.ok) throw new Error("unreachable");
+			expect(loaded.run).toMatchObject({
+				revision: 1,
+				state: "awaiting-auth",
+				continuation: CONTINUATION,
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"run status plain output projects the same secret-free auth continuation bindings",
+		async () => {
+			const result = await spawnBrowserUse([
+				"run",
+				"status",
+				"--run",
+				"run-blocked",
+				"--plain",
+			]);
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain("continuation_id=continuation-auth-process");
+			expect(result.stdout).toContain("continuation_state=pending");
+			expect(result.stdout).toContain("required_actor=agent");
+			expect(result.stdout).toContain(`route_digest=${"e".repeat(64)}`);
+			expect(result.stdout).toContain("account_ref=account-oncore-primary");
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -414,11 +512,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						launch: { launched: false },
 						proof: {
 							environment_contract_id: "warm-chrome.browser-entry",
-							environment_schema_version: "1",
+							environment_schema_version: "2",
 							route_evidence: "verified-live",
+							profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 						},
 						contract_id: "browser-connect.verified-handoff",
-						schema_version: "2",
+						schema_version: "3",
 					},
 					error: null,
 				}),
@@ -435,7 +534,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"--handoff",
 				handoffPath,
 				"--json",
-			]);
+			], handoffPath);
 
 			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
 			const envelope = parse(result.stdout);
@@ -572,11 +671,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 							launch: { launched: false },
 							proof: {
 								environment_contract_id: "warm-chrome.browser-entry",
-								environment_schema_version: "1",
+								environment_schema_version: "2",
 								route_evidence: "verified-live",
+								profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 							},
 							contract_id: "browser-connect.verified-handoff",
-							schema_version: "2",
+							schema_version: "3",
 						},
 						error: null,
 					}),
@@ -592,7 +692,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 					"--handoff",
 					handoffPath,
 					"--json",
-				]);
+				], handoffPath);
 				expect(result.exitCode).toBe(20);
 				expect(parse(result.stdout)).toMatchObject({
 					data: { external_effect: "none" },
@@ -655,11 +755,12 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 						launch: { launched: false },
 						proof: {
 							environment_contract_id: "warm-chrome.browser-entry",
-							environment_schema_version: "1",
+							environment_schema_version: "2",
 							route_evidence: "verified-live",
+							profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 						},
 						contract_id: "browser-connect.verified-handoff",
-						schema_version: "2",
+						schema_version: "3",
 					},
 					error: null,
 				}),
@@ -686,7 +787,7 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"--expect-visible",
 				"[data-persisted='true']",
 				"--json",
-			]);
+			], handoffPath);
 
 			expect(result).toMatchObject({ exitCode: 0, stderr: "" });
 			const envelope = parse(result.stdout);

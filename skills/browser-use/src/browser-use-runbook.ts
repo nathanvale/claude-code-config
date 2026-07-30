@@ -23,6 +23,7 @@
 // Date.now, no Math.random, no process.cwd().
 // ---------------------------------------------------------------------------
 
+import { createHash } from "node:crypto";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { lstat as fsLstat, open as fsOpen } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
@@ -31,6 +32,7 @@ import {
 	type AgentBrowserAuthDeliveryContext,
 	type AgentBrowserExecutionResult,
 	type AgentBrowserExecutionRuntime,
+	type AgentBrowserPostcondition,
 	type AgentBrowserTask,
 	type AgentBrowserVerifiedHandoff,
 	executeAgentBrowserTask,
@@ -58,13 +60,17 @@ import {
 	type BrowserUseItemBatchState,
 	type BrowserUseResolvedReviewedAction,
 	type BrowserUseReviewedActionRefusal,
+	type BrowserUseRunExecutionBinding,
 	captureStructuredResult,
+	itemKeySequenceDigest,
 	itemKeysAreValid,
+	normalizedInputDigest,
 	resolveNextBatchItem,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
 import type { BrowserUseRunStructuredResult } from "./browser-use-run-model";
+import { validateTimesheetRunbookInputs } from "./browser-use-timesheet-run-contract";
 
 // --- Discovery location ------------------------------------------------------
 
@@ -169,6 +175,8 @@ export class BrowserUseShippedRunbooksMissingError extends Error {
 export type BrowserUseRunbookDiscoveryFailure = {
 	code:
 		| "runbook_not_found"
+		| "runbook_inactive"
+		| "runbook_catalog_drift"
 		| "runbook_record_corrupt"
 		| "runbook_record_invalid"
 		| "runbook_id_invalid";
@@ -413,12 +421,14 @@ async function loadRunbookFromRoot(
  * @param fs - Platform fs port
  * @param dataRoot - The admitted `paths.data.root`
  * @param id - Service and flow id
+ * @param seam - Optional active-generation layer captured for this command
  * @returns The validated runbook plus its health, or one typed refusal
  */
 export async function showRunbook(
 	fs: BrowserUsePlatformFs,
 	dataRoot: string,
 	id: { serviceId: string; flowId: string },
+	seam?: BrowserUseActiveGenerationSeam,
 ): Promise<BrowserUseRunbookShowResult> {
 	if (!SAFE_SEGMENT.test(id.serviceId) || !SAFE_SEGMENT.test(id.flowId)) {
 		return {
@@ -428,6 +438,25 @@ export async function showRunbook(
 				"service and flow id must be safe lowercase slugs.",
 			),
 		};
+	}
+	if (seam !== undefined) {
+		const resolved = await resolveEffectiveRunbook(fs, dataRoot, id, seam);
+		if (resolved === undefined) {
+			return {
+				ok: false,
+				failure: failure(
+					"runbook_not_found",
+					`no runbook is defined for ${id.serviceId}/${id.flowId}.`,
+				),
+			};
+		}
+		return resolved.ok
+			? {
+					ok: true,
+					runbook: resolved.runbook,
+					health: resolved.health,
+				}
+			: { ok: false, failure: resolved.failure };
 	}
 	const fromStore = await loadRunbookFromRoot(fs, runbooksRoot(dataRoot), id);
 	if (fromStore.ok) {
@@ -459,6 +488,8 @@ export async function showRunbook(
 export type BrowserUseRunbookExecutionRefusal = {
 	code:
 		| "runbook_not_found"
+		| "runbook_inactive"
+		| "runbook_catalog_drift"
 		| "runbook_record_corrupt"
 		| "runbook_record_invalid"
 		| "runbook_id_invalid"
@@ -472,6 +503,7 @@ export type BrowserUseRunbookExecutionRefusal = {
 		| "runbook_confidential_native_capability_absent"
 		| "runbook_confidential_delivery_unavailable";
 	message: string;
+	admission_code?: string;
 };
 
 /**
@@ -488,7 +520,7 @@ export type BrowserUseRunbookExecutionRefusal = {
  */
 export type BrowserUseRunbookAuthDeliveryOutcome =
 	| { ok: true; context: AgentBrowserAuthDeliveryContext }
-	| { ok: false; message: string };
+	| { ok: false; message: string; admission_code?: string };
 
 export type BrowserUseRunbookAuthDelivery = (input: {
 	pendingItemBindings: readonly string[];
@@ -564,7 +596,137 @@ function executionPlanOf(
 
 export type BrowserUsePreparedRunbookExecution =
 	| { ok: false; refusal: BrowserUseRunbookExecutionRefusal }
-	| { ok: true; plan: BrowserUseRunbookPlan };
+	| {
+			ok: true;
+			plan: BrowserUseRunbookPlan;
+			execution_binding?: BrowserUseRunExecutionBinding;
+	  };
+
+/**
+ * Active or retained generation identity needed to bind a prepared run.
+ *
+ * The manifest owner supplies these immutable digests. Preparation adds the
+ * runbook inputs, item keys, target scope, and postcondition derived from the
+ * exact validated plan.
+ */
+export type BrowserUseGenerationBindingIdentity = {
+	generation_id: string;
+	activation_epoch: number;
+	runbook_digest: string;
+	action_registry_digest: string;
+	/** Retention-owned private input; ordinary inputs use a normalized digest. */
+	governed_input_artifact_ref?: string;
+};
+
+function runbookInputAtPath(
+	inputs: BrowserUseRunbookInputs,
+	path: string,
+): unknown {
+	const [root, ...segments] = path.split(".");
+	if (root === undefined || !Object.hasOwn(inputs, root)) return undefined;
+	let value: unknown = inputs[root];
+	for (const segment of segments) {
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			Array.isArray(value) ||
+			!Object.hasOwn(value, segment)
+		) {
+			return undefined;
+		}
+		value = (value as Readonly<Record<string, unknown>>)[segment];
+	}
+	return value;
+}
+
+function orderedRunbookItemKeys(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): readonly string[] {
+	const itemKeys: string[] = [];
+	for (const step of runbook.steps) {
+		if (step.kind !== "iterate") continue;
+		const values = runbookInputAtPath(inputs, step.over_input);
+		if (!Array.isArray(values)) continue;
+		for (const value of values) {
+			if (typeof value === "string") itemKeys.push(value);
+		}
+	}
+	return itemKeys;
+}
+
+function runbookPostconditionRef(
+	runbook: BrowserUseRunbook,
+): BrowserUseRunExecutionBinding["postcondition"] {
+	let postcondition: AgentBrowserPostcondition | undefined;
+	for (let index = runbook.steps.length - 1; index >= 0; index -= 1) {
+		const step = runbook.steps[index];
+		if (
+			step !== undefined &&
+			"postcondition" in step &&
+			step.postcondition !== undefined
+		) {
+			postcondition = step.postcondition;
+			break;
+		}
+		if (step?.kind === "iterate") {
+			postcondition = step.step.postcondition;
+			if (postcondition !== undefined) break;
+		}
+	}
+	if (postcondition === undefined) {
+		const summary = "Complete the bound runbook plan.";
+		return {
+			id: createHash("sha256")
+				.update(
+					JSON.stringify([
+						runbook.service_id,
+						runbook.flow_id,
+						runbook.version,
+						runbook.steps.length,
+					]),
+				)
+				.digest("hex"),
+			summary,
+		};
+	}
+	return {
+		id: createHash("sha256")
+			.update(JSON.stringify(postcondition))
+			.digest("hex"),
+		summary: `Complete the bound ${postcondition.kind} postcondition.`,
+	};
+}
+
+function executionBindingForPlan(
+	identity: BrowserUseGenerationBindingIdentity,
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): BrowserUseRunExecutionBinding {
+	const inputCustody =
+		identity.governed_input_artifact_ref === undefined
+			? { normalized_input_digest: normalizedInputDigest(inputs) }
+			: {
+					governed_input_artifact_ref:
+						identity.governed_input_artifact_ref,
+				};
+	return {
+		schema_version: "1",
+		generation_id: identity.generation_id,
+		activation_epoch: identity.activation_epoch,
+		service_id: runbook.service_id,
+		flow_id: runbook.flow_id,
+		runbook_version: runbook.version,
+		runbook_digest: identity.runbook_digest,
+		action_registry_digest: identity.action_registry_digest,
+		...inputCustody,
+		item_key_digest: itemKeySequenceDigest(
+			orderedRunbookItemKeys(runbook, inputs),
+		),
+		target_scope: JSON.stringify([...runbook.allowed_origins].sort()),
+		postcondition: runbookPostconditionRef(runbook),
+	};
+}
 
 /**
  * The single allowed origin a reviewed action resolves against: a runbook that
@@ -581,21 +743,24 @@ function singleAllowedOrigin(
 }
 
 // Substitute the runbook's typed inputs into an action step's declared input
-// map: each value is a scalar token or an already-structured input value keyed
-// by input id. `{{id}}` tokens resolve to the input value verbatim (structured
-// values pass through unchanged; scalar values render as the raw value).
+// map. `{{id}}` and `{{id.object.path}}` tokens resolve verbatim, so a shared
+// input envelope can feed a portal-owned reviewed action without flattening or
+// duplicating the human-authored run contract.
 function resolveActionInputs(
 	declared: Readonly<Record<string, string>>,
 	inputs: BrowserUseRunbookInputs,
 ): Readonly<Record<string, unknown>> {
 	const out: Record<string, unknown> = {};
 	for (const [key, token] of Object.entries(declared)) {
-		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
+		const match =
+			/^\{\{([a-z0-9][a-z0-9_]{0,63}(?:\.[a-z0-9][a-z0-9_]{0,63})*)\}\}$/.exec(
+				token,
+			);
 		if (match?.[1] === undefined) {
 			out[key] = token;
 			continue;
 		}
-		const resolved = inputs[match[1]];
+		const resolved = runbookInputAtPath(inputs, match[1]);
 		if (resolved !== undefined) out[key] = resolved;
 	}
 	return out;
@@ -671,7 +836,7 @@ async function resolveRunbookActionSteps(
 			continue;
 		}
 		// iterate: one verified action per stable item key from `over_input`.
-		const overRaw = inputs[step.over_input];
+		const overRaw = runbookInputAtPath(inputs, step.over_input);
 		if (!itemKeysAreValid(overRaw)) {
 			return {
 				ok: false,
@@ -762,6 +927,10 @@ export async function prepareRunbookExecution(
 		flowId: string;
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
+		/** Active manifest snapshot used by list/show/run for one command. */
+		activeGenerationSeam?: BrowserUseActiveGenerationSeam;
+		/** Manifest identities used to persist an immutable execution binding. */
+		generationBinding?: BrowserUseGenerationBindingIdentity;
 		actionSeam?: BrowserUseActionGenerationSeam;
 		/** Durable per-item truth keyed by absolute iterate step index. */
 		itemBatchStates?: ReadonlyMap<number, BrowserUseItemBatchState>;
@@ -770,12 +939,28 @@ export async function prepareRunbookExecution(
 	const shown = await showRunbook(fs, dataRoot, {
 		serviceId: input.serviceId,
 		flowId: input.flowId,
-	});
+	}, input.activeGenerationSeam);
 	if (!shown.ok) return { ok: false, refusal: shown.failure };
 	const normalizedInputs = materializeRunbookInputs(
 		shown.runbook,
 		input.inputs,
 	);
+	const timesheetIssues = validateTimesheetRunbookInputs(
+		shown.runbook.service_id,
+		shown.runbook.flow_id,
+		normalizedInputs,
+	);
+	if (timesheetIssues.length > 0) {
+		return {
+			ok: false,
+			refusal: {
+				code: "runbook_input_rejected",
+				message: `timesheet input rejected: ${timesheetIssues
+					.map((issue) => `${issue.path}: ${issue.message}`)
+					.join(" ")}`,
+			},
+		};
+	}
 	let resolvedActionSteps:
 		| ReadonlyMap<number, BrowserUseRunbookActionResolution>
 		| undefined;
@@ -811,9 +996,20 @@ export async function prepareRunbookExecution(
 		...(resolvedActionSteps !== undefined ? { resolvedActionSteps } : {}),
 		...(readActionMeta !== undefined ? { readActionMeta } : {}),
 	});
-	return planned.ok
-		? { ok: true, plan: planned.plan }
-		: { ok: false, refusal: planned.refusal };
+	if (!planned.ok) return { ok: false, refusal: planned.refusal };
+	return {
+		ok: true,
+		plan: planned.plan,
+		...(input.generationBinding === undefined
+			? {}
+			: {
+					execution_binding: executionBindingForPlan(
+						input.generationBinding,
+						shown.runbook,
+						normalizedInputs,
+					),
+				}),
+	};
 }
 
 /**
@@ -918,6 +1114,9 @@ export async function executePreparedRunbook(
 				refusal: {
 					code: "runbook_confidential_delivery_unavailable",
 					message: built.message,
+					...(built.admission_code !== undefined
+						? { admission_code: built.admission_code }
+						: {}),
 				},
 			};
 		}
@@ -1358,6 +1557,149 @@ export async function verifyEffectiveCatalog(
 		if (a.service_id !== b.service_id) return a.service_id < b.service_id ? -1 : 1;
 		return a.flow_id < b.flow_id ? -1 : a.flow_id > b.flow_id ? 1 : 0;
 	});
+}
+
+/** One fail-closed effective-catalog listing outcome. */
+export type BrowserUseEffectiveRunbookListResult =
+	| { ok: true; rows: readonly BrowserUseRunbookCatalogRow[] }
+	| { ok: false; failure: BrowserUseRunbookDiscoveryFailure };
+
+/**
+ * Project the same effective catalog used by show and run.
+ *
+ * Unlike the legacy compatibility listing, this path surfaces an invalid
+ * active or compatibility record instead of silently omitting it. Activation
+ * validates the complete generation first, while this read-time check catches
+ * later corruption and package drift before a caller treats a partial list as
+ * authoritative.
+ *
+ * @param fs - Platform fs port
+ * @param dataRoot - The admitted `paths.data.root`
+ * @param seam - Active-generation layer captured for this command
+ * @returns Redacted rows, or the first deterministic fail-closed refusal
+ *
+ * @example
+ * ```typescript
+ * const listed = await listEffectiveRunbooks(fs, dataRoot, activeGeneration)
+ * if (!listed.ok) throw new Error(listed.failure.code)
+ * ```
+ */
+export async function listEffectiveRunbooks(
+	fs: BrowserUsePlatformFs,
+	dataRoot: string,
+	seam: BrowserUseActiveGenerationSeam,
+): Promise<BrowserUseEffectiveRunbookListResult> {
+	const entries = await verifyEffectiveCatalog(fs, dataRoot, seam);
+	const failed = entries.find(
+		(
+			entry,
+		): entry is Extract<BrowserUseEffectiveCatalogEntry, { ok: false }> =>
+			!entry.ok,
+	);
+	if (failed !== undefined) {
+		return { ok: false, failure: failed.failure };
+	}
+	return {
+		ok: true,
+		rows: entries
+			.filter(
+				(
+					entry,
+				): entry is Extract<BrowserUseEffectiveCatalogEntry, { ok: true }> =>
+					entry.ok,
+			)
+			.map((entry) => projectRunbookCatalogRow(entry.runbook, entry.health)),
+	};
+}
+
+// --- Runbook input custody ---------------------------------------------------
+
+/** Public and private input ids supplied for one runbook execution. */
+export type BrowserUseRunbookInputSources = {
+	publicInputIds: readonly string[];
+	privateInputIds: readonly string[];
+};
+
+/** Typed custody refusal. Carries input ids or values in neither field. */
+export type BrowserUseRunbookInputCustodyRefusal = {
+	code:
+		| "runbook_input_unknown"
+		| "runbook_input_source_conflict"
+		| "runbook_input_custody_mismatch";
+	message: string;
+};
+
+/** One runbook input-custody decision. */
+export type BrowserUseRunbookInputCustodyResult =
+	| { ok: true }
+	| { ok: false; refusal: BrowserUseRunbookInputCustodyRefusal };
+
+function inputCustodyRefusal(
+	code: BrowserUseRunbookInputCustodyRefusal["code"],
+	message: string,
+): Extract<BrowserUseRunbookInputCustodyResult, { ok: false }> {
+	return { ok: false, refusal: { code, message } };
+}
+
+/**
+ * Enforce the declared custody route for supplied input ids.
+ *
+ * Accepts ids only, so the runbook engine cannot retain, log, or reflect a
+ * supplied value. Required-input and value-schema checks remain owned by the
+ * execution planner after this source boundary passes.
+ *
+ * @param runbook - Validated v2 runbook with explicit input custody
+ * @param sources - Public argv and private-file input ids, never their values
+ * @returns Admission or a value-free typed refusal
+ */
+export function enforceRunbookInputCustody(
+	runbook: BrowserUseRunbook,
+	sources: BrowserUseRunbookInputSources,
+): BrowserUseRunbookInputCustodyResult {
+	const declared = new Map(
+		runbook.inputs.map((input) => [input.id, input.custody] as const),
+	);
+	const publicIds = new Set(sources.publicInputIds);
+	const privateIds = new Set(sources.privateInputIds);
+	for (const id of publicIds) {
+		if (privateIds.has(id)) {
+			return inputCustodyRefusal(
+				"runbook_input_source_conflict",
+				"One input id was supplied through both public and private routes.",
+			);
+		}
+	}
+	for (const id of publicIds) {
+		const custody = declared.get(id);
+		if (custody === undefined) {
+			return inputCustodyRefusal(
+				"runbook_input_unknown",
+				"A public input id is not declared by this runbook.",
+			);
+		}
+		if (custody !== "ordinary") {
+			return inputCustodyRefusal(
+				"runbook_input_custody_mismatch",
+				"A sensitive input id was supplied through the public route.",
+			);
+		}
+	}
+	for (const id of privateIds) {
+		const custody = declared.get(id);
+		if (custody === undefined) {
+			return inputCustodyRefusal(
+				"runbook_input_unknown",
+				"A private input id is not declared by this runbook.",
+			);
+		}
+		if (custody !== "sensitive") {
+			return inputCustodyRefusal(
+				"runbook_input_custody_mismatch",
+				"An ordinary input id was supplied through the private route.",
+			);
+		}
+	}
+	return { ok: true };
 }
 
 // --- Private-file structured-input route (R10, R41) --------------------------

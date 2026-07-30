@@ -120,11 +120,22 @@ profile, not a connection failure — keep driving the page.
 
 const AUTH_GUIDE = `browser-use guide — auth boundary
 
-- Auth readiness is a check, not a login script:
-  browser-use auth enroll-browser-automation-token --json
+- Inspect local auth custody without reading its value:
+  browser-use auth status --json
+- Install or atomically replace only through a human-controlled channel:
+  browser-use auth install-token             # hidden terminal entry
+  browser-use auth install-token --stdin     # explicit inherited stdin
+- Remove local custody, then follow the remote-revocation continuation:
+  browser-use auth remove-token --json
+- A noninteractive install without --stdin returns human-action-required. It
+  never waits for a terminal and never accepts a value in argv, flags, or env.
+- Auth readiness remains a check, not a login script:
   browser-use auth repair-vault-grant --json
 - Blocked-cause continuations are commands: a blocked run's envelope names the
   exact auth subcommand to dispatch verbatim.
+- Inspect and resume the same run from a fresh process:
+  browser-use run status --run <id> --json
+  browser-use run resume --run <id> --json
 - Resolve login secrets through the domain's Auth Pointer at runtime; never
   inline secret values in commands, files, or output.
 - Report secret checks by shape only: present/absent, length, status code,

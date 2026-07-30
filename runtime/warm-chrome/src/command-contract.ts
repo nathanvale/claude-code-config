@@ -73,7 +73,7 @@ const launchFlags = {
 	"--profile": {
 		type: "path",
 		description:
-			"Dedicated profile directory; launch may create and chmod local profile state.",
+			"Dedicated profile directory; a missing path requires an exact external human continuation before creation.",
 	},
 	"--chrome": {
 		type: "path",
@@ -87,7 +87,7 @@ const repairFlags = {
 	"--profile": {
 		type: "path",
 		description:
-			"Dedicated profile directory; repair may create, chmod, or rewrite local profile proof state.",
+			"Dedicated profile directory; repair may chmod proof state, while a missing path requires an exact external human continuation.",
 	},
 } as const satisfies WarmChromeCommandContract["flags"];
 
@@ -102,6 +102,11 @@ export const warmChromeExitCodes = {
 	"1": "Runtime failure.",
 	"2": "Invalid usage.",
 	"20": "Browser entry required; no adapter fallback.",
+} as const satisfies WarmChromeCommandContract["exitCodes"];
+
+export const warmChromeMutatingExitCodes = {
+	...warmChromeExitCodes,
+	"21": "Human action is required; a non-interactive call never creates a profile.",
 } as const satisfies WarmChromeCommandContract["exitCodes"];
 
 /**
@@ -119,6 +124,12 @@ export const warmChromeFailureActions = [
 	{
 		id: "repair_profile",
 		summary: "Repair owner-only Warm Chrome profile proof.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "create_clean_profile",
+		summary:
+			"Create a fresh isolated profile after explicit human approval; preserve the prior profile.",
 		sideEffects: ["write"],
 	},
 	{
@@ -237,7 +248,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			resultContract,
 			actionAffordances,
 			flags: launchFlags,
-			exitCodes: warmChromeExitCodes,
+			exitCodes: warmChromeMutatingExitCodes,
 		},
 		repair: {
 			script: WARM_CHROME_CLI_NAME,
@@ -259,7 +270,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			resultContract,
 			actionAffordances,
 			flags: repairFlags,
-			exitCodes: warmChromeExitCodes,
+			exitCodes: warmChromeMutatingExitCodes,
 		},
 	} as const satisfies Record<WarmChromeCommand, WarmChromeCommandContract>,
 	{

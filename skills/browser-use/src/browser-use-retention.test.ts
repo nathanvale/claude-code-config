@@ -1136,6 +1136,28 @@ describe("stageGeneration immutable staging (AE12 substrate; V2)", () => {
 		});
 	});
 
+	test("mixed nested paths verify in global relPath order rather than directory-local DFS order", async () => {
+		const { deps } = await makeWorld();
+		const files = [
+			{ relPath: "a/z.md", contents: "nested\n" },
+			{ relPath: "a-plain.md", contents: "root\n" },
+			{ relPath: "b.md", contents: "later\n" },
+		];
+
+		expect(
+			await stageGeneration(deps, {
+				generationId: "gen-global-order",
+				files,
+			}),
+		).toMatchObject({ ok: true, verified_noop: false });
+		expect(
+			await stageGeneration(deps, {
+				generationId: "gen-global-order",
+				files: [...files].reverse(),
+			}),
+		).toMatchObject({ ok: true, verified_noop: true });
+	});
+
 	test("content drift against a recorded generation is a typed fatal retention_collision; nothing is rewritten", async () => {
 		const { deps } = await makeWorld();
 		await stageGeneration(deps, { generationId: "gen-1", files: FILES });

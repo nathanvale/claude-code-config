@@ -14,7 +14,10 @@ import {
 import {
 	REAL_VERIFIED_HANDOFF_ENVELOPE,
 } from "./browser-connect-handoff-fixtures";
-import { BROWSER_USE_ADAPTER_LANES_CONTRACT_ID } from "./command-contract";
+import {
+	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
+	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
+} from "./command-contract";
 import { adapterLaneRow, renderAdapterLaneLine, runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -114,7 +117,7 @@ describe("lanes list — Adapter Lane Registry projection", () => {
 			// Implementation slot (U1 verification).
 			expect(lane.handoff).toMatchObject({
 				contract_id: "browser-connect.verified-handoff",
-				schema_version: "2",
+				schema_version: BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 			});
 			const implementation = lane.native_implementation as Record<
 				string,
@@ -283,7 +286,7 @@ describe("lanes show — fail-closed lane resolution (AE1)", () => {
 		expect(lane.lane_id).toBe("chrome-devtools-mcp");
 		expect(lane.handoff).toMatchObject({
 			contract_id: "browser-connect.verified-handoff",
-			schema_version: "2",
+			schema_version: BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 		});
 		expect(lane.native_implementation).toMatchObject({
 			implemented: true,

@@ -25,6 +25,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "../browser-connect-handoff-fixtures";
 import type {
 	AgentBrowserAuthDeliveryContext,
 	AgentBrowserExecutionRuntime,
@@ -95,11 +96,12 @@ const HANDOFF = {
 	launch: { launched: false },
 	proof: {
 		environment_contract_id: "warm-chrome.browser-entry",
-		environment_schema_version: "1",
+		environment_schema_version: "2",
 		route_evidence: "verified-live",
+		profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 	},
 	contract_id: "browser-connect.verified-handoff",
-	schema_version: "2",
+	schema_version: "3",
 } as const;
 
 const RUNBOOK: BrowserUseRunbook = {
@@ -130,11 +132,13 @@ const RUNBOOK: BrowserUseRunbook = {
 
 const BINDING: BrowserUseItemBinding = {
 	service_id: "oncore",
+	service_account_id: "service-account-1",
 	auth_context: "interactive-login",
 	allowed_origins: ["https://portal.example.com"],
 	allowed_login_paths: [],
 	vault_id: "vault-1",
 	item_id: "item-1",
+	item_revision: 7,
 	allowed_auth_methods: ["password", "otp"],
 	binding_revision: 1,
 };

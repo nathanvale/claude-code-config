@@ -5,13 +5,24 @@ Keep active choices in `TASKS.md`; use this file when history matters.
 
 ## Closed Implementation Units
 
+- 2026-07-30 Browser Use activation U6 live admission closed for
+  `/Users/nathanvale/.agent-warm-profile-u6` on port `9243`: Nathan approved
+  the exact profile, the package-owned one-use grant was consumed, and Chrome
+  PID `18518` proved the same profile and endpoint. Effective Password Manager
+  evidence proved signed out, password sync off, auto sign-in off, saving off,
+  and zero saved credentials. The resulting posture was `no-source` and
+  `live-clean`; Browser Connect preserved that exact provenance. No portal
+  authentication or credential retrieval occurred. CDP `Autofill.disable`
+  only disables domain notifications, so this proof makes no unsupported
+  password-fill-engine-disable claim. Verification: Warm Chrome 283 tests and
+  Browser Connect 555 tests green, with both typechecks green.
 - 2026-07-03 U1 package scaffold closed: `@side-quest/warm-chrome` lives at
   `runtime/warm-chrome`, source-linked bin `warm-chrome`, facade dependency,
   tests, typecheck, and package docs.
 - 2026-07-03 U2 command contract closed: `check`, `status`, `launch`,
   `repair`, exit `20`, action affordances, write-preview posture, discovery,
   and help surface pinned.
-- 2026-07-03 U3 Branch Station Catalog closed: sixteen stations, re-emit map,
+- 2026-07-03 U3 Branch Station Catalog closed: initial station set, re-emit map,
   canonical code/action/mutation pins, and station evidence manifest.
 - 2026-07-03 U4 runtime seam and redaction gate closed: injectable runtime,
   source entrypoint, envelope plumbing, foreign-listener redaction, and

@@ -1,0 +1,11 @@
+entries:
+  - domain: iteraterecruitment-oncoreservices
+    flow: fill-timesheet
+    status: untrusted-label
+    risk_class: safe
+  - domain: iteraterecruitment-oncoreservices
+    flow: authenticate-session
+    status: trusted
+  - domain: iteraterecruitment-oncoreservices
+    flow: submit-timesheet
+    status: trusted

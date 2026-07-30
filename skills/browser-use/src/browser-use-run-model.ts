@@ -260,13 +260,89 @@ export type BrowserUseArtifactReference = {
 	retention: BrowserUseArtifactRetentionClass;
 };
 
-/**
- * Exactly-one next safe action for a blocked run (R24).
- */
-export type BrowserUseRunContinuation = {
+/** Legacy exactly-one next safe action kept for durable compatibility. */
+export type BrowserUseLegacyRunContinuation = {
 	next_action_id: string;
 	summary: string;
 };
+
+/** Auth continuation states persisted without a reusable delivery capability. */
+export const BROWSER_USE_AUTH_CONTINUATION_STATES = [
+	"pending",
+	"claimed",
+	"in-progress",
+	"completed",
+	"expired",
+	"invalidated",
+] as const;
+
+/** Auth continuation lifecycle state. */
+export type BrowserUseAuthContinuationState =
+	(typeof BROWSER_USE_AUTH_CONTINUATION_STATES)[number];
+
+/** Stable reasons an auth transaction can stop before the runbook resumes. */
+export type BrowserUseAuthContinuationReason =
+	| "login-required"
+	| "user-presence-required"
+	| "delivery-outcome-unknown"
+	| "submission-outcome-unknown"
+	| "session-identity-unproven"
+	| "human-action-required"
+	| "input-resupply-required";
+
+/**
+ * Versioned, secret-free R16 auth continuation.
+ *
+ * It pins every authority fact a fresh process must re-prove. Target and
+ * identity references are opaque; no credential, DOM snapshot, or reusable
+ * delivery handle is legal in this record.
+ */
+export type BrowserUseAuthRunContinuation = BrowserUseLegacyRunContinuation & {
+	schema_version: "1";
+	kind: "auth";
+	continuation_id: string;
+	run_id: string;
+	state: BrowserUseAuthContinuationState;
+	reason: BrowserUseAuthContinuationReason;
+	required_actor: "agent" | "human";
+	safe_to_retry: boolean;
+	checkpoint: string;
+	expires_at_epoch_ms: number;
+	resume_action: {
+		command: "run";
+		args: readonly ["resume", "--run", string, "--json"];
+	};
+	bindings: {
+		generation_id: string;
+		activation_epoch: number;
+		route_digest: string;
+		lane_id: string;
+		adapter_id: BrowserAdapterId;
+		handoff_evidence_id: string;
+		environment: string;
+		profile: string;
+		target_binding_id: string;
+		expected_identity: {
+			subject_ref: string;
+			account_ref: string;
+			tenant_ref?: string;
+		};
+	};
+	claim?: {
+		claimant_id: string;
+		claimed_at_epoch_ms: number;
+	};
+};
+
+/**
+ * Exactly-one next safe action for a blocked run (R24).
+ *
+ * Legacy two-field continuations remain readable. New auth stops use the
+ * versioned R16 form so a fresh process can atomically claim and re-prove it.
+ */
+export type BrowserUseRunContinuation =
+	| BrowserUseLegacyRunContinuation
+	| BrowserUseAuthRunContinuation;
 
 /** Private durable binding to one Agent Browser target. */
 export type BrowserUseRunbookTargetBinding = {
@@ -446,7 +522,8 @@ export type BrowserUseRunIssueCode =
 	| "runbook_progress_invalid"
 	| "run_execution_binding_invalid"
 	| "run_item_batch_invalid"
-	| "run_structured_results_invalid";
+	| "run_structured_results_invalid"
+	| "run_auth_continuation_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -463,6 +540,174 @@ function isBlockedState(state: BrowserUseRunState): boolean {
 const FULL_DIGEST = /^[0-9a-f]{64}$/;
 const ITEM_BATCH_MAX_KEYS = 512;
 const STRUCTURED_RESULT_MAX_COUNT = 512;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const AUTH_CONTINUATION_ID_MAX_LENGTH = 256;
+const AUTH_CONTINUATION_SUMMARY_MAX_LENGTH = 512;
+const AUTH_CONTINUATION_OPAQUE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
+const AUTH_CONTINUATION_SECRET_SHAPE = /\b(?:op|wss?|https?):\/\//i;
+
+function hasExactKeys(
+	record: Record<string, unknown>,
+	required: readonly string[],
+	optional: readonly string[] = [],
+): boolean {
+	const keys = Object.keys(record);
+	return (
+		required.every((key) => Object.hasOwn(record, key)) &&
+		keys.every((key) => required.includes(key) || optional.includes(key))
+	);
+}
+
+function isOpaqueRef(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length <= AUTH_CONTINUATION_ID_MAX_LENGTH &&
+		AUTH_CONTINUATION_OPAQUE_REF.test(value) &&
+		!AUTH_CONTINUATION_SECRET_SHAPE.test(value)
+	);
+}
+
+function isBoundedSummary(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value.length <= AUTH_CONTINUATION_SUMMARY_MAX_LENGTH &&
+		!AUTH_CONTINUATION_SECRET_SHAPE.test(value)
+	);
+}
+
+/**
+ * True only for the complete additive versioned R16 continuation shape.
+ *
+ * @param continuation - Untrusted durable continuation candidate
+ * @returns Whether every required secret-free R16 field is structurally valid
+ */
+export function isBrowserUseAuthRunContinuation(
+	continuation: unknown,
+): continuation is BrowserUseAuthRunContinuation {
+	if (!isRecord(continuation)) return false;
+	const resumeAction = continuation.resume_action;
+	const bindings = continuation.bindings;
+	const claim = continuation.claim;
+	const expectedIdentity =
+		isRecord(bindings) && isRecord(bindings.expected_identity)
+			? bindings.expected_identity
+			: undefined;
+	return (
+		hasExactKeys(
+			continuation,
+			[
+				"schema_version",
+				"kind",
+				"continuation_id",
+				"run_id",
+				"state",
+				"reason",
+				"required_actor",
+				"safe_to_retry",
+				"checkpoint",
+				"expires_at_epoch_ms",
+				"resume_action",
+				"bindings",
+				"next_action_id",
+				"summary",
+			],
+			["claim"],
+		) &&
+		continuation.kind === "auth" &&
+		continuation.schema_version === "1" &&
+		continuation.next_action_id === "resume-auth-continuation" &&
+		isBoundedSummary(continuation.summary) &&
+		isOpaqueRef(continuation.continuation_id) &&
+		isOpaqueRef(continuation.run_id) &&
+		(BROWSER_USE_AUTH_CONTINUATION_STATES as readonly unknown[]).includes(
+			continuation.state,
+		) &&
+		[
+			"login-required",
+			"user-presence-required",
+			"delivery-outcome-unknown",
+			"submission-outcome-unknown",
+			"session-identity-unproven",
+			"human-action-required",
+			"input-resupply-required",
+		].includes(continuation.reason as string) &&
+		!((continuation.reason === "delivery-outcome-unknown" ||
+			continuation.reason === "submission-outcome-unknown") &&
+			continuation.safe_to_retry !== false) &&
+		(continuation.required_actor === "agent" ||
+			continuation.required_actor === "human") &&
+		typeof continuation.safe_to_retry === "boolean" &&
+		isOpaqueRef(continuation.checkpoint) &&
+		typeof continuation.expires_at_epoch_ms === "number" &&
+		Number.isFinite(continuation.expires_at_epoch_ms) &&
+		continuation.expires_at_epoch_ms > 0 &&
+		isRecord(resumeAction) &&
+		hasExactKeys(resumeAction, ["command", "args"]) &&
+		resumeAction.command === "run" &&
+		Array.isArray(resumeAction.args) &&
+		resumeAction.args.length === 4 &&
+		resumeAction.args[0] === "resume" &&
+		resumeAction.args[1] === "--run" &&
+		resumeAction.args[2] === continuation.run_id &&
+		resumeAction.args[3] === "--json" &&
+		isRecord(bindings) &&
+		hasExactKeys(bindings, [
+			"generation_id",
+			"activation_epoch",
+			"route_digest",
+			"lane_id",
+			"adapter_id",
+			"handoff_evidence_id",
+			"environment",
+			"profile",
+			"target_binding_id",
+			"expected_identity",
+		]) &&
+		isOpaqueRef(bindings.generation_id) &&
+		Number.isInteger(bindings.activation_epoch) &&
+		(bindings.activation_epoch as number) >= 0 &&
+		typeof bindings.route_digest === "string" &&
+		FULL_DIGEST.test(bindings.route_digest) &&
+		isOpaqueRef(bindings.lane_id) &&
+		typeof bindings.adapter_id === "string" &&
+		(BROWSER_USE_LIVE_ADAPTERS as readonly string[]).includes(bindings.adapter_id) &&
+		isOpaqueRef(bindings.handoff_evidence_id) &&
+		isOpaqueRef(bindings.environment) &&
+		isOpaqueRef(bindings.profile) &&
+		isOpaqueRef(bindings.target_binding_id) &&
+		expectedIdentity !== undefined &&
+		hasExactKeys(
+			expectedIdentity,
+			["subject_ref", "account_ref"],
+			["tenant_ref"],
+		) &&
+		isOpaqueRef(expectedIdentity.subject_ref) &&
+		isOpaqueRef(expectedIdentity.account_ref) &&
+		(expectedIdentity.tenant_ref === undefined ||
+			isOpaqueRef(expectedIdentity.tenant_ref)) &&
+		(continuation.state === "pending"
+			? claim === undefined
+			: continuation.state === "claimed" || continuation.state === "in-progress"
+				? isRecord(claim) &&
+				hasExactKeys(claim, ["claimant_id", "claimed_at_epoch_ms"]) &&
+				isOpaqueRef(claim.claimant_id) &&
+				typeof claim.claimed_at_epoch_ms === "number" &&
+				Number.isFinite(claim.claimed_at_epoch_ms) &&
+				claim.claimed_at_epoch_ms >= 0
+				: claim === undefined ||
+					(isRecord(claim) &&
+						hasExactKeys(claim, ["claimant_id", "claimed_at_epoch_ms"]) &&
+						isOpaqueRef(claim.claimant_id) &&
+						typeof claim.claimed_at_epoch_ms === "number" &&
+						Number.isFinite(claim.claimed_at_epoch_ms) &&
+						claim.claimed_at_epoch_ms >= 0))
+	);
+}
 
 /**
  * Validate shared-run invariants (R6, R24).
@@ -501,6 +746,28 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 		issues.push({
 			code: "run_ready_with_continuation",
 			message: "a ready run cannot carry a blocked-state continuation.",
+		});
+	}
+	const continuation = run.continuation;
+	const continuationUnknown: unknown = continuation;
+	const continuationRecord = isRecord(continuationUnknown)
+		? continuationUnknown
+		: undefined;
+	const authContinuationCandidate =
+		continuationRecord?.kind === "auth" ||
+		continuationRecord?.schema_version !== undefined ||
+		continuationRecord?.continuation_id !== undefined;
+	if (
+		continuation !== undefined &&
+		authContinuationCandidate &&
+		(!isBrowserUseAuthRunContinuation(continuation) ||
+			continuation.run_id !== run.run_id ||
+			continuation.next_action_id !== "resume-auth-continuation")
+	) {
+		issues.push({
+			code: "run_auth_continuation_invalid",
+			message:
+				"the versioned auth continuation must carry complete secret-free R16 bindings and a state-consistent claim.",
 		});
 	}
 	if (

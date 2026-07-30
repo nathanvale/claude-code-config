@@ -17,6 +17,7 @@ import {
 	assessBindingMethod,
 	assessBindingUsability,
 	importCandidates,
+	itemBindingsEqual,
 	matchItemBinding,
 	normalizeOrigin,
 	screenImportCandidate,
@@ -47,6 +48,7 @@ function baseEvidence(
 	return {
 		item_id: "item-1",
 		vault_id: "vault-1",
+		item_revision: 7,
 		origins: [PORTAL_ORIGIN],
 		login_paths: ["/login"],
 		supported_methods: ["password", "otp"],
@@ -60,16 +62,42 @@ function baseBinding(
 ): BrowserUseItemBinding {
 	return {
 		service_id: "oncore",
+		service_account_id: "service-account-1",
 		auth_context: "interactive-login",
 		allowed_origins: [PORTAL_ORIGIN],
 		allowed_login_paths: ["/login"],
 		vault_id: "vault-1",
 		item_id: "item-1",
+		item_revision: 7,
 		allowed_auth_methods: ["password", "otp"],
 		binding_revision: 1,
 		...overrides,
 	};
 }
+
+test("binding equality follows the schema-owned exact key set", () => {
+	const binding = baseBinding();
+	expect(
+		itemBindingsEqual(binding, {
+			...binding,
+			allowed_origins: [...binding.allowed_origins],
+			allowed_login_paths: [...binding.allowed_login_paths],
+			allowed_auth_methods: [...binding.allowed_auth_methods],
+		}),
+	).toBe(true);
+	expect(
+		itemBindingsEqual(binding, {
+			...binding,
+			item_revision: binding.item_revision + 1,
+		}),
+	).toBe(false);
+	expect(
+		itemBindingsEqual(binding, {
+			...binding,
+			allowed_auth_methods: [...binding.allowed_auth_methods].reverse(),
+		}),
+	).toBe(false);
+});
 
 function baseCandidate(
 	overrides: Partial<BrowserUseImportCandidate> = {},
@@ -92,6 +120,7 @@ function baseMatchInput(
 ): BrowserUseBindingMatchInput {
 	return {
 		service_id: "oncore",
+		service_account_id: "service-account-1",
 		auth_context: "interactive-login",
 		target_origins: [PORTAL_ORIGIN],
 		login_path: null,
@@ -394,11 +423,13 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 		if (result.kind === "bound") {
 			expect(result.binding).toEqual({
 				service_id: "oncore",
+				service_account_id: "service-account-1",
 				auth_context: "interactive-login",
 				allowed_origins: [PORTAL_ORIGIN, "https://sso.example.com"],
 				allowed_login_paths: ["/login"],
 				vault_id: "vault-1",
 				item_id: "item-1",
+				item_revision: 7,
 				allowed_auth_methods: ["password", "otp"],
 				binding_revision: 1,
 			});
@@ -564,6 +595,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 			candidates: [
 				baseCandidate({ proposed_origins: [PORTAL_ORIGIN, LEGACY_ORIGIN] }),
 			],
+			service_account_id: "service-account-1",
 			vault_id: "vault-1",
 			items: [baseEvidence()],
 		});
@@ -594,6 +626,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 					proposed_origins: ["https://Portal.Example.com:443/login?x=1"],
 				}),
 			],
+			service_account_id: "service-account-1",
 			vault_id: "vault-1",
 			items: [baseEvidence()],
 		});
@@ -610,6 +643,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 	test("an unparseable proposed origin refuses that candidate as shape-invalid", () => {
 		const results = importCandidates({
 			candidates: [baseCandidate({ proposed_origins: ["not a url"] })],
+			service_account_id: "service-account-1",
 			vault_id: "vault-1",
 			items: [baseEvidence()],
 		});
@@ -630,6 +664,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 				}),
 				baseCandidate({ candidate_id: "cand-3", service_id: "timesheet" }),
 			],
+			service_account_id: "service-account-1",
 			vault_id: "vault-1",
 			items: [baseEvidence()],
 		});
@@ -652,6 +687,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 	test("an invalid batch vault_id names the batch input, never candidate shape", () => {
 		const results = importCandidates({
 			candidates: [baseCandidate(), baseCandidate({ candidate_id: "cand-2" })],
+			service_account_id: "service-account-1",
 			vault_id: "",
 			items: [baseEvidence()],
 		});
@@ -675,6 +711,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 				baseCandidate(),
 				baseCandidate({ candidate_id: "cand-2", service_id: "timesheet" }),
 			],
+			service_account_id: "service-account-1",
 			vault_id: "vault-1",
 			items: [item],
 		});
@@ -763,6 +800,17 @@ describe("binding liveness + method admission (R11, R13)", () => {
 		}
 	});
 
+	test("a changed live item revision invalidates an otherwise identical binding", () => {
+		const result = assessBindingUsability(baseBinding(), {
+			item: baseEvidence({ item_revision: 8 }),
+		});
+		expect(result.usable).toBe(false);
+		if (!result.usable) {
+			expect(result.stale_state).toBe("revision-changed");
+			expect(result.blocked_cause).toBe("revoked-binding");
+		}
+	});
+
 	test("an active live item in the bound vault keeps the binding usable", () => {
 		const result = assessBindingUsability(baseBinding(), { item: baseEvidence() });
 		expect(result.usable).toBe(true);
@@ -813,10 +861,11 @@ describe("vocabularies + key sets", () => {
 			"revoked",
 			"expired",
 			"out-of-scope",
+			"revision-changed",
 		]);
-		expect(BROWSER_USE_ITEM_BINDING_KEYS).toHaveLength(8);
+		expect(BROWSER_USE_ITEM_BINDING_KEYS).toHaveLength(10);
 		expect(BROWSER_USE_IMPORT_CANDIDATE_KEYS).toHaveLength(8);
-		expect(BROWSER_USE_VAULT_ITEM_EVIDENCE_KEYS).toHaveLength(6);
+		expect(BROWSER_USE_VAULT_ITEM_EVIDENCE_KEYS).toHaveLength(7);
 	});
 
 	test("legacy contexts and presence methods are unrepresentable (SD5, R13)", () => {

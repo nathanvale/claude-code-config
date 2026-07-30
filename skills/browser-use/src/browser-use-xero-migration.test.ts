@@ -3,15 +3,22 @@ import { validateRunbook } from "./browser-use-runbook-model";
 import {
 	BROWSER_USE_XERO_EXTRACT_MAX_RANGE_DAYS,
 	type BrowserUseXeroMigrationInput,
+	buildXeroActionCandidates,
 	buildXeroMigration,
 	captureXeroStatementsResult,
 	preflightXeroExtract,
 	refuseInactiveXeroRun,
 	simulateXeroReconcileBatch,
 } from "./browser-use-xero-migration";
+import {
+	actionAssetDigest,
+	XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES,
+	XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES,
+} from "./browser-use-runbook-actions";
 
 const DIGESTS = {
-	extractBankStatements: "1".repeat(64),
+	requestBankStatements: "1".repeat(64),
+	captureBankStatements: "4".repeat(64),
 	postBankTransaction: "2".repeat(64),
 	reconcileBatch: "3".repeat(64),
 };
@@ -34,12 +41,12 @@ function migrationInput(
 	};
 }
 
-describe("Xero migration — active extraction + staged financial writes (U6, R27/R28/R33/AE9)", () => {
-	test("builds one valid active read-only extraction flow", () => {
+describe("Xero migration — staged extraction + staged financial writes (U6, R27/R28/R33/AE9)", () => {
+	test("builds one valid staged extraction with separate request and capture effects", () => {
 		const migrated = buildXeroMigration(migrationInput());
 
 		expect(validateRunbook(migrated.extract.runbook)).toEqual([]);
-		expect(migrated.extract.activation_state).toBe("active");
+		expect(migrated.extract.activation_state).toBe("staged-inactive");
 		expect(migrated.extract.runbook).toMatchObject({
 			service_id: "xero-api-explorer",
 			flow_id: "extract-bankstatementsplus",
@@ -51,6 +58,48 @@ describe("Xero migration — active extraction + staged financial writes (U6, R2
 			["from_date", "date"],
 			["to_date", "date"],
 		]);
+		expect(migrated.extract.runbook.inputs.map((input) => [input.id, input.custody])).toEqual([
+			["bank_account_id", "sensitive"],
+			["from_date", "ordinary"],
+			["to_date", "ordinary"],
+		]);
+		expect(
+			migrated.extract.runbook.steps
+				.filter((step) => step.kind === "action")
+				.map((step) => step.action_id),
+		).toEqual([
+			"xero-request-bankstatements",
+			"xero-capture-bankstatements",
+		]);
+	});
+
+	test("stages exact request and capture assets with non-authorizing receipts", () => {
+		const candidates = buildXeroActionCandidates({
+			sourceProvenance:
+				"api-explorer-xero/playbooks/extract-bankstatementsplus.yaml",
+		});
+
+		expect(candidates).toHaveLength(2);
+		expect(candidates.map((candidate) => candidate.record.action_id)).toEqual([
+			"xero-capture-bankstatements",
+			"xero-request-bankstatements",
+		]);
+		expect(candidates.map((candidate) => candidate.record.effect_class)).toEqual([
+			"read",
+			"mutation",
+		]);
+		expect(
+			candidates.every(
+				(candidate) =>
+					candidate.record.promotion_receipt.disposition === "invalidated",
+			),
+		).toBe(true);
+		expect(candidates[0]?.record.expected_digest).toBe(
+			actionAssetDigest(XERO_BANKSTATEMENTS_CAPTURE_ACTION_BYTES),
+		);
+		expect(candidates[1]?.record.expected_digest).toBe(
+			actionAssetDigest(XERO_BANKSTATEMENTS_REQUEST_ACTION_BYTES),
+		);
 	});
 
 	test("marks post-banktransaction and reconcile-batch staged-inactive", () => {
@@ -75,7 +124,7 @@ describe("Xero migration — active extraction + staged financial writes (U6, R2
 					"api-explorer-xero/playbooks/extract-bankstatementsplus.yaml",
 				disposition: "migrated",
 				flow_id: "extract-bankstatementsplus",
-				activation_state: "active",
+				activation_state: "staged-inactive",
 			},
 			{
 				source_relative_path:
@@ -104,8 +153,10 @@ describe("Xero migration — active extraction + staged financial writes (U6, R2
 			},
 		]);
 		expect(
-			migrated.provenance.filter((edge) => edge.activation_state === "active"),
-		).toHaveLength(1);
+			migrated.provenance.every(
+				(edge) => edge.activation_state === "staged-inactive",
+			),
+		).toBe(true);
 	});
 
 	test.each([
@@ -317,9 +368,15 @@ describe("Xero statements structured result (R21)", () => {
 });
 
 describe("Xero staged-inactive dispatch refusal (R33/AE9)", () => {
-	test("an active flow is not refused", () => {
+	test("extraction refuses until request and capture actions are separately approved", () => {
 		const migrated = buildXeroMigration(migrationInput());
-		expect(refuseInactiveXeroRun(migrated.extract)).toEqual({ ok: true });
+		expect(refuseInactiveXeroRun(migrated.extract)).toEqual({
+			ok: false,
+			refusal: expect.objectContaining({
+				code: "runbook_inactive",
+				flow_id: "extract-bankstatementsplus",
+			}),
+		});
 	});
 
 	test.each([
@@ -329,7 +386,9 @@ describe("Xero staged-inactive dispatch refusal (R33/AE9)", () => {
 		"a direct run of %s refuses with runbook_inactive before handoff",
 		(flowId, index) => {
 			const migrated = buildXeroMigration(migrationInput());
-			const result = refuseInactiveXeroRun(migrated.stagedInactive[index]!);
+			const flow = migrated.stagedInactive[index];
+			if (flow === undefined) throw new Error(`missing staged flow ${flowId}`);
+			const result = refuseInactiveXeroRun(flow);
 			expect(result.ok).toBe(false);
 			if (!result.ok) {
 				expect(result.refusal.code).toBe("runbook_inactive");

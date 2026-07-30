@@ -91,6 +91,20 @@ export const warmChromeBranchStationCatalog = [
 		mutationExpectation: "read_only",
 	},
 	{
+		id: "check.profile_posture_unsafe",
+		command: "check",
+		classification: "required",
+		intent: "proof_failure",
+		trigger:
+			"dedicated profile cannot prove disabled save, autofill, and sync controls with no stored login",
+		expectedExitCode: BROWSER_ENTRY_EXIT,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
+		expectedErrorCode: "profile_posture_unsafe",
+		expectedActionId: "create_clean_profile",
+		mutationExpectation: "read_only",
+	},
+	{
 		id: "check.non_loopback",
 		command: "check",
 		classification: "required",
@@ -206,6 +220,20 @@ export const warmChromeBranchStationCatalog = [
 		mutationExpectation: "writes_browser_state",
 	},
 	{
+		id: "launch.human-action-required",
+		command: "launch",
+		classification: "required",
+		intent: "proof_failure",
+		trigger:
+			"a missing fresh profile requires an exact external human continuation before creation",
+		expectedExitCode: 21,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
+		expectedErrorCode: "human-action-required",
+		expectedActionId: "create_clean_profile",
+		mutationExpectation: "fails_closed_without_spawn",
+	},
+	{
 		id: "repair.repaired",
 		command: "repair",
 		classification: "required",
@@ -230,6 +258,20 @@ export const warmChromeBranchStationCatalog = [
 		expectedActionId: "inspect_diagnostics",
 		mutationExpectation: "fails_closed",
 	},
+	{
+		id: "repair.human-action-required",
+		command: "repair",
+		classification: "required",
+		intent: "proof_failure",
+		trigger:
+			"a missing fresh profile requires an exact external human continuation before creation",
+		expectedExitCode: 21,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: WARM_CHROME_CONTRACT_ID,
+		expectedErrorCode: "human-action-required",
+		expectedActionId: "create_clean_profile",
+		mutationExpectation: "fails_closed",
+	},
 ] as const satisfies readonly BranchStation[];
 
 /**
@@ -241,6 +283,7 @@ export const WARM_CHROME_CHECK_PROOF_FAILURE_STATION_IDS = [
 	"check.listener_mismatch",
 	"check.non_loopback",
 	"check.port_occupied_foreign",
+	"check.profile_posture_unsafe",
 	"check.unsafe_profile",
 	"check.wrong_browser",
 ] as const;
