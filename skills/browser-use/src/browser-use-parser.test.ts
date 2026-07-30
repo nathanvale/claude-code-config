@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { type BrowserUseCommand, browserUseContracts } from "./command-contract";
 import { runForTest } from "./browser-use";
+import { parseBrowserUseArgv } from "./browser-use-parser";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
 // Per-module tests for browser-use-parser.ts (carved from U3 blocks, plan U9).
@@ -109,6 +110,28 @@ describe("U3 help and version", () => {
 // =========================================================================
 
 describe("U3 parser", () => {
+	test("runbook run accepts repeated private input files", () => {
+		const parsed = parseBrowserUseArgv([
+			"runbook",
+			"run",
+			"--service",
+			"fasttrack",
+			"--flow",
+			"fill-week",
+			"--input-file",
+			"timesheet_run=/private/one.json",
+			"--input-file",
+			"other=/private/two.json",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+		expect(parsed.repeatedFlagValues["--input-file"]).toEqual([
+			"timesheet_run=/private/one.json",
+			"other=/private/two.json",
+		]);
+	});
+
 	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
 	// door smoke tests). A PRESENT but unregistered family token stays a usage
 	// error naming the invalid value (D6).

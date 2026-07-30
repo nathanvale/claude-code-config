@@ -9,7 +9,9 @@
 // capturing runtime.
 // ---------------------------------------------------------------------------
 
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
@@ -22,7 +24,9 @@ import {
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
+	resolveBrowserUsePaths,
 } from "./browser-use-paths";
+import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
 import {
 	type McporterCommandInput,
 	type McporterCommandResult,
@@ -102,6 +106,46 @@ async function resolveAuthTokenRetrieval(
 	} catch {
 		return undefined;
 	}
+}
+
+function environmentTokenRetrievalOf(
+	runtime: BrowserUseRuntime,
+): BrowserUseTokenRetrievalPort | undefined {
+	const paths = resolveBrowserUsePaths(runtime.env);
+	if (!paths.ok) return undefined;
+	let configRoot: string;
+	try {
+		configRoot = realpathSync(paths.resolution.roots.config);
+	} catch {
+		return undefined;
+	}
+	const nativeBinRoot = import.meta.dir.endsWith("/dist")
+		? join(import.meta.dir, "bin")
+		: join(
+				import.meta.dir,
+				"..",
+				"..",
+				"..",
+				"runtime",
+				"browser-use-environment-auth",
+				".build",
+				"release",
+			);
+	const supervisorPath = join(
+		nativeBinRoot,
+		"browser-use-op-supervisor",
+	);
+	const opPaths =
+		process.arch === "arm64"
+			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
+			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
+	const opPath = opPaths.find((path) => existsSync(path));
+	if (!existsSync(supervisorPath) || opPath === undefined) return undefined;
+	return createEnvironmentTokenRetrievalPort({
+		supervisorPath,
+		opPath,
+		configRoot,
+	});
 }
 
 export type BrowserUseRuntime = {
@@ -195,14 +239,19 @@ export function createDefaultBrowserUseRuntime(
  */
 export async function createProductionBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
-	seam: BrowserUseSecuritySeam = createNativeAbsentSecuritySeam(),
+	seam?: BrowserUseSecuritySeam,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
 	// Honor an explicitly injected port; otherwise let the seam decide. Absence
 	// leaves the field undefined so the auth command reports typed absence.
 	if (runtime.authTokenRetrieval === undefined) {
-		const port = await resolveAuthTokenRetrieval(seam);
+		const port = await resolveAuthTokenRetrieval(
+			seam ?? createNativeAbsentSecuritySeam(),
+		);
 		if (port !== undefined) runtime.authTokenRetrieval = port;
+	}
+	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
+		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
 	}
 	return runtime;
 }

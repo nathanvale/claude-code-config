@@ -580,22 +580,44 @@ function singleAllowedOrigin(
 		: { ok: false };
 }
 
+function runbookInputAtPath(
+	inputs: BrowserUseRunbookInputs,
+	path: string,
+): unknown {
+	const [root, ...segments] = path.split(".");
+	if (root === undefined || !Object.hasOwn(inputs, root)) return undefined;
+	let value: unknown = inputs[root];
+	for (const segment of segments) {
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			Array.isArray(value) ||
+			!Object.hasOwn(value, segment)
+		) {
+			return undefined;
+		}
+		value = (value as Readonly<Record<string, unknown>>)[segment];
+	}
+	return value;
+}
+
 // Substitute the runbook's typed inputs into an action step's declared input
-// map: each value is a scalar token or an already-structured input value keyed
-// by input id. `{{id}}` tokens resolve to the input value verbatim (structured
-// values pass through unchanged; scalar values render as the raw value).
+// map. `{{id}}` and `{{id.object.path}}` tokens resolve verbatim.
 function resolveActionInputs(
 	declared: Readonly<Record<string, string>>,
 	inputs: BrowserUseRunbookInputs,
 ): Readonly<Record<string, unknown>> {
 	const out: Record<string, unknown> = {};
 	for (const [key, token] of Object.entries(declared)) {
-		const match = /^\{\{([a-z0-9_]+)\}\}$/.exec(token);
+		const match =
+			/^\{\{([a-z0-9][a-z0-9_]{0,63}(?:\.[a-z0-9][a-z0-9_]{0,63})*)\}\}$/.exec(
+				token,
+			);
 		if (match?.[1] === undefined) {
 			out[key] = token;
 			continue;
 		}
-		const resolved = inputs[match[1]];
+		const resolved = runbookInputAtPath(inputs, match[1]);
 		if (resolved !== undefined) out[key] = resolved;
 	}
 	return out;

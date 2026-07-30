@@ -13,6 +13,17 @@ const distRoot = join(skillRoot, "dist");
 // dist-adjacent copy first, then the repo-local `../runbooks` fallback.
 const shippedRunbooksSource = join(skillRoot, "runbooks");
 const shippedRunbooksDist = join(distRoot, "runbooks");
+const shippedActionsSource = join(skillRoot, "actions");
+const shippedActionsDist = join(distRoot, "actions");
+const nativeAuthRoot = join(
+	skillRoot,
+	"..",
+	"..",
+	"runtime",
+	"browser-use-environment-auth",
+);
+const nativeBinDist = join(distRoot, "bin");
+const nativeSupervisorName = "browser-use-op-supervisor";
 const entrypoints = [
 	"browser-use.ts",
 ].map((entrypoint) => join(import.meta.dir, entrypoint));
@@ -46,6 +57,19 @@ if (!build.success) {
 	process.exit(1);
 }
 
+const nativeBuild = Bun.spawn(
+	["swift", "build", "-c", "release", "--disable-sandbox"],
+	{ cwd: nativeAuthRoot, stdout: "inherit", stderr: "inherit" },
+);
+if ((await nativeBuild.exited) !== 0) {
+	throw new Error("Native environment-token proof build failed.");
+}
+await mkdir(nativeBinDist, { recursive: true });
+await cp(
+	join(nativeAuthRoot, ".build", "release", nativeSupervisorName),
+	join(nativeBinDist, nativeSupervisorName),
+);
+
 // Copy the shipped runbook catalog into dist so it travels with the packaged
 // bin. Fail closed if the source is missing — a build that dropped the seed
 // catalog would ship a `browser-use` whose `runbook list` is silently empty.
@@ -56,22 +80,40 @@ if (shippedSourceStat === null || !shippedSourceStat.isDirectory()) {
 	);
 }
 await cp(shippedRunbooksSource, shippedRunbooksDist, { recursive: true });
+const shippedActionsStat = await stat(shippedActionsSource).catch(() => null);
+if (shippedActionsStat === null || !shippedActionsStat.isDirectory()) {
+	throw new Error(
+		`Shipped action catalog missing at ${relative(skillRoot, shippedActionsSource)}.`,
+	);
+}
+await cp(shippedActionsSource, shippedActionsDist, { recursive: true });
 
 await verifyDist();
 
 async function verifyDist(): Promise<void> {
 	// The compiled entrypoints plus the copied shipped-runbook catalog directory.
 	const SHIPPED_RUNBOOKS_DIRNAME = "runbooks";
+	const SHIPPED_ACTIONS_DIRNAME = "actions";
+	const NATIVE_BIN_DIRNAME = "bin";
 	const distEntries = await readdir(distRoot);
 	const unexpected = distEntries.filter(
 		(entry) =>
-			!expectedDistFiles.has(entry) && entry !== SHIPPED_RUNBOOKS_DIRNAME,
+			!expectedDistFiles.has(entry) &&
+			entry !== SHIPPED_RUNBOOKS_DIRNAME &&
+			entry !== SHIPPED_ACTIONS_DIRNAME &&
+			entry !== NATIVE_BIN_DIRNAME,
 	);
 	const missing = [...expectedDistFiles].filter(
 		(entry) => !distEntries.includes(entry),
 	);
 	if (!distEntries.includes(SHIPPED_RUNBOOKS_DIRNAME)) {
 		missing.push(SHIPPED_RUNBOOKS_DIRNAME);
+	}
+	if (!distEntries.includes(SHIPPED_ACTIONS_DIRNAME)) {
+		missing.push(SHIPPED_ACTIONS_DIRNAME);
+	}
+	if (!distEntries.includes(NATIVE_BIN_DIRNAME)) {
+		missing.push(NATIVE_BIN_DIRNAME);
 	}
 
 	if (missing.length > 0 || unexpected.length > 0) {
@@ -94,9 +136,31 @@ async function verifyDist(): Promise<void> {
 			`Shipped seed runbook missing from dist at ${relative(skillRoot, seedRunbook)}.`,
 		);
 	}
+	const actionRegistry = join(shippedActionsDist, "registry.json");
+	const actionRegistryStat = await stat(actionRegistry).catch(() => null);
+	if (actionRegistryStat === null || !actionRegistryStat.isFile()) {
+		throw new Error(
+			`Shipped action registry missing from dist at ${relative(skillRoot, actionRegistry)}.`,
+		);
+	}
+	const nativeSupervisor = join(nativeBinDist, nativeSupervisorName);
+	const nativeSupervisorStat = await stat(nativeSupervisor).catch(() => null);
+	if (
+		nativeSupervisorStat === null ||
+		!nativeSupervisorStat.isFile() ||
+		(nativeSupervisorStat.mode & 0o111) === 0
+	) {
+		throw new Error("Native environment-token proof executable is missing.");
+	}
 
 	for (const entry of distEntries) {
-		if (entry === SHIPPED_RUNBOOKS_DIRNAME) continue;
+		if (
+			entry === SHIPPED_RUNBOOKS_DIRNAME ||
+			entry === SHIPPED_ACTIONS_DIRNAME ||
+			entry === NATIVE_BIN_DIRNAME
+		) {
+			continue;
+		}
 		const distPath = join(distRoot, entry);
 		const stats = await stat(distPath);
 

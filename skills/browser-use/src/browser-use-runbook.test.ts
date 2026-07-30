@@ -66,6 +66,7 @@ import {
 	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	recordItemCheckpoint,
 } from "./browser-use-runbook-actions";
+import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import type {
 	BrowserUseActionGenerationSeam,
 	BrowserUseItemBatchState,
@@ -934,6 +935,11 @@ describe("runbook discovery over the XDG data root", () => {
 			// `runbook list` never reports catalog_count=0 out of the box.
 			expect(rows).toEqual([
 				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "fill-week",
+					health: "healthy",
+				}),
+				expect.objectContaining({
 					service_id: "matest",
 					flow_id: "development-snapshot-verify",
 					health: "healthy",
@@ -1086,6 +1092,76 @@ describe("runbook discovery over the XDG data root", () => {
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
 describe("shipped runbooks root resolution", () => {
+	test("ships exactly the three daily-driver runbooks", async () => {
+		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
+		try {
+			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
+			expect(
+				rows.map((row) => `${row.service_id}/${row.flow_id}`).sort(),
+			).toEqual([
+				"fasttrack/fill-week",
+				"matest/development-snapshot-verify",
+				"oncore/timesheet-snapshot-verify",
+			]);
+		} finally {
+			rmSync(dataRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("prepares FastTrack from shipped reviewed actions without Submit", async () => {
+		const prepared = await prepareRunbookExecution(
+			createDefaultPlatformFs(),
+			mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
+			{
+				serviceId: "fasttrack",
+				flowId: "fill-week",
+				inputs: {
+					timesheet_run: {
+						envelope: {
+							target_account: "primary",
+							period_start: "2026-07-27",
+							period_end: "2026-08-02",
+							selected_work_dates: ["2026-07-27"],
+							expected_aggregate: { unit: "hours", value: 8 },
+							mutation_mode: "prepare-draft",
+							final_action: "human-submit",
+						},
+						payload: {
+							portal: "fasttrack",
+							rows: [
+								{
+									date: "2026-07-27",
+									day: "Mon",
+									start_time: "09:00",
+									end_time: "17:00",
+									attendance_type: "Standard",
+								},
+							],
+						},
+					},
+				},
+				resumeFromStep: 0,
+				actionSeam: createBrowserUseShippedActionSeam(
+					createDefaultPlatformFs(),
+				),
+			},
+		);
+
+		expect(prepared.ok).toBe(true);
+		if (!prepared.ok) return;
+		expect(prepared.plan.steps).toHaveLength(7);
+		expect(
+			prepared.plan.steps.filter((step) => step.kind === "evaluate"),
+		).toHaveLength(4);
+		expect(
+			prepared.plan.steps.some(
+				(step) =>
+					step.kind === "evaluate" &&
+					step.action_id.toLowerCase().includes("submit"),
+			),
+		).toBe(false);
+	});
+
 	test("resolves to an existing directory containing the shipped runbooks", () => {
 		const root = shippedRunbooksRoot();
 		expect(existsSync(root)).toBe(true);

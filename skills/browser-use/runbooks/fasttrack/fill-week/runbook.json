@@ -1,0 +1,221 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "fasttrack",
+  "flow_id": "fill-week",
+  "flow_name": "fill-week",
+  "version": "2",
+  "summary": "Fill and verify one FastTrack week, then save it as a draft. Final Submit stays human-controlled.",
+  "allowed_origins": ["https://manpowergroup.fasttrack360.com.au"],
+  "auth_context_ref": "fasttrack-session",
+  "inputs": [
+    {
+      "id": "timesheet_run",
+      "summary": "The selected week, expected hours, and FastTrack row values.",
+      "required": true,
+      "schema": {
+        "kind": "object",
+        "fields": {
+          "envelope": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "target_account": {
+                  "required": true,
+                  "schema": {
+                    "kind": "string",
+                    "min_length": 1,
+                    "max_length": 256
+                  }
+                },
+                "period_start": {
+                  "required": true,
+                  "schema": { "kind": "date" }
+                },
+                "period_end": {
+                  "required": true,
+                  "schema": { "kind": "date" }
+                },
+                "selected_work_dates": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 31,
+                    "items": { "kind": "date" }
+                  }
+                },
+                "expected_aggregate": {
+                  "required": true,
+                  "schema": {
+                    "kind": "object",
+                    "fields": {
+                      "unit": {
+                        "required": true,
+                        "schema": {
+                          "kind": "enum",
+                          "values": ["hours"]
+                        }
+                      },
+                      "value": {
+                        "required": true,
+                        "schema": {
+                          "kind": "number",
+                          "minimum": 0,
+                          "maximum": 168
+                        }
+                      }
+                    }
+                  }
+                },
+                "mutation_mode": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": ["prepare-draft"]
+                  }
+                },
+                "final_action": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": ["human-submit"]
+                  }
+                }
+              }
+            }
+          },
+          "payload": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "portal": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": ["fasttrack"]
+                  }
+                },
+                "rows": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 7,
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "date": {
+                          "required": true,
+                          "schema": { "kind": "date" }
+                        },
+                        "day": {
+                          "required": true,
+                          "schema": {
+                            "kind": "enum",
+                            "values": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                          }
+                        },
+                        "start_time": {
+                          "required": true,
+                          "schema": {
+                            "kind": "string",
+                            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                          }
+                        },
+                        "end_time": {
+                          "required": true,
+                          "schema": {
+                            "kind": "string",
+                            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                          }
+                        },
+                        "attendance_type": {
+                          "required": true,
+                          "schema": {
+                            "kind": "enum",
+                            "values": ["Standard", "Public Holiday Worked"]
+                          }
+                        },
+                        "breaks": {
+                          "required": false,
+                          "schema": {
+                            "kind": "array",
+                            "max_items": 4,
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "start_time": {
+                                  "required": true,
+                                  "schema": {
+                                    "kind": "string",
+                                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                                  }
+                                },
+                                "end_time": {
+                                  "required": true,
+                                  "schema": {
+                                    "kind": "string",
+                                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "steps": [
+    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-fill-week",
+      "expected_digest": "5a6ba553e36c23162dc8c2a622d9ea690fd4afdb0ce2faafcfcc56c607f98d09",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-filled-week",
+      "expected_digest": "22e8271f22bcdb1e2b75baa39b9282a0f2b93eefbffa7f45f7721024bbcea6d5",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    },
+    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-save-draft",
+      "expected_digest": "d2cd6c6085145a10caa16fba112d878add676c843fc0fffcb2a808c355701910",
+      "inputs": {}
+    },
+    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-saved-draft",
+      "expected_digest": "cd7fb7e7b31221f85f547b1c52f9d808b00e5eea1937ca08aa3aa52c1d478f61",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}",
+        "expected_total_hours": "{{timesheet_run.envelope.expected_aggregate.value}}"
+      }
+    }
+  ]
+}

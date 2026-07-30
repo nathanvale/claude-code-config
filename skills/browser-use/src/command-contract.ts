@@ -1552,6 +1552,11 @@ const browserUseRunbookRunFlags = {
 		description:
 			"Runbook input binding as <id>=<value>. Repeatable; one per declared runbook input.",
 	},
+	"--input-file": {
+		type: "string",
+		description:
+			"Private structured input as <id>=<absolute-path>. Repeatable; files must be owner-only beneath the runtime private-input root.",
+	},
 	"--handoff": {
 		type: "path",
 		description:
@@ -2069,7 +2074,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Compile one Browser Runbook and dispatch it through the agent-browser lane against a verified handoff; returns the shared run, external-effect state, and next safe action.",
 			usage: [
-				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
+				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--input-file <id>=<absolute-path>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",

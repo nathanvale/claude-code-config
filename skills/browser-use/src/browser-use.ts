@@ -204,8 +204,10 @@ import {
 	executePreparedRunbook,
 	listRunbooks,
 	prepareRunbookExecution,
+	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
+import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import {
 	type BrowserUseRunbookInputs,
 	nextRunbookStepAfterExecution,
@@ -3415,6 +3417,68 @@ function parseRunbookInputs(
 	return { ok: true, inputs };
 }
 
+type PrivateRunbookInputBinding = {
+	inputId: string;
+	filePath: string;
+};
+
+function parsePrivateRunbookInputBindings(
+	pairs: readonly string[],
+):
+	| { ok: true; bindings: readonly PrivateRunbookInputBinding[] }
+	| { ok: false; code: string; message: string } {
+	const inputIds = new Set<string>();
+	const bindings: PrivateRunbookInputBinding[] = [];
+	for (const pair of pairs) {
+		const equals = pair.indexOf("=");
+		if (equals <= 0 || equals === pair.length - 1) {
+			return {
+				ok: false,
+				code: "private_input_shape_invalid",
+				message:
+					"each --input-file must be <id>=<absolute-path>; private paths and values are withheld.",
+			};
+		}
+		const inputId = pair.slice(0, equals);
+		if (inputIds.has(inputId)) {
+			return {
+				ok: false,
+				code: "private_input_shape_invalid",
+				message: "a private input id may be supplied only once.",
+			};
+		}
+		inputIds.add(inputId);
+		bindings.push({ inputId, filePath: pair.slice(equals + 1) });
+	}
+	return { ok: true, bindings };
+}
+
+async function readPrivateRunbookInputs(
+	bindings: readonly PrivateRunbookInputBinding[],
+	inputRoot: string,
+): Promise<
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; code: string; message: string }
+> {
+	const inputs: Record<string, unknown> = {};
+	for (const binding of bindings) {
+		const read = await readPrivateStructuredInput({
+			inputId: binding.inputId,
+			inputRoot,
+			filePath: binding.filePath,
+		});
+		if (!read.ok) {
+			return {
+				ok: false,
+				code: read.refusal.code,
+				message: read.refusal.message,
+			};
+		}
+		Object.assign(inputs, read.inputs);
+	}
+	return { ok: true, inputs };
+}
+
 // Redact an --input pair for an error message: never echo the value bytes (a
 // confidential value could ride in), only the id portion.
 function sanitizeInputPairForError(pair: string): string {
@@ -3497,9 +3561,51 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			recoverability: "change_input",
 		});
 	}
+	const privateInputBindings = parsePrivateRunbookInputBindings(
+		input.parsed.repeatedFlagValues["--input-file"] ?? [],
+	);
+	if (!privateInputBindings.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: privateInputBindings.code,
+			message: privateInputBindings.message,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const publicInputIds = new Set(Object.keys(parsedInputs.inputs));
+	const conflictingInput = privateInputBindings.bindings.find((binding) =>
+		publicInputIds.has(binding.inputId),
+	);
+	if (conflictingInput !== undefined) {
+		return emitTaskRunFailure(input, undefined, {
+			code: "runbook_input_source_conflict",
+			message: `runbook input ${conflictingInput.inputId} may use either --input or --input-file, not both.`,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
 
 	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
+	const privateInputs = await readPrivateRunbookInputs(
+		privateInputBindings.bindings,
+		join(store.deps.paths.resolution.roots.runtime, "private-inputs"),
+	);
+	if (!privateInputs.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: privateInputs.code,
+			message: privateInputs.message,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const runbookInputs: BrowserUseRunbookInputs = {
+		...parsedInputs.inputs,
+		...privateInputs.inputs,
+	};
 
 	const runFlag = stringField(flags["--run"]);
 	const explicitTabId = stringField(flags["--tab"]);
@@ -3579,8 +3685,9 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		{
 			serviceId,
 			flowId,
-			inputs: parsedInputs.inputs,
+			inputs: runbookInputs,
 			resumeFromStep,
+			actionSeam: createBrowserUseShippedActionSeam(store.deps.fs),
 		},
 	);
 	if (!prepared.ok) {
