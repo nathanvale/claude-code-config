@@ -56,6 +56,7 @@ import {
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createBrowserUseAdminAuthorityReceiptStore } from "./browser-use-admin-authority-receipt";
+import { inspectBrowserUseAuthStatusBinding } from "./browser-use-auth-status-binding";
 import {
 	type BrowserUseProfilePostureStatus,
 	parseBrowserConnectProfilePostureStatus,
@@ -1360,18 +1361,15 @@ export async function inspectBrowserUseAuthStatusExecutable(
 	return inspectOwnedNativeIdentity(path, expectation.expected_identifier);
 }
 
-/**
- * Inspect only local packaged executable availability.
- *
- * Human authority, running-Chrome posture, and route binding have no
- * command-independent production proof owner here. Report those states
- * explicitly as absent/unproven so the status composer can prioritize a
- * bounded repair without claiming live evidence.
- */
+/** Compose executable, human-authority, Warm Chrome, and binding evidence. */
 function createProductionAuthStatusSupportPort(
 	runtime: Pick<
 		BrowserUseRuntime,
-		"authProfilePosture" | "env" | "now" | "platformFs"
+		| "authAdmission"
+		| "authProfilePosture"
+		| "env"
+		| "now"
+		| "platformFs"
 	>,
 ): BrowserUseAuthStatusSupportPort {
 	let executableEvidence:
@@ -1422,6 +1420,19 @@ function createProductionAuthStatusSupportPort(
 		let adminAuthority: "proven" | "missing" | "invalid" = "missing";
 		let profile: "live-clean" | "missing" | "unsafe" | "unproven" =
 			"unproven";
+		let binding: "ready" | "missing" | "stale" | "invalid" = "missing";
+		let proof: {
+			lane_digest: string;
+			principal_digest: string;
+			vault_digest: string;
+			profile_digest: string;
+			profile_posture_receipt_digest: string;
+			admin_authority_receipt_digest: string;
+			binding_context_digest: string;
+			binding_receipt_digest: string;
+			observed_at_epoch_ms: number;
+			fresh_until_epoch_ms: number;
+		} | null = null;
 		if (coordinates !== undefined) {
 			const opened = await inspectBrowserUsePaths(
 				runtime.platformFs,
@@ -1445,26 +1456,104 @@ function createProductionAuthStatusSupportPort(
 						: receipt.state === "missing"
 							? "missing"
 							: "invalid";
-			}
-			if (
-				adminAuthority === "proven" &&
-				runtime.authProfilePosture !== undefined
-			) {
-				try {
-					profile = (await runtime.authProfilePosture()).state;
-				} catch {
-					profile = "unproven";
+				if (
+					adminAuthority === "proven" &&
+					runtime.authProfilePosture !== undefined
+				) {
+					let posture: BrowserUseProfilePostureStatus;
+					try {
+						posture = await runtime.authProfilePosture();
+					} catch {
+						posture = { state: "unproven" };
+					}
+					profile = posture.state;
+					if (posture.state === "live-clean") {
+						const admission = runtime.authAdmission;
+						if (
+							receipt.state === "proven" &&
+							admission !== undefined &&
+							admission.kind !== "blocked"
+						) {
+							try {
+								const bindingInspection =
+									await inspectBrowserUseAuthStatusBinding(
+										{
+											fs: runtime.platformFs,
+											paths: opened.paths,
+											clock: runtime.now,
+										},
+										admission,
+										{
+											proofCoordinates: coordinates,
+										},
+									);
+								binding = bindingInspection.state;
+								if (
+									bindingInspection.state === "ready"
+								) {
+									const observedAt = runtime.now();
+									const freshUntil = Math.min(
+										observedAt + 60_000,
+										posture.observed_at_epoch_ms +
+											60_000,
+									);
+									if (
+										Number.isSafeInteger(observedAt) &&
+										observedAt >=
+											posture.observed_at_epoch_ms &&
+										freshUntil > observedAt
+									) {
+										const bindingContextDigest =
+											createHash("sha256")
+												.update(
+													[
+														"browser-use.auth-status.binding-context.v1",
+														coordinates.lane_digest,
+														coordinates.principal_digest,
+														coordinates.vault_digest,
+														coordinates.profile_digest,
+														posture.profile_posture_receipt_digest,
+														receipt.receipt_digest,
+														bindingInspection.binding_receipt_digest,
+													].join("\0"),
+												)
+												.digest("hex");
+										proof = {
+											...coordinates,
+											profile_posture_receipt_digest:
+												posture.profile_posture_receipt_digest,
+											admin_authority_receipt_digest:
+												receipt.receipt_digest,
+											binding_context_digest:
+												bindingContextDigest,
+											binding_receipt_digest:
+												bindingInspection.binding_receipt_digest,
+											observed_at_epoch_ms:
+												observedAt,
+											fresh_until_epoch_ms:
+												freshUntil,
+										};
+									} else {
+										binding = "invalid";
+									}
+								}
+							} catch {
+								binding = "invalid";
+								proof = null;
+							}
+							}
+						}
+					}
 				}
 			}
-		}
-		return {
+			return {
 			contract: "browser-use.auth-status-support",
 			schema_version: "1",
 			executables,
 			admin_authority: adminAuthority,
 			profile,
-			binding: "missing",
-			proof: null,
+			binding,
+			proof,
 		};
 	};
 }

@@ -474,6 +474,25 @@ function proofCoordinates(
 	};
 }
 
+/** Recompute status coordinates from one freshly proved exact binding. */
+export function authStatusProofCoordinatesForBinding(
+	admission: Exclude<
+		BrowserUseAuthLaneAdmission<BrowserUseTokenRetrievalPort>,
+		{ kind: "blocked" }
+	>,
+	binding: Pick<BrowserUseItemBinding, "service_account_id" | "vault_id">,
+): BrowserUseAuthStatusProofCoordinates {
+	return proofCoordinates(
+		admission,
+		{
+			service_account_id: binding.service_account_id,
+			state: "ACTIVE",
+			type: "SERVICE_ACCOUNT",
+		},
+		binding.vault_id,
+	);
+}
+
 /**
  * Inspect active principal and vault scope without exposing identifiers.
  *
