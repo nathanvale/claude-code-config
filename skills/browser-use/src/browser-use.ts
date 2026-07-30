@@ -113,6 +113,7 @@ import {
 	type BrowserUseSharedRun,
 	type BrowserUseTaskIntent,
 	classifyCancellation,
+	isBrowserUseAuthRunContinuation,
 } from "./browser-use-run-model";
 import {
 	emitWithDiagnostics,
@@ -1317,6 +1318,8 @@ type PlatformStoreFailure = {
 	actionId: PlatformStoreActionId;
 	exitCode: number;
 	recoverability: RuntimeErrorRecoverability;
+	dataExtra?: Record<string, unknown>;
+	plainExtra?: readonly string[];
 };
 
 function platformErrorCode(error: unknown): string {
@@ -1395,7 +1398,7 @@ function emitPlatformStoreFailure(
 	const message = redactUnsafeText(failure.message);
 	if (input.parsed.outputMode === "plain") {
 		input.stderr.write(
-			`browser_use ${failure.code}: ${message} action=${failure.actionId} (run_id=${input.runId})\n`,
+			`browser_use ${failure.code}: ${message} action=${failure.actionId}${failure.plainExtra === undefined ? "" : ` ${failure.plainExtra.join(" ")}`} (run_id=${input.runId})\n`,
 		);
 		return failure.exitCode;
 	}
@@ -1407,6 +1410,7 @@ function emitPlatformStoreFailure(
 			data: {
 				command: input.parsed.command,
 				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				...(failure.dataExtra ?? {}),
 				caller: input.caller,
 			},
 			runtime_actions: [platformStoreAction(failure.actionId)],
@@ -1501,6 +1505,34 @@ function writeRunPlain(
 		stdout.write(
 			`continuation=${run.continuation.next_action_id} ${run.continuation.summary}\n`,
 		);
+		if (isBrowserUseAuthRunContinuation(run.continuation)) {
+			const continuation = run.continuation;
+			stdout.write(
+				[
+					`continuation_id=${continuation.continuation_id}`,
+					`continuation_state=${continuation.state}`,
+					`continuation_reason=${continuation.reason}`,
+					`required_actor=${continuation.required_actor}`,
+					`safe_to_retry=${continuation.safe_to_retry}`,
+					`checkpoint=${continuation.checkpoint}`,
+					`expires_at_epoch_ms=${continuation.expires_at_epoch_ms}`,
+					`generation_id=${continuation.bindings.generation_id}`,
+					`activation_epoch=${continuation.bindings.activation_epoch}`,
+					`route_digest=${continuation.bindings.route_digest}`,
+					`lane_id=${continuation.bindings.lane_id}`,
+					`continuation_adapter=${continuation.bindings.adapter_id}`,
+					`handoff_evidence_id=${continuation.bindings.handoff_evidence_id}`,
+					`target_binding_id=${continuation.bindings.target_binding_id}`,
+					`subject_ref=${continuation.bindings.expected_identity.subject_ref}`,
+					`account_ref=${continuation.bindings.expected_identity.account_ref}`,
+					...(continuation.bindings.expected_identity.tenant_ref !== undefined
+						? [
+								`tenant_ref=${continuation.bindings.expected_identity.tenant_ref}`,
+							]
+						: []),
+				].join(" ") + "\n",
+			);
+		}
 	}
 	for (const artifact of run.artifacts) {
 		stdout.write(
@@ -1752,9 +1784,10 @@ async function runRunStatus(input: PlatformCommandInput): Promise<number> {
 }
 
 /**
- * `run resume` (R28/R36, AE7/AE15 substrate). Blocked: re-emits the run plus
- * its exactly-one persisted continuation (state unchanged — the continuation
- * IS the resume answer in U2). Ready/running: the U1 same-lane gate runs
+ * `run resume` (R28/R36, AE7/AE15 substrate). Blocked legacy continuations are
+ * re-emitted. Versioned auth continuations return an exact runbook resupply
+ * action without claim unless this process can continue the pinned effect
+ * path. Ready/running: the U1 same-lane gate runs
  * against the pinned observed identity, then live execution reports typed
  * unavailability (exit 1; lanes land in U4). Terminal truth never re-enters
  * execution (exit 20).
@@ -1789,6 +1822,24 @@ async function runRunResume(input: PlatformCommandInput): Promise<number> {
 				actionId: "inspect_shared_run",
 				exitCode: RUNTIME_FAILURE_EXIT_CODE,
 				recoverability: "none",
+			});
+		case "input-resupply-required":
+			return emitPlatformStoreFailure(input, {
+				code: "run_resume_input_resupply_required",
+				message: `run ${projection.run.run_id} ${projection.resupply.input_custody} inputs are not recoverable in this process; invoke ${projection.resupply.command} ${projection.resupply.args.join(" ")} with ${projection.resupply.required_flags.join(", ")}.`,
+				actionId: projection.resupply.action_id,
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+				dataExtra: {
+					resume: "input-resupply-required",
+					resupply: projection.resupply,
+				},
+				plainExtra: [
+					"resume=input-resupply-required",
+					`command=${projection.resupply.command}`,
+					`args=${projection.resupply.args.join(",")}`,
+					`required_flags=${projection.resupply.required_flags.join(",")}`,
+				],
 			});
 		case "lane-mismatch":
 			return emitPlatformStoreFailure(input, {

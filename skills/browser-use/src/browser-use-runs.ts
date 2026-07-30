@@ -35,6 +35,7 @@ import type {
 import {
 	type BrowserUseAuthCommitResult,
 	type BrowserUseAuthContractPort,
+	type BrowserUseAuthRunContinuation,
 	type BrowserUseResumeCheck,
 	type BrowserUseRunContinuation,
 	type BrowserUseRunIntegrationPort,
@@ -45,6 +46,7 @@ import {
 	applyAuthCommit,
 	checkSameLaneResume,
 	checkRunItemBatchTransition,
+	isBrowserUseAuthRunContinuation,
 	validateSharedRun,
 } from "./browser-use-run-model";
 import {
@@ -333,6 +335,236 @@ export async function createSharedRun(
 		return runFailure(written.failure.code, written.failure.message);
 	}
 	return { ok: true, run: initial };
+}
+
+/** Typed result of atomically claiming one durable R16 auth continuation. */
+export type RunContinuationClaimResult =
+	| {
+			status: "claimed";
+			run: BrowserUseSharedRun;
+			continuation: BrowserUseAuthRunContinuation;
+	  }
+	| {
+			status: "already-claimed";
+			run: BrowserUseSharedRun;
+			continuation: BrowserUseAuthRunContinuation;
+	  }
+	| { status: "in-progress"; run: BrowserUseSharedRun }
+	| { status: "terminal"; run: BrowserUseSharedRun }
+	| {
+			status: "mismatch";
+			kind: "continuation-id" | "revision";
+			run: BrowserUseSharedRun;
+	  }
+	| {
+			status: "unavailable";
+			code: string;
+			message: string;
+	  };
+
+/**
+ * Atomically claim an available secret-free auth continuation before any
+ * browser, handoff, credential-delivery, or submit effect begins.
+ *
+ * The activation barrier and per-run lock serialize the load, revision CAS,
+ * claim transition, and durable write. A racing caller observes the persisted
+ * claimed state and receives `already-claimed`; it never executes a callback
+ * or obtains a reusable delivery capability.
+ *
+ * @param deps - Injected fs, admitted paths, and clock
+ * @param input - Exact run, continuation, revision, and opaque claimant ids
+ * @returns One typed claim, loser, terminal, human gate, or store outcome
+ */
+export async function claimRunContinuation(
+	deps: RunStoreDeps,
+	input: {
+		runId: string;
+		continuationId: string;
+		expectedRevision: number;
+		claimantId: string;
+		actor: "agent" | "human";
+	},
+): Promise<RunContinuationClaimResult> {
+	const dirs = await ensureRunDirs(deps, input.runId);
+	if (!dirs.ok) {
+		return { status: "unavailable", code: dirs.code, message: dirs.message };
+	}
+	const claimUnderRunLock = async (): Promise<
+		| { ok: true; result: RunContinuationClaimResult }
+		| { ok: false; code: string; message: string }
+	> => {
+		const locked = await withExclusiveFileLock<{
+			ok: true;
+			result: RunContinuationClaimResult;
+		}>(
+			deps.fs,
+			{
+				lockPath: runLockPath(deps.paths, input.runId),
+				holderId: `continuation-claim-${input.runId}`,
+				staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+				clock: deps.clock,
+			},
+			async () => {
+				const loaded = await loadSharedRun(deps, input.runId);
+				if (!loaded.ok) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: loaded.code,
+							message: loaded.message,
+						},
+					};
+				}
+				const { run } = loaded;
+				if (isTerminalState(run.state)) {
+					return { ok: true, result: { status: "terminal", run } };
+				}
+				if (run.state === "ready" || run.state === "running") {
+					return { ok: true, result: { status: "in-progress", run } };
+				}
+				const continuation = run.continuation;
+				if (
+					continuation === undefined ||
+					!isBrowserUseAuthRunContinuation(continuation)
+				) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: "run_continuation_not_claimable",
+							message:
+								"the run does not carry the requested versioned auth continuation.",
+						},
+					};
+				}
+				if (continuation.continuation_id !== input.continuationId) {
+					return {
+						ok: true,
+						result: { status: "mismatch", kind: "continuation-id", run },
+					};
+				}
+				if (continuation.state === "claimed") {
+					return {
+						ok: true,
+						result: { status: "already-claimed", run, continuation },
+					};
+				}
+				if (continuation.state === "in-progress") {
+					return { ok: true, result: { status: "in-progress", run } };
+				}
+				if (
+					continuation.state === "completed" ||
+					continuation.state === "expired" ||
+					continuation.state === "invalidated" ||
+					deps.clock() >= continuation.expires_at_epoch_ms
+				) {
+					return { ok: true, result: { status: "terminal", run } };
+				}
+				if (continuation.required_actor !== input.actor) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: "human-action-required",
+							message: "the continuation requires its declared human actor.",
+						},
+					};
+				}
+				if (run.revision !== input.expectedRevision) {
+					return {
+						ok: true,
+						result: { status: "mismatch", kind: "revision", run },
+					};
+				}
+				const claimed: BrowserUseAuthRunContinuation = {
+					...continuation,
+					state: "claimed",
+					claim: {
+						claimant_id: input.claimantId,
+						claimed_at_epoch_ms: deps.clock(),
+					},
+				};
+				const next: BrowserUseSharedRun = {
+					...run,
+					revision: run.revision + 1,
+					continuation: claimed,
+				};
+				const issues = validateSharedRun(next);
+				const firstIssue = issues[0];
+				if (firstIssue !== undefined) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: firstIssue.code,
+							message: redactUnsafeText(
+								issues.map((issue) => issue.message).join(" "),
+							),
+						},
+					};
+				}
+				const payload: BrowserUseSharedRunPayload = {
+					...next,
+					created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
+					updated_at_epoch_ms: deps.clock(),
+				};
+				const admitted = admitRedactionClean(payload);
+				if (!admitted.ok) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: admitted.code,
+							message: admitted.message,
+						},
+					};
+				}
+				const written = await writeDurableFile(deps.fs, {
+					path: deps.paths.state.runFile(input.runId),
+					contents: encodeDurableRecord("shared-run", payload),
+				});
+				if (!written.ok) {
+					return {
+						ok: true,
+						result: {
+							status: "unavailable",
+							code: written.failure.code,
+							message: written.failure.message,
+						},
+					};
+				}
+				return {
+					ok: true,
+					result: { status: "claimed", run: next, continuation: claimed },
+				};
+			},
+		);
+		if (isLockFailure(locked)) {
+			return {
+				ok: false,
+				code: locked.failure.code,
+				message: locked.failure.message,
+			};
+		}
+		return locked;
+	};
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `continuation-claim-epoch-${input.runId}` },
+		claimUnderRunLock,
+	);
+	if (isLockFailure(outcome)) {
+		return {
+			status: "unavailable",
+			code: outcome.failure.code,
+			message: outcome.failure.message,
+		};
+	}
+	if (!outcome.ok) {
+		return { status: "unavailable", code: outcome.code, message: outcome.message };
+	}
+	return outcome.result;
 }
 
 // --- CAS update (R13, R27) ----------------------------------------------------
@@ -896,6 +1128,17 @@ export type SharedRunResumeProjection =
 	  }
 	| { kind: "execution-unavailable"; run: BrowserUseSharedRun }
 	| {
+			kind: "input-resupply-required";
+			run: BrowserUseSharedRun;
+			resupply: {
+				action_id: "resupply_run_inputs";
+				input_custody: "ordinary" | "governed";
+				command: "browser-use runbook run";
+				args: readonly ["--run", string];
+				required_flags: readonly ["--handoff", "--input", "--json"];
+			};
+	  }
+	| {
 			kind: "lane-mismatch";
 			run: BrowserUseSharedRun;
 			refusal: Extract<BrowserUseResumeCheck, { ok: false }>;
@@ -917,13 +1160,38 @@ export type SharedRunResumeProjection =
  */
 export async function resumeSharedRun(
 	deps: RunStoreDeps,
-	input: { runId: string; observed?: RunResumeObservedIdentity },
+	input: {
+		runId: string;
+		observed?: RunResumeObservedIdentity;
+		inputsRecovered?: boolean;
+	},
 ): Promise<SharedRunResumeProjection> {
 	const loaded = await loadSharedRun(deps, input.runId);
 	if (!loaded.ok) return { kind: "load-failed", failure: loaded };
 	const { run } = loaded;
 	if (isTerminalState(run.state)) {
 		return { kind: "terminal", run };
+	}
+	const requiresRunbookOrchestration =
+		run.run_execution_binding !== undefined ||
+		(isBlockedState(run.state) &&
+			run.continuation !== undefined &&
+			isBrowserUseAuthRunContinuation(run.continuation));
+	if (requiresRunbookOrchestration && input.inputsRecovered !== true) {
+		return {
+			kind: "input-resupply-required",
+			run,
+			resupply: {
+				action_id: "resupply_run_inputs",
+				input_custody:
+					run.run_execution_binding?.governed_input_artifact_ref !== undefined
+						? "governed"
+						: "ordinary",
+				command: "browser-use runbook run",
+				args: ["--run", run.run_id],
+				required_flags: ["--handoff", "--input", "--json"],
+			},
+		};
 	}
 	if (isBlockedState(run.state)) {
 		if (run.continuation === undefined) {

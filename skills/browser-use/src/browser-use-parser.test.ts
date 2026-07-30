@@ -105,6 +105,35 @@ describe("U3 help and version", () => {
 	});
 });
 
+describe("R16 continuation resume surface alignment", () => {
+	test("parser, contract usage, and rendered help accept the same exact run resume action", async () => {
+		expect(
+			parseBrowserUseArgv([
+				"run",
+				"resume",
+				"--run",
+				"run-auth-1",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "run-resume",
+			flagValues: { "--run": "run-auth-1" },
+			outputMode: "json",
+		});
+		expect(browserUseContracts["run-resume"].usage).toContain(
+			"run resume --run <id> [--caller <label>] [--json|--plain]",
+		);
+		const help = await runForTest(
+			["run", "resume", "--help"],
+			makeRuntime(),
+		);
+		expect(help.exitCode).toBe(0);
+		expect(help.stdout).toContain("run resume --run <id>");
+		expect(help.stdout).toContain("--run");
+	});
+});
+
 // =========================================================================
 // Parser acceptance / rejection
 // =========================================================================

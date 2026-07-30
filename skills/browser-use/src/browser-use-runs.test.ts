@@ -21,6 +21,7 @@ import {
 	attestationByDigestFrom,
 	BrowserUseAuthCommitInfrastructureError,
 	casUpdateSharedRun,
+	claimRunContinuation,
 	createRunIntegrationPort,
 	createSharedRun,
 	leaseKeyForRun,
@@ -96,6 +97,41 @@ const CONTINUATION = {
 	next_action_id: "prepare_auth_binding",
 	summary: "Prepare the credential binding, then resume this run.",
 };
+
+const AUTH_CONTINUATION = {
+	schema_version: "1",
+	kind: "auth",
+	continuation_id: "continuation-auth-1",
+	run_id: "run-auth-continuation-claim",
+	state: "pending",
+	reason: "login-required",
+	required_actor: "agent",
+	safe_to_retry: false,
+	checkpoint: "before-auth-delivery",
+	expires_at_epoch_ms: 10_000,
+	resume_action: {
+		command: "run",
+		args: ["resume", "--run", "run-auth-continuation-claim", "--json"],
+	},
+	bindings: {
+		generation_id: "gen-a",
+		activation_epoch: 3,
+		route_digest: "e".repeat(64),
+		lane_id: "daily-work",
+		adapter_id: "agent-browser",
+		handoff_evidence_id: "evidence-1",
+		environment: "agent-chrome",
+		profile: "default",
+		target_binding_id: "target-opaque-1",
+		expected_identity: {
+			subject_ref: "subject-oncore-primary",
+			account_ref: "account-oncore-primary",
+			tenant_ref: "tenant-monash",
+		},
+	},
+	next_action_id: "resume-auth-continuation",
+	summary: "Claim and re-prove this auth continuation before resuming.",
+} as const;
 
 const RUN_EXECUTION_BINDING = {
 	schema_version: "1",
@@ -402,6 +438,226 @@ describe("createSharedRun + loadSharedRun (R24)", () => {
 			code: "run_record_invalid",
 			message: expect.stringContaining("next safe action"),
 		});
+	});
+});
+
+describe("claimRunContinuation (R16)", () => {
+	test("claims one available auth continuation before any external effect", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun(AUTH_CONTINUATION.run_id, {
+				continuation: AUTH_CONTINUATION,
+			}),
+		);
+
+		const claimed = await claimRunContinuation(deps, {
+			runId: run.run_id,
+			continuationId: AUTH_CONTINUATION.continuation_id,
+			expectedRevision: run.revision,
+			claimantId: "orchestrator-a",
+			actor: "agent",
+		});
+
+		expect(claimed).toMatchObject({
+			status: "claimed",
+			run: { revision: 2 },
+			continuation: {
+				state: "claimed",
+				claim: {
+					claimant_id: "orchestrator-a",
+					claimed_at_epoch_ms: 1_000,
+				},
+			},
+		});
+		const loaded = await loadOk(deps, run.run_id);
+		expect(loaded.run.revision).toBe(2);
+		expect(loaded.run.continuation).toMatchObject({
+			state: "claimed",
+			claim: { claimant_id: "orchestrator-a" },
+		});
+	});
+
+	test("two concurrent claimants produce one winner and one typed already-claimed loser", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const runId = "run-auth-continuation-race";
+		const continuation = {
+			...AUTH_CONTINUATION,
+			run_id: runId,
+			continuation_id: "continuation-auth-race",
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", runId, "--json"] as const,
+			},
+		};
+		const run = await createOk(
+			deps,
+			blockedRun(runId, { continuation }),
+		);
+
+		const outcomes = await Promise.all(
+			["orchestrator-a", "orchestrator-b"].map(
+				async (claimantId) =>
+					await claimRunContinuation(deps, {
+						runId,
+						continuationId: continuation.continuation_id,
+						expectedRevision: run.revision,
+						claimantId,
+						actor: "agent",
+					}),
+			),
+		);
+
+		expect(outcomes.map((outcome) => outcome.status).sort()).toEqual([
+			"already-claimed",
+			"claimed",
+		]);
+		const loaded = await loadOk(deps, runId);
+		expect(loaded.run.revision).toBe(2);
+		expect(loaded.run.continuation).toMatchObject({ state: "claimed" });
+	});
+
+	test("continuation-id and revision mismatches are distinct and preserve durable bytes", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const runId = "run-auth-continuation-mismatch";
+		const continuation = {
+			...AUTH_CONTINUATION,
+			run_id: runId,
+			continuation_id: "continuation-auth-mismatch",
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", runId, "--json"] as const,
+			},
+		};
+		const run = await createOk(
+			deps,
+			blockedRun(runId, { continuation }),
+		);
+		const before = await rawRecordOf(deps, runId);
+
+		expect(
+			await claimRunContinuation(deps, {
+				runId,
+				continuationId: "continuation-other",
+				expectedRevision: run.revision,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({ status: "mismatch", kind: "continuation-id" });
+		expect(await rawRecordOf(deps, runId)).toBe(before);
+
+		expect(
+			await claimRunContinuation(deps, {
+				runId,
+				continuationId: continuation.continuation_id,
+				expectedRevision: run.revision + 1,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({ status: "mismatch", kind: "revision" });
+		expect(await rawRecordOf(deps, runId)).toBe(before);
+	});
+
+	test("an agent cannot claim a human continuation and no bytes change", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const runId = "run-auth-continuation-human";
+		const continuation = {
+			...AUTH_CONTINUATION,
+			run_id: runId,
+			continuation_id: "continuation-auth-human",
+			required_actor: "human" as const,
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", runId, "--json"] as const,
+			},
+		};
+		const run = await createOk(
+			deps,
+			blockedRun(runId, { continuation }),
+		);
+		const before = await rawRecordOf(deps, runId);
+
+		expect(
+			await claimRunContinuation(deps, {
+				runId,
+				continuationId: continuation.continuation_id,
+				expectedRevision: run.revision,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({
+			status: "unavailable",
+			code: "human-action-required",
+		});
+		expect(await rawRecordOf(deps, runId)).toBe(before);
+	});
+
+	test("in-progress, terminal, and expired continuations are typed and never rewritten", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const running = await createOk(
+			deps,
+			blockedRun("run-claim-running", {
+				state: "running",
+				continuation: undefined,
+			}),
+		);
+		const terminal = await createOk(
+			deps,
+			blockedRun("run-claim-terminal", {
+				state: "confirmed",
+				continuation: undefined,
+			}),
+		);
+		const expiredContinuation = {
+			...AUTH_CONTINUATION,
+			run_id: "run-claim-expired",
+			continuation_id: "continuation-expired",
+			expires_at_epoch_ms: 1_000,
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", "run-claim-expired", "--json"] as const,
+			},
+		};
+		const expired = await createOk(
+			deps,
+			blockedRun(expiredContinuation.run_id, {
+				continuation: expiredContinuation,
+			}),
+		);
+
+		expect(
+			await claimRunContinuation(deps, {
+				runId: running.run_id,
+				continuationId: "irrelevant",
+				expectedRevision: running.revision,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({ status: "in-progress", run: { revision: 1 } });
+		expect(
+			await claimRunContinuation(deps, {
+				runId: terminal.run_id,
+				continuationId: "irrelevant",
+				expectedRevision: terminal.revision,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({ status: "terminal", run: { revision: 1 } });
+		expect(
+			await claimRunContinuation(deps, {
+				runId: expired.run_id,
+				continuationId: expiredContinuation.continuation_id,
+				expectedRevision: expired.revision,
+				claimantId: "orchestrator-a",
+				actor: "agent",
+			}),
+		).toMatchObject({ status: "terminal", run: { revision: 1 } });
+		expect((await loadOk(deps, expired.run_id)).run.revision).toBe(1);
 	});
 });
 
@@ -1718,6 +1974,142 @@ describe("S15: restart/resume (R24, AE7/AE15 substrate)", () => {
 		});
 		// Resume is a projection: the durable record is byte-identical after it.
 		expect(await rawRecordOf(depsB, "run-restart")).toBe(bytesBeforeRestart);
+	});
+
+	test("a fresh process gets one exact resupply action when bound inputs are not recoverable", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		for (const scenario of [
+			{
+				runId: "run-resupply-ordinary",
+				binding: RUN_EXECUTION_BINDING,
+				custody: "ordinary",
+			},
+			{
+				runId: "run-resupply-governed",
+				binding: {
+					...RUN_EXECUTION_BINDING,
+					normalized_input_digest: undefined,
+					governed_input_artifact_ref: "artifact://governed-input",
+				},
+				custody: "governed",
+			},
+		] as const) {
+			const run = await createOk(
+				deps,
+				blockedRun(scenario.runId, {
+					...RUNBOOK_PRIVATE_STATE,
+					run_execution_binding: scenario.binding,
+				}),
+			);
+			expect(
+				await resumeSharedRun(deps, {
+					runId: run.run_id,
+				}),
+			).toEqual({
+				kind: "input-resupply-required",
+				run,
+				resupply: {
+					action_id: "resupply_run_inputs",
+					input_custody: scenario.custody,
+					command: "browser-use runbook run",
+					args: ["--run", run.run_id],
+					required_flags: ["--handoff", "--input", "--json"],
+				},
+			});
+		}
+	});
+
+	test("a public auth resume delegates without claiming when its effect path is unavailable", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const runId = "run-auth-delegation";
+		const continuation = {
+			...AUTH_CONTINUATION,
+			run_id: runId,
+			continuation_id: "continuation-auth-delegation",
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", runId, "--json"] as const,
+			},
+		};
+		const run = await createOk(
+			deps,
+			blockedRun(runId, {
+				...RUNBOOK_PRIVATE_STATE,
+				continuation,
+			}),
+		);
+		const before = await rawRecordOf(deps, runId);
+
+		expect(await resumeSharedRun(deps, { runId })).toEqual({
+			kind: "input-resupply-required",
+			run,
+			resupply: {
+				action_id: "resupply_run_inputs",
+				input_custody: "ordinary",
+				command: "browser-use runbook run",
+				args: ["--run", runId],
+				required_flags: ["--handoff", "--input", "--json"],
+			},
+		});
+		expect(await rawRecordOf(deps, runId)).toBe(before);
+	});
+
+	test("input resupply precedes claim and every browser-side effect seam", async () => {
+		const clock = fixedClock();
+		const { deps } = await makeIsolatedDeps(clock.now);
+		const runId = "run-resupply-before-claim";
+		const continuation = {
+			...AUTH_CONTINUATION,
+			run_id: runId,
+			continuation_id: "continuation-resupply-before-claim",
+			resume_action: {
+				command: "run" as const,
+				args: ["resume", "--run", runId, "--json"] as const,
+			},
+		};
+		const run = await createOk(
+			deps,
+			blockedRun(runId, {
+				...RUNBOOK_PRIVATE_STATE,
+				run_execution_binding: RUN_EXECUTION_BINDING,
+				continuation,
+			}),
+		);
+		const before = await rawRecordOf(deps, runId);
+		let browserEffects = 0;
+
+		const missing = await resumeSharedRun(deps, { runId });
+		if (missing.kind === "blocked") browserEffects += 1;
+		expect(missing).toMatchObject({
+			kind: "input-resupply-required",
+			resupply: {
+				action_id: "resupply_run_inputs",
+				command: "browser-use runbook run",
+				args: ["--run", runId],
+				required_flags: ["--handoff", "--input", "--json"],
+			},
+		});
+		expect(browserEffects).toBe(0);
+		expect(await rawRecordOf(deps, runId)).toBe(before);
+
+		const resupplied = await resumeSharedRun(deps, {
+			runId,
+			inputsRecovered: true,
+		});
+		expect(resupplied).toMatchObject({ kind: "blocked" });
+		if (resupplied.kind !== "blocked") throw new Error("unreachable");
+		const claimed = await claimRunContinuation(deps, {
+			runId,
+			continuationId: continuation.continuation_id,
+			expectedRevision: run.revision,
+			claimantId: "orchestrator-resupplied",
+			actor: "agent",
+		});
+		if (claimed.status === "claimed") browserEffects += 1;
+		expect(claimed).toMatchObject({ status: "claimed" });
+		expect(browserEffects).toBe(1);
 	});
 
 	test("a ready run passes the same-lane gate and reports execution unavailable", async () => {

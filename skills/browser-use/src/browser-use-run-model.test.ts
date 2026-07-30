@@ -50,6 +50,41 @@ const RUNBOOK_PROGRESS = {
 	total_steps: 2,
 } as const;
 
+const AUTH_CONTINUATION = {
+	schema_version: "1",
+	kind: "auth",
+	continuation_id: "continuation-auth-1",
+	run_id: "run-1",
+	state: "pending",
+	reason: "login-required",
+	required_actor: "agent",
+	safe_to_retry: false,
+	checkpoint: "before-auth-delivery",
+	expires_at_epoch_ms: 10_000,
+	resume_action: {
+		command: "run",
+		args: ["resume", "--run", "run-1", "--json"],
+	},
+	bindings: {
+		generation_id: "gen-a",
+		activation_epoch: 3,
+		route_digest: "e".repeat(64),
+		lane_id: "daily-work",
+		adapter_id: "agent-browser",
+		handoff_evidence_id: "evidence-1",
+		environment: "agent-chrome",
+		profile: "default",
+		target_binding_id: "target-opaque-1",
+		expected_identity: {
+			subject_ref: "subject-oncore-primary",
+			account_ref: "account-oncore-primary",
+			tenant_ref: "tenant-monash",
+		},
+	},
+	next_action_id: "resume-auth-continuation",
+	summary: "Claim and re-prove this auth continuation before resuming.",
+} as const;
+
 function baseRun(overrides: Partial<BrowserUseSharedRun> = {}): BrowserUseSharedRun {
 	return {
 		run_id: "run-1",
@@ -104,6 +139,74 @@ describe("run state vocabulary (R24)", () => {
 			}),
 		);
 		expect(issues).toEqual([]);
+	});
+
+	test("the versioned R16 auth continuation validates while the legacy two-field shape stays compatible", () => {
+		expect(
+			validateSharedRun(
+				baseRun({
+					state: "awaiting-auth",
+					continuation: AUTH_CONTINUATION,
+				}),
+			),
+		).toEqual([]);
+		expect(
+			validateSharedRun(
+				baseRun({
+					state: "awaiting-auth",
+					continuation: {
+						next_action_id: "prepare_auth_binding",
+						summary: "Prepare the credential binding, then resume.",
+					},
+				}),
+			),
+		).toEqual([]);
+	});
+
+	test("partial, forged, and cross-run auth continuations fail closed", () => {
+		for (const continuation of [
+			{ ...AUTH_CONTINUATION, schema_version: "2" },
+			{ ...AUTH_CONTINUATION, run_id: "run-other" },
+			{
+				...AUTH_CONTINUATION,
+				bindings: {
+					...AUTH_CONTINUATION.bindings,
+					route_digest: "short",
+				},
+			},
+			{
+				...AUTH_CONTINUATION,
+				bindings: {
+					...AUTH_CONTINUATION.bindings,
+					expected_identity: {
+						...AUTH_CONTINUATION.bindings.expected_identity,
+						account_ref: "op://vault/account",
+					},
+				},
+			},
+			{ ...AUTH_CONTINUATION, unexpected: "extra-key" },
+			{
+				...AUTH_CONTINUATION,
+				reason: "delivery-outcome-unknown",
+				safe_to_retry: true,
+			},
+			{
+				...AUTH_CONTINUATION,
+				state: "claimed",
+				claim: undefined,
+			},
+		]) {
+			expect(
+				validateSharedRun(
+					baseRun({
+						state: "awaiting-auth",
+						continuation: continuation as never,
+					}),
+				),
+			).toEqual([
+				expect.objectContaining({ code: "run_auth_continuation_invalid" }),
+			]);
+		}
 	});
 
 	test("ready without a committed attestation is a typed issue (R6)", () => {

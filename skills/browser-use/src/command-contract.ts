@@ -9,7 +9,11 @@ import {
 	type BrowserAdapterId,
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
-import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
+import {
+	BROWSER_USE_AUTH_CONTINUATION_STATES,
+	BROWSER_USE_TASK_INTENTS,
+	type BrowserUseAuthRunContinuation,
+} from "./browser-use-run-model";
 import type { BrowserUseRunbookPrivateInputRefusal } from "./browser-use-runbook";
 
 // The Warm Chrome browser-entry proof contract id + schema version are owned by
@@ -374,12 +378,7 @@ export const BROWSER_USE_CONTINUATION_REQUIRED_ACTORS = [
 ] as const;
 /** Durable continuation lifecycle states exposed to a fresh process. */
 export const BROWSER_USE_CONTINUATION_STATES = [
-	"pending",
-	"claimed",
-	"in-progress",
-	"completed",
-	"expired",
-	"invalidated",
+	...BROWSER_USE_AUTH_CONTINUATION_STATES,
 ] as const;
 /** Atomic claim outcomes; exactly one claimant can receive `claimed`. */
 export const BROWSER_USE_CONTINUATION_CLAIM_RESULTS = [
@@ -387,29 +386,11 @@ export const BROWSER_USE_CONTINUATION_CLAIM_RESULTS = [
 	"already-claimed",
 	"in-progress",
 	"terminal",
+	"mismatch",
 ] as const;
 
 /** Secret-free continuation envelope persisted for restart-safe resume. */
-export type BrowserUseSecretFreeContinuation = {
-	continuation_id: string;
-	run_id: string;
-	state: (typeof BROWSER_USE_CONTINUATION_STATES)[number];
-	reason: string;
-	required_actor: (typeof BROWSER_USE_CONTINUATION_REQUIRED_ACTORS)[number];
-	safe_to_retry: boolean;
-	checkpoint: string;
-	expires_at_epoch_ms: number;
-	resume_action: {
-		command: "run";
-		args: readonly ["resume", "--run", string, "--json"];
-	};
-	bindings: {
-		generation_id: string;
-		target_binding_id: string;
-		environment: string;
-		profile: string;
-	};
-};
+export type BrowserUseSecretFreeContinuation = BrowserUseAuthRunContinuation;
 
 /** Stable result of an atomic continuation claim attempt. */
 export type BrowserUseContinuationClaimResult = {
@@ -1121,6 +1102,12 @@ export const browserUsePlatformStoreFailureActions = [
 		id: "change_export_destination",
 		summary:
 			"Pass an absolute export destination outside every browser-use root.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "resupply_run_inputs",
+		summary:
+			"Run browser-use runbook run --run <id> with the original --handoff and --input flags; pinned digests reject altered values.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -2428,7 +2415,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"run-resume": {
 			script: "browser-use",
 			summary:
-				"Resume a blocked shared Browser Use run on the same adapter lane after auth, approval, or restart; typed claim conflicts fail closed.",
+				"Resume a blocked shared Browser Use run on the same adapter lane; a fresh process receives one exact input-resupply action before any continuation claim.",
 			usage: ["run resume --run <id> [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",

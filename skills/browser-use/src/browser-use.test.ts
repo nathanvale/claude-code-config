@@ -264,26 +264,40 @@ describe("U3 command contract", () => {
 	});
 
 	test("R16 continuation schema and stable claim exits stay code-owned", () => {
-		const fixture = {
-			continuation_id: "continuation-1",
-			run_id: "run-1",
+			const fixture = {
+				schema_version: "1",
+				kind: "auth",
+				continuation_id: "continuation-1",
+				run_id: "run-1",
 			state: "pending",
 			reason: "user-presence-required",
 			required_actor: "human",
 			safe_to_retry: false,
 			checkpoint: "before-auth-submit",
 			expires_at_epoch_ms: 2_000,
-			resume_action: {
-				command: "run",
-				args: ["resume", "--run", "run-1", "--json"],
-			},
-			bindings: {
-				generation_id: "generation-1",
-				target_binding_id: "target-1",
-				environment: "agent-chrome",
-				profile: "default",
-			},
-		} as const satisfies BrowserUseSecretFreeContinuation;
+				resume_action: {
+					command: "run",
+					args: ["resume", "--run", "run-1", "--json"],
+				},
+				bindings: {
+					generation_id: "generation-1",
+					activation_epoch: 3,
+					route_digest: "e".repeat(64),
+					lane_id: "daily-work",
+					adapter_id: "agent-browser",
+					handoff_evidence_id: "handoff-1",
+					target_binding_id: "target-1",
+					environment: "agent-chrome",
+					profile: "default",
+					expected_identity: {
+						subject_ref: "subject-oncore-primary",
+						account_ref: "account-oncore-primary",
+						tenant_ref: "tenant-monash",
+					},
+				},
+				next_action_id: "resume-auth-continuation",
+				summary: "Claim and re-prove this auth continuation before resuming.",
+			} as const satisfies BrowserUseSecretFreeContinuation;
 		expect(fixture.required_actor).toBe("human");
 		expect(BROWSER_USE_CONTINUATION_REQUIRED_ACTORS).toEqual(["agent", "human"]);
 		expect(BROWSER_USE_CONTINUATION_STATES).toEqual([
@@ -297,9 +311,10 @@ describe("U3 command contract", () => {
 		expect(BROWSER_USE_CONTINUATION_CLAIM_RESULTS).toEqual([
 			"claimed",
 			"already-claimed",
-			"in-progress",
-			"terminal",
-		]);
+				"in-progress",
+				"terminal",
+				"mismatch",
+			]);
 		expect(browserUseContracts["run-resume"].exitCodes).toMatchObject({
 			"21": expect.stringContaining("human"),
 			"22": expect.stringContaining("claimed"),
