@@ -125,7 +125,7 @@ const AUTH_GUIDE = `browser-use guide — auth boundary
   browser-use auth repair-vault-grant --json
 - Blocked-cause continuations are commands: a blocked run's envelope names the
   exact auth subcommand to dispatch verbatim.
-- Resolve login secrets through the domain's Auth Pointer at runtime; never
+- Resolve login secrets through the domain's Item Binding at runtime; never
   inline secret values in commands, files, or output.
 - Report secret checks by shape only: present/absent, length, status code,
   account or org name. Never print token, cookie, or password values.

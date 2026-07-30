@@ -5,7 +5,7 @@ Scoped vocabulary for browser-use: Warm Chrome, Browser Adapters, the browser-co
 ## Language
 
 ### Retired terms (Router era)
-The Browser Adapter Router chain (Router CLI with prepare/route/report, Browser Adapter Proof, Browser Adapter Map) is deleted; `runtime/browser-connect` owns the connection and its Verified Handoff Envelope replaced route evidence. The surviving router engine/model/recovery/validation modules are internal capability-policy detail, not agent vocabulary. Retired — do not reintroduce as live terms: Validated Route Evidence Envelope, Adapter capability report, Router Recovery, Route Validity, Route Evidence Invalid, Research Recovery, Browser Adapter Router, Browser Adapter Proof, Browser Adapter Map, Browser Adapter Command Resolution, route-bound (renamed handoff-bound), Evidence-First Selection (its evidence-or-recovery discipline lives on in browser-connect's fail-closed gates).
+The Browser Adapter Router command surface (Router CLI with prepare/route/report, Browser Adapter Proof, Browser Adapter Map) is deleted; `runtime/browser-connect` owns the connection and its Verified Handoff Envelope replaced route evidence. The `browser-adapter-router-*.ts` engine/model/recovery/validation modules survive only as dormant dead code pending removal — no live import edge — not agent vocabulary. Retired — do not reintroduce as live terms: Validated Route Evidence Envelope, Adapter capability report, Router Recovery, Route Validity, Route Evidence Invalid, Research Recovery, Browser Adapter Router, Browser Adapter Proof, Browser Adapter Map, Browser Adapter Command Resolution, Bounded Browser Outcome (live per-attach scoping is Shared Browser Use Run + Task Intent), route-bound (renamed handoff-bound), Evidence-First Selection (its evidence-or-recovery discipline lives on in browser-connect's fail-closed gates).
 
 ### Retired terms (browser memory era)
 `browser-domain-memory` is archived with no compatibility route. Browser Use owns future durable browser knowledge and capture work.
@@ -66,10 +66,6 @@ _Avoid_: manual checklist, browser-domain-memory preflight, browser-use-owned pr
 The `targets` discovery mode whose binding evidence is the browser-connect Verified Handoff Envelope. Formerly route-bound, whose evidence was the Router's route artifact; the rename keeps "route" grounded in browser-connect's attachment-route sense. `recovery` mode keeps its name and yields evidence-gathering candidates, not operation-ready ones.
 _Avoid_: route-bound, route artifact, proof-bound
 
-**Bounded Browser Outcome**:
-A scoped browser objective that `browser-use` can pursue while its assumptions remain valid. It is narrower than a whole user request and broader than a single element action.
-_Avoid_: browser task, action window, runbook step, whole request
-
 **Shared Browser Use Run**:
 The one durable run record the platform owns for browser work (owner: `skills/browser-use/src/browser-use-run-model.ts`). It carries exactly one run state, a compare-and-swap revision, environment/profile identity, the opaque versioned auth fragment slot, and exactly one next safe action when blocked. Platform code is its only writer; authentication reaches it only through the run integration Port and never writes run state directly. Caller metadata on a run is audit-only and never authority.
 _Avoid_: auth-owned run, second run lifecycle, task log, caller-scoped run
@@ -88,40 +84,43 @@ _Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure, sel
 
 ### Architecture patterns (pressure-earned)
 
-Pattern names refereed against live prototype + decision evidence; see `docs/decisions/2026-06-13-001-gof-pattern-naming-decision-log.md` for the verdicts.
+Pattern names refereed against prototype + decision evidence; see `docs/decisions/2026-06-13-001-gof-pattern-naming-decision-log.md` for the verdicts. `operate` is a live command family and Adapter has live footing; the full Browser Facade action surface and the Differential Oracle are refereed-but-unbuilt target vocabulary (proven only in `src/prototype-playwright-vocab-map/`).
 
 **Browser Facade**:
-The `operate` / `observe` / `verify` action surface that hides which Browser Adapter ran. It is a GoF Facade for the action path only — callers never name an engine. It does NOT name the divergence-surfacing layer; the Differential Oracle is its deliberate opposite.
+The `operate` action surface that hides which Browser Adapter ran. It is a GoF Facade for the action path only — callers never name an engine. It does NOT name the divergence-surfacing layer; the Differential Oracle is its deliberate opposite. A wider `observe` / `verify` surface is target vocabulary, unbuilt: `observe` has no command surface and `verify` lives only as `migration verify`, never a Facade verb.
 _Avoid_: facade-as-whole-product, universal browser API, the facade hides divergence
 
-**Differential Oracle**:
-A mechanical Set-diff over N independent Browser Adapters observing one Warm Chrome, producing consensus / confidence / quorum. It is **N-version programming** (independent re-derivations voted in code), not a Facade — its value is to SURFACE per-engine divergence, never hide it. The LLM consumes its verdict; it does not produce it.
+**Differential Oracle** (target vocabulary, unbuilt):
+A mechanical Set-diff over N independent Browser Adapters observing one Warm Chrome, producing consensus / confidence / quorum. It is **N-version programming** (independent re-derivations voted in code), not a Facade — its value is to SURFACE per-engine divergence, never hide it. The LLM consumes its verdict; it does not produce it. Proven in `src/prototype-playwright-vocab-map/` only; live adapters run single-engine per lane, no N-adapter fan-out.
 _Avoid_: facade, LLM oracle, model judgment, single-engine check, consensus engine
 
 **Adapter (pattern sense)**:
-Each Browser Adapter is a GoF Adapter — the two-axis mapping layer (parser-per-ref-format + dispatch-per-transport, engine-origin-tagged ref) converts each engine's native vocabulary and dispatch to the Browser Facade contract. Fully pressure-earned: delete the mapping and N collapses to 1.
+Each Browser Adapter is a GoF Adapter — the per-lane native executors (`browser-use-chrome-task.ts`, `browser-use-agent-browser.ts`, `browser-use-playwright-task.ts`) plus the `browser-use-adapter-model.ts` lane table convert each engine's native vocabulary and dispatch to the Browser Facade contract. Fully pressure-earned: delete the mapping and N collapses to 1.
 _Avoid_: thin wrapper, passthrough, shim
 
 ### Durable browser knowledge
-**Browser capture**:
+
+The capture/playback terms below (Browser capture, Scratch Evidence, Recorder JSON, Browser Gotcha, Run Outcome per-mode metrics, and the three playback modes) are **planned target vocabulary — not yet shipped**. Shipped today: one declarative v2 Browser Runbook keyed by `service_id`/`flow_id`, executed through the agent-browser lane. The compounding capture loop is unbuilt (ledger DDA-E14/E16).
+
+**Browser capture** (planned, unbuilt):
 The Browser Use workflow that turns messy browser-run evidence into Durable Browser Knowledge. It may use raw Scratch Evidence as source material, but durable output is curated knowledge, not a trace.
 _Avoid_: capture everything, raw trace archive, recording, replay capture, capture skill
 
-**Scratch Evidence**:
-Redacted browser-run source material selectively retained when a run teaches something: capture, drift, failure, ambiguity, user-requested save, or promotion proof. It is not kept for every clean replay, not trusted memory, not a runbook, and not a durable replay artifact. Use timestamped evidence names such as `YYYY-MM-DD-HHMMSS-flow-slug`.
+**Scratch Evidence** (planned, unbuilt):
+Redacted browser-run source material selectively retained when a run teaches something: capture, drift, failure, ambiguity, user-requested save, or promotion proof. It is not kept for every clean replay, not trusted memory, not a runbook, and not a durable replay artifact.
 _Avoid_: recording, trace, tape, replay file, raw history, durable instruction
 
 **Durable Browser Knowledge**:
-Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes Item Bindings (surviving legacy Auth Pointers are Import Candidates), Browser Runbooks, optional Recorder JSON for deterministic-ready flows, Browser Gotchas, and other model-readable notes.
+Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. Shipped: Item Bindings (surviving legacy Auth Pointers are Import Candidates) and Browser Runbooks. Planned (unbuilt): Browser Gotchas, optional Recorder JSON for deterministic-ready flows, and other model-readable notes.
 _Avoid_: scratch, trace archive, replay library, browser automation store
 
-**Browser Domain Key**:
-Canonical hostname used as the storage key for a portal's Durable Browser Knowledge. It has a required human alias because hostnames are often meaningless. Tenant/account identity is not part of the v1 key unless it changes the hostname.
-_Avoid_: display name key, tenant key, account key
+**Storage key**:
+Durable Browser Knowledge is keyed by `service_id`/`flow_id`; a Browser Runbook and its Item Bindings share that key. Scope is carried by each binding's exact `allowed_origins`, not by a hostname. (There is no hostname-derived storage key.)
+_Avoid_: Browser Domain Key, canonical hostname key, display name key, tenant key, account key
 
-**Browser Flow Slug**:
-Human-readable stable slug for a repeated browser intent, such as `submit-timesheet` or `download-invoice`. It helps humans and LLMs find the right Browser Runbook. Change it when the user intent changes, not when selectors change.
-_Avoid_: opaque id, URL slug, page slug
+**Flow Name**:
+Human-readable label (`flow_name`) for a repeated browser intent, such as `submit-timesheet` or `download-invoice`. It helps humans and LLMs find the right Browser Runbook; the machine key is `flow_id`. Change the name when the user intent changes, not when the flow's steps change.
+_Avoid_: Browser Flow Slug, opaque id, URL slug, page slug
 
 **Auth Pointer**:
 The legacy-era name for what is now the Item Binding: a safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, approved origins, optional login paths, and login context needed for browser auth. Surviving legacy pointers are Import Candidates — they propose and never bind. Use Item Binding for new work.
@@ -136,42 +135,45 @@ A legacy-derived proposal handed to the candidate-import Interface during platfo
 _Avoid_: trusted import, binding transplant, legacy authority, bulk bind, migrated credential
 
 **Browser Runbook**:
-The one active durable path for a known browser flow. It may retain prior versions for rollback, but only one current runbook is active. It may include login selectors and login choreography, and may reference an Item Binding (legacy runbooks may still name an Auth Pointer) for the secret fields. It must not contain secret values or 1Password item details. Prose mode may read it; Runbook mode consumes it mechanically; Deterministic mode uses its paired Recorder JSON when available.
-_Avoid_: automation script, CI fixture, raw trace
+The one active durable path for a known browser flow, keyed by `service_id`/`flow_id`. The shipped v2 form is declarative: typed inputs and runtime-resolved semantic targets (role + name, resolved to exactly one match against a fresh page snapshot) — no stored CSS selectors and no paired Recorder JSON. It may reference an Item Binding for confidential fills and a non-secret auth-context ref, but never secret values or 1Password item details. It may retain prior versions for rollback; only one current runbook is active.
+_Avoid_: automation script, CI fixture, raw trace, stored selectors, Recorder JSON pairing
 
-**Recorder JSON**:
-An optional deterministic replay artifact paired with a Browser Runbook when the flow has been captured or made deterministic-ready. It contains replayable browser steps and may include login selectors or login choreography, but never secret values or 1Password item details.
+**Recorder JSON** (planned, unbuilt):
+A deterministic replay artifact intended to pair with a Browser Runbook once deterministic replay ships. It would contain replayable browser steps and may include login selectors or login choreography, but never secret values or 1Password item details. No type, parser, or pairing exists in code yet (v2 dropped v1 record/replay).
 _Avoid_: recording, raw trace, transcript, secret replay file
 
-### Playback modes
-**Prose mode**:
-The playback mode where a reasoning agent reads model-readable Durable Browser Knowledge and re-drives Warm Chrome through `browser-use`, using runbooks and gotchas to reduce discovery while still inspecting and judging the page. It does not consume Recorder JSON. The flexible default. Config value `replayMode=prose`.
+### Playback modes (planned, unbuilt)
+
+The three modes below are target vocabulary; no `replayMode` config surface exists in code. Shipped today is a single declarative execution path (the v2 Browser Runbook through the agent-browser lane).
+
+**Prose mode** (planned, unbuilt):
+The mode where a reasoning agent reads model-readable Durable Browser Knowledge and re-drives Warm Chrome through `browser-use`, using runbooks and gotchas to reduce discovery while still inspecting and judging the page. It does not consume Recorder JSON. The intended flexible default.
 _Avoid_: coded replay, deterministic replay, manual mode
 
-**Runbook mode**:
-The playback mode where code reads a Browser Runbook and drives Warm Chrome through a Browser Adapter step-by-step, resolving stored selectors, waits, asserts, and coded heal ladders without an LLM call per step. It does not consume Recorder JSON. The fast tool-neutral path once the runbook is refined. Config value `replayMode=runbook`.
+**Runbook mode** (planned, unbuilt):
+The mode where code reads a Browser Runbook and drives Warm Chrome through a Browser Adapter step-by-step, resolving stored targets, waits, asserts, and coded heal ladders without an LLM call per step. It does not consume Recorder JSON. The intended fast tool-neutral path once the runbook is refined.
 _Avoid_: prose mode, puppeteer replay, LLM replay
 
-**Deterministic mode**:
-The playback mode where a Browser Runbook's Recorder JSON replays against Warm Chrome through a Browser Adapter — fast, zero reasoning rounds, secret-value-free, and repaired through the heal/recapture loop when drift breaks playback. Recorder JSON may include login selectors/choreography, but secret field values come from live 1Password resolution via the Item Binding. The fast opt-in. Config value `replayMode=deterministic`.
+**Deterministic mode** (planned, unbuilt):
+The mode where a Browser Runbook's Recorder JSON replays against Warm Chrome through a Browser Adapter — fast, zero reasoning rounds, secret-value-free, and repaired through the heal/recapture loop when drift breaks playback. Secret field values come from live 1Password resolution via the Item Binding. The intended fast opt-in.
 _Avoid_: machine-play, tape execution, CI replay
 
 **Run Outcome**:
-A per-run result record for a Browser Runbook, stored beside it as `<flow>.runs.jsonl`. It tracks date, result, steps healed, drifted selectors, and per-mode value metrics (reasoning rounds / snapshots eliminated, heal rate, wall-clock), and links to timestamped Scratch Evidence only when evidence was selectively retained. It feeds the staleness policy and lets the user assess which mode earns its keep per flow.
-_Avoid_: test result, execution proof, success metric in prose
+The result recorded on the Shared Browser Use Run via `recordTaskRunOutcome` (owner: `browser-use-run-model.ts` / `browser-use-runs.ts`), keyed by run id. It tracks date, result, and what the run did. (Per-mode value metrics are planned, pending the playback modes above.)
+_Avoid_: test result, execution proof, success metric in prose, `<flow>.runs.jsonl`
 
-**Browser Gotcha**:
-A non-obvious domain fact, fork, trap, warning, label mismatch, slow state, or fragile condition that helps future browser work. Use this broad bucket instead of adding a generic browser note type in v1.
+**Browser Gotcha** (planned, unbuilt):
+A non-obvious domain fact, fork, trap, warning, label mismatch, slow state, or fragile condition that would help future browser work. Intended as one broad bucket rather than a generic browser note type. No gotcha record or storage exists yet.
 _Avoid_: note, trivia, ordinary noise, raw observation
 
-**Compound browser knowledge**:
-The loop where browser work produces learning evidence, Browser capture distills it into Durable Browser Knowledge, and later Browser Use runs start from that knowledge. The compounding is curated memory, not blind capture-everything.
+**Compound browser knowledge** (planned, unbuilt):
+The intended loop where browser work produces learning evidence, Browser capture distills it into Durable Browser Knowledge, and later Browser Use runs start from that knowledge. The compounding is curated memory, not blind capture-everything.
 _Avoid_: raw record/replay everything, browser automation engine
 
 ## Example Dialogue
 
 Dev: "Should `browser-use` remember the login path it just discovered?"
-Domain expert: "Yes, through Browser capture. Browser Use owns the resulting Durable Browser Knowledge."
+Domain expert: "That is the intent, through Browser capture (planned). Browser Use owns the resulting Durable Browser Knowledge."
 
 Dev: "Can Browser capture open or repair Warm Chrome?"
 Domain expert: "No. Browser Use routes connection and repair through `browser-connect`; capture owns knowledge, not browser entry."
@@ -201,7 +203,7 @@ Dev: "Is browser capture a separate skill?"
 Domain expert: "No. Browser capture is a Browser Use workflow that distills messy browser-run evidence into Durable Browser Knowledge."
 
 Dev: "Is the Chrome Recorder-shaped JSON a recording?"
-Domain expert: "Not by itself. Recorder-shaped Scratch Evidence may be retained as source evidence, but only verified Recorder JSON is durable replay material."
+Domain expert: "Not by itself. In the planned capture path, Recorder-shaped Scratch Evidence would be retained as source evidence, but only verified Recorder JSON would be durable replay material."
 
 Dev: "What does browser capture create?"
 Domain expert: "Durable Browser Knowledge: curated runbooks, gotchas, and notes future `browser-use` runs can trust. Item Bindings arrive through the auth discovery and selection policy, not through capture."
@@ -213,13 +215,13 @@ Dev: "Where does the 1Password item path for a portal live?"
 Domain expert: "As an Item Binding in Durable Browser Knowledge; a surviving legacy Auth Pointer only proposes as an Import Candidate. `one-password` owns safe access mechanics, not the domain-specific item choice."
 
 Dev: "Should a Browser Runbook repeat the login steps?"
-Domain expert: "It may include login choreography and selectors. Secret source details stay in the Item Binding; secret values come only from live 1Password resolution."
+Domain expert: "It may include login choreography. Secret source details stay in the Item Binding; secret values come only from live 1Password resolution."
 
 Dev: "Can a runbook click through the site next time?"
-Domain expert: "Yes, in Runbook mode. Code reads the Browser Runbook and drives a Browser Adapter step-by-step. Deterministic mode replays Recorder JSON through a Browser Adapter. Prose mode keeps the agent in the loop and uses memory to avoid rediscovery."
+Domain expert: "Today a v2 Browser Runbook drives the flow declaratively through the agent-browser lane, resolving semantic targets against a fresh snapshot. Faster playback modes (Runbook, Deterministic) are planned, not yet shipped."
 
 Dev: "Can Browser capture choose `agent-browser` or Chrome DevTools MCP directly?"
-Domain expert: "No. It requests a playback mode or Bounded Browser Outcome. Browser Use owns adapter policy and selection."
+Domain expert: "No. It requests a Task Intent. Browser Use owns adapter policy and selection."
 
 Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
