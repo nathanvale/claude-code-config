@@ -465,24 +465,9 @@ export function createBrowserUseNativeConfidentialDeliveryHook(input: {
 						reason: "helper-crash",
 						field_cleared: false,
 						write_state: "blocked-before-write",
-					};
-		}
-		let resumed = false;
-		try {
-			resumed = (
-				await input.quarantine.resume({ target: delivery.target })
-			).ok;
-		} catch {
-			resumed = false;
-		}
-		return resumed
-			? { ok: true, shape: native.shape }
-			: {
-					ok: false,
-					reason: "helper-crash",
-					field_cleared: false,
-					write_state: "write-outcome-unknown",
 				};
+		}
+		return { ok: true, shape: native.shape };
 	};
 }
 

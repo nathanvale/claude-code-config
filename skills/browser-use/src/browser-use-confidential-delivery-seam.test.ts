@@ -446,7 +446,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		});
 
 		expect(result.ok).toBe(true);
-		expect(journal).toEqual(["pause", "native", "cleanup", "resume"]);
+		expect(journal).toEqual(["pause", "native", "cleanup"]);
 		expect(nativeInputs).toMatchObject([
 			{
 				locator: {

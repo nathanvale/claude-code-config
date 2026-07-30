@@ -256,7 +256,6 @@ describe("prepared runbook auth field delivery", () => {
 			"pause",
 			"native",
 			"cleanup",
-			"resume",
 		]);
 		expect(harness.nativeInputs).toHaveLength(1);
 		expect(harness.nativeInputs[0]).toMatchObject({
@@ -308,6 +307,40 @@ describe("prepared runbook auth field delivery", () => {
 		});
 		expect(journal).toEqual(["reprove-drift"]);
 		expect(harness.nativeInputs).toEqual([]);
+	});
+
+	test("successful auth delivery can stay held until final proof", async () => {
+		const journal: string[] = [];
+		const harness = deliveryHarness(journal, {
+			kind: "delivered",
+			field: "password",
+		});
+		const result = await deliverPreparedRunbookAuthField({
+			provider: provider(tokenPort(journal)),
+			binding: BINDING,
+			target: TARGET,
+			fragment: passwordFragment(),
+			field: "password",
+			locator: { role: "textbox", name: "Password" },
+			deliver: harness.hook,
+			reproveTarget: async ({ target }) => ({
+				proven: true,
+				observed_digest: target.target_proof_digest,
+			}),
+			persistReproof: async () => true,
+		});
+
+		expect(result).toMatchObject({ status: "delivered" });
+		expect(journal).toEqual([
+			"fetch:password",
+			"pause",
+			"native",
+			"cleanup",
+		]);
+		expect(harness.quarantine.inspect()).toEqual({
+			state: "cleaned",
+			write_state: "delivered",
+		});
 	});
 
 	test("origin drift retains its human-owned blocked cause", async () => {
