@@ -157,6 +157,8 @@ type BrowserUseEnvironmentPrivateDeliveryInput = {
 	locator: BrowserUseNativeConfidentialDeliveryRequest["locator"];
 };
 
+type BrowserUseCanonicalConfigRootResolver = () => Promise<string>;
+
 export type BrowserUseEnvironmentPrivateDeliveryProcess = (
 	input: BrowserUseEnvironmentPrivateDeliveryInput,
 ) => Promise<unknown>;
@@ -390,6 +392,7 @@ export function createEnvironmentConfidentialAuthPorts(input: {
 	env: Record<string, string | undefined>;
 	now: () => number;
 	executePrivateDelivery: BrowserUseEnvironmentPrivateDeliveryProcess;
+	resolveCanonicalConfigRoot?: BrowserUseCanonicalConfigRootResolver;
 }): {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	confidentialDelivery: BrowserUseConfidentialDeliveryRuntimePort;
@@ -398,8 +401,14 @@ export function createEnvironmentConfidentialAuthPorts(input: {
 		string,
 		BrowserUseEnvironmentDeferredCapability
 	>();
+	const resolveCanonicalConfigRoot =
+		input.resolveCanonicalConfigRoot ??
+		createAdmittedCanonicalConfigRootResolver(
+			input.env,
+			createDefaultPlatformFs(),
+		);
 	const tokenRetrieval = createNativeEnvironmentTokenRetrievalPort(
-		input.env,
+		resolveCanonicalConfigRoot,
 		input.now,
 		(capability) => {
 			capabilities.set(capability.handle.handle_id, capability.record);
@@ -503,13 +512,18 @@ function blockedPrivateDeliveryResult() {
  */
 function createNativeAbsentSecuritySeam(
 	runtime: BrowserUseRuntime,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 ): BrowserUseSecuritySeam {
 	const lifecycle = runtime.environmentTokenLifecycle;
 	const environmentAuth = createEnvironmentConfidentialAuthPorts({
 		env: runtime.env,
 		now: runtime.now,
+		resolveCanonicalConfigRoot,
 		executePrivateDelivery: (input) =>
-			executeNativeEnvironmentPrivateDelivery(runtime.env, input),
+			executeNativeEnvironmentPrivateDelivery(
+				resolveCanonicalConfigRoot,
+				input,
+			),
 	});
 	runtime.authConfidentialDelivery ??= environmentAuth.confidentialDelivery;
 	return {
@@ -760,16 +774,24 @@ export async function createProductionBrowserUseRuntime(
 	seam?: BrowserUseSecuritySeam,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
-	if (runtime.environmentTokenLifecycle === undefined) {
-		runtime.environmentTokenLifecycle = createNativeEnvironmentTokenLifecyclePort(
+	const resolveCanonicalConfigRoot =
+		createAdmittedCanonicalConfigRootResolver(
 			runtime.env,
 			runtime.platformFs,
+		);
+	if (runtime.environmentTokenLifecycle === undefined) {
+		runtime.environmentTokenLifecycle = createNativeEnvironmentTokenLifecyclePort(
+			resolveCanonicalConfigRoot,
 		);
 	}
 	runtime.authTargetProof ??= createNativeTargetProofPort();
 	runtime.authDocumentRead ??= createNativeDocumentReadPort();
 	runtime.authAdmission = await resolveAuthAdmission(
-		seam ?? createNativeAbsentSecuritySeam(runtime),
+		seam ??
+			createNativeAbsentSecuritySeam(
+				runtime,
+				resolveCanonicalConfigRoot,
+			),
 	);
 	runtime.authTokenRetrieval =
 		runtime.authAdmission.kind === "blocked"
@@ -1049,6 +1071,60 @@ async function checkBrowserUseRootIgnored(path: string): Promise<boolean> {
 	return (await child.exited) === 0 && child.signalCode === null;
 }
 
+/**
+ * Resolve one runtime's config root once, then re-admit that pinned canonical
+ * path before every native auth operation. A later XDG symlink retarget cannot
+ * split token custody, metadata, and field delivery across different roots.
+ */
+function createAdmittedCanonicalConfigRootResolver(
+	env: Record<string, string | undefined>,
+	platformFs: BrowserUsePlatformFs,
+): BrowserUseCanonicalConfigRootResolver {
+	let canonicalConfigRoot: string | undefined;
+	let initialResolution: Promise<string> | undefined;
+
+	const admitCanonical = async (path: string): Promise<string> => {
+		const admission = await admitBrowserUseRoot(platformFs, {
+			kind: "config",
+			path,
+			checkIgnored: checkBrowserUseRootIgnored,
+		});
+		if (!admission.ok) {
+			throw new Error("Browser Use config root is unavailable");
+		}
+		return path;
+	};
+
+	return async () => {
+		if (canonicalConfigRoot !== undefined) {
+			return admitCanonical(canonicalConfigRoot);
+		}
+		initialResolution ??= (async () => {
+			const resolved = resolveBrowserUsePaths(env);
+			if (!resolved.ok) {
+				throw new Error("Browser Use paths are unavailable");
+			}
+			const configRoot = resolved.resolution.roots.config;
+			await admitCanonical(configRoot);
+			const canonical = await platformFs.realpath(configRoot);
+			if (canonical === undefined) {
+				throw new Error("Browser Use config root is unavailable");
+			}
+			if (canonical !== configRoot) {
+				await admitCanonical(canonical);
+			}
+			canonicalConfigRoot = canonical;
+			return canonical;
+		})();
+		try {
+			return await initialResolution;
+		} catch (error) {
+			initialResolution = undefined;
+			throw error;
+		}
+	};
+}
+
 type BrowserUseAuthStatusExecutableState =
 	| "ready"
 	| "missing"
@@ -1291,19 +1367,18 @@ function environmentMetadataFailure() {
 }
 
 async function executeNativeEnvironmentMetadata(
-	env: Record<string, string | undefined>,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 	operation: BrowserUseEnvironmentOpMetadataOperation,
 ) {
 	try {
-		const resolved = resolveBrowserUsePaths(env);
-		if (!resolved.ok) return environmentMetadataFailure();
+		const configRoot = await resolveCanonicalConfigRoot();
 		const invocation = buildEnvironmentOpMetadataInvocation({
 			supervisor_path: join(
 				browserUseNativeBinRoot(),
 				"browser-use-op-supervisor",
 			),
 			op_path: fixedOpExecutablePath(),
-			config_root: resolved.resolution.roots.config,
+			config_root: configRoot,
 			operation,
 		});
 		const child = Bun.spawn(
@@ -1353,13 +1428,12 @@ async function executeNativeEnvironmentMetadata(
 }
 
 async function executeNativeEnvironmentPrivateDelivery(
-	env: Record<string, string | undefined>,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 	input: BrowserUseEnvironmentPrivateDeliveryInput,
 ): Promise<unknown> {
 	let started = false;
 	try {
-		const resolved = resolveBrowserUsePaths(env);
-		if (!resolved.ok) return blockedPrivateDeliveryResult();
+		const configRoot = await resolveCanonicalConfigRoot();
 		const executable = join(
 			browserUseNativeBinRoot(),
 			"browser-use-confidential-delivery",
@@ -1369,7 +1443,7 @@ async function executeNativeEnvironmentPrivateDelivery(
 				executable,
 				"private",
 				"--config-root",
-				resolved.resolution.roots.config,
+				configRoot,
 				"--op-path",
 				fixedOpExecutablePath(),
 			],
@@ -1432,7 +1506,7 @@ async function executeNativeEnvironmentPrivateDelivery(
 }
 
 function createNativeEnvironmentTokenRetrievalPort(
-	env: Record<string, string | undefined>,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 	now: () => number,
 	recordCapability: (input: {
 		handle: BrowserUseSecretHandle;
@@ -1441,7 +1515,10 @@ function createNativeEnvironmentTokenRetrievalPort(
 ): BrowserUseTokenRetrievalPort {
 	return createEnvironmentOpTokenRetrievalPort({
 		executeMetadata: (operation) =>
-			executeNativeEnvironmentMetadata(env, operation),
+			executeNativeEnvironmentMetadata(
+				resolveCanonicalConfigRoot,
+				operation,
+			),
 		mintCapability: ({ binding, field, target }) => {
 			const expiresAt = now() + 60_000;
 			const handle = {
@@ -1485,8 +1562,7 @@ async function readBoundedNativeOutput(
 }
 
 function createNativeEnvironmentTokenLifecyclePort(
-	env: Record<string, string | undefined>,
-	platformFs: BrowserUsePlatformFs,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 ): BrowserUseEnvironmentTokenLifecyclePort {
 	const nativeBinRoot = browserUseNativeBinRoot();
 	const custodyExecutable = join(nativeBinRoot, "browser-use-token-custody");
@@ -1498,31 +1574,7 @@ function createNativeEnvironmentTokenLifecyclePort(
 	return {
 		inputIsTTY: () => process.stdin.isTTY === true,
 		async execute(input) {
-			const resolved = resolveBrowserUsePaths(env);
-			if (!resolved.ok) throw new Error("Browser Use paths are unavailable");
-			const configRoot = resolved.resolution.roots.config;
-			const admitted = await admitBrowserUseRoot(platformFs, {
-				kind: "config",
-				path: configRoot,
-				checkIgnored: checkBrowserUseRootIgnored,
-			});
-			if (!admitted.ok) {
-				throw new Error("Browser Use config root is unavailable");
-			}
-			const canonicalConfigRoot = await platformFs.realpath(configRoot);
-			if (canonicalConfigRoot === undefined) {
-				throw new Error("Browser Use config root is unavailable");
-			}
-			if (canonicalConfigRoot !== configRoot) {
-				const canonicalAdmission = await admitBrowserUseRoot(platformFs, {
-					kind: "config",
-					path: canonicalConfigRoot,
-					checkIgnored: checkBrowserUseRootIgnored,
-				});
-				if (!canonicalAdmission.ok) {
-					throw new Error("Browser Use config root is unavailable");
-				}
-			}
+			const canonicalConfigRoot = await resolveCanonicalConfigRoot();
 			const invocation = buildEnvironmentTokenCustodyInvocation({
 				executable_path: custodyExecutable,
 				action: input.action,
