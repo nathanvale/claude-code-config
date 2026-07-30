@@ -49,6 +49,7 @@ import {
 } from "./browser-use-op";
 import {
 	type BrowserUsePlatformFs,
+	admitBrowserUseRoot,
 	createDefaultPlatformFs,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
@@ -762,6 +763,7 @@ export async function createProductionBrowserUseRuntime(
 	if (runtime.environmentTokenLifecycle === undefined) {
 		runtime.environmentTokenLifecycle = createNativeEnvironmentTokenLifecyclePort(
 			runtime.env,
+			runtime.platformFs,
 		);
 	}
 	runtime.authTargetProof ??= createNativeTargetProofPort();
@@ -1433,6 +1435,7 @@ async function readBoundedNativeOutput(
 
 function createNativeEnvironmentTokenLifecyclePort(
 	env: Record<string, string | undefined>,
+	platformFs: BrowserUsePlatformFs,
 ): BrowserUseEnvironmentTokenLifecyclePort {
 	const nativeBinRoot = browserUseNativeBinRoot();
 	const custodyExecutable = join(nativeBinRoot, "browser-use-token-custody");
@@ -1446,10 +1449,31 @@ function createNativeEnvironmentTokenLifecyclePort(
 		async execute(input) {
 			const resolved = resolveBrowserUsePaths(env);
 			if (!resolved.ok) throw new Error("Browser Use paths are unavailable");
+			const configRoot = resolved.resolution.roots.config;
+			const admitted = await admitBrowserUseRoot(platformFs, {
+				kind: "config",
+				path: configRoot,
+			});
+			if (!admitted.ok) {
+				throw new Error("Browser Use config root is unavailable");
+			}
+			const canonicalConfigRoot = await platformFs.realpath(configRoot);
+			if (canonicalConfigRoot === undefined) {
+				throw new Error("Browser Use config root is unavailable");
+			}
+			if (canonicalConfigRoot !== configRoot) {
+				const canonicalAdmission = await admitBrowserUseRoot(platformFs, {
+					kind: "config",
+					path: canonicalConfigRoot,
+				});
+				if (!canonicalAdmission.ok) {
+					throw new Error("Browser Use config root is unavailable");
+				}
+			}
 			const invocation = buildEnvironmentTokenCustodyInvocation({
 				executable_path: custodyExecutable,
 				action: input.action,
-				config_root: resolved.resolution.roots.config,
+				config_root: canonicalConfigRoot,
 				...(input.input_channel === "stdin"
 					? { input: { kind: "stdin" as const, fd: 0 } }
 					: input.input_channel === "tty"
