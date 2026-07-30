@@ -1164,7 +1164,7 @@ private func runAsFakeOp() {
     }
     if executable.lastPathComponent.contains("slow-binding") {
         let phase: String?
-        if arguments.starts(with: ["user", "get"]) {
+        if arguments.starts(with: ["whoami"]) {
             phase = "user"
         } else if arguments.starts(with: ["vault", "list"]) {
             phase = "vault"
@@ -1228,11 +1228,10 @@ private func runAsFakeOp() {
         usleep(5_000_000)
         return
     }
-    if arguments.starts(with: ["user", "get"]) {
+    if arguments.starts(with: ["whoami"]) {
         emitFakeOpJSON([
-            "id": principalTwo ? "user-2" : "user-1",
-            "state": "ACTIVE",
-            "type": "SERVICE_ACCOUNT",
+            "user_uuid": principalTwo ? "user-2" : "user-1",
+            "user_type": "SERVICE_ACCOUNT",
             "email": "not-projected@example.com",
         ])
         let mutationMarker = executable.deletingLastPathComponent()

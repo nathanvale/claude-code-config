@@ -1093,7 +1093,7 @@ public enum EnvironmentOpMetadataOperation: Equatable, Sendable {
     fileprivate var arguments: [String] {
         switch self {
         case .userGet:
-            return ["user", "get", "--me", "--format=json"]
+            return ["whoami", "--format=json"]
         case .vaultList:
             return ["vault", "list", "--format=json"]
         case let .itemList(vaultID):
@@ -1234,12 +1234,12 @@ private func projectMetadata(
     switch operation {
     case .userGet:
         guard let row = raw as? [String: Any],
-              let id = boundedString(row["id"]),
-              let state = boundedString(row["state"]),
-              let type = boundedString(row["type"])
+              let id = boundedString(row["user_uuid"] ?? row["id"]),
+              let type = boundedString(row["user_type"] ?? row["type"])
         else {
             return nil
         }
+        let state = boundedString(row["state"]) ?? "ACTIVE"
         return ["id": id, "state": state, "type": type]
     case .vaultList:
         guard let rows = raw as? [Any] else { return nil }
@@ -1914,6 +1914,8 @@ public enum EnvironmentOpSupervisor {
               userObject["ok"] as? Bool == true,
               let userValue = userObject["value"] as? [String: Any],
               boundedString(userValue["id"]) != nil,
+              boundedString(userValue["state"]) == "ACTIVE",
+              boundedString(userValue["type"]) == "SERVICE_ACCOUNT",
               let vaultObject = try? JSONSerialization.jsonObject(with: vaults)
                 as? [String: Any],
               vaultObject["ok"] as? Bool == true,
