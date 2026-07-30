@@ -3574,6 +3574,124 @@ private func confidentialPrivateModeRejectsMismatchedBrowserPID() throws {
     _ = fixture.done.wait(timeout: .now() + 4)
 }
 
+private func confidentialTargetProofDerivesClosedNativeObservation() throws {
+    let fixture = try startConfidentialWebSocketFixture()
+    let request: [String: Any] = [
+        "schema_version": 1,
+        "browser_ws_endpoint": fixture.endpoint,
+        "browser_pid": getpid(),
+        "target_id": "target-1",
+    ]
+    let requestData = try JSONSerialization.data(
+        withJSONObject: request,
+        options: [.sortedKeys]
+    )
+    let result = ConfidentialFieldDeliveryProcess.proveTargetForTesting(
+        requestData: requestData
+    )
+    try check(
+        fixture.done.wait(timeout: .now() + 3) == .success,
+        "native target proof fixture did not finish"
+    )
+    guard let envelope = try JSONSerialization.jsonObject(with: result)
+        as? [String: Any],
+        Set(envelope.keys) == ["schema_version", "ok", "proof"],
+        envelope["schema_version"] as? Int == 1,
+        envelope["ok"] as? Bool == true,
+        let proof = envelope["proof"] as? [String: Any],
+        Set(proof.keys) == [
+            "lane_id",
+            "target_id",
+            "page_id",
+            "frame_id",
+            "top_level_origin",
+            "frame_origin",
+            "target_proof_digest",
+        ]
+    else {
+        throw TestFailure(
+            description: "native target proof envelope was not closed"
+        )
+    }
+    let canonical = try JSONSerialization.data(
+        withJSONObject: [
+            1,
+            "agent-browser",
+            "target-1",
+            "target-1",
+            "frame-1",
+            "https://oncore.test",
+            "https://oncore.test",
+        ]
+    )
+    let expectedDigest = SHA256.hash(data: canonical)
+        .map { String(format: "%02x", $0) }
+        .joined()
+    try check(
+        proof["lane_id"] as? String == "agent-browser"
+            && proof["target_id"] as? String == "target-1"
+            && proof["page_id"] as? String == "target-1"
+            && proof["frame_id"] as? String == "frame-1"
+            && proof["top_level_origin"] as? String
+                == "https://oncore.test"
+            && proof["frame_origin"] as? String == "https://oncore.test"
+            && proof["target_proof_digest"] as? String == expectedDigest,
+        "native target proof did not derive exact CDP coordinates: \(proof)"
+    )
+    try check(
+        fixture.trace.methods == [
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+        ],
+        "target proof crossed its read-only CDP allowlist: \(fixture.trace.methods)"
+    )
+    try check(
+        !String(decoding: result, as: UTF8.self).contains(fixture.endpoint),
+        "target proof leaked the browser endpoint"
+    )
+}
+
+private func confidentialTargetProofRejectsUntrustedRequests() throws {
+    for request in [
+        [
+            "schema_version": 1,
+            "browser_ws_endpoint":
+                "ws://localhost:9222/devtools/browser/browser-id",
+            "browser_pid": Int(getpid()),
+            "target_id": "target-1",
+        ],
+        [
+            "schema_version": 1,
+            "browser_ws_endpoint":
+                "ws://127.0.0.1:9222/devtools/browser/browser-id",
+            "browser_pid": Int(getpid()),
+            "target_id": "target-1",
+            "unexpected": "field",
+        ],
+    ] {
+        let result = ConfidentialFieldDeliveryProcess.proveTargetForTesting(
+            requestData: try JSONSerialization.data(
+                withJSONObject: request,
+                options: [.sortedKeys]
+            ),
+            timeoutMilliseconds: 100
+        )
+        guard let envelope = try JSONSerialization.jsonObject(with: result)
+            as? [String: Any],
+            Set(envelope.keys) == ["schema_version", "ok", "rejection"],
+            envelope["schema_version"] as? Int == 1,
+            envelope["ok"] as? Bool == false,
+            let rejection = envelope["rejection"] as? [String: Any],
+            Set(rejection.keys) == ["code", "message"],
+            rejection["code"] as? String == "invalid-request"
+        else {
+            throw TestFailure(
+                description: "untrusted target proof request did not fail closed"
+            )
+        }
+    }
+}
+
 private func confidentialChromeExecutablePathRejectsLookalike() throws {
     try check(
         ConfidentialFieldDeliveryProcess
@@ -3751,6 +3869,14 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "confidential private mode rejects mismatched browser pid",
                 confidentialPrivateModeRejectsMismatchedBrowserPID
+            ),
+            (
+                "confidential target proof derives closed native observation",
+                confidentialTargetProofDerivesClosedNativeObservation
+            ),
+            (
+                "confidential target proof rejects untrusted requests",
+                confidentialTargetProofRejectsUntrustedRequests
             ),
             (
                 "confidential chrome path rejects lookalike",

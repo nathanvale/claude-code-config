@@ -18,6 +18,10 @@ import {
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
 import type {
+	BrowserUseNativeTargetProofPort,
+	BrowserUseNativeTargetProofRequest,
+} from "./browser-use-agent-browser";
+import type {
 	BrowserUseAuthLaneAdmission,
 	BrowserUseItemBinding,
 } from "./browser-use-auth-bindings";
@@ -153,6 +157,67 @@ type BrowserUseEnvironmentPrivateDeliveryInput = {
 export type BrowserUseEnvironmentPrivateDeliveryProcess = (
 	input: BrowserUseEnvironmentPrivateDeliveryInput,
 ) => Promise<unknown>;
+
+/** Exact native prove-target process invocation. Endpoint/PID stay in stdin. */
+export type BrowserUseNativeTargetProofInvocation = {
+	executable_path: string;
+	argv: readonly ["prove-target"];
+	env: Readonly<{ PATH: "/usr/bin:/bin"; LANG: "C" }>;
+	stdin_text: string;
+	timeout_ms: 15_000;
+};
+
+/**
+ * Build the read-only U7 prove-target process boundary.
+ *
+ * The running-browser endpoint is capability-bearing. Keep it out of argv and
+ * output; the native helper receives it only in one bounded stdin request.
+ */
+export function buildBrowserUseNativeTargetProofInvocation(input: {
+	native_bin_root: string;
+	request: BrowserUseNativeTargetProofRequest;
+}): BrowserUseNativeTargetProofInvocation {
+	if (
+		!isAbsolute(input.native_bin_root) ||
+		!safeLoopbackBrowserWebSocket(input.request.browser_ws_endpoint) ||
+		!Number.isSafeInteger(input.request.browser_pid) ||
+		input.request.browser_pid <= 0 ||
+		!/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/.test(input.request.target_id)
+	) {
+		throw new Error("native target proof request is inadmissible");
+	}
+	const stdinText = JSON.stringify({
+		schema_version: 1,
+		browser_ws_endpoint: input.request.browser_ws_endpoint,
+		browser_pid: input.request.browser_pid,
+		target_id: input.request.target_id,
+	});
+	if (Buffer.byteLength(stdinText, "utf8") > 4_096) {
+		throw new Error("native target proof request exceeded its bound");
+	}
+	return {
+		executable_path: join(
+			input.native_bin_root,
+			"browser-use-confidential-delivery",
+		),
+		argv: ["prove-target"],
+		env: { PATH: "/usr/bin:/bin", LANG: "C" },
+		stdin_text: stdinText,
+		timeout_ms: 15_000,
+	};
+}
+
+/** Reject any capability-bearing endpoint reflected by native output. */
+export function browserUseNativeTargetProofOutputIsSafe(input: {
+	stdout: string;
+	stderr: string;
+	browser_ws_endpoint: string;
+}): boolean {
+	return (
+		!input.stdout.includes(input.browser_ws_endpoint) &&
+		!input.stderr.includes(input.browser_ws_endpoint)
+	);
+}
 
 /**
  * Link deferred field minting and one-shot native consumption inside one
@@ -458,6 +523,10 @@ export type BrowserUseRuntime = {
 	 */
 	authConfidentialDelivery?: BrowserUseConfidentialDeliveryRuntimePort;
 	/**
+	 * Read-only native U7 target proof owner used around identity reads.
+	 */
+	authTargetProof?: BrowserUseNativeTargetProofPort;
+	/**
 	 * One admission decision captured during production runtime construction.
 	 * Every consumer receives this same object and selected port.
 	 */
@@ -531,6 +600,7 @@ export async function createProductionBrowserUseRuntime(
 			runtime.env,
 		);
 	}
+	runtime.authTargetProof ??= createNativeTargetProofPort();
 	runtime.authAdmission = await resolveAuthAdmission(
 		seam ?? createNativeAbsentSecuritySeam(runtime),
 	);
@@ -545,6 +615,73 @@ export async function createProductionBrowserUseRuntime(
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 15_000;
 const NATIVE_LIFECYCLE_TERMINATION_GRACE_MS = 2_000;
 const NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES = 65_536;
+
+function createNativeTargetProofPort(): BrowserUseNativeTargetProofPort {
+	return {
+		async proveTarget(request) {
+			const invocation = buildBrowserUseNativeTargetProofInvocation({
+				native_bin_root: browserUseNativeBinRoot(),
+				request,
+			});
+			const child = Bun.spawn(
+				[invocation.executable_path, ...invocation.argv],
+				{
+					env: invocation.env,
+					stdin: "pipe",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			child.stdin.write(invocation.stdin_text);
+			child.stdin.end();
+			const stdoutPromise = readBoundedNativeOutput(child.stdout);
+			const stderrPromise = readBoundedNativeOutput(child.stderr);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timedOut = await Promise.race([
+				child.exited.then(() => false),
+				new Promise<true>((resolve) => {
+					timer = setTimeout(
+						() => resolve(true),
+						invocation.timeout_ms,
+					);
+				}),
+			]);
+			if (timer !== undefined) clearTimeout(timer);
+			if (timedOut) {
+				void Promise.allSettled([stdoutPromise, stderrPromise]);
+				await terminateEnvironmentTokenLifecycleProcess(child);
+				throw new Error("native target proof timed out");
+			}
+			const exitCode = await child.exited;
+			const [stdout, stderr] = await Promise.all([
+				stdoutPromise,
+				stderrPromise,
+			]);
+			if (
+				child.signalCode != null ||
+				!browserUseNativeTargetProofOutputIsSafe({
+					stdout,
+					stderr,
+					browser_ws_endpoint: request.browser_ws_endpoint,
+				})
+			) {
+				throw new Error("native target proof output was unsafe");
+			}
+			const parsed = JSON.parse(stdout) as unknown;
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				Array.isArray(parsed) ||
+				!("ok" in parsed) ||
+				typeof parsed.ok !== "boolean" ||
+				exitCode !== (parsed.ok ? 0 : 20)
+			) {
+				throw new Error("native target proof process contract drifted");
+			}
+			return parsed;
+		},
+	};
+}
 
 export type BrowserUseEnvironmentTokenLifecycleProcess = {
 	readonly exited: Promise<number>;

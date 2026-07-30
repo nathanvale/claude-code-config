@@ -62,6 +62,25 @@ guard !forbiddenEnvironmentKeys.contains(where: {
 }
 
 let rawArguments = CommandLine.arguments.dropFirst()
+if rawArguments.first == "prove-target" {
+    guard Array(rawArguments) == ["prove-target"],
+          let request = try? FileHandle.standardInput.readToEnd(),
+          request.count <= 4_096
+    else {
+        emit(
+            ConfidentialFieldDeliveryProcess.proveTarget(
+                requestData: Data()
+            ),
+            exitCode: 20
+        )
+    }
+    let result = ConfidentialFieldDeliveryProcess.proveTarget(
+        requestData: request
+    )
+    let decoded = try? JSONSerialization.jsonObject(with: result)
+        as? [String: Any]
+    emit(result, exitCode: decoded?["ok"] as? Bool == true ? 0 : 20)
+}
 if rawArguments.first == "private" {
     guard let options = exactOptions(rawArguments.dropFirst()),
           options.count == 2,
