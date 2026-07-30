@@ -11,6 +11,10 @@ private struct TestFailure: Error, CustomStringConvertible {
     let description: String
 }
 
+private struct TestSkip: Error, CustomStringConvertible {
+    let description: String
+}
+
 private func check(
     _ condition: @autoclosure () throws -> Bool,
     _ message: String
@@ -36,7 +40,7 @@ private func installForTest(
     replacing: Bool,
     backupExclusionProof: TokenCustodyBackupExclusionProof =
         acceptingBackupExclusionProof,
-    validatorTimeoutMilliseconds: Int32 = 5_000,
+    validatorTimeoutMilliseconds: Int32 = 20_000,
     validationCompletion: @escaping @Sendable () throws -> Void = {}
 ) -> TokenCustodyResult {
     TokenCustody.installForTesting(
@@ -191,6 +195,7 @@ private func validator(
     custodyDirectory: URL,
     approve: Bool,
     respond: Bool = true,
+    responseDelayMicroseconds: useconds_t = 0,
     mutate: (@Sendable (URL) -> Void)? = nil
 ) throws -> (
     Int32,
@@ -221,6 +226,9 @@ private func validator(
         guard respond else {
             usleep(200_000)
             return
+        }
+        if responseDelayMicroseconds > 0 {
+            usleep(responseDelayMicroseconds)
         }
         let response = approve && received.descriptor != nil
             ? Array("ok\n".utf8)
@@ -421,6 +429,245 @@ private func emptyInputCancelsWithoutDamage() throws {
     )
 }
 
+private let hiddenTerminalSentinel = "ops_HIDDEN_TTY_SENTINEL"
+
+private func spawnHiddenTerminalReader()
+    throws -> (master: Int32, slave: Int32, pid: pid_t)
+{
+    var master: Int32 = -1
+    let executable = CommandLine.arguments[0]
+    var arguments: [UnsafeMutablePointer<CChar>?] = [
+        strdup(executable),
+        strdup("--hidden-terminal-reader"),
+        nil,
+    ]
+    defer {
+        for pointer in arguments.compactMap({ $0 }) { free(pointer) }
+    }
+    let pid = forkpty(&master, nil, nil, nil)
+    guard pid >= 0 else {
+        throw POSIXError(.EAGAIN)
+    }
+    if pid == 0 {
+        _ = arguments.withUnsafeMutableBufferPointer { argv in
+            execv(executable, argv.baseAddress!)
+        }
+        _exit(70)
+    }
+    guard let slavePath = ptsname(master) else {
+        _ = kill(pid, SIGKILL)
+        _ = Darwin.close(master)
+        throw POSIXError(.ENXIO)
+    }
+    let slave = Darwin.open(
+        slavePath,
+        O_RDWR | O_CLOEXEC | O_NOCTTY
+    )
+    guard slave >= 0 else {
+        _ = kill(pid, SIGKILL)
+        _ = Darwin.close(master)
+        throw POSIXError(.ENXIO)
+    }
+    return (master, slave, pid)
+}
+
+private func waitForHiddenTerminalEcho(
+    descriptor: Int32,
+    enabled: Bool,
+    timeoutMilliseconds: Int
+) -> Bool {
+    let attempts = max(1, timeoutMilliseconds / 10)
+    for _ in 0..<attempts {
+        var state = termios()
+        if tcgetattr(descriptor, &state) == 0,
+           (state.c_lflag & tcflag_t(ECHO) != 0) == enabled
+        {
+            return true
+        }
+        usleep(10_000)
+    }
+    return false
+}
+
+private func waitForHiddenTerminalChild(
+    _ pid: pid_t,
+    timeoutMilliseconds: Int
+) -> Int32? {
+    let attempts = max(1, timeoutMilliseconds / 10)
+    for _ in 0..<attempts {
+        var status: Int32 = 0
+        let result = waitpid(pid, &status, WNOHANG)
+        if result == pid { return status }
+        if result < 0, errno != EINTR { return nil }
+        usleep(10_000)
+    }
+    return nil
+}
+
+private func requireHiddenTerminalEchoDisabled(
+    descriptor: Int32,
+    pid: pid_t,
+    context: String
+) throws {
+    guard waitForHiddenTerminalEcho(
+        descriptor: descriptor,
+        enabled: false,
+        timeoutMilliseconds: 1_000
+    ) else {
+        let status = waitForHiddenTerminalChild(
+            pid,
+            timeoutMilliseconds: 100
+        )
+        if status == (100 + EPERM) << 8 {
+            throw TestSkip(
+                description: "sandbox denied the forkpty child /dev/tty"
+            )
+        }
+        throw TestFailure(
+            description:
+                "hidden terminal did not disable echo before \(context); child status \(String(describing: status))"
+        )
+    }
+}
+
+private func hiddenTerminalPromptsBeforeReadingAndNeverEchoesInput() throws {
+    let spawned = try spawnHiddenTerminalReader()
+    defer {
+        _ = Darwin.close(spawned.master)
+        _ = Darwin.close(spawned.slave)
+    }
+    try check(
+        TokenCustodyHiddenTerminal.prompt
+            == "Paste the 1Password service account token (input hidden): ",
+        "hidden terminal prompt drifted"
+    )
+    try requireHiddenTerminalEchoDisabled(
+        descriptor: spawned.slave,
+        pid: spawned.pid,
+        context: "reading"
+    )
+
+    let input = Array((hiddenTerminalSentinel + "\n").utf8)
+    let written = input.withUnsafeBytes {
+        Darwin.write(spawned.master, $0.baseAddress, input.count)
+    }
+    try check(written == input.count, "hidden terminal input write failed")
+    guard let status = waitForHiddenTerminalChild(
+        spawned.pid,
+        timeoutMilliseconds: 2_000
+    ) else {
+        _ = kill(spawned.pid, SIGKILL)
+        _ = waitForHiddenTerminalChild(
+            spawned.pid,
+            timeoutMilliseconds: 1_000
+        )
+        throw TestFailure(
+            description: "hidden terminal input did not complete"
+        )
+    }
+    try check(status == 0, "hidden terminal input failed")
+    try check(
+        waitForHiddenTerminalEcho(
+            descriptor: spawned.slave,
+            enabled: true,
+            timeoutMilliseconds: 1_000
+        ),
+        "hidden terminal did not restore echo after input"
+    )
+
+    _ = fcntl(spawned.master, F_SETFL, O_NONBLOCK)
+    var terminalCapture: [UInt8] = []
+    while true {
+        var buffer = [UInt8](repeating: 0, count: 256)
+        let capacity = buffer.count
+        let count = buffer.withUnsafeMutableBytes {
+            Darwin.read(spawned.master, $0.baseAddress, capacity)
+        }
+        guard count > 0 else { break }
+        terminalCapture.append(contentsOf: buffer.prefix(count))
+    }
+    try check(
+        terminalCapture.starts(
+            with: Array(TokenCustodyHiddenTerminal.prompt.utf8)
+        ),
+        "hidden terminal did not emit its prompt"
+    )
+    try check(
+        !String(decoding: terminalCapture, as: UTF8.self)
+            .contains(hiddenTerminalSentinel),
+        "hidden terminal echoed token input"
+    )
+}
+
+private func hiddenTerminalRestoresEchoBeforeSignalTermination() throws {
+    let spawned = try spawnHiddenTerminalReader()
+    defer {
+        _ = Darwin.close(spawned.master)
+        _ = Darwin.close(spawned.slave)
+    }
+    try requireHiddenTerminalEchoDisabled(
+        descriptor: spawned.slave,
+        pid: spawned.pid,
+        context: "signal"
+    )
+
+    try check(
+        kill(spawned.pid, SIGTERM) == 0,
+        "hidden terminal child could not be terminated"
+    )
+    guard let status = waitForHiddenTerminalChild(
+        spawned.pid,
+        timeoutMilliseconds: 2_000
+    ) else {
+        _ = kill(spawned.pid, SIGKILL)
+        _ = waitForHiddenTerminalChild(
+            spawned.pid,
+            timeoutMilliseconds: 1_000
+        )
+        throw TestFailure(
+            description: "hidden terminal signal did not complete"
+        )
+    }
+    try check(
+        status & 0x7f == SIGTERM,
+        "hidden terminal did not preserve SIGTERM termination"
+    )
+
+    var restored = termios()
+    try check(
+        tcgetattr(spawned.slave, &restored) == 0,
+        "restored terminal state was unreadable"
+    )
+    try check(
+        restored.c_lflag & tcflag_t(ECHO) != 0,
+        "hidden terminal did not restore echo before termination"
+    )
+}
+
+private func hiddenTerminalAlarmReturnsTypedCancellation() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    process.arguments = ["--hidden-terminal-timeout-reader"]
+    let input = Pipe()
+    defer { try? input.fileHandleForWriting.close() }
+    process.standardInput = input
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    let done = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in done.signal() }
+    try process.run()
+    guard done.wait(timeout: .now() + 3) == .success else {
+        process.terminate()
+        throw TestFailure(
+            description: "hidden terminal alarm did not stay bounded"
+        )
+    }
+    try check(
+        process.terminationStatus == 0,
+        "hidden terminal alarm bypassed typed cancellation"
+    )
+}
+
 private func rejectingBackupProofBlocksBeforePublish() throws {
     let root = try makeConfigRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -497,6 +744,37 @@ private func validatorTimeoutCleansStagingPath() throws {
     try check(
         !entries.contains(TokenCustodyPaths.tokenName),
         "validator timeout published a token"
+    )
+}
+
+private func validatorBudgetContainsLegalDownstreamWork() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let custody = root.appendingPathComponent(
+        TokenCustodyPaths.directoryName,
+        isDirectory: true
+    )
+    let channel = try validator(
+        custodyDirectory: custody,
+        approve: true,
+        responseDelayMicroseconds: 5_100_000
+    )
+    var token = Array("ops_SLOW_VALIDATOR\n".utf8)
+
+    let result = installForTest(
+        configRoot: root.path,
+        tokenBytes: &token,
+        validatorDescriptor: channel.0,
+        replacing: false
+    )
+    _ = Darwin.close(channel.0)
+    try check(
+        channel.1.wait(timeout: .now() + 2) == .success,
+        "slow validator did not close"
+    )
+    try check(
+        result.state == .installed,
+        "custody deadline could not contain legal validator work"
     )
 }
 
@@ -1790,6 +2068,8 @@ private func environmentOpSupervisorAdmissionSurfaceAligns() throws {
     let supervisor = URL(fileURLWithPath: CommandLine.arguments[0])
         .deletingLastPathComponent()
         .appendingPathComponent("browser-use-op-supervisor")
+    let stagingRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: stagingRoot) }
     try check(
         FileManager.default.isExecutableFile(atPath: supervisor.path),
         "packaged supervisor executable is unavailable; run swift build first"
@@ -1800,7 +2080,7 @@ private func environmentOpSupervisorAdmissionSurfaceAligns() throws {
         let process = Process()
         process.executableURL = supervisor
         process.arguments = arguments
-        process.environment = [:]
+        process.environment = ["TMPDIR": stagingRoot.path]
         process.standardOutput = output
         process.standardError = Pipe()
         try process.run()
@@ -1934,8 +2214,11 @@ private func runAsFakeValidator() -> Never {
     guard Set(ProcessInfo.processInfo.environment.keys) == [
         "LANG",
         "PATH",
+        "TMPDIR",
         "__CF_USER_TEXT_ENCODING",
-    ]
+    ],
+          let stagingRoot = ProcessInfo.processInfo.environment["TMPDIR"],
+          (stagingRoot as NSString).isAbsolutePath
     else { Foundation.exit(45) }
     let opPath = arguments[4]
     if opPath.hasSuffix(".descendant.pid") {
@@ -4460,6 +4743,64 @@ private func confidentialChromeExecutablePathRejectsLookalike() throws {
 @main
 enum BrowserUseEnvironmentAuthTests {
     static func main() throws {
+        if CommandLine.arguments.dropFirst() == ["--hidden-terminal-reader"] {
+            let probe = Darwin.open(
+                "/dev/tty",
+                O_RDWR | O_CLOEXEC | O_NOCTTY
+            )
+            guard probe >= 0 else { _exit(100 + errno) }
+            _ = Darwin.close(probe)
+            do {
+                let input = try TokenCustodyHiddenTerminal.read()
+                _exit(
+                    input == Array(hiddenTerminalSentinel.utf8)
+                        ? EXIT_SUCCESS
+                        : 71
+                )
+            } catch {
+                _exit(errno == 0 ? 72 : errno)
+            }
+        }
+        if CommandLine.arguments.dropFirst()
+            == ["--hidden-terminal-timeout-reader"]
+        {
+            do {
+                _ =
+                    try TokenCustodyHiddenTerminal
+                        .readStandardInputForTesting(
+                            timeoutSeconds: 1
+                        )
+                _exit(71)
+            } catch TokenCustodyCause.inputCancelled {
+                _exit(EXIT_SUCCESS)
+            } catch {
+                _exit(72)
+            }
+        }
+        if CommandLine.arguments.dropFirst() == ["--hidden-terminal-tests"] {
+            for (name, test) in [
+                (
+                    "hidden terminal prompts before reading without echo",
+                    hiddenTerminalPromptsBeforeReadingAndNeverEchoesInput
+                ),
+                (
+                    "hidden terminal restores echo before signal termination",
+                    hiddenTerminalRestoresEchoBeforeSignalTermination
+                ),
+                (
+                    "hidden terminal alarm returns typed cancellation",
+                    hiddenTerminalAlarmReturnsTypedCancellation
+                ),
+            ] {
+                do {
+                    try test()
+                    print("pass: \(name)")
+                } catch let skip as TestSkip {
+                    print("skip: \(name): \(skip.description)")
+                }
+            }
+            return
+        }
         let executableName = URL(fileURLWithPath: CommandLine.arguments[0])
             .lastPathComponent
         if executableName == "browser-use-op-supervisor" {
@@ -4482,12 +4823,28 @@ enum BrowserUseEnvironmentAuthTests {
             ("path swap and residue block", pathSwapAndCrashResidueBlock),
             ("empty input cancels cleanly", emptyInputCancelsWithoutDamage),
             (
+                "hidden terminal prompts before reading without echo",
+                hiddenTerminalPromptsBeforeReadingAndNeverEchoesInput
+            ),
+            (
+                "hidden terminal restores echo before signal termination",
+                hiddenTerminalRestoresEchoBeforeSignalTermination
+            ),
+            (
+                "hidden terminal alarm returns typed cancellation",
+                hiddenTerminalAlarmReturnsTypedCancellation
+            ),
+            (
                 "rejecting backup proof blocks before publish",
                 rejectingBackupProofBlocksBeforePublish
             ),
             (
                 "validator timeout cleans staging",
                 validatorTimeoutCleansStagingPath
+            ),
+            (
+                "custody deadline contains legal validator work",
+                validatorBudgetContainsLegalDownstreamWork
             ),
             (
                 "removal path swap unlinks neither identity",
@@ -4680,8 +5037,12 @@ enum BrowserUseEnvironmentAuthTests {
             ),
         ]
         for (name, test) in tests {
-            try test()
-            print("pass: \(name)")
+            do {
+                try test()
+                print("pass: \(name)")
+            } catch let skip as TestSkip {
+                print("skip: \(name): \(skip.description)")
+            }
         }
     }
 }

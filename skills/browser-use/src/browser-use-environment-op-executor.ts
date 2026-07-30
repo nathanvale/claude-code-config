@@ -84,7 +84,7 @@ export type BrowserUseEnvironmentOpMetadataOperation =
 export type BrowserUseEnvironmentOpMetadataInvocation = {
 	executable_path: string;
 	argv: readonly string[];
-	env: Readonly<Record<string, never>>;
+	env: Readonly<{ TMPDIR: string }>;
 	inherited_fds: readonly number[];
 };
 
@@ -100,7 +100,7 @@ export type BrowserUseEnvironmentOpAdmissionInvocation =
 export type BrowserUseEnvironmentOpValidatorInvocation = {
 	executable_path: string;
 	argv: readonly string[];
-	env: Readonly<Record<string, never>>;
+	env: Readonly<{ TMPDIR: string }>;
 	inherited_fds: readonly [number];
 };
 
@@ -118,13 +118,15 @@ function assertCoordinate(value: string, label: string): void {
 export function buildEnvironmentOpAdmissionInvocation(input: {
 	supervisor_path: string;
 	op_path: string;
+	staging_root: string;
 }): BrowserUseEnvironmentOpAdmissionInvocation {
 	assertAbsolute(input.supervisor_path, "OP supervisor path");
 	assertAbsolute(input.op_path, "OP executable path");
+	assertAbsolute(input.staging_root, "OP staging root");
 	return {
 		executable_path: input.supervisor_path,
 		argv: ["admit", "--op-path", input.op_path],
-		env: {},
+		env: { TMPDIR: input.staging_root },
 		inherited_fds: [],
 	};
 }
@@ -168,7 +170,7 @@ export function buildEnvironmentOpMetadataInvocation(input: {
 	return {
 		executable_path: input.supervisor_path,
 		argv,
-		env: {},
+		env: { TMPDIR: input.config_root },
 		inherited_fds: [],
 	};
 }
@@ -177,10 +179,12 @@ export function buildEnvironmentOpMetadataInvocation(input: {
 export function buildEnvironmentOpValidatorInvocation(input: {
 	supervisor_path: string;
 	op_path: string;
+	staging_root: string;
 	validator_fd: number;
 }): BrowserUseEnvironmentOpValidatorInvocation {
 	assertAbsolute(input.supervisor_path, "OP supervisor path");
 	assertAbsolute(input.op_path, "OP executable path");
+	assertAbsolute(input.staging_root, "OP staging root");
 	if (!Number.isSafeInteger(input.validator_fd) || input.validator_fd < 3) {
 		throw new TypeError("validator fd must be an inherited non-standard fd");
 	}
@@ -193,8 +197,8 @@ export function buildEnvironmentOpValidatorInvocation(input: {
 			"--op-path",
 			input.op_path,
 		],
-		env: {},
-	inherited_fds: [input.validator_fd],
+		env: { TMPDIR: input.staging_root },
+		inherited_fds: [input.validator_fd],
 	};
 }
 

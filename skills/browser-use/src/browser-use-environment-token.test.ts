@@ -53,14 +53,14 @@ describe("environment token custody control model", () => {
 				"9",
 			],
 			inherited_fds: [7, 9],
+			timeout_ms: 30_000,
 		});
 		expect(JSON.stringify(invocation)).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
 		expect(invocation.argv.join(" ")).not.toContain("token=");
 	});
 
 	test("builds the production validator-process install invocation", () => {
-		expect(
-			buildEnvironmentTokenCustodyInvocation({
+		const invocation = buildEnvironmentTokenCustodyInvocation({
 				executable_path: "/opt/browser-use/bin/browser-use-token-custody",
 				action: "replace",
 				config_root: "/safe/config/browser-use",
@@ -68,8 +68,8 @@ describe("environment token custody control model", () => {
 				validator_executable_path:
 					"/opt/browser-use/bin/browser-use-op-supervisor",
 				op_executable_path: "/opt/homebrew/bin/op",
-			}),
-		).toEqual({
+			});
+		expect(invocation).toEqual({
 			executable_path: "/opt/browser-use/bin/browser-use-token-custody",
 			argv: [
 				"replace",
@@ -82,7 +82,9 @@ describe("environment token custody control model", () => {
 				"/opt/homebrew/bin/op",
 			],
 			inherited_fds: [],
+			timeout_ms: 330_000,
 		});
+		expect(invocation.timeout_ms).toBe(330_000);
 	});
 
 	test("parses every exact secret-free native lifecycle projection", () => {

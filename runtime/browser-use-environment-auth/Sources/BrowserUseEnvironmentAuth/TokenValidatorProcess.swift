@@ -200,7 +200,8 @@ private func execValidator(
     stagedExecutablePath: String,
     executableArgument: String,
     socket: Int32,
-    opPath: String
+    opPath: String,
+    stagingRoot: String
 ) -> Never {
     let arguments = [
         executableArgument,
@@ -213,6 +214,7 @@ private func execValidator(
     let environment = [
         "PATH=/usr/bin:/bin",
         "LANG=C.UTF-8",
+        "TMPDIR=\(stagingRoot)",
     ]
     var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) }
     argv.append(nil)
@@ -234,6 +236,7 @@ private func validatorChild(
     socket: Int32,
     parentSocket: Int32,
     opPath: String,
+    stagingRoot: String,
     inheritedSignalMask: sigset_t
 ) -> Never {
     closeDescriptor(parentSocket)
@@ -264,7 +267,8 @@ private func validatorChild(
         stagedExecutablePath: stagedExecutablePath,
         executableArgument: executablePath,
         socket: socket,
-        opPath: opPath
+        opPath: opPath,
+        stagingRoot: stagingRoot
     )
 }
 
@@ -406,6 +410,7 @@ public struct EnvironmentTokenValidatorProcess: Sendable {
                 socket: sockets[1],
                 parentSocket: sockets[0],
                 opPath: opPath,
+                stagingRoot: stagingRoot,
                 inheritedSignalMask: inheritedSignalMask
             )
         }

@@ -120,22 +120,7 @@ private func readBoundedInput(
 }
 
 private func readHiddenTTY() throws -> [UInt8] {
-    let descriptor = Darwin.open("/dev/tty", O_RDONLY | O_CLOEXEC | O_NOCTTY)
-    guard descriptor >= 0 else {
-        throw TokenCustodyCause.inputCancelled
-    }
-    defer { _ = Darwin.close(descriptor) }
-    var original = termios()
-    guard tcgetattr(descriptor, &original) == 0 else {
-        throw TokenCustodyCause.inputCancelled
-    }
-    var hidden = original
-    hidden.c_lflag &= ~tcflag_t(ECHO)
-    guard tcsetattr(descriptor, TCSAFLUSH, &hidden) == 0 else {
-        throw TokenCustodyCause.inputCancelled
-    }
-    defer { _ = tcsetattr(descriptor, TCSAFLUSH, &original) }
-    return try readBoundedInput(descriptor: descriptor, stopAtNewline: true)
+    try TokenCustodyHiddenTerminal.read()
 }
 
 private func blocked(_ cause: TokenCustodyCause) -> TokenCustodyResult {

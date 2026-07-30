@@ -3,6 +3,8 @@ import { isAbsolute, join } from "node:path";
 /** Fixed names shared with the native custody executable. */
 const TOKEN_CUSTODY_DIRECTORY_NAME = "auth.nosync";
 const TOKEN_FILE_NAME = "op-service-account-token";
+const NONINTERACTIVE_MUTATION_TIMEOUT_MS = 30_000;
+const HIDDEN_TTY_LIFECYCLE_TIMEOUT_MS = 330_000;
 
 /**
  * Fixed, secret-free custody paths beneath one admitted Browser Use config root.
@@ -59,6 +61,8 @@ export type BrowserUseEnvironmentTokenCustodyInvocation = {
 	argv: readonly string[];
 	/** Exact descriptors the launcher keeps open in the child. */
 	inherited_fds: readonly number[];
+	/** Extended bounded deadline for an interactive hidden-terminal mutation. */
+	timeout_ms?: number;
 };
 
 /** Explicit non-environment input source for an install or replacement. */
@@ -188,6 +192,14 @@ export function buildEnvironmentTokenCustodyInvocation(
 		executable_path: input.executable_path,
 		argv,
 		inherited_fds: inheritedFds,
+		...(input.input === undefined
+			? {}
+			: {
+					timeout_ms:
+						input.input.kind === "tty"
+							? HIDDEN_TTY_LIFECYCLE_TIMEOUT_MS
+							: NONINTERACTIVE_MUTATION_TIMEOUT_MS,
+				}),
 	};
 }
 

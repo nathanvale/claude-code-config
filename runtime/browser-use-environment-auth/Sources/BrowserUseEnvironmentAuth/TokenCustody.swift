@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 
+private func tokenCustodyHiddenTerminalAlarmHandler(_: Int32) {}
+
 public enum TokenCustodyState: String, Codable, Sendable {
     case missing
     case ready
@@ -116,6 +118,60 @@ public enum TokenCustodyProcessSafety {
         else {
             throw TokenCustodyCause.coreDumpDisableFailed
         }
+    }
+}
+
+@_spi(Executor)
+public enum TokenCustodyHiddenTerminal {
+    public static let prompt =
+        "Paste the 1Password service account token (input hidden): "
+
+    public static func read() throws -> [UInt8] {
+        try read(flags: RPP_REQUIRE_TTY, timeoutSeconds: 300)
+    }
+
+    @_spi(Testing)
+    public static func readStandardInputForTesting(
+        timeoutSeconds: UInt32
+    ) throws -> [UInt8] {
+        try read(flags: RPP_STDIN, timeoutSeconds: timeoutSeconds)
+    }
+
+    private static func read(
+        flags: Int32,
+        timeoutSeconds: UInt32
+    ) throws -> [UInt8] {
+        guard timeoutSeconds > 0 else {
+            throw TokenCustodyCause.inputInvalid
+        }
+        var buffer = [CChar](repeating: 0, count: 65_537)
+        let previousAlarmHandler = signal(
+            SIGALRM,
+            tokenCustodyHiddenTerminalAlarmHandler
+        )
+        _ = alarm(timeoutSeconds)
+        defer {
+            _ = alarm(0)
+            _ = signal(SIGALRM, previousAlarmHandler)
+            _ = buffer.withUnsafeMutableBytes {
+                $0.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+        }
+        let result = prompt.withCString { promptPointer in
+            buffer.withUnsafeMutableBufferPointer { bufferPointer in
+                readpassphrase(
+                    promptPointer,
+                    bufferPointer.baseAddress,
+                    bufferPointer.count,
+                    flags
+                )
+            }
+        }
+        guard result != nil else {
+            throw TokenCustodyCause.inputCancelled
+        }
+        let end = buffer.firstIndex(of: 0) ?? buffer.endIndex
+        return buffer[..<end].map { UInt8(bitPattern: $0) }
     }
 }
 
@@ -736,6 +792,8 @@ private func syncFile(_ descriptor: Int32) throws {
 }
 
 public enum TokenCustody {
+    private static let validatorTimeoutMilliseconds: Int32 = 20_000
+
     public static func status(configRoot: String) -> TokenCustodyResult {
         status(
             configRoot: configRoot,
@@ -838,7 +896,7 @@ public enum TokenCustody {
             validatorDescriptor: validatorDescriptor,
             replacing: replacing,
             backupExclusionProof: .production,
-            validatorTimeoutMilliseconds: 5_000,
+            validatorTimeoutMilliseconds: validatorTimeoutMilliseconds,
             validationCompletion: {}
         )
     }
@@ -857,7 +915,7 @@ public enum TokenCustody {
             validatorDescriptor: validatorDescriptor,
             replacing: replacing,
             backupExclusionProof: .production,
-            validatorTimeoutMilliseconds: 5_000,
+            validatorTimeoutMilliseconds: validatorTimeoutMilliseconds,
             validationCompletion: validationCompletion
         )
     }
@@ -869,7 +927,7 @@ public enum TokenCustody {
         validatorDescriptor: Int32,
         replacing: Bool,
         backupExclusionProof: TokenCustodyBackupExclusionProof,
-        validatorTimeoutMilliseconds: Int32 = 5_000,
+        validatorTimeoutMilliseconds: Int32 = 20_000,
         validationCompletion: @escaping @Sendable () throws -> Void = {}
     ) -> TokenCustodyResult {
         install(

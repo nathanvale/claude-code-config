@@ -63,6 +63,7 @@ describe("environment OP executable admission", () => {
 			buildEnvironmentOpValidatorInvocation({
 				supervisor_path: "/opt/browser-use/bin/browser-use-op-supervisor",
 				op_path: "/opt/homebrew/bin/op",
+				staging_root: "/safe/config/browser-use",
 				validator_fd: 9,
 			}),
 		).toEqual({
@@ -74,7 +75,7 @@ describe("environment OP executable admission", () => {
 				"--op-path",
 				"/opt/homebrew/bin/op",
 			],
-			env: {},
+			env: { TMPDIR: "/safe/config/browser-use" },
 			inherited_fds: [9],
 		});
 	});
@@ -84,11 +85,12 @@ describe("environment OP executable admission", () => {
 			buildEnvironmentOpAdmissionInvocation({
 				supervisor_path: "/opt/browser-use/bin/browser-use-op-supervisor",
 				op_path: "/opt/homebrew/bin/op",
+				staging_root: "/safe/config/browser-use",
 			}),
 		).toEqual({
 			executable_path: "/opt/browser-use/bin/browser-use-op-supervisor",
 			argv: ["admit", "--op-path", "/opt/homebrew/bin/op"],
-			env: {},
+			env: { TMPDIR: "/safe/config/browser-use" },
 			inherited_fds: [],
 		});
 		expect(
@@ -174,7 +176,7 @@ describe("environment OP executable admission", () => {
 });
 
 describe("environment OP native invocation", () => {
-	test("contains only absolute paths, bounded operation coordinates, and no environment", () => {
+	test("contains only absolute paths, bounded coordinates, and the private staging root", () => {
 		expect(
 			buildEnvironmentOpMetadataInvocation({
 				supervisor_path: "/opt/browser-use/bin/browser-use-op-supervisor",
@@ -195,7 +197,7 @@ describe("environment OP native invocation", () => {
 				"--vault-id",
 				"vault-1",
 			],
-			env: {},
+			env: { TMPDIR: "/safe/config/browser-use" },
 			inherited_fds: [],
 		});
 		expect(

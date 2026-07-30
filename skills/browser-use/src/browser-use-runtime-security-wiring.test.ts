@@ -202,14 +202,23 @@ describe("U4 three-state production lane admission", () => {
 		);
 		if (!existsSync(opPath) || !existsSync(supervisorAlias)) return;
 		const supervisorPath = realpathSync(supervisorAlias);
+		const stagingRoot = await mkdtemp(
+			join(import.meta.dir, ".auth-status-op-staging-"),
+		);
+		await chmod(stagingRoot, 0o700);
 		expect((await lstat(opPath)).isSymbolicLink()).toBe(true);
-		expect(
-			await inspectBrowserUseAuthStatusExecutable(opPath, {
-				kind: "op",
-				approved_path: opPath,
-				supervisor_path: supervisorPath,
-			}),
-		).toBe("ready");
+		try {
+			expect(
+				await inspectBrowserUseAuthStatusExecutable(opPath, {
+					kind: "op",
+					approved_path: opPath,
+					supervisor_path: supervisorPath,
+					staging_root: stagingRoot,
+				}),
+			).toBe("ready");
+		} finally {
+			await rm(stagingRoot, { recursive: true, force: true });
+		}
 	});
 
 	test("auth status rejects an executable without the owned native identity", async () => {

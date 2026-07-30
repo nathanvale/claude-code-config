@@ -850,7 +850,10 @@ export async function createProductionBrowserUseRuntime(
 		runtime.authAdmission.kind === "blocked"
 			? undefined
 			: runtime.authAdmission.tokenRetrieval;
-	runtime.authStatusSupport ??= createProductionAuthStatusSupportPort(runtime);
+	runtime.authStatusSupport ??= createProductionAuthStatusSupportPort(
+		runtime,
+		resolveCanonicalConfigRoot,
+	);
 	return runtime;
 }
 
@@ -1189,6 +1192,7 @@ type BrowserUseAuthStatusExecutableExpectation =
 			kind: "op";
 			approved_path: string;
 			supervisor_path: string;
+			staging_root: string;
 	  }
 	| {
 			kind: "owned-native";
@@ -1226,6 +1230,7 @@ async function inspectOwnedNativeIdentity(
 async function inspectNativeEnvironmentOpAdmission(
 	path: string,
 	supervisorPath: string,
+	stagingRoot: string,
 ): Promise<BrowserUseAuthStatusExecutableState> {
 	const supervisorState = await inspectBrowserUseAuthStatusExecutable(
 		supervisorPath,
@@ -1240,6 +1245,7 @@ async function inspectNativeEnvironmentOpAdmission(
 		const invocation = buildEnvironmentOpAdmissionInvocation({
 			supervisor_path: supervisorPath,
 			op_path: path,
+			staging_root: stagingRoot,
 		});
 		const child = Bun.spawn(
 			[invocation.executable_path, ...invocation.argv],
@@ -1315,6 +1321,7 @@ export async function inspectBrowserUseAuthStatusExecutable(
 		return inspectNativeEnvironmentOpAdmission(
 			path,
 			expectation.supervisor_path,
+			expectation.staging_root,
 		);
 	}
 	const expectedUid = process.geteuid?.() ?? process.getuid?.();
@@ -1371,6 +1378,7 @@ function createProductionAuthStatusSupportPort(
 		| "now"
 		| "platformFs"
 	>,
+	resolveCanonicalConfigRoot: BrowserUseCanonicalConfigRootResolver,
 ): BrowserUseAuthStatusSupportPort {
 	let executableEvidence:
 		| Promise<{
@@ -1384,35 +1392,39 @@ function createProductionAuthStatusSupportPort(
 		const nativeBinRoot = browserUseNativeBinRoot();
 		const supervisorPath = join(nativeBinRoot, "browser-use-op-supervisor");
 		const opPath = fixedOpExecutablePath();
-		executableEvidence = Promise.all([
-			inspectBrowserUseAuthStatusExecutable(
-				opPath,
-				{
-					kind: "op",
-					approved_path: opPath,
-					supervisor_path: supervisorPath,
-				},
-			),
-			inspectBrowserUseAuthStatusExecutable(
-				supervisorPath,
-				{
-					kind: "owned-native",
-					approved_path: supervisorPath,
-					expected_identifier: "browser-use-op-supervisor",
-				},
-			),
-			inspectBrowserUseAuthStatusExecutable(
-				join(nativeBinRoot, "browser-use-confidential-delivery"),
-				{
-					kind: "owned-native",
-					approved_path: join(
-						nativeBinRoot,
-						"browser-use-confidential-delivery",
+		executableEvidence = resolveCanonicalConfigRoot()
+			.then((stagingRoot) =>
+				Promise.all([
+					inspectBrowserUseAuthStatusExecutable(opPath, {
+						kind: "op",
+						approved_path: opPath,
+						supervisor_path: supervisorPath,
+						staging_root: stagingRoot,
+					}),
+					inspectBrowserUseAuthStatusExecutable(supervisorPath, {
+						kind: "owned-native",
+						approved_path: supervisorPath,
+						expected_identifier: "browser-use-op-supervisor",
+					}),
+					inspectBrowserUseAuthStatusExecutable(
+						join(nativeBinRoot, "browser-use-confidential-delivery"),
+						{
+							kind: "owned-native",
+							approved_path: join(
+								nativeBinRoot,
+								"browser-use-confidential-delivery",
+							),
+							expected_identifier: "browser-use-confidential-delivery",
+						},
 					),
-					expected_identifier: "browser-use-confidential-delivery",
-				},
-			),
-		]).then(([op, wrapper, helper]) => ({ op, wrapper, helper }));
+				]),
+			)
+			.then(([op, wrapper, helper]) => ({ op, wrapper, helper }))
+			.catch(() => ({
+				op: "unproven" as const,
+				wrapper: "unproven" as const,
+				helper: "unproven" as const,
+			}));
 		return executableEvidence;
 	};
 	return async (coordinates) => {
@@ -1810,7 +1822,7 @@ function createNativeEnvironmentTokenLifecyclePort(
 				new Promise<true>((resolve) => {
 					timer = setTimeout(
 						() => resolve(true),
-						NATIVE_LIFECYCLE_TIMEOUT_MS,
+						invocation.timeout_ms ?? NATIVE_LIFECYCLE_TIMEOUT_MS,
 					);
 				}),
 			]);
