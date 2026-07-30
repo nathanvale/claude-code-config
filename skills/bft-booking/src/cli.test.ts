@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { main, parseArgs } from "./cli.ts";
+import type { BftRuntime } from "./cli.ts";
 import type {
 	AuthSession,
 	Booking,
@@ -41,8 +42,9 @@ const BOOKING: Booking = {
 	waitlisted: false,
 };
 
-function runtime(overrides: Record<string, unknown> = {}) {
+function runtime(overrides: Partial<BftRuntime> = {}): BftRuntime {
 	return {
+		now: () => new Date("2026-08-01T00:00:00+10:00"),
 		loadCredentials: async () => CREDENTIALS,
 		login: async () => AUTH,
 		listSessions: async () => [SESSION],
@@ -55,7 +57,7 @@ function runtime(overrides: Record<string, unknown> = {}) {
 
 async function captureMain(
 	argv: string[],
-	overrides: Record<string, unknown> = {},
+	overrides: Partial<BftRuntime> = {},
 ) {
 	const stdout: string[] = [];
 	const stderr: string[] = [];
@@ -115,6 +117,24 @@ describe("parseArgs", () => {
 		);
 	});
 
+	test("rejects a flag where another flag needs a value", () => {
+		expect(() => parseArgs(["sessions", "--date", "--json"])).toThrow(
+			"--date needs a value",
+		);
+	});
+
+	test("leaves omitted days undefined", () => {
+		expect(parseArgs(["sessions"]).days).toBeUndefined();
+	});
+
+	test("rejects explicit days outside sessions", () => {
+		expect(() => parseArgs(["bookings", "--days", "1"])).toThrow(
+			"--date and --days are only valid for sessions",
+		);
+	});
+});
+
+describe("main", () => {
 	test("keeps command discovery parseable through the public CLI", async () => {
 		const captured = await captureMain(["commands", "--json"]);
 		expect(captured.exitCode).toBe(0);
@@ -241,5 +261,24 @@ describe("parseArgs", () => {
 			error: { category: string };
 		};
 		expect(output.error.category).toBe("usage");
+	});
+
+	test("resolves Melbourne tomorrow across the end of daylight saving", async () => {
+		const captured = await captureMain(
+			["sessions", "--date", "tomorrow", "--json"],
+			{
+				now: () => new Date("2026-04-04T13:30:00Z"),
+			},
+		);
+		expect(captured.exitCode).toBe(0);
+		const output = JSON.parse(captured.stdout[0]) as {
+			data: { from: string; to: string };
+		};
+		expect(output.data).toEqual(
+			expect.objectContaining({
+				from: "2026-04-06",
+				to: "2026-04-07",
+			}),
+		);
 	});
 });

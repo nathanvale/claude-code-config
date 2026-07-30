@@ -87,7 +87,7 @@ export interface ParsedArgs {
 	execute: boolean;
 	joinWaitlist: boolean;
 	date?: string;
-	days: number;
+	days?: number;
 	sessionId?: string;
 	bookingId?: string;
 }

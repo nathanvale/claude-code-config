@@ -3,6 +3,7 @@ import type { Credentials } from "./model.ts";
 const DEFAULT_WRAPPER = "/Users/nathanvale/code/dotfiles/bin/with-env";
 const DEFAULT_VAULT = "API Credentials";
 const DEFAULT_ITEM = "BFT / Glofox";
+const CREDENTIAL_PROCESS_TIMEOUT_MS = 15_000;
 
 interface OpField {
 	label?: string;
@@ -135,6 +136,7 @@ export async function loadCredentials(): Promise<Credentials> {
 			env: safeProcessEnvironment(),
 			stdout: "pipe",
 			stderr: "pipe",
+			timeout: CREDENTIAL_PROCESS_TIMEOUT_MS,
 		},
 	);
 	const [exitCode, stdout] = await Promise.all([

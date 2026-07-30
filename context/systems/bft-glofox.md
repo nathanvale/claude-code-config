@@ -17,7 +17,8 @@
 
 ## Sessions
 
-- Glofox timetable: `GET https://api.glofox.com/2.0/branches/{branch_id}/events/`
+- Glofox timetable: `GET https://api.glofox.com/2.0/branches/{branch_id}/events/?from={from}&to={to}`
+- Timetable `from` and `to` query parameters use local calendar dates in `YYYY-MM-DD` format.
 - Hapana timetable: `GET https://app.hapana.com/v2/site/sessions`
 - My bookings: `GET https://api.glofox.com/2.0/bookings`
 

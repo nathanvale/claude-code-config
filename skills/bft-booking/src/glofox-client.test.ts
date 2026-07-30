@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	cancelBooking,
 	createBooking,
 	listBookings,
 	login,
@@ -38,6 +39,32 @@ describe("login", () => {
 			password: "private-password",
 		});
 		expect(JSON.stringify(auth)).not.toContain("private-password");
+	});
+
+	test("includes a parsed server message and status on authentication failure", async () => {
+		const credentials: Credentials = {
+			login: "member@example.test",
+			password: "private-password",
+			branchId: "branch-1",
+			namespace: "bft",
+			headers: {},
+			device: "ios",
+		};
+		const fetcher = (async () =>
+			new Response(JSON.stringify({ message: "Invalid credentials" }), {
+				status: 401,
+			})) as unknown as typeof fetch;
+
+		try {
+			await login(credentials, fetcher);
+			expect.unreachable("Expected login to fail.");
+		} catch (error) {
+			expect(error).toMatchObject({
+				message:
+					"Glofox authentication failed: Invalid credentials (HTTP 401).",
+				status: 401,
+			});
+		}
 	});
 });
 
@@ -137,9 +164,10 @@ describe("legacy response errors", () => {
 			new Response(JSON.stringify({ success: false }), {
 				status: 200,
 			})) as unknown as typeof fetch;
-		await expect(listBookings(auth, fetcher)).rejects.toThrow(
-			"Glofox rejected the request",
-		);
+		await expect(listBookings(auth, fetcher)).rejects.toMatchObject({
+			message: "Glofox rejected the request.",
+			status: 200,
+		});
 	});
 
 	test("marks server failures after a mutation as uncertain", async () => {
@@ -154,15 +182,55 @@ describe("legacy response errors", () => {
 				status: 500,
 			})) as unknown as typeof fetch;
 
+		let caught: unknown;
 		try {
 			await createBooking(auth, "session-1", false, fetcher);
-			throw new Error("Expected createBooking to fail.");
 		} catch (error) {
-			expect(error).toBeInstanceOf(Error);
-			expect(
-				(error as { mutationMayHaveChangedState?: boolean })
-					.mutationMayHaveChangedState,
-			).toBe(true);
+			caught = error;
 		}
+
+		expect(caught).toBeInstanceOf(Error);
+		expect(
+			(caught as { mutationMayHaveChangedState?: boolean })
+				.mutationMayHaveChangedState,
+		).toBe(true);
+	});
+
+	test("marks a cancellation server failure as uncertain", async () => {
+		const auth: AuthSession = {
+			token: "secret-token",
+			branchId: "branch-1",
+			namespace: "namespace",
+			headers: { "x-glofox-access-token": "app-token" },
+		};
+		const fetcher = (async () =>
+			new Response(JSON.stringify({ message: "Server error" }), {
+				status: 503,
+			})) as unknown as typeof fetch;
+
+		await expect(cancelBooking(auth, "booking-1", fetcher)).rejects.toMatchObject(
+			{
+				status: 503,
+				mutationMayHaveChangedState: true,
+			},
+		);
+	});
+
+	test("marks a rejected mutation transport as uncertain", async () => {
+		const auth: AuthSession = {
+			token: "secret-token",
+			branchId: "branch-1",
+			namespace: "namespace",
+			headers: { "x-glofox-access-token": "app-token" },
+		};
+		const fetcher = (async () => {
+			throw new TypeError("connection reset");
+		}) as unknown as typeof fetch;
+
+		await expect(
+			createBooking(auth, "session-1", false, fetcher),
+		).rejects.toMatchObject({
+			mutationMayHaveChangedState: true,
+		});
 	});
 });

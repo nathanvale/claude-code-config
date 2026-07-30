@@ -168,8 +168,13 @@ export async function login(
 	const body = record(await readJson(response));
 	const token = body ? textValue(body, ["token", "access_token"]) : undefined;
 	if (!response.ok || !token) {
+		const message = body
+			? textValue(body, ["message", "error", "detail"])
+			: undefined;
 		throw new GlofoxError(
-			`Glofox authentication failed with HTTP ${response.status}.`,
+			message
+				? `Glofox authentication failed: ${message} (HTTP ${response.status}).`
+				: `Glofox authentication failed with HTTP ${response.status}.`,
 			{ status: response.status },
 		);
 	}
@@ -309,7 +314,7 @@ export function normalizeBookings(payload: unknown): Booking[] {
 async function apiRequest(
 	auth: AuthSession,
 	path: string,
-	options: RequestInit,
+	options: Omit<RequestInit, "headers" | "signal">,
 	fetcher: typeof fetch,
 	mutation: boolean,
 ): Promise<unknown> {
@@ -341,16 +346,16 @@ async function apiRequest(
 		}
 		throw error;
 	}
-	const bodyRecord = record(body);
 	if (!response.ok) {
 		throw new GlofoxError(`Glofox returned HTTP ${response.status}.`, {
 			status: response.status,
 			mutationMayHaveChangedState: mutation && response.status >= 500,
 		});
 	}
+	const bodyRecord = record(body);
 	if (bodyRecord?.success === false) {
 		throw new GlofoxError("Glofox rejected the request.", {
-			status: 400,
+			status: response.status,
 			mutationMayHaveChangedState: false,
 		});
 	}

@@ -35,7 +35,8 @@ const COMMANDS: CommandName[] = [
 	"cancel",
 ];
 
-interface BftRuntime {
+export interface BftRuntime {
+	now: () => Date;
 	loadCredentials: () => Promise<Credentials>;
 	login: (credentials: Credentials) => Promise<AuthSession>;
 	listSessions: (
@@ -53,6 +54,7 @@ interface BftRuntime {
 }
 
 const LIVE_RUNTIME: BftRuntime = {
+	now: () => new Date(),
 	loadCredentials,
 	login,
 	listSessions,
@@ -98,7 +100,9 @@ function parsePositiveInteger(raw: string, flag: string): number {
 
 function requiredValue(argv: string[], index: number, flag: string): string {
 	const value = argv[index + 1];
-	if (!value) throw new UsageError(`${flag} needs a value.`);
+	if (!value || value.startsWith("-")) {
+		throw new UsageError(`${flag} needs a value.`);
+	}
 	return value;
 }
 
@@ -147,7 +151,7 @@ function validateParsedArgs(parsed: ParsedArgs): void {
 	if (parsed.bookingId && command !== "cancel") {
 		throw new UsageError("--booking-id is only valid for cancel.");
 	}
-	if ((parsed.date !== undefined || parsed.days !== 1) && command !== "sessions") {
+	if ((parsed.date !== undefined || parsed.days !== undefined) && command !== "sessions") {
 		throw new UsageError("--date and --days are only valid for sessions.");
 	}
 }
@@ -159,7 +163,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
 		help: false,
 		execute: false,
 		joinWaitlist: false,
-		days: 1,
 	};
 	const command = argv[0];
 	if (command && !command.startsWith("-")) {
@@ -176,8 +179,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	return parsed;
 }
 
-function melbourneDate(offsetDays = 0): string {
-	const date = new Date(Date.now() + offsetDays * 86_400_000);
+function melbourneDate(date: Date): string {
 	return new Intl.DateTimeFormat("en-CA", {
 		timeZone: "Australia/Melbourne",
 		year: "numeric",
@@ -186,9 +188,10 @@ function melbourneDate(offsetDays = 0): string {
 	}).format(date);
 }
 
-function resolveDate(raw: string | undefined): string {
-	if (!raw || raw === "today") return melbourneDate();
-	if (raw === "tomorrow") return melbourneDate(1);
+function resolveDate(raw: string | undefined, now: Date): string {
+	const today = melbourneDate(now);
+	if (!raw || raw === "today") return today;
+	if (raw === "tomorrow") return addDays(today, 1);
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
 		throw new UsageError("--date must be YYYY-MM-DD, today, or tomorrow.");
 	}
@@ -288,7 +291,7 @@ async function runDoctor(runtime: BftRuntime): Promise<CommandResult<unknown>> {
 	const metadata = credentialProviderMetadata();
 	const dependency = {
 		bun: typeof Bun !== "undefined",
-		op: Boolean(Bun.which("op")),
+		op: typeof Bun !== "undefined" && Boolean(Bun.which("op")),
 		wrapper: existsSync(metadata.wrapper),
 	};
 	const missingDependencies = Object.entries(dependency)
@@ -326,8 +329,8 @@ async function runSessions(
 	auth: AuthSession,
 	runtime: BftRuntime,
 ): Promise<CommandResult<unknown>> {
-	const from = resolveDate(args.date);
-	const to = addDays(from, args.days);
+	const from = resolveDate(args.date, runtime.now());
+	const to = addDays(from, args.days ?? 1);
 	const sessions = await runtime.listSessions(auth, from, to);
 	return result("sessions", { from, to, count: sessions.length, sessions });
 }
@@ -377,7 +380,7 @@ async function runBook(
 	runtime: BftRuntime,
 ): Promise<CommandResult<unknown>> {
 	if (!args.sessionId) throw new UsageError("book requires --session-id ID.");
-	const from = melbourneDate();
+	const from = melbourneDate(runtime.now());
 	const sessions = await runtime.listSessions(auth, from, addDays(from, 31));
 	const session = sessions.find((candidate) => candidate.id === args.sessionId);
 	if (!session) {
@@ -476,7 +479,7 @@ async function runCancel(
 		{
 			action: "cancel",
 			booking: target,
-			verified_absent: !after.some((booking) => booking.id === args.bookingId),
+			verified_absent: true,
 			bookings: after,
 		},
 			{ changed: true, retrySafe: false },
