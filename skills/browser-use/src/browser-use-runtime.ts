@@ -57,6 +57,10 @@ import {
 } from "./browser-use-paths";
 import { createBrowserUseAdminAuthorityReceiptStore } from "./browser-use-admin-authority-receipt";
 import {
+	type BrowserUseProfilePostureStatus,
+	parseBrowserConnectProfilePostureStatus,
+} from "./browser-use-profile-posture";
+import {
 	type BrowserUseEnvironmentTokenCustodyAction,
 	type BrowserUseEnvironmentTokenCustodyState,
 	buildEnvironmentTokenCustodyInvocation,
@@ -737,6 +741,12 @@ export type BrowserUseRuntime = {
 	 */
 	authStatusSupport?: BrowserUseAuthStatusSupportPort;
 	/**
+	 * Read-only Browser Connect check reduced to Warm Chrome's exact redacted
+	 * profile posture. Tests inject earned proof; production calls the owning
+	 * browser-connect check surface in-process.
+	 */
+	authProfilePosture?: () => Promise<BrowserUseProfilePostureStatus>;
+	/**
 	 * Native local-token lifecycle. Token bytes remain in inherited stdin or
 	 * the native hidden terminal; TypeScript receives only the secret-free
 	 * lifecycle state.
@@ -790,6 +800,13 @@ export function createDefaultBrowserUseRuntime(
 			}
 		},
 		platformFs: createDefaultPlatformFs(),
+		authProfilePosture: () =>
+			inspectProfilePostureInProcess(
+				overrides.env === undefined
+					? process.env.WARM_CHROME_CDP_PORT
+					: overrides.env.WARM_CHROME_CDP_PORT,
+				overrides.now?.() ?? Date.now(),
+			),
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
 	};
@@ -1352,7 +1369,10 @@ export async function inspectBrowserUseAuthStatusExecutable(
  * bounded repair without claiming live evidence.
  */
 function createProductionAuthStatusSupportPort(
-	runtime: Pick<BrowserUseRuntime, "env" | "now" | "platformFs">,
+	runtime: Pick<
+		BrowserUseRuntime,
+		"authProfilePosture" | "env" | "now" | "platformFs"
+	>,
 ): BrowserUseAuthStatusSupportPort {
 	let executableEvidence:
 		| Promise<{
@@ -1400,6 +1420,8 @@ function createProductionAuthStatusSupportPort(
 	return async (coordinates) => {
 		const executables = await inspectExecutables();
 		let adminAuthority: "proven" | "missing" | "invalid" = "missing";
+		let profile: "live-clean" | "missing" | "unsafe" | "unproven" =
+			"unproven";
 		if (coordinates !== undefined) {
 			const opened = await inspectBrowserUsePaths(
 				runtime.platformFs,
@@ -1424,13 +1446,23 @@ function createProductionAuthStatusSupportPort(
 							? "missing"
 							: "invalid";
 			}
+			if (
+				adminAuthority === "proven" &&
+				runtime.authProfilePosture !== undefined
+			) {
+				try {
+					profile = (await runtime.authProfilePosture()).state;
+				} catch {
+					profile = "unproven";
+				}
+			}
 		}
 		return {
 			contract: "browser-use.auth-status-support",
 			schema_version: "1",
 			executables,
 			admin_authority: adminAuthority,
-			profile: "unproven",
+			profile,
 			binding: "missing",
 			proof: null,
 		};
@@ -1773,6 +1805,58 @@ async function mintHandoffInProcess(input: {
 			stdout: "",
 			stderr: `browser-connect could not mint the handoff in this installation (${detail}); pass --handoff <path> with a pre-minted Verified Handoff Envelope.`,
 		};
+	}
+}
+
+async function inspectProfilePostureInProcess(
+	port: string | undefined,
+	now: number,
+): Promise<BrowserUseProfilePostureStatus> {
+	let cli: typeof import("@side-quest/browser-connect/cli");
+	try {
+		cli = await import("@side-quest/browser-connect/cli");
+	} catch {
+		return { state: "unproven" };
+	}
+	const outputLimit = 64 * 1024;
+	const capture = () => {
+		const chunks: string[] = [];
+		let bytes = 0;
+		let overflow = false;
+		return {
+			writer: {
+				write: (text: string) => {
+					bytes += Buffer.byteLength(text, "utf8");
+					if (bytes > outputLimit) {
+						overflow = true;
+						return true;
+					}
+					chunks.push(text);
+					return true;
+				},
+			},
+			text: () => (overflow ? "" : chunks.join("")),
+		};
+	};
+	const stdout = capture();
+	const stderr = capture();
+	try {
+		const deps = await cli.createProductionDeps();
+		const exitCode = await cli.main(
+			[
+				"check",
+				"--json",
+				...(port === undefined ? [] : ["--port", port]),
+			],
+			{ ...deps, stdout: stdout.writer, stderr: stderr.writer },
+		);
+		return parseBrowserConnectProfilePostureStatus(
+			stdout.text(),
+			exitCode,
+			now,
+		);
+	} catch {
+		return { state: "unproven" };
 	}
 }
 

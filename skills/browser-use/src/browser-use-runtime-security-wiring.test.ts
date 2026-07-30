@@ -276,6 +276,7 @@ describe("U4 three-state production lane admission", () => {
 	test("production support reuses preflight and admits the exact human authority receipt only after metadata binding", async () => {
 		const xdg = makeTempXdgEnv();
 		try {
+			let profileCalls = 0;
 			const fs = createDefaultPlatformFs();
 			const opened = await openBrowserUsePaths(fs, xdg.env);
 			if (!opened.ok) throw new Error("paths refused");
@@ -295,6 +296,14 @@ describe("U4 three-state production lane admission", () => {
 			const runtime = await createProductionBrowserUseRuntime({
 				env: xdg.env,
 				platformFs: fs,
+				authProfilePosture: async () => {
+					profileCalls += 1;
+					return {
+						state: "live-clean",
+						profile_posture_receipt_digest: "9".repeat(64),
+						observed_at_epoch_ms: 900,
+					};
+				},
 				environmentTokenLifecycle: {
 					inputIsTTY: () => false,
 					execute: async () => ({
@@ -308,6 +317,8 @@ describe("U4 three-state production lane admission", () => {
 				admin_authority: string;
 				executables: Record<string, string>;
 			};
+			expect(preflight.admin_authority).toBe("missing");
+			expect(profileCalls).toBe(0);
 			const bound = (await runtime.authStatusSupport?.(coordinates)) as {
 				admin_authority: string;
 				executables: Record<string, string>;
@@ -316,13 +327,13 @@ describe("U4 three-state production lane admission", () => {
 				proof: unknown;
 			};
 
-			expect(preflight.admin_authority).toBe("missing");
 			expect(bound).toMatchObject({
 				admin_authority: "proven",
-				profile: "unproven",
+				profile: "live-clean",
 				binding: "missing",
 				proof: null,
 			});
+			expect(profileCalls).toBe(1);
 			expect(bound.executables).toEqual(preflight.executables);
 		} finally {
 			xdg.dispose();
