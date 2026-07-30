@@ -451,16 +451,24 @@ export async function orchestrateRunbookAuthentication(input: {
 			safe_to_retry: false,
 		};
 	}
-	if (
-		input.resumeCheckpoint === "delivery-outcome-unknown" ||
-		input.resumeCheckpoint === "submission-outcome-unknown"
-	) {
+	const resumedDeliveryUnknown = [
+		"delivery-outcome-unknown",
+		"before-username-delivery",
+		"before-password-delivery",
+		"before-otp-delivery",
+	].includes(input.resumeCheckpoint ?? "");
+	const resumedSubmissionUnknown = [
+		"submission-outcome-unknown",
+		"before-username-submit",
+		"before-password-submit",
+		"before-otp-submit",
+	].includes(input.resumeCheckpoint ?? "");
+	if (resumedDeliveryUnknown || resumedSubmissionUnknown) {
 		return {
 			ok: false,
-			code:
-				input.resumeCheckpoint === "delivery-outcome-unknown"
-					? "auth-delivery-outcome-unknown"
-					: "auth-submission-outcome-unknown",
+			code: resumedDeliveryUnknown
+				? "auth-delivery-outcome-unknown"
+				: "auth-submission-outcome-unknown",
 			safe_to_retry: false,
 		};
 	}

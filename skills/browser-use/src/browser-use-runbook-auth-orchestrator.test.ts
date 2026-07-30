@@ -296,9 +296,39 @@ describe("runbook auth orchestrator U8", () => {
 	});
 
 	test("a resumed unknown field or submit outcome inspects session but never repeats the effect", async () => {
-		for (const checkpoint of [
-			"delivery-outcome-unknown",
-			"submission-outcome-unknown",
+		for (const [checkpoint, expectedCode] of [
+			[
+				"delivery-outcome-unknown",
+				"auth-delivery-outcome-unknown",
+			],
+			[
+				"before-username-delivery",
+				"auth-delivery-outcome-unknown",
+			],
+			[
+				"before-password-delivery",
+				"auth-delivery-outcome-unknown",
+			],
+			[
+				"before-otp-delivery",
+				"auth-delivery-outcome-unknown",
+			],
+			[
+				"submission-outcome-unknown",
+				"auth-submission-outcome-unknown",
+			],
+			[
+				"before-username-submit",
+				"auth-submission-outcome-unknown",
+			],
+			[
+				"before-password-submit",
+				"auth-submission-outcome-unknown",
+			],
+			[
+				"before-otp-submit",
+				"auth-submission-outcome-unknown",
+			],
 		] as const) {
 			const events: Event[] = [];
 			const result = await orchestrateRunbookAuthentication({
@@ -318,10 +348,7 @@ describe("runbook auth orchestrator U8", () => {
 
 			expect(result).toEqual({
 				ok: false,
-				code:
-					checkpoint === "delivery-outcome-unknown"
-						? "auth-delivery-outcome-unknown"
-						: "auth-submission-outcome-unknown",
+				code: expectedCode,
 				safe_to_retry: false,
 			});
 			expect(events).toEqual(["inspect"]);
