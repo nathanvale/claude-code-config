@@ -23,6 +23,10 @@ import {
 	runbooksRoot,
 	shippedRunbooksRoot,
 } from "./browser-use-runbook";
+import {
+	LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
+	verifiedHandoffEnvelope,
+} from "./browser-connect-handoff-fixtures";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
 import { stageGeneration } from "./browser-use-retention";
 import {
@@ -92,11 +96,12 @@ function handoffEnvelope(adapterId: string, runId: string) {
 			launch: { launched: false },
 			proof: {
 				environment_contract_id: "warm-chrome.browser-entry",
-				environment_schema_version: "1",
+				environment_schema_version: "2",
 				route_evidence: "verified-live",
+				profile_posture: LIVE_CLEAN_PROFILE_POSTURE_FIXTURE,
 			},
 			contract_id: "browser-connect.verified-handoff",
-			schema_version: "2",
+			schema_version: "3",
 		},
 		error: null,
 	};
@@ -1518,35 +1523,51 @@ describe("runbook family — live (U4 wiring)", () => {
 			artifacts: [],
 		};
 		expect((await createSharedRun(store.deps, seed)).ok).toBe(true);
-		const { runtime, calls } = scriptedRuntime(store.env, [
+		const { runtime, calls } = scriptedRuntime(
+			store.env,
+			[
+				{
+					stdout: agentSuccess({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{
+					stdout: agentSuccess({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: agentSuccess({ selected: true }) },
+				{ stdout: agentSuccess({ url: "https://example.test/" }) },
+				{
+					stdout: agentSuccess({
+						snapshot: "@e1 button",
+						refs: { "@e1": {} },
+					}),
+				},
+			],
+			createDefaultPlatformFs(),
 			{
-				stdout: agentSuccess({
-					tabs: [
-						{
-							tabId: "t1",
-							active: true,
-							type: "page",
-							url: "https://example.test/",
-						},
-					],
+				mintHandoff: async () => ({
+					exitCode: 0,
+					stdout: JSON.stringify(envelope),
+					stderr: "",
 				}),
 			},
-			{
-				stdout: agentSuccess({
-					tabs: [
-						{
-							tabId: "t1",
-							active: true,
-							type: "page",
-							url: "https://example.test/",
-						},
-					],
-				}),
-			},
-			{ stdout: agentSuccess({ selected: true }) },
-			{ stdout: agentSuccess({ url: "https://example.test/" }) },
-			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
-		]);
+		);
 		const result = await runForTest(
 			[
 				"runbook", "run",
@@ -1684,40 +1705,51 @@ describe("runbook family — live (U4 wiring)", () => {
 		});
 		expect(activeWrite.ok).toBe(true);
 
-		const { runtime, calls } = scriptedRuntime(store.env, [
+		const { runtime, calls } = scriptedRuntime(
+			store.env,
+			[
+				{
+					stdout: agentSuccess({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{
+					stdout: agentSuccess({
+						tabs: [
+							{
+								tabId: "t1",
+								active: true,
+								type: "page",
+								url: "https://example.test/",
+							},
+						],
+					}),
+				},
+				{ stdout: agentSuccess({ selected: true }) },
+				{ stdout: agentSuccess({ url: "https://example.test/" }) },
+				{
+					stdout: agentSuccess({
+						snapshot: "@e1 button",
+						refs: { "@e1": {} },
+					}),
+				},
+			],
+			createDefaultPlatformFs(),
 			{
-				stdout: agentSuccess({
-					tabs: [
-						{
-							tabId: "t1",
-							active: true,
-							type: "page",
-							url: "https://example.test/",
-						},
-					],
+				mintHandoff: async () => ({
+					exitCode: 0,
+					stdout: JSON.stringify(envelope),
+					stderr: "",
 				}),
 			},
-			{
-				stdout: agentSuccess({
-					tabs: [
-						{
-							tabId: "t1",
-							active: true,
-							type: "page",
-							url: "https://example.test/",
-						},
-					],
-				}),
-			},
-			{ stdout: agentSuccess({ selected: true }) },
-			{ stdout: agentSuccess({ url: "https://example.test/" }) },
-			{
-				stdout: agentSuccess({
-					snapshot: "@e1 button",
-					refs: { "@e1": {} },
-				}),
-			},
-		]);
+		);
 		const result = await runForTest(
 			[
 				"runbook",
@@ -1825,6 +1857,11 @@ describe("runbook family — live (U4 wiring)", () => {
 			env: store.env,
 			now: () => 1_000,
 			platformFs: createDefaultPlatformFs(),
+			mintHandoff: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify(envelope),
+				stderr: "",
+			}),
 			readTextFile: (path: string) =>
 				import("node:fs/promises").then((module) =>
 					module.readFile(path, "utf-8"),
@@ -2038,7 +2075,7 @@ describe("task run — internal envelope mint (D4)", () => {
 		expect(scripted.calls).toHaveLength(0);
 	});
 
-	test("--handoff still wins over the mint (advanced caller-managed path)", async () => {
+	test("--handoff is a binding hint that is freshly re-proved before dispatch", async () => {
 		const store = await makeStore();
 		const handoffPath = writeHandoff(store.base, "chrome-devtools-mcp", "run-managed-1");
 		const scripted = scriptedRuntime(store.env, [
@@ -2046,10 +2083,21 @@ describe("task run — internal envelope mint (D4)", () => {
 			{ stdout: chromeConsole() },
 			{ stdout: chromeNetwork() },
 		]);
-		let minted = false;
-		scripted.runtime.mintHandoff = async () => {
-			minted = true;
-			throw new Error("mint must not run when --handoff is supplied");
+		const mintCalls: Array<{
+			adapterId: string;
+			runId?: string;
+			port?: string;
+		}> = [];
+		scripted.runtime.mintHandoff = async (input) => {
+			mintCalls.push(input);
+			const current = handoffEnvelope(input.adapterId, input.runId ?? "missing");
+			current.data.attachment.probe_executable =
+				"/opt/browser-connect/current-probe";
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify(current),
+				stderr: "",
+			};
 		};
 		const result = await runForTest(
 			[
@@ -2063,7 +2111,88 @@ describe("task run — internal envelope mint (D4)", () => {
 			scripted.runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(minted).toBe(false);
+		expect(mintCalls).toEqual([
+			{
+				adapterId: "chrome-devtools-mcp",
+				runId: "run-managed-1",
+				port: "9222",
+			},
+		]);
+		expect(scripted.calls.flat()).toContain(
+			"/opt/browser-connect/current-probe",
+		);
+		expect(scripted.calls.flat()).not.toContain("/opt/browser-connect/probe");
+	});
+
+	test("a caller-managed handoff cannot authorize a different re-proved browser", async () => {
+		const store = await makeStore();
+		const handoffPath = writeHandoff(
+			store.base,
+			"chrome-devtools-mcp",
+			"run-managed-mismatch",
+		);
+		const scripted = scriptedRuntime(store.env, []);
+		scripted.runtime.mintHandoff = async () => ({
+			exitCode: 0,
+			stdout: verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = "run-managed-mismatch";
+				envelope.data.endpoint.http = "http://127.0.0.1:9243";
+				envelope.data.endpoint.ws =
+					"ws://127.0.0.1:9243/devtools/browser/other";
+				envelope.data.proof.profile_posture.effective.observer.port = "9243";
+			}),
+			stderr: "",
+		});
+
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--handoff", handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			scripted.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "task_run_handoff_lane_mismatch",
+		});
+		expect(scripted.calls).toEqual([]);
+	});
+
+	test("a failed caller-managed re-proof surfaces Browser Connect verbatim", async () => {
+		const store = await makeStore();
+		const handoffPath = writeHandoff(
+			store.base,
+			"chrome-devtools-mcp",
+			"run-managed-failure",
+		);
+		const scripted = scriptedRuntime(store.env, []);
+		const stdout = '{"status":"error","error":{"code":"listener_gone"}}';
+		const stderr = "Repair Path: inspect_listener\n";
+		scripted.runtime.mintHandoff = async () => ({
+			exitCode: 20,
+			stdout,
+			stderr,
+		});
+
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "debug",
+				"--handoff", handoffPath,
+				"--tab", "0",
+				"--allowed-origin", "https://example.test",
+				"--json",
+			],
+			scripted.runtime,
+		);
+
+		expect(result).toMatchObject({ exitCode: 20, stdout, stderr });
+		expect(scripted.calls).toEqual([]);
 	});
 
 	test("runbook run without --handoff mints for the agent-browser lane", async () => {
