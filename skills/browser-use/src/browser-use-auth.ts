@@ -339,40 +339,48 @@ function continuationCarriesSecretShape(
 	);
 }
 
-function blockedContinuationReasonOf(
+export function browserUseAuthBlockedContinuationFacts(
 	cause: BrowserUseAuthBlockedCause,
-): BrowserUseAuthRunContinuation["reason"] {
-	if (cause === "user-presence-required" || cause === "challenge-escalation") {
-		return "user-presence-required";
-	}
-	if (cause === "unknown-post-submit-state") {
-		return "submission-outcome-unknown";
-	}
-	if (
-		cause === "session-identity-proof-unavailable" ||
-		cause === "human-identity-attestation-required"
-	) {
-		return "session-identity-unproven";
-	}
-	return BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state ===
-		"awaiting-auth"
-		? "login-required"
-		: "human-action-required";
+): {
+	reason: BrowserUseAuthRunContinuation["reason"];
+	required_actor: BrowserUseAuthRunContinuation["required_actor"];
+	checkpoint: string;
+} {
+	const runState = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state;
+	const reason =
+		cause === "user-presence-required" ||
+		cause === "challenge-escalation"
+			? "user-presence-required"
+			: cause === "unknown-post-submit-state"
+				? "submission-outcome-unknown"
+				: cause ===
+							"session-identity-proof-unavailable" ||
+						cause ===
+							"human-identity-attestation-required"
+					? "session-identity-unproven"
+					: runState === "awaiting-auth"
+						? "login-required"
+						: "human-action-required";
+	return {
+		reason,
+		required_actor:
+			runState === "awaiting-auth" ? "agent" : "human",
+		checkpoint: `blocked-${cause}`,
+	};
 }
 
 function versionedBlockedContinuationMatches(
 	cause: BrowserUseAuthBlockedCause,
 	continuation: BrowserUseAuthRunContinuation,
 ): boolean {
-	const runState = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state;
+	const expected = browserUseAuthBlockedContinuationFacts(cause);
 	return (
 		continuation.state === "pending" &&
 		continuation.claim === undefined &&
 		continuation.safe_to_retry === false &&
-		continuation.required_actor ===
-			(runState === "awaiting-auth" ? "agent" : "human") &&
-		continuation.reason === blockedContinuationReasonOf(cause) &&
-		continuation.checkpoint === `blocked-${cause}`
+		continuation.required_actor === expected.required_actor &&
+		continuation.reason === expected.reason &&
+		continuation.checkpoint === expected.checkpoint
 	);
 }
 

@@ -32,6 +32,7 @@ import {
 } from "./browser-use-agent-browser";
 import {
 	type BrowserUseSessionIdentityVerificationResult,
+	browserUseAuthBlockedContinuationFacts,
 	commitAuthTransaction,
 	createBrowserUseAuthContract,
 	verifyBrowserUseSessionIdentityObservation,
@@ -62,6 +63,7 @@ import {
 	createBrowserUseGenerationRuntime,
 } from "./browser-use-generation-runtime";
 import type {
+	BrowserUseAuthSemanticLocator,
 	BrowserUseGenerationReviewedActionRef,
 	BrowserUseGenerationSessionPolicy,
 } from "./browser-use-generation-schemas";
@@ -112,8 +114,16 @@ import {
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import { createBrowserUseConfidentialDeliveryQuarantine } from "./browser-use-confidential-delivery-quarantine";
+import {
+	type BrowserUseDeliveryHook,
+	type BrowserUseTargetReproof,
+	type BrowserUseVerifiedTarget,
+	createBrowserUseNativeConfidentialDeliveryHook,
+	deliverConfidentialFields,
+} from "./browser-use-confidential-field-delivery";
 import { nextRunbookStepAfterExecution } from "./browser-use-runbook-model";
 import { identifyRunbookAuthState } from "./browser-use-runbook-auth-state";
+import type { BrowserUseOpCredentialField } from "./browser-use-op";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
 	BROWSER_USE_EXTERNAL_EFFECT_NONE,
@@ -1174,6 +1184,115 @@ function buildRunbookAuthDelivery(
 	});
 }
 
+export async function deliverPreparedRunbookAuthField(input: {
+	provider: Pick<BrowserUseAuthProvider, "buildAgentBrowserDeliveryContext">;
+	binding: BrowserUseItemBinding;
+	target: BrowserUseVerifiedTarget;
+	fragment: BrowserUseAuthTransactionFragment;
+	field: RunbookAuthField;
+	locator: BrowserUseAuthSemanticLocator;
+	deliver: BrowserUseDeliveryHook;
+	reproveTarget: BrowserUseTargetReproof;
+	persistReproof(
+		fragment: BrowserUseAuthTransactionFragment,
+	): Promise<boolean>;
+}): Promise<
+	| {
+			status: "delivered";
+			fragment: BrowserUseAuthTransactionFragment;
+	  }
+	| {
+			status: "blocked";
+			cause: BrowserUseAuthBlockedCause;
+	  }
+	| { status: "unknown" }
+> {
+	const credentialField: BrowserUseOpCredentialField =
+		input.field === "otp" ? "otp-current" : input.field;
+	const reproveStep =
+		credentialField === "username"
+			? undefined
+			: applyAuthTransition(input.fragment, {
+					type: "method-step-complete",
+					step: "reprove-target",
+				});
+	if (reproveStep !== undefined && !reproveStep.ok) {
+		return { status: "blocked", cause: "capability-loss" };
+	}
+	const fragmentAfterReproof =
+		reproveStep?.ok ? reproveStep.fragment : input.fragment;
+	const fillStep = applyAuthTransition(fragmentAfterReproof, {
+		type: "method-step-complete",
+		step:
+			credentialField === "otp-current"
+				? "fill-otp"
+				: credentialField === "password"
+					? "fill-password"
+					: "fill-username",
+	});
+	if (!fillStep.ok) {
+		return { status: "blocked", cause: "capability-loss" };
+	}
+
+	const context = input.provider.buildAgentBrowserDeliveryContext({
+		binding: input.binding,
+		target: input.target,
+		deliver: input.deliver,
+		reproveTarget: async ({ target }) => {
+			const proof = await input.reproveTarget({ target });
+			if (!proof.proven) return proof;
+			if (
+				reproveStep?.ok &&
+				!(await input.persistReproof(
+					reproveStep.fragment,
+				))
+			) {
+				return {
+					proven: false,
+					cause: "target-proof-invalid",
+				};
+			}
+			return proof;
+		},
+		field_by_ref: { "@auth-field": credentialField },
+		in_sensitive_interval: true,
+	});
+	const delivered = await deliverConfidentialFields({
+		binding: context.binding,
+		target: context.target,
+		fields: [credentialField],
+		semantic_locators: {
+			[credentialField]: {
+				role: input.locator.role,
+				accessible_name: input.locator.name,
+				input_kind: credentialField,
+			},
+		},
+		tokenRetrieval: context.tokenRetrieval,
+		deliver: context.deliver,
+		reproveTarget: context.reproveTarget,
+	});
+	if (!delivered.ok) {
+		if (delivered.blocked.external_effect_possible) {
+			return { status: "unknown" };
+		}
+		const cause = delivered.blocked.blocked_cause;
+		return {
+			status: "blocked",
+			cause:
+				cause === "origin-mismatch" ||
+				cause === "target-proof-invalid" ||
+				cause === "user-presence-required" ||
+				cause === "challenge-escalation" ||
+				cause === "capability-loss" ||
+				cause === "adapter-crash"
+					? cause
+					: "capability-loss",
+		};
+	}
+	return { status: "delivered", fragment: fillStep.fragment };
+}
+
 /**
  * Prepare the digest-bound generation candidate using metadata only.
  *
@@ -1359,6 +1478,7 @@ function buildRunbookAuthContinuation(input: {
 	run: BrowserUseSharedRun;
 	failure: BrowserUseRunbookCommandFailure;
 	activeCheckpoint?: RunbookAuthCheckpoint;
+	blockedCause?: BrowserUseAuthBlockedCause;
 	now: number;
 	generationRuntime: BrowserUseGenerationRuntime;
 	resolution: BrowserUseResolvedAuthCandidate;
@@ -1366,10 +1486,17 @@ function buildRunbookAuthContinuation(input: {
 	handoff: HandoffFacts;
 	targetBindingId: string;
 }): BrowserUseAuthRunContinuation {
+	const blockedFacts =
+		input.blockedCause === undefined
+			? undefined
+			: browserUseAuthBlockedContinuationFacts(
+					input.blockedCause,
+				);
 	const reason =
-		input.activeCheckpoint === undefined
+		blockedFacts?.reason ??
+		(input.activeCheckpoint === undefined
 			? authContinuationReasonOf(input.failure)
-			: "login-required";
+			: "login-required");
 	return {
 		schema_version: "1",
 		kind: "auth",
@@ -1384,11 +1511,13 @@ function buildRunbookAuthContinuation(input: {
 		state: "pending",
 		reason,
 		required_actor:
-			reason === "user-presence-required"
+			blockedFacts?.required_actor ??
+			(reason === "user-presence-required"
 				? "human"
-				: "agent",
+				: "agent"),
 		safe_to_retry: false,
 		checkpoint:
+			blockedFacts?.checkpoint ??
 			input.activeCheckpoint ??
 			input.failure.code.replaceAll("_", "-"),
 		expires_at_epoch_ms: input.now + 15 * 60_000,
@@ -2562,10 +2691,14 @@ async function runRunbookRun(
 	let authCheckpointCommitted =
 		authRun.auth_fragment !== undefined &&
 		isBrowserUseAuthRunContinuation(authRun.continuation);
+	let terminalAuthCheckpointPersistenceFailed = false;
 	try {
 		const emitPersistedAuthFailure = async (
 			failure: BrowserUseRunbookCommandFailure,
 		): Promise<number> => {
+			if (terminalAuthCheckpointPersistenceFailed) {
+				return ports.output.emitPlatformFailure(failure);
+			}
 			let continuation: BrowserUseAuthRunContinuation | undefined;
 			if (
 				authCheckpointCommitted &&
@@ -2650,8 +2783,28 @@ async function runRunbookRun(
 				createBrowserUseConfidentialDeliveryQuarantine({
 					runCommand: ports.runtime.runCommand,
 				});
+			const nativeDelivery =
+				ports.runtime.authConfidentialDelivery?.forBrowser({
+					browser_ws_endpoint:
+						verifiedHandoff.endpoint.ws,
+					browser_pid:
+						verifiedHandoff.proof.profile_posture
+							.effective.observer.browser_pid,
+				});
+			const authDeliveryHook =
+				nativeDelivery === undefined
+					? undefined
+					: createBrowserUseNativeConfidentialDeliveryHook(
+							{
+								quarantine:
+									authQuarantine.quarantine,
+								consumePrivatePipeAndDeliver:
+									nativeDelivery.consumePrivatePipeAndDeliver,
+							},
+						);
 			runbookRunCommand = authQuarantine.runCommand;
 			let preparedItemBinding: BrowserUseItemBinding | undefined;
+			let preparedTarget: BrowserUseVerifiedTarget | undefined;
 			let authFragment:
 				| BrowserUseAuthTransactionFragment
 				| undefined;
@@ -2668,6 +2821,70 @@ async function runRunbookRun(
 						{ status: "authenticated" }
 				  >
 				| undefined;
+			const commitAuthCheckpoint = async (
+				checkpoint: RunbookAuthCheckpoint,
+				blockedCause?: BrowserUseAuthBlockedCause,
+			): Promise<boolean> => {
+				if (
+					authProvider === undefined ||
+					preparedItemBinding === undefined ||
+					authFragment === undefined
+				) {
+					return false;
+				}
+				const continuation =
+					buildRunbookAuthContinuation({
+						run: authRun,
+						failure: {
+							code: "runbook_auth_login_required",
+							message:
+								"the reviewed login transaction is active.",
+							actionId:
+								"inspect-auth-readiness",
+							exitCode:
+								BINDING_FAIL_CLOSED_EXIT_CODE,
+							recoverability: "retry",
+						},
+						activeCheckpoint: checkpoint,
+						blockedCause,
+						now: ports.clock(),
+						generationRuntime,
+						resolution: resolvedAuthCandidate,
+						policy,
+						handoff,
+						targetBindingId:
+							targetResolution.binding
+								.target_candidate_id,
+					});
+				const committed =
+					await authProvider.commitWithClaim(
+						dispatchClaim,
+						{
+							run_id: authRun.run_id,
+							expected_revision:
+								authRun.revision,
+							fragment: authFragment,
+							continuation,
+						},
+					);
+				if (!committed.ok) {
+					if (
+						blockedCause !== undefined ||
+						checkpoint === "human-presence-required" ||
+						checkpoint === "delivery-outcome-unknown" ||
+						checkpoint === "submission-outcome-unknown" ||
+						checkpoint === "session-identity-unproven"
+					) {
+						terminalAuthCheckpointPersistenceFailed = true;
+					}
+					return false;
+				}
+				authRun = committed.run;
+				authCheckpointCommitted = true;
+				terminalAuthCheckpointPersistenceFailed = false;
+				run = authRun;
+				return true;
+			};
 			const authResult = await orchestrateRunbookAuthentication({
 				policy,
 				resumeContinuation: false,
@@ -2796,59 +3013,197 @@ async function runRunbookRun(
 							fragment = transitioned.fragment;
 						}
 						preparedItemBinding = prepared.binding;
+						preparedTarget = {
+							lane_id: target.proof.lane_id,
+							run_id: authRun.run_id,
+							top_level_origin:
+								target.proof.top_level_origin,
+							frame_origin:
+								target.proof.frame_origin,
+							target_id: target.proof.target_id,
+							page_id: target.proof.page_id,
+							frame_id: target.proof.frame_id,
+							account_ref:
+								policy.identity_verifier.expected
+									.account_reference,
+							target_proof_digest:
+								target.proof.target_proof_digest,
+						};
 						authFragment = fragment;
 						return { ok: true };
 					},
 					persistCheckpoint: async (checkpoint) => {
 						if (
+							checkpoint ===
+								"delivery-outcome-unknown" &&
+							authFragment !== undefined
+						) {
+							if (authFragment.status === "active") {
+								const blocked =
+									applyAuthTransition(
+										authFragment,
+										{
+											type: "confidential-delivery-outcome-observed",
+											outcome:
+												"possibly-written",
+										},
+									);
+								if (!blocked.ok) return false;
+								authFragment = blocked.fragment;
+							}
+							if (
+								authFragment.status !== "blocked" ||
+								authFragment.blocked_cause === null
+							) {
+								return false;
+							}
+							return await commitAuthCheckpoint(
+								checkpoint,
+								authFragment.blocked_cause,
+							);
+						}
+						return await commitAuthCheckpoint(
+							checkpoint,
+						);
+					},
+					deliverField: async ({
+						field,
+						locator,
+					}) => {
+						if (
 							authProvider === undefined ||
 							preparedItemBinding === undefined ||
-							authFragment === undefined
+							preparedTarget === undefined ||
+							authFragment === undefined ||
+							locator === undefined
 						) {
-							return false;
+							return { status: "blocked" };
 						}
-						const continuation =
-							buildRunbookAuthContinuation({
-								run: authRun,
-								failure: {
-									code: "runbook_auth_login_required",
-									message:
-										"the reviewed login transaction is active.",
-									actionId:
-										"inspect-auth-readiness",
-									exitCode:
-										BINDING_FAIL_CLOSED_EXIT_CODE,
-									recoverability: "retry",
-								},
-								activeCheckpoint: checkpoint,
-								now: ports.clock(),
-								generationRuntime,
-								resolution:
-									resolvedAuthCandidate,
-								policy,
-								handoff,
-								targetBindingId:
-									targetResolution.binding
-										.target_candidate_id,
-							});
-						const committed =
-							await authProvider.commitWithClaim(
-								dispatchClaim,
+						if (authDeliveryHook === undefined) {
+							const blocked = applyAuthTransition(
+								authFragment,
 								{
-									run_id: authRun.run_id,
-									expected_revision:
-										authRun.revision,
-									fragment: authFragment,
-									continuation,
+									type: "blocked",
+									cause: "capability-loss",
 								},
 							);
-						if (!committed.ok) return false;
-						authRun = committed.run;
-						authCheckpointCommitted = true;
-						run = authRun;
-						return true;
+							if (!blocked.ok) {
+								return { status: "unknown" };
+							}
+							authFragment = blocked.fragment;
+							return {
+								status: (await commitAuthCheckpoint(
+									`before-${field}-delivery`,
+									"capability-loss",
+								))
+									? "blocked"
+									: "unknown",
+							};
+						}
+						const delivered =
+							await deliverPreparedRunbookAuthField({
+								provider: authProvider,
+								binding: preparedItemBinding,
+								target: preparedTarget,
+								fragment: authFragment,
+								field,
+								locator,
+								deliver: authDeliveryHook,
+								reproveTarget: async ({
+									target,
+								}) => {
+									const proof =
+										await proveAgentBrowserTarget(
+											{
+												targetProof,
+												handoff:
+													verifiedHandoff,
+												target_id:
+													target.target_id,
+											},
+										);
+									if (!proof.ok) {
+										return {
+											proven: false,
+											cause: "target-proof-invalid",
+										};
+									}
+									if (
+										proof.proof
+											.top_level_origin !==
+											target.top_level_origin ||
+										proof.proof.frame_origin !==
+											target.frame_origin
+									) {
+										return {
+											proven: false,
+											cause: "origin-mismatch",
+										};
+									}
+									if (
+										proof.proof.lane_id !==
+											target.lane_id ||
+										proof.proof.target_id !==
+											target.target_id ||
+										proof.proof.page_id !==
+											target.page_id ||
+										proof.proof.frame_id !==
+											target.frame_id ||
+										proof.proof
+											.target_proof_digest !==
+											target.target_proof_digest
+									) {
+										return {
+											proven: false,
+											cause: "target-proof-invalid",
+										};
+									}
+									return {
+										proven: true,
+										observed_digest:
+											proof.proof
+												.target_proof_digest,
+									};
+								},
+								persistReproof: async (
+									fragment,
+								) => {
+									authFragment = fragment;
+									return await commitAuthCheckpoint(
+										`before-${field}-delivery`,
+									);
+								},
+							});
+						if (
+							delivered.status === "delivered"
+						) {
+							authFragment = delivered.fragment;
+							return { status: "delivered" };
+						}
+						if (delivered.status === "unknown") {
+							return { status: "unknown" };
+						}
+						const blocked = applyAuthTransition(
+							authFragment,
+							{
+								type: "blocked",
+								cause: delivered.cause,
+							},
+						);
+						if (!blocked.ok) {
+							return { status: "unknown" };
+						}
+						authFragment = blocked.fragment;
+						if (
+							!(await commitAuthCheckpoint(
+								`before-${field}-delivery`,
+								delivered.cause,
+							))
+						) {
+							return { status: "unknown" };
+						}
+						return { status: "blocked" };
 					},
-					deliverField: async () => ({ status: "blocked" }),
 					submitAuthAction: async () => ({
 						status: "blocked",
 					}),
