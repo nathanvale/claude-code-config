@@ -46,8 +46,49 @@ import {
 } from "./browser-use-store";
 
 const MIGRATION_STATE_FILE = "migration-state.json";
+const LEGACY_MIGRATION_STATE_DIR = "legacy-state";
 const MIGRATION_OWNER_LOCK_FILE = "migration-owner.lock";
 const MIGRATION_OWNER_LOCK_STALE_AFTER_MS = 30 * 60 * 1_000;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const LEGACY_GENERATION_ID_PATTERN = /^generation-[0-9a-f]{16}$/;
+const MIGRATION_PHASES = [
+	"empty",
+	"inventoried",
+	"planned",
+	"staged",
+	"verified",
+] as const;
+const LEGACY_DISPOSITIONS = [
+	"stage",
+	"quarantine-backup",
+	"quarantine-secret",
+	"quarantine-executable",
+	"quarantine-obsolete",
+	"quarantine-unsupported",
+] as const;
+const LEGACY_STATE_KEYS = [
+	"contract",
+	"schema_version",
+	"phase",
+	"snapshot_id",
+	"snapshot_digest",
+	"source_root_identity",
+	"source_entry_count",
+	"disposition_count",
+	"dispositions",
+	"staged_generation",
+	"last_apply_verified_noop",
+	"activation_state",
+] as const;
+const LEGACY_DISPOSITION_KEYS = [
+	"source_relative_path",
+	"source_content_hash",
+	"disposition",
+	"reason",
+	"transform_version",
+	"logical_destination_id",
+	"expected_hash",
+] as const;
 
 export {
 	CORPUS_GENERATION_CANDIDATE_MANIFEST_PATH,
@@ -89,6 +130,253 @@ function migrationStatePath(deps: RetentionDeps): string {
 
 function migrationOwnerLockPath(deps: RetentionDeps): string {
 	return join(deps.paths.runtime.locksDir, MIGRATION_OWNER_LOCK_FILE);
+}
+
+type BrowserUseLegacyMigrationDisposition = {
+	source_relative_path: string;
+	source_content_hash: string;
+	disposition: (typeof LEGACY_DISPOSITIONS)[number];
+	reason: string;
+	transform_version: string;
+	logical_destination_id: string | null;
+	expected_hash: string | null;
+};
+
+type BrowserUseLegacyMigrationState = {
+	contract: "browser-use.migration-status";
+	schema_version: "1";
+	phase: (typeof MIGRATION_PHASES)[number];
+	snapshot_id: string | null;
+	snapshot_digest: string | null;
+	source_root_identity: string | null;
+	source_entry_count: number;
+	disposition_count: number;
+	dispositions: readonly BrowserUseLegacyMigrationDisposition[];
+	staged_generation: string | null;
+	last_apply_verified_noop: boolean | null;
+	activation_state: "unchanged";
+};
+
+function hasExactKeys(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const keys = Object.keys(value).sort();
+	const sortedExpected = [...expected].sort();
+	return (
+		keys.length === sortedExpected.length &&
+		keys.every((key, index) => key === sortedExpected[index])
+	);
+}
+
+function isLegacyRelativePath(value: unknown): value is string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.startsWith("/") ||
+		value.includes("\0")
+	) {
+		return false;
+	}
+	const segments = value.split("/");
+	return (
+		segments.length > 0 &&
+		segments.every(
+			(segment) => segment !== "" && segment !== "." && segment !== "..",
+		)
+	);
+}
+
+function isLegacyMigrationDisposition(
+	value: unknown,
+): value is BrowserUseLegacyMigrationDisposition {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		!hasExactKeys(record, LEGACY_DISPOSITION_KEYS) ||
+		!isLegacyRelativePath(record.source_relative_path) ||
+		typeof record.source_content_hash !== "string" ||
+		!SHA256_PATTERN.test(record.source_content_hash) ||
+		!LEGACY_DISPOSITIONS.includes(
+			record.disposition as (typeof LEGACY_DISPOSITIONS)[number],
+		) ||
+		typeof record.reason !== "string" ||
+		record.reason.length === 0 ||
+		record.transform_version !== "copy-v1"
+	) {
+		return false;
+	}
+	if (record.disposition === "stage") {
+		return (
+			record.logical_destination_id ===
+				`knowledge/${record.source_relative_path}` &&
+			record.expected_hash === record.source_content_hash
+		);
+	}
+	return record.logical_destination_id === null && record.expected_hash === null;
+}
+
+function parseLegacyMigrationState(
+	raw: string,
+): BrowserUseLegacyMigrationState | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return undefined;
+	}
+	const record = parsed as Record<string, unknown>;
+	if (
+		!hasExactKeys(record, LEGACY_STATE_KEYS) ||
+		record.contract !== "browser-use.migration-status" ||
+		record.schema_version !== "1" ||
+		!MIGRATION_PHASES.includes(
+			record.phase as (typeof MIGRATION_PHASES)[number],
+		) ||
+		!isNonNegativeSafeInteger(record.source_entry_count) ||
+		!isNonNegativeSafeInteger(record.disposition_count) ||
+		!Array.isArray(record.dispositions) ||
+		!record.dispositions.every(isLegacyMigrationDisposition) ||
+		record.disposition_count !== record.dispositions.length ||
+		record.activation_state !== "unchanged"
+	) {
+		return undefined;
+	}
+	const sourcePaths = record.dispositions.map(
+		(disposition) => disposition.source_relative_path,
+	);
+	if (new Set(sourcePaths).size !== sourcePaths.length) return undefined;
+
+	const phase = record.phase as BrowserUseLegacyMigrationState["phase"];
+	const hasSnapshot =
+		typeof record.snapshot_id === "string" &&
+		typeof record.snapshot_digest === "string" &&
+		typeof record.source_root_identity === "string" &&
+		SHA256_PATTERN.test(record.snapshot_digest) &&
+		SHA256_PATTERN.test(record.source_root_identity) &&
+		record.snapshot_id === `snapshot-${record.snapshot_digest.slice(0, 16)}`;
+	const hasCompletePlan =
+		record.disposition_count === record.source_entry_count;
+	const hasGeneration =
+		typeof record.staged_generation === "string" &&
+		LEGACY_GENERATION_ID_PATTERN.test(record.staged_generation);
+	const generationMatchesSnapshot =
+		typeof record.snapshot_digest === "string" &&
+		record.staged_generation ===
+			`generation-${record.snapshot_digest.slice(0, 16)}`;
+	const validPhase =
+		(phase === "empty" &&
+			record.snapshot_id === null &&
+			record.snapshot_digest === null &&
+			record.source_root_identity === null &&
+			record.source_entry_count === 0 &&
+			record.disposition_count === 0 &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		(phase === "inventoried" &&
+			hasSnapshot &&
+			record.disposition_count === 0 &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		(phase === "planned" &&
+			hasSnapshot &&
+			hasCompletePlan &&
+			record.staged_generation === null &&
+			record.last_apply_verified_noop === null) ||
+		((phase === "staged" || phase === "verified") &&
+			hasSnapshot &&
+			hasCompletePlan &&
+			hasGeneration &&
+			generationMatchesSnapshot &&
+			typeof record.last_apply_verified_noop === "boolean");
+	if (!validPhase) return undefined;
+	return record as BrowserUseLegacyMigrationState;
+}
+
+async function archiveLegacyMigrationState(
+	deps: RetentionDeps,
+	raw: string,
+): Promise<{ ok: true } | BrowserUseMigrationFailure> {
+	const archiveDir = join(
+		deps.paths.state.migrationsDir,
+		LEGACY_MIGRATION_STATE_DIR,
+	);
+	const archivePath = join(
+		archiveDir,
+		`migration-state-v1-${sha256(raw)}.json`,
+	);
+	try {
+		await deps.fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
+		await deps.fs.syncDirectory(deps.paths.state.migrationsDir);
+	} catch {
+		return migrationFailure(
+			"store_flush_failed",
+			"legacy migration archive directory could not be durably created.",
+		);
+	}
+	const archiveDirStat = await deps.fs.lstat(archiveDir);
+	if (
+		archiveDirStat?.kind !== "directory" ||
+		(archiveDirStat.mode & 0o077) !== 0
+	) {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"legacy migration archive directory is not private.",
+		);
+	}
+	const standing = await readDurableFile(deps.fs, archivePath);
+	if (standing.status === "unreadable") {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"legacy migration archive is unreadable.",
+		);
+	}
+	if (standing.status === "present") {
+		const archiveStat = await deps.fs.lstat(archivePath);
+		if (
+			archiveStat?.kind !== "file" ||
+			(archiveStat.mode & 0o077) !== 0 ||
+			standing.raw !== raw
+		) {
+			return migrationFailure(
+				"migration_collision",
+				"legacy migration archive conflicts with private standing bytes.",
+			);
+		}
+		try {
+			await deps.fs.syncDirectory(archiveDir);
+		} catch {
+			return migrationFailure(
+				"store_flush_failed",
+				"standing legacy migration archive could not be made durable.",
+			);
+		}
+		return { ok: true };
+	}
+	const written = await writeDurableFile(deps.fs, {
+		path: archivePath,
+		contents: raw,
+		mode: 0o600,
+	});
+	if (!written.ok) {
+		return migrationFailure("store_flush_failed", written.failure.message);
+	}
+	const verified = await readDurableFile(deps.fs, archivePath);
+	const verifiedStat = await deps.fs.lstat(archivePath);
+	return verified.status === "present" &&
+		verifiedStat?.kind === "file" &&
+		(verifiedStat.mode & 0o077) === 0 &&
+		verified.raw === raw
+		? { ok: true }
+		: migrationFailure(
+				"store_flush_failed",
+				"legacy migration archive could not be verified.",
+			);
 }
 
 function durableMigrationState(
@@ -337,9 +625,65 @@ async function inventoryBrowserUseMigrationUnderLock(
 			"migration source must be an absolute path.",
 		);
 	}
-	const standing = await readBrowserUseMigrationStatus(deps);
-	if (!standing.ok) return standing;
 	const normalizedRoot = normalize(sourceRoot);
+	const standingRaw = await readDurableFile(deps.fs, migrationStatePath(deps));
+	if (standingRaw.status === "unreadable") {
+		return migrationFailure(
+			"migration_state_corrupt",
+			"migration state is unreadable.",
+		);
+	}
+	let legacy:
+		| { state: BrowserUseLegacyMigrationState; raw: string }
+		| undefined;
+	if (standingRaw.status === "present") {
+		let schemaVersion: unknown;
+		try {
+			schemaVersion = (
+				JSON.parse(standingRaw.raw) as { schema_version?: unknown }
+			).schema_version;
+		} catch {
+			schemaVersion = undefined;
+		}
+		if (schemaVersion === "1") {
+			const parsed = parseLegacyMigrationState(standingRaw.raw);
+			if (parsed === undefined) {
+				return migrationFailure(
+					"migration_state_corrupt",
+					"migration state does not match schema version 1.",
+				);
+			}
+			if (
+				parsed.phase !== "empty" &&
+				parsed.source_root_identity !==
+					sha256(`root:${normalizedRoot}`)
+			) {
+				return migrationFailure(
+					"migration_source_drift",
+					"migration source root differs from the legacy inventory.",
+				);
+			}
+			legacy = { state: parsed, raw: standingRaw.raw };
+		}
+	}
+	// `migration inventory --source` is the explicit operator re-freeze
+	// checkpoint. A valid v1 ledger proves the source root identity only; its
+	// obsolete snapshot and dispositions are archived, never promoted into v2.
+	const standing =
+		legacy === undefined ? await readBrowserUseMigrationStatus(deps) : undefined;
+	if (standing !== undefined && !standing.ok) return standing;
+	let activationState: BrowserUseMigrationState["activation_state"];
+	if (legacy === undefined) {
+		activationState = standing?.state.activation_state ?? "unchanged";
+	} else {
+		const projected = await projectActiveGenerationStatus(
+			deps,
+			legacy.state.activation_state,
+		);
+		if (!projected.ok) return projected;
+		activationState =
+			projected.activeGeneration.current === null ? "unchanged" : "active";
+	}
 	const inventoried = await inventoryEntries(deps.fs, normalizedRoot);
 	if (!inventoried.ok) return inventoried;
 	const snapshotDigest = sha256(JSON.stringify(inventoried.entries));
@@ -376,8 +720,13 @@ async function inventoryBrowserUseMigrationUnderLock(
 		target_provenance: [],
 		staged_generation: null,
 		last_apply_verified_noop: null,
-		activation_state: standing.state.activation_state,
+		activation_state: activationState,
 	};
+	if (legacy !== undefined) {
+		const archived = await archiveLegacyMigrationState(deps, legacy.raw);
+		if (!archived.ok) return archived;
+		return await writeMigrationStateIfUnchanged(deps, state, legacy.raw);
+	}
 	return await writeMigrationState(deps, state);
 }
 
