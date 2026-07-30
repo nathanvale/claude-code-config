@@ -1,0 +1,16 @@
+{
+	"name": "bft-booking-skill",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Runtime owner for BFT session discovery and Glofox booking actions.",
+	"scripts": {
+		"bft": "bun run src/cli.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}
