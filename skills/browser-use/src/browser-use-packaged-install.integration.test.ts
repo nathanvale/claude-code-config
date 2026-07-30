@@ -10,6 +10,7 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -148,6 +149,20 @@ describe("U9 packaged public interface", () => {
 
 			const cleanHome = privateDirectory(join(root, "home"));
 			const configTarget = privateDirectory(join(root, "xdg-config-target"));
+			const initializedConfigRepository = await runProcess({
+				argv: ["/usr/bin/git", "init", "--quiet"],
+				cwd: configTarget,
+				env: {
+					HOME: cleanHome,
+					PATH: "/usr/bin:/bin",
+					LANG: "C",
+				},
+			});
+			expect(initializedConfigRepository).toMatchObject({
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+			});
 			const configLink = join(root, "xdg-config-link");
 			symlinkSync(configTarget, configLink);
 			const cleanEnv = {
@@ -167,6 +182,20 @@ describe("U9 packaged public interface", () => {
 				".bin",
 				"browser-use",
 			);
+
+			const unignoredStatus = await runProcess({
+				argv: [installedBin, "auth", "status", "--json"],
+				cwd: neutralCwd,
+				env: cleanEnv,
+			});
+			expect(unignoredStatus.exitCode).toBe(20);
+			expect(JSON.parse(unignoredStatus.stdout)).toMatchObject({
+				status: "error",
+				data: { blocked_cause: "environment-probe-failed" },
+				continuation: { next_action_id: "inspect-capability-loss" },
+			});
+
+			writeFileSync(join(configTarget, ".gitignore"), "browser-use/\n");
 
 			const help = await runProcess({
 				argv: [installedBin, "--help"],

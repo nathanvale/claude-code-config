@@ -782,6 +782,7 @@ export async function createProductionBrowserUseRuntime(
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 15_000;
 const NATIVE_LIFECYCLE_TERMINATION_GRACE_MS = 2_000;
 const NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES = 65_536;
+const GIT_IGNORE_PROBE_TIMEOUT_MS = 2_000;
 
 function createNativeTargetProofPort(): BrowserUseNativeTargetProofPort {
 	return {
@@ -996,6 +997,56 @@ function fixedOpExecutablePath(): string {
 			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
 			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
 	return preferred.find((path) => existsSync(path)) ?? preferred[0];
+}
+
+async function checkBrowserUseRootIgnored(path: string): Promise<boolean> {
+	let canonicalPath: string;
+	try {
+		canonicalPath = realpathSync(path);
+	} catch {
+		return false;
+	}
+	let child: ReturnType<typeof Bun.spawn>;
+	try {
+		child = Bun.spawn(
+			[
+				"/usr/bin/git",
+				"-C",
+				canonicalPath,
+				"check-ignore",
+				"-q",
+				"--",
+				canonicalPath,
+			],
+			{
+				env: { PATH: "/usr/bin:/bin", LANG: "C" },
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "ignore",
+			},
+		);
+	} catch {
+		return false;
+	}
+	if (
+		!(await processExitedWithin(child.exited, GIT_IGNORE_PROBE_TIMEOUT_MS))
+	) {
+		child.kill("SIGTERM");
+		if (
+			!(await processExitedWithin(
+				child.exited,
+				NATIVE_LIFECYCLE_TERMINATION_GRACE_MS,
+			))
+		) {
+			child.kill("SIGKILL");
+			await processExitedWithin(
+				child.exited,
+				NATIVE_LIFECYCLE_TERMINATION_GRACE_MS,
+			);
+		}
+		return false;
+	}
+	return (await child.exited) === 0 && child.signalCode === null;
 }
 
 type BrowserUseAuthStatusExecutableState =
@@ -1453,6 +1504,7 @@ function createNativeEnvironmentTokenLifecyclePort(
 			const admitted = await admitBrowserUseRoot(platformFs, {
 				kind: "config",
 				path: configRoot,
+				checkIgnored: checkBrowserUseRootIgnored,
 			});
 			if (!admitted.ok) {
 				throw new Error("Browser Use config root is unavailable");
@@ -1465,6 +1517,7 @@ function createNativeEnvironmentTokenLifecyclePort(
 				const canonicalAdmission = await admitBrowserUseRoot(platformFs, {
 					kind: "config",
 					path: canonicalConfigRoot,
+					checkIgnored: checkBrowserUseRootIgnored,
 				});
 				if (!canonicalAdmission.ok) {
 					throw new Error("Browser Use config root is unavailable");
