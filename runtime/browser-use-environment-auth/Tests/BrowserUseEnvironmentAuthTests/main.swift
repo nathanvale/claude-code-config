@@ -40,7 +40,7 @@ private func installForTest(
     replacing: Bool,
     backupExclusionProof: TokenCustodyBackupExclusionProof =
         acceptingBackupExclusionProof,
-    validatorTimeoutMilliseconds: Int32 = 20_000,
+    validatorTimeoutMilliseconds: Int32 = 45_000,
     validationCompletion: @escaping @Sendable () throws -> Void = {}
 ) -> TokenCustodyResult {
     TokenCustody.installForTesting(
@@ -195,6 +195,7 @@ private func validator(
     custodyDirectory: URL,
     approve: Bool,
     respond: Bool = true,
+    response: String? = nil,
     responseDelayMicroseconds: useconds_t = 0,
     mutate: (@Sendable (URL) -> Void)? = nil
 ) throws -> (
@@ -230,11 +231,13 @@ private func validator(
         if responseDelayMicroseconds > 0 {
             usleep(responseDelayMicroseconds)
         }
-        let response = approve && received.descriptor != nil
-            ? Array("ok\n".utf8)
-            : Array("no\n".utf8)
-        _ = response.withUnsafeBytes {
-            Darwin.write(server, $0.baseAddress, response.count)
+        let responseBytes = Array(
+            (response ?? (
+                approve && received.descriptor != nil ? "ok\n" : "no\n"
+            )).utf8
+        )
+        _ = responseBytes.withUnsafeBytes {
+            Darwin.write(server, $0.baseAddress, responseBytes.count)
         }
     }
     return (
@@ -356,6 +359,33 @@ private func failedReplacementPreservesPriorInodeAndBytes() throws {
     try check(
         try Data(contentsOf: token) == Data("ops_ORIGINAL_SENTINEL".utf8),
         "failed replacement changed prior bytes"
+    )
+}
+
+private func validatorExecutionTimeoutRemainsTyped() throws {
+    let root = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let custody = root.appendingPathComponent(
+        TokenCustodyPaths.directoryName,
+        isDirectory: true
+    )
+    let timedOut = try validator(
+        custodyDirectory: custody,
+        approve: false,
+        response: "timeout\n"
+    )
+    var token = Array("ops_VALIDATOR_EXECUTION_TIMEOUT\n".utf8)
+    let result = installForTest(
+        configRoot: root.path,
+        tokenBytes: &token,
+        validatorDescriptor: timedOut.0,
+        replacing: false
+    )
+    _ = Darwin.close(timedOut.0)
+    _ = timedOut.1.wait(timeout: .now() + 2)
+    try check(
+        result.cause == .validationTimeout,
+        "downstream OP timeout collapsed into validation-failed"
     )
 }
 
@@ -1229,9 +1259,14 @@ private func runAsFakeOp() {
         return
     }
     if arguments.starts(with: ["whoami"]) {
+        if executable.lastPathComponent.contains("cold-service-account") {
+            usleep(5_500_000)
+        }
         emitFakeOpJSON([
             "user_uuid": principalTwo ? "user-2" : "user-1",
-            "user_type": "SERVICE_ACCOUNT",
+            "user_type": executable.lastPathComponent.contains(
+                "invalid-service-account"
+            ) ? "USER" : "SERVICE_ACCOUNT",
             "email": "not-projected@example.com",
         ])
         let mutationMarker = executable.deletingLastPathComponent()
@@ -1248,6 +1283,20 @@ private func runAsFakeOp() {
         return
     }
     if arguments.starts(with: ["vault", "list"]) {
+        if executable.lastPathComponent.contains("cold-service-account") {
+            usleep(5_500_000)
+        }
+        if executable.lastPathComponent.contains("zero-vault") {
+            emitFakeOpJSON([])
+            return
+        }
+        if executable.lastPathComponent.contains("multi-vault") {
+            emitFakeOpJSON([
+                ["id": "vault-1"],
+                ["id": "vault-2"],
+            ])
+            return
+        }
         emitFakeOpJSON([
             [
                 "id": principalTwo ? "vault-2" : "vault-1",
@@ -2178,11 +2227,13 @@ private func environmentOpValidatorUsesReceivedDescriptor() throws {
             return
         }
         defer { _ = Darwin.close(descriptor) }
-        let approved = EnvironmentOpSupervisor.validateStagedTokenForTesting(
+        let validation = EnvironmentOpSupervisor.validateStagedTokenForTesting(
             executablePath: fake.path,
             tokenDescriptor: descriptor
         )
-        let response = approved ? Array("ok\n".utf8) : Array("no\n".utf8)
+        let response = validation == .approved
+            ? Array("ok\n".utf8)
+            : Array("no\n".utf8)
         _ = response.withUnsafeBytes {
             Darwin.write(server, $0.baseAddress, response.count)
         }
@@ -2197,6 +2248,59 @@ private func environmentOpValidatorUsesReceivedDescriptor() throws {
     _ = Darwin.close(sockets[0])
     try check(done.wait(timeout: .now() + 3) == .success, "native validator stalled")
     try check(result.state == .installed, "native validator rejected valid OP scope")
+}
+
+private func environmentOpValidatorReturnsTypedIdentityAndScope() throws {
+    for (name, expected) in [
+        (
+            "browser-use-fake-op-invalid-service-account",
+            EnvironmentTokenValidationResult.invalidServiceAccount
+        ),
+        (
+            "browser-use-fake-op-zero-vault",
+            EnvironmentTokenValidationResult.invalidVaultScope
+        ),
+        (
+            "browser-use-fake-op-multi-vault",
+            EnvironmentTokenValidationResult.invalidVaultScope
+        ),
+    ] {
+        let fake = try makeFakeOp(name: name)
+        defer {
+            try? FileManager.default.removeItem(
+                at: fake.deletingLastPathComponent()
+            )
+        }
+        try withTokenDescriptor { descriptor in
+            try check(
+                EnvironmentOpSupervisor.validateStagedTokenForTesting(
+                    executablePath: fake.path,
+                    tokenDescriptor: descriptor
+                ) == expected,
+                "\(name) did not return its typed validation result"
+            )
+        }
+    }
+}
+
+private func environmentOpValidatorAllowsBoundedColdServiceAccount() throws {
+    let fake = try makeFakeOp(
+        name: "browser-use-fake-op-cold-service-account"
+    )
+    defer {
+        try? FileManager.default.removeItem(
+            at: fake.deletingLastPathComponent()
+        )
+    }
+    try withTokenDescriptor { descriptor in
+        try check(
+            EnvironmentOpSupervisor.validateStagedTokenForTesting(
+                executablePath: fake.path,
+                tokenDescriptor: descriptor
+            ) == .approved,
+            "bounded cold service-account metadata exceeded its legal budget"
+        )
+    }
 }
 
 private func runAsFakeValidator() -> Never {
@@ -4800,6 +4904,27 @@ enum BrowserUseEnvironmentAuthTests {
             }
             return
         }
+        if CommandLine.arguments.dropFirst()
+            == ["--validator-timeout-typing-test"]
+        {
+            try validatorExecutionTimeoutRemainsTyped()
+            print("pass: validator execution timeout remains typed")
+            return
+        }
+        if CommandLine.arguments.dropFirst()
+            == ["--validator-identity-scope-typing-test"]
+        {
+            try environmentOpValidatorReturnsTypedIdentityAndScope()
+            print("pass: validator identity and scope remain typed")
+            return
+        }
+        if CommandLine.arguments.dropFirst()
+            == ["--validator-cold-service-account-test"]
+        {
+            try environmentOpValidatorAllowsBoundedColdServiceAccount()
+            print("pass: validator allows bounded cold service account")
+            return
+        }
         let executableName = URL(fileURLWithPath: CommandLine.arguments[0])
             .lastPathComponent
         if executableName == "browser-use-op-supervisor" {
@@ -4840,6 +4965,10 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "validator timeout cleans staging",
                 validatorTimeoutCleansStagingPath
+            ),
+            (
+                "validator execution timeout remains typed",
+                validatorExecutionTimeoutRemainsTyped
             ),
             (
                 "custody deadline contains legal validator work",
@@ -4925,6 +5054,14 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "environment OP validator uses received descriptor",
                 environmentOpValidatorUsesReceivedDescriptor
+            ),
+            (
+                "environment OP validator returns typed identity and scope",
+                environmentOpValidatorReturnsTypedIdentityAndScope
+            ),
+            (
+                "environment OP validator allows bounded cold service account",
+                environmentOpValidatorAllowsBoundedColdServiceAccount
             ),
             (
                 "binding evidence rejects unknown options",

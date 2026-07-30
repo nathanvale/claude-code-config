@@ -197,12 +197,27 @@ private func emit(_ data: Data, exitCode: Int32) -> Never {
     Foundation.exit(exitCode)
 }
 
-private func emitValidator(_ approved: Bool, socket: Int32) -> Never {
-    let bytes = approved ? Array("ok\n".utf8) : Array("no\n".utf8)
+private func emitValidator(
+    _ result: EnvironmentTokenValidationResult,
+    socket: Int32
+) -> Never {
+    let bytes: [UInt8]
+    switch result {
+    case .approved:
+        bytes = Array("ok\n".utf8)
+    case .timeout:
+        bytes = Array("timeout\n".utf8)
+    case .invalidServiceAccount:
+        bytes = Array("identity\n".utf8)
+    case .invalidVaultScope:
+        bytes = Array("vault\n".utf8)
+    case .rejected:
+        bytes = Array("no\n".utf8)
+    }
     _ = bytes.withUnsafeBytes {
         Darwin.write(socket, $0.baseAddress, bytes.count)
     }
-    Foundation.exit(approved ? 0 : 20)
+    Foundation.exit(result == .approved ? 0 : 20)
 }
 
 _ = signal(SIGPIPE, SIG_IGN)
@@ -277,6 +292,6 @@ case let .validate(validatorDescriptor, opPath):
             socket: validatorDescriptor
         )
     } catch {
-        emitValidator(false, socket: validatorDescriptor)
+        emitValidator(.rejected, socket: validatorDescriptor)
     }
 }

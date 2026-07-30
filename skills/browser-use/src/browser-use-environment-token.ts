@@ -232,6 +232,8 @@ export const BROWSER_USE_ENVIRONMENT_TOKEN_CUSTODY_CAUSES = [
 	"input-cancelled",
 	"input-invalid",
 	"write-failed",
+	"invalid-service-account",
+	"invalid-vault-scope",
 	"validation-failed",
 	"validation-timeout",
 	"validation-unavailable",

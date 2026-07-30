@@ -1130,6 +1130,14 @@ public enum EnvironmentOpPrivateField: String, Sendable {
     }
 }
 
+public enum EnvironmentTokenValidationResult: Equatable, Sendable {
+    case approved
+    case invalidServiceAccount
+    case invalidVaultScope
+    case rejected
+    case timeout
+}
+
 private func boundedString(_ value: Any?) -> String? {
     guard let value = value as? String,
           !value.isEmpty,
@@ -1847,9 +1855,9 @@ public enum EnvironmentOpSupervisor {
     public static func validateStagedToken(
         executablePath: String,
         tokenDescriptor: Int32
-    ) -> Bool {
+    ) -> EnvironmentTokenValidationResult {
         guard let staged = try? stageOfficialEnvironmentOp(executablePath) else {
-            return false
+            return .rejected
         }
         defer { try? FileManager.default.removeItem(atPath: staged.directory) }
         return validateTokenUsingExecutable(
@@ -1863,7 +1871,7 @@ public enum EnvironmentOpSupervisor {
     public static func validateStagedTokenForTesting(
         executablePath: String,
         tokenDescriptor: Int32
-    ) -> Bool {
+    ) -> EnvironmentTokenValidationResult {
         validateTokenUsingExecutable(
             executablePath,
             tokenDescriptor: tokenDescriptor
@@ -1874,7 +1882,7 @@ public enum EnvironmentOpSupervisor {
         _ executablePath: String,
         tokenDescriptor: Int32,
         expectedVersion: String? = nil
-    ) -> Bool {
+    ) -> EnvironmentTokenValidationResult {
         guard let admittedIdentity = environmentOpExecutableIdentity(
                   executablePath
               ),
@@ -1885,29 +1893,26 @@ public enum EnvironmentOpSupervisor {
               environmentOpExecutableIdentity(executablePath)
                 == admittedIdentity
         else {
-            return false
+            return .rejected
         }
         let user = executeMetadata(
             executablePath: executablePath,
             operation: .userGet,
             tokenDescriptor: tokenDescriptor,
-            timeoutMilliseconds: 5_000
+            timeoutMilliseconds: 15_000
         )
         guard environmentOpExecutableIdentity(executablePath)
             == admittedIdentity
         else {
-            return false
+            return .rejected
         }
-        let vaults = executeMetadata(
-            executablePath: executablePath,
-            operation: .vaultList,
-            tokenDescriptor: tokenDescriptor,
-            timeoutMilliseconds: 5_000
-        )
-        guard environmentOpExecutableIdentity(executablePath)
-            == admittedIdentity
-        else {
-            return false
+        if let userObject = try? JSONSerialization.jsonObject(with: user)
+                as? [String: Any],
+           userObject["ok"] as? Bool == false,
+           let rejection = userObject["rejection"] as? [String: Any],
+           rejection["code"] as? String == EnvironmentOpExecutionCause.timeout.rawValue
+        {
+            return .timeout
         }
         guard let userObject = try? JSONSerialization.jsonObject(with: user)
                 as? [String: Any],
@@ -1915,15 +1920,37 @@ public enum EnvironmentOpSupervisor {
               let userValue = userObject["value"] as? [String: Any],
               boundedString(userValue["id"]) != nil,
               boundedString(userValue["state"]) == "ACTIVE",
-              boundedString(userValue["type"]) == "SERVICE_ACCOUNT",
-              let vaultObject = try? JSONSerialization.jsonObject(with: vaults)
+              boundedString(userValue["type"]) == "SERVICE_ACCOUNT"
+        else {
+            return .invalidServiceAccount
+        }
+        let vaults = executeMetadata(
+            executablePath: executablePath,
+            operation: .vaultList,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: 15_000
+        )
+        guard environmentOpExecutableIdentity(executablePath)
+            == admittedIdentity
+        else {
+            return .rejected
+        }
+        if let vaultObject = try? JSONSerialization.jsonObject(with: vaults)
+                as? [String: Any],
+           vaultObject["ok"] as? Bool == false,
+           let rejection = vaultObject["rejection"] as? [String: Any],
+           rejection["code"] as? String == EnvironmentOpExecutionCause.timeout.rawValue
+        {
+            return .timeout
+        }
+        guard let vaultObject = try? JSONSerialization.jsonObject(with: vaults)
                 as? [String: Any],
               vaultObject["ok"] as? Bool == true,
-              let vaultValue = vaultObject["value"] as? [Any],
-              vaultValue.count == 1
+              let vaultValue = vaultObject["value"] as? [Any]
         else {
-            return false
+            return .rejected
         }
-        return true
+        guard vaultValue.count == 1 else { return .invalidVaultScope }
+        return .approved
     }
 }

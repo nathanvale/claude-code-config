@@ -30,6 +30,8 @@ public enum TokenCustodyCause: String, Codable, Error, Sendable {
     case inputCancelled = "input-cancelled"
     case inputInvalid = "input-invalid"
     case writeFailed = "write-failed"
+    case invalidServiceAccount = "invalid-service-account"
+    case invalidVaultScope = "invalid-vault-scope"
     case validationFailed = "validation-failed"
     case validationTimeout = "validation-timeout"
     case validationUnavailable = "validation-unavailable"
@@ -681,23 +683,15 @@ private func validateStagedFile(
         descriptor: stagedReadDescriptor,
         deadlineMilliseconds: deadline
     )
-    var response = [UInt8](repeating: 0, count: 3)
-    var offset = 0
-    while offset < response.count {
+    var response: [UInt8] = []
+    while response.count < 16 {
         try waitForSocket(
             validatorDescriptor,
             events: Int16(POLLIN),
             deadlineMilliseconds: deadline
         )
-        let remaining = response.count - offset
-        let count = response.withUnsafeMutableBytes {
-            recv(
-                validatorDescriptor,
-                $0.baseAddress!.advanced(by: offset),
-                remaining,
-                MSG_DONTWAIT
-            )
-        }
+        var byte: UInt8 = 0
+        let count = recv(validatorDescriptor, &byte, 1, MSG_DONTWAIT)
         if count == 0 {
             throw TokenCustodyCause.validationUnavailable
         }
@@ -706,11 +700,23 @@ private func validateStagedFile(
             if errno == EAGAIN || errno == EWOULDBLOCK { continue }
             throw TokenCustodyCause.validationUnavailable
         }
-        offset += count
+        response.append(byte)
+        if byte == UInt8(ascii: "\n") { break }
     }
-    guard response == Array("ok\n".utf8) else {
-        throw TokenCustodyCause.validationFailed
+    if response == Array("ok\n".utf8) { return }
+    if response == Array("timeout\n".utf8) {
+        throw TokenCustodyCause.validationTimeout
     }
+    if response == Array("identity\n".utf8) {
+        throw TokenCustodyCause.invalidServiceAccount
+    }
+    if response == Array("vault\n".utf8) {
+        throw TokenCustodyCause.invalidVaultScope
+    }
+    guard response == Array("no\n".utf8) else {
+        throw TokenCustodyCause.validationUnavailable
+    }
+    throw TokenCustodyCause.validationFailed
 }
 
 private func reproveStagedPath(
@@ -792,7 +798,7 @@ private func syncFile(_ descriptor: Int32) throws {
 }
 
 public enum TokenCustody {
-    private static let validatorTimeoutMilliseconds: Int32 = 20_000
+    private static let validatorTimeoutMilliseconds: Int32 = 45_000
 
     public static func status(configRoot: String) -> TokenCustodyResult {
         status(
