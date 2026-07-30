@@ -109,6 +109,7 @@ function targetProof(
 		target_id: "t1",
 		page_id: "t1",
 		frame_id: "frame-1",
+		document_id: "document-1",
 		top_level_origin: origin,
 		frame_origin: origin,
 		...overrides,
@@ -179,6 +180,7 @@ async function identify(
 	options: {
 		proofs?: readonly BrowserUseNativeTargetProofV1[];
 		record?: BrowserUseReviewedActionRecord;
+		expectedTargetProofDigest?: string;
 	} = {},
 ) {
 	const calls: string[][] = [];
@@ -201,6 +203,8 @@ async function identify(
 		handoff: HANDOFF,
 		runId: "run-auth-state",
 		targetId: "t1",
+		expectedTargetProofDigest:
+			options.expectedTargetProofDigest,
 	});
 	return { outcome, calls, proofCalls };
 }
@@ -277,6 +281,133 @@ describe("reviewed login-state adapter", () => {
 		);
 		expect(outcome).toEqual({ status: "unproven" });
 		expect(proofCalls).toBe(2);
+	});
+
+	test("a restored confidential document is refused before capture", async () => {
+		const allowed = targetProof(IDP_ORIGIN, {
+			document_id: "document-2",
+		});
+		const restored = targetProof(IDP_ORIGIN, {
+			document_id: "document-1",
+		});
+		const { outcome, calls, proofCalls } = await identify(
+			{
+				schema_version: "1",
+				status: "fields-required",
+				fields: ["password"],
+			},
+			{
+				proofs: [restored],
+				expectedTargetProofDigest:
+					allowed.target_proof_digest,
+			},
+		);
+
+		expect(outcome).toEqual({ status: "unproven" });
+		expect(calls).toEqual([]);
+		expect(proofCalls).toBe(1);
+	});
+
+	test("uses one native exact-document read after confidential delivery", async () => {
+		const expected = targetProof(IDP_ORIGIN, {
+			document_id: "document-after-submit",
+		});
+		let adapterCalls = 0;
+		let proofCalls = 0;
+		const requests: unknown[] = [];
+		const outcome = await identifyRunbookAuthState({
+			approvedOrigins: [IDP_ORIGIN],
+			action: ACTION_REF,
+			actionSeam: actionSeam(),
+			runCommand: async () => {
+				adapterCalls += 1;
+				throw new Error("generic capture must remain quarantined");
+			},
+			targetProof: {
+				async proveTarget() {
+					proofCalls += 1;
+					throw new Error("separate proof would reopen the race");
+				},
+			},
+			documentRead: {
+				async readDocument(request) {
+					requests.push(request);
+					return {
+						schema_version: 1,
+						ok: true,
+						proof: expected,
+						navigation_history_sealed: false,
+						result: {
+							schema_version: "1",
+							status: "fields-required",
+							fields: ["otp"],
+						},
+					};
+				},
+			},
+			expectedDocumentProof: expected,
+			handoff: HANDOFF,
+			runId: "run-native-auth-state",
+			targetId: "t1",
+		});
+
+		expect(outcome).toEqual({
+			status: "fields-required",
+			fields: ["otp"],
+		});
+		expect(adapterCalls).toBe(0);
+		expect(proofCalls).toBe(0);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({
+			target_id: expected.target_id,
+			document_id: expected.document_id,
+			target_proof_digest: expected.target_proof_digest,
+			script: ACTION_BYTES,
+			script_sha256: ACTION_DIGEST,
+		});
+	});
+
+	test("discards a native reviewed read returned from another document", async () => {
+		const expected = targetProof(IDP_ORIGIN, {
+			document_id: "document-after-submit",
+		});
+		const restored = targetProof(IDP_ORIGIN, {
+			document_id: "document-before-submit",
+		});
+		const outcome = await identifyRunbookAuthState({
+			approvedOrigins: [IDP_ORIGIN],
+			action: ACTION_REF,
+			actionSeam: actionSeam(),
+			runCommand: async () => {
+				throw new Error("generic capture must remain quarantined");
+			},
+			targetProof: {
+				async proveTarget() {
+					throw new Error("separate proof must not run");
+				},
+			},
+			documentRead: {
+				async readDocument() {
+					return {
+						schema_version: 1,
+						ok: true,
+						proof: restored,
+						navigation_history_sealed: false,
+						result: {
+							schema_version: "1",
+							status: "fields-required",
+							fields: ["otp"],
+						},
+					};
+				},
+			},
+			expectedDocumentProof: expected,
+			handoff: HANDOFF,
+			runId: "run-native-auth-state-race",
+			targetId: "t1",
+		});
+
+		expect(outcome).toEqual({ status: "unproven" });
 	});
 
 	test("refuses a reviewed action whose result is not low sensitivity before browser execution", async () => {

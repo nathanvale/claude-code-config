@@ -12,12 +12,14 @@
 import { existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
 import type {
+	BrowserUseNativeDocumentReadPort,
+	BrowserUseNativeDocumentReadRequest,
 	BrowserUseNativeTargetProofPort,
 	BrowserUseNativeTargetProofRequest,
 } from "./browser-use-agent-browser";
@@ -217,6 +219,164 @@ export function browserUseNativeTargetProofOutputIsSafe(input: {
 		!input.stdout.includes(input.browser_ws_endpoint) &&
 		!input.stderr.includes(input.browser_ws_endpoint)
 	);
+}
+
+/** Exact native reviewed-read process invocation. Browser authority stays in stdin. */
+export type BrowserUseNativeDocumentReadInvocation = {
+	executable_path: string;
+	argv: readonly ["read-reviewed"];
+	env: Readonly<{ PATH: "/usr/bin:/bin"; LANG: "C" }>;
+	stdin_text: string;
+	timeout_ms: 15_000;
+};
+
+const NATIVE_DOCUMENT_READ_STDIN_LIMIT_BYTES = 131_072;
+const NATIVE_DOCUMENT_READ_SCRIPT_LIMIT_BYTES = 100_000;
+const SAFE_NATIVE_DOCUMENT_COORDINATE =
+	/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
+const SAFE_NATIVE_DOCUMENT_DIGEST = /^[a-f0-9]{64}$/;
+
+function exactWebOrigin(value: string): boolean {
+	try {
+		const parsed = new URL(value);
+		return (
+			(parsed.protocol === "https:" || parsed.protocol === "http:") &&
+			parsed.origin === value
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Build one bounded, shell-free reviewed document read. */
+export function buildBrowserUseNativeDocumentReadInvocation(input: {
+	native_bin_root: string;
+	request: BrowserUseNativeDocumentReadRequest;
+}): BrowserUseNativeDocumentReadInvocation {
+	const request = input.request;
+	if (
+		!isAbsolute(input.native_bin_root) ||
+		!safeLoopbackBrowserWebSocket(request.browser_ws_endpoint) ||
+		!Number.isSafeInteger(request.browser_pid) ||
+		request.browser_pid <= 0 ||
+		!SAFE_NATIVE_DOCUMENT_COORDINATE.test(request.target_id) ||
+		!SAFE_NATIVE_DOCUMENT_COORDINATE.test(request.document_id) ||
+		!exactWebOrigin(request.top_level_origin) ||
+		!exactWebOrigin(request.frame_origin) ||
+		!SAFE_NATIVE_DOCUMENT_DIGEST.test(request.target_proof_digest) ||
+		typeof request.reset_navigation_history !== "boolean" ||
+		request.script.length === 0 ||
+		Buffer.byteLength(request.script, "utf8") >
+			NATIVE_DOCUMENT_READ_SCRIPT_LIMIT_BYTES ||
+		!SAFE_NATIVE_DOCUMENT_DIGEST.test(request.script_sha256) ||
+		createHash("sha256").update(request.script).digest("hex") !==
+			request.script_sha256
+	) {
+		throw new Error("native reviewed document read request is inadmissible");
+	}
+	const stdinText = JSON.stringify({
+		schema_version: 1,
+		browser_ws_endpoint: request.browser_ws_endpoint,
+		browser_pid: request.browser_pid,
+		target_id: request.target_id,
+		document_id: request.document_id,
+		top_level_origin: request.top_level_origin,
+		frame_origin: request.frame_origin,
+		target_proof_digest: request.target_proof_digest,
+		script: request.script,
+		script_sha256: request.script_sha256,
+		reset_navigation_history:
+			request.reset_navigation_history,
+	});
+	if (
+		Buffer.byteLength(stdinText, "utf8") >
+		NATIVE_DOCUMENT_READ_STDIN_LIMIT_BYTES
+	) {
+		throw new Error("native reviewed document read request exceeded its bound");
+	}
+	return {
+		executable_path: join(
+			input.native_bin_root,
+			"browser-use-confidential-delivery",
+		),
+		argv: ["read-reviewed"],
+		env: { PATH: "/usr/bin:/bin", LANG: "C" },
+		stdin_text: stdinText,
+		timeout_ms: 15_000,
+	};
+}
+
+/** Reject reflected browser authority or reviewed source from native output. */
+export function browserUseNativeDocumentReadOutputIsSafe(input: {
+	stdout: string;
+	stderr: string;
+	request: BrowserUseNativeDocumentReadRequest;
+}): boolean {
+	return (
+		!input.stdout.includes(input.request.browser_ws_endpoint) &&
+		!input.stderr.includes(input.request.browser_ws_endpoint) &&
+		!input.stdout.includes(input.request.script) &&
+		!input.stderr.includes(input.request.script)
+	);
+}
+
+/** Parse one bounded native process result without trusting its stdout. */
+export function parseBrowserUseNativeDocumentReadProcessOutput(input: {
+	stdout: string;
+	stderr: string;
+	exit_code: number;
+	signal_code: NodeJS.Signals | null | undefined;
+	request: BrowserUseNativeDocumentReadRequest;
+}): Record<string, unknown> {
+	if (
+		input.signal_code != null ||
+		Buffer.byteLength(input.stdout, "utf8") >
+			NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES ||
+		Buffer.byteLength(input.stderr, "utf8") >
+			NATIVE_LIFECYCLE_OUTPUT_LIMIT_BYTES ||
+		!browserUseNativeDocumentReadOutputIsSafe(input)
+	) {
+		throw new Error("native reviewed document read output was unsafe");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(input.stdout);
+	} catch {
+		throw new Error(
+			"native reviewed document read process contract drifted",
+		);
+	}
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		Array.isArray(parsed)
+	) {
+		throw new Error(
+			"native reviewed document read process contract drifted",
+		);
+	}
+	const envelope = parsed as Record<string, unknown>;
+	if (
+		envelope.schema_version !== 1 ||
+		typeof envelope.ok !== "boolean" ||
+		(envelope.ok &&
+			!exactObjectKeys(envelope, [
+				"schema_version",
+				"ok",
+				"proof",
+				"result",
+				"navigation_history_sealed",
+			])) ||
+		(envelope.ok &&
+			envelope.navigation_history_sealed !==
+				input.request.reset_navigation_history) ||
+		input.exit_code !== (envelope.ok ? 0 : 20)
+	) {
+		throw new Error(
+			"native reviewed document read process contract drifted",
+		);
+	}
+	return envelope;
 }
 
 /**
@@ -527,6 +687,10 @@ export type BrowserUseRuntime = {
 	 */
 	authTargetProof?: BrowserUseNativeTargetProofPort;
 	/**
+	 * Read-only native owner for one reviewed action bound to one root document.
+	 */
+	authDocumentRead?: BrowserUseNativeDocumentReadPort;
+	/**
 	 * One admission decision captured during production runtime construction.
 	 * Every consumer receives this same object and selected port.
 	 */
@@ -601,6 +765,7 @@ export async function createProductionBrowserUseRuntime(
 		);
 	}
 	runtime.authTargetProof ??= createNativeTargetProofPort();
+	runtime.authDocumentRead ??= createNativeDocumentReadPort();
 	runtime.authAdmission = await resolveAuthAdmission(
 		seam ?? createNativeAbsentSecuritySeam(runtime),
 	);
@@ -679,6 +844,70 @@ function createNativeTargetProofPort(): BrowserUseNativeTargetProofPort {
 				throw new Error("native target proof process contract drifted");
 			}
 			return parsed;
+		},
+	};
+}
+
+function exactObjectKeys(
+	value: Readonly<Record<string, unknown>>,
+	expected: readonly string[],
+): boolean {
+	const actual = Object.keys(value).sort();
+	const sortedExpected = [...expected].sort();
+	return (
+		actual.length === sortedExpected.length &&
+		actual.every((key, index) => key === sortedExpected[index])
+	);
+}
+
+function createNativeDocumentReadPort(): BrowserUseNativeDocumentReadPort {
+	return {
+		async readDocument(request) {
+			const invocation = buildBrowserUseNativeDocumentReadInvocation({
+				native_bin_root: browserUseNativeBinRoot(),
+				request,
+			});
+			const child = Bun.spawn(
+				[invocation.executable_path, ...invocation.argv],
+				{
+					env: invocation.env,
+					stdin: "pipe",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			child.stdin.write(invocation.stdin_text);
+			child.stdin.end();
+			const stdoutPromise = readBoundedNativeOutput(child.stdout);
+			const stderrPromise = readBoundedNativeOutput(child.stderr);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timedOut = await Promise.race([
+				child.exited.then(() => false),
+				new Promise<true>((resolve) => {
+					timer = setTimeout(
+						() => resolve(true),
+						invocation.timeout_ms,
+					);
+				}),
+			]);
+			if (timer !== undefined) clearTimeout(timer);
+			if (timedOut) {
+				void Promise.allSettled([stdoutPromise, stderrPromise]);
+				await terminateEnvironmentTokenLifecycleProcess(child);
+				throw new Error("native reviewed document read timed out");
+			}
+			const exitCode = await child.exited;
+			const [stdout, stderr] = await Promise.all([
+				stdoutPromise,
+				stderrPromise,
+			]);
+			return parseBrowserUseNativeDocumentReadProcessOutput({
+				stdout,
+				stderr,
+				exit_code: exitCode,
+				signal_code: child.signalCode,
+				request,
+			});
 		},
 	};
 }

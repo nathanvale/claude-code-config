@@ -34,6 +34,7 @@ import {
 	type BrowserUseCorpusGenerationCandidatePayload,
 	type BrowserUseCorpusGenerationManifestPayload,
 } from "./browser-use-schemas";
+import type { BrowserUseGenerationSessionPolicy } from "./browser-use-generation-schemas";
 import { writeDurableFile } from "./browser-use-store";
 import { runForTest } from "./browser-use";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
@@ -175,6 +176,7 @@ async function seedActiveGeneration(
 	runbook: BrowserUseRunbook,
 	activation: "active" | "inactive" = "active",
 	activationEpoch = 2,
+	sessionPolicy?: BrowserUseGenerationSessionPolicy,
 ): Promise<BrowserUseCorpusGenerationManifestPayload> {
 	const generationId = `generation-${runbook.flow_id}`;
 	const runbookRaw = `${JSON.stringify(runbook)}\n`;
@@ -202,6 +204,9 @@ async function seedActiveGeneration(
 					auth_context_ref: authContextRef,
 					candidate_id: authCandidate.candidate_id,
 					status: "active" as const,
+					...(sessionPolicy === undefined
+						? {}
+						: { session_policy: sessionPolicy }),
 				};
 	const authCandidateRaw =
 		authCandidate === undefined ? undefined : `${JSON.stringify(authCandidate)}\n`;
@@ -427,6 +432,49 @@ function authBoundReadOnlyRunbook(): BrowserUseRunbook {
 		auth_context_ref: "oncore-session",
 	};
 }
+
+const AUTH_SESSION_POLICY: BrowserUseGenerationSessionPolicy = {
+	schema_version: "1",
+	approved_service_origins: ["https://example.test"],
+	approved_identity_provider_origins: ["https://login.example.test"],
+	auth_flow: {
+		schema_version: "1",
+		fields: {
+			username: { role: "textbox", name: "Username" },
+			password: { role: "textbox", name: "Password" },
+			otp: { role: "textbox", name: "Verification code" },
+		},
+		identify_state: {
+			action_id: "identify-login-state",
+			expected_digest: "1".repeat(64),
+		},
+		username_submit: {
+			action_id: "submit-username",
+			expected_digest: "2".repeat(64),
+		},
+		password_submit: {
+			action_id: "submit-password",
+			expected_digest: "3".repeat(64),
+		},
+		otp_submit: {
+			action_id: "submit-otp",
+			expected_digest: "4".repeat(64),
+		},
+	},
+	identity_verifier: {
+		schema_version: "1",
+		action: {
+			action_id: "verify-session",
+			expected_digest: "5".repeat(64),
+		},
+		expected: {
+			subject_reference: "subject-primary",
+			account_reference: "account-primary",
+			tenant_reference: "tenant-primary",
+		},
+		freshness_ms: 30_000,
+	},
+};
 
 // A runtime replaying a scripted adapter response sequence over the real store.
 function scriptedRuntime(
@@ -924,6 +972,264 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(calls).toEqual([]);
 		const loaded = await loadSharedRun(store.deps, "run-auth-bound-1");
 		expect(loaded.ok).toBe(false);
+	});
+
+	test("every sensitive auth resume recovers its claim before handoff or adapter work", async () => {
+		const cases = [
+			[
+				"before-username-delivery",
+				"delivery-outcome-unknown",
+				"runbook_auth_delivery_outcome_unknown",
+			],
+			[
+				"before-password-delivery",
+				"delivery-outcome-unknown",
+				"runbook_auth_delivery_outcome_unknown",
+			],
+			[
+				"before-otp-delivery",
+				"delivery-outcome-unknown",
+				"runbook_auth_delivery_outcome_unknown",
+			],
+			[
+				"delivery-outcome-unknown",
+				"delivery-outcome-unknown",
+				"runbook_auth_delivery_outcome_unknown",
+			],
+			[
+				"before-username-submit",
+				"submission-outcome-unknown",
+				"runbook_auth_submission_outcome_unknown",
+			],
+			[
+				"before-password-submit",
+				"submission-outcome-unknown",
+				"runbook_auth_submission_outcome_unknown",
+			],
+			[
+				"before-otp-submit",
+				"submission-outcome-unknown",
+				"runbook_auth_submission_outcome_unknown",
+			],
+			[
+				"submission-outcome-unknown",
+				"submission-outcome-unknown",
+				"runbook_auth_submission_outcome_unknown",
+			],
+			[
+				"human-presence-required",
+				"user-presence-required",
+				"runbook_auth_human_presence_required",
+			],
+			[
+				"session-identity-unproven",
+				"session-identity-unproven",
+				"runbook_auth_identity_unproven",
+			],
+		] as const;
+
+		for (const [
+			caseIndex,
+			[checkpoint, reason, expectedCode],
+		] of cases.entries()) {
+			const store = await makeStore();
+			const runbook = authBoundReadOnlyRunbook();
+			const manifest = await seedActiveGeneration(
+				store,
+				runbook,
+				"active",
+				2,
+				AUTH_SESSION_POLICY,
+			);
+			const runId = `run-sensitive-${caseIndex}`;
+			const envelope = handoffEnvelope("agent-browser", runId);
+			const handoffPath = join(
+				store.base,
+				`handoff-sensitive-${caseIndex}.json`,
+			);
+			writeFileSync(
+				handoffPath,
+				JSON.stringify(envelope),
+				"utf-8",
+			);
+			const parsed = parseHandoffFacts(JSON.stringify(envelope));
+			if (!parsed.ok || parsed.kind !== "verified") {
+				throw new Error("fixture handoff invalid");
+			}
+			const targetEnvelopeId = targetEnvelopeIdOf({
+				runId,
+				mode: "handoff-bound",
+				adapter: "agent-browser",
+				handoffEvidenceId: parsed.facts.handoffEvidenceId,
+			});
+			const targetBindingId = candidateIdOf(targetEnvelopeId, [
+				"adapter_page_id",
+				"t1",
+			]);
+			const runbookRaw = `${JSON.stringify(runbook)}\n`;
+			const postcondition = runbook.steps[0];
+			if (postcondition?.kind !== "open") {
+				throw new Error("fixture postcondition missing");
+			}
+			const authRouteRaw = `${JSON.stringify({
+				auth_context_ref: runbook.auth_context_ref,
+				candidate_id: `candidate-${runbook.service_id}`,
+				status: "active",
+				session_policy: AUTH_SESSION_POLICY,
+			})}\n`;
+			const created = await createSharedRun(store.deps, {
+				run_id: runId,
+				state: "awaiting-auth",
+				task_intent: "runbook-execution",
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "default",
+				},
+				adapter_id: "agent-browser",
+				handoff_evidence_id:
+					parsed.facts.handoffEvidenceId,
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: targetBindingId,
+				},
+				runbook_progress: {
+					schema_version: "1",
+					service_id: runbook.service_id,
+					flow_id: runbook.flow_id,
+					runbook_version: runbook.version,
+					next_step: 0,
+					total_steps: runbook.steps.length,
+				},
+				run_execution_binding: {
+					schema_version: "1",
+					generation_id: manifest.generation_id,
+					activation_epoch:
+						manifest.activation_epoch,
+					service_id: runbook.service_id,
+					flow_id: runbook.flow_id,
+					runbook_version: runbook.version,
+					runbook_digest: sha256(runbookRaw),
+					action_registry_digest:
+						manifest.action_registry.registry_digest,
+					normalized_input_digest:
+						normalizedInputDigest({}),
+					item_key_digest: itemKeySequenceDigest([]),
+					target_scope: JSON.stringify(
+						[...runbook.allowed_origins].sort(),
+					),
+					postcondition: {
+						id: sha256(
+							JSON.stringify(
+								postcondition.postcondition,
+							),
+						),
+						summary:
+							"Complete the bound url-equals postcondition.",
+					},
+				},
+				mutation_dispatched: false,
+				artifacts: [],
+				continuation: {
+					schema_version: "1",
+					kind: "auth",
+					continuation_id: `continuation-sensitive-${caseIndex}`,
+					run_id: runId,
+					state: "pending",
+					reason,
+					required_actor: "agent",
+					safe_to_retry: false,
+					checkpoint,
+					expires_at_epoch_ms: 10_000,
+					resume_action: {
+						command: "run",
+						args: [
+							"resume",
+							"--run",
+							runId,
+							"--json",
+						],
+					},
+					bindings: {
+						generation_id: manifest.generation_id,
+						activation_epoch:
+							manifest.activation_epoch,
+						route_digest: sha256(authRouteRaw),
+						lane_id: "agent-browser",
+						adapter_id: "agent-browser",
+						handoff_evidence_id:
+							parsed.facts.handoffEvidenceId,
+						environment: "agent-chrome",
+						profile: "default",
+						target_binding_id: targetBindingId,
+						expected_identity: {
+							subject_ref:
+								AUTH_SESSION_POLICY
+									.identity_verifier.expected
+									.subject_reference,
+							account_ref:
+								AUTH_SESSION_POLICY
+									.identity_verifier.expected
+									.account_reference,
+							tenant_ref:
+								AUTH_SESSION_POLICY
+									.identity_verifier.expected
+									.tenant_reference,
+						},
+					},
+					next_action_id:
+						"resume-auth-continuation",
+					summary:
+						"Inspect this sensitive checkpoint before any browser work.",
+				},
+			});
+			expect(created.ok).toBe(true);
+
+			let mintCalls = 0;
+			const scripted = scriptedRuntime(store.env, []);
+			scripted.runtime.mintHandoff = async () => {
+				mintCalls += 1;
+				throw new Error("handoff acquisition must not run");
+			};
+			const result = await runForTest(
+				[
+					"runbook",
+					"run",
+					"--service",
+					runbook.service_id,
+					"--flow",
+					runbook.flow_id,
+					"--run",
+					runId,
+					"--handoff",
+					handoffPath,
+					"--json",
+				],
+				scripted.runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout)).toMatchObject({
+				error: {
+					code: expectedCode,
+				},
+				data: {
+					checkpoint,
+					external_effect: "none",
+				},
+			});
+			expect(mintCalls).toBe(0);
+			expect(scripted.calls).toEqual([]);
+			const loaded = await loadSharedRun(store.deps, runId);
+			expect(loaded.ok).toBe(true);
+			if (loaded.ok) {
+				expect(loaded.run.revision).toBe(3);
+				expect(loaded.run.continuation).toMatchObject({
+					state: "pending",
+					checkpoint,
+				});
+			}
+		}
 	});
 
 	test("inactive generation target refuses before handoff acquisition", async () => {

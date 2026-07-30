@@ -35,6 +35,26 @@ private func rejection() -> Data {
     )
 }
 
+private func readBoundedStandardInput(maximumBytes: Int) -> Data? {
+    var output = Data()
+    do {
+        while output.count <= maximumBytes {
+            let capacity = min(8_192, maximumBytes + 1 - output.count)
+            guard let chunk = try FileHandle.standardInput.read(
+                upToCount: capacity
+            ),
+                !chunk.isEmpty
+            else {
+                return output
+            }
+            output.append(chunk)
+        }
+    } catch {
+        return nil
+    }
+    return nil
+}
+
 private func emit(_ data: Data, exitCode: Int32) -> Never {
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([0x0a]))
@@ -75,6 +95,24 @@ if rawArguments.first == "prove-target" {
         )
     }
     let result = ConfidentialFieldDeliveryProcess.proveTarget(
+        requestData: request
+    )
+    let decoded = try? JSONSerialization.jsonObject(with: result)
+        as? [String: Any]
+    emit(result, exitCode: decoded?["ok"] as? Bool == true ? 0 : 20)
+}
+if rawArguments.first == "read-reviewed" {
+    guard Array(rawArguments) == ["read-reviewed"],
+          let request = readBoundedStandardInput(maximumBytes: 131_072)
+    else {
+        emit(
+            ConfidentialFieldDeliveryProcess.readReviewed(
+                requestData: Data()
+            ),
+            exitCode: 20
+        )
+    }
+    let result = ConfidentialFieldDeliveryProcess.readReviewed(
         requestData: request
     )
     let decoded = try? JSONSerialization.jsonObject(with: result)

@@ -2292,26 +2292,81 @@ private enum ConfidentialSemanticMatchMode {
     case multiple
 }
 
+private enum ConfidentialReviewedReadEvaluation {
+    case success(Any)
+    case exception
+    case invalid
+}
+
 private final class ConfidentialDeliveryTraceBox: @unchecked Sendable {
     let matchMode: ConfidentialSemanticMatchMode
-    let targetURL: String
+    let targetURLs: [String]
+    let rootFrameLoaderIDs: [String?]
+    let reviewedReadContextID: Int?
+    let reviewedReadEvaluation: ConfidentialReviewedReadEvaluation
+    let reviewedReadResetSucceeds: Bool
+    let reviewedReadHistoryCurrentIndex: Int
+    let reviewedReadHistoryEntries: [[String: Any]]
     let suppressInsertResponse: Bool
     let atomicWriteAllowed: Bool
     var methods: [String] = []
+    var targetProofCount = 0
+    var frameProofCount = 0
     var insertedText: String?
+    var reviewedReadWorldParameters: [String: Any]?
+    var reviewedReadExpression: String?
+    var reviewedReadParameters: [String: Any]?
     var atomicFunctionRechecksOrigins = false
     var failure: String?
 
     init(
         matchMode: ConfidentialSemanticMatchMode = .exact,
         targetURL: String = "https://oncore.test/login",
+        targetURLs: [String]? = nil,
+        rootFrameLoaderIDs: [String?] = ["loader-1"],
+        reviewedReadContextID: Int? = 71,
+        reviewedReadEvaluation: ConfidentialReviewedReadEvaluation =
+            .success(["rows": 7]),
+        reviewedReadResetSucceeds: Bool = true,
+        reviewedReadHistoryCurrentIndex: Int = 0,
+        reviewedReadHistoryEntries: [[String: Any]] = [
+            ["id": 1, "url": "https://oncore.test/login"],
+        ],
         suppressInsertResponse: Bool = false,
         atomicWriteAllowed: Bool = true
     ) {
         self.matchMode = matchMode
-        self.targetURL = targetURL
+        self.targetURLs = targetURLs ?? [targetURL]
+        self.rootFrameLoaderIDs = rootFrameLoaderIDs
+        self.reviewedReadContextID = reviewedReadContextID
+        self.reviewedReadEvaluation = reviewedReadEvaluation
+        self.reviewedReadResetSucceeds = reviewedReadResetSucceeds
+        self.reviewedReadHistoryCurrentIndex =
+            reviewedReadHistoryCurrentIndex
+        self.reviewedReadHistoryEntries = reviewedReadHistoryEntries
         self.suppressInsertResponse = suppressInsertResponse
         self.atomicWriteAllowed = atomicWriteAllowed
+    }
+
+    var targetURL: String {
+        targetURLs.first ?? "https://oncore.test/login"
+    }
+
+    func nextTargetURL() -> String {
+        let index = min(targetProofCount, max(0, targetURLs.count - 1))
+        targetProofCount += 1
+        return targetURLs.isEmpty
+            ? "https://invalid.test"
+            : targetURLs[index]
+    }
+
+    func nextRootFrameLoaderID() -> String? {
+        let index = min(
+            frameProofCount,
+            max(0, rootFrameLoaderIDs.count - 1)
+        )
+        frameProofCount += 1
+        return rootFrameLoaderIDs.isEmpty ? nil : rootFrameLoaderIDs[index]
     }
 }
 
@@ -2517,17 +2572,61 @@ private func fakeConfidentialCDPResult(
             "targetInfo": [
                 "targetId": "target-1",
                 "type": "page",
-                "url": "https://oncore.test/login",
+                "url": trace.nextTargetURL(),
             ],
         ]
     case "Page.getFrameTree":
+        var frame: [String: Any] = [
+            "id": "frame-1",
+            "url": "https://oncore.test/login",
+        ]
+        if let loaderID = trace.nextRootFrameLoaderID() {
+            frame["loaderId"] = loaderID
+        }
         return [
             "frameTree": [
-                "frame": [
-                    "id": "frame-1",
-                    "url": "https://oncore.test/login",
-                ],
+                "frame": frame,
             ],
+        ]
+    case "Page.createIsolatedWorld":
+        trace.reviewedReadWorldParameters =
+            request["params"] as? [String: Any]
+        guard let contextID = trace.reviewedReadContextID else {
+            return [:]
+        }
+        return ["executionContextId": contextID]
+    case "Runtime.evaluate":
+        let parameters = request["params"] as? [String: Any]
+        trace.reviewedReadParameters = parameters
+        trace.reviewedReadExpression = parameters?["expression"] as? String
+        switch trace.reviewedReadEvaluation {
+        case let .success(value):
+            return [
+                "result": [
+                    "type": value is [String: Any] ? "object" : "string",
+                    "value": value,
+                ],
+            ]
+        case .exception:
+            return [
+                "result": ["type": "object"],
+                "exceptionDetails": [
+                    "text": "SENSITIVE_SCRIPT_EXCEPTION",
+                ],
+            ]
+        case .invalid:
+            return [
+                "result": [
+                    "type": "undefined",
+                ],
+            ]
+        }
+    case "Page.resetNavigationHistory":
+        return trace.reviewedReadResetSucceeds ? [:] : nil
+    case "Page.getNavigationHistory":
+        return [
+            "currentIndex": trace.reviewedReadHistoryCurrentIndex,
+            "entries": trace.reviewedReadHistoryEntries,
         ]
     case "Accessibility.getFullAXTree":
         return [
@@ -2581,7 +2680,19 @@ private struct ConfidentialWebSocketFixture {
     let trace: ConfidentialDeliveryTraceBox
 }
 
-private func startConfidentialWebSocketFixture() throws
+private func startConfidentialWebSocketFixture(
+    rootFrameLoaderID: String? = "loader-1",
+    rootFrameLoaderIDs: [String?]? = nil,
+    reviewedReadContextID: Int? = 71,
+    reviewedReadEvaluation: ConfidentialReviewedReadEvaluation =
+        .success(["rows": 7]),
+    targetURLs: [String]? = nil,
+    reviewedReadResetSucceeds: Bool = true,
+    reviewedReadHistoryCurrentIndex: Int = 0,
+    reviewedReadHistoryEntries: [[String: Any]] = [
+        ["id": 1, "url": "https://oncore.test/login"],
+    ]
+) throws
     -> ConfidentialWebSocketFixture
 {
     let listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -2627,7 +2738,16 @@ private func startConfidentialWebSocketFixture() throws
     let endpoint = "ws://127.0.0.1:\(port)/devtools/browser/browser-id"
     let pageEndpoint = "ws://127.0.0.1:\(port)/devtools/page/target-1"
     let done = DispatchSemaphore(value: 0)
-    let trace = ConfidentialDeliveryTraceBox()
+    let trace = ConfidentialDeliveryTraceBox(
+        targetURLs: targetURLs,
+        rootFrameLoaderIDs: rootFrameLoaderIDs ?? [rootFrameLoaderID],
+        reviewedReadContextID: reviewedReadContextID,
+        reviewedReadEvaluation: reviewedReadEvaluation,
+        reviewedReadResetSucceeds: reviewedReadResetSucceeds,
+        reviewedReadHistoryCurrentIndex:
+            reviewedReadHistoryCurrentIndex,
+        reviewedReadHistoryEntries: reviewedReadHistoryEntries
+    )
     DispatchQueue.global().async {
         defer {
             _ = Darwin.close(listener)
@@ -3604,6 +3724,7 @@ private func confidentialTargetProofDerivesClosedNativeObservation() throws {
             "target_id",
             "page_id",
             "frame_id",
+            "document_id",
             "top_level_origin",
             "frame_origin",
             "target_proof_digest",
@@ -3620,6 +3741,7 @@ private func confidentialTargetProofDerivesClosedNativeObservation() throws {
             "target-1",
             "target-1",
             "frame-1",
+            "loader-1",
             "https://oncore.test",
             "https://oncore.test",
         ]
@@ -3632,6 +3754,7 @@ private func confidentialTargetProofDerivesClosedNativeObservation() throws {
             && proof["target_id"] as? String == "target-1"
             && proof["page_id"] as? String == "target-1"
             && proof["frame_id"] as? String == "frame-1"
+            && proof["document_id"] as? String == "loader-1"
             && proof["top_level_origin"] as? String
                 == "https://oncore.test"
             && proof["frame_origin"] as? String == "https://oncore.test"
@@ -3648,6 +3771,631 @@ private func confidentialTargetProofDerivesClosedNativeObservation() throws {
     try check(
         !String(decoding: result, as: UTF8.self).contains(fixture.endpoint),
         "target proof leaked the browser endpoint"
+    )
+}
+
+private func confidentialTargetProofBindsRootDocumentIdentity() throws {
+    var proofs: [[String: Any]] = []
+    for loaderID in ["loader-1", "loader-2"] {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderID: loaderID
+        )
+        let requestData = try JSONSerialization.data(
+            withJSONObject: [
+                "schema_version": 1,
+                "browser_ws_endpoint": fixture.endpoint,
+                "browser_pid": getpid(),
+                "target_id": "target-1",
+            ],
+            options: [.sortedKeys]
+        )
+        let result = ConfidentialFieldDeliveryProcess.proveTargetForTesting(
+            requestData: requestData
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "document identity target proof fixture did not finish"
+        )
+        guard let envelope = try JSONSerialization.jsonObject(with: result)
+                as? [String: Any],
+              envelope["ok"] as? Bool == true,
+              let proof = envelope["proof"] as? [String: Any]
+        else {
+            throw TestFailure(
+                description: "document identity target proof was rejected"
+            )
+        }
+        proofs.append(proof)
+    }
+    try check(
+        proofs[0]["target_id"] as? String
+            == proofs[1]["target_id"] as? String
+            && proofs[0]["frame_id"] as? String
+                == proofs[1]["frame_id"] as? String
+            && proofs[0]["top_level_origin"] as? String
+                == proofs[1]["top_level_origin"] as? String
+            && proofs[0]["frame_origin"] as? String
+                == proofs[1]["frame_origin"] as? String
+            && proofs[0]["document_id"] as? String == "loader-1"
+            && proofs[1]["document_id"] as? String == "loader-2"
+            && proofs[0]["target_proof_digest"] as? String
+                != proofs[1]["target_proof_digest"] as? String,
+        "root document change did not change the exact target proof"
+    )
+}
+
+private func confidentialTargetProofRejectsMissingOrInvalidDocumentIdentity()
+    throws
+{
+    for loaderID in [nil, "", "loader id"] as [String?] {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderID: loaderID
+        )
+        let requestData = try JSONSerialization.data(
+            withJSONObject: [
+                "schema_version": 1,
+                "browser_ws_endpoint": fixture.endpoint,
+                "browser_pid": getpid(),
+                "target_id": "target-1",
+            ],
+            options: [.sortedKeys]
+        )
+        let result = ConfidentialFieldDeliveryProcess.proveTargetForTesting(
+            requestData: requestData
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "invalid document identity target proof fixture did not finish"
+        )
+        guard let envelope = try JSONSerialization.jsonObject(with: result)
+                as? [String: Any],
+              envelope["ok"] as? Bool == false,
+              let rejection = envelope["rejection"] as? [String: Any],
+              rejection["code"] as? String == "target-unproven"
+        else {
+            throw TestFailure(
+                description:
+                    "missing or invalid root loader identity was admitted"
+            )
+        }
+    }
+}
+
+private func reviewedReadRequest(
+    fixture: ConfidentialWebSocketFixture,
+    documentID: String = "loader-1",
+    targetProofDigest: String? = nil,
+    resetNavigationHistory: Bool = false,
+    script: String = "async () => ({ rows: 7 })",
+    scriptDigest: String? = nil
+) throws -> Data {
+    let digest = scriptDigest ?? SHA256.hash(data: Data(script.utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    let proofCanonical = try JSONSerialization.data(
+        withJSONObject: [
+            1,
+            "agent-browser",
+            "target-1",
+            "target-1",
+            "frame-1",
+            documentID,
+            "https://oncore.test",
+            "https://oncore.test",
+        ]
+    )
+    let proofDigest = targetProofDigest
+        ?? SHA256.hash(data: proofCanonical)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    return try JSONSerialization.data(
+        withJSONObject: [
+            "schema_version": 1,
+            "browser_ws_endpoint": fixture.endpoint,
+            "browser_pid": getpid(),
+            "target_id": "target-1",
+            "document_id": documentID,
+            "top_level_origin": "https://oncore.test",
+            "frame_origin": "https://oncore.test",
+            "target_proof_digest": proofDigest,
+            "reset_navigation_history": resetNavigationHistory,
+            "script": script,
+            "script_sha256": digest,
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func reviewedReadRejectionCode(_ data: Data) throws -> String {
+    guard let envelope = try JSONSerialization.jsonObject(with: data)
+            as? [String: Any],
+          Set(envelope.keys) == ["schema_version", "ok", "rejection"],
+          envelope["schema_version"] as? Int == 1,
+          envelope["ok"] as? Bool == false,
+          let rejection = envelope["rejection"] as? [String: Any],
+          Set(rejection.keys) == ["code", "message"],
+          let code = rejection["code"] as? String,
+          !String(decoding: data, as: UTF8.self).contains(
+            "SENSITIVE_SCRIPT_EXCEPTION"
+          )
+    else {
+        throw TestFailure(
+            description: "reviewed read rejection was not closed and secret-free"
+        )
+    }
+    return code
+}
+
+private func confidentialReviewedReadIsDocumentBoundAndClosed() throws {
+    let fixture = try startConfidentialWebSocketFixture(
+        rootFrameLoaderIDs: ["loader-1", "loader-1", "loader-1"]
+    )
+    let script = "async ({ inputs }) => ({ rows: Object.keys(inputs).length + 7 })"
+    let digest = SHA256.hash(data: Data(script.utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+        requestData: try reviewedReadRequest(
+            fixture: fixture,
+            script: script
+        )
+    )
+    try check(
+        fixture.done.wait(timeout: .now() + 3) == .success,
+        "reviewed read fixture did not finish"
+    )
+    guard let envelope = try JSONSerialization.jsonObject(with: result)
+            as? [String: Any],
+          Set(envelope.keys) == [
+            "schema_version",
+            "ok",
+            "proof",
+            "result",
+            "navigation_history_sealed",
+          ],
+          envelope["schema_version"] as? Int == 1,
+          envelope["ok"] as? Bool == true,
+          envelope["navigation_history_sealed"] as? Bool == false,
+          let proof = envelope["proof"] as? [String: Any],
+          Set(proof.keys) == [
+            "lane_id",
+            "target_id",
+            "page_id",
+            "frame_id",
+            "document_id",
+            "top_level_origin",
+            "frame_origin",
+            "target_proof_digest",
+          ],
+          proof["document_id"] as? String == "loader-1",
+          let observation = envelope["result"] as? [String: Any],
+          observation["rows"] as? Int == 7
+    else {
+        throw TestFailure(
+            description: "reviewed read success envelope was not closed"
+        )
+    }
+    try check(
+        fixture.trace.methods == [
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Page.createIsolatedWorld",
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Runtime.evaluate",
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+        ],
+        "reviewed read protocol allowlist drifted: \(fixture.trace.methods)"
+    )
+    try check(
+        fixture.trace.reviewedReadWorldParameters?["frameId"] as? String
+            == "frame-1"
+            && fixture.trace.reviewedReadWorldParameters?[
+                "grantUniveralAccess"
+            ] as? Bool == false
+            && fixture.trace.reviewedReadWorldParameters?["worldName"]
+                as? String
+                == "browser-use-reviewed-\(digest.prefix(16))"
+            && Set(
+                fixture.trace.reviewedReadWorldParameters?.keys.map { $0 }
+                    ?? []
+            ) == [
+                "frameId",
+                "worldName",
+                "grantUniveralAccess",
+            ],
+        "reviewed read isolated-world contract drifted"
+    )
+    try check(
+        (
+            fixture.trace.reviewedReadParameters?["contextId"] as? NSNumber
+        )?.intValue == 71
+            && fixture.trace.reviewedReadParameters?["awaitPromise"] as? Bool
+                == true
+            && fixture.trace.reviewedReadParameters?["returnByValue"] as? Bool
+                == true
+            && fixture.trace.reviewedReadParameters?["userGesture"] as? Bool
+                == false
+            && fixture.trace.reviewedReadParameters?["includeCommandLineAPI"]
+                as? Bool == false
+            && fixture.trace.reviewedReadParameters?[
+                "allowUnsafeEvalBlockedByCSP"
+            ] as? Bool == false
+            && Set(
+                fixture.trace.reviewedReadParameters?.keys.map { $0 } ?? []
+            ) == [
+                "expression",
+                "contextId",
+                "awaitPromise",
+                "returnByValue",
+                "userGesture",
+                "includeCommandLineAPI",
+                "allowUnsafeEvalBlockedByCSP",
+            ]
+            && fixture.trace.reviewedReadExpression?.contains(script) == true
+            && fixture.trace.reviewedReadExpression?.contains(digest) == true,
+        "reviewed read did not bind the approved script to one isolated context"
+    )
+    try check(
+        fixture.trace.reviewedReadExpression?.contains(
+            "action({ inputs: Object.freeze({}) })"
+        ) == true,
+        "reviewed read did not preserve the input-envelope action ABI"
+    )
+}
+
+private func confidentialReviewedReadSealsNavigationHistory() throws {
+    let fixture = try startConfidentialWebSocketFixture(
+        rootFrameLoaderIDs: [
+            "loader-1",
+            "loader-1",
+            "loader-1",
+            "loader-1",
+        ]
+    )
+    let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+        requestData: try reviewedReadRequest(
+            fixture: fixture,
+            resetNavigationHistory: true
+        )
+    )
+    try check(
+        fixture.done.wait(timeout: .now() + 3) == .success,
+        "navigation-history sealing fixture did not finish"
+    )
+    guard let envelope = try JSONSerialization.jsonObject(with: result)
+            as? [String: Any],
+          envelope["ok"] as? Bool == true,
+          envelope["navigation_history_sealed"] as? Bool == true
+    else {
+        throw TestFailure(
+            description: "reviewed read did not seal navigation history"
+        )
+    }
+    try check(
+        fixture.trace.methods == [
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Page.createIsolatedWorld",
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Runtime.evaluate",
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+            "Page.resetNavigationHistory",
+            "Page.getNavigationHistory",
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+        ],
+        "history-sealed reviewed-read protocol drifted: \(fixture.trace.methods)"
+    )
+}
+
+private func confidentialReviewedReadRejectsUnsealedHistory() throws {
+    let cases: [
+        (
+            String,
+            Bool,
+            Int,
+            [[String: Any]],
+            String
+        )
+    ] = [
+        (
+            "reset error",
+            false,
+            0,
+            [["id": 1, "url": "https://oncore.test/login"]],
+            "Page.resetNavigationHistory"
+        ),
+        (
+            "retained entry",
+            true,
+            1,
+            [
+                ["id": 1, "url": "https://oncore.test/previous"],
+                ["id": 2, "url": "https://oncore.test/login"],
+            ],
+            "Page.getNavigationHistory"
+        ),
+        (
+            "history origin mismatch",
+            true,
+            0,
+            [["id": 1, "url": "https://drift.test/login"]],
+            "Page.getNavigationHistory"
+        ),
+    ]
+    for (name, resetSucceeds, currentIndex, entries, lastMethod) in cases {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderIDs: [
+                "loader-1",
+                "loader-1",
+                "loader-1",
+                "loader-1",
+            ],
+            reviewedReadResetSucceeds: resetSucceeds,
+            reviewedReadHistoryCurrentIndex: currentIndex,
+            reviewedReadHistoryEntries: entries
+        )
+        let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+            requestData: try reviewedReadRequest(
+                fixture: fixture,
+                resetNavigationHistory: true
+            )
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "\(name) history-sealing fixture did not finish"
+        )
+        try check(
+            try reviewedReadRejectionCode(result)
+                == "navigation-history-unsealed",
+            "\(name) did not discard the reviewed-read result"
+        )
+        try check(
+            fixture.trace.methods.last == lastMethod,
+            "\(name) crossed the history-sealing failure boundary"
+        )
+    }
+}
+
+private func confidentialReviewedReadRejectsHistorySealRaces() throws {
+    let stable = "https://oncore.test/login"
+    let drift = "https://drift.test/login"
+    let cases: [
+        (
+            String,
+            [String?],
+            [String],
+            Bool
+        )
+    ] = [
+        (
+            "loader before reset",
+            ["loader-1", "loader-1", "loader-2"],
+            [stable, stable, stable],
+            false
+        ),
+        (
+            "origin before reset",
+            ["loader-1", "loader-1", "loader-1"],
+            [stable, stable, drift],
+            false
+        ),
+        (
+            "loader after reset",
+            ["loader-1", "loader-1", "loader-1", "loader-2"],
+            [stable, stable, stable, stable],
+            true
+        ),
+        (
+            "origin after reset",
+            ["loader-1", "loader-1", "loader-1", "loader-1"],
+            [stable, stable, stable, drift],
+            true
+        ),
+    ]
+    for (name, loaders, targetURLs, resetRan) in cases {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderIDs: loaders,
+            targetURLs: targetURLs
+        )
+        let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+            requestData: try reviewedReadRequest(
+                fixture: fixture,
+                resetNavigationHistory: true
+            )
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "\(name) history race fixture did not finish"
+        )
+        try check(
+            try reviewedReadRejectionCode(result) == "target-unproven",
+            "\(name) history race was admitted"
+        )
+        try check(
+            fixture.trace.methods.contains("Page.resetNavigationHistory")
+                == resetRan,
+            "\(name) crossed the wrong history reset boundary"
+        )
+    }
+}
+
+private func confidentialReviewedReadRejectsStaleTargetProofDigest() throws {
+    let fixture = try startConfidentialWebSocketFixture()
+    let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+        requestData: try reviewedReadRequest(
+            fixture: fixture,
+            targetProofDigest: String(repeating: "0", count: 64)
+        )
+    )
+    try check(
+        fixture.done.wait(timeout: .now() + 3) == .success,
+        "stale target-proof digest fixture did not finish"
+    )
+    try check(
+        try reviewedReadRejectionCode(result) == "target-unproven",
+        "stale target-proof digest was admitted"
+    )
+    try check(
+        fixture.trace.methods == [
+            "Target.getTargetInfo",
+            "Page.getFrameTree",
+        ],
+        "stale target-proof digest crossed into isolated execution"
+    )
+}
+
+private func confidentialReviewedReadRejectsDocumentRaces() throws {
+    for (name, expectedDocument, loaders, evaluated) in [
+        (
+            "before isolated context",
+            "loader-expected",
+            ["loader-observed"] as [String?],
+            false
+        ),
+        (
+            "before evaluation",
+            "loader-1",
+            ["loader-1", "loader-2"] as [String?],
+            false
+        ),
+        (
+            "after evaluation",
+            "loader-1",
+            ["loader-1", "loader-1", "loader-2"] as [String?],
+            true
+        ),
+    ] {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderIDs: loaders
+        )
+        let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+            requestData: try reviewedReadRequest(
+                fixture: fixture,
+                documentID: expectedDocument
+            )
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "\(name) loader-race fixture did not finish"
+        )
+        try check(
+            try reviewedReadRejectionCode(result) == "target-unproven",
+            "\(name) loader race was not rejected"
+        )
+        try check(
+            fixture.trace.methods.contains("Runtime.evaluate") == evaluated,
+            "\(name) loader race crossed the wrong evaluation boundary"
+        )
+    }
+}
+
+private func confidentialReviewedReadMasksEvaluationFailures() throws {
+    for (name, contextID, evaluation, expectedCode) in [
+        (
+            "missing context",
+            nil,
+            ConfidentialReviewedReadEvaluation.success(["rows": 7]),
+            "isolated-world-unavailable"
+        ),
+        (
+            "stale context",
+            71,
+            ConfidentialReviewedReadEvaluation.exception,
+            "evaluation-failed"
+        ),
+    ] {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderIDs: ["loader-1", "loader-1", "loader-1"],
+            reviewedReadContextID: contextID,
+            reviewedReadEvaluation: evaluation
+        )
+        let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+            requestData: try reviewedReadRequest(fixture: fixture)
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "\(name) reviewed-read fixture did not finish"
+        )
+        try check(
+            try reviewedReadRejectionCode(result) == expectedCode,
+            "\(name) reviewed-read failure was misclassified"
+        )
+    }
+}
+
+private func confidentialReviewedReadRejectsInvalidResults() throws {
+    for evaluation in [
+        ConfidentialReviewedReadEvaluation.invalid,
+        .success(String(repeating: "x", count: 40_000)),
+    ] {
+        let fixture = try startConfidentialWebSocketFixture(
+            rootFrameLoaderIDs: ["loader-1", "loader-1", "loader-1"],
+            reviewedReadEvaluation: evaluation
+        )
+        let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+            requestData: try reviewedReadRequest(fixture: fixture)
+        )
+        try check(
+            fixture.done.wait(timeout: .now() + 3) == .success,
+            "invalid reviewed-read result fixture did not finish"
+        )
+        try check(
+            try reviewedReadRejectionCode(result) == "result-invalid",
+            "invalid or oversized reviewed-read result was admitted"
+        )
+    }
+}
+
+private func confidentialReviewedReadRejectsEditedScripts() throws {
+    let fixture = try startConfidentialWebSocketFixture()
+    let result = ConfidentialFieldDeliveryProcess.readReviewedForTesting(
+        requestData: try reviewedReadRequest(
+            fixture: fixture,
+            scriptDigest: String(repeating: "0", count: 64)
+        ),
+        timeoutMilliseconds: 100
+    )
+    try check(
+        try reviewedReadRejectionCode(result) == "invalid-request",
+        "edited reviewed-read script was admitted"
+    )
+    try check(
+        fixture.trace.methods.isEmpty,
+        "edited reviewed-read script reached CDP"
+    )
+}
+
+private func confidentialReviewedReadCLIRejectsInvalidInput() throws {
+    let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-confidential-delivery")
+    let input = Pipe()
+    let output = Pipe()
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = ["read-reviewed"]
+    process.environment = [
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    ]
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = Pipe()
+    try process.run()
+    input.fileHandleForWriting.write(Data("{}".utf8))
+    try input.fileHandleForWriting.close()
+    process.waitUntilExit()
+    let result = output.fileHandleForReading.readDataToEndOfFile()
+    try check(
+        process.terminationStatus == 20
+            && (try reviewedReadRejectionCode(result))
+                == "invalid-request",
+        "read-reviewed CLI did not expose its closed failure contract"
     )
 }
 
@@ -3873,6 +4621,54 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "confidential target proof derives closed native observation",
                 confidentialTargetProofDerivesClosedNativeObservation
+            ),
+            (
+                "confidential target proof binds root document identity",
+                confidentialTargetProofBindsRootDocumentIdentity
+            ),
+            (
+                "confidential target proof rejects invalid document identity",
+                confidentialTargetProofRejectsMissingOrInvalidDocumentIdentity
+            ),
+            (
+                "confidential reviewed read is document-bound and closed",
+                confidentialReviewedReadIsDocumentBoundAndClosed
+            ),
+            (
+                "confidential reviewed read seals navigation history",
+                confidentialReviewedReadSealsNavigationHistory
+            ),
+            (
+                "confidential reviewed read rejects unsealed history",
+                confidentialReviewedReadRejectsUnsealedHistory
+            ),
+            (
+                "confidential reviewed read rejects history seal races",
+                confidentialReviewedReadRejectsHistorySealRaces
+            ),
+            (
+                "confidential reviewed read rejects stale target digest",
+                confidentialReviewedReadRejectsStaleTargetProofDigest
+            ),
+            (
+                "confidential reviewed read rejects document races",
+                confidentialReviewedReadRejectsDocumentRaces
+            ),
+            (
+                "confidential reviewed read masks evaluation failures",
+                confidentialReviewedReadMasksEvaluationFailures
+            ),
+            (
+                "confidential reviewed read rejects invalid results",
+                confidentialReviewedReadRejectsInvalidResults
+            ),
+            (
+                "confidential reviewed read rejects edited scripts",
+                confidentialReviewedReadRejectsEditedScripts
+            ),
+            (
+                "confidential reviewed read CLI rejects invalid input",
+                confidentialReviewedReadCLIRejectsInvalidInput
             ),
             (
                 "confidential target proof rejects untrusted requests",

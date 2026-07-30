@@ -62,6 +62,11 @@ export function createBrowserUseConfidentialDeliveryQuarantine(input: {
 		previous_target: BrowserUseVerifiedTarget;
 		next_target: BrowserUseVerifiedTarget;
 	}): { ok: true } | { ok: false };
+	releaseAfterNavigationHistorySeal(input: {
+		target: BrowserUseVerifiedTarget;
+		target_proof_digest: string;
+		navigation_history_sealed: true;
+	}): { ok: true } | { ok: false };
 	inspect(): {
 		state: QuarantineState;
 		write_state: QuarantineWriteState | null;
@@ -158,6 +163,25 @@ export function createBrowserUseConfidentialDeliveryQuarantine(input: {
 				return { ok: false };
 			}
 			target = { ...candidate.next_target };
+			return { ok: true };
+		},
+		releaseAfterNavigationHistorySeal(candidate) {
+			if (
+				state !== "cleaned" ||
+				activeCommands !== 0 ||
+				target === undefined ||
+				!targetsEqual(target, candidate.target) ||
+				!sensitiveEffect ||
+				candidate.navigation_history_sealed !== true ||
+				candidate.target_proof_digest !==
+					target.target_proof_digest
+			) {
+				return { ok: false };
+			}
+			target = undefined;
+			writeState = null;
+			sensitiveEffect = false;
+			state = "open";
 			return { ok: true };
 		},
 		inspect: () => ({ state, write_state: writeState }),

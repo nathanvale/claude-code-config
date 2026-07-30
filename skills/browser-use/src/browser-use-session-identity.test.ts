@@ -98,6 +98,7 @@ function nativeProof(
 		target_id: "target-1",
 		page_id: "target-1",
 		frame_id: "frame-1",
+		document_id: "document-1",
 		top_level_origin: "https://portal.example.test",
 		frame_origin: "https://portal.example.test",
 		...overrides,
@@ -377,12 +378,149 @@ describe("Agent Browser Session Identity Proof producer", () => {
 		]);
 	});
 
+	test("uses one native exact-document read without generic capture", async () => {
+		const expected = nativeProof({
+			document_id: "document-after-auth",
+		});
+		let adapterCalls = 0;
+		let proofCalls = 0;
+		let readCalls = 0;
+		const projected = await observeAgentBrowserSessionIdentity({
+			runtime: {
+				async runCommand() {
+					adapterCalls += 1;
+					throw new Error("generic capture must remain quarantined");
+				},
+			},
+			targetProof: {
+				async proveTarget() {
+					proofCalls += 1;
+					throw new Error("separate target proof must not run");
+				},
+			},
+			documentRead: {
+				async readDocument(request) {
+					readCalls += 1;
+					expect(request.document_id).toBe(
+						expected.document_id,
+					);
+					expect(request.target_proof_digest).toBe(
+						expected.target_proof_digest,
+					);
+					expect(request.reset_navigation_history).toBe(
+						true,
+					);
+					return {
+						schema_version: 1,
+						ok: true,
+						proof: expected,
+						navigation_history_sealed: true,
+						result: {
+							subject_reference: "subject-1",
+							account_reference: "account-1",
+							tenant_reference: "tenant-1",
+						},
+					};
+				},
+			},
+			expectedDocumentProof: expected,
+			handoff: HANDOFF,
+			run_id: "run-1",
+			target_id: "target-1",
+			verifier: verifierStep(),
+			freshness_ms: 15_000,
+			now: () => 1_000,
+		});
+
+		expect(projected.ok).toBe(true);
+		expect(adapterCalls).toBe(0);
+		expect(proofCalls).toBe(0);
+		expect(readCalls).toBe(1);
+		if (!projected.ok) throw new Error(projected.cause);
+		expect(projected.observation.target_proof_digest).toBe(
+			expected.target_proof_digest,
+		);
+	});
+
+	test("refuses native reviewed-read inputs the helper cannot bind", async () => {
+		const expected = nativeProof();
+		let readCalls = 0;
+		const result = await observeAgentBrowserSessionIdentity({
+			runtime: reviewedReadRuntime(),
+			targetProof: {
+				async proveTarget() {
+					throw new Error("separate proof must not run");
+				},
+			},
+			documentRead: {
+				async readDocument() {
+					readCalls += 1;
+					throw new Error("native read must not run");
+				},
+			},
+			expectedDocumentProof: expected,
+			handoff: HANDOFF,
+			run_id: "run-input-refusal",
+			target_id: "target-1",
+			verifier: {
+				...verifierStep(),
+				inputs: { unsupported: "value" },
+			},
+			freshness_ms: 15_000,
+			now: () => 1_000,
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			cause: "verifier-execution-refused",
+		});
+		expect(readCalls).toBe(0);
+	});
+
+	test("refuses session identity without the requested history seal", async () => {
+		const expected = nativeProof();
+		const result = await observeAgentBrowserSessionIdentity({
+			runtime: reviewedReadRuntime(),
+			targetProof: {
+				async proveTarget() {
+					throw new Error("separate proof must not run");
+				},
+			},
+			documentRead: {
+				async readDocument() {
+					return {
+						schema_version: 1,
+						ok: true,
+						proof: expected,
+						navigation_history_sealed: false,
+						result: {
+							subject_reference: "subject-1",
+							account_reference: "account-1",
+							tenant_reference: "tenant-1",
+						},
+					};
+				},
+			},
+			expectedDocumentProof: expected,
+			handoff: HANDOFF,
+			run_id: "run-missing-history-seal",
+			target_id: "target-1",
+			verifier: verifierStep(),
+			freshness_ms: 15_000,
+			now: () => 1_000,
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			cause: "verifier-execution-refused",
+		});
+	});
+
 	test("blocks a navigation race between native pre/post proofs", async () => {
 		const proofs = [
 			nativeProof(),
 			nativeProof({
-				frame_id: "frame-after-navigation",
-				frame_origin: "https://portal.example.test",
+				document_id: "document-after-navigation",
 			}),
 		];
 		const result = await observeAgentBrowserSessionIdentity({
@@ -409,6 +547,10 @@ describe("Agent Browser Session Identity Proof producer", () => {
 
 	test("rejects malformed native proof before reviewed browser execution", async () => {
 		let browserCommands = 0;
+		const missingDocument = {
+			...nativeProof(),
+		} as Record<string, unknown>;
+		delete missingDocument.document_id;
 		const result = await observeAgentBrowserSessionIdentity({
 			runtime: {
 				async runCommand() {
@@ -420,7 +562,7 @@ describe("Agent Browser Session Identity Proof producer", () => {
 				proveTarget: async () => ({
 					schema_version: 1,
 					ok: true,
-					proof: { ...nativeProof(), session_identity: "forged" },
+					proof: missingDocument,
 				}),
 			},
 			handoff: HANDOFF,

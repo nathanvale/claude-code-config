@@ -381,6 +381,10 @@ export type AgentBrowserSessionIdentityObservationResult =
 	| {
 			ok: true;
 			observation: BrowserUseSessionIdentityObservationV1;
+			capture_release?: {
+				target_proof_digest: string;
+				navigation_history_sealed: true;
+			};
 	  }
 	| AgentBrowserSessionIdentityObservationRefusal;
 
@@ -396,12 +400,34 @@ export type BrowserUseNativeTargetProofPort = {
 	proveTarget(input: BrowserUseNativeTargetProofRequest): Promise<unknown>;
 };
 
+/** Native request for one reviewed read bound to an exact root document. */
+export type BrowserUseNativeDocumentReadRequest = {
+	browser_ws_endpoint: string;
+	browser_pid: number;
+	target_id: string;
+	document_id: string;
+	top_level_origin: string;
+	frame_origin: string;
+	target_proof_digest: string;
+	script: string;
+	script_sha256: string;
+	reset_navigation_history: boolean;
+};
+
+/** Native CDP owner that executes a reviewed read inside one proven document. */
+export type BrowserUseNativeDocumentReadPort = {
+	readDocument(
+		input: BrowserUseNativeDocumentReadRequest,
+	): Promise<unknown>;
+};
+
 /** Exact read-only CDP coordinates derived by the native U7 owner. */
 export type BrowserUseNativeTargetProofV1 = {
 	lane_id: "agent-browser";
 	target_id: string;
 	page_id: string;
 	frame_id: string;
+	document_id: string;
 	top_level_origin: string;
 	frame_origin: string;
 	target_proof_digest: string;
@@ -423,8 +449,9 @@ function exactOrigin(value: string): boolean {
  * Canonical digest shared with the native U7 prove-target process.
  *
  * A CDP `page` target is the page coordinate on this boundary, so `page_id`
- * must equal the proven target id. `frame_id` is the root frame derived from
- * `Page.getFrameTree`.
+ * must equal the proven target id. `frame_id` and `document_id` are the root
+ * frame and loader identifiers derived from `Page.getFrameTree`; only a
+ * changed loader can prove departure from a confidential document.
  */
 export function nativeTargetProofDigestOf(
 	proof: Omit<BrowserUseNativeTargetProofV1, "target_proof_digest">,
@@ -437,6 +464,7 @@ export function nativeTargetProofDigestOf(
 				proof.target_id,
 				proof.page_id,
 				proof.frame_id,
+				proof.document_id,
 				proof.top_level_origin,
 				proof.frame_origin,
 			]),
@@ -453,6 +481,7 @@ function exactNativeTargetProof(
 		left.target_id === right.target_id &&
 		left.page_id === right.page_id &&
 		left.frame_id === right.frame_id &&
+		left.document_id === right.document_id &&
 		left.top_level_origin === right.top_level_origin &&
 		left.frame_origin === right.frame_origin &&
 		left.target_proof_digest === right.target_proof_digest
@@ -530,6 +559,7 @@ function parseNativeTargetProof(
 			"target_id",
 			"page_id",
 			"frame_id",
+			"document_id",
 			"top_level_origin",
 			"frame_origin",
 			"target_proof_digest",
@@ -538,12 +568,14 @@ function parseNativeTargetProof(
 		typeof proof.target_id !== "string" ||
 		typeof proof.page_id !== "string" ||
 		typeof proof.frame_id !== "string" ||
+		typeof proof.document_id !== "string" ||
 		typeof proof.top_level_origin !== "string" ||
 		typeof proof.frame_origin !== "string" ||
 		typeof proof.target_proof_digest !== "string" ||
 		!SAFE_TAB_ID.test(proof.target_id) ||
 		proof.page_id !== proof.target_id ||
 		!SAFE_PROOF_COORDINATE.test(proof.frame_id) ||
+		!SAFE_PROOF_COORDINATE.test(proof.document_id) ||
 		!exactOrigin(proof.top_level_origin) ||
 		!exactOrigin(proof.frame_origin) ||
 		!SAFE_DIGEST.test(proof.target_proof_digest)
@@ -555,6 +587,7 @@ function parseNativeTargetProof(
 		target_id: proof.target_id,
 		page_id: proof.page_id,
 		frame_id: proof.frame_id,
+		document_id: proof.document_id,
 		top_level_origin: proof.top_level_origin,
 		frame_origin: proof.frame_origin,
 		target_proof_digest: proof.target_proof_digest,
@@ -712,6 +745,116 @@ export async function proveAgentBrowserTarget(input: {
 }
 
 /**
+ * Execute one reviewed read inside the native proof owner's exact document.
+ *
+ * The native owner binds evaluation to one CDP execution context. Generic
+ * adapter capture is never used, so a restored credential document cannot
+ * race into stdout between proof and evaluation.
+ *
+ * @param input - Exact document authority, reviewed script, and native port
+ * @returns Proven document plus low-level action result, or a closed refusal
+ * @internal
+ */
+export async function readAgentBrowserDocument(input: {
+	documentRead: BrowserUseNativeDocumentReadPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	expectedProof: BrowserUseNativeTargetProofV1;
+	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>;
+	resetNavigationHistory?: boolean;
+}): Promise<
+	| {
+			ok: true;
+			proof: BrowserUseNativeTargetProofV1;
+			data: unknown;
+			navigationHistorySealed: boolean;
+	  }
+	| { ok: false }
+> {
+	if (
+		input.step.effect !== "read" ||
+		input.step.item_key !== undefined ||
+		Object.keys(input.step.inputs).length !== 0 ||
+		input.step.allowed_origin !==
+			input.expectedProof.top_level_origin ||
+		input.expectedProof.top_level_origin !==
+			input.expectedProof.frame_origin ||
+		!actionIntegrityIsValid(
+			input.step,
+			new Set([input.expectedProof.top_level_origin]),
+		)
+	) {
+		return { ok: false };
+	}
+	let raw: unknown;
+	try {
+		raw = await input.documentRead.readDocument({
+			browser_ws_endpoint: input.handoff.endpoint.ws,
+			browser_pid:
+				input.handoff.proof.profile_posture.effective.observer.browser_pid,
+			target_id: input.expectedProof.target_id,
+			document_id: input.expectedProof.document_id,
+			top_level_origin:
+				input.expectedProof.top_level_origin,
+			frame_origin: input.expectedProof.frame_origin,
+			target_proof_digest:
+				input.expectedProof.target_proof_digest,
+			script: input.step.script,
+			script_sha256: input.step.script_sha256,
+			reset_navigation_history:
+				input.resetNavigationHistory === true,
+		});
+	} catch {
+		return { ok: false };
+	}
+	if (
+		typeof raw !== "object" ||
+		raw === null ||
+		Array.isArray(raw)
+	) {
+		return { ok: false };
+	}
+	const envelope = raw as Record<string, unknown>;
+	if (
+		!exactObjectKeys(envelope, [
+			"schema_version",
+			"ok",
+			"proof",
+			"result",
+			"navigation_history_sealed",
+		]) ||
+		envelope.schema_version !== 1 ||
+		envelope.ok !== true ||
+		typeof envelope.navigation_history_sealed !== "boolean" ||
+		envelope.navigation_history_sealed !==
+			(input.resetNavigationHistory === true)
+	) {
+		return { ok: false };
+	}
+	const proof = parseNativeTargetProof({
+		schema_version: 1,
+		ok: true,
+		proof: envelope.proof,
+	});
+	if (
+		proof === undefined ||
+		"rejection" in proof ||
+		!exactNativeTargetProof(
+			input.expectedProof,
+			proof,
+		)
+	) {
+		return { ok: false };
+	}
+	return {
+		ok: true,
+		proof,
+		data: envelope.result,
+		navigationHistorySealed:
+			envelope.navigation_history_sealed,
+	};
+}
+
+/**
  * Produce one Session Identity Proof observation around a reviewed read action.
  *
  * Native U7 proof runs before and after the reviewed identity read. The action
@@ -729,6 +872,8 @@ export async function observeAgentBrowserSessionIdentity(input: {
 	run_id: string;
 	target_id: string;
 	verifier: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>;
+	documentRead?: BrowserUseNativeDocumentReadPort;
+	expectedDocumentProof?: BrowserUseNativeTargetProofV1;
 	freshness_ms: number;
 	now: () => number;
 }): Promise<AgentBrowserSessionIdentityObservationResult> {
@@ -758,70 +903,110 @@ export async function observeAgentBrowserSessionIdentity(input: {
 			input.handoff.proof.profile_posture.effective.observer.browser_pid,
 		target_id: input.target_id,
 	};
-	const targetBefore = await observeNativeTarget(
-		input.targetProof,
-		proofRequest,
-	);
-	if (targetBefore === "transport-unavailable") {
-		return { ok: false, cause: "target-proof-unavailable" };
-	}
 	if (
-		typeof targetBefore === "object" &&
-		"rejection" in targetBefore
-	) {
-		return {
-			ok: false,
-			cause:
-				targetBefore.rejection === "target-unproven"
-					? "target-proof-invalid"
-					: "target-proof-unavailable",
-		};
-	}
-	if (
-		targetBefore === undefined ||
-		targetBefore.target_id !== input.target_id ||
-		targetBefore.top_level_origin !== verifier.allowed_origin
+		(input.documentRead === undefined) !==
+		(input.expectedDocumentProof === undefined)
 	) {
 		return { ok: false, cause: "target-proof-invalid" };
 	}
-	const execution = await executeAgentBrowserTask(input.runtime, {
-		handoff: input.handoff,
-		run_id: input.run_id,
-		target_tab_id: input.target_id,
-		allowed_origins: [verifier.allowed_origin],
-		steps: [{ kind: "snapshot", interactive: false }, verifier],
-	});
-	const targetAfter = await observeNativeTarget(input.targetProof, proofRequest);
-	if (targetAfter === "transport-unavailable") {
-		return { ok: false, cause: "target-proof-unavailable" };
-	}
+	let targetAfter: BrowserUseNativeTargetProofV1;
+	let readData: unknown;
 	if (
-		typeof targetAfter === "object" &&
-		"rejection" in targetAfter
+		input.documentRead !== undefined &&
+		input.expectedDocumentProof !== undefined
 	) {
-		return { ok: false, cause: "target-navigation-raced" };
+		if (
+			input.expectedDocumentProof.target_id !==
+				input.target_id ||
+			input.expectedDocumentProof.top_level_origin !==
+				verifier.allowed_origin
+		) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const nativeRead = await readAgentBrowserDocument({
+			documentRead: input.documentRead,
+			handoff: input.handoff,
+			expectedProof: input.expectedDocumentProof,
+			step: verifier,
+			resetNavigationHistory: true,
+		});
+		if (!nativeRead.ok) {
+			return {
+				ok: false,
+				cause: "verifier-execution-refused",
+			};
+		}
+		targetAfter = nativeRead.proof;
+		readData = nativeRead.data;
+	} else {
+		const targetBefore = await observeNativeTarget(
+			input.targetProof,
+			proofRequest,
+		);
+		if (targetBefore === "transport-unavailable") {
+			return { ok: false, cause: "target-proof-unavailable" };
+		}
+		if (
+			typeof targetBefore === "object" &&
+			"rejection" in targetBefore
+		) {
+			return {
+				ok: false,
+				cause:
+					targetBefore.rejection === "target-unproven"
+						? "target-proof-invalid"
+						: "target-proof-unavailable",
+			};
+		}
+		if (
+			targetBefore === undefined ||
+			targetBefore.target_id !== input.target_id ||
+			targetBefore.top_level_origin !== verifier.allowed_origin
+		) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const execution = await executeAgentBrowserTask(input.runtime, {
+			handoff: input.handoff,
+			run_id: input.run_id,
+			target_tab_id: input.target_id,
+			allowed_origins: [verifier.allowed_origin],
+			steps: [{ kind: "snapshot", interactive: false }, verifier],
+		});
+		const observedAfter = await observeNativeTarget(
+			input.targetProof,
+			proofRequest,
+		);
+		if (observedAfter === "transport-unavailable") {
+			return { ok: false, cause: "target-proof-unavailable" };
+		}
+		if (
+			typeof observedAfter === "object" &&
+			"rejection" in observedAfter
+		) {
+			return { ok: false, cause: "target-navigation-raced" };
+		}
+		if (observedAfter === undefined) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		if (!exactNativeTargetProof(targetBefore, observedAfter)) {
+			return { ok: false, cause: "target-navigation-raced" };
+		}
+		if (
+			!execution.ok ||
+			execution.outcome !== "confirmed" ||
+			execution.executed_steps !== 2 ||
+			execution.mutation_dispatched ||
+			execution.target_tab_id !== targetBefore.target_id ||
+			execution.read_results?.length !== 1 ||
+			execution.read_results[0]?.action_id !== verifier.action_id ||
+			execution.read_results[0]?.item_key !== undefined
+		) {
+			return { ok: false, cause: "verifier-execution-refused" };
+		}
+		targetAfter = observedAfter;
+		readData = execution.read_results[0].data;
 	}
-	if (targetAfter === undefined) {
-		return { ok: false, cause: "target-proof-invalid" };
-	}
-	if (!exactNativeTargetProof(targetBefore, targetAfter)) {
-		return { ok: false, cause: "target-navigation-raced" };
-	}
-	if (
-		!execution.ok ||
-		execution.outcome !== "confirmed" ||
-		execution.executed_steps !== 2 ||
-		execution.mutation_dispatched ||
-		execution.target_tab_id !== targetBefore.target_id ||
-		execution.read_results?.length !== 1 ||
-		execution.read_results[0]?.action_id !== verifier.action_id ||
-		execution.read_results[0]?.item_key !== undefined
-	) {
-		return { ok: false, cause: "verifier-execution-refused" };
-	}
-	const references = exactIdentityReferences(
-		execution.read_results[0].data,
-	);
+	const references = exactIdentityReferences(readData);
 	if (references === undefined) {
 		return { ok: false, cause: "identity-observation-invalid" };
 	}
@@ -865,6 +1050,15 @@ export async function observeAgentBrowserSessionIdentity(input: {
 			observed_at_epoch_ms: observedAt,
 			fresh_until_epoch_ms: freshUntil,
 		},
+		...(input.documentRead === undefined
+			? {}
+			: {
+					capture_release: {
+						target_proof_digest:
+							targetAfter.target_proof_digest,
+						navigation_history_sealed: true as const,
+					},
+				}),
 	};
 }
 

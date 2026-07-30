@@ -1,10 +1,12 @@
 import {
 	type AgentBrowserExecutionRuntime,
 	type AgentBrowserVerifiedHandoff,
+	type BrowserUseNativeDocumentReadPort,
 	type BrowserUseNativeTargetProofPort,
 	type BrowserUseNativeTargetProofV1,
 	executeAgentBrowserTask,
 	proveAgentBrowserTarget,
+	readAgentBrowserDocument,
 } from "./browser-use-agent-browser";
 import type { BrowserUseGenerationReviewedActionRef } from "./browser-use-generation-schemas";
 import {
@@ -90,6 +92,7 @@ function targetProofsEqual(
 		left.target_id === right.target_id &&
 		left.page_id === right.page_id &&
 		left.frame_id === right.frame_id &&
+		left.document_id === right.document_id &&
 		left.top_level_origin === right.top_level_origin &&
 		left.frame_origin === right.frame_origin &&
 		left.target_proof_digest === right.target_proof_digest
@@ -111,15 +114,34 @@ export async function identifyRunbookAuthState(input: {
 	handoff: AgentBrowserVerifiedHandoff;
 	runId: string;
 	targetId: string;
+	expectedTargetProofDigest?: string;
+	documentRead?: BrowserUseNativeDocumentReadPort;
+	expectedDocumentProof?: BrowserUseNativeTargetProofV1;
 }): Promise<BrowserUseReviewedAuthState> {
-	const before = await proveAgentBrowserTarget({
-		targetProof: input.targetProof,
-		handoff: input.handoff,
-		target_id: input.targetId,
-	});
+	if (
+		(input.documentRead === undefined) !==
+		(input.expectedDocumentProof === undefined)
+	) {
+		return { status: "unproven" };
+	}
+	const before =
+		input.expectedDocumentProof === undefined
+			? await proveAgentBrowserTarget({
+					targetProof: input.targetProof,
+					handoff: input.handoff,
+					target_id: input.targetId,
+				})
+			: {
+					ok: true as const,
+					proof: input.expectedDocumentProof,
+				};
 	if (
 		!before.ok ||
+		before.proof.target_id !== input.targetId ||
 		before.proof.top_level_origin !== before.proof.frame_origin ||
+		(input.expectedTargetProofDigest !== undefined &&
+			before.proof.target_proof_digest !==
+				input.expectedTargetProofDigest) ||
 		!input.approvedOrigins.includes(before.proof.top_level_origin)
 	) {
 		return { status: "unproven" };
@@ -138,6 +160,27 @@ export async function identifyRunbookAuthState(input: {
 		resolved.resolved.result_sensitivity !== "low"
 	) {
 		return { status: "unproven" };
+	}
+	if (
+		input.documentRead !== undefined &&
+		input.expectedDocumentProof !== undefined
+	) {
+		const execution = await readAgentBrowserDocument({
+			documentRead: input.documentRead,
+			handoff: input.handoff,
+			expectedProof: input.expectedDocumentProof,
+			step: resolved.resolved.step,
+		});
+		if (
+			!execution.ok ||
+			!actionValueMatchesSchema(
+				execution.data,
+				resolved.resolved.result_schema,
+			)
+		) {
+			return { status: "unproven" };
+		}
+		return parseReviewedAuthState(execution.data);
 	}
 	const execution = await executeAgentBrowserTask(
 		{ runCommand: input.runCommand },

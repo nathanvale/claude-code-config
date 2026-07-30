@@ -205,6 +205,67 @@ describe("production confidential-delivery quarantine", () => {
 		).toEqual({ ok: true });
 	});
 
+	test("reopens capture only after an exact native navigation-history seal", async () => {
+		let commands = 0;
+		const controller = createBrowserUseConfidentialDeliveryQuarantine({
+			runCommand: async () => {
+				commands += 1;
+				return { exitCode: 0, stdout: "{}", stderr: "" };
+			},
+			approved_rebind_origins: ["https://service.example.com"],
+		});
+		expect(await controller.quarantine.pause({ target: TARGET })).toEqual({
+			ok: true,
+		});
+		expect(
+			await controller.quarantine.cleanup({
+				target: TARGET,
+				write_state: "delivered",
+			}),
+		).toEqual({ ok: true });
+		const serviceTarget = {
+			...TARGET,
+			top_level_origin: "https://service.example.com",
+			frame_origin: "https://service.example.com",
+			frame_id: "frame-service",
+			target_proof_digest: "c".repeat(64),
+		};
+		expect(
+			controller.rebind({
+				previous_target: TARGET,
+				next_target: serviceTarget,
+			}),
+		).toEqual({ ok: true });
+		expect(
+			controller.releaseAfterNavigationHistorySeal({
+				target: serviceTarget,
+				target_proof_digest: TARGET.target_proof_digest,
+				navigation_history_sealed: true,
+			}),
+		).toEqual({ ok: false });
+		await expect(
+			controller.runCommand({
+				command: "/usr/bin/agent-browser",
+				args: ["snapshot"],
+				timeoutMs: 1_000,
+			}),
+		).rejects.toThrow("capture is quarantined");
+		expect(
+			controller.releaseAfterNavigationHistorySeal({
+				target: serviceTarget,
+				target_proof_digest:
+					serviceTarget.target_proof_digest,
+				navigation_history_sealed: true,
+			}),
+		).toEqual({ ok: true });
+		await controller.runCommand({
+			command: "/usr/bin/agent-browser",
+			args: ["snapshot"],
+			timeoutMs: 1_000,
+		});
+		expect(commands).toBe(1);
+	});
+
 	test("an unknown write remains quarantined and cannot start another delivery", async () => {
 		let commands = 0;
 		const controller = createBrowserUseConfidentialDeliveryQuarantine({

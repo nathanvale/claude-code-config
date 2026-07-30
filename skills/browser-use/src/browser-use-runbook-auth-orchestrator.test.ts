@@ -9,6 +9,8 @@ import {
 	type BrowserUseRunbookAuthOrchestratorPorts,
 	inspectRunbookAuthenticatedSession,
 	orchestrateRunbookAuthentication,
+	releaseRunbookCaptureAfterAuthenticatedSession,
+	runbookAuthCheckpointReason,
 	runbookPreEffectClaimRecoveryFailure,
 } from "./browser-use-runbook-command";
 import {
@@ -17,6 +19,8 @@ import {
 	actionAssetDigest,
 } from "./browser-use-runbook-actions";
 import { LIVE_CLEAN_PROFILE_POSTURE_FIXTURE } from "./browser-connect-handoff-fixtures";
+import { createBrowserUseConfidentialDeliveryQuarantine } from "./browser-use-confidential-delivery-quarantine";
+import type { BrowserUseVerifiedTarget } from "./browser-use-confidential-field-delivery";
 
 const DIGEST = "a".repeat(64);
 
@@ -103,6 +107,34 @@ function ports(
 }
 
 describe("runbook auth orchestrator U8", () => {
+	test("durable checkpoints retain their actor-facing continuation reason", () => {
+		expect(
+			runbookAuthCheckpointReason(
+				"human-presence-required",
+			),
+		).toBe("user-presence-required");
+		expect(
+			runbookAuthCheckpointReason(
+				"delivery-outcome-unknown",
+			),
+		).toBe("delivery-outcome-unknown");
+		expect(
+			runbookAuthCheckpointReason(
+				"submission-outcome-unknown",
+			),
+		).toBe("submission-outcome-unknown");
+		expect(
+			runbookAuthCheckpointReason(
+				"session-identity-unproven",
+			),
+		).toBe("session-identity-unproven");
+		expect(
+			runbookAuthCheckpointReason(
+				"before-password-submit",
+			),
+		).toBe("login-required");
+	});
+
 	test("claims a resumed continuation immediately before session inspection", async () => {
 		const events: Event[] = [];
 		const result = await orchestrateRunbookAuthentication({
@@ -182,13 +214,192 @@ describe("runbook auth orchestrator U8", () => {
 			"prepare-binding",
 			"persist:before-username-delivery",
 			"deliver:username",
-			"persist:before-username-submit",
-			"submit:submit-username",
 			"persist:before-password-delivery",
 			"deliver:password",
 			"persist:before-password-submit",
 			"submit:submit-password",
 			"inspect:https://service.test",
+		]);
+	});
+
+	test("username-first login reclassifies before delivering password", async () => {
+		const events: Event[] = [];
+		let inspections = 0;
+		let identifications = 0;
+		const result = await orchestrateRunbookAuthentication({
+			policy: POLICY,
+			resumeContinuation: false,
+			ports: ports(events, {
+				inspectSession: async () => {
+					events.push("inspect");
+					inspections += 1;
+					return inspections < 3
+						? {
+								status: "login-required",
+								observed_origin: "https://idp.test",
+							}
+						: { status: "authenticated" };
+				},
+				identifyAuthState: async () => {
+					identifications += 1;
+					const field =
+						identifications === 1 ? "username" : "password";
+					events.push(`identify:${field}`);
+					return {
+						status: "fields-required",
+						fields: [field],
+					};
+				},
+			}),
+		});
+
+		expect(result).toEqual({ ok: true, status: "authenticated" });
+		expect(events).toEqual([
+			"inspect",
+			"identify:username",
+			"prepare-binding",
+			"persist:before-username-delivery",
+			"deliver:username",
+			"persist:before-username-submit",
+			"submit:submit-username",
+			"inspect",
+			"identify:password",
+			"persist:before-password-delivery",
+			"deliver:password",
+			"persist:before-password-submit",
+			"submit:submit-password",
+			"inspect",
+		]);
+	});
+
+	test("password submit can reclassify once into OTP and never redeliver password", async () => {
+		const events: Event[] = [];
+		let inspections = 0;
+		let identifications = 0;
+		const result = await orchestrateRunbookAuthentication({
+			policy: POLICY,
+			resumeContinuation: false,
+			ports: ports(events, {
+				inspectSession: async () => {
+					inspections += 1;
+					return inspections < 3
+						? {
+								status: "login-required",
+								observed_origin: "https://idp.test",
+							}
+						: { status: "authenticated" };
+				},
+				identifyAuthState: async () => {
+					identifications += 1;
+					return {
+						status: "fields-required",
+						fields: [
+							identifications === 1
+								? "password"
+								: "otp",
+						],
+					};
+				},
+			}),
+		});
+
+		expect(result).toEqual({ ok: true, status: "authenticated" });
+		expect(events).toEqual([
+			"prepare-binding",
+			"persist:before-password-delivery",
+			"deliver:password",
+			"persist:before-password-submit",
+			"submit:submit-password",
+			"persist:before-otp-delivery",
+			"deliver:otp",
+			"persist:before-otp-submit",
+			"submit:submit-otp",
+		]);
+	});
+
+	test("post-password human challenges persist without redelivery", async () => {
+		for (const challenge of ["mfa", "captcha", "passkey"] as const) {
+			const events: Event[] = [];
+			let inspections = 0;
+			let identifications = 0;
+			const result = await orchestrateRunbookAuthentication({
+				policy: POLICY,
+				resumeContinuation: false,
+				ports: ports(events, {
+					inspectSession: async () => {
+						inspections += 1;
+						return {
+							status: "login-required",
+							observed_origin: "https://idp.test",
+						};
+					},
+					identifyAuthState: async () => {
+						identifications += 1;
+						return identifications === 1
+							? {
+									status: "fields-required",
+									fields: ["password"],
+								}
+							: {
+									status: "human-presence-required",
+									challenge,
+								};
+					},
+				}),
+			});
+
+			expect(result).toEqual({
+				ok: false,
+				code: "auth-human-presence-required",
+				safe_to_retry: false,
+			});
+			expect(inspections).toBe(2);
+			expect(events).toEqual([
+				"prepare-binding",
+				"persist:before-password-delivery",
+				"deliver:password",
+				"persist:before-password-submit",
+				"submit:submit-password",
+				"persist:human-presence-required",
+			]);
+		}
+	});
+
+	test("an unproven post-submit session persists no-repeat truth", async () => {
+		const events: Event[] = [];
+		let inspections = 0;
+		const result = await orchestrateRunbookAuthentication({
+			policy: POLICY,
+			resumeContinuation: false,
+			ports: ports(events, {
+				inspectSession: async () => {
+					inspections += 1;
+					return inspections === 1
+						? {
+								status: "login-required",
+								observed_origin: "https://idp.test",
+							}
+						: { status: "unproven" };
+				},
+				identifyAuthState: async () => ({
+					status: "fields-required",
+					fields: ["password"],
+				}),
+			}),
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			code: "auth-submission-outcome-unknown",
+			safe_to_retry: false,
+		});
+		expect(events).toEqual([
+			"prepare-binding",
+			"persist:before-password-delivery",
+			"deliver:password",
+			"persist:before-password-submit",
+			"submit:submit-password",
+			"persist:submission-outcome-unknown",
 		]);
 	});
 
@@ -295,7 +506,7 @@ describe("runbook auth orchestrator U8", () => {
 		expect(events).toEqual([]);
 	});
 
-	test("a resumed unknown field or submit outcome inspects session but never repeats the effect", async () => {
+	test("a resumed sensitive checkpoint performs no browser or secret effect", async () => {
 		for (const [checkpoint, expectedCode] of [
 			[
 				"delivery-outcome-unknown",
@@ -329,6 +540,14 @@ describe("runbook auth orchestrator U8", () => {
 				"before-otp-submit",
 				"auth-submission-outcome-unknown",
 			],
+			[
+				"human-presence-required",
+				"auth-human-presence-required",
+			],
+			[
+				"session-identity-unproven",
+				"auth-session-identity-unproven",
+			],
 		] as const) {
 			const events: Event[] = [];
 			const result = await orchestrateRunbookAuthentication({
@@ -351,7 +570,7 @@ describe("runbook auth orchestrator U8", () => {
 				code: expectedCode,
 				safe_to_retry: false,
 			});
-			expect(events).toEqual(["inspect"]);
+			expect(events).toEqual([]);
 		}
 	});
 
@@ -477,6 +696,92 @@ describe("pre-effect claim recovery handoff failure", () => {
 });
 
 describe("runbook command session proof adapter", () => {
+	test("releases the first real runbook command only with the native history seal", async () => {
+		const target: BrowserUseVerifiedTarget = {
+			lane_id: "agent-browser",
+			run_id: "run-history-seal",
+			top_level_origin: "https://service.test",
+			frame_origin: "https://service.test",
+			target_id: "t1",
+			page_id: "t1",
+			frame_id: "frame-service",
+			account_ref: "account-primary",
+			target_proof_digest: "d".repeat(64),
+		};
+		let commands = 0;
+		const quarantine =
+			createBrowserUseConfidentialDeliveryQuarantine({
+				runCommand: async () => {
+					commands += 1;
+					return { exitCode: 0, stdout: "{}", stderr: "" };
+				},
+			});
+		expect(await quarantine.quarantine.pause({ target })).toEqual({
+			ok: true,
+		});
+		expect(
+			await quarantine.quarantine.cleanup({
+				target,
+				write_state: "delivered",
+			}),
+		).toEqual({ ok: true });
+		expect(
+			releaseRunbookCaptureAfterAuthenticatedSession({
+				confidentialDocumentDelivered: true,
+				session: {},
+				target,
+				currentDocumentId: "service-document",
+				deliveredDocumentIds: new Set(["login-document"]),
+				quarantine,
+			}),
+		).toBe(false);
+		await expect(
+			quarantine.runCommand({
+				command: "/usr/bin/agent-browser",
+				args: ["snapshot"],
+				timeoutMs: 1_000,
+			}),
+		).rejects.toThrow("capture is quarantined");
+		expect(
+			releaseRunbookCaptureAfterAuthenticatedSession({
+				confidentialDocumentDelivered: true,
+				session: {
+					capture_release: {
+						target_proof_digest:
+							target.target_proof_digest,
+						navigation_history_sealed: true,
+					},
+				},
+				target,
+				currentDocumentId: "login-document",
+				deliveredDocumentIds: new Set(["login-document"]),
+				quarantine,
+			}),
+		).toBe(false);
+		expect(
+			releaseRunbookCaptureAfterAuthenticatedSession({
+				confidentialDocumentDelivered: true,
+				session: {
+					capture_release: {
+						target_proof_digest:
+							target.target_proof_digest,
+						navigation_history_sealed: true,
+					},
+				},
+				target,
+				currentDocumentId: "service-document",
+				deliveredDocumentIds: new Set(["login-document"]),
+				quarantine,
+			}),
+		).toBe(true);
+		await quarantine.runCommand({
+			command: "/usr/bin/agent-browser",
+			args: ["snapshot"],
+			timeoutMs: 1_000,
+		});
+		expect(commands).toBe(1);
+	});
+
 	test("resolves the reviewed verifier and proves the exact warm-browser identity", async () => {
 		const assetBytes =
 			"async ({ inputs }) => JSON.parse(document.querySelector('#session-identity').textContent)";
@@ -562,6 +867,7 @@ describe("runbook command session proof adapter", () => {
 			target_id: "t1",
 			page_id: "t1",
 			frame_id: "frame-1",
+			document_id: "document-1",
 			top_level_origin: "https://service.test",
 			frame_origin: "https://service.test",
 		};

@@ -1,4 +1,5 @@
 import Darwin
+import CoreFoundation
 import CryptoKit
 import Foundation
 
@@ -88,6 +89,34 @@ private struct ConfidentialTargetProofRequest: Codable, Equatable, Sendable {
     }
 }
 
+private struct ConfidentialReviewedReadRequest: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let browserWebSocketEndpoint: String
+    let browserPID: Int32
+    let targetID: String
+    let documentID: String
+    let topLevelOrigin: String
+    let frameOrigin: String
+    let targetProofDigest: String
+    let resetNavigationHistory: Bool
+    let script: String
+    let scriptSHA256: String
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case browserWebSocketEndpoint = "browser_ws_endpoint"
+        case browserPID = "browser_pid"
+        case targetID = "target_id"
+        case documentID = "document_id"
+        case topLevelOrigin = "top_level_origin"
+        case frameOrigin = "frame_origin"
+        case targetProofDigest = "target_proof_digest"
+        case resetNavigationHistory = "reset_navigation_history"
+        case script
+        case scriptSHA256 = "script_sha256"
+    }
+}
+
 private enum ConfidentialDeliveryCause: String {
     case invalidRequest = "invalid-request"
     case targetUnproven = "target-unproven"
@@ -103,6 +132,16 @@ private enum ConfidentialTargetProofCause: String {
     case invalidRequest = "invalid-request"
     case browserChannelUnavailable = "browser-channel-unavailable"
     case targetUnproven = "target-unproven"
+}
+
+private enum ConfidentialReviewedReadCause: String {
+    case invalidRequest = "invalid-request"
+    case browserChannelUnavailable = "browser-channel-unavailable"
+    case targetUnproven = "target-unproven"
+    case isolatedWorldUnavailable = "isolated-world-unavailable"
+    case evaluationFailed = "evaluation-failed"
+    case resultInvalid = "result-invalid"
+    case navigationHistoryUnsealed = "navigation-history-unsealed"
 }
 
 private func confidentialMonotonicMilliseconds() -> Int64 {
@@ -395,6 +434,63 @@ private func decodeTargetProofRequest(
     return request
 }
 
+private func decodeReviewedReadRequest(
+    _ data: Data
+) -> ConfidentialReviewedReadRequest? {
+    guard data.count <= 131_072,
+          let raw = try? JSONSerialization.jsonObject(with: data)
+            as? [String: Any],
+          exactKeys(
+            raw,
+            [
+                "schema_version",
+                "browser_ws_endpoint",
+                "browser_pid",
+                "target_id",
+                "document_id",
+                "top_level_origin",
+                "frame_origin",
+                "target_proof_digest",
+                "reset_navigation_history",
+                "script",
+                "script_sha256",
+            ]
+          ),
+          let request = try? JSONDecoder().decode(
+            ConfidentialReviewedReadRequest.self,
+            from: data
+          ),
+          request.schemaVersion == 1,
+          request.browserPID > 0,
+          validLoopbackBrowserWebSocket(
+            request.browserWebSocketEndpoint
+          ) != nil,
+          boundedCoordinate(request.targetID),
+          boundedCoordinate(request.documentID),
+          normalizedOrigin(request.topLevelOrigin)
+            == request.topLevelOrigin,
+          normalizedOrigin(request.frameOrigin) == request.frameOrigin,
+          request.topLevelOrigin == request.frameOrigin,
+          request.targetProofDigest.utf8.count == 64,
+          request.targetProofDigest.utf8.allSatisfy({
+              ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+          }),
+          !request.script.isEmpty,
+          request.script.utf8.count <= 100_000,
+          !request.script.contains("\0"),
+          request.scriptSHA256.utf8.count == 64,
+          request.scriptSHA256.utf8.allSatisfy({
+              ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+          })
+    else {
+        return nil
+    }
+    let digest = SHA256.hash(data: Data(request.script.utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    return digest == request.scriptSHA256 ? request : nil
+}
+
 private func exactChromeExecutable(_ path: String) -> Bool {
     path == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 }
@@ -672,6 +768,16 @@ private func dictionary(_ value: Any?) -> [String: Any]? {
 
 private func stringValue(_ value: Any?) -> String? {
     value as? String
+}
+
+private func exactProtocolInteger(_ value: Any?) -> Int64? {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID(),
+          number.doubleValue == Double(number.int64Value)
+    else {
+        return nil
+    }
+    return number.int64Value
 }
 
 private func connectConfidentialLoopback(
@@ -1342,12 +1448,70 @@ private func envelope(
     )
 }
 
-private func targetProofEnvelope(
+private struct ConfidentialObservedTarget {
+    let targetID: String
+    let frameID: String
+    let documentID: String
+    let topLevelOrigin: String
+    let frameOrigin: String
+}
+
+private func observeConfidentialTarget(
+    channel: any ConfidentialBrowserRequestChannel,
+    targetID expectedTargetID: String
+) -> ConfidentialObservedTarget? {
+    guard let targetResult = channel.request(
+        method: "Target.getTargetInfo",
+        parameters: ["targetId": expectedTargetID]
+    ),
+        let targetInfo = dictionary(targetResult["targetInfo"]),
+        let targetID = stringValue(targetInfo["targetId"]),
+        targetID == expectedTargetID,
+        stringValue(targetInfo["type"]) == "page",
+        let targetURL = stringValue(targetInfo["url"]),
+        let topLevelOrigin = normalizedOrigin(targetURL),
+        let frameResult = channel.request(
+            method: "Page.getFrameTree",
+            parameters: [:]
+        ),
+        let frameTree = dictionary(frameResult["frameTree"]),
+        let frame = dictionary(frameTree["frame"]),
+        let frameID = stringValue(frame["id"]),
+        boundedCoordinate(frameID),
+        let documentID = stringValue(frame["loaderId"]),
+        boundedCoordinate(documentID),
+        let frameURL = stringValue(frame["url"]),
+        let frameOrigin = normalizedOrigin(frameURL)
+    else {
+        return nil
+    }
+    return ConfidentialObservedTarget(
+        targetID: targetID,
+        frameID: frameID,
+        documentID: documentID,
+        topLevelOrigin: topLevelOrigin,
+        frameOrigin: frameOrigin
+    )
+}
+
+private func exactObservedTarget(
+    _ left: ConfidentialObservedTarget,
+    _ right: ConfidentialObservedTarget
+) -> Bool {
+    left.targetID == right.targetID
+        && left.frameID == right.frameID
+        && left.documentID == right.documentID
+        && left.topLevelOrigin == right.topLevelOrigin
+        && left.frameOrigin == right.frameOrigin
+}
+
+private func targetProofValue(
     targetID: String,
     frameID: String,
+    documentID: String,
     topLevelOrigin: String,
     frameOrigin: String
-) -> Data {
+) -> [String: Any]? {
     // CDP represents a page as a Target of type `page`; there is no separate
     // page identifier on this boundary. `page_id` is therefore the proven page
     // Target ID, while `frame_id` is the root frame derived from
@@ -1359,29 +1523,50 @@ private func targetProofEnvelope(
         targetID,
         pageID,
         frameID,
+        documentID,
         topLevelOrigin,
         frameOrigin,
     ]
     guard let canonicalData = try? JSONSerialization.data(
         withJSONObject: canonical
     ) else {
-        return targetProofRejection(.targetUnproven)
+        return nil
     }
     let digest = SHA256.hash(data: canonicalData)
         .map { String(format: "%02x", $0) }
         .joined()
+    return [
+        "lane_id": "agent-browser",
+        "target_id": targetID,
+        "page_id": pageID,
+        "frame_id": frameID,
+        "document_id": documentID,
+        "top_level_origin": topLevelOrigin,
+        "frame_origin": frameOrigin,
+        "target_proof_digest": digest,
+    ]
+}
+
+private func targetProofEnvelope(
+    targetID: String,
+    frameID: String,
+    documentID: String,
+    topLevelOrigin: String,
+    frameOrigin: String
+) -> Data {
+    guard let proof = targetProofValue(
+        targetID: targetID,
+        frameID: frameID,
+        documentID: documentID,
+        topLevelOrigin: topLevelOrigin,
+        frameOrigin: frameOrigin
+    ) else {
+        return targetProofRejection(.targetUnproven)
+    }
     let value: [String: Any] = [
         "schema_version": 1,
         "ok": true,
-        "proof": [
-            "lane_id": "agent-browser",
-            "target_id": targetID,
-            "page_id": pageID,
-            "frame_id": frameID,
-            "top_level_origin": topLevelOrigin,
-            "frame_origin": frameOrigin,
-            "target_proof_digest": digest,
-        ],
+        "proof": proof,
     ]
     return (try? JSONSerialization.data(
         withJSONObject: value,
@@ -1407,6 +1592,80 @@ private func targetProofRejection(
         "{\"ok\":false,\"rejection\":{\"code\":\"invalid-request\",\"message\":\"target proof blocked; inspect the typed code.\"},\"schema_version\":1}"
             .utf8
     )
+}
+
+private func reviewedReadRejection(
+    _ cause: ConfidentialReviewedReadCause
+) -> Data {
+    let value: [String: Any] = [
+        "schema_version": 1,
+        "ok": false,
+        "rejection": [
+            "code": cause.rawValue,
+            "message": "reviewed read blocked; inspect the typed code.",
+        ],
+    ]
+    return (try? JSONSerialization.data(
+        withJSONObject: value,
+        options: [.sortedKeys]
+    )) ?? Data(
+        "{\"ok\":false,\"rejection\":{\"code\":\"invalid-request\",\"message\":\"reviewed read blocked; inspect the typed code.\"},\"schema_version\":1}"
+            .utf8
+    )
+}
+
+private func reviewedReadExpression(
+    request: ConfidentialReviewedReadRequest
+) -> String {
+    """
+    (async function reviewed_read_\(request.scriptSHA256)() {
+      try {
+        const action = (\(request.script));
+        if (typeof action !== "function") throw "invalid";
+        return await action({ inputs: Object.freeze({}) });
+      } catch (_) {
+        throw "reviewed-read-failed";
+      }
+    })()
+    """
+}
+
+private func reviewedReadSuccess(
+    target: ConfidentialObservedTarget,
+    result: Any,
+    navigationHistorySealed: Bool
+) -> Data? {
+    guard reviewedReadResultIsValid(result),
+        let proof = targetProofValue(
+            targetID: target.targetID,
+            frameID: target.frameID,
+            documentID: target.documentID,
+            topLevelOrigin: target.topLevelOrigin,
+            frameOrigin: target.frameOrigin
+        )
+    else {
+        return nil
+    }
+    return try? JSONSerialization.data(
+        withJSONObject: [
+            "schema_version": 1,
+            "ok": true,
+            "proof": proof,
+            "result": result,
+            "navigation_history_sealed": navigationHistorySealed,
+        ],
+        options: [.sortedKeys]
+    )
+}
+
+private func reviewedReadResultIsValid(_ result: Any) -> Bool {
+    guard let resultData = try? JSONSerialization.data(
+        withJSONObject: result,
+        options: [.fragmentsAllowed, .sortedKeys]
+    ) else {
+        return false
+    }
+    return resultData.count <= 32_768
 }
 
 public enum ConfidentialFieldDeliveryProcess {
@@ -1479,6 +1738,180 @@ public enum ConfidentialFieldDeliveryProcess {
         )
     }
 
+    public static func readReviewed(
+        requestData: Data,
+        timeoutMilliseconds: Int32 = 5_000
+    ) -> Data {
+        readReviewed(
+            requestData: requestData,
+            timeoutMilliseconds: timeoutMilliseconds,
+            requireChromeExecutable: true
+        )
+    }
+
+    @_spi(Testing)
+    public static func readReviewedForTesting(
+        requestData: Data,
+        timeoutMilliseconds: Int32 = 5_000
+    ) -> Data {
+        readReviewed(
+            requestData: requestData,
+            timeoutMilliseconds: timeoutMilliseconds,
+            requireChromeExecutable: false
+        )
+    }
+
+    private static func readReviewed(
+        requestData: Data,
+        timeoutMilliseconds: Int32,
+        requireChromeExecutable: Bool
+    ) -> Data {
+        let deadline = confidentialMonotonicMilliseconds()
+            + Int64(timeoutMilliseconds)
+        guard timeoutMilliseconds > 0,
+              let request = decodeReviewedReadRequest(requestData),
+              let browserEndpoint = validLoopbackBrowserWebSocket(
+                request.browserWebSocketEndpoint
+              ),
+              browserProcessOwnsConfidentialListener(
+                pid: request.browserPID,
+                endpoint: browserEndpoint,
+                requireChromeExecutable: requireChromeExecutable
+              ),
+              let endpoint = resolveConfidentialPageWebSocket(
+                browserEndpoint: request.browserWebSocketEndpoint,
+                targetID: request.targetID,
+                deadline: deadline
+              )
+        else {
+            return reviewedReadRejection(.invalidRequest)
+        }
+        guard let channel = ConfidentialWebSocketBrowserChannel(
+            endpoint: endpoint,
+            browserPID: request.browserPID,
+            deadline: deadline
+        ) else {
+            return reviewedReadRejection(.browserChannelUnavailable)
+        }
+        guard let initial = observeConfidentialTarget(
+            channel: channel,
+            targetID: request.targetID
+        ),
+            initial.documentID == request.documentID,
+            initial.topLevelOrigin == request.topLevelOrigin,
+            initial.frameOrigin == request.frameOrigin,
+            targetProofValue(
+                targetID: initial.targetID,
+                frameID: initial.frameID,
+                documentID: initial.documentID,
+                topLevelOrigin: initial.topLevelOrigin,
+                frameOrigin: initial.frameOrigin
+            )?["target_proof_digest"] as? String
+                == request.targetProofDigest
+        else {
+            return reviewedReadRejection(.targetUnproven)
+        }
+        guard let isolated = channel.request(
+            method: "Page.createIsolatedWorld",
+            parameters: [
+                "frameId": initial.frameID,
+                "worldName":
+                    "browser-use-reviewed-\(request.scriptSHA256.prefix(16))",
+                "grantUniveralAccess": false,
+            ]
+        ),
+            let contextID = exactProtocolInteger(
+                isolated["executionContextId"]
+            ),
+            contextID > 0,
+            contextID <= Int64(Int32.max)
+        else {
+            return reviewedReadRejection(.isolatedWorldUnavailable)
+        }
+        guard let beforeEvaluation = observeConfidentialTarget(
+            channel: channel,
+            targetID: request.targetID
+        ),
+            exactObservedTarget(initial, beforeEvaluation)
+        else {
+            return reviewedReadRejection(.targetUnproven)
+        }
+        let evaluation = channel.request(
+            method: "Runtime.evaluate",
+            parameters: [
+                "expression": reviewedReadExpression(request: request),
+                "contextId": contextID,
+                "awaitPromise": true,
+                "returnByValue": true,
+                "userGesture": false,
+                "includeCommandLineAPI": false,
+                "allowUnsafeEvalBlockedByCSP": false,
+            ]
+        )
+        guard let final = observeConfidentialTarget(
+            channel: channel,
+            targetID: request.targetID
+        ),
+            exactObservedTarget(initial, final)
+        else {
+            return reviewedReadRejection(.targetUnproven)
+        }
+        guard let evaluation, evaluation["exceptionDetails"] == nil else {
+            return reviewedReadRejection(.evaluationFailed)
+        }
+        guard let remote = dictionary(evaluation["result"]),
+              let remoteType = remote["type"] as? String,
+              ["object", "string", "number", "boolean"].contains(remoteType),
+              remote.keys.contains("value"),
+              let result = remote["value"],
+              reviewedReadResultIsValid(result)
+        else {
+            return reviewedReadRejection(.resultInvalid)
+        }
+        guard request.resetNavigationHistory else {
+            return reviewedReadSuccess(
+                target: final,
+                result: result,
+                navigationHistorySealed: false
+            )
+                ?? reviewedReadRejection(.resultInvalid)
+        }
+        guard channel.request(
+            method: "Page.resetNavigationHistory",
+            parameters: [:]
+        ) != nil,
+            let history = channel.request(
+                method: "Page.getNavigationHistory",
+                parameters: [:]
+            ),
+            let currentIndex = exactProtocolInteger(
+                history["currentIndex"]
+            ),
+            currentIndex == 0,
+            let entries = history["entries"] as? [Any],
+            entries.count == 1,
+            let entry = dictionary(entries[0]),
+            let currentURL = stringValue(entry["url"]),
+            normalizedOrigin(currentURL) == final.topLevelOrigin
+        else {
+            return reviewedReadRejection(.navigationHistoryUnsealed)
+        }
+        guard let sealedTarget = observeConfidentialTarget(
+            channel: channel,
+            targetID: request.targetID
+        ),
+            exactObservedTarget(final, sealedTarget)
+        else {
+            return reviewedReadRejection(.targetUnproven)
+        }
+        return reviewedReadSuccess(
+            target: sealedTarget,
+            result: result,
+            navigationHistorySealed: true
+        )
+            ?? reviewedReadRejection(.resultInvalid)
+    }
+
     private static func proveTarget(
         requestData: Data,
         timeoutMilliseconds: Int32,
@@ -1529,6 +1962,8 @@ public enum ConfidentialFieldDeliveryProcess {
             let frame = dictionary(frameTree["frame"]),
             let frameID = stringValue(frame["id"]),
             boundedCoordinate(frameID),
+            let documentID = stringValue(frame["loaderId"]),
+            boundedCoordinate(documentID),
             let frameURL = stringValue(frame["url"]),
             let frameOrigin = normalizedOrigin(frameURL)
         else {
@@ -1537,6 +1972,7 @@ public enum ConfidentialFieldDeliveryProcess {
         return targetProofEnvelope(
             targetID: targetID,
             frameID: frameID,
+            documentID: documentID,
             topLevelOrigin: topLevelOrigin,
             frameOrigin: frameOrigin
         )

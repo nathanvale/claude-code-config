@@ -104,6 +104,7 @@ function targetProof(
 		target_id: "t1",
 		page_id: "t1",
 		frame_id: "frame-1",
+		document_id: "document-1",
 		top_level_origin: origin,
 		frame_origin: origin,
 		...overrides,
@@ -208,7 +209,9 @@ async function submit(options: {
 		...(options.proofs ?? [
 			targetProof(),
 			targetProof(),
-			targetProof(),
+			targetProof(IDP_ORIGIN, {
+				document_id: "document-2",
+			}),
 		]),
 	];
 	const record = options.record ?? ACTION_RECORD;
@@ -255,7 +258,14 @@ describe("reviewed login submit adapter", () => {
 	test("persists write-ahead truth immediately before one digest-pinned mutation", async () => {
 		const { result, journal, stdinPayloads, outputs } = await submit();
 
-		expect(result).toEqual({ status: "confirmed" });
+		expect(result).toEqual({
+			status: "confirmed",
+			page_departed: true,
+			document_id: "document-2",
+			target_proof_digest: targetProof(IDP_ORIGIN, {
+				document_id: "document-2",
+			}).target_proof_digest,
+		});
 		expect(journal).toEqual([
 			"tab list --json",
 			"tab t1 --json",
@@ -382,11 +392,32 @@ describe("reviewed login submit adapter", () => {
 			proofs: [
 				targetProof(),
 				targetProof(),
-				targetProof(serviceOrigin),
+				targetProof(serviceOrigin, {
+					document_id: "document-2",
+				}),
 			],
 		});
 
-		expect(result).toEqual({ status: "confirmed" });
+		expect(result).toEqual({
+			status: "confirmed",
+			page_departed: true,
+			document_id: "document-2",
+			target_proof_digest: targetProof(serviceOrigin, {
+				document_id: "document-2",
+			}).target_proof_digest,
+		});
+	});
+
+	test("same-document URL change stays unknown because capture cannot reopen", async () => {
+		const { result } = await submit({
+			proofs: [
+				targetProof(),
+				targetProof(),
+				targetProof(),
+			],
+		});
+
+		expect(result).toEqual({ status: "unknown" });
 	});
 
 	test("an unapproved post-submit redirect is unknown after dispatch", async () => {

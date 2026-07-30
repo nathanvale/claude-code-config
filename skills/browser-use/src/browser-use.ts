@@ -262,6 +262,30 @@ import { renderGuide } from "./browser-use-guide";
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
 
+/** Project runtime auth owners into the live runbook command without drift. */
+export function browserUseRunbookRuntimePorts(
+	runtime: BrowserUseRuntime,
+): BrowserUseRunbookCommandPorts["runtime"] {
+	return {
+		runCommand: runtime.runCommand,
+		...(runtime.authAdmission !== undefined
+			? { authAdmission: runtime.authAdmission }
+			: {}),
+		...(runtime.authTargetProof !== undefined
+			? { authTargetProof: runtime.authTargetProof }
+			: {}),
+		...(runtime.authDocumentRead !== undefined
+			? { authDocumentRead: runtime.authDocumentRead }
+			: {}),
+		...(runtime.authConfidentialDelivery !== undefined
+			? {
+					authConfidentialDelivery:
+						runtime.authConfidentialDelivery,
+				}
+			: {}),
+	};
+}
+
 export async function runBrowserUseCli(
 	argv: readonly string[],
 	options: {
@@ -579,21 +603,7 @@ async function executeCommand(input: {
 		};
 		const runbookPorts: BrowserUseRunbookCommandPorts = {
 			clock: runtime.now,
-			runtime: {
-				runCommand: runtime.runCommand,
-				...(runtime.authAdmission !== undefined
-					? { authAdmission: runtime.authAdmission }
-					: {}),
-				...(runtime.authTargetProof !== undefined
-					? { authTargetProof: runtime.authTargetProof }
-					: {}),
-				...(runtime.authConfidentialDelivery !== undefined
-					? {
-							authConfidentialDelivery:
-								runtime.authConfidentialDelivery,
-						}
-					: {}),
-			},
+			runtime: browserUseRunbookRuntimePorts(runtime),
 			store: {
 				open: (access) => openPlatformStore(runbookInput, access),
 			},

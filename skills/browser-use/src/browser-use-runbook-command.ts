@@ -25,6 +25,7 @@ import {
 	type AgentBrowserTaskStep,
 	type AgentBrowserTargetResolutionResult,
 	type AgentBrowserVerifiedHandoff,
+	type BrowserUseNativeTargetProofV1,
 	agentBrowserHandoffEvidenceIdOf,
 	observeAgentBrowserSessionIdentity,
 	proveAgentBrowserTarget,
@@ -123,6 +124,7 @@ import {
 } from "./browser-use-confidential-field-delivery";
 import { nextRunbookStepAfterExecution } from "./browser-use-runbook-model";
 import { identifyRunbookAuthState } from "./browser-use-runbook-auth-state";
+import { submitReviewedRunbookAuthAction } from "./browser-use-runbook-auth-submit";
 import type { BrowserUseOpCredentialField } from "./browser-use-op";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
@@ -239,7 +241,7 @@ export function runbookPreEffectClaimRecoveryFailure(input: {
 				: "unknown";
 	return {
 		code: "run_continuation_claim_recovery_failed",
-		message: `run ${input.runId} could not release auth continuation ${input.continuationId} after handoff acquisition failed; claim recovery resolved as ${input.recovery.status}:${detail}. Inspect and repair this exact shared run before retrying.`,
+		message: `run ${input.runId} could not release auth continuation ${input.continuationId} before any browser effect; claim recovery resolved as ${input.recovery.status}:${detail}. Inspect and repair this exact shared run before retrying.`,
 		actionId: "inspect_task_run_result",
 		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 		recoverability: "repair_state",
@@ -393,6 +395,64 @@ export type BrowserUseRunbookAuthOrchestratorResult =
 			safe_to_retry: false;
 	  };
 
+type RunbookAuthResumeFailureCode =
+	| "auth-delivery-outcome-unknown"
+	| "auth-submission-outcome-unknown"
+	| "auth-human-presence-required"
+	| "auth-session-identity-unproven";
+
+/**
+ * Classify durable checkpoints that cannot be replayed by an agent.
+ *
+ * The outer command calls this immediately after claiming a continuation, before
+ * handoff acquisition or any adapter command. The auth orchestrator calls it too
+ * so direct consumers retain the same fail-closed contract.
+ */
+function runbookAuthResumeFailureCode(
+	checkpoint: string | undefined,
+): RunbookAuthResumeFailureCode | undefined {
+	if (
+		[
+			"delivery-outcome-unknown",
+			"before-username-delivery",
+			"before-password-delivery",
+			"before-otp-delivery",
+		].includes(checkpoint ?? "")
+	) {
+		return "auth-delivery-outcome-unknown";
+	}
+	if (
+		[
+			"submission-outcome-unknown",
+			"before-username-submit",
+			"before-password-submit",
+			"before-otp-submit",
+		].includes(checkpoint ?? "")
+	) {
+		return "auth-submission-outcome-unknown";
+	}
+	if (checkpoint === "human-presence-required") {
+		return "auth-human-presence-required";
+	}
+	if (checkpoint === "session-identity-unproven") {
+		return "auth-session-identity-unproven";
+	}
+	return undefined;
+}
+
+function runbookAuthPublicFailureCode(
+	code: Extract<
+		BrowserUseRunbookAuthOrchestratorResult,
+		{ ok: false }
+	>["code"],
+): string {
+	const publicCode =
+		code === "auth-session-identity-unproven"
+			? "auth-identity-unproven"
+			: code;
+	return `runbook_${publicCode.replaceAll("-", "_")}`;
+}
+
 function submitActionForField(
 	policy: BrowserUseGenerationSessionPolicy,
 	field: RunbookAuthField,
@@ -442,6 +502,17 @@ export async function orchestrateRunbookAuthentication(input: {
 		}
 	}
 
+	const resumeFailureCode = runbookAuthResumeFailureCode(
+		input.resumeCheckpoint,
+	);
+	if (resumeFailureCode !== undefined) {
+		return {
+			ok: false,
+			code: resumeFailureCode,
+			safe_to_retry: false,
+		};
+	}
+
 	const initialSession = await input.ports.inspectSession({
 		approvedOrigins: policy.approved_service_origins,
 		verifier: policy.identity_verifier,
@@ -458,27 +529,6 @@ export async function orchestrateRunbookAuthentication(input: {
 			code: persisted
 				? "auth-session-identity-unproven"
 				: "auth-continuation-unavailable",
-			safe_to_retry: false,
-		};
-	}
-	const resumedDeliveryUnknown = [
-		"delivery-outcome-unknown",
-		"before-username-delivery",
-		"before-password-delivery",
-		"before-otp-delivery",
-	].includes(input.resumeCheckpoint ?? "");
-	const resumedSubmissionUnknown = [
-		"submission-outcome-unknown",
-		"before-username-submit",
-		"before-password-submit",
-		"before-otp-submit",
-	].includes(input.resumeCheckpoint ?? "");
-	if (resumedDeliveryUnknown || resumedSubmissionUnknown) {
-		return {
-			ok: false,
-			code: resumedDeliveryUnknown
-				? "auth-delivery-outcome-unknown"
-				: "auth-submission-outcome-unknown",
 			safe_to_retry: false,
 		};
 	}
@@ -537,80 +587,156 @@ export async function orchestrateRunbookAuthentication(input: {
 			safe_to_retry: false,
 		};
 	}
-	for (const field of identified.fields) {
-		const locator = policy.auth_flow.fields[field];
-		if (locator === undefined) {
-			return {
-				ok: false,
-				code: "auth-field-policy-unproven",
-				safe_to_retry: false,
-			};
-		}
-		if (!(await input.ports.persistCheckpoint(`before-${field}-delivery`))) {
-			return {
-				ok: false,
-				code: "auth-delivery-blocked",
-				safe_to_retry: false,
-			};
-		}
-		const delivered = await input.ports.deliverField({
-			field,
-			locator,
-			approvedOrigins: policy.approved_identity_provider_origins,
-		});
-		if (delivered.status === "unknown") {
-			const persisted = await input.ports.persistCheckpoint(
-				"delivery-outcome-unknown",
-			);
-			return {
-				ok: false,
-				code: persisted
-					? "auth-delivery-outcome-unknown"
-					: "auth-continuation-unavailable",
-				safe_to_retry: false,
-			};
-		}
-		if (delivered.status === "blocked") {
-			return {
-				ok: false,
-				code: "auth-delivery-blocked",
-				safe_to_retry: false,
-			};
-		}
+	let pendingFields = [...identified.fields];
+	const completedFields = new Set<RunbookAuthField>();
+	for (let round = 0; round < 3; round += 1) {
+		let reclassified = false;
+		for (const field of pendingFields) {
+			if (completedFields.has(field)) {
+				return {
+					ok: false,
+					code: "auth-login-state-unproven",
+					safe_to_retry: false,
+				};
+			}
+			const locator = policy.auth_flow.fields[field];
+			if (locator === undefined) {
+				return {
+					ok: false,
+					code: "auth-field-policy-unproven",
+					safe_to_retry: false,
+				};
+			}
+			if (!(await input.ports.persistCheckpoint(`before-${field}-delivery`))) {
+				return {
+					ok: false,
+					code: "auth-delivery-blocked",
+					safe_to_retry: false,
+				};
+			}
+			const delivered = await input.ports.deliverField({
+				field,
+				locator,
+				approvedOrigins: policy.approved_identity_provider_origins,
+			});
+			if (delivered.status === "unknown") {
+				const persisted = await input.ports.persistCheckpoint(
+					"delivery-outcome-unknown",
+				);
+				return {
+					ok: false,
+					code: persisted
+						? "auth-delivery-outcome-unknown"
+						: "auth-continuation-unavailable",
+					safe_to_retry: false,
+				};
+			}
+			if (delivered.status === "blocked") {
+				return {
+					ok: false,
+					code: "auth-delivery-blocked",
+					safe_to_retry: false,
+				};
+			}
+			completedFields.add(field);
 
-		const submitAction = submitActionForField(policy, field);
-		if (submitAction === undefined) continue;
-		if (!(await input.ports.persistCheckpoint(`before-${field}-submit`))) {
-			return {
-				ok: false,
-				code: "auth-submit-blocked",
-				safe_to_retry: false,
-			};
+			const submitAction =
+				field === "username" && pendingFields.includes("password")
+					? undefined
+					: submitActionForField(policy, field);
+			if (submitAction === undefined) continue;
+			if (!(await input.ports.persistCheckpoint(`before-${field}-submit`))) {
+				return {
+					ok: false,
+					code: "auth-submit-blocked",
+					safe_to_retry: false,
+				};
+			}
+			const submitted = await input.ports.submitAuthAction({
+				field,
+				action: submitAction,
+				approvedOrigins: policy.approved_identity_provider_origins,
+			});
+			if (submitted.status === "unknown") {
+				const persisted = await input.ports.persistCheckpoint(
+					"submission-outcome-unknown",
+				);
+				return {
+					ok: false,
+					code: persisted
+						? "auth-submission-outcome-unknown"
+						: "auth-continuation-unavailable",
+					safe_to_retry: false,
+				};
+			}
+			if (submitted.status === "blocked") {
+				return {
+					ok: false,
+					code: "auth-submit-blocked",
+					safe_to_retry: false,
+				};
+			}
+
+			const postSubmitSession = await input.ports.inspectSession({
+				approvedOrigins: policy.approved_service_origins,
+				verifier: policy.identity_verifier,
+			});
+			if (postSubmitSession.status === "authenticated") {
+				return { ok: true, status: "authenticated" };
+			}
+			if (
+				postSubmitSession.status === "unproven" ||
+				!policy.approved_identity_provider_origins.includes(
+					postSubmitSession.observed_origin,
+				)
+			) {
+				const persisted = await input.ports.persistCheckpoint(
+					"submission-outcome-unknown",
+				);
+				return {
+					ok: false,
+					code: persisted
+						? "auth-submission-outcome-unknown"
+						: "auth-continuation-unavailable",
+					safe_to_retry: false,
+				};
+			}
+			const next = await input.ports.identifyAuthState({
+				approvedOrigins: policy.approved_identity_provider_origins,
+				action: policy.auth_flow.identify_state,
+			});
+			if (next.status === "human-presence-required") {
+				const persisted = await input.ports.persistCheckpoint(
+					"human-presence-required",
+				);
+				return {
+					ok: false,
+					code: persisted
+						? "auth-human-presence-required"
+						: "auth-continuation-unavailable",
+					safe_to_retry: false,
+				};
+			}
+			if (
+				next.status === "unproven" ||
+				next.fields.some(
+					(nextField) =>
+						completedFields.has(nextField) ||
+						policy.auth_flow.fields[nextField] === undefined,
+				)
+			) {
+				return {
+					ok: false,
+					code: "auth-login-state-unproven",
+					safe_to_retry: false,
+				};
+			}
+			pendingFields = [...next.fields];
+			reclassified = true;
+			break;
 		}
-		const submitted = await input.ports.submitAuthAction({
-			field,
-			action: submitAction,
-			approvedOrigins: policy.approved_identity_provider_origins,
-		});
-		if (submitted.status === "unknown") {
-			const persisted = await input.ports.persistCheckpoint(
-				"submission-outcome-unknown",
-			);
-			return {
-				ok: false,
-				code: persisted
-					? "auth-submission-outcome-unknown"
-					: "auth-continuation-unavailable",
-				safe_to_retry: false,
-			};
-		}
-		if (submitted.status === "blocked") {
-			return {
-				ok: false,
-				code: "auth-submit-blocked",
-				safe_to_retry: false,
-			};
-		}
+		if (reclassified) continue;
+		break;
 	}
 
 	const finalSession = await input.ports.inspectSession({
@@ -671,6 +797,8 @@ export async function inspectRunbookAuthenticatedSession(input: {
 	actionSeam: BrowserUseActionGenerationSeam;
 	runCommand: BrowserUseRunbookCommandPorts["runtime"]["runCommand"];
 	targetProof: NonNullable<BrowserUseRuntime["authTargetProof"]>;
+	documentRead?: NonNullable<BrowserUseRuntime["authDocumentRead"]>;
+	expectedDocumentProof?: BrowserUseNativeTargetProofV1;
 	handoff: AgentBrowserVerifiedHandoff;
 	runId: string;
 	targetId: string;
@@ -687,6 +815,10 @@ export async function inspectRunbookAuthenticatedSession(input: {
 				BrowserUseSessionIdentityVerificationResult,
 				{ ok: true }
 			>;
+			capture_release?: {
+				target_proof_digest: string;
+				navigation_history_sealed: true;
+			};
 	  }
 	| { status: "login-required"; observed_origin: string }
 	| { status: "unproven" }
@@ -705,6 +837,8 @@ export async function inspectRunbookAuthenticatedSession(input: {
 			run_id: input.runId,
 			target_id: input.targetId,
 			verifier: action.step,
+			documentRead: input.documentRead,
+			expectedDocumentProof: input.expectedDocumentProof,
 			freshness_ms: verifier.freshness_ms,
 			now: input.clock,
 		});
@@ -751,6 +885,12 @@ export async function inspectRunbookAuthenticatedSession(input: {
 					status: "authenticated",
 					observation,
 					verification: verified,
+					...(observed.capture_release === undefined
+						? {}
+						: {
+								capture_release:
+									observed.capture_release,
+							}),
 				};
 			}
 		}
@@ -772,6 +912,42 @@ export async function inspectRunbookAuthenticatedSession(input: {
 					idpTarget.proof.top_level_origin,
 			}
 		: { status: "unproven" };
+}
+
+/** Release generic capture only after the native session read sealed history. */
+export function releaseRunbookCaptureAfterAuthenticatedSession(input: {
+	confidentialDocumentDelivered: boolean;
+	session: {
+		capture_release?: {
+			target_proof_digest: string;
+			navigation_history_sealed: true;
+		};
+	};
+	target?: BrowserUseVerifiedTarget;
+	currentDocumentId?: string;
+	deliveredDocumentIds: ReadonlySet<string>;
+	quarantine: Pick<
+		ReturnType<typeof createBrowserUseConfidentialDeliveryQuarantine>,
+		"releaseAfterNavigationHistorySeal"
+	>;
+}): boolean {
+	if (!input.confidentialDocumentDelivered) return true;
+	const release = input.session.capture_release;
+	return (
+		release !== undefined &&
+		input.target !== undefined &&
+		input.currentDocumentId !== undefined &&
+		!input.deliveredDocumentIds.has(
+			input.currentDocumentId,
+		) &&
+		input.quarantine.releaseAfterNavigationHistorySeal({
+			target: input.target,
+			target_proof_digest:
+				release.target_proof_digest,
+			navigation_history_sealed:
+				release.navigation_history_sealed,
+		}).ok
+	);
 }
 
 function runbookSessionCommitFailure(
@@ -921,6 +1097,7 @@ export type BrowserUseRunbookCommandPorts = {
 		| "runCommand"
 		| "authAdmission"
 		| "authTargetProof"
+		| "authDocumentRead"
 		| "authConfidentialDelivery"
 	>;
 	store: {
@@ -1474,6 +1651,25 @@ function authContinuationReasonOf(
 	return "login-required";
 }
 
+/** Map durable auth checkpoints onto their exact continuation class. */
+export function runbookAuthCheckpointReason(
+	checkpoint: RunbookAuthCheckpoint,
+): BrowserUseAuthRunContinuation["reason"] {
+	if (checkpoint === "human-presence-required") {
+		return "user-presence-required";
+	}
+	if (checkpoint === "delivery-outcome-unknown") {
+		return "delivery-outcome-unknown";
+	}
+	if (checkpoint === "submission-outcome-unknown") {
+		return "submission-outcome-unknown";
+	}
+	if (checkpoint === "session-identity-unproven") {
+		return "session-identity-unproven";
+	}
+	return "login-required";
+}
+
 function buildRunbookAuthContinuation(input: {
 	run: BrowserUseSharedRun;
 	failure: BrowserUseRunbookCommandFailure;
@@ -1496,7 +1692,9 @@ function buildRunbookAuthContinuation(input: {
 		blockedFacts?.reason ??
 		(input.activeCheckpoint === undefined
 			? authContinuationReasonOf(input.failure)
-			: "login-required");
+			: runbookAuthCheckpointReason(
+					input.activeCheckpoint,
+				));
 	return {
 		schema_version: "1",
 		kind: "auth",
@@ -2272,6 +2470,63 @@ async function runRunbookRun(
 		};
 	}
 
+	if (preEffectClaim !== undefined && run !== undefined) {
+		const resumeFailureCode = runbookAuthResumeFailureCode(
+			preEffectClaim.checkpoint,
+		);
+		if (resumeFailureCode !== undefined) {
+			const recovery =
+				await recoverRunContinuationPreEffectClaim(deps, {
+					runId: run.run_id,
+					continuationId:
+						preEffectClaim.continuationId,
+					expectedRevision:
+						preEffectClaim.claimedRevision,
+					claimantId: preEffectClaim.claimantId,
+					external_effect:
+						BROWSER_USE_EXTERNAL_EFFECT_NONE,
+				});
+			const recoveryFailure =
+				runbookPreEffectClaimRecoveryFailure({
+					runId: run.run_id,
+					continuationId:
+						preEffectClaim.continuationId,
+					recovery,
+				});
+			if (recoveryFailure !== undefined) {
+				return ports.output.emitTaskFailure(
+					run.run_id,
+					recoveryFailure,
+				);
+			}
+			if (recovery.status !== "recovered") {
+				return ports.output.emitTaskFailure(run.run_id, {
+					code: "run_continuation_claim_recovery_failed",
+					message:
+						"the auth continuation claim recovery returned no durable run.",
+					actionId: "inspect_task_run_result",
+					exitCode:
+						BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			run = recovery.run;
+			return ports.output.emitTaskFailure(run.run_id, {
+				code: runbookAuthPublicFailureCode(resumeFailureCode),
+				message:
+					"the durable authentication checkpoint cannot be replayed safely; no browser or authentication effect was attempted.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+				dataExtra: {
+					external_effect: "none",
+					checkpoint:
+						preEffectClaim.checkpoint,
+				},
+			});
+		}
+	}
+
 	const acquired = await ports.handoff.acquire();
 	if (!acquired.ok) {
 		if (preEffectClaim !== undefined && run !== undefined) {
@@ -2692,11 +2947,15 @@ async function runRunbookRun(
 		authRun.auth_fragment !== undefined &&
 		isBrowserUseAuthRunContinuation(authRun.continuation);
 	let terminalAuthCheckpointPersistenceFailed = false;
+	let preBindingHumanCheckpointCommitted = false;
 	try {
 		const emitPersistedAuthFailure = async (
 			failure: BrowserUseRunbookCommandFailure,
 		): Promise<number> => {
-			if (terminalAuthCheckpointPersistenceFailed) {
+			if (
+				terminalAuthCheckpointPersistenceFailed ||
+				preBindingHumanCheckpointCommitted
+			) {
 				return ports.output.emitPlatformFailure(failure);
 			}
 			let continuation: BrowserUseAuthRunContinuation | undefined;
@@ -2763,15 +3022,17 @@ async function runRunbookRun(
 		if (resolvedAuthCandidate !== undefined) {
 			const policy = resolvedSessionPolicy;
 			const targetProof = ports.runtime.authTargetProof;
+			const documentRead = ports.runtime.authDocumentRead;
 			if (
 				policy === undefined ||
 				generationRuntime === undefined ||
-				targetProof === undefined
+				targetProof === undefined ||
+				documentRead === undefined
 			) {
 				return await emitPersistedAuthFailure({
 					code: "runbook_auth_session_policy_unproven",
 					message:
-						"the runbook session policy, generation action authority, or native target proof owner is unavailable.",
+						"the runbook session policy, generation action authority, or native exact-document read owner is unavailable.",
 					actionId: "inspect-auth-readiness",
 					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 					recoverability: "repair_state",
@@ -2779,10 +3040,17 @@ async function runRunbookRun(
 			}
 			const verifiedHandoff =
 				rawHandoffData as AgentBrowserVerifiedHandoff;
-			const authQuarantine =
+			const createAuthQuarantine = () =>
 				createBrowserUseConfidentialDeliveryQuarantine({
 					runCommand: ports.runtime.runCommand,
+					approved_rebind_origins: [
+						...new Set([
+							...policy.approved_identity_provider_origins,
+							...policy.approved_service_origins,
+						]),
+					],
 				});
+			const authQuarantine = createAuthQuarantine();
 			const nativeDelivery =
 				ports.runtime.authConfidentialDelivery?.forBrowser({
 					browser_ws_endpoint:
@@ -2791,7 +3059,7 @@ async function runRunbookRun(
 						verifiedHandoff.proof.profile_posture
 							.effective.observer.browser_pid,
 				});
-			const authDeliveryHook =
+			let authDeliveryHook =
 				nativeDelivery === undefined
 					? undefined
 					: createBrowserUseNativeConfidentialDeliveryHook(
@@ -2805,6 +3073,11 @@ async function runRunbookRun(
 			runbookRunCommand = authQuarantine.runCommand;
 			let preparedItemBinding: BrowserUseItemBinding | undefined;
 			let preparedTarget: BrowserUseVerifiedTarget | undefined;
+			let preparedDocumentProof:
+				| BrowserUseNativeTargetProofV1
+				| undefined;
+			let confidentialDocumentDelivered = false;
+			const deliveredDocumentIds = new Set<string>();
 			let authFragment:
 				| BrowserUseAuthTransactionFragment
 				| undefined;
@@ -2900,6 +3173,14 @@ async function runRunbookRun(
 								generationRuntime.actionGenerationSeam,
 							runCommand: runbookRunCommand,
 							targetProof,
+							documentRead:
+								confidentialDocumentDelivered
+									? documentRead
+									: undefined,
+							expectedDocumentProof:
+								confidentialDocumentDelivered
+									? preparedDocumentProof
+									: undefined,
 							handoff: verifiedHandoff,
 							runId: authRun.run_id,
 							targetId:
@@ -2920,8 +3201,9 @@ async function runRunbookRun(
 					identifyAuthState: async ({
 						approvedOrigins,
 						action,
-					}) =>
-						await identifyRunbookAuthState({
+					}) => {
+						const identified =
+							await identifyRunbookAuthState({
 							approvedOrigins,
 							action,
 							actionSeam:
@@ -2932,7 +3214,61 @@ async function runRunbookRun(
 							runId: authRun.run_id,
 							targetId:
 								targetResolution.target_tab_id,
-					}),
+							expectedTargetProofDigest:
+								preparedTarget?.target_proof_digest,
+							documentRead:
+								confidentialDocumentDelivered
+									? documentRead
+									: undefined,
+							expectedDocumentProof:
+								confidentialDocumentDelivered
+									? preparedDocumentProof
+									: undefined,
+						});
+						if (
+							authFragment?.submission_started ===
+								true &&
+							identified.status ===
+								"fields-required" &&
+							identified.fields.length === 1 &&
+							identified.fields[0] === "otp"
+						) {
+							const observed =
+								applyAuthTransition(authFragment, {
+									type: "submit-outcome-observed",
+									outcome: "otp-required",
+								});
+							if (!observed.ok) {
+								return { status: "unproven" };
+							}
+							const cleaned =
+								applyAuthTransition(
+									observed.fragment,
+									{ type: "cleanup-complete" },
+								);
+							if (!cleaned.ok) {
+								return { status: "unproven" };
+							}
+							const previous = authFragment;
+							authFragment = cleaned.fragment;
+							if (
+								!(await commitAuthCheckpoint(
+									"before-otp-delivery",
+								))
+							) {
+								authFragment = previous;
+								return { status: "unproven" };
+							}
+						} else if (
+							authFragment?.submission_started ===
+								true &&
+							identified.status !==
+								"human-presence-required"
+						) {
+							return { status: "unproven" };
+						}
+						return identified;
+					},
 					prepareBinding: async () => {
 						if (authProvider === undefined) {
 							return { ok: false };
@@ -2944,10 +3280,10 @@ async function runRunbookRun(
 								target_id:
 									targetResolution.target_tab_id,
 							});
-						if (
-							!target.ok ||
-							target.proof.top_level_origin !==
-								target.proof.frame_origin ||
+							if (
+								!target.ok ||
+								target.proof.top_level_origin !==
+									target.proof.frame_origin ||
 							!policy.approved_identity_provider_origins.includes(
 								target.proof.top_level_origin,
 							)
@@ -2988,7 +3324,10 @@ async function runRunbookRun(
 								page_id: target.proof.page_id,
 								frame_id: target.proof.frame_id,
 							},
-							method: "password",
+							method:
+								policy.auth_flow.otp_submit === undefined
+									? "password"
+									: "otp",
 							attempt_limit: 3,
 							attempts_already_consumed: 0,
 						});
@@ -3026,13 +3365,117 @@ async function runRunbookRun(
 							account_ref:
 								policy.identity_verifier.expected
 									.account_reference,
-							target_proof_digest:
-								target.proof.target_proof_digest,
-						};
-						authFragment = fragment;
+								target_proof_digest:
+									target.proof.target_proof_digest,
+							};
+							preparedDocumentProof =
+								target.proof;
+							authFragment = fragment;
 						return { ok: true };
 					},
 					persistCheckpoint: async (checkpoint) => {
+						if (
+							checkpoint ===
+								"human-presence-required" &&
+							authFragment === undefined
+						) {
+							const failure: BrowserUseRunbookCommandFailure = {
+								code: "runbook_auth_human_presence_required",
+								message:
+									"the reviewed login requires human presence.",
+								actionId:
+									"inspect-auth-readiness",
+								exitCode:
+									BINDING_FAIL_CLOSED_EXIT_CODE,
+								recoverability: "retry",
+							};
+							const continuation =
+								buildRunbookAuthContinuation({
+									run: authRun,
+									failure,
+									activeCheckpoint: checkpoint,
+									now: ports.clock(),
+									generationRuntime,
+									resolution:
+										resolvedAuthCandidate,
+									policy,
+									handoff,
+									targetBindingId:
+										targetResolution.binding
+											.target_candidate_id,
+								});
+							const persisted =
+								await persistRunbookAuthBlock(
+									ports,
+									deps,
+									authRun,
+									dispatchClaim,
+									failure,
+									continuation,
+								);
+							if (!persisted.ok) {
+								terminalAuthCheckpointPersistenceFailed =
+									true;
+								return false;
+							}
+							authRun = persisted.run;
+							run = authRun;
+							preBindingHumanCheckpointCommitted =
+								true;
+							return true;
+						}
+						if (
+							checkpoint ===
+								"human-presence-required" &&
+							authFragment !== undefined
+						) {
+							const previous = authFragment;
+							const classified =
+								authFragment.submission_started
+									? applyAuthTransition(
+											authFragment,
+											{
+												type: "submit-outcome-observed",
+												outcome:
+													"challenge-escalation",
+											},
+										)
+									: applyAuthTransition(
+											authFragment,
+											{
+												type: "blocked",
+												cause: "challenge-escalation",
+											},
+										);
+							if (!classified.ok) return false;
+							const blocked =
+								authFragment.submission_started
+									? applyAuthTransition(
+											classified.fragment,
+											{
+												type: "cleanup-complete",
+											},
+										)
+									: classified;
+							if (
+								!blocked.ok ||
+								blocked.fragment.status !==
+									"blocked"
+							) {
+								return false;
+							}
+							authFragment = blocked.fragment;
+							if (
+								!(await commitAuthCheckpoint(
+									checkpoint,
+									"challenge-escalation",
+								))
+							) {
+								authFragment = previous;
+								return false;
+							}
+							return true;
+						}
 						if (
 							checkpoint ===
 								"delivery-outcome-unknown" &&
@@ -3174,14 +3617,27 @@ async function runRunbookRun(
 									);
 								},
 							});
-						if (
-							delivered.status === "delivered"
-						) {
-							authFragment = delivered.fragment;
-							return { status: "delivered" };
-						}
-						if (delivered.status === "unknown") {
-							return { status: "unknown" };
+							if (
+								delivered.status === "delivered"
+							) {
+								if (preparedDocumentProof === undefined) {
+									return { status: "unknown" };
+								}
+								deliveredDocumentIds.add(
+									preparedDocumentProof.document_id,
+								);
+								confidentialDocumentDelivered = true;
+								authFragment = delivered.fragment;
+								return { status: "delivered" };
+							}
+							if (delivered.status === "unknown") {
+								if (preparedDocumentProof !== undefined) {
+									deliveredDocumentIds.add(
+										preparedDocumentProof.document_id,
+									);
+								}
+								confidentialDocumentDelivered = true;
+								return { status: "unknown" };
 						}
 						const blocked = applyAuthTransition(
 							authFragment,
@@ -3204,9 +3660,158 @@ async function runRunbookRun(
 						}
 						return { status: "blocked" };
 					},
-					submitAuthAction: async () => ({
-						status: "blocked",
-					}),
+					submitAuthAction: async ({
+						field,
+						action,
+						approvedOrigins,
+					}) => {
+						if (
+							authFragment === undefined ||
+							preparedTarget === undefined
+						) {
+							return { status: "blocked" };
+						}
+						const checkpoint =
+							`before-${field}-submit` as const;
+						const submitted =
+							await submitReviewedRunbookAuthAction({
+								approvedIdentityProviderOrigins:
+									approvedOrigins,
+								approvedPostSubmitOrigins: [
+									...new Set([
+										...policy.approved_identity_provider_origins,
+										...policy.approved_service_origins,
+									]),
+								],
+								action,
+								actionSeam:
+									generationRuntime.actionGenerationSeam,
+								runCommand:
+									ports.runtime.runCommand,
+								targetProof,
+								handoff: verifiedHandoff,
+								runId: authRun.run_id,
+								targetId:
+									targetResolution.target_tab_id,
+								beforeMutationDispatch: async () => {
+									if (field === "username") {
+										return { ok: true };
+									}
+									if (
+										authFragment === undefined
+									) {
+										return { ok: false };
+									}
+									const previous =
+										authFragment;
+									const dispatched =
+										applyAuthTransition(
+											authFragment,
+											{
+												type: "submission-dispatched",
+											},
+										);
+									if (!dispatched.ok) {
+										return { ok: false };
+									}
+									authFragment =
+										dispatched.fragment;
+									if (
+										!(await commitAuthCheckpoint(
+											checkpoint,
+										))
+									) {
+										authFragment = previous;
+										return { ok: false };
+									}
+									return { ok: true };
+								},
+							});
+						if (submitted.status !== "confirmed") {
+							return submitted;
+						}
+						if (field === "username") {
+							const completed =
+								applyAuthTransition(authFragment, {
+									type: "method-step-complete",
+									step: "submit-username",
+								});
+							if (!completed.ok) {
+								return { status: "unknown" };
+							}
+							const previous = authFragment;
+							authFragment = completed.fragment;
+							if (
+								!(await commitAuthCheckpoint(
+									checkpoint,
+								))
+							) {
+								authFragment = previous;
+								return { status: "unknown" };
+							}
+						}
+						const target =
+							await proveAgentBrowserTarget({
+								targetProof,
+								handoff: verifiedHandoff,
+								target_id:
+									targetResolution.target_tab_id,
+							});
+						if (
+							!target.ok ||
+							target.proof.document_id !==
+								submitted.document_id ||
+							target.proof.target_proof_digest !==
+								submitted.target_proof_digest ||
+							target.proof.top_level_origin !==
+								target.proof.frame_origin ||
+							!(
+								policy.approved_identity_provider_origins.includes(
+									target.proof.top_level_origin,
+								) ||
+								policy.approved_service_origins.includes(
+									target.proof.top_level_origin,
+								)
+							)
+						) {
+							return { status: "unknown" };
+						}
+						const nextPreparedTarget: BrowserUseVerifiedTarget = {
+							lane_id: target.proof.lane_id,
+							run_id: authRun.run_id,
+							top_level_origin:
+								target.proof.top_level_origin,
+							frame_origin:
+								target.proof.frame_origin,
+							target_id: target.proof.target_id,
+							page_id: target.proof.page_id,
+							frame_id: target.proof.frame_id,
+							account_ref:
+								policy.identity_verifier.expected
+									.account_reference,
+							target_proof_digest:
+								target.proof.target_proof_digest,
+						};
+						if (
+							preparedTarget === undefined ||
+							!authQuarantine.rebind({
+								previous_target: preparedTarget,
+								next_target: nextPreparedTarget,
+							}).ok
+						) {
+							return { status: "unknown" };
+						}
+						preparedTarget = nextPreparedTarget;
+						preparedDocumentProof = target.proof;
+						if (
+							policy.approved_service_origins.includes(
+								target.proof.top_level_origin,
+							)
+						) {
+							authDeliveryHook = undefined;
+						}
+						return submitted;
+					},
 				},
 			});
 			if (!authResult.ok) {
@@ -3215,7 +3820,9 @@ async function runRunbookRun(
 						preparationFailure !== undefined
 						? preparationFailure
 						: {
-								code: `runbook_${authResult.code.replaceAll("-", "_")}`,
+								code: runbookAuthPublicFailureCode(
+									authResult.code,
+								),
 								message:
 									"the reviewed runbook authentication session could not be proven.",
 								actionId:
@@ -3231,6 +3838,23 @@ async function runRunbookRun(
 				return await emitPersistedAuthFailure(
 					runbookSessionCommitFailure(
 						"the authenticated session result carried no run-bound identity proof.",
+					),
+				);
+			}
+			if (
+				!releaseRunbookCaptureAfterAuthenticatedSession({
+					confidentialDocumentDelivered,
+					session: authenticatedSession,
+					target: preparedTarget,
+					currentDocumentId:
+						preparedDocumentProof?.document_id,
+					deliveredDocumentIds,
+					quarantine: authQuarantine,
+				})
+			) {
+				return await emitPersistedAuthFailure(
+					runbookSessionCommitFailure(
+						"capture remained quarantined because the authenticated document carried no exact navigation-history seal.",
 					),
 				);
 			}

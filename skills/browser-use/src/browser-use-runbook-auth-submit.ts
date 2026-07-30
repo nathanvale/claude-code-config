@@ -13,7 +13,12 @@ import {
 
 /** Secret-free outcome from one reviewed authentication-form submission. */
 export type BrowserUseReviewedAuthSubmitOutcome =
-	| { status: "confirmed" }
+	| {
+			status: "confirmed";
+			page_departed: true;
+			document_id: string;
+			target_proof_digest: string;
+	  }
 	| { status: "blocked" }
 	| { status: "unknown" };
 
@@ -154,7 +159,14 @@ export async function submitReviewedRunbookAuthAction(input: {
 	return execution.ok &&
 		execution.outcome === "confirmed" &&
 		execution.executed_steps === 1 &&
-		execution.target_tab_id === input.targetId
-		? { status: "confirmed" }
+		execution.target_tab_id === input.targetId &&
+		after.proof.document_id !== before.proof.document_id
+		? {
+				status: "confirmed",
+				page_departed: true,
+				document_id: after.proof.document_id,
+				target_proof_digest:
+					after.proof.target_proof_digest,
+			}
 		: { status: "unknown" };
 }
