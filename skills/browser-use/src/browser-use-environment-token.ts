@@ -275,9 +275,14 @@ export type BrowserUseEnvironmentTokenCustodyState =
 			state: "blocked";
 			cause: Exclude<
 				BrowserUseEnvironmentTokenCustodyCause,
-				"staging-residue" | "removal-residue"
+				"staging-residue" | "removal-residue" | "invalid-vault-scope"
 			>;
 			next_action: "repair-token-custody";
+	  }
+	| {
+			state: "blocked";
+			cause: "invalid-vault-scope";
+			next_action: "repair-vault-grant";
 	  }
 	| {
 			state: "blocked";
@@ -327,6 +332,7 @@ const CUSTODY_NEXT_ACTION_SET = new Set<string>([
 	"cleanup-token-staging",
 	"complete-local-token-removal",
 	"repair-token-custody",
+	"repair-vault-grant",
 	"revoke-service-account-token-remotely",
 	"inspect-token-status",
 ]);
@@ -457,9 +463,17 @@ export function parseEnvironmentTokenCustodyState(
 				return candidate as BrowserUseEnvironmentTokenCustodyState;
 			}
 			if (
+				candidate.cause === "invalid-vault-scope" &&
+				hasExactKeys(candidate, ["state", "cause", "next_action"]) &&
+				candidate.next_action === "repair-vault-grant"
+			) {
+				return candidate as BrowserUseEnvironmentTokenCustodyState;
+			}
+			if (
 				typeof candidate.cause === "string" &&
 				candidate.cause !== "staging-residue" &&
 				candidate.cause !== "removal-residue" &&
+				candidate.cause !== "invalid-vault-scope" &&
 				hasExactKeys(candidate, ["state", "cause", "next_action"]) &&
 				candidate.next_action === "repair-token-custody"
 			) {

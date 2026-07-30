@@ -10,6 +10,9 @@ import {
 	BROWSER_USE_LIVE_ADAPTERS,
 } from "./discovery-model";
 import {
+	BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION,
+} from "./browser-use-auth-model";
+import {
 	BROWSER_USE_AUTH_CONTINUATION_STATES,
 	BROWSER_USE_TASK_INTENTS,
 	type BrowserUseAuthRunContinuation,
@@ -1915,6 +1918,12 @@ const browserUseEnvironmentTokenLifecycleResultContract = {
 	schema_version: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseRepairVaultGrantAction = {
+	id: BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION.next_action_id,
+	summary: BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION.summary,
+	sideEffects: ["auth", "write"],
+} as const;
+
 export const browserUseEnvironmentTokenLifecycleActions = [
 	{
 		id: "inspect-token-status",
@@ -1948,6 +1957,7 @@ export const browserUseEnvironmentTokenLifecycleActions = [
 		summary: "Repair the local custody evidence named by the typed cause.",
 		sideEffects: ["check", "write"],
 	},
+	browserUseRepairVaultGrantAction,
 	{
 		id: "revoke-service-account-token-remotely",
 		summary:
@@ -2015,11 +2025,7 @@ export const browserUseAuthRepairActions = [
 		summary: "Enroll or repair the Browser Automation service-account token.",
 		sideEffects: ["check"],
 	},
-	{
-		id: "repair-vault-grant",
-		summary: "Repair the token's vault grant to exactly one visible vault.",
-		sideEffects: ["check"],
-	},
+	browserUseRepairVaultGrantAction,
 	{
 		id: "repair-item-binding",
 		summary: "Repair the revoked or moved item binding; never rescan silently.",
@@ -2042,9 +2048,17 @@ export const browserUseAuthRepairActions = [
 	},
 ] as const;
 
+const browserUseEnvironmentTokenLifecycleOnlyActions =
+	browserUseEnvironmentTokenLifecycleActions.filter(
+		(action) => action.id !== "repair-vault-grant",
+	);
+const browserUseAuthRepairOnlyActions = browserUseAuthRepairActions.filter(
+	(action) => action.id !== "repair-vault-grant",
+);
+
 export const browserUseRunbookAuthFailureActions = [
 	...browserUseAuthRepairActions,
-	...browserUseEnvironmentTokenLifecycleActions,
+	...browserUseEnvironmentTokenLifecycleOnlyActions,
 ] as const;
 
 // Failures reuse the platform store vocabulary (the store is the only
@@ -2063,7 +2077,7 @@ export const browserUseAuthRepairFailureActions = [
 /** Discoverable next actions emitted by composed authentication status. */
 export const browserUseAuthStatusActions = [
 	...browserUseEnvironmentTokenLifecycleActions,
-	...browserUseAuthRepairActions,
+	...browserUseAuthRepairOnlyActions,
 	{
 		id: "record-admin-authority-receipt",
 		summary:
@@ -2100,7 +2114,7 @@ export const browserUseAdminAuthorityReceiptActions = [
 export const browserUseAdminAuthorityReceiptFailureActions = [
 	...browserUsePlatformStoreFailureActions,
 	...browserUseEnvironmentTokenLifecycleActions,
-	...browserUseAuthRepairActions,
+	...browserUseAuthRepairOnlyActions,
 	{
 		id: "confirm-admin-authority-receipt",
 		summary:

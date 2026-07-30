@@ -162,6 +162,12 @@ export type BrowserUseAuthContinuation = {
 	summary: string;
 };
 
+export const BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION = {
+	next_action_id: "repair-vault-grant",
+	summary:
+		"Have a human replace the service account with read-item access to exactly one Browser Automation vault, then rerun auth install-token.",
+} as const satisfies BrowserUseAuthContinuation;
+
 /**
  * Code-owned cause table (R21): each blocked cause maps to exactly one
  * platform blocked run state and exactly one continuation. One owner — the
@@ -183,10 +189,7 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 	},
 	"invalid-vault-scope": {
 		run_state: "awaiting-auth",
-		continuation: {
-			next_action_id: "repair-vault-grant",
-			summary: "Repair the token's vault grant to exactly one visible vault.",
-		},
+		continuation: BROWSER_USE_REPAIR_VAULT_GRANT_CONTINUATION,
 	},
 	"ambiguous-binding-selection": {
 		run_state: "awaiting-approval",

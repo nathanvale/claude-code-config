@@ -111,6 +111,11 @@ describe("environment token custody control model", () => {
 			},
 			{
 				state: "blocked",
+				cause: "invalid-vault-scope",
+				next_action: "repair-vault-grant",
+			},
+			{
+				state: "blocked",
 				cause: "staging-residue",
 				next_action: "cleanup-token-staging",
 			},
@@ -188,6 +193,16 @@ describe("environment token custody control model", () => {
 				state: "blocked",
 				cause: "token-unsafe",
 				remote_authority: "may-remain-live",
+				next_action: "repair-token-custody",
+			},
+			{
+				state: "blocked",
+				cause: "token-unsafe",
+				next_action: "repair-vault-grant",
+			},
+			{
+				state: "blocked",
+				cause: "invalid-vault-scope",
 				next_action: "repair-token-custody",
 			},
 			{

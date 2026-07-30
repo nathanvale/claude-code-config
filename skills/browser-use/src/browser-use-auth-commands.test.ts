@@ -568,6 +568,36 @@ describe("environment-token lifecycle public commands", () => {
 		}
 	});
 
+	test("invalid vault scope routes token installation to the human vault grant repair", async () => {
+		const fixture = lifecycleRuntime({
+			results: [
+				{ state: "missing", next_action: "install-local-token" },
+				{
+					state: "blocked",
+					cause: "invalid-vault-scope",
+					next_action: "repair-vault-grant",
+				},
+			],
+		});
+		const result = await runForTest(
+			["auth", "install-token", "--stdin", "--json"],
+			fixture.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(fixture.calls).toEqual([
+			{ action: "status" },
+			{ action: "install", input_channel: "stdin" },
+		]);
+		expect(envelopeOf(result.stdout).data).toMatchObject({
+			state: "blocked",
+			cause: "invalid-vault-scope",
+		});
+		expect(envelopeOf(result.stdout).continuation.next_action_id).toBe(
+			"repair-vault-grant",
+		);
+	});
+
 	test("hidden TTY uses the native hidden channel and removal keeps remote revocation explicit", async () => {
 		const install = lifecycleRuntime({
 			tty: true,

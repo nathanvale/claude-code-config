@@ -20,10 +20,12 @@ import {
 	browserUseContracts,
 	browserUseGenerationFailureActions,
 	browserUseGenerationSuccessActions,
+	browserUseEnvironmentTokenLifecycleActions,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
 	browserUseRunbookAuthFailureActions,
 } from "./command-contract";
+import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
 import { contractFlags } from "./browser-use-test-helpers";
 
 const ALL_COMMANDS: BrowserUseCommand[] = [
@@ -102,6 +104,34 @@ describe("U3 command contract", () => {
 				expect(flags).not.toContain(reserved);
 			}
 		}
+	});
+
+	test("every command declares each runtime action id once per outcome", () => {
+		for (const command of ALL_COMMANDS) {
+			for (const outcome of ["success", "failure"] as const) {
+				const ids =
+					browserUseContracts[command].actionAffordances?.[outcome]?.map(
+						(action) => action.id,
+					) ?? [];
+				expect(ids, `${command} ${outcome}`).toEqual([...new Set(ids)]);
+			}
+		}
+	});
+
+	test("vault-scope repair wording stays human-gated across persisted and CLI continuations", () => {
+		const persisted =
+			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["invalid-vault-scope"].continuation;
+		const lifecycle = browserUseEnvironmentTokenLifecycleActions.find(
+			(action) => action.id === persisted.next_action_id,
+		);
+
+		expect(lifecycle).toMatchObject({
+			id: "repair-vault-grant",
+			summary: persisted.summary,
+			sideEffects: ["auth", "write"],
+		});
+		expect(persisted.summary).toContain("Have a human");
+		expect(persisted.summary).toContain("rerun auth install-token");
 	});
 
 	test("registers every runbook, private-input, and resume diagnostic emitted by the driver", () => {

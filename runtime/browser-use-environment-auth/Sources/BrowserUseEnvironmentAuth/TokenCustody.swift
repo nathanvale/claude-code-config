@@ -1107,14 +1107,20 @@ public enum TokenCustody {
             )
         } catch let cause as TokenCustodyCause {
             let removalResidue = cause == .removalResidue
+            let nextAction: String
+            if removalResidue {
+                nextAction = "complete-local-token-removal"
+            } else if cause == .stagingResidue {
+                nextAction = "cleanup-token-staging"
+            } else if cause == .invalidVaultScope {
+                nextAction = "repair-vault-grant"
+            } else {
+                nextAction = "repair-token-custody"
+            }
             return TokenCustodyResult(
                 state: .blocked,
                 cause: cause,
-                nextAction: removalResidue
-                    ? "complete-local-token-removal"
-                    : cause == .stagingResidue
-                        ? "cleanup-token-staging"
-                        : "repair-token-custody",
+                nextAction: nextAction,
                 remoteAuthority: removalResidue ? "may-remain-live" : nil
             )
         } catch {

@@ -2283,6 +2283,92 @@ private func environmentOpValidatorReturnsTypedIdentityAndScope() throws {
     }
 }
 
+private func tokenCustodyRoutesVaultScopeRepair() throws {
+    let configRoot = try makeConfigRoot()
+    defer { try? FileManager.default.removeItem(at: configRoot) }
+    let custody = configRoot.appendingPathComponent(
+        TokenCustodyPaths.directoryName,
+        isDirectory: true
+    )
+    let tokenPath = custody.appendingPathComponent(TokenCustodyPaths.tokenName)
+    var original = Array("ops_U5_SCOPE_ORIGINAL".utf8)
+    let approved = try validator(custodyDirectory: custody, approve: true)
+    try check(
+        installForTest(
+            configRoot: configRoot.path,
+            tokenBytes: &original,
+            validatorDescriptor: approved.0,
+            replacing: false
+        ).state == .installed,
+        "vault repair fixture install failed"
+    )
+    _ = Darwin.close(approved.0)
+    _ = approved.1.wait(timeout: .now() + 2)
+    let originalMetadata = try FileManager.default.attributesOfItem(
+        atPath: tokenPath.path
+    )
+    let originalInode = originalMetadata[.systemFileNumber] as? NSNumber
+
+    var sockets: [Int32] = [0, 0]
+    guard socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0 else {
+        throw POSIXError(.ENOTSOCK)
+    }
+    let done = DispatchSemaphore(value: 0)
+    let server = sockets[1]
+    DispatchQueue.global().async {
+        defer {
+            _ = Darwin.close(server)
+            done.signal()
+        }
+        guard let descriptor = try? EnvironmentOpSupervisor.receiveTokenDescriptor(
+            socket: server
+        ) else {
+            return
+        }
+        _ = Darwin.close(descriptor)
+        let response = Array("vault\n".utf8)
+        _ = response.withUnsafeBytes {
+            Darwin.write(server, $0.baseAddress, response.count)
+        }
+    }
+    var replacement = Array("ops_U5_SCOPE_REPLACEMENT".utf8)
+    let result = installForTest(
+        configRoot: configRoot.path,
+        tokenBytes: &replacement,
+        validatorDescriptor: sockets[0],
+        replacing: true
+    )
+    _ = Darwin.close(sockets[0])
+    try check(done.wait(timeout: .now() + 3) == .success, "vault repair fixture stalled")
+    try check(
+        result.state == .blocked
+            && result.cause == .invalidVaultScope
+            && result.nextAction == "repair-vault-grant",
+        "invalid vault scope did not route to the vault grant repair"
+    )
+    let preservedMetadata = try FileManager.default.attributesOfItem(
+        atPath: tokenPath.path
+    )
+    try check(
+        preservedMetadata[.systemFileNumber] as? NSNumber == originalInode,
+        "invalid vault scope replaced the prior token inode"
+    )
+    try check(
+        try Data(contentsOf: tokenPath) == Data("ops_U5_SCOPE_ORIGINAL".utf8),
+        "invalid vault scope replaced the prior token bytes"
+    )
+    let residue = try FileManager.default.contentsOfDirectory(atPath: custody.path)
+        .filter { $0.hasPrefix(TokenCustodyPaths.stagingPrefix) }
+    try check(residue.isEmpty, "invalid vault scope left staging residue")
+    let encoded = try JSONEncoder().encode(result)
+    let projection = String(decoding: encoded, as: UTF8.self)
+    try check(
+        !projection.contains("ops_U5_SCOPE_ORIGINAL")
+            && !projection.contains("ops_U5_SCOPE_REPLACEMENT"),
+        "invalid vault scope serialized token bytes"
+    )
+}
+
 private func environmentOpValidatorAllowsBoundedColdServiceAccount() throws {
     let fake = try makeFakeOp(
         name: "browser-use-fake-op-cold-service-account"
@@ -4919,6 +5005,13 @@ enum BrowserUseEnvironmentAuthTests {
             return
         }
         if CommandLine.arguments.dropFirst()
+            == ["--vault-scope-repair-routing-test"]
+        {
+            try tokenCustodyRoutesVaultScopeRepair()
+            print("pass: invalid vault scope routes to vault grant repair")
+            return
+        }
+        if CommandLine.arguments.dropFirst()
             == ["--validator-cold-service-account-test"]
         {
             try environmentOpValidatorAllowsBoundedColdServiceAccount()
@@ -5058,6 +5151,10 @@ enum BrowserUseEnvironmentAuthTests {
             (
                 "environment OP validator returns typed identity and scope",
                 environmentOpValidatorReturnsTypedIdentityAndScope
+            ),
+            (
+                "invalid vault scope routes to vault grant repair",
+                tokenCustodyRoutesVaultScopeRepair
             ),
             (
                 "environment OP validator allows bounded cold service account",
