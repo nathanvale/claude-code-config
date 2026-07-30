@@ -42,6 +42,7 @@ import {
 } from "./browser-use-auth-provider";
 import {
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseAuthTransactionFragment,
 	type BrowserUseSessionIdentityObservationV1,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 } from "./browser-use-auth-model";
@@ -51,7 +52,10 @@ import {
 	beginAuthTransaction,
 } from "./browser-use-auth-transaction";
 import { createBrowserUseAuthBindingStore } from "./browser-use-auth-binding-store";
-import type { BrowserUseResolvedAuthCandidate } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseItemBinding,
+	BrowserUseResolvedAuthCandidate,
+} from "./browser-use-auth-bindings";
 import type { HandoffFacts } from "./browser-use-discovery";
 import {
 	type BrowserUseGenerationRuntime,
@@ -1175,7 +1179,8 @@ export async function prepareRunbookGenerationAuthBinding(
 	resolution: BrowserUseResolvedAuthCandidate,
 	targetOrigins: readonly string[],
 ): Promise<
-	{ ok: true } | { ok: false; failure: BrowserUseRunbookCommandFailure }
+	| { ok: true; binding: BrowserUseItemBinding }
+	| { ok: false; failure: BrowserUseRunbookCommandFailure }
 > {
 	const prepared = await provider.prepareGenerationBinding({
 		resolution,
@@ -1183,7 +1188,44 @@ export async function prepareRunbookGenerationAuthBinding(
 		login_path: null,
 		method: "password",
 	});
-	if (prepared.ok) return { ok: true };
+	if (prepared.ok) {
+		if (prepared.binding === null) {
+			return {
+				ok: false,
+				failure: {
+					code: "runbook_auth_binding_unavailable",
+					message:
+						"the password authentication preparation returned no item binding.",
+					actionId: "repair-item-binding",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				},
+			};
+		}
+		if (
+			prepared.binding.service_id !== resolution.candidate.service_id ||
+			prepared.binding.auth_context !==
+				resolution.candidate.auth_context ||
+			!prepared.binding.allowed_auth_methods.includes("password") ||
+			targetOrigins.some(
+				(origin) =>
+					!prepared.binding?.allowed_origins.includes(origin),
+			)
+		) {
+			return {
+				ok: false,
+				failure: {
+					code: "runbook_auth_binding_unavailable",
+					message:
+						"the password authentication preparation returned a binding outside the exact runbook authority.",
+					actionId: "repair-item-binding",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				},
+			};
+		}
+		return { ok: true, binding: prepared.binding };
+	}
 	const actionId = isRunbookPlatformActionId(
 		prepared.continuation.next_action_id,
 	)
@@ -1308,6 +1350,7 @@ function authContinuationReasonOf(
 function buildRunbookAuthContinuation(input: {
 	run: BrowserUseSharedRun;
 	failure: BrowserUseRunbookCommandFailure;
+	activeCheckpoint?: RunbookAuthCheckpoint;
 	now: number;
 	generationRuntime: BrowserUseGenerationRuntime;
 	resolution: BrowserUseResolvedAuthCandidate;
@@ -1315,7 +1358,10 @@ function buildRunbookAuthContinuation(input: {
 	handoff: HandoffFacts;
 	targetBindingId: string;
 }): BrowserUseAuthRunContinuation {
-	const reason = authContinuationReasonOf(input.failure);
+	const reason =
+		input.activeCheckpoint === undefined
+			? authContinuationReasonOf(input.failure)
+			: "login-required";
 	return {
 		schema_version: "1",
 		kind: "auth",
@@ -1334,7 +1380,9 @@ function buildRunbookAuthContinuation(input: {
 				? "human"
 				: "agent",
 		safe_to_retry: false,
-		checkpoint: input.failure.code.replaceAll("_", "-"),
+		checkpoint:
+			input.activeCheckpoint ??
+			input.failure.code.replaceAll("_", "-"),
 		expires_at_epoch_ms: input.now + 15 * 60_000,
 		resume_action: {
 			command: "run",
@@ -2500,17 +2548,22 @@ async function runRunbookRun(
 		dispatchLease.lease,
 		ports.run.platformFailureOf,
 	);
-	const authBlockRun = run;
+	let authRun = run;
+	let authCheckpointCommitted = false;
 	try {
 		const emitPersistedAuthFailure = async (
 			failure: BrowserUseRunbookCommandFailure,
 		): Promise<number> => {
+			if (authCheckpointCommitted) {
+				run = authRun;
+				return ports.output.emitPlatformFailure(failure);
+			}
 			const continuation =
 				resolvedAuthCandidate !== undefined &&
 				resolvedSessionPolicy !== undefined &&
 				generationRuntime !== undefined
 					? buildRunbookAuthContinuation({
-							run: authBlockRun,
+							run: authRun,
 							failure,
 							now: ports.clock(),
 							generationRuntime,
@@ -2525,7 +2578,7 @@ async function runRunbookRun(
 			const persisted = await persistRunbookAuthBlock(
 				ports,
 				deps,
-				authBlockRun,
+				authRun,
 				dispatchClaim,
 				failure,
 				continuation,
@@ -2533,7 +2586,8 @@ async function runRunbookRun(
 			if (!persisted.ok) {
 				return ports.output.emitPlatformFailure(persisted.failure);
 			}
-			run = persisted.run;
+			authRun = persisted.run;
+			run = authRun;
 			return ports.output.emitPlatformFailure(failure);
 		};
 		const guardResult = beginSensitiveRunGuard(run.run_id);
@@ -2575,6 +2629,13 @@ async function runRunbookRun(
 					runCommand: ports.runtime.runCommand,
 				});
 			runbookRunCommand = authQuarantine.runCommand;
+			let preparedItemBinding: BrowserUseItemBinding | undefined;
+			let authFragment:
+				| BrowserUseAuthTransactionFragment
+				| undefined;
+			let preparationFailure:
+				| BrowserUseRunbookCommandFailure
+				| undefined;
 			let authenticatedSession:
 				| Extract<
 						Awaited<
@@ -2599,7 +2660,7 @@ async function runRunbookRun(
 							runCommand: runbookRunCommand,
 							targetProof,
 							handoff: verifiedHandoff,
-							runId: authBlockRun.run_id,
+							runId: authRun.run_id,
 							targetId:
 								targetResolution.target_tab_id,
 							serviceId:
@@ -2627,12 +2688,142 @@ async function runRunbookRun(
 							runCommand: runbookRunCommand,
 							targetProof,
 							handoff: verifiedHandoff,
-							runId: authBlockRun.run_id,
+							runId: authRun.run_id,
 							targetId:
 								targetResolution.target_tab_id,
-						}),
-					prepareBinding: async () => ({ ok: false }),
-					persistCheckpoint: async () => false,
+					}),
+					prepareBinding: async () => {
+						if (authProvider === undefined) {
+							return { ok: false };
+						}
+						const target =
+							await proveAgentBrowserTarget({
+								targetProof,
+								handoff: verifiedHandoff,
+								target_id:
+									targetResolution.target_tab_id,
+							});
+						if (
+							!target.ok ||
+							target.proof.top_level_origin !==
+								target.proof.frame_origin ||
+							!policy.approved_identity_provider_origins.includes(
+								target.proof.top_level_origin,
+							)
+						) {
+							return { ok: false };
+						}
+						const prepared =
+							await prepareRunbookGenerationAuthBinding(
+								authProvider,
+								resolvedAuthCandidate,
+								[target.proof.top_level_origin],
+							);
+						if (!prepared.ok) {
+							preparationFailure = prepared.failure;
+							return { ok: false };
+						}
+						const begun = beginAuthTransaction({
+							binding: {
+								run_id: authRun.run_id,
+								handoff_evidence_id:
+									agentBrowserHandoffEvidenceIdOf(
+										verifiedHandoff,
+									),
+								lane_id: "agent-browser",
+								environment:
+									handoff.environmentName,
+								profile:
+									handoff.environmentProfile,
+								service_id:
+									resolvedAuthCandidate.candidate
+										.service_id,
+								auth_context:
+									resolvedAuthCandidate.candidate
+										.auth_context,
+								origin:
+									target.proof.top_level_origin,
+								target_id: target.proof.target_id,
+								page_id: target.proof.page_id,
+								frame_id: target.proof.frame_id,
+							},
+							method: "password",
+							attempt_limit: 3,
+							attempts_already_consumed: 0,
+						});
+						if (!begun.ok) return { ok: false };
+						let fragment = begun.fragment;
+						const events: readonly BrowserUseAuthTransactionEvent[] =
+							[
+								{ type: "pre-auth-proved" },
+								{ type: "preparation-complete" },
+								{ type: "lease-granted" },
+								{
+									type: "method-step-complete",
+									step: "identify-auth-state",
+								},
+							];
+						for (const event of events) {
+							const transitioned =
+								applyAuthTransition(fragment, event);
+							if (!transitioned.ok) {
+								return { ok: false };
+							}
+							fragment = transitioned.fragment;
+						}
+						preparedItemBinding = prepared.binding;
+						authFragment = fragment;
+						return { ok: true };
+					},
+					persistCheckpoint: async (checkpoint) => {
+						if (
+							authProvider === undefined ||
+							preparedItemBinding === undefined ||
+							authFragment === undefined
+						) {
+							return false;
+						}
+						const continuation =
+							buildRunbookAuthContinuation({
+								run: authRun,
+								failure: {
+									code: "runbook_auth_login_required",
+									message:
+										"the reviewed login transaction is active.",
+									actionId:
+										"inspect-auth-readiness",
+									exitCode:
+										BINDING_FAIL_CLOSED_EXIT_CODE,
+									recoverability: "retry",
+								},
+								activeCheckpoint: checkpoint,
+								now: ports.clock(),
+								generationRuntime,
+								resolution:
+									resolvedAuthCandidate,
+								policy,
+								handoff,
+								targetBindingId:
+									targetResolution.binding
+										.target_candidate_id,
+							});
+						const committed =
+							await authProvider.commitWithClaim(
+								dispatchClaim,
+								{
+									run_id: authRun.run_id,
+									expected_revision:
+										authRun.revision,
+									fragment: authFragment,
+									continuation,
+								},
+							);
+						if (!committed.ok) return false;
+						authRun = committed.run;
+						authCheckpointCommitted = true;
+						run = authRun;
+						return true;
+					},
 					deliverField: async () => ({ status: "blocked" }),
 					submitAuthAction: async () => ({
 						status: "blocked",
@@ -2640,14 +2831,22 @@ async function runRunbookRun(
 				},
 			});
 			if (!authResult.ok) {
-				return await emitPersistedAuthFailure({
-					code: `runbook_${authResult.code.replaceAll("-", "_")}`,
-					message:
-						"the reviewed runbook authentication session could not be proven.",
-					actionId: "inspect-auth-readiness",
-					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-					recoverability: "repair_state",
-				});
+				return await emitPersistedAuthFailure(
+					authResult.code === "auth-binding-unavailable" &&
+						preparationFailure !== undefined
+						? preparationFailure
+						: {
+								code: `runbook_${authResult.code.replaceAll("-", "_")}`,
+								message:
+									"the reviewed runbook authentication session could not be proven.",
+								actionId:
+									"inspect-auth-readiness",
+								exitCode:
+									BINDING_FAIL_CLOSED_EXIT_CODE,
+								recoverability:
+									"repair_state",
+							},
+				);
 			}
 			if (authenticatedSession === undefined) {
 				return await emitPersistedAuthFailure(
@@ -2659,7 +2858,7 @@ async function runRunbookRun(
 			const committedSession =
 				await commitRunbookAuthenticatedSession({
 					deps,
-					run,
+					run: authRun,
 					claim: dispatchClaim,
 					session: authenticatedSession,
 					serviceId:

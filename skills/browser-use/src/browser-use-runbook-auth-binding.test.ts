@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { BrowserUseResolvedAuthCandidate } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseItemBinding,
+	BrowserUseResolvedAuthCandidate,
+} from "./browser-use-auth-bindings";
 import type {
 	BrowserUseAuthProvider,
 	BrowserUsePreparationBlockDetail,
@@ -28,17 +31,87 @@ const RESOLUTION: BrowserUseResolvedAuthCandidate = {
 describe("runbook generation auth binding", () => {
 	test("prepares the captured candidate before runbook execution", async () => {
 		const calls: unknown[] = [];
+		const binding: BrowserUseItemBinding = {
+			service_id: "oncore",
+			service_account_id: "service-account-1",
+			auth_context: "interactive-login",
+			allowed_origins: ["https://portal.example.com"],
+			allowed_login_paths: [],
+			vault_id: "vault-1",
+			item_id: "item-1",
+			item_revision: 7,
+			allowed_auth_methods: ["password"],
+			binding_revision: 1,
+		};
 		const provider: Pick<BrowserUseAuthProvider, "prepareGenerationBinding"> = {
 			async prepareGenerationBinding(input) {
 				calls.push(input);
 				return {
 					ok: true,
 					event: { type: "preparation-complete" },
+					binding,
+				};
+			},
+		};
+
+		expect(
+			await prepareRunbookGenerationAuthBinding(
+				provider,
+				RESOLUTION,
+				["https://portal.example.com"],
+			),
+		).toEqual({ ok: true, binding });
+		expect(calls).toEqual([
+			{
+				resolution: RESOLUTION,
+				target_origins: ["https://portal.example.com"],
+				login_path: null,
+				method: "password",
+			},
+		]);
+	});
+
+	test("refuses a missing password binding", async () => {
+		const provider: Pick<BrowserUseAuthProvider, "prepareGenerationBinding"> = {
+			async prepareGenerationBinding() {
+				return {
+					ok: true,
+					event: { type: "preparation-complete" },
+					binding: null,
+				};
+			},
+		};
+
+		expect(
+			await prepareRunbookGenerationAuthBinding(
+				provider,
+				RESOLUTION,
+				["https://portal.example.com"],
+			),
+		).toEqual({
+			ok: false,
+			failure: {
+				code: "runbook_auth_binding_unavailable",
+				message:
+					"the password authentication preparation returned no item binding.",
+				actionId: "repair-item-binding",
+				exitCode: 20,
+				recoverability: "repair_state",
+			},
+		});
+	});
+
+	test("refuses a binding outside the exact service or target origin", async () => {
+		const provider: Pick<BrowserUseAuthProvider, "prepareGenerationBinding"> = {
+			async prepareGenerationBinding() {
+				return {
+					ok: true,
+					event: { type: "preparation-complete" },
 					binding: {
-						service_id: "oncore",
+						service_id: "other-service",
 						service_account_id: "service-account-1",
 						auth_context: "interactive-login",
-						allowed_origins: ["https://portal.example.com"],
+						allowed_origins: ["https://other.example.com"],
 						allowed_login_paths: [],
 						vault_id: "vault-1",
 						item_id: "item-1",
@@ -56,15 +129,17 @@ describe("runbook generation auth binding", () => {
 				RESOLUTION,
 				["https://portal.example.com"],
 			),
-		).toEqual({ ok: true });
-		expect(calls).toEqual([
-			{
-				resolution: RESOLUTION,
-				target_origins: ["https://portal.example.com"],
-				login_path: null,
-				method: "password",
+		).toEqual({
+			ok: false,
+			failure: {
+				code: "runbook_auth_binding_unavailable",
+				message:
+					"the password authentication preparation returned a binding outside the exact runbook authority.",
+				actionId: "repair-item-binding",
+				exitCode: 20,
+				recoverability: "repair_state",
 			},
-		]);
+		});
 	});
 
 	test("maps a blocked live proof to one typed repair action", async () => {
