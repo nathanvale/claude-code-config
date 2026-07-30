@@ -168,6 +168,7 @@ const SAFE_ROUTE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const SAFE_IDENTITY_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
 const SAFE_ACTION_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const UNSAFE_SEMANTIC_NAME =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars in untrusted semantic names is the point.
 	/[\u0000-\u001f\u007f-\u009f]|\b(?:op|wss?|otpauth):\/\/|\b[A-Z2-7]{32,}\b/i;
 const MAX_SEMANTIC_NAME_LENGTH = 128;
 const MAX_AUTH_ORIGINS = 16;
