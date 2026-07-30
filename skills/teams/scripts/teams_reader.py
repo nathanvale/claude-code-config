@@ -97,6 +97,18 @@ def undef(x):
     return None if x is None or type(x).__name__ == "Undefined" else x
 
 
+# Teams keeps client-side feeds alongside real conversations, addressed as
+# `48:<feed>`. They are not chats: the local user owns every record in them, so
+# `creator` and `isSentByCurrentUser` describe the feed's owner rather than the
+# message's author. Known feeds: 48:notifications (the activity/mentions panel)
+# and 48:calllogs.
+_SYNTHETIC_FEED_PREFIX = "48:"
+
+
+def _is_synthetic_feed(conversation_id) -> bool:
+    return isinstance(conversation_id, str) and conversation_id.startswith(_SYNTHETIC_FEED_PREFIX)
+
+
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"[ \t]+")
 
@@ -388,15 +400,31 @@ class TeamsReader:
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
+                author = undef(m.get("imDisplayName")) or "(unknown)"
+                from_me = bool(m.get("isSentByCurrentUser"))
+                creator = undef(m.get("creator"))
+
+                # Synthetic feeds (48:notifications, 48:calllogs) are owned by you,
+                # not written by you: every record carries your MRI as `creator` and
+                # isSentByCurrentUser=True because it is *your* activity feed. Taking
+                # that at face value attributes other people's words to you — measured
+                # 2026-07-30, all 31 empty-author records in this store live in 48:*
+                # and none anywhere else, and 10 of the 12 notification entries exist
+                # ONLY there (no real twin to fall back on). So keep the content and
+                # drop the false ownership rather than filtering the records out.
+                if _is_synthetic_feed(cid):
+                    from_me = False
+                    creator = None
+
                 yield Message(
                     time=msg_time(m),
-                    author=undef(m.get("imDisplayName")) or "(unknown)",
-                    from_me=bool(m.get("isSentByCurrentUser")),
+                    author=author,
+                    from_me=from_me,
                     conversation_id=cid,
                     seq=undef(m.get("sequenceId")),
                     content=content,
                     message_id=server_id,
-                    creator_mri=undef(m.get("creator")),
+                    creator_mri=creator,
                 )
 
     # ---- CAP 1: digest --------------------------------------------------------
@@ -484,9 +512,13 @@ class TeamsReader:
                 content = clean(m.get("content"))
                 if not content:
                     continue
+                # Synthetic 48:* feeds mark every record as sent-by-you; see
+                # iter_messages for why that ownership flag must not be trusted.
                 chain.append(Message(
                     time=msg_time(m), author=undef(m.get("imDisplayName")) or "(unknown)",
-                    from_me=bool(m.get("isSentByCurrentUser")), conversation_id=conversation_id,
+                    from_me=(bool(m.get("isSentByCurrentUser"))
+                             and not _is_synthetic_feed(conversation_id)),
+                    conversation_id=conversation_id,
                     seq=undef(m.get("sequenceId")), content=content,
                     message_id=str(m.get("id") or mid)))
             if contains and not any(contains.lower() in c.content.lower() for c in chain):
