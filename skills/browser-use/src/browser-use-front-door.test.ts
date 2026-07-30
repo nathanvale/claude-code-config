@@ -104,7 +104,7 @@ describe("front door: guide family (D3)", () => {
 
 	test("every guide topic renders its own content", async () => {
 		const topics: Array<[string, string]> = [
-			["auth", "Auth Pointer"],
+			["auth", "Item Binding"],
 			["lanes", "lanes list"],
 			["recovery", "Repair Path"],
 			["setup", "required_binary"],
