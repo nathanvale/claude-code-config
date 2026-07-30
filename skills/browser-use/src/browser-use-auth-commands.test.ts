@@ -137,6 +137,167 @@ function lifecycleRuntime(input: {
 }
 
 describe("environment-token lifecycle public commands", () => {
+	test("admin authority receipt requires a human TTY and never writes otherwise", async () => {
+		const store = await makeStore();
+		const runtime = makeRuntime({
+			env: store.env,
+			platformFs: store.deps.fs,
+			operatorInputIsTTY: () => false,
+		});
+
+		const result = await runForTest(
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(21);
+		expect(envelopeOf(result.stdout).error.code).toBe(
+			"human-action-required",
+		);
+		expect(envelopeOf(result.stdout).continuation.next_action_id).toBe(
+			"confirm-admin-authority-receipt",
+		);
+		expect(
+			await store.deps.fs.lstat(
+				store.deps.paths.state.authAuthorityReceiptFile,
+			),
+		).toBeUndefined();
+	});
+
+	test("an authorized human records authority for the captured principal and vault", async () => {
+		const store = await makeStore();
+		let observedChallenge = "";
+		const tokenPort = fakePort({
+			getBindingEvidence: async () => ({
+				ok: true,
+				evidence: {
+					identity: {
+						service_account_id: "service-account-1",
+						state: "ACTIVE",
+						type: "SERVICE_ACCOUNT",
+					},
+					vaults: [{ vault_id: "vault-1" }],
+					item_evidence: null,
+				},
+			}),
+		});
+		const runtime = makeRuntime({
+			env: store.env,
+			platformFs: store.deps.fs,
+			operatorInputIsTTY: () => true,
+			confirmAdminAuthority: async ({ challenge }) => {
+				observedChallenge = challenge;
+				return true;
+			},
+			authAdmission: {
+				kind: "environment-admitted",
+				evidence: {
+					lane: "environment-injected-op",
+					assurance: "lower-assurance",
+					native: { verdict: "native-capability-absent" },
+					environment: {
+						state: "ready",
+						next_action: "validate-service-account",
+					},
+				},
+				tokenRetrieval: tokenPort,
+			},
+			authTokenRetrieval: tokenPort,
+		});
+
+		const result = await runForTest(
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelopeOf(result.stdout).data).toMatchObject({
+			contract: "browser-use.admin-authority-receipt",
+			state: "recorded",
+			authority: "read-item-only",
+		});
+		expect(envelopeOf(result.stdout).continuation.next_action_id).toBe(
+			"recheck-auth-status",
+		);
+		expect(observedChallenge).toMatch(/^READ-[A-F0-9]{12}$/);
+		const raw = await store.deps.fs.readTextFile(
+			store.deps.paths.state.authAuthorityReceiptFile,
+		);
+		expect(raw).not.toContain("service-account-1");
+		expect(raw).not.toContain("vault-1");
+	});
+
+	test("a TTY without the post-metadata bound challenge cannot mint authority", async () => {
+		const store = await makeStore();
+		const tokenPort = fakePort({
+			getBindingEvidence: async () => ({
+				ok: true,
+				evidence: {
+					identity: {
+						service_account_id: "service-account-1",
+						state: "ACTIVE",
+						type: "SERVICE_ACCOUNT",
+					},
+					vaults: [{ vault_id: "vault-1" }],
+					item_evidence: null,
+				},
+			}),
+		});
+		const runtime = makeRuntime({
+			env: store.env,
+			platformFs: store.deps.fs,
+			operatorInputIsTTY: () => true,
+			confirmAdminAuthority: async () => false,
+			authAdmission: {
+				kind: "environment-admitted",
+				evidence: {
+					lane: "environment-injected-op",
+					assurance: "lower-assurance",
+					native: { verdict: "native-capability-absent" },
+					environment: {
+						state: "ready",
+						next_action: "validate-service-account",
+					},
+				},
+				tokenRetrieval: tokenPort,
+			},
+			authTokenRetrieval: tokenPort,
+		});
+
+		const result = await runForTest(
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(21);
+		expect(envelopeOf(result.stdout).error.code).toBe(
+			"human-action-required",
+		);
+		expect(envelopeOf(result.stdout).continuation.next_action_id).toBe(
+			"confirm-admin-authority-receipt",
+		);
+		expect(
+			await store.deps.fs.lstat(
+				store.deps.paths.state.authAuthorityReceiptFile,
+			),
+		).toBeUndefined();
+	});
+
 	test("status reports the unavailable lower-assurance lane and one install action without OP", async () => {
 		const calls = {
 			identity: 0,
@@ -497,6 +658,7 @@ type AuthStatusSupportFixture = {
 		vault_digest: string;
 		profile_digest: string;
 		profile_posture_receipt_digest: string;
+		admin_authority_receipt_digest: string;
 		binding_context_digest: string;
 		binding_receipt_digest: string;
 		observed_at_epoch_ms: number;
@@ -513,8 +675,10 @@ const AUTH_STATUS_PROOF = {
 		"897e7115d9aca68c616685a1b387987afeebe245c6aa822345f7049fbba977ac",
 	profile_posture_receipt_digest:
 		"9999999999999999999999999999999999999999999999999999999999999999",
+	admin_authority_receipt_digest:
+		"7777777777777777777777777777777777777777777777777777777777777777",
 	binding_context_digest:
-		"01c7c46b5c848478e7d5977ead0a872518734bd30d2ec681307dc2e786b35267",
+		"4b9db45855b3bef23dfec6640d58e719a3b613aaa06607652ca9266a01faaf19",
 	binding_receipt_digest:
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	observed_at_epoch_ms: 900,
@@ -606,6 +770,35 @@ function composedStatusRuntime(input: {
 }
 
 describe("composed authentication status gate priority", () => {
+	test("binds support evidence to the one captured metadata proof", async () => {
+		const supportInputs: unknown[] = [];
+		const fixture = composedStatusRuntime({
+			support: async (proofCoordinates?: unknown) => {
+				supportInputs.push(proofCoordinates);
+				return proofCoordinates === undefined
+					? { ...authStatusSupport(), proof: null }
+					: authStatusSupport();
+			},
+		});
+
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			fixture.runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(fixture.calls).toEqual({ bindingEvidence: 1, field: 0 });
+		expect(supportInputs).toEqual([
+			undefined,
+			{
+				lane_digest: AUTH_STATUS_PROOF.lane_digest,
+				principal_digest: AUTH_STATUS_PROOF.principal_digest,
+				vault_digest: AUTH_STATUS_PROOF.vault_digest,
+				profile_digest: AUTH_STATUS_PROOF.profile_digest,
+			},
+		]);
+	});
+
 	test.each([
 		{
 			name: "missing wrapper",
@@ -722,6 +915,27 @@ describe("composed authentication status gate priority", () => {
 		expect(result.stdout).not.toContain("operator@example.test");
 	});
 
+	test("metadata failure never publishes unbound admin, profile, or binding evidence", async () => {
+		const fixture = composedStatusRuntime({
+			support: async () => authStatusSupport(),
+			rejection: rejection("output-shape-invalid"),
+		});
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			fixture.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelopeOf(result.stdout).data).toMatchObject({
+			blocked_cause: "invalid-service-account",
+			checks: {
+				admin_authority: { state: "not-evaluated" },
+				profile: { state: "not-evaluated" },
+				binding: { state: "not-evaluated" },
+			},
+		});
+	});
+
 	test.each([
 		{
 			name: "lane",
@@ -756,6 +970,15 @@ describe("composed authentication status gate priority", () => {
 				...AUTH_STATUS_PROOF,
 				profile_digest:
 					"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			},
+			cause: "support-evidence-mismatch",
+		},
+		{
+			name: "admin authority receipt",
+			proof: {
+				...AUTH_STATUS_PROOF,
+				admin_authority_receipt_digest:
+					"6666666666666666666666666666666666666666666666666666666666666666",
 			},
 			cause: "support-evidence-mismatch",
 		},
@@ -970,6 +1193,7 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 			(candidate) =>
 				![
 					"status",
+					"record-admin-authority-receipt",
 					"install-token",
 					"remove-token",
 					"inspect-auth-readiness",

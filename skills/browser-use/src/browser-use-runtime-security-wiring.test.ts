@@ -25,6 +25,12 @@ import type {
 	BrowserUseOpExecute,
 	BrowserUseTokenRetrievalPort,
 } from "./browser-use-op";
+import { createBrowserUseAdminAuthorityReceiptStore } from "./browser-use-admin-authority-receipt";
+import {
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 
 // =========================================================================
 // U10 — native TokenRetrievalPort wiring in createProductionBrowserUseRuntime.
@@ -264,6 +270,62 @@ describe("U4 three-state production lane admission", () => {
 		]);
 		for (const state of Object.values(evidence.executables)) {
 			expect(["ready", "missing", "unsafe", "unproven"]).toContain(state);
+		}
+	});
+
+	test("production support reuses preflight and admits the exact human authority receipt only after metadata binding", async () => {
+		const xdg = makeTempXdgEnv();
+		try {
+			const fs = createDefaultPlatformFs();
+			const opened = await openBrowserUsePaths(fs, xdg.env);
+			if (!opened.ok) throw new Error("paths refused");
+			const coordinates = {
+				lane_digest: "1".repeat(64),
+				principal_digest: "2".repeat(64),
+				vault_digest: "3".repeat(64),
+				profile_digest: "4".repeat(64),
+			};
+			const receipt = await createBrowserUseAdminAuthorityReceiptStore({
+				fs,
+				paths: opened.paths,
+				clock: () => 1_000,
+			}).record(coordinates);
+			expect(receipt.ok).toBe(true);
+
+			const runtime = await createProductionBrowserUseRuntime({
+				env: xdg.env,
+				platformFs: fs,
+				environmentTokenLifecycle: {
+					inputIsTTY: () => false,
+					execute: async () => ({
+						state: "blocked",
+						cause: "token-unsafe",
+						next_action: "repair-token-custody",
+					}),
+				},
+			});
+			const preflight = (await runtime.authStatusSupport?.()) as {
+				admin_authority: string;
+				executables: Record<string, string>;
+			};
+			const bound = (await runtime.authStatusSupport?.(coordinates)) as {
+				admin_authority: string;
+				executables: Record<string, string>;
+				profile: string;
+				binding: string;
+				proof: unknown;
+			};
+
+			expect(preflight.admin_authority).toBe("missing");
+			expect(bound).toMatchObject({
+				admin_authority: "proven",
+				profile: "unproven",
+				binding: "missing",
+				proof: null,
+			});
+			expect(bound.executables).toEqual(preflight.executables);
+		} finally {
+			xdg.dispose();
 		}
 	});
 

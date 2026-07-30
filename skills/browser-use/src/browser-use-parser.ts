@@ -210,10 +210,19 @@ export function parseBrowserUseArgv(
 	validateEnumFlagValues(flagValues, flags);
 	if (
 		command === "auth-status" ||
+		command === "auth-record-admin-authority-receipt" ||
 		command === "auth-install-token" ||
 		command === "auth-remove-token"
 	) {
 		rejectUnexpectedPositionals(rest, flags);
+	}
+	if (
+		command === "auth-record-admin-authority-receipt" &&
+		!Object.hasOwn(flagValues, "--confirm-read-item-only")
+	) {
+		throw usageError(
+			"auth record-admin-authority-receipt requires --confirm-read-item-only.",
+		);
 	}
 	if (command === "run-resume" || command === "run-cancel") {
 		const runId = stringField(flagValues["--run"]);
@@ -429,6 +438,11 @@ function rejectUnexpectedPositionals(
 		}
 		const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
 		const spec = flags[name];
+		if (spec?.type === "boolean" && arg.includes("=")) {
+			throw usageError(
+				`boolean flag ${name} accepts no assigned value; pass the flag alone.`,
+			);
+		}
 		if (
 			spec !== undefined &&
 			!arg.includes("=") &&

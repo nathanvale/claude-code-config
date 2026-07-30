@@ -345,8 +345,9 @@ describe("U9 packaged public interface", () => {
 								profile_digest:
 									"897e7115d9aca68c616685a1b387987afeebe245c6aa822345f7049fbba977ac",
 								profile_posture_receipt_digest: "9".repeat(64),
+								admin_authority_receipt_digest: "7".repeat(64),
 								binding_context_digest:
-									"01c7c46b5c848478e7d5977ead0a872518734bd30d2ec681307dc2e786b35267",
+									"4b9db45855b3bef23dfec6640d58e719a3b613aaa06607652ca9266a01faaf19",
 								binding_receipt_digest: "a".repeat(64),
 								observed_at_epoch_ms: 900,
 								fresh_until_epoch_ms: 1_100,

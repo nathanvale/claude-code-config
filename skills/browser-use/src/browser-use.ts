@@ -39,6 +39,8 @@ import {
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_CONTRACT_ID,
+	BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_SCHEMA_VERSION,
 	BROWSER_USE_AUTH_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
@@ -64,6 +66,8 @@ import {
 	type BrowserUseGuideTopic,
 	type BrowserUseGenerationResult,
 	browserUseAdapterLanesFailureActions,
+	browserUseAdminAuthorityReceiptActions,
+	browserUseAdminAuthorityReceiptFailureActions,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
 	browserUseAuthStatusActions,
@@ -100,6 +104,7 @@ import {
 	runAuthConformanceMatrix,
 } from "./browser-use-auth-conformance";
 import { inspectBrowserUseAuthMetadata } from "./browser-use-auth-provider";
+import { createBrowserUseAdminAuthorityReceiptStore } from "./browser-use-admin-authority-receipt";
 import {
 	type BrowserAdapterId,
 	BROWSER_USE_LIVE_ADAPTERS,
@@ -713,6 +718,17 @@ async function executeCommand(input: {
 	// as live check commands. Native custody absence is a typed evaluation,
 	// never a crash; dry-run keeps the mock envelope below.
 	if (parsed.family === "auth" && !parsed.dryRun) {
+		if (parsed.command === "auth-record-admin-authority-receipt") {
+			return runAdminAuthorityReceipt({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
 		if (
 			parsed.command === "auth-status" ||
 			parsed.command === "auth-install-token" ||
@@ -4479,6 +4495,7 @@ type BrowserUseAuthStatusSupportingEvidence = {
 		vault_digest: string;
 		profile_digest: string;
 		profile_posture_receipt_digest: string;
+		admin_authority_receipt_digest: string;
 		binding_context_digest: string;
 		binding_receipt_digest: string;
 		observed_at_epoch_ms: number;
@@ -4577,6 +4594,7 @@ function parseAuthStatusSupportingEvidence(
 				"vault_digest",
 				"profile_digest",
 				"profile_posture_receipt_digest",
+				"admin_authority_receipt_digest",
 				"binding_context_digest",
 				"binding_receipt_digest",
 				"observed_at_epoch_ms",
@@ -4592,6 +4610,7 @@ function parseAuthStatusSupportingEvidence(
 			"vault_digest",
 			"profile_digest",
 			"profile_posture_receipt_digest",
+			"admin_authority_receipt_digest",
 			"binding_context_digest",
 			"binding_receipt_digest",
 		] as const) {
@@ -4621,6 +4640,8 @@ function parseAuthStatusSupportingEvidence(
 			profile_digest: value.proof.profile_digest as string,
 			profile_posture_receipt_digest:
 				value.proof.profile_posture_receipt_digest as string,
+			admin_authority_receipt_digest:
+				value.proof.admin_authority_receipt_digest as string,
 			binding_context_digest: value.proof.binding_context_digest as string,
 			binding_receipt_digest: value.proof.binding_receipt_digest as string,
 			observed_at_epoch_ms: value.proof.observed_at_epoch_ms as number,
@@ -4675,6 +4696,7 @@ function authStatusProofMatches(
 				expected.vault_digest,
 				expected.profile_digest,
 				proof.profile_posture_receipt_digest,
+				proof.admin_authority_receipt_digest,
 				proof.binding_receipt_digest,
 			].join("\0"),
 		)
@@ -4934,16 +4956,16 @@ async function emitSignedAuthAdmissionStatus(
 	}
 
 	const metadata = await inspectBrowserUseAuthMetadata(admission);
-	const checks = {
+	let checks = {
 		token_file: { state: tokenFileState },
 		op: { state: supporting.executables.op },
 		wrapper: { state: supporting.executables.wrapper },
 		helper: { state: supporting.executables.helper },
 		service_account: { state: metadata.service_account },
 		vault_scope: { state: metadata.vault_scope },
-		admin_authority: { state: supporting.admin_authority },
-		profile: { state: supporting.profile },
-		binding: { state: supporting.binding },
+		admin_authority: { state: "not-evaluated" },
+		profile: { state: "not-evaluated" },
+		binding: { state: "not-evaluated" },
 	};
 	if (!metadata.ok) {
 		return emitAuthStatusResult(
@@ -4974,6 +4996,55 @@ async function emitSignedAuthAdmissionStatus(
 			"repair-vault-grant",
 		);
 	}
+	if (metadata.proof_coordinates === null) {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: "support-evidence-unavailable",
+				checks,
+			},
+			"inspect-capability-loss",
+		);
+	}
+	let boundSupporting: BrowserUseAuthStatusSupportingEvidence | undefined;
+	try {
+		boundSupporting =
+			input.runtime.authStatusSupport === undefined
+				? undefined
+				: parseAuthStatusSupportingEvidence(
+						await input.runtime.authStatusSupport(
+							metadata.proof_coordinates,
+						),
+					);
+	} catch {
+		boundSupporting = undefined;
+	}
+	if (
+		boundSupporting === undefined ||
+		boundSupporting.executables.op !== supporting.executables.op ||
+		boundSupporting.executables.wrapper !== supporting.executables.wrapper ||
+		boundSupporting.executables.helper !== supporting.executables.helper
+	) {
+		return emitAuthStatusResult(
+			input,
+			{
+				...common,
+				state: "blocked",
+				blocked_cause: "support-evidence-unavailable",
+				checks,
+			},
+			"inspect-capability-loss",
+		);
+	}
+	supporting = boundSupporting;
+	checks = {
+		...checks,
+		admin_authority: { state: supporting.admin_authority },
+		profile: { state: supporting.profile },
+		binding: { state: supporting.binding },
+	};
 	if (supporting.admin_authority !== "proven") {
 		return emitAuthStatusResult(
 			input,
@@ -5036,6 +5107,202 @@ async function emitSignedAuthAdmissionStatus(
 		},
 		"run-authenticated-runbook",
 	);
+}
+
+const adminAuthorityReceiptActionById = new Map<
+	string,
+	| (typeof browserUseAdminAuthorityReceiptActions)[number]
+	| (typeof browserUseAdminAuthorityReceiptFailureActions)[number]
+>(
+	[
+		...browserUseAdminAuthorityReceiptActions,
+		...browserUseAdminAuthorityReceiptFailureActions,
+	].map((action) => [action.id, action]),
+);
+
+function adminAuthorityReceiptAction(id: string): RuntimeActionGuidance {
+	const safeId = adminAuthorityReceiptActionById.has(id)
+		? id
+		: "inspect-capability-loss";
+	return actionFor(
+		adminAuthorityReceiptActionById,
+		safeId,
+		"admin authority receipt",
+	);
+}
+
+function emitAdminAuthorityReceiptFailure(
+	input: PlatformCommandInput,
+	failure: {
+		code: string;
+		message: string;
+		actionId: string;
+		exitCode?: number;
+	},
+): number {
+	const exitCode = failure.exitCode ?? BINDING_FAIL_CLOSED_EXIT_CODE;
+	const action = adminAuthorityReceiptAction(failure.actionId);
+	const data = {
+		contract: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_CONTRACT_ID,
+		schema_version: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_SCHEMA_VERSION,
+		state: "blocked",
+		authority: "read-item-only",
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${failure.code}: ${failure.message} action=${action.id} (run_id=${input.runId})\n`,
+		);
+		return exitCode;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: exitCode,
+			data,
+			runtime_actions: [action],
+			continuation: { next_action_id: action.id },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: failure.code,
+				message: failure.message,
+				exit_code: exitCode,
+				severity: "error",
+				...retryabilityForRecoverability(
+					exitCode === 21 ? "authenticate" : "repair_state",
+				),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return exitCode;
+}
+
+async function runAdminAuthorityReceipt(
+	input: PlatformCommandInput,
+): Promise<number> {
+	if (!(input.runtime.operatorInputIsTTY?.() ?? false)) {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "human-action-required",
+			message:
+				"An authorized human must confirm read-item-only authority from an interactive terminal.",
+			actionId: "confirm-admin-authority-receipt",
+			exitCode: 21,
+		});
+	}
+	const admission = input.runtime.authAdmission;
+	if (admission === undefined || admission.kind === "blocked") {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "admin_authority_lane_unavailable",
+			message:
+				"An admitted authentication lane is required before authority can be recorded.",
+			actionId:
+				admission?.evidence.environment?.state === "missing"
+					? "install-local-token"
+					: "inspect-capability-loss",
+		});
+	}
+	const metadata = await inspectBrowserUseAuthMetadata(admission);
+	if (!metadata.ok) {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "admin_authority_metadata_unavailable",
+			message:
+				"The admitted principal and vault authority could not be proven.",
+			actionId:
+				metadata.blocked_cause === "missing-token"
+					? "install-local-token"
+					: "inspect-capability-loss",
+		});
+	}
+	if (
+		metadata.vault_scope !== "exactly-one" ||
+		metadata.proof_coordinates === null
+	) {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "admin_authority_vault_scope_invalid",
+			message:
+				"Read-item-only authority can be recorded only for exactly one visible vault.",
+			actionId: "repair-vault-grant",
+		});
+	}
+	const confirmationChallenge = `READ-${createHash("sha256")
+		.update(
+			[
+				"browser-use.admin-authority-confirmation.v1",
+				input.runId,
+				metadata.proof_coordinates.lane_digest,
+				metadata.proof_coordinates.principal_digest,
+				metadata.proof_coordinates.vault_digest,
+			].join("\0"),
+		)
+		.digest("hex")
+		.slice(0, 12)
+		.toUpperCase()}`;
+	let confirmed = false;
+	try {
+		confirmed =
+			(await input.runtime.confirmAdminAuthority?.({
+				challenge: confirmationChallenge,
+			})) ?? false;
+	} catch {
+		confirmed = false;
+	}
+	if (!confirmed) {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "human-action-required",
+			message:
+				"The bound read-item-only authority challenge was not confirmed.",
+			actionId: "confirm-admin-authority-receipt",
+			exitCode: 21,
+		});
+	}
+	const opened = await openPlatformStore(input, "write");
+	if (!opened.ok) return opened.exitCode;
+	const store = createBrowserUseAdminAuthorityReceiptStore({
+		fs: opened.deps.fs,
+		paths: opened.deps.paths,
+		clock: input.runtime.now,
+	});
+	const recorded = await store.record({
+		lane_digest: metadata.proof_coordinates.lane_digest,
+		principal_digest: metadata.proof_coordinates.principal_digest,
+		vault_digest: metadata.proof_coordinates.vault_digest,
+	});
+	if (!recorded.ok) {
+		return emitAdminAuthorityReceiptFailure(input, {
+			code: "admin_authority_receipt_unavailable",
+			message:
+				"The owner-only authority receipt could not be recorded safely.",
+			actionId: "inspect-capability-loss",
+		});
+	}
+	const action = adminAuthorityReceiptAction("recheck-auth-status");
+	const data = {
+		contract: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_CONTRACT_ID,
+		schema_version: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_SCHEMA_VERSION,
+		state: "recorded",
+		authority: "read-item-only",
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			`contract=${data.contract} schema=${data.schema_version} state=${data.state} authority=${data.authority} continuation=${action.id}\n`,
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data,
+			runtime_actions: [action],
+			continuation: { next_action_id: action.id },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
 }
 
 async function runEnvironmentTokenLifecycle(
@@ -5453,6 +5720,7 @@ async function evaluateAuthReadiness(
 			};
 		}
 		case "status":
+		case "record-admin-authority-receipt":
 		case "install-token":
 		case "remove-token":
 			throw new Error("environment token lifecycle command reached auth readiness");

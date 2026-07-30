@@ -362,6 +362,9 @@ export const BROWSER_USE_AUTH_STATUS_CONTRACT_ID =
 	"browser-use.auth-status" as const;
 /** First secret-free composed authentication status schema. */
 export const BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_CONTRACT_ID =
+	"browser-use.admin-authority-receipt" as const;
+export const BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID =
 	"browser-use.environment-token-lifecycle" as const;
 export const BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_SCHEMA_VERSION =
@@ -528,6 +531,7 @@ export type BrowserUseRepairSubcommand =
 // state, never a crash or a stub.
 export const BROWSER_USE_AUTH_SUBCOMMANDS = [
 	"status",
+	"record-admin-authority-receipt",
 	"install-token",
 	"remove-token",
 	"enroll-browser-automation-token",
@@ -647,6 +651,7 @@ export type BrowserUseCommand =
 	| "repair-status"
 	| "repair-apply"
 	| "auth-status"
+	| "auth-record-admin-authority-receipt"
 	| "auth-install-token"
 	| "auth-remove-token"
 	| "auth-enroll-browser-automation-token"
@@ -825,6 +830,10 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// against a run whose persisted continuation names a DIFFERENT next safe
 	// action fails closed — the run's own continuation stays the one truth.
 	"auth_continuation_mismatch",
+	"admin_authority_lane_unavailable",
+	"admin_authority_metadata_unavailable",
+	"admin_authority_vault_scope_invalid",
+	"admin_authority_receipt_unavailable",
 	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
 	// Each routing/dispatch failure class maps to its own recovery, never a
 	// silent lane substitution (R10, AE3) or an optimistic retry (R26, F7).
@@ -1894,6 +1903,12 @@ const browserUseAuthStatusResultContract = {
 	schema_version: BROWSER_USE_AUTH_STATUS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseAdminAuthorityReceiptResultContract = {
+	id: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_CONTRACT_ID,
+	kind: "Bounded human authority receipt.",
+	schema_version: BROWSER_USE_ADMIN_AUTHORITY_RECEIPT_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
 const browserUseEnvironmentTokenLifecycleResultContract = {
 	id: BROWSER_USE_ENVIRONMENT_TOKEN_LIFECYCLE_CONTRACT_ID,
 	kind: "Local auth lifecycle state with one next safe action.",
@@ -2073,6 +2088,35 @@ const browserUseAuthStatusFailureActions = [
 	...browserUseAuthStatusActions,
 	...browserUsePlatformStoreFailureActions,
 ] as const;
+
+export const browserUseAdminAuthorityReceiptActions = [
+	{
+		id: "recheck-auth-status",
+		summary: "Re-run browser-use auth status against the recorded authority.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseAdminAuthorityReceiptFailureActions = [
+	...browserUsePlatformStoreFailureActions,
+	...browserUseEnvironmentTokenLifecycleActions,
+	...browserUseAuthRepairActions,
+	{
+		id: "confirm-admin-authority-receipt",
+		summary:
+			"Re-run this command from an interactive terminal and answer its metadata-bound authority challenge.",
+		sideEffects: ["auth", "write"],
+	},
+] as const;
+
+const browserUseAdminAuthorityReceiptFlags = {
+	"--confirm-read-item-only": {
+		type: "boolean",
+		description:
+			"Confirm that an authorized human verified this service account has read-item-only authority over its one visible vault.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseAuthFlags = {
 	"--run": {
@@ -2814,6 +2858,33 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseAuthStatusFailureActions,
 			},
 			flags: browserUseEnvironmentTokenLifecycleFlags,
+			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,
+		},
+		"auth-record-admin-authority-receipt": {
+			script: "browser-use",
+			summary:
+				"Record a human-confirmed read-item-only authority receipt for the admitted principal and one visible vault.",
+			usage: [
+				"auth record-admin-authority-receipt --confirm-read-item-only [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["auth", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"The explicit human confirmation is the bounded write authority; status is the read-only preview.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "required",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAdminAuthorityReceiptResultContract,
+			actionAffordances: {
+				success: browserUseAdminAuthorityReceiptActions,
+				failure: browserUseAdminAuthorityReceiptFailureActions,
+			},
+			flags: browserUseAdminAuthorityReceiptFlags,
 			exitCodes: browserUseEnvironmentTokenLifecycleExitCodes,
 		},
 		"auth-install-token": {

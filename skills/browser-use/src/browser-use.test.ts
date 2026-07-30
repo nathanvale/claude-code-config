@@ -62,6 +62,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"repair-apply",
 	// Environment-token lifecycle plus R27 auth repair surface.
 	"auth-status",
+	"auth-record-admin-authority-receipt",
 	"auth-install-token",
 	"auth-remove-token",
 	"auth-enroll-browser-automation-token",
@@ -114,6 +115,17 @@ describe("U3 command contract", () => {
 			"resume_generation_drift",
 			"resume_generation_unavailable",
 			"resume_binding_invalid",
+		] as const) {
+			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
+		}
+	});
+
+	test("registers every admin authority receipt diagnostic emitted by the driver", () => {
+		for (const code of [
+			"admin_authority_lane_unavailable",
+			"admin_authority_metadata_unavailable",
+			"admin_authority_vault_scope_invalid",
+			"admin_authority_receipt_unavailable",
 		] as const) {
 			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
 		}

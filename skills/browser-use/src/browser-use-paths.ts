@@ -735,6 +735,8 @@ export type BrowserUseAdmittedPaths = {
 		authBindingsDir: string;
 		/** <state>/auth-bindings/<candidate-id>.json */
 		authBindingFile(candidateId: string): string;
+		/** <state>/admin-authority-receipt.json */
+		authAuthorityReceiptFile: string;
 		/** <state>/attestations/<full-64-hex-digest>.json */
 		attestationFile(digest: string): string;
 		/** <state>/activation-epoch.json */
@@ -813,6 +815,10 @@ function deriveAdmittedPaths(
 				assertSafePathSegment(candidateId);
 				return join(authBindingsDir, `${candidateId}.json`);
 			},
+			authAuthorityReceiptFile: join(
+				roots.state,
+				"admin-authority-receipt.json",
+			),
 			attestationFile(digest: string): string {
 				assertAttestationDigestShape(digest);
 				return join(attestationsDir, `${digest}.json`);

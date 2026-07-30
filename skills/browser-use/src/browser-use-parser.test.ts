@@ -158,6 +158,19 @@ describe("U3 parser", () => {
 			command: "auth-remove-token",
 			outputMode: "json",
 		});
+		expect(
+			parseBrowserUseArgv([
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "auth-record-admin-authority-receipt",
+			outputMode: "json",
+			flagValues: { "--confirm-read-item-only": "" },
+		});
 
 		for (const argv of [
 			["auth", "install-token", "raw-token"],
@@ -165,6 +178,18 @@ describe("U3 parser", () => {
 			["auth", "install-token", "--token-env", "OP_SERVICE_ACCOUNT_TOKEN"],
 			["auth", "status", "--stdin"],
 			["auth", "remove-token", "--stdin"],
+			["auth", "record-admin-authority-receipt"],
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only",
+				"forged",
+			],
+			[
+				"auth",
+				"record-admin-authority-receipt",
+				"--confirm-read-item-only=false",
+			],
 		]) {
 			expect(() => parseBrowserUseArgv(argv)).toThrow();
 		}

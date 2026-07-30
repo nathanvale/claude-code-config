@@ -13,6 +13,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { createInterface } from "node:readline/promises";
 import {
 	type AdmissionRuntime,
 	createNativeAbsentRuntime,
@@ -51,8 +52,10 @@ import {
 	type BrowserUsePlatformFs,
 	admitBrowserUseRoot,
 	createDefaultPlatformFs,
+	inspectBrowserUsePaths,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
+import { createBrowserUseAdminAuthorityReceiptStore } from "./browser-use-admin-authority-receipt";
 import {
 	type BrowserUseEnvironmentTokenCustodyAction,
 	type BrowserUseEnvironmentTokenCustodyState,
@@ -117,7 +120,16 @@ export type BrowserUseAuthAdmissionSnapshot =
  * proof. Browser Use treats the returned value as untrusted and applies an
  * exact bounded projection before reporting it.
  */
-export type BrowserUseAuthStatusSupportPort = () => Promise<unknown>;
+export type BrowserUseAuthStatusSupportCoordinates = {
+	lane_digest: string;
+	principal_digest: string;
+	vault_digest: string;
+	profile_digest: string;
+};
+
+export type BrowserUseAuthStatusSupportPort = (
+	proofCoordinates?: BrowserUseAuthStatusSupportCoordinates,
+) => Promise<unknown>;
 
 /** Secret-free native lifecycle request; input names a channel, never bytes. */
 export type BrowserUseEnvironmentTokenLifecycleRequest = {
@@ -680,6 +692,12 @@ export type BrowserUseRuntime = {
 	// mirroring the Router envelope seam. Returns "" when nothing is piped; the
 	// inline env var is the fallback the CLI driver applies when this is empty.
 	readStdin: () => Promise<string>;
+	/** True only when the invoking human owns an interactive terminal. */
+	operatorInputIsTTY?: () => boolean;
+	/** Post-metadata human challenge; the response never enters argv or state. */
+	confirmAdminAuthority?: (input: {
+		challenge: string;
+	}) => Promise<boolean>;
 	/** Platform store filesystem (U2). Default binds node:fs/promises; tests
 	 *  inject temp-rooted real fs or the volatile-overlay fake. */
 	platformFs: BrowserUsePlatformFs;
@@ -754,6 +772,23 @@ export function createDefaultBrowserUseRuntime(
 			await mkdir(path, { recursive: true, mode: 0o700 });
 		},
 		readStdin: () => readAllStdin(),
+		operatorInputIsTTY: () => Boolean(process.stdin.isTTY),
+		confirmAdminAuthority: async ({ challenge }) => {
+			if (!process.stdin.isTTY) return false;
+			const terminal = createInterface({
+				input: process.stdin,
+				output: process.stderr,
+				terminal: true,
+			});
+			try {
+				const response = await terminal.question(
+					`Type ${challenge} to attest read-item-only authority: `,
+				);
+				return response.trim() === challenge;
+			} finally {
+				terminal.close();
+			}
+		},
 		platformFs: createDefaultPlatformFs(),
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
@@ -797,7 +832,7 @@ export async function createProductionBrowserUseRuntime(
 		runtime.authAdmission.kind === "blocked"
 			? undefined
 			: runtime.authAdmission.tokenRetrieval;
-	runtime.authStatusSupport ??= createProductionAuthStatusSupportPort();
+	runtime.authStatusSupport ??= createProductionAuthStatusSupportPort(runtime);
 	return runtime;
 }
 
@@ -1316,22 +1351,38 @@ export async function inspectBrowserUseAuthStatusExecutable(
  * explicitly as absent/unproven so the status composer can prioritize a
  * bounded repair without claiming live evidence.
  */
-function createProductionAuthStatusSupportPort(): BrowserUseAuthStatusSupportPort {
-	return async () => {
+function createProductionAuthStatusSupportPort(
+	runtime: Pick<BrowserUseRuntime, "env" | "now" | "platformFs">,
+): BrowserUseAuthStatusSupportPort {
+	let executableEvidence:
+		| Promise<{
+				op: "ready" | "missing" | "unsafe" | "unproven";
+				wrapper: "ready" | "missing" | "unsafe" | "unproven";
+				helper: "ready" | "missing" | "unsafe" | "unproven";
+		  }>
+		| undefined;
+	const inspectExecutables = () => {
+		if (executableEvidence !== undefined) return executableEvidence;
 		const nativeBinRoot = browserUseNativeBinRoot();
 		const supervisorPath = join(nativeBinRoot, "browser-use-op-supervisor");
 		const opPath = fixedOpExecutablePath();
-		const [op, wrapper, helper] = await Promise.all([
-			inspectBrowserUseAuthStatusExecutable(opPath, {
-				kind: "op",
-				approved_path: opPath,
-				supervisor_path: supervisorPath,
-			}),
-			inspectBrowserUseAuthStatusExecutable(supervisorPath, {
-				kind: "owned-native",
-				approved_path: supervisorPath,
-				expected_identifier: "browser-use-op-supervisor",
-			}),
+		executableEvidence = Promise.all([
+			inspectBrowserUseAuthStatusExecutable(
+				opPath,
+				{
+					kind: "op",
+					approved_path: opPath,
+					supervisor_path: supervisorPath,
+				},
+			),
+			inspectBrowserUseAuthStatusExecutable(
+				supervisorPath,
+				{
+					kind: "owned-native",
+					approved_path: supervisorPath,
+					expected_identifier: "browser-use-op-supervisor",
+				},
+			),
 			inspectBrowserUseAuthStatusExecutable(
 				join(nativeBinRoot, "browser-use-confidential-delivery"),
 				{
@@ -1343,12 +1394,42 @@ function createProductionAuthStatusSupportPort(): BrowserUseAuthStatusSupportPor
 					expected_identifier: "browser-use-confidential-delivery",
 				},
 			),
-		]);
+		]).then(([op, wrapper, helper]) => ({ op, wrapper, helper }));
+		return executableEvidence;
+	};
+	return async (coordinates) => {
+		const executables = await inspectExecutables();
+		let adminAuthority: "proven" | "missing" | "invalid" = "missing";
+		if (coordinates !== undefined) {
+			const opened = await inspectBrowserUsePaths(
+				runtime.platformFs,
+				runtime.env,
+			);
+			if (!opened.ok) {
+				adminAuthority = "invalid";
+			} else {
+				const receipt = await createBrowserUseAdminAuthorityReceiptStore({
+					fs: runtime.platformFs,
+					paths: opened.paths,
+					clock: runtime.now,
+				}).inspect({
+					lane_digest: coordinates.lane_digest,
+					principal_digest: coordinates.principal_digest,
+					vault_digest: coordinates.vault_digest,
+				});
+				adminAuthority =
+					receipt.state === "proven"
+						? "proven"
+						: receipt.state === "missing"
+							? "missing"
+							: "invalid";
+			}
+		}
 		return {
 			contract: "browser-use.auth-status-support",
 			schema_version: "1",
-			executables: { op, wrapper, helper },
-			admin_authority: "missing",
+			executables,
+			admin_authority: adminAuthority,
 			profile: "unproven",
 			binding: "missing",
 			proof: null,

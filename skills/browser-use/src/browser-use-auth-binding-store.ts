@@ -322,10 +322,9 @@ export function isPrivateBindingFileMetadataAdmitted(
 	);
 }
 
-function openAnchoredBindingsDirectory(
+function openAnchoredStateDirectory(
 	stateRoot: string,
 	expectedUid: number | undefined,
-	create: boolean,
 ): AnchoredDirectory {
 	const io = loadDescriptorRelativeIo();
 	if (io === null || expectedUid === undefined) return { status: "refused" };
@@ -353,6 +352,7 @@ function openAnchoredBindingsDirectory(
 		0,
 	);
 	if (current < 0) return { status: "refused" };
+	let retained = false;
 	try {
 		for (const component of canonical.split("/").filter(Boolean)) {
 			const next = io.openAt(
@@ -375,11 +375,29 @@ function openAnchoredBindingsDirectory(
 			state.ino !== initial.ino ||
 			state.uid !== expectedUid ||
 			(state.mode & 0o777) !== 0o700
-		) {
-			return { status: "refused" };
-		}
+			) {
+				return { status: "refused" };
+			}
+		retained = true;
+		return { status: "admitted", descriptor: current };
+	} catch {
+		return { status: "refused" };
+	} finally {
+		if (!retained) closeSync(current);
+	}
+}
+
+function openAnchoredBindingsDirectory(
+	stateRoot: string,
+	expectedUid: number | undefined,
+	create: boolean,
+): AnchoredDirectory {
+	const io = loadDescriptorRelativeIo();
+	const state = openAnchoredStateDirectory(stateRoot, expectedUid);
+	if (io === null || state.status !== "admitted") return state;
+	try {
 		let bindings = io.openAt(
-			current,
+			state.descriptor,
 			"auth-bindings",
 			fsConstants.O_RDONLY |
 				fsConstants.O_DIRECTORY |
@@ -391,11 +409,11 @@ function openAnchoredBindingsDirectory(
 			return { status: "missing" };
 		}
 		if (bindings < 0 && create) {
-			if (io.mkdirAt(current, "auth-bindings", 0o700) !== 0) {
+			if (io.mkdirAt(state.descriptor, "auth-bindings", 0o700) !== 0) {
 				return { status: "refused" };
 			}
 			bindings = io.openAt(
-				current,
+				state.descriptor,
 				"auth-bindings",
 				fsConstants.O_RDONLY |
 					fsConstants.O_DIRECTORY |
@@ -418,7 +436,7 @@ function openAnchoredBindingsDirectory(
 	} catch {
 		return { status: "refused" };
 	} finally {
-		closeSync(current);
+		closeSync(state.descriptor);
 	}
 }
 
@@ -426,6 +444,7 @@ function readPrivateBindingFile(
 	directory: number,
 	name: string,
 	expectedUid: number | undefined,
+	exactMode?: number,
 	):
 	| { status: "present"; raw: string }
 	| { status: "missing" }
@@ -436,6 +455,7 @@ function readPrivateBindingFile(
 		directory,
 		name,
 		fsConstants.O_RDONLY |
+			fsConstants.O_NONBLOCK |
 			fsConstants.O_NOFOLLOW |
 			DARWIN_O_CLOEXEC,
 		0,
@@ -454,7 +474,7 @@ function readPrivateBindingFile(
 				size: stat.size,
 			},
 			expectedUid,
-		)) {
+		) || (exactMode !== undefined && (stat.mode & 0o777) !== exactMode)) {
 			return { status: "refused" };
 		}
 		const bytes = Buffer.alloc(Math.min(stat.size + 1, MAX_CACHE_BYTES + 1));
@@ -484,10 +504,16 @@ function writePrivateBindingFile(
 	name: string,
 	expectedOwnerUid: number | undefined,
 	contents: string,
+	exactMode?: number,
 ): boolean {
 	const io = loadDescriptorRelativeIo();
 	if (io === null) return false;
-	const existing = readPrivateBindingFile(directory, name, expectedOwnerUid);
+	const existing = readPrivateBindingFile(
+		directory,
+		name,
+		expectedOwnerUid,
+		exactMode,
+	);
 	if (existing.status === "refused") return false;
 
 	const tempName = `${name}.tmp-${randomBytes(16).toString("hex")}`;
@@ -529,6 +555,118 @@ function writePrivateBindingFile(
 	} finally {
 		if (tempOpen) closeSync(tempDescriptor);
 		if (!published) io.unlinkAt(directory, tempName);
+	}
+}
+
+export type BrowserUseAnchoredPrivateStateFileRead =
+	| { status: "present"; raw: string }
+	| { status: "missing" }
+	| { status: "refused" };
+
+function safePrivateStateLeaf(name: string): boolean {
+	return (
+		name !== "" &&
+		name === basename(name) &&
+		name !== "." &&
+		name !== ".." &&
+		!name.includes("\0")
+	);
+}
+
+/**
+ * Read one private state leaf through a descriptor anchored to the admitted
+ * state-directory inode. Ancestor and leaf swaps cannot redirect the read.
+ */
+export async function readBrowserUseAnchoredPrivateStateFile(input: {
+	stateRoot: string;
+	name: string;
+	expectedOwnerUid?: number;
+	exactMode?: number;
+	afterDirectoryOpenedForTest?: () => Promise<void>;
+}): Promise<BrowserUseAnchoredPrivateStateFileRead> {
+	if (!safePrivateStateLeaf(input.name)) return { status: "refused" };
+	const expectedOwnerUid = input.expectedOwnerUid ?? process.getuid?.();
+	const directory = openAnchoredStateDirectory(
+		input.stateRoot,
+		expectedOwnerUid,
+	);
+	if (directory.status !== "admitted") return directory;
+	try {
+		await input.afterDirectoryOpenedForTest?.();
+		return readPrivateBindingFile(
+			directory.descriptor,
+			input.name,
+			expectedOwnerUid,
+			input.exactMode,
+		);
+	} catch {
+		return { status: "refused" };
+	} finally {
+		closeSync(directory.descriptor);
+	}
+}
+
+/**
+ * Durably replace one private state leaf through its anchored directory.
+ *
+ * `replaceRefused` is reserved for a separately challenged repair command. It
+ * unlinks only the exact anchored leaf; directories and ancestor redirects
+ * remain refused.
+ */
+export async function writeBrowserUseAnchoredPrivateStateFile(input: {
+	stateRoot: string;
+	name: string;
+	contents: string;
+	expectedOwnerUid?: number;
+	exactMode?: number;
+	replaceRefused?: boolean;
+	afterDirectoryOpenedForTest?: () => Promise<void>;
+}): Promise<{ status: "written" | "refused" }> {
+	if (
+		!safePrivateStateLeaf(input.name) ||
+		Buffer.byteLength(input.contents, "utf8") > MAX_CACHE_BYTES
+	) {
+		return { status: "refused" };
+	}
+	const expectedOwnerUid = input.expectedOwnerUid ?? process.getuid?.();
+	const directory = openAnchoredStateDirectory(
+		input.stateRoot,
+		expectedOwnerUid,
+	);
+	if (directory.status !== "admitted") return { status: "refused" };
+	try {
+		await input.afterDirectoryOpenedForTest?.();
+		if (input.replaceRefused) {
+			const standing = readPrivateBindingFile(
+				directory.descriptor,
+				input.name,
+				expectedOwnerUid,
+				input.exactMode,
+			);
+			if (standing.status === "refused") {
+				const io = loadDescriptorRelativeIo();
+				if (
+					io === null ||
+					io.unlinkAt(directory.descriptor, input.name) !== 0
+				) {
+					return { status: "refused" };
+				}
+				fsyncSync(directory.descriptor);
+			}
+		}
+		return writePrivateBindingFile(
+			directory.descriptor,
+			input.name,
+			expectedOwnerUid,
+			input.contents,
+			input.exactMode,
+		)
+			? { status: "written" }
+			: { status: "refused" };
+	} catch {
+		return { status: "refused" };
+	} finally {
+		closeSync(directory.descriptor);
 	}
 }
 
