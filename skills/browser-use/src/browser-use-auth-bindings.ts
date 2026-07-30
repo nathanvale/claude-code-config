@@ -13,6 +13,7 @@
 
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
 import type { BrowserUseEnvironmentTokenCustodyState } from "./browser-use-environment-token";
+import type { BrowserUseGenerationAuthRouteRecord } from "./browser-use-generation-schemas";
 import {
 	type BrowserUseAuthBlockedCause,
 	type BrowserUseAuthContinuation,
@@ -242,6 +243,8 @@ export type BrowserUseResolvedAuthCandidate = {
 	auth_context_ref: string;
 	route_digest: string;
 	candidate_digest: string;
+	/** Exact parsed route policy; absent only for legacy in-memory callers. */
+	route?: BrowserUseGenerationAuthRouteRecord;
 	candidate: BrowserUseImportCandidate;
 };
 

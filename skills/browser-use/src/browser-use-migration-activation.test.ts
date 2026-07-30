@@ -83,6 +83,8 @@ async function seedCompleteGeneration(
 			candidateServiceId: string;
 			authContextRef?: string;
 			routeExtra?: Record<string, unknown>;
+			sessionPolicy?: boolean;
+			sessionPolicyFault?: "missing" | "digest" | "origin" | "effect";
 		};
 	},
 ): Promise<{ contentHash: string }> {
@@ -111,8 +113,103 @@ async function seedCompleteGeneration(
 		inputs: [],
 		steps: [{ kind: "snapshot", interactive: false }],
 	})}\n`;
-	const registry = `${JSON.stringify({ actions: [] })}\n`;
 	const proof = `${JSON.stringify({ proof: "verified" })}\n`;
+	const serviceOrigin = `https://${serviceId}.test`;
+	const identityProviderOrigin = `https://login.${serviceId}.test`;
+	const identifyAsset =
+		"async ({ inputs }) => ({ forms: document.querySelectorAll('form').length })";
+	const verifierAsset =
+		"async ({ inputs }) => ({ markers: document.querySelectorAll('[data-session]').length })";
+	const submitAsset =
+		"async ({ inputs }) => { document.querySelector('#submit').click(); return { submitted: true } }";
+	const identifyDigest = sha256(identifyAsset);
+	const verifierDigest = sha256(verifierAsset);
+	const submitDigest = sha256(submitAsset);
+	const actionRecords =
+		input.auth?.sessionPolicy === true
+			? [
+					{
+						action_id: `${serviceId}-identify-auth`,
+						asset_id: identifyDigest,
+						expected_digest: identifyDigest,
+						allowed_origin: identityProviderOrigin,
+						effect_class: "read",
+						containment: "read-only-observation",
+						input_schema: { kind: "object", fields: {} },
+						result_schema: { kind: "object", fields: {} },
+						result_sensitivity: "low",
+						source_provenance: `reviewed/${serviceId}-identify-auth.js`,
+						promotion_receipt: {
+							approved_digest: identifyDigest,
+							disposition: "approved",
+							approved_origin: identityProviderOrigin,
+							approved_effect: "read",
+							approver_ref: "operator-review",
+						},
+					},
+					{
+						action_id: `${serviceId}-verify-session`,
+						asset_id: verifierDigest,
+						expected_digest: verifierDigest,
+						allowed_origin: serviceOrigin,
+						effect_class: "read",
+						containment: "read-only-observation",
+						input_schema: { kind: "object", fields: {} },
+						result_schema: { kind: "object", fields: {} },
+						result_sensitivity: "low",
+						source_provenance: `reviewed/${serviceId}-verify-session.js`,
+						promotion_receipt: {
+							approved_digest: verifierDigest,
+							disposition: "approved",
+							approved_origin: serviceOrigin,
+							approved_effect: "read",
+							approver_ref: "operator-review",
+						},
+					},
+					{
+						action_id: `${serviceId}-submit-login`,
+						asset_id: submitDigest,
+						expected_digest: submitDigest,
+						allowed_origin: identityProviderOrigin,
+						effect_class: "mutation",
+						containment: "none",
+						input_schema: { kind: "object", fields: {} },
+						result_schema: { kind: "object", fields: {} },
+						result_sensitivity: "low",
+						required_postcondition: {
+							kind: "element-visible",
+							selector: "#authenticated",
+						},
+						source_provenance: `reviewed/${serviceId}-submit-login.js`,
+						promotion_receipt: {
+							approved_digest: submitDigest,
+							disposition: "approved",
+							approved_origin: identityProviderOrigin,
+							approved_effect: "mutation",
+							approver_ref: "operator-review",
+						},
+					},
+				]
+			: [];
+	const actionFiles = actionRecords.flatMap((record) => {
+		const asset =
+			record.action_id === `${serviceId}-identify-auth`
+				? identifyAsset
+				: record.action_id === `${serviceId}-verify-session`
+					? verifierAsset
+					: submitAsset;
+		const recordContents = `${JSON.stringify(record)}\n`;
+		return [
+			{
+				record,
+				recordPath: `actions/records/${record.action_id}.json`,
+				recordContents,
+				assetPath: `actions/assets/${record.expected_digest}.js`,
+				asset,
+			},
+		];
+	});
+	const registry = `${JSON.stringify({ actions: actionRecords })}\n`;
 	const authCandidate =
 		input.auth === undefined
 			? undefined
@@ -126,6 +223,55 @@ async function seedCompleteGeneration(
 					legacy_vault_name: null,
 					provenance: "legacy-auth-pointer",
 				})}\n`;
+	const sessionPolicy =
+		input.auth?.sessionPolicy !== true
+			? undefined
+			: {
+					schema_version: "1",
+					approved_service_origins: [serviceOrigin],
+					approved_identity_provider_origins: [
+						input.auth.sessionPolicyFault === "origin"
+							? `https://other-login.${serviceId}.test`
+							: identityProviderOrigin,
+					],
+					auth_flow: {
+						schema_version: "1",
+						fields: {
+							username: { role: "textbox", name: "Email address" },
+						},
+						identify_state: {
+							action_id:
+								input.auth.sessionPolicyFault === "missing"
+									? `${serviceId}-missing-identify`
+									: input.auth.sessionPolicyFault === "effect"
+										? `${serviceId}-submit-login`
+										: `${serviceId}-identify-auth`,
+							expected_digest:
+								input.auth.sessionPolicyFault === "digest"
+									? "f".repeat(64)
+									: input.auth.sessionPolicyFault === "effect"
+										? submitDigest
+										: identifyDigest,
+						},
+						username_submit: {
+							action_id: `${serviceId}-submit-login`,
+							expected_digest: submitDigest,
+						},
+					},
+					identity_verifier: {
+						schema_version: "1",
+						action: {
+							action_id: `${serviceId}-verify-session`,
+							expected_digest: verifierDigest,
+						},
+						expected: {
+							subject_reference: `${serviceId}-subject`,
+							account_reference: `${serviceId}-account`,
+							tenant_reference: `${serviceId}-tenant`,
+						},
+						freshness_ms: 60_000,
+					},
+				};
 	const authRoute =
 		input.auth === undefined
 			? undefined
@@ -133,6 +279,9 @@ async function seedCompleteGeneration(
 					auth_context_ref: authContextRef,
 					candidate_id: `candidate-${input.generationId}`,
 					status: "active",
+					...(sessionPolicy === undefined
+						? {}
+						: { session_policy: sessionPolicy }),
 					...(input.auth.routeExtra ?? {}),
 				})}\n`;
 	const authCandidatePath = `auth/candidate-${input.generationId}.json`;
@@ -159,7 +308,13 @@ async function seedCompleteGeneration(
 		action_registry: {
 			registry_path: registryPath,
 			registry_digest: sha256(registry),
-			actions: [],
+			actions: actionFiles.map((action) => ({
+				action_id: action.record.action_id,
+				record_path: action.recordPath,
+				record_digest: sha256(action.recordContents),
+				asset_path: action.assetPath,
+				asset_digest: action.record.expected_digest,
+			})),
 		},
 		auth:
 			input.auth === undefined ||
@@ -200,6 +355,10 @@ async function seedCompleteGeneration(
 		files: [
 			{ relPath: runbookPath, contents: runbook },
 			{ relPath: registryPath, contents: registry },
+			...actionFiles.flatMap((action) => [
+				{ relPath: action.recordPath, contents: action.recordContents },
+				{ relPath: action.assetPath, contents: action.asset },
+			]),
 			{ relPath: proofPath, contents: proof },
 			...(authCandidate === undefined || authRoute === undefined
 				? []
@@ -1168,6 +1327,52 @@ describe("activateBrowserUseMigration", () => {
 			ok: false,
 			code: "migration_manifest_incomplete",
 		});
+	});
+
+	test("auth route admission accepts an exact reviewed session policy", async () => {
+		const deps = await makeDeps();
+		await seedCompleteGeneration(deps, {
+			generationId: "generation-auth-session-policy",
+			targetId: "acme/read",
+			sourcePath: "acme/playbooks/read.json",
+			auth: {
+				candidateServiceId: "acme",
+				authContextRef: "acme-portal-session",
+				sessionPolicy: true,
+			},
+		});
+
+		expect(await activateBrowserUseMigration(deps, {})).toMatchObject({
+			ok: true,
+			state: { activation_state: "active" },
+		});
+	});
+
+	test("auth route admission rejects missing or drifted reviewed action authority", async () => {
+		for (const fault of [
+			"missing",
+			"digest",
+			"origin",
+			"effect",
+		] as const) {
+			const deps = await makeDeps();
+			await seedCompleteGeneration(deps, {
+				generationId: `generation-auth-session-${fault}`,
+				targetId: "acme/read",
+				sourcePath: "acme/playbooks/read.json",
+				auth: {
+					candidateServiceId: "acme",
+					authContextRef: "acme-portal-session",
+					sessionPolicy: true,
+					sessionPolicyFault: fault,
+				},
+			});
+
+			expect(await activateBrowserUseMigration(deps, {})).toMatchObject({
+				ok: false,
+				code: "migration_manifest_incomplete",
+			});
+		}
 	});
 
 	test("auth route admission binds the selected candidate to the active target service", async () => {

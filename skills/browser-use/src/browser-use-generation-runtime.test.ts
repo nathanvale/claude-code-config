@@ -56,11 +56,51 @@ describe("createBrowserUseGenerationRuntime", () => {
 			legacy_vault_name: null,
 			provenance: "legacy-auth-pointer",
 		})}\n`;
-		const authRoute = `${JSON.stringify({
+		const sessionPolicy = {
+			schema_version: "1",
+			approved_service_origins: ["https://portal.example"],
+			approved_identity_provider_origins: ["https://login.example"],
+			auth_flow: {
+				schema_version: "1",
+				fields: {
+					username: { role: "textbox", name: "Email address" },
+				},
+				identify_state: {
+					action_id: "acme-identify-auth-state",
+					expected_digest: "1".repeat(64),
+				},
+				username_submit: {
+					action_id: "acme-submit-username",
+					expected_digest: "2".repeat(64),
+				},
+			},
+			identity_verifier: {
+				schema_version: "1",
+				action: {
+					action_id: "acme-verify-session",
+					expected_digest: "3".repeat(64),
+				},
+				expected: {
+					subject_reference: "acme-subject",
+					account_reference: "acme-account",
+					tenant_reference: "acme-tenant",
+				},
+				freshness_ms: 60_000,
+			},
+		} as const;
+		const authRouteRecord = {
 			auth_context_ref: "acme-session",
 			candidate_id: "candidate-acme",
 			status: "active",
-		})}\n`;
+			session_policy: sessionPolicy,
+		} as const;
+		const authRoute = `${JSON.stringify(authRouteRecord)}\n`;
+		const legacyAuthRouteRecord = {
+			auth_context_ref: "legacy-acme-session",
+			candidate_id: "candidate-acme",
+			status: "active",
+		} as const;
+		const legacyAuthRoute = `${JSON.stringify(legacyAuthRouteRecord)}\n`;
 		const staged = await stageGeneration(
 			{ fs, paths: opened.paths, clock: () => 100 },
 			{
@@ -78,6 +118,10 @@ describe("createBrowserUseGenerationRuntime", () => {
 					{
 						relPath: "auth/routes/acme-session.json",
 						contents: authRoute,
+					},
+					{
+						relPath: "auth/routes/legacy-acme-session.json",
+						contents: legacyAuthRoute,
 					},
 				],
 			},
@@ -136,6 +180,12 @@ describe("createBrowserUseGenerationRuntime", () => {
 						candidate_id: "candidate-acme",
 						path: "auth/routes/acme-session.json",
 						digest: sha256(authRoute),
+					},
+					{
+						auth_context_ref: "legacy-acme-session",
+						candidate_id: "candidate-acme",
+						path: "auth/routes/legacy-acme-session.json",
+						digest: sha256(legacyAuthRoute),
 					},
 				],
 			},
@@ -196,6 +246,23 @@ describe("createBrowserUseGenerationRuntime", () => {
 				auth_context_ref: "acme-session",
 				route_digest: sha256(authRoute),
 				candidate_digest: sha256(authCandidate),
+				route: authRouteRecord,
+				candidate: JSON.parse(authCandidate),
+			},
+		});
+		expect(
+			await openedRuntime.runtime.authGenerationSeam.loadAuthCandidate(
+				"legacy-acme-session",
+			),
+		).toEqual({
+			ok: true,
+			resolution: {
+				generation_id: generationId,
+				activation_epoch: 2,
+				auth_context_ref: "legacy-acme-session",
+				route_digest: sha256(legacyAuthRoute),
+				candidate_digest: sha256(authCandidate),
+				route: legacyAuthRouteRecord,
 				candidate: JSON.parse(authCandidate),
 			},
 		});

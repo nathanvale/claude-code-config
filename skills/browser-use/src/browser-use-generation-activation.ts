@@ -42,7 +42,11 @@ import {
 	type BrowserUseRunbook,
 	validateRunbook,
 } from "./browser-use-runbook-model";
-import { parseGenerationAuthRouteRecord } from "./browser-use-generation-schemas";
+import {
+	type BrowserUseGenerationReviewedActionRef,
+	type BrowserUseGenerationSessionPolicy,
+	parseGenerationAuthRouteRecord,
+} from "./browser-use-generation-schemas";
 import {
 	type BrowserUseActivationPendingPayload,
 	type BrowserUseCorpusGenerationCandidatePayload,
@@ -781,6 +785,90 @@ function reviewedActionRecordProblem(
 	return undefined;
 }
 
+function reviewedAuthRouteActionProblem(
+	records: ReadonlyMap<string, BrowserUseReviewedActionRecord>,
+	ref: BrowserUseGenerationReviewedActionRef,
+	expectedEffect: "read" | "mutation",
+	allowedOrigins: readonly string[],
+): string | undefined {
+	const record = records.get(ref.action_id);
+	if (
+		record === undefined ||
+		record.expected_digest !== ref.expected_digest ||
+		record.effect_class !== expectedEffect ||
+		!allowedOrigins.includes(record.allowed_origin) ||
+		record.promotion_receipt.disposition !== "approved" ||
+		record.promotion_receipt.approved_digest !== ref.expected_digest ||
+		record.promotion_receipt.approved_origin !== record.allowed_origin ||
+		record.promotion_receipt.approved_effect !== expectedEffect ||
+		(expectedEffect === "mutation" &&
+			record.required_postcondition === undefined)
+	) {
+		return "auth route action authority is missing, mismatched, or unapproved.";
+	}
+	return undefined;
+}
+
+function sessionPolicyActionProblem(
+	records: ReadonlyMap<string, BrowserUseReviewedActionRecord>,
+	policy: BrowserUseGenerationSessionPolicy,
+): string | undefined {
+	const flow = policy.auth_flow;
+	const requirements: Array<{
+		ref: BrowserUseGenerationReviewedActionRef;
+		effect: "read" | "mutation";
+		origins: readonly string[];
+	}> = [
+		{
+			ref: flow.identify_state,
+			effect: "read",
+			origins: policy.approved_identity_provider_origins,
+		},
+		...(flow.username_submit === undefined
+			? []
+			: [
+					{
+						ref: flow.username_submit,
+						effect: "mutation" as const,
+						origins: policy.approved_identity_provider_origins,
+					},
+				]),
+		...(flow.password_submit === undefined
+			? []
+			: [
+					{
+						ref: flow.password_submit,
+						effect: "mutation" as const,
+						origins: policy.approved_identity_provider_origins,
+					},
+				]),
+		...(flow.otp_submit === undefined
+			? []
+			: [
+					{
+						ref: flow.otp_submit,
+						effect: "mutation" as const,
+						origins: policy.approved_identity_provider_origins,
+					},
+				]),
+		{
+			ref: policy.identity_verifier.action,
+			effect: "read",
+			origins: policy.approved_service_origins,
+		},
+	];
+	for (const requirement of requirements) {
+		const problem = reviewedAuthRouteActionProblem(
+			records,
+			requirement.ref,
+			requirement.effect,
+			requirement.origins,
+		);
+		if (problem !== undefined) return problem;
+	}
+	return undefined;
+}
+
 function generationFileBindingProblem(
 	read: Extract<CandidateManifestRead, { status: "present" }>,
 ): string | undefined {
@@ -1099,6 +1187,10 @@ async function validateCandidateClosure(
 		}
 	}
 
+	const reviewedActionRecords = new Map<
+		string,
+		BrowserUseReviewedActionRecord
+	>();
 	for (const action of candidate.action_registry.actions) {
 		const recordFile = await readGenerationText(
 			deps,
@@ -1152,6 +1244,7 @@ async function validateCandidateClosure(
 		if (problem !== undefined) {
 			return migrationFailure("migration_manifest_incomplete", problem);
 		}
+		reviewedActionRecords.set(action.action_id, parsedRecord.record);
 	}
 
 	const screenedCandidates = new Map<string, BrowserUseImportCandidate>();
@@ -1223,7 +1316,6 @@ async function validateCandidateClosure(
 		const parsedRoute = parseGenerationAuthRouteRecord(raw);
 		if (
 			parsedRoute === undefined ||
-			findRedactionViolations(parsedRoute).length > 0 ||
 			parsedRoute.auth_context_ref !== route.auth_context_ref ||
 			parsedRoute.candidate_id !== route.candidate_id ||
 			routedAuthCandidates.has(route.auth_context_ref)
@@ -1232,6 +1324,15 @@ async function validateCandidateClosure(
 				"migration_manifest_incomplete",
 				"auth route does not prove one active candidate route.",
 			);
+		}
+		if ("session_policy" in parsedRoute) {
+			const problem = sessionPolicyActionProblem(
+				reviewedActionRecords,
+				parsedRoute.session_policy,
+			);
+			if (problem !== undefined) {
+				return migrationFailure("migration_manifest_incomplete", problem);
+			}
 		}
 		routedAuthCandidates.set(route.auth_context_ref, selectedCandidate);
 	}

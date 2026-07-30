@@ -5,6 +5,7 @@ import {
 	corpusGenerationManifestProblem,
 	generationEffectFenceProblem,
 	generationProblem,
+	parseGenerationAuthRouteRecord,
 } from "./browser-use-generation-schemas";
 
 const CANDIDATE = {
@@ -43,6 +44,261 @@ const CANDIDATE = {
 } as const;
 
 describe("Corpus Generation schema owner", () => {
+	test("accepts legacy and complete session-bound auth routes", () => {
+		const legacyRoute = {
+			auth_context_ref: "oncore-session",
+			candidate_id: "candidate-oncore",
+			status: "active",
+		} as const;
+		const sessionRoute = {
+			...legacyRoute,
+			session_policy: {
+				schema_version: "1",
+				approved_service_origins: ["https://example.test"],
+				approved_identity_provider_origins: ["https://login.example.test"],
+				auth_flow: {
+					schema_version: "1",
+					fields: {
+						username: { role: "textbox", name: "Email address" },
+						password: { role: "textbox", name: "Password" },
+						otp: { role: "textbox", name: "Verification code" },
+					},
+					identify_state: {
+						action_id: "oncore-identify-auth-state",
+						expected_digest: "1".repeat(64),
+					},
+					username_submit: {
+						action_id: "oncore-submit-username",
+						expected_digest: "2".repeat(64),
+					},
+					password_submit: {
+						action_id: "oncore-submit-password",
+						expected_digest: "3".repeat(64),
+					},
+					otp_submit: {
+						action_id: "oncore-submit-otp",
+						expected_digest: "4".repeat(64),
+					},
+				},
+				identity_verifier: {
+					schema_version: "1",
+					action: {
+						action_id: "oncore-verify-session",
+						expected_digest: "5".repeat(64),
+					},
+					expected: {
+						subject_reference: "oncore-subject-expected",
+						account_reference: "oncore-account-expected",
+						tenant_reference: "oncore-tenant-expected",
+					},
+					freshness_ms: 60_000,
+				},
+			},
+		} as const;
+
+		expect(parseGenerationAuthRouteRecord(legacyRoute)).toEqual(legacyRoute);
+		expect(parseGenerationAuthRouteRecord(sessionRoute)).toEqual(sessionRoute);
+	});
+
+	test("rejects partial, malformed, unknown, duplicate, or hostile session policies", () => {
+		const route = {
+			auth_context_ref: "oncore-session",
+			candidate_id: "candidate-oncore",
+			status: "active",
+			session_policy: {
+				schema_version: "1",
+				approved_service_origins: ["https://example.test"],
+				approved_identity_provider_origins: ["https://login.example.test"],
+				auth_flow: {
+					schema_version: "1",
+					fields: {
+						username: { role: "textbox", name: "Email address" },
+						password: { role: "textbox", name: "Password" },
+					},
+					identify_state: {
+						action_id: "oncore-identify-auth-state",
+						expected_digest: "1".repeat(64),
+					},
+					password_submit: {
+						action_id: "oncore-submit-password",
+						expected_digest: "3".repeat(64),
+					},
+				},
+				identity_verifier: {
+					schema_version: "1",
+					action: {
+						action_id: "oncore-verify-session",
+						expected_digest: "2".repeat(64),
+					},
+					expected: {
+						subject_reference: "oncore-subject-expected",
+						account_reference: "oncore-account-expected",
+						tenant_reference: "oncore-tenant-expected",
+					},
+					freshness_ms: 60_000,
+				},
+			},
+		} as const;
+
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					identity_verifier: undefined,
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					approved_service_origins: ["https://example.test/account"],
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					approved_service_origins: [
+						"https://example.test",
+						"https://example.test",
+					],
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					schema_version: "2",
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					auth_flow: {
+						...route.session_policy.auth_flow,
+						fields: {
+							...route.session_policy.auth_flow.fields,
+							password: {
+								role: "textbox",
+								name: "op://vault/item/password",
+							},
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					identity_verifier: {
+						...route.session_policy.identity_verifier,
+						expected: {
+							...route.session_policy.identity_verifier.expected,
+							password: "sentinel-secret",
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
+		for (const origin of [
+			"https://user@example.test",
+			"https://example.test?tenant=one",
+			"https://example.test#session",
+			"http://example.test",
+		]) {
+			expect(
+				parseGenerationAuthRouteRecord({
+					...route,
+					session_policy: {
+						...route.session_policy,
+						approved_service_origins: [origin],
+					},
+				}),
+			).toBeUndefined();
+		}
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					auth_flow: {
+						...route.session_policy.auth_flow,
+						fields: {
+							...route.session_policy.auth_flow.fields,
+							username: { role: "button", name: "Email address" },
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					auth_flow: {
+						...route.session_policy.auth_flow,
+						password_submit: undefined,
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					auth_flow: {
+						...route.session_policy.auth_flow,
+						fields: {
+							username: { role: "textbox", name: "Email address" },
+						},
+						password_submit: undefined,
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					identity_verifier: {
+						...route.session_policy.identity_verifier,
+						action: {
+							action_id: "oncore-verify-session",
+							expected_digest: "not-a-digest",
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				session_policy: {
+					...route.session_policy,
+					identity_verifier: {
+						...route.session_policy.identity_verifier,
+						freshness_ms: 300_001,
+					},
+				},
+			}),
+		).toBeUndefined();
+	});
+
 	test("accepts one complete valid schema family", () => {
 		expect(
 			generationProblem({

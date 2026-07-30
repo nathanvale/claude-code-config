@@ -8,6 +8,11 @@ import { CORPUS_GENERATION_CANDIDATE_MANIFEST_PATH } from "./browser-use-generat
 import type { BrowserUseMigrationState } from "./browser-use-migration-model";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
 import {
+	type BrowserUseGenerationReviewedActionRef,
+	type BrowserUseGenerationSessionPolicy,
+	parseGenerationAuthRouteRecord,
+} from "./browser-use-generation-schemas";
+import {
 	actionAssetDigest,
 	actionAssetIsSecretFree,
 	type BrowserUseReviewedActionRecord,
@@ -51,6 +56,8 @@ export type BrowserUseCorpusGenerationActionInput = {
 export type BrowserUseCorpusGenerationAuthRouteInput = {
 	authContextRef: string;
 	candidateId: string;
+	/** Exact reviewed session authority; absent preserves a legacy unproven route. */
+	sessionPolicy?: BrowserUseGenerationSessionPolicy;
 };
 
 /** Complete deterministic inputs for one migration-bound generation candidate. */
@@ -91,6 +98,58 @@ function safeRelativePath(value: string): boolean {
 		!value.includes("\\") &&
 		!value.includes("\0") &&
 		value.split("/").every((segment) => segment !== "" && segment !== "..")
+	);
+}
+
+function reviewedRouteAction(
+	records: readonly BrowserUseReviewedActionRecord[],
+	ref: BrowserUseGenerationReviewedActionRef,
+	allowedOrigins: readonly string[],
+	expectedEffect: "read" | "mutation",
+): boolean {
+	const record = records.find((candidate) => candidate.action_id === ref.action_id);
+	return (
+		record !== undefined &&
+		record.expected_digest === ref.expected_digest &&
+		record.effect_class === expectedEffect &&
+		record.promotion_receipt.disposition === "approved" &&
+		allowedOrigins.includes(record.allowed_origin)
+	);
+}
+
+function sessionPolicyActionsAreReviewed(
+	records: readonly BrowserUseReviewedActionRecord[],
+	policy: BrowserUseGenerationSessionPolicy,
+): boolean {
+	const flow = policy.auth_flow;
+	const optionalSubmits = [
+		flow.username_submit,
+		flow.password_submit,
+		flow.otp_submit,
+	].filter(
+		(ref): ref is BrowserUseGenerationReviewedActionRef => ref !== undefined,
+	);
+	return (
+		reviewedRouteAction(
+			records,
+			flow.identify_state,
+			policy.approved_identity_provider_origins,
+			"read",
+		) &&
+		optionalSubmits.every((ref) =>
+			reviewedRouteAction(
+				records,
+				ref,
+				policy.approved_identity_provider_origins,
+				"mutation",
+			),
+		) &&
+		reviewedRouteAction(
+			records,
+			policy.identity_verifier.action,
+			policy.approved_service_origins,
+			"read",
+		)
 	);
 }
 
@@ -377,11 +436,27 @@ export async function buildBrowserUseCorpusGeneration(
 		) {
 			throw new Error("Auth route does not bind one admitted caller candidate.");
 		}
-		const contents = json({
+		const routeRecord = parseGenerationAuthRouteRecord({
 			auth_context_ref: route.authContextRef,
 			candidate_id: route.candidateId,
 			status: "active",
+			...(route.sessionPolicy === undefined
+				? {}
+				: { session_policy: route.sessionPolicy }),
 		});
+		if (
+			routeRecord === undefined ||
+			("session_policy" in routeRecord &&
+				!sessionPolicyActionsAreReviewed(
+					actionRecords,
+					routeRecord.session_policy,
+				))
+		) {
+			throw new Error(
+				"Auth route session policy does not bind approved reviewed actions.",
+			);
+		}
+		const contents = json(routeRecord);
 		const path = `auth/routes/${route.authContextRef}.json`;
 		files.push({ relPath: path, contents });
 		authRouteRefs.push({

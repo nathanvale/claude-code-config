@@ -202,6 +202,45 @@ describe("buildBrowserUseCorpusGeneration", () => {
 		expect(built.candidate.auth.routes).toEqual([]);
 	});
 
+	test("never infers session policy from runbook or candidate origins", async () => {
+		const buildInput = input({});
+		buildInput.authCandidates = [
+			{
+				candidate_id: "auth-candidate-oncore",
+				auth_context: "interactive-login",
+				service_id: "oncore",
+				legacy_context_prose: null,
+				hint_item_id: null,
+				proposed_origins: ["https://legacy-oncore.example.test"],
+				legacy_vault_name: null,
+				provenance: "legacy-auth-pointer",
+			},
+		];
+		buildInput.authRoutes = [
+			{
+				authContextRef: "oncore-session",
+				candidateId: "auth-candidate-oncore",
+			},
+		];
+
+		const built = await buildBrowserUseCorpusGeneration(
+			{ fs: readOnlyFs({}) },
+			buildInput,
+		);
+
+		expect(
+			JSON.parse(
+				built.files.find(
+					(file) => file.relPath === "auth/routes/oncore-session.json",
+				)?.contents ?? "null",
+			),
+		).toEqual({
+			auth_context_ref: "oncore-session",
+			candidate_id: "auth-candidate-oncore",
+			status: "active",
+		});
+	});
+
 	test("records quarantined and provenance-only dispositions in the ledger without copying bytes", async () => {
 		const buildInput = input({});
 		buildInput.state = {
@@ -252,6 +291,12 @@ describe("buildBrowserUseCorpusGeneration", () => {
 		const assetBytes =
 			"async () => ({ rows: document.querySelectorAll('.row').length })";
 		const digest = actionAssetDigest(assetBytes);
+		const submitAssetBytes =
+			"async () => { document.querySelector('#submit').click(); return { submitted: true } }";
+		const submitDigest = actionAssetDigest(submitAssetBytes);
+		const identifyAssetBytes =
+			"async ({ inputs }) => ({ forms: document.querySelectorAll('form').length })";
+		const identifyDigest = actionAssetDigest(identifyAssetBytes);
 		const action: BrowserUseReviewedActionRecord = {
 			action_id: "oncore-read-grid",
 			asset_id: digest,
@@ -276,6 +321,42 @@ describe("buildBrowserUseCorpusGeneration", () => {
 				approver_ref: "operator-review",
 			},
 		};
+		const submitAction: BrowserUseReviewedActionRecord = {
+			action_id: "oncore-submit-login",
+			asset_id: submitDigest,
+			expected_digest: submitDigest,
+			allowed_origin: "https://login.example.test",
+			effect_class: "mutation",
+			containment: "none",
+			input_schema: { kind: "object", fields: {} },
+			result_schema: { kind: "object", fields: {} },
+			result_sensitivity: "low",
+			required_postcondition: {
+				kind: "element-visible",
+				selector: "#authenticated",
+			},
+			source_provenance: "reviewed/oncore-submit-login.js",
+			promotion_receipt: {
+				approved_digest: submitDigest,
+				disposition: "approved",
+				approved_origin: "https://login.example.test",
+				approved_effect: "mutation",
+				approver_ref: "operator-review",
+			},
+		};
+		const identifyAction: BrowserUseReviewedActionRecord = {
+			...action,
+			action_id: "oncore-identify-login",
+			asset_id: identifyDigest,
+			expected_digest: identifyDigest,
+			allowed_origin: "https://login.example.test",
+			source_provenance: "reviewed/oncore-identify-login.js",
+			promotion_receipt: {
+				...action.promotion_receipt,
+				approved_digest: identifyDigest,
+				approved_origin: "https://login.example.test",
+			},
+		};
 		const oncore = buildInput.targets.find(
 			(target) => target.canonicalTargetId === "oncore/fill-timesheet",
 		);
@@ -294,7 +375,11 @@ describe("buildBrowserUseCorpusGeneration", () => {
 				},
 			],
 		};
-		buildInput.actions = [{ record: action, assetBytes }];
+		buildInput.actions = [
+			{ record: action, assetBytes },
+			{ record: identifyAction, assetBytes: identifyAssetBytes },
+			{ record: submitAction, assetBytes: submitAssetBytes },
+		];
 		buildInput.authCandidates = [
 			{
 				candidate_id: "auth-candidate-oncore",
@@ -311,6 +396,41 @@ describe("buildBrowserUseCorpusGeneration", () => {
 			{
 				authContextRef: "oncore-session",
 				candidateId: "auth-candidate-oncore",
+				sessionPolicy: {
+					schema_version: "1",
+					approved_service_origins: ["https://oncore.example.test"],
+					approved_identity_provider_origins: [
+						"https://login.example.test",
+					],
+					auth_flow: {
+						schema_version: "1",
+						fields: {
+							username: { role: "textbox", name: "Email address" },
+							password: { role: "textbox", name: "Password" },
+						},
+						identify_state: {
+							action_id: identifyAction.action_id,
+							expected_digest: identifyDigest,
+						},
+						password_submit: {
+							action_id: submitAction.action_id,
+							expected_digest: submitDigest,
+						},
+					},
+					identity_verifier: {
+						schema_version: "1",
+						action: {
+							action_id: action.action_id,
+							expected_digest: digest,
+						},
+						expected: {
+							subject_reference: "oncore-subject",
+							account_reference: "oncore-account",
+							tenant_reference: "oncore-tenant",
+						},
+						freshness_ms: 60_000,
+					},
+				},
 			},
 		];
 
@@ -324,12 +444,24 @@ describe("buildBrowserUseCorpusGeneration", () => {
 				(target) => target.canonical_target_id === "oncore/fill-timesheet",
 			)?.activation,
 		).toBe("active");
-		expect(built.candidate.action_registry.actions).toHaveLength(1);
+		expect(built.candidate.action_registry.actions).toHaveLength(3);
 		expect(built.candidate.auth.routes).toEqual([
 			expect.objectContaining({
 				auth_context_ref: "oncore-session",
 				candidate_id: "auth-candidate-oncore",
 			}),
 		]);
+		expect(
+			JSON.parse(
+				built.files.find(
+					(file) => file.relPath === "auth/routes/oncore-session.json",
+				)?.contents ?? "null",
+			),
+		).toEqual({
+			auth_context_ref: "oncore-session",
+			candidate_id: "auth-candidate-oncore",
+			status: "active",
+			session_policy: buildInput.authRoutes[0]?.sessionPolicy,
+		});
 	});
 });

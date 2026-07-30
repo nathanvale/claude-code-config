@@ -6,6 +6,10 @@
 // ---------------------------------------------------------------------------
 
 import { isJsonObject, stringField } from "./browser-use-core";
+import {
+	actionDigestIsValid,
+	type BrowserUseReviewedActionRecord,
+} from "./browser-use-runbook-actions";
 
 /** Immutable corpus generation record (R29 substrate; activation lands in U3). */
 export type BrowserUseGenerationPayload = {
@@ -61,20 +65,121 @@ export type BrowserUseCorpusGenerationAuthRouteRef = {
 	digest: string;
 };
 
-/** Exact active route record stored inside one immutable generation. */
-export type BrowserUseGenerationAuthRouteRecord = {
+type BrowserUseGenerationAuthRouteBase = {
 	auth_context_ref: string;
 	candidate_id: string;
 	status: "active";
 };
 
-/** Parse one route record without accepting extension keys or inactive aliases. */
+/** Secret-free target identity references expected from an authenticated tab. */
+export type BrowserUseSessionIdentityReference = {
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+};
+
+/** Exact reviewed-action authority retained by a versioned auth route. */
+export type BrowserUseGenerationReviewedActionRef = Pick<
+	BrowserUseReviewedActionRecord,
+	"action_id" | "expected_digest"
+>;
+
+/** Semantic credential-field locator; never a selector or credential value. */
+export type BrowserUseAuthSemanticLocator = {
+	role: string;
+	name: string;
+};
+
+/** Digest-bound login choreography for one approved generation route. */
+export type BrowserUseGenerationAuthFlow = {
+	schema_version: "1";
+	fields: {
+		username?: BrowserUseAuthSemanticLocator;
+		password?: BrowserUseAuthSemanticLocator;
+		otp?: BrowserUseAuthSemanticLocator;
+	};
+	identify_state: BrowserUseGenerationReviewedActionRef;
+	username_submit?: BrowserUseGenerationReviewedActionRef;
+	password_submit?: BrowserUseGenerationReviewedActionRef;
+	otp_submit?: BrowserUseGenerationReviewedActionRef;
+};
+
+/** Digest-bound browser identity verifier for one approved generation route. */
+export type BrowserUseGenerationIdentityVerifier = {
+	schema_version: "1";
+	action: BrowserUseGenerationReviewedActionRef;
+	expected: BrowserUseSessionIdentityReference;
+	freshness_ms: number;
+};
+
+/** Versioned, phase-scoped session policy retained in an immutable generation. */
+export type BrowserUseGenerationSessionPolicy = {
+	schema_version: "1";
+	approved_service_origins: readonly string[];
+	approved_identity_provider_origins: readonly string[];
+	auth_flow: BrowserUseGenerationAuthFlow;
+	identity_verifier: BrowserUseGenerationIdentityVerifier;
+};
+
+/** Exact active route record stored inside one immutable generation. */
+export type BrowserUseGenerationAuthRouteRecord =
+	| BrowserUseGenerationAuthRouteBase
+	| (BrowserUseGenerationAuthRouteBase & {
+			session_policy: BrowserUseGenerationSessionPolicy;
+	  });
+
+const AUTH_ROUTE_BASE_KEYS = [
+	"auth_context_ref",
+	"candidate_id",
+	"status",
+] as const;
+const AUTH_ROUTE_SESSION_KEYS = [
+	...AUTH_ROUTE_BASE_KEYS,
+	"session_policy",
+] as const;
+const SESSION_POLICY_KEYS = [
+	"schema_version",
+	"approved_service_origins",
+	"approved_identity_provider_origins",
+	"auth_flow",
+	"identity_verifier",
+] as const;
+const AUTH_FLOW_KEYS = [
+	"schema_version",
+	"fields",
+	"identify_state",
+	"username_submit",
+	"password_submit",
+	"otp_submit",
+] as const;
+const AUTH_FLOW_REQUIRED_KEYS = [
+	"schema_version",
+	"fields",
+	"identify_state",
+] as const;
+const AUTH_FIELD_KEYS = ["username", "password", "otp"] as const;
+const SESSION_IDENTITY_KEYS = [
+	"subject_reference",
+	"account_reference",
+	"tenant_reference",
+] as const;
+const REVIEWED_ACTION_REF_KEYS = ["action_id", "expected_digest"] as const;
+const SAFE_IDENTITY_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
+const SAFE_ACTION_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const UNSAFE_SEMANTIC_NAME =
+	/[\u0000-\u001f\u007f-\u009f]|\b(?:op|wss?|otpauth):\/\/|\b[A-Z2-7]{32,}\b/i;
+const MAX_SEMANTIC_NAME_LENGTH = 128;
+const MAX_AUTH_ORIGINS = 16;
+const MAX_IDENTITY_FRESHNESS_MS = 300_000;
+
+/** Parse one route record without accepting partial policy or extension keys. */
 export function parseGenerationAuthRouteRecord(
 	value: unknown,
 ): BrowserUseGenerationAuthRouteRecord | undefined {
 	if (!isJsonObject(value)) return undefined;
 	if (
-		Object.keys(value).length !== 3 ||
+		(!hasExactKeys(value, AUTH_ROUTE_BASE_KEYS) &&
+			!hasExactKeys(value, AUTH_ROUTE_SESSION_KEYS)) ||
 		typeof value.auth_context_ref !== "string" ||
 		value.auth_context_ref.length === 0 ||
 		typeof value.candidate_id !== "string" ||
@@ -83,11 +188,290 @@ export function parseGenerationAuthRouteRecord(
 	) {
 		return undefined;
 	}
+	if (hasExactKeys(value, AUTH_ROUTE_BASE_KEYS)) {
+		return {
+			auth_context_ref: value.auth_context_ref,
+			candidate_id: value.candidate_id,
+			status: "active",
+		};
+	}
+
+	const sessionPolicy = parseGenerationSessionPolicy(value.session_policy);
+	if (sessionPolicy === undefined) return undefined;
 	return {
 		auth_context_ref: value.auth_context_ref,
 		candidate_id: value.candidate_id,
 		status: "active",
+		session_policy: sessionPolicy,
 	};
+}
+
+function hasExactKeys(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const keys = Object.keys(value);
+	return (
+		keys.length === expected.length &&
+		keys.every((key) => expected.includes(key))
+	);
+}
+
+function parseCanonicalOrigins(value: unknown): readonly string[] | undefined {
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.length > MAX_AUTH_ORIGINS
+	) {
+		return undefined;
+	}
+	const origins: string[] = [];
+	for (const candidate of value) {
+		if (typeof candidate !== "string") return undefined;
+		let parsed: URL;
+		try {
+			parsed = new URL(candidate);
+		} catch {
+			return undefined;
+		}
+		if (
+			(parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+			parsed.origin !== candidate ||
+			(parsed.protocol === "http:" && !isLoopbackHostname(parsed.hostname)) ||
+			origins.includes(candidate)
+		) {
+			return undefined;
+		}
+		origins.push(candidate);
+	}
+	return origins;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+	return (
+		hostname === "localhost" ||
+		hostname === "[::1]" ||
+		/^127(?:\.[0-9]{1,3}){3}$/.test(hostname)
+	);
+}
+
+function parseGenerationSessionPolicy(
+	value: unknown,
+): BrowserUseGenerationSessionPolicy | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasExactKeys(value, SESSION_POLICY_KEYS) ||
+		value.schema_version !== "1"
+	) {
+		return undefined;
+	}
+	const approvedServiceOrigins = parseCanonicalOrigins(
+		value.approved_service_origins,
+	);
+	const approvedIdentityProviderOrigins = parseCanonicalOrigins(
+		value.approved_identity_provider_origins,
+	);
+	const authFlow = parseGenerationAuthFlow(value.auth_flow);
+	const identityVerifier = parseGenerationIdentityVerifier(
+		value.identity_verifier,
+	);
+	if (
+		approvedServiceOrigins === undefined ||
+		approvedIdentityProviderOrigins === undefined ||
+		authFlow === undefined ||
+		identityVerifier === undefined
+	) {
+		return undefined;
+	}
+	return {
+		schema_version: "1",
+		approved_service_origins: approvedServiceOrigins,
+		approved_identity_provider_origins: approvedIdentityProviderOrigins,
+		auth_flow: authFlow,
+		identity_verifier: identityVerifier,
+	};
+}
+
+function parseGenerationAuthFlow(
+	value: unknown,
+): BrowserUseGenerationAuthFlow | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasOnlyKeys(value, AUTH_FLOW_KEYS, AUTH_FLOW_REQUIRED_KEYS) ||
+		value.schema_version !== "1" ||
+		!isJsonObject(value.fields)
+	) {
+		return undefined;
+	}
+	const fieldKeys = Object.keys(value.fields);
+	if (
+		fieldKeys.length === 0 ||
+		fieldKeys.length > AUTH_FIELD_KEYS.length ||
+		fieldKeys.some(
+			(key) => !(AUTH_FIELD_KEYS as readonly string[]).includes(key),
+		)
+	) {
+		return undefined;
+	}
+	const username = parseSemanticLocator(value.fields.username);
+	const password = parseSemanticLocator(value.fields.password);
+	const otp = parseSemanticLocator(value.fields.otp);
+	if (
+		(value.fields.username !== undefined && username === undefined) ||
+		(value.fields.password !== undefined && password === undefined) ||
+		(value.fields.otp !== undefined && otp === undefined)
+	) {
+		return undefined;
+	}
+	const identifyState = parseReviewedActionRef(value.identify_state);
+	const usernameSubmit = parseOptionalReviewedActionRef(value.username_submit);
+	const passwordSubmit = parseOptionalReviewedActionRef(value.password_submit);
+	const otpSubmit = parseOptionalReviewedActionRef(value.otp_submit);
+	if (
+		identifyState === undefined ||
+		usernameSubmit === false ||
+		passwordSubmit === false ||
+		otpSubmit === false ||
+		(password !== undefined && passwordSubmit === undefined) ||
+		(otp !== undefined && otpSubmit === undefined) ||
+		(usernameSubmit === undefined &&
+			passwordSubmit === undefined &&
+			otpSubmit === undefined)
+	) {
+		return undefined;
+	}
+	return {
+		schema_version: "1",
+		fields: {
+			...(username === undefined ? {} : { username }),
+			...(password === undefined ? {} : { password }),
+			...(otp === undefined ? {} : { otp }),
+		},
+		identify_state: identifyState,
+		...(usernameSubmit === undefined
+			? {}
+			: { username_submit: usernameSubmit }),
+		...(passwordSubmit === undefined
+			? {}
+			: { password_submit: passwordSubmit }),
+		...(otpSubmit === undefined ? {} : { otp_submit: otpSubmit }),
+	};
+}
+
+function hasOnlyKeys(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+	required: readonly string[],
+): boolean {
+	const keys = Object.keys(value);
+	return (
+		keys.every((key) => allowed.includes(key)) &&
+		required.every((key) => keys.includes(key))
+	);
+}
+
+function parseSemanticLocator(
+	value: unknown,
+): BrowserUseAuthSemanticLocator | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasExactKeys(value, ["role", "name"]) ||
+		value.role !== "textbox" ||
+		typeof value.name !== "string" ||
+		value.name.length === 0 ||
+		value.name.length > MAX_SEMANTIC_NAME_LENGTH ||
+		UNSAFE_SEMANTIC_NAME.test(value.name)
+	) {
+		return undefined;
+	}
+	return { role: value.role, name: value.name };
+}
+
+function parseReviewedActionRef(
+	value: unknown,
+): BrowserUseGenerationReviewedActionRef | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasExactKeys(value, REVIEWED_ACTION_REF_KEYS) ||
+		typeof value.action_id !== "string" ||
+		!SAFE_ACTION_ID.test(value.action_id) ||
+		typeof value.expected_digest !== "string" ||
+		!actionDigestIsValid(value.expected_digest)
+	) {
+		return undefined;
+	}
+	return {
+		action_id: value.action_id,
+		expected_digest: value.expected_digest,
+	};
+}
+
+function parseOptionalReviewedActionRef(
+	value: unknown,
+): BrowserUseGenerationReviewedActionRef | undefined | false {
+	return value === undefined ? undefined : (parseReviewedActionRef(value) ?? false);
+}
+
+function parseGenerationIdentityVerifier(
+	value: unknown,
+): BrowserUseGenerationIdentityVerifier | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasExactKeys(value, [
+			"schema_version",
+			"action",
+			"expected",
+			"freshness_ms",
+		]) ||
+		value.schema_version !== "1" ||
+		!Number.isInteger(value.freshness_ms) ||
+		(value.freshness_ms as number) < 1 ||
+		(value.freshness_ms as number) > MAX_IDENTITY_FRESHNESS_MS
+	) {
+		return undefined;
+	}
+	const action = parseReviewedActionRef(value.action);
+	const expected = parseSessionIdentityReference(value.expected);
+	if (action === undefined || expected === undefined) return undefined;
+	return {
+		schema_version: "1",
+		action,
+		expected,
+		freshness_ms: value.freshness_ms as number,
+	};
+}
+
+/** Parse exact, bounded, secret-free session identity references. */
+export function parseSessionIdentityReference(
+	value: unknown,
+): BrowserUseSessionIdentityReference | undefined {
+	if (
+		!isJsonObject(value) ||
+		!hasExactKeys(value, SESSION_IDENTITY_KEYS)
+	) {
+		return undefined;
+	}
+	const subjectReference = safeIdentityReference(value.subject_reference);
+	const accountReference = safeIdentityReference(value.account_reference);
+	const tenantReference = safeIdentityReference(value.tenant_reference);
+	if (
+		subjectReference === undefined ||
+		accountReference === undefined ||
+		tenantReference === undefined
+	) {
+		return undefined;
+	}
+	return {
+		subject_reference: subjectReference,
+		account_reference: accountReference,
+		tenant_reference: tenantReference,
+	};
+}
+
+function safeIdentityReference(value: unknown): string | undefined {
+	return typeof value === "string" && SAFE_IDENTITY_REFERENCE.test(value)
+		? value
+		: undefined;
 }
 
 /** One proof artifact bound by name and exact bytes. */

@@ -290,6 +290,7 @@ export async function createBrowserUseGenerationRuntime(
 					auth_context_ref: route.auth_context_ref,
 					route_digest: routeRef.digest,
 					candidate_digest: candidateRef.digest,
+					route,
 					candidate: candidateValue as BrowserUseImportCandidate,
 				},
 			};
