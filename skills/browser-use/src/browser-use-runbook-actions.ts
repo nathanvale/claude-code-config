@@ -43,7 +43,10 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import type { AgentBrowserPostcondition, AgentBrowserTaskStep } from "./browser-use-agent-browser";
+import type {
+	AgentBrowserPostcondition,
+	AgentBrowserTaskStep,
+} from "./browser-use-agent-browser";
 import { redactUnsafeText } from "./browser-use-core";
 import { SAFE_BATCH_ITEM_KEY } from "./browser-use-identifiers";
 import {
@@ -76,6 +79,15 @@ export const STRUCTURED_RESULT_SUMMARY_MAX_LENGTH =
  */
 export function actionAssetDigest(bytes: string): string {
 	return createHash("sha256").update(bytes, "utf-8").digest("hex");
+}
+
+/** Bind operator approval to one exact reviewed action postcondition. */
+export function reviewedActionPostconditionDigest(
+	postcondition: AgentBrowserPostcondition,
+): string {
+	return createHash("sha256")
+		.update(canonicalJson(postcondition), "utf-8")
+		.digest("hex");
 }
 
 const ACTION_ASSET_SECRET_PATTERNS: readonly RegExp[] = [
@@ -692,8 +704,9 @@ export type BrowserUsePromotionDisposition =
 /**
  * An operator-approved promotion RECEIPT (R17). It binds an approval to the
  * EXACT asset digest (an approval for other bytes never carries over) plus the
- * exact allowed origin and audited effect class the operator approved. A
- * runbook can never author this — it is generation/registry-owned (KTD5).
+ * exact allowed origin, audited effect class, and optional closed purpose the
+ * operator approved. A runbook can never author this — it is
+ * generation/registry-owned (KTD5).
  */
 export type BrowserUsePromotionReceipt = {
 	/** The exact asset digest this receipt approved; must match the record. */
@@ -703,6 +716,10 @@ export type BrowserUsePromotionReceipt = {
 	approved_origin: string;
 	/** The audited effect class the operator approved. */
 	approved_effect: BrowserUseActionEffectClass;
+	/** Closed mutation purpose the operator approved, when purpose-scoped. */
+	approved_purpose?: "runbook-auth-submit";
+	/** Exact postcondition digest approved for a purpose-scoped mutation. */
+	approved_postcondition_digest?: string;
 	/** Opaque operator identity; audit only, never an authority branch. */
 	approver_ref: string;
 };
@@ -726,6 +743,8 @@ export type BrowserUseReviewedActionRecord = {
 	allowed_origin: string;
 	/** Audited effect class (R19); MUST match the asset audit at resolution. */
 	effect_class: BrowserUseActionEffectClass;
+	/** Closed mutation purpose for reviewed login-form submission. */
+	purpose?: "runbook-auth-submit";
 	/** Enforced containment policy (R23); an unenforceable claim is refused. */
 	containment: BrowserUseActionContainmentPolicy;
 	/** Typed input schema (R17); the runbook's substituted inputs must satisfy it. */
@@ -802,6 +821,7 @@ export function parseReviewedActionRecord(
 			"expected_digest",
 			"allowed_origin",
 			"effect_class",
+			"purpose",
 			"containment",
 			"input_schema",
 			"result_schema",
@@ -819,6 +839,9 @@ export function parseReviewedActionRecord(
 		typeof record.allowed_origin !== "string" ||
 		!exactOriginValid(record.allowed_origin) ||
 		(record.effect_class !== "read" && record.effect_class !== "mutation") ||
+		(record.purpose !== undefined &&
+			(record.purpose !== "runbook-auth-submit" ||
+				record.effect_class !== "mutation")) ||
 		!(
 			BROWSER_USE_ACTION_CONTAINMENT_POLICIES as readonly unknown[]
 		).includes(record.containment) ||
@@ -849,6 +872,8 @@ export function parseReviewedActionRecord(
 			"disposition",
 			"approved_origin",
 			"approved_effect",
+			"approved_purpose",
+			"approved_postcondition_digest",
 			"approver_ref",
 		]) ||
 		typeof receipt.approved_digest !== "string" ||
@@ -860,6 +885,20 @@ export function parseReviewedActionRecord(
 		!exactOriginValid(receipt.approved_origin) ||
 		(receipt.approved_effect !== "read" &&
 			receipt.approved_effect !== "mutation") ||
+		(receipt.approved_purpose !== undefined &&
+			(receipt.approved_purpose !== "runbook-auth-submit" ||
+				receipt.approved_effect !== "mutation")) ||
+		receipt.approved_purpose !== record.purpose ||
+		(receipt.approved_postcondition_digest !== undefined &&
+			(typeof receipt.approved_postcondition_digest !== "string" ||
+				!actionDigestIsValid(receipt.approved_postcondition_digest))) ||
+		(record.purpose === "runbook-auth-submit" &&
+			receipt.approved_postcondition_digest !==
+				reviewedActionPostconditionDigest(
+					record.required_postcondition as AgentBrowserPostcondition,
+				)) ||
+		(record.purpose === undefined &&
+			receipt.approved_postcondition_digest !== undefined) ||
 		typeof receipt.approver_ref !== "string" ||
 		receipt.approver_ref.length === 0
 	) {
@@ -916,7 +955,9 @@ export type BrowserUseReviewedActionRefusalCode =
 	| "action_receipt_not_approved"
 	| "action_receipt_digest_mismatch"
 	| "action_receipt_origin_mismatch"
-	| "action_receipt_effect_mismatch";
+	| "action_receipt_effect_mismatch"
+	| "action_receipt_purpose_mismatch"
+	| "action_receipt_postcondition_mismatch";
 
 /** One typed reviewed-action refusal. Never carries asset bytes or a value. */
 export type BrowserUseReviewedActionRefusal = {
@@ -960,6 +1001,8 @@ function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
 export type BrowserUseResolvedReviewedAction = {
 	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>;
 	effect_class: BrowserUseActionEffectClass;
+	/** Closed mutation purpose propagated from the reviewed registry record. */
+	purpose?: "runbook-auth-submit";
 	result_schema: BrowserUseActionValueSchema;
 	result_sensitivity: "low" | "high";
 };
@@ -984,7 +1027,7 @@ export type BrowserUseReviewedActionResolution =
  *      satisfy the input schema (R17);
  *   8. a mutation declares a required postcondition (R17);
  *   9. an operator-approved promotion receipt whose approved digest, origin,
- *      and effect all match the record EXACTLY (R17/R18/R42).
+ *      effect, and purpose all match the record EXACTLY (R17/R18/R42).
  *
  * @param input - Action id, requested origin, substituted inputs, and the seam
  * @returns The verified `evaluate` step plus result metadata, or a typed refusal
@@ -1167,6 +1210,24 @@ export async function resolveReviewedAction(input: {
 			"the promotion receipt approved a different effect class than the record's.",
 		);
 	}
+	if (receipt.approved_purpose !== record.purpose) {
+		return refuse(
+			"action_receipt_purpose_mismatch",
+			"the promotion receipt approved a different purpose than the record's.",
+		);
+	}
+	if (
+		record.purpose === "runbook-auth-submit" &&
+		receipt.approved_postcondition_digest !==
+			reviewedActionPostconditionDigest(
+				record.required_postcondition as AgentBrowserPostcondition,
+			)
+	) {
+		return refuse(
+			"action_receipt_postcondition_mismatch",
+			"the promotion receipt approved a different auth-submit postcondition than the record's.",
+		);
+	}
 
 	// Every invariant proven: build the executor's approved evaluate step. The
 	// executor RE-PROVES origin, digest, approval, and postcondition itself, so
@@ -1189,6 +1250,7 @@ export async function resolveReviewedAction(input: {
 		resolved: {
 			step,
 			effect_class: record.effect_class,
+			...(record.purpose === undefined ? {} : { purpose: record.purpose }),
 			result_schema: record.result_schema,
 			result_sensitivity: record.result_sensitivity,
 		},

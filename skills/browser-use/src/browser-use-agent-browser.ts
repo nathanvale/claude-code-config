@@ -1010,6 +1010,20 @@ function reviewedActionPayload(
 	].join("\n");
 }
 
+function reviewedAuthSubmitPayload(
+	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>,
+): string {
+	return [
+		"try {",
+		`  const action = (${step.script});`,
+		`  await action({ inputs: ${JSON.stringify(step.inputs)} });`,
+		"} catch {",
+		'  throw "reviewed-auth-submit-failed";',
+		"}",
+		"undefined;",
+	].join("\n");
+}
+
 type AgentBrowserCommandContext = Pick<
 	AgentBrowserTask,
 	"handoff" | "run_id"
@@ -1701,5 +1715,110 @@ export async function executeAgentBrowserTask(
 				}
 			: {}),
 		...(readResults.length > 0 ? { read_results: readResults } : {}),
+	};
+}
+
+/**
+ * Execute one reviewed auth-form submit without any page capture command.
+ *
+ * This narrow path exists because a login form already contains confidential
+ * values. It permits tab identity, URL proof, one result-discarding reviewed
+ * mutation, and URL postcondition proof only. It never snapshots, reads DOM
+ * values, or returns evaluated page data.
+ *
+ * @param runtime - Structured command runner plus final durable write-ahead hook
+ * @param task - Exact target and one reviewed auth-submit mutation
+ * @returns Structural dispatch truth with no page or action result payload
+ * @internal
+ */
+export async function executeAgentBrowserReviewedAuthSubmit(
+	runtime: AgentBrowserExecutionRuntime,
+	task: AgentBrowserTask,
+): Promise<AgentBrowserExecutionResult> {
+	const validation = validateTask(task);
+	if (!validation.ok) return validation;
+	const [step] = task.steps;
+	if (
+		task.steps.length !== 1 ||
+		step?.kind !== "evaluate" ||
+		step.effect !== "mutation" ||
+		step.item_key !== undefined ||
+		step.postcondition?.kind !== "url-equals" ||
+		!actionIntegrityIsValid(step, validation.allowedOrigins)
+	) {
+		return failure(
+			"agent_browser_task_invalid",
+			"not-achieved",
+			"Auth submit requires one approved URL-proven mutation and no capture step.",
+		);
+	}
+	const nativeCommand = (args: readonly string[]) =>
+		runNative(runtime, task, args);
+	const targetFailure = await selectAgentBrowserTarget(
+		nativeCommand,
+		task,
+		validation.allowedOrigins,
+	);
+	if (targetFailure !== undefined) return targetFailure;
+
+	const currentUrl = await runNative(runtime, task, [
+		"get",
+		"url",
+		"--json",
+	]);
+	const observedUrl = parseSuccessData(currentUrl?.stdout ?? "")?.url;
+	if (
+		!commandSucceeded(currentUrl) ||
+		typeof observedUrl !== "string" ||
+		!agentBrowserHasExactOrigin(observedUrl, step.allowed_origin)
+	) {
+		return failure(
+			"agent_browser_action_target_refused",
+			"not-achieved",
+			"The reviewed auth action's exact identity-provider origin is not freshly proven.",
+		);
+	}
+	const markerFailure = await markMutationDispatch(runtime, task, 0);
+	if (markerFailure !== undefined) return markerFailure;
+
+	const evaluated = await runNative(
+		runtime,
+		task,
+		["eval", "--stdin", "--json"],
+		reviewedAuthSubmitPayload(step),
+	);
+	if (!commandSucceeded(evaluated)) {
+		return failure(
+			"agent_browser_mutation_effect_unknown",
+			"unknown",
+			"The reviewed auth submit may have dispatched browser effects; inspect before retry.",
+			0,
+			true,
+		);
+	}
+	const verified = await verifyAgentBrowserPostcondition(
+		nativeCommand,
+		step.postcondition,
+		validation.allowedOrigins,
+	);
+	if (verified !== "confirmed") {
+		return failure(
+			verified === "unavailable"
+				? "agent_browser_mutation_effect_unknown"
+				: "agent_browser_postcondition_not_achieved",
+			verified === "unavailable" ? "unknown" : "not-achieved",
+			verified === "unavailable"
+				? "Auth submit completed without fresh URL proof; inspect before retry."
+				: "Fresh URL proof did not satisfy the reviewed auth-submit postcondition.",
+			1,
+			true,
+		);
+	}
+	return {
+		ok: true,
+		outcome: "confirmed",
+		executed_steps: 1,
+		target_tab_id: task.target_tab_id,
+		mutation_dispatched: true,
 	};
 }

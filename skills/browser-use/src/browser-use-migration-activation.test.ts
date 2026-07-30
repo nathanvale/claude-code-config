@@ -39,6 +39,7 @@ import {
 	writeSourceSnapshot,
 } from "./browser-use-retention";
 import { shippedRunbooksRoot } from "./browser-use-runbook";
+import { reviewedActionPostconditionDigest } from "./browser-use-runbook-actions";
 import { parseDurableRecord } from "./browser-use-schemas";
 import { readDurableFile, writeDurableFile } from "./browser-use-store";
 
@@ -84,7 +85,14 @@ async function seedCompleteGeneration(
 			authContextRef?: string;
 			routeExtra?: Record<string, unknown>;
 			sessionPolicy?: boolean;
-			sessionPolicyFault?: "missing" | "digest" | "origin" | "effect";
+			sessionPolicyFault?:
+				| "missing"
+				| "digest"
+				| "origin"
+				| "effect"
+				| "purpose"
+				| "receipt-purpose"
+				| "postcondition";
 		};
 	},
 ): Promise<{ contentHash: string }> {
@@ -172,13 +180,19 @@ async function seedCompleteGeneration(
 						expected_digest: submitDigest,
 						allowed_origin: identityProviderOrigin,
 						effect_class: "mutation",
+						...(input.auth?.sessionPolicyFault === "purpose"
+							? {}
+							: { purpose: "runbook-auth-submit" }),
 						containment: "none",
 						input_schema: { kind: "object", fields: {} },
 						result_schema: { kind: "object", fields: {} },
 						result_sensitivity: "low",
 						required_postcondition: {
 							kind: "element-visible",
-							selector: "#authenticated",
+							selector:
+								input.auth?.sessionPolicyFault === "postcondition"
+									? "#changed-authenticated"
+									: "#authenticated",
 						},
 						source_provenance: `reviewed/${serviceId}-submit-login.js`,
 						promotion_receipt: {
@@ -186,6 +200,17 @@ async function seedCompleteGeneration(
 							disposition: "approved",
 							approved_origin: identityProviderOrigin,
 							approved_effect: "mutation",
+							...(input.auth?.sessionPolicyFault === "purpose" ||
+							input.auth?.sessionPolicyFault === "receipt-purpose"
+								? {}
+								: {
+										approved_purpose: "runbook-auth-submit",
+										approved_postcondition_digest:
+											reviewedActionPostconditionDigest({
+												kind: "element-visible",
+												selector: "#authenticated",
+											}),
+									}),
 							approver_ref: "operator-review",
 						},
 					},
@@ -1354,6 +1379,9 @@ describe("activateBrowserUseMigration", () => {
 			"digest",
 			"origin",
 			"effect",
+			"purpose",
+			"receipt-purpose",
+			"postcondition",
 		] as const) {
 			const deps = await makeDeps();
 			await seedCompleteGeneration(deps, {

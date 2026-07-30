@@ -36,6 +36,7 @@ import {
 	auditActionEffectClass,
 	type BrowserUseReviewedActionRecord,
 	parseReviewedActionRecord,
+	reviewedActionPostconditionDigest,
 } from "./browser-use-runbook-actions";
 import {
 	parseRunbookRecord,
@@ -778,7 +779,15 @@ function reviewedActionRecordProblem(
 		(record.promotion_receipt.disposition !== "approved" ||
 			record.promotion_receipt.approved_digest !== record.expected_digest ||
 			record.promotion_receipt.approved_origin !== record.allowed_origin ||
-			record.promotion_receipt.approved_effect !== record.effect_class)
+			record.promotion_receipt.approved_effect !== record.effect_class ||
+			record.promotion_receipt.approved_purpose !== record.purpose ||
+			(record.purpose === "runbook-auth-submit" &&
+				record.promotion_receipt.approved_postcondition_digest !==
+					reviewedActionPostconditionDigest(
+						record.required_postcondition as NonNullable<
+							BrowserUseReviewedActionRecord["required_postcondition"]
+						>,
+					)))
 	) {
 		return "active reviewed action lacks an exact approved promotion receipt.";
 	}
@@ -790,17 +799,27 @@ function reviewedAuthRouteActionProblem(
 	ref: BrowserUseGenerationReviewedActionRef,
 	expectedEffect: "read" | "mutation",
 	allowedOrigins: readonly string[],
+	expectedPurpose?: BrowserUseReviewedActionRecord["purpose"],
 ): string | undefined {
 	const record = records.get(ref.action_id);
 	if (
 		record === undefined ||
 		record.expected_digest !== ref.expected_digest ||
 		record.effect_class !== expectedEffect ||
+		(expectedPurpose !== undefined && record.purpose !== expectedPurpose) ||
 		!allowedOrigins.includes(record.allowed_origin) ||
 		record.promotion_receipt.disposition !== "approved" ||
 		record.promotion_receipt.approved_digest !== ref.expected_digest ||
 		record.promotion_receipt.approved_origin !== record.allowed_origin ||
 		record.promotion_receipt.approved_effect !== expectedEffect ||
+		record.promotion_receipt.approved_purpose !== record.purpose ||
+		(record.purpose === "runbook-auth-submit" &&
+			record.promotion_receipt.approved_postcondition_digest !==
+				reviewedActionPostconditionDigest(
+					record.required_postcondition as NonNullable<
+						BrowserUseReviewedActionRecord["required_postcondition"]
+					>,
+				)) ||
 		(expectedEffect === "mutation" &&
 			record.required_postcondition === undefined)
 	) {
@@ -818,6 +837,7 @@ function sessionPolicyActionProblem(
 		ref: BrowserUseGenerationReviewedActionRef;
 		effect: "read" | "mutation";
 		origins: readonly string[];
+		purpose?: BrowserUseReviewedActionRecord["purpose"];
 	}> = [
 		{
 			ref: flow.identify_state,
@@ -831,6 +851,7 @@ function sessionPolicyActionProblem(
 						ref: flow.username_submit,
 						effect: "mutation" as const,
 						origins: policy.approved_identity_provider_origins,
+						purpose: "runbook-auth-submit" as const,
 					},
 				]),
 		...(flow.password_submit === undefined
@@ -840,6 +861,7 @@ function sessionPolicyActionProblem(
 						ref: flow.password_submit,
 						effect: "mutation" as const,
 						origins: policy.approved_identity_provider_origins,
+						purpose: "runbook-auth-submit" as const,
 					},
 				]),
 		...(flow.otp_submit === undefined
@@ -849,6 +871,7 @@ function sessionPolicyActionProblem(
 						ref: flow.otp_submit,
 						effect: "mutation" as const,
 						origins: policy.approved_identity_provider_origins,
+						purpose: "runbook-auth-submit" as const,
 					},
 				]),
 		{
@@ -863,6 +886,7 @@ function sessionPolicyActionProblem(
 			requirement.ref,
 			requirement.effect,
 			requirement.origins,
+			requirement.purpose,
 		);
 		if (problem !== undefined) return problem;
 	}
