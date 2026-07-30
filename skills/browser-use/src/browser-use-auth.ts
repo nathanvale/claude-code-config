@@ -17,10 +17,13 @@ import type {
 	BrowserUseAuthCommitResult,
 	BrowserUseAuthCommitSummary,
 	BrowserUseAuthContractPort,
+	BrowserUseAuthRunContinuation,
 	BrowserUseRunIntegrationPort,
 } from "./browser-use-run-model";
+import { isBrowserUseAuthRunContinuation } from "./browser-use-run-model";
 import {
 	type BrowserUseAuthAttestation,
+	type BrowserUseAuthBlockedCause,
 	type BrowserUseSessionIdentityObservationV1,
 	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
@@ -30,6 +33,7 @@ import {
 	sessionIdentityObservationDigestOf,
 	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
+import { secretShapeFindingOf } from "./browser-use-auth-bindings";
 
 /** Every expected coordinate pinned by the Session Identity Proof consumer. */
 export type BrowserUseSessionIdentityExpectation = {
@@ -303,6 +307,74 @@ const CONTINUE_TRANSACTION_CONTINUATION = {
 	next_action_id: "continue-auth-transaction",
 	summary: "The authentication transaction is mid-flight; continue it.",
 } as const;
+const CONTINUATION_SECRET_ASSIGNMENT =
+	/\b(?:password|passwd|secret|seed|totp|credential|token)\b["']?\s*[:=]\s*["']?\S+/i;
+const CONTINUATION_AUTHORIZATION_VALUE = /\bBearer\s+\S+/i;
+
+function continuationCarriesSecretShape(
+	continuation: BrowserUseAuthRunContinuation,
+): boolean {
+	const strings = [
+		continuation.summary,
+		continuation.continuation_id,
+		continuation.run_id,
+		continuation.checkpoint,
+		continuation.bindings.generation_id,
+		continuation.bindings.lane_id,
+		continuation.bindings.handoff_evidence_id,
+		continuation.bindings.environment,
+		continuation.bindings.profile,
+		continuation.bindings.target_binding_id,
+		continuation.bindings.expected_identity.subject_ref,
+		continuation.bindings.expected_identity.account_ref,
+		continuation.bindings.expected_identity.tenant_ref,
+		continuation.claim?.claimant_id,
+	];
+	return strings.some(
+		(value) =>
+			value !== undefined &&
+			(secretShapeFindingOf(value) !== undefined ||
+				CONTINUATION_SECRET_ASSIGNMENT.test(value) ||
+				CONTINUATION_AUTHORIZATION_VALUE.test(value)),
+	);
+}
+
+function blockedContinuationReasonOf(
+	cause: BrowserUseAuthBlockedCause,
+): BrowserUseAuthRunContinuation["reason"] {
+	if (cause === "user-presence-required" || cause === "challenge-escalation") {
+		return "user-presence-required";
+	}
+	if (cause === "unknown-post-submit-state") {
+		return "submission-outcome-unknown";
+	}
+	if (
+		cause === "session-identity-proof-unavailable" ||
+		cause === "human-identity-attestation-required"
+	) {
+		return "session-identity-unproven";
+	}
+	return BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state ===
+		"awaiting-auth"
+		? "login-required"
+		: "human-action-required";
+}
+
+function versionedBlockedContinuationMatches(
+	cause: BrowserUseAuthBlockedCause,
+	continuation: BrowserUseAuthRunContinuation,
+): boolean {
+	const runState = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[cause].run_state;
+	return (
+		continuation.state === "pending" &&
+		continuation.claim === undefined &&
+		continuation.safe_to_retry === false &&
+		continuation.required_actor ===
+			(runState === "awaiting-auth" ? "agent" : "human") &&
+		continuation.reason === blockedContinuationReasonOf(cause) &&
+		continuation.checkpoint === `blocked-${cause}`
+	);
+}
 
 /**
  * Map one fragment onto the platform commit summary (R6). Terminal
@@ -318,6 +390,7 @@ const CONTINUE_TRANSACTION_CONTINUATION = {
  */
 export function authCommitSummaryOf(
 	fragment: BrowserUseAuthTransactionFragment,
+	continuation?: BrowserUseAuthRunContinuation,
 ): BrowserUseAuthSummaryResult {
 	const issues = validateAuthFragmentShape(fragment);
 	const firstIssue = issues[0];
@@ -330,7 +403,38 @@ export function authCommitSummaryOf(
 			},
 		};
 	}
+	if (
+		continuation !== undefined &&
+		(!isBrowserUseAuthRunContinuation(continuation) ||
+			continuation.run_id !== fragment.binding.run_id ||
+			continuation.bindings.lane_id !== fragment.binding.lane_id ||
+			continuation.bindings.adapter_id !== fragment.binding.lane_id ||
+			continuation.bindings.handoff_evidence_id !==
+				fragment.binding.handoff_evidence_id ||
+			continuation.bindings.environment !== fragment.binding.environment ||
+			continuation.bindings.profile !== fragment.binding.profile ||
+			continuationCarriesSecretShape(continuation))
+	) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message:
+					"the versioned continuation is invalid or does not match the auth fragment binding.",
+			},
+		};
+	}
 	if (fragment.terminal_outcome === "authenticated") {
+		if (continuation !== undefined) {
+			return {
+				ok: false,
+				rejection: {
+					code: "auth_fragment_not_committable",
+					message:
+						"an authenticated fragment cannot retain a blocked-state continuation.",
+				},
+			};
+		}
 		if (
 			fragment.attestation_digest === null ||
 			fragment.fresh_until_epoch_ms === null
@@ -366,11 +470,40 @@ export function authCommitSummaryOf(
 	}
 	if (fragment.status === "blocked" && fragment.blocked_cause !== null) {
 		const entry = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[fragment.blocked_cause];
+		if (
+			continuation !== undefined &&
+			!versionedBlockedContinuationMatches(
+				fragment.blocked_cause,
+				continuation,
+			)
+		) {
+			return {
+				ok: false,
+				rejection: {
+					code: "auth_fragment_not_committable",
+					message:
+						"the versioned continuation contradicts the blocked auth cause.",
+				},
+			};
+		}
 		return {
 			ok: true,
 			summary: {
 				state: entry.run_state,
-				continuation: { ...entry.continuation },
+				continuation: continuation ?? { ...entry.continuation },
+			},
+		};
+	}
+	if (
+		continuation !== undefined &&
+		!["pending", "claimed", "in-progress"].includes(continuation.state)
+	) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message:
+					"an active auth fragment requires a live continuation lifecycle.",
 			},
 		};
 	}
@@ -378,7 +511,7 @@ export function authCommitSummaryOf(
 		ok: true,
 		summary: {
 			state: "awaiting-auth",
-			continuation: { ...CONTINUE_TRANSACTION_CONTINUATION },
+			continuation: continuation ?? { ...CONTINUE_TRANSACTION_CONTINUATION },
 		},
 	};
 }
@@ -406,9 +539,19 @@ export async function commitAuthTransaction(
 		run_id: string;
 		expected_revision: number;
 		fragment: BrowserUseAuthTransactionFragment;
+		continuation?: BrowserUseAuthRunContinuation;
 	},
 ): Promise<BrowserUseAuthCommitResult | BrowserUseAuthCommitRefusal> {
-	const mapped = authCommitSummaryOf(input.fragment);
+	if (input.run_id !== input.fragment.binding.run_id) {
+		return {
+			ok: false,
+			rejection: {
+				code: "auth_fragment_not_committable",
+				message: "the commit run id does not match the auth fragment binding.",
+			},
+		};
+	}
+	const mapped = authCommitSummaryOf(input.fragment, input.continuation);
 	if (!mapped.ok) return mapped;
 	return await port.commitAuthOutcome({
 		run_id: input.run_id,

@@ -31,7 +31,10 @@ import {
 	makeTempXdgEnv,
 } from "./browser-use-platform-test-helpers";
 import { createOpTokenRetrievalPort } from "./browser-use-op";
-import type { BrowserUseSharedRun } from "./browser-use-run-model";
+import type {
+	BrowserUseAuthRunContinuation,
+	BrowserUseSharedRun,
+} from "./browser-use-run-model";
 import {
 	type RunStoreDeps,
 	createSharedRun,
@@ -381,6 +384,46 @@ function blockedLeaseFragment(): BrowserUseAuthTransactionFragment {
 	});
 }
 
+function authContinuation(
+	overrides: Partial<BrowserUseAuthRunContinuation> = {},
+): BrowserUseAuthRunContinuation {
+	return {
+		schema_version: "1",
+		kind: "auth",
+		continuation_id: "continuation-1",
+		run_id: "run-1",
+		state: "pending",
+		reason: "login-required",
+		required_actor: "agent",
+		safe_to_retry: false,
+		checkpoint: "before-auth-delivery",
+		expires_at_epoch_ms: 10_000,
+		resume_action: {
+			command: "run",
+			args: ["resume", "--run", "run-1", "--json"],
+		},
+		bindings: {
+			generation_id: "generation-1",
+			activation_epoch: 2,
+			route_digest: "a".repeat(64),
+			lane_id: "agent-browser",
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "evidence-1",
+			environment: "agent-chrome",
+			profile: "default",
+			target_binding_id: "target-binding-1",
+			expected_identity: {
+				subject_ref: "subject-1",
+				account_ref: "account-1",
+				tenant_ref: "tenant-1",
+			},
+		},
+		next_action_id: "resume-auth-continuation",
+		summary: "Resume the exact authentication continuation.",
+		...overrides,
+	};
+}
+
 function basePreparationInput(
 	overrides: Partial<PreparationInput> = {},
 ): PreparationInput {
@@ -582,14 +625,13 @@ describe("acquireSensitiveIntervalLease (lease -> event mapping)", () => {
 		const committed = await provider.commitWithClaim(outcome.claim, {
 			run_id: "run-1",
 			expected_revision: 1,
-			fragment: blockedLeaseFragment(),
+			fragment: baseFragment(),
+			continuation: authContinuation(),
 		});
 		expect(committed.ok).toBe(true);
 		if (committed.ok && "run" in committed) {
 			expect(committed.run.revision).toBe(2);
-			expect(committed.run.continuation?.next_action_id).toBe(
-				"wait-for-lease-holder",
-			);
+			expect(committed.run.continuation).toEqual(authContinuation());
 		}
 	});
 });
@@ -1576,6 +1618,116 @@ describe("credential retrieval authority", () => {
 // --- commitWithClaim boundary (D8) -------------------------------------------
 
 describe("commitWithClaim (throw -> typed refusal, D8)", () => {
+	test("malformed runtime checkpoint input returns a typed refusal without writing", async () => {
+		const { provider, store } = await makeProvider();
+		const created = await createSharedRun(store, baseRun());
+		expect(created.ok).toBe(true);
+		if (!created.ok) throw new Error("unreachable");
+		const granted = expectGranted(
+			await provider.acquireSensitiveIntervalLease({
+				run: created.run,
+				holder_id: "auth-transaction",
+				ttl_ms: TTL_MS,
+			}),
+		);
+		const malformedFragment = {
+			schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+			binding: null,
+		} as unknown as BrowserUseAuthTransactionFragment;
+		const fragmentResult = await provider.commitWithClaim(granted.claim, {
+			run_id: "run-1",
+			expected_revision: 1,
+			fragment: malformedFragment,
+		});
+		expect(fragmentResult.ok).toBe(false);
+		if (!fragmentResult.ok) {
+			expect(fragmentResult.rejection.code).toBe("auth_fragment_invalid");
+		}
+		const continuationResult = await provider.commitWithClaim(granted.claim, {
+			run_id: "run-1",
+			expected_revision: 1,
+			fragment: baseFragment(),
+			continuation: {
+				...authContinuation(),
+				bindings: null,
+			} as unknown as BrowserUseAuthRunContinuation,
+		});
+		expect(continuationResult.ok).toBe(false);
+		if (!continuationResult.ok) {
+			expect(continuationResult.rejection.code).toBe(
+				"auth_fragment_not_committable",
+			);
+		}
+		const loaded = await loadSharedRun(store, "run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) expect(loaded.run.revision).toBe(1);
+	});
+
+	test("continuation generation, epoch, and target authority must match the loaded run", async () => {
+		const { provider, store } = await makeProvider();
+		const created = await createSharedRun(
+			store,
+			baseRun({
+				task_intent: "runbook-execution",
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "target-binding-1",
+				},
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "oncore",
+					flow_id: "fill-timesheet",
+					runbook_version: "1.0.0",
+					next_step: 0,
+					total_steps: 2,
+				},
+				run_execution_binding: {
+					schema_version: "1",
+					generation_id: "generation-1",
+					activation_epoch: 2,
+					service_id: "oncore",
+					flow_id: "fill-timesheet",
+					runbook_version: "1.0.0",
+					runbook_digest: "b".repeat(64),
+					action_registry_digest: "c".repeat(64),
+					normalized_input_digest: "d".repeat(64),
+					item_key_digest: "e".repeat(64),
+					target_scope: "https://portal.example.com",
+					postcondition: { id: "saved", summary: "Draft saved." },
+				},
+			}),
+		);
+		expect(created.ok).toBe(true);
+		if (!created.ok) throw new Error("unreachable");
+		const granted = expectGranted(
+			await provider.acquireSensitiveIntervalLease({
+				run: created.run,
+				holder_id: "auth-transaction",
+				ttl_ms: TTL_MS,
+			}),
+		);
+		for (const bindings of [
+			{ ...authContinuation().bindings, generation_id: "generation-other" },
+			{ ...authContinuation().bindings, activation_epoch: 3 },
+			{ ...authContinuation().bindings, target_binding_id: "target-other" },
+		]) {
+			const result = await provider.commitWithClaim(granted.claim, {
+				run_id: "run-1",
+				expected_revision: 1,
+				fragment: baseFragment(),
+				continuation: authContinuation({ bindings }),
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.rejection.code).toBe("auth_fragment_not_committable");
+			}
+		}
+		const loaded = await loadSharedRun(store, "run-1");
+		expect(loaded.ok).toBe(true);
+		if (loaded.ok) expect(loaded.run.revision).toBe(1);
+	});
+
 	test("a fencing-stale claim resolves to auth_commit_lease_rejected, never a throw", async () => {
 		const { provider, store } = await makeProvider();
 		const created = await createSharedRun(store, baseRun());
@@ -1637,7 +1789,19 @@ describe("commitWithClaim (throw -> typed refusal, D8)", () => {
 		const result = await provider.commitWithClaim(granted.claim, {
 			run_id: "run-store-fault",
 			expected_revision: 1,
-			fragment: blockedLeaseFragment(),
+			fragment: baseFragment({
+				phase: "lease-request",
+				status: "blocked",
+				blocked_cause: "lease-unavailable",
+				continuation: {
+					...BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["lease-unavailable"]
+						.continuation,
+				},
+				binding: {
+					...baseFragment().binding,
+					run_id: "run-store-fault",
+				},
+			}),
 		});
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");

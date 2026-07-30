@@ -138,13 +138,14 @@ type DeliveryHelperFake = {
 function runRepresentativeAuthFlow(
 	helper: DeliveryHelperFake,
 	events: readonly BrowserUseAuthTransactionEvent[],
+	runId = "run-leak-harness",
 ): BrowserUseAuthTransactionFragment {
 	const begun = beginAuthTransaction({
 		method: "password",
 		attempt_limit: 3,
 		attempts_already_consumed: 0,
 		binding: {
-			run_id: "run-leak-harness",
+			run_id: runId,
 			handoff_evidence_id: "evidence-1",
 			lane_id: "agent-browser",
 			environment: "agent-chrome",
@@ -640,7 +641,7 @@ describe("value-aware leak harness (AE5)", () => {
 			{ type: "method-step-complete", step: "reprove-target" },
 			{ type: "method-step-complete", step: "fill-password" },
 			{ type: "submission-dispatched" },
-		]);
+		], RUN);
 		await persistAndReadStoreBytes(deps, RUN, fragment);
 
 		// Sweep bytes the SUT emitted on the real failure: the returned failure

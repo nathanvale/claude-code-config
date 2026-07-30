@@ -27,6 +27,7 @@ import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
 import type { AgentBrowserAuthDeliveryContext } from "./browser-use-agent-browser";
 import {
 	type BrowserUseAuthContractDeps,
+	authCommitSummaryOf,
 	commitAuthTransaction,
 	createBrowserUseAuthContract,
 } from "./browser-use-auth";
@@ -77,6 +78,7 @@ import {
 	proveVaultScope,
 } from "./browser-use-op";
 import type {
+	BrowserUseAuthRunContinuation,
 	BrowserUseRunIntegrationPort,
 	BrowserUseSharedRun,
 } from "./browser-use-run-model";
@@ -209,6 +211,47 @@ export type BrowserUseProviderCommitOutcome =
 			};
 	  };
 
+function commitAuthorityMatchesRun(
+	run: BrowserUseSharedRun,
+	fragment: BrowserUseAuthTransactionFragment,
+	continuation?: BrowserUseAuthRunContinuation,
+): boolean {
+	if (
+		fragment.binding.run_id !== run.run_id ||
+		fragment.binding.environment !== run.environment_profile.environment ||
+		fragment.binding.profile !== run.environment_profile.profile ||
+		fragment.binding.lane_id !== run.adapter_id ||
+		fragment.binding.handoff_evidence_id !== run.handoff_evidence_id
+	) {
+		return false;
+	}
+	if (continuation === undefined) return true;
+	if (
+		continuation.run_id !== run.run_id ||
+		continuation.bindings.adapter_id !== run.adapter_id ||
+		continuation.bindings.handoff_evidence_id !== run.handoff_evidence_id ||
+		continuation.bindings.environment !== run.environment_profile.environment ||
+		continuation.bindings.profile !== run.environment_profile.profile
+	) {
+		return false;
+	}
+	const executionBinding = run.run_execution_binding;
+	if (
+		executionBinding !== undefined &&
+		(continuation.bindings.generation_id !== executionBinding.generation_id ||
+			continuation.bindings.activation_epoch !==
+				executionBinding.activation_epoch ||
+			fragment.binding.service_id !== executionBinding.service_id)
+	) {
+		return false;
+	}
+	const targetBinding = run.runbook_target_binding;
+	return (
+		targetBinding === undefined ||
+		continuation.bindings.target_binding_id === targetBinding.binding_id
+	);
+}
+
 /** The provider surface the U3a workflow composes. */
 export type BrowserUseAuthProvider = {
 	acquireSensitiveIntervalLease(input: {
@@ -240,6 +283,7 @@ export type BrowserUseAuthProvider = {
 			run_id: string;
 			expected_revision: number;
 			fragment: BrowserUseAuthTransactionFragment;
+			continuation?: BrowserUseAuthRunContinuation;
 		},
 	): Promise<BrowserUseProviderCommitOutcome>;
 	buildAgentBrowserDeliveryContext(
@@ -1091,6 +1135,27 @@ export function createBrowserUseAuthProvider(
 					rejection: {
 						code: "auth_commit_store_faulted",
 						message: `auth commit could not load the run (${loaded.code}).`,
+					},
+				};
+			}
+			const admitted = authCommitSummaryOf(
+				input.fragment,
+				input.continuation,
+			);
+			if (!admitted.ok) return admitted;
+			if (
+				!commitAuthorityMatchesRun(
+					loaded.run,
+					input.fragment,
+					input.continuation,
+				)
+			) {
+				return {
+					ok: false,
+					rejection: {
+						code: "auth_fragment_not_committable",
+						message:
+							"the auth checkpoint authority does not match the loaded run.",
 					},
 				};
 			}
