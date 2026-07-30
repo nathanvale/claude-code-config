@@ -29,7 +29,6 @@ import {
 	observeAgentBrowserSessionIdentity,
 	proveAgentBrowserTarget,
 	resolveAgentBrowserTaskTarget,
-	executeAgentBrowserTask,
 } from "./browser-use-agent-browser";
 import {
 	type BrowserUseSessionIdentityVerificationResult,
@@ -108,7 +107,9 @@ import {
 	type BrowserUseActionGenerationSeam,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
+import { createBrowserUseConfidentialDeliveryQuarantine } from "./browser-use-confidential-delivery-quarantine";
 import { nextRunbookStepAfterExecution } from "./browser-use-runbook-model";
+import { identifyRunbookAuthState } from "./browser-use-runbook-auth-state";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
 	BROWSER_USE_EXTERNAL_EFFECT_NONE,
@@ -491,6 +492,17 @@ export async function orchestrateRunbookAuthentication(input: {
 			code: persisted
 				? "auth-human-presence-required"
 				: "auth-continuation-unavailable",
+			safe_to_retry: false,
+		};
+	}
+	if (
+		identified.fields.some(
+			(field) => policy.auth_flow.fields[field] === undefined,
+		)
+	) {
+		return {
+			ok: false,
+			code: "auth-field-policy-unproven",
 			safe_to_retry: false,
 		};
 	}
@@ -2538,6 +2550,7 @@ async function runRunbookRun(
 						}),
 					})
 				: undefined;
+		let runbookRunCommand = ports.runtime.runCommand;
 		if (resolvedAuthCandidate !== undefined) {
 			const policy = resolvedSessionPolicy;
 			const targetProof = ports.runtime.authTargetProof;
@@ -2557,6 +2570,11 @@ async function runRunbookRun(
 			}
 			const verifiedHandoff =
 				rawHandoffData as AgentBrowserVerifiedHandoff;
+			const authQuarantine =
+				createBrowserUseConfidentialDeliveryQuarantine({
+					runCommand: ports.runtime.runCommand,
+				});
+			runbookRunCommand = authQuarantine.runCommand;
 			let authenticatedSession:
 				| Extract<
 						Awaited<
@@ -2578,7 +2596,7 @@ async function runRunbookRun(
 							policy,
 							actionSeam:
 								generationRuntime.actionGenerationSeam,
-							runCommand: ports.runtime.runCommand,
+							runCommand: runbookRunCommand,
 							targetProof,
 							handoff: verifiedHandoff,
 							runId: authBlockRun.run_id,
@@ -2597,9 +2615,22 @@ async function runRunbookRun(
 						}
 						return inspected;
 					},
-					identifyAuthState: async () => ({
-						status: "unproven",
-					}),
+					identifyAuthState: async ({
+						approvedOrigins,
+						action,
+					}) =>
+						await identifyRunbookAuthState({
+							approvedOrigins,
+							action,
+							actionSeam:
+								generationRuntime.actionGenerationSeam,
+							runCommand: runbookRunCommand,
+							targetProof,
+							handoff: verifiedHandoff,
+							runId: authBlockRun.run_id,
+							targetId:
+								targetResolution.target_tab_id,
+						}),
 					prepareBinding: async () => ({ ok: false }),
 					persistCheckpoint: async () => false,
 					deliverField: async () => ({ status: "blocked" }),
@@ -2652,7 +2683,7 @@ async function runRunbookRun(
 			await executePreparedRunbook(
 				{
 					runtime: {
-						runCommand: ports.runtime.runCommand,
+						runCommand: runbookRunCommand,
 						beforeMutationDispatch: async ({ run_id }) => {
 							if (run_id !== dispatchRun.run_id) {
 								return { ok: false };

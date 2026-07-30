@@ -260,6 +260,41 @@ describe("runbook auth orchestrator U8", () => {
 		]);
 	});
 
+	test("an undeclared field is refused before binding preparation", async () => {
+		const events: Event[] = [];
+		const policyWithoutOtp: BrowserUseGenerationSessionPolicy = {
+			...POLICY,
+			auth_flow: {
+				...POLICY.auth_flow,
+				fields: {
+					username: POLICY.auth_flow.fields.username,
+					password: POLICY.auth_flow.fields.password,
+				},
+			},
+		};
+		const result = await orchestrateRunbookAuthentication({
+			policy: policyWithoutOtp,
+			resumeContinuation: false,
+			ports: ports(events, {
+				inspectSession: async () => ({
+					status: "login-required",
+					observed_origin: "https://idp.test",
+				}),
+				identifyAuthState: async () => ({
+					status: "fields-required",
+					fields: ["otp"],
+				}),
+			}),
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			code: "auth-field-policy-unproven",
+			safe_to_retry: false,
+		});
+		expect(events).toEqual([]);
+	});
+
 	test("a resumed unknown field or submit outcome inspects session but never repeats the effect", async () => {
 		for (const checkpoint of [
 			"delivery-outcome-unknown",
