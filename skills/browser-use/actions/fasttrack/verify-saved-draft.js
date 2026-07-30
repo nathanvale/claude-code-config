@@ -83,7 +83,19 @@ async ({ inputs }) => {
       row_href: link?.getAttribute("href") || link?.href || "",
     };
   };
+  // Only consider rows in the active/visible tab pane. AngularJS nav-tab sets
+  // commonly keep every pane's rows mounted in the DOM and toggle visibility;
+  // scraping the whole document would match a Submitted-pane row while the
+  // Incomplete tab is active and bypass the submitted-state guard below.
+  const isVisible = (el) => {
+    if (!el) return false;
+    if (el.offsetParent !== null) return true; // laid out and not display:none
+    const pane = el.closest(".tab-pane, [role='tabpanel']");
+    if (pane) return pane.classList.contains("active") && !pane.hidden;
+    return false;
+  };
   const scrapeRows = () => Array.from(document.querySelectorAll("table tbody tr"))
+    .filter((row) => isVisible(row))
     .map(rowInfo)
     .filter((row) => row.cells.some(Boolean));
   const findTarget = () => scrapeRows().find((row) =>
@@ -98,11 +110,21 @@ async ({ inputs }) => {
     return null;
   };
 
+  // Positively prove the week is NOT submitted before certifying a draft.
+  // Check the Submitted pane first: if the target week appears there, it has
+  // been submitted and the draft proof must fail closed rather than emit a
+  // hardcoded submitted:false.
+  await clickTab("Submitted");
+  if (await waitForTarget()) {
+    fail("submitted_state_observed", {
+      reason: "target week appears under the Submitted tab; not an un-submitted draft",
+      targetStart,
+      targetEnd,
+    });
+  }
   await clickTab("Incomplete");
   const target = await waitForTarget();
   if (!target) {
-    await clickTab("Submitted");
-    if (await waitForTarget()) fail("submitted_state_observed", { targetStart, targetEnd });
     await clickTab("Available");
     if (await waitForTarget()) fail("missing_saved_state", { targetStart, targetEnd });
     fail("wrong_week_open", { targetStart, targetEnd, title: document.title, url: location.href });
@@ -111,6 +133,8 @@ async ({ inputs }) => {
   if (target.total_attendance_hours !== expectedTotal) {
     fail("total_hours_mismatch", { expectedTotal, observedTotal: target.total_attendance_hours, row: target });
   }
+  // submitted is now an observed conclusion: the week was absent from the
+  // Submitted pane and present under Incomplete, so it is a saved draft.
   return {
     proof_schema: "FastTrack360SavedDraftProofV1",
     timesheet_id: target.timesheet_id,
@@ -119,6 +143,7 @@ async ({ inputs }) => {
     total_attendance_hours: target.total_attendance_hours,
     editable_state: "saved_incomplete",
     submitted: false,
+    submitted_state_source: "absent_from_submitted_pane,present_under_incomplete",
     row_count: expectedRowCount,
     proof_observed_at: new Date().toISOString(),
   };

@@ -6,7 +6,9 @@
   "flow_name": "fill-week",
   "version": "2",
   "summary": "Fill and verify one FastTrack week, then save it as a draft. Final Submit stays human-controlled.",
-  "allowed_origins": ["https://manpowergroup.fasttrack360.com.au"],
+  "allowed_origins": [
+    "https://manpowergroup.fasttrack360.com.au"
+  ],
   "auth_context_ref": "fasttrack-session",
   "inputs": [
     {
@@ -31,11 +33,15 @@
                 },
                 "period_start": {
                   "required": true,
-                  "schema": { "kind": "date" }
+                  "schema": {
+                    "kind": "date"
+                  }
                 },
                 "period_end": {
                   "required": true,
-                  "schema": { "kind": "date" }
+                  "schema": {
+                    "kind": "date"
+                  }
                 },
                 "selected_work_dates": {
                   "required": true,
@@ -43,7 +49,9 @@
                     "kind": "array",
                     "min_items": 1,
                     "max_items": 31,
-                    "items": { "kind": "date" }
+                    "items": {
+                      "kind": "date"
+                    }
                   }
                 },
                 "expected_aggregate": {
@@ -55,7 +63,9 @@
                         "required": true,
                         "schema": {
                           "kind": "enum",
-                          "values": ["hours"]
+                          "values": [
+                            "hours"
+                          ]
                         }
                       },
                       "value": {
@@ -73,14 +83,18 @@
                   "required": true,
                   "schema": {
                     "kind": "enum",
-                    "values": ["prepare-draft"]
+                    "values": [
+                      "prepare-draft"
+                    ]
                   }
                 },
                 "final_action": {
                   "required": true,
                   "schema": {
                     "kind": "enum",
-                    "values": ["human-submit"]
+                    "values": [
+                      "human-submit"
+                    ]
                   }
                 }
               }
@@ -95,7 +109,9 @@
                   "required": true,
                   "schema": {
                     "kind": "enum",
-                    "values": ["fasttrack"]
+                    "values": [
+                      "fasttrack"
+                    ]
                   }
                 },
                 "rows": {
@@ -109,13 +125,23 @@
                       "fields": {
                         "date": {
                           "required": true,
-                          "schema": { "kind": "date" }
+                          "schema": {
+                            "kind": "date"
+                          }
                         },
                         "day": {
                           "required": true,
                           "schema": {
                             "kind": "enum",
-                            "values": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                            "values": [
+                              "Mon",
+                              "Tue",
+                              "Wed",
+                              "Thu",
+                              "Fri",
+                              "Sat",
+                              "Sun"
+                            ]
                           }
                         },
                         "start_time": {
@@ -136,7 +162,10 @@
                           "required": true,
                           "schema": {
                             "kind": "enum",
-                            "values": ["Standard", "Public Holiday Worked"]
+                            "values": [
+                              "Standard",
+                              "Public Holiday Worked"
+                            ]
                           }
                         },
                         "breaks": {
@@ -177,11 +206,14 @@
     }
   ],
   "steps": [
-    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
     {
       "kind": "action",
       "action_id": "fasttrack-fill-week",
-      "expected_digest": "5a6ba553e36c23162dc8c2a622d9ea690fd4afdb0ce2faafcfcc56c607f98d09",
+      "expected_digest": "3b94d7a94def50c425594eaa78f1a29be2f50656104cacb27631f9236297d1db",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",
@@ -191,25 +223,34 @@
     {
       "kind": "action",
       "action_id": "fasttrack-verify-filled-week",
-      "expected_digest": "22e8271f22bcdb1e2b75baa39b9282a0f2b93eefbffa7f45f7721024bbcea6d5",
+      "expected_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",
         "rows": "{{timesheet_run.payload.rows}}"
       }
     },
-    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
     {
       "kind": "action",
       "action_id": "fasttrack-save-draft",
-      "expected_digest": "d2cd6c6085145a10caa16fba112d878add676c843fc0fffcb2a808c355701910",
-      "inputs": {}
+      "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}"
+      }
     },
-    { "kind": "snapshot", "interactive": false },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
     {
       "kind": "action",
       "action_id": "fasttrack-verify-saved-draft",
-      "expected_digest": "cd7fb7e7b31221f85f547b1c52f9d808b00e5eea1937ca08aa3aa52c1d478f61",
+      "expected_digest": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",

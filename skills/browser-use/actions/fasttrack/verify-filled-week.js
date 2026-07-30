@@ -56,6 +56,27 @@ async ({ inputs }) => {
     row.querySelector("[ng-model='rxg.endDateTime']") ||
     row.querySelector("[ng-model='rxg.attendanceTypeId']")
   );
+  const rowDate = (row) => {
+    // The row's own rxg.startDateTime input is authoritative: a generic
+    // date-shaped cell can be a shared period/processed-date column repeated
+    // on every row, which would collapse all rows onto one date. Read the
+    // input's date half first; fall back to a date-shaped cell only when the
+    // input carries no date.
+    const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
+    const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
+    const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+    const inputParsed = inputMatch && parseDate(inputMatch[0]);
+    if (inputParsed) return dmy(inputParsed);
+    const dateCell = Array.from(row.querySelectorAll("td, [ng-bind*='date' i], .date, [class*='date' i]"))
+      .map((el) => normalize(el.innerText || el.textContent || el.getAttribute?.("title") || ""))
+      .find((text) => /\d{2}\/\d{2}\/\d{4}/.test(text) || /\d{4}-\d{2}-\d{2}/.test(text));
+    if (dateCell) {
+      const m = dateCell.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const parsed = m && parseDate(m[0]);
+      if (parsed) return dmy(parsed);
+    }
+    return "";
+  };
   const waitForTimeAttendance = async () => {
     for (let i = 0; i < 60; i += 1) {
       const hasTabs = tabs().some((tab) => /Available|Incomplete|Submitted/.test(normalize(tab.innerText || tab.textContent)));
@@ -103,10 +124,24 @@ async ({ inputs }) => {
     const link = Array.from(row.querySelectorAll("a[href]")).find((candidate) => normalize(candidate.innerText || candidate.textContent) || candidate.href);
     return { row, cells, link };
   };
+  // Only consider rows in the active/visible tab pane. AngularJS nav-tab sets
+  // commonly keep every pane's rows mounted in the DOM and toggle visibility;
+  // scraping the whole document could match a Submitted-pane copy of the
+  // target week while another tab is active.
+  const isVisible = (el) => {
+    if (!el) return false;
+    if (el.offsetParent !== null) return true; // laid out and not display:none
+    const pane = el.closest(".tab-pane, [role='tabpanel']");
+    if (pane) return pane.classList.contains("active") && !pane.hidden;
+    return false;
+  };
   const findTargetRow = () =>
-    Array.from(document.querySelectorAll("table tbody tr")).map(rowInfo).find((info) =>
-      info.cells.includes(targetStart) && info.cells.includes(targetEnd) && info.link
-    );
+    Array.from(document.querySelectorAll("table tbody tr"))
+      .filter((row) => isVisible(row))
+      .map(rowInfo)
+      .find((info) =>
+        info.cells.includes(targetStart) && info.cells.includes(targetEnd) && info.link
+      );
   const waitForTargetRow = async () => {
     for (let i = 0; i < 32; i += 1) {
       const target = findTargetRow();
@@ -137,12 +172,48 @@ async ({ inputs }) => {
   }
   const rows = editRows();
   if (rows.length < 5) fail("wrong_week_open", { targetStart, targetEnd, title: document.title, url: location.href });
+  // Fail closed: prove the open grid is the target week and anchor every
+  // check to a row's own calendar date — never a positional weekday index.
+  // This mirrors fill-week's placement contract; verifying rows[dayIndex]
+  // could certify the wrong physical row on any non-Mon..Sun grid order.
+  const targetWeekDates = new Set();
+  for (let i = 0; i < 7; i += 1) targetWeekDates.add(dmy(addDays(weekStart, i)));
+  const rowsByDate = new Map();
+  for (const row of rows) {
+    const d = rowDate(row);
+    if (!d) {
+      fail("row_dates_unreadable", { targetStart, targetEnd, row_count: rows.length });
+    }
+    if (rowsByDate.has(d)) {
+      fail("duplicate_row_date", { date: d, row_count: rows.length });
+    }
+    rowsByDate.set(d, row);
+  }
+  const foreignDates = Array.from(rowsByDate.keys()).filter((date) => !targetWeekDates.has(date));
+  if (foreignDates.length > 0 || !rowsByDate.has(targetStart)) {
+    fail("wrong_week_open", {
+      targetStart,
+      targetEnd,
+      foreign_dates: foreignDates.slice(0, 14),
+      dates: Array.from(rowsByDate.keys()).slice(0, 14),
+      title: document.title,
+      url: location.href,
+    });
+  }
   const results = [];
   for (const requested of requestedRows) {
     const dayIndex = toDayIndex(requested.day);
     if (dayIndex < 0 || dayIndex > 6) fail("invalid_day", { day: requested.day, results });
-    const row = rows[dayIndex];
-    if (!row) fail("row_not_found", { dayIndex, row_count: rows.length, results });
+    const expectedDate = dmy(addDays(weekStart, dayIndex));
+    const row = rowsByDate.get(expectedDate);
+    if (!row) {
+      fail("row_date_mismatch", {
+        day: requested.day,
+        expectedDate,
+        available_dates: Array.from(rowsByDate.keys()).slice(0, 14),
+        results,
+      });
+    }
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']") || row.querySelector("input:nth-child(2)");
     const endInput = row.querySelector("[ng-model='rxg.endDateTime']") || row.querySelector("input:nth-child(3)");
     const attendanceSelect = row.querySelector("[ng-model='rxg.attendanceTypeId']") || row.querySelector("select");

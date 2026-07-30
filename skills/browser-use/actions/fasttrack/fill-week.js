@@ -135,8 +135,60 @@ async ({ inputs }) => {
     }
     return false;
   };
+  // Read a row's own calendar date from the edit grid, defensively across the
+  // shapes FastTrack renders it in (a date cell, or the date half of the
+  // rxg.startDateTime input). Returns a dmy string or "" when undeterminable.
+  const rowDate = (row) => {
+    // The row's own rxg.startDateTime input is authoritative: a generic
+    // date-shaped cell can be a shared period/processed-date column repeated
+    // on every row, which would collapse all rows onto one date. Read the
+    // input's date half first; fall back to a date-shaped cell only when the
+    // input carries no date.
+    const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
+    const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
+    const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+    const inputParsed = inputMatch && parseDate(inputMatch[0]);
+    if (inputParsed) return dmy(inputParsed);
+    const dateCell = Array.from(row.querySelectorAll("td, [ng-bind*='date' i], .date, [class*='date' i]"))
+      .map((el) => normalize(el.innerText || el.textContent || el.getAttribute?.("title") || ""))
+      .find((text) => /\d{2}\/\d{2}\/\d{4}/.test(text) || /\d{4}-\d{2}-\d{2}/.test(text));
+    if (dateCell) {
+      const m = dateCell.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const parsed = m && parseDate(m[0]);
+      if (parsed) return dmy(parsed);
+    }
+    return "";
+  };
+  // Fail closed: confirm an already-open grid actually belongs to the target
+  // week before trusting it. Every readable row date must fall inside the
+  // target week (no foreign or duplicate dates) and the week-start date must
+  // be present, so a superset grid (fortnight, adjacent-week rows) or a
+  // repeated-date grid is refused. A Mon-Fri-only grid still passes. Never
+  // write into a blindly-open grid.
+  const targetWeekDates = new Set();
+  for (let i = 0; i < 7; i += 1) targetWeekDates.add(dmy(addDays(weekStart, i)));
+  const openGridMatchesTargetWeek = () => {
+    const rows = editRows();
+    if (rows.length < 5) return false;
+    const dates = rows.map(rowDate).filter(Boolean);
+    if (dates.length < rows.length) return false; // cannot prove -> refuse
+    if (new Set(dates).size !== dates.length) return false; // duplicate date -> refuse
+    if (!dates.every((date) => targetWeekDates.has(date))) return false; // foreign date -> refuse
+    return dates.includes(targetStart);
+  };
   const openTargetIfNeeded = async () => {
-    if (editRows().length >= 5) return { mode: "already_editing" };
+    if (editRows().length >= 5) {
+      if (openGridMatchesTargetWeek()) return { mode: "already_editing", targetStart, targetEnd };
+      // An editable grid is open but is NOT provably the target week: refuse to
+      // fill it. Fall through to navigate + open the target row by date.
+      fail("wrong_week_open", {
+        reason: "an editable grid is open but does not match the target week; refusing to fill",
+        targetStart,
+        targetEnd,
+        title: document.title,
+        url: location.href,
+      });
+    }
     const route = await navigateToTimeAttendance();
     for (const tabName of ["Available", "Incomplete"]) {
       await clickTab(tabName);
@@ -159,12 +211,53 @@ async ({ inputs }) => {
 
   const opened = await openTargetIfNeeded();
   const rows = editRows();
+  // Anchor each edit row to its own calendar date once, so fills are placed by
+  // date rather than a blind weekday index. dmy(week_start + dayIndex) is the
+  // expected date for each requested weekday; the physical row is selected by
+  // that date. Fail closed when a row's date cannot be read or does not match.
+  const rowsByDate = new Map();
+  let rowDatesReadable = true;
+  for (const row of rows) {
+    const d = rowDate(row);
+    if (!d) { rowDatesReadable = false; break; }
+    if (rowsByDate.has(d)) {
+      // Two rows resolving to one date means the per-row date read is not
+      // trustworthy (e.g. a shared period cell matched first). Refuse rather
+      // than fill whichever row won the map.
+      fail("duplicate_row_date", { date: d, row_count: rows.length });
+    }
+    rowsByDate.set(d, row);
+  }
   const fieldsUpdated = [];
   for (const requested of requestedRows) {
     const dayIndex = toDayIndex(requested.day);
     if (dayIndex < 0 || dayIndex > 6) fail("invalid_day", { day: requested.day, fieldsUpdated });
-    const row = rows[dayIndex];
-    if (!row) fail("row_not_found", { dayIndex, row_count: rows.length, fieldsUpdated });
+    // Expected calendar date for this weekday within the target week.
+    const expectedDate = dmy(addDays(weekStart, dayIndex));
+    let row;
+    if (rowDatesReadable) {
+      row = rowsByDate.get(expectedDate);
+      if (!row) {
+        fail("row_date_mismatch", {
+          reason: "no edit-grid row carries the requested date; refusing index fallback",
+          day: requested.day,
+          expectedDate,
+          available_dates: Array.from(rowsByDate.keys()),
+          fieldsUpdated,
+        });
+      }
+    } else {
+      // Row dates are not readable in this DOM shape: refuse rather than fall
+      // back to a positional guess that could fill the wrong day.
+      fail("row_dates_unreadable", {
+        reason: "edit-grid row dates could not be read; refusing weekday-index placement",
+        day: requested.day,
+        expectedDate,
+        row_count: rows.length,
+        fieldsUpdated,
+      });
+    }
+    if (!row) fail("row_not_found", { dayIndex, expectedDate, row_count: rows.length, fieldsUpdated });
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']") || row.querySelector("input:nth-child(2)");
     const endInput = row.querySelector("[ng-model='rxg.endDateTime']") || row.querySelector("input:nth-child(3)");
     const attendanceSelect = row.querySelector("[ng-model='rxg.attendanceTypeId']") || row.querySelector("select");
@@ -177,6 +270,7 @@ async ({ inputs }) => {
     attendanceSelect.dispatchEvent(new Event("change", { bubbles: true }));
     fieldsUpdated.push({
       dayIndex,
+      date: expectedDate,
       startTime: startInput.value,
       endTime: endInput.value,
       attendanceType: attendanceSelect.options[attendanceSelect.selectedIndex]?.text?.trim() || "",
