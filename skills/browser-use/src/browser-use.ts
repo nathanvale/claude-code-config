@@ -584,6 +584,15 @@ async function executeCommand(input: {
 				...(runtime.authAdmission !== undefined
 					? { authAdmission: runtime.authAdmission }
 					: {}),
+				...(runtime.authTargetProof !== undefined
+					? { authTargetProof: runtime.authTargetProof }
+					: {}),
+				...(runtime.authConfidentialDelivery !== undefined
+					? {
+							authConfidentialDelivery:
+								runtime.authConfidentialDelivery,
+						}
+					: {}),
 			},
 			store: {
 				open: (access) => openPlatformStore(runbookInput, access),
@@ -610,6 +619,7 @@ async function executeCommand(input: {
 						command: runbookInput,
 						mintAdapterId: "agent-browser",
 						subject: "a runbook",
+						deferFailure: true,
 					}),
 				checkSameLaneResume: checkSameLaneResumeForTaskRun,
 			},
@@ -2584,33 +2594,68 @@ async function acquireVerifiedHandoff(input: {
 	mintAdapterId: string | undefined;
 	/** Failure-message subject: "a task" | "a runbook". */
 	subject: string;
+	/** Delay output until a claimed continuation is safely recovered. */
+	deferFailure?: boolean;
 }): Promise<
 	| { ok: true; handoff: HandoffFacts; rawHandoffData: unknown }
-	| { ok: false; exitCode: number }
+	| {
+			ok: false;
+			exitCode: number;
+			reportFailure?: () => number;
+	  }
 > {
 	const command = input.command;
 	const flags = command.parsed.flagValues;
-	const fail = (message: string): { ok: false; exitCode: number } => ({
-		ok: false,
-		exitCode: emitTaskRunFailure(command, undefined, {
-			code: "task_run_handoff_lane_mismatch",
-			message,
-			actionId: "supply_matching_handoff",
-			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-			recoverability: "change_input",
-		}),
-	});
+	const fail = (
+		message: string,
+	): {
+		ok: false;
+		exitCode: number;
+		reportFailure?: () => number;
+	} => {
+		const reportFailure = () =>
+			emitTaskRunFailure(command, undefined, {
+				code: "task_run_handoff_lane_mismatch",
+				message,
+				actionId: "supply_matching_handoff",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			});
+		return input.deferFailure
+			? {
+					ok: false,
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					reportFailure,
+				}
+			: { ok: false, exitCode: reportFailure() };
+	};
 	const handoffPath = stringField(flags["--handoff"]);
 	const mint = async (mintInput: {
 		adapterId: string;
 		runId?: string;
 		port?: string;
-	}): Promise<{ ok: true; raw: string } | { ok: false; exitCode: number }> => {
+	}): Promise<
+		| { ok: true; raw: string }
+		| {
+				ok: false;
+				exitCode: number;
+				reportFailure?: () => number;
+		  }
+	> => {
 		const minted = await command.runtime.mintHandoff(mintInput);
 		if (minted.exitCode !== 0) {
-			if (minted.stderr.length > 0) command.stderr.write(minted.stderr);
-			if (minted.stdout.length > 0) command.stdout.write(minted.stdout);
-			return { ok: false, exitCode: minted.exitCode };
+			const reportFailure = () => {
+				if (minted.stderr.length > 0) command.stderr.write(minted.stderr);
+				if (minted.stdout.length > 0) command.stdout.write(minted.stdout);
+				return minted.exitCode;
+			};
+			return input.deferFailure
+				? {
+						ok: false,
+						exitCode: minted.exitCode,
+						reportFailure,
+					}
+				: { ok: false, exitCode: reportFailure() };
 		}
 		return { ok: true, raw: minted.stdout };
 	};

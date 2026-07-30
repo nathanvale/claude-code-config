@@ -674,6 +674,44 @@ async function observeNativeTarget(
 }
 
 /**
+ * Prove one exact Agent Browser target through the native U7 owner.
+ *
+ * This additive projection exposes the existing strict parser without
+ * duplicating its protocol in orchestration callers.
+ */
+export async function proveAgentBrowserTarget(input: {
+	targetProof: BrowserUseNativeTargetProofPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	target_id: string;
+}): Promise<
+	| { ok: true; proof: BrowserUseNativeTargetProofV1 }
+	| {
+			ok: false;
+			cause:
+				| "target-proof-unavailable"
+				| "target-proof-invalid";
+	  }
+> {
+	const observed = await observeNativeTarget(input.targetProof, {
+		browser_ws_endpoint: input.handoff.endpoint.ws,
+		browser_pid:
+			input.handoff.proof.profile_posture.effective.observer.browser_pid,
+		target_id: input.target_id,
+	});
+	if (observed === "transport-unavailable") {
+		return { ok: false, cause: "target-proof-unavailable" };
+	}
+	if (
+		observed === undefined ||
+		(typeof observed === "object" && "rejection" in observed) ||
+		observed.target_id !== input.target_id
+	) {
+		return { ok: false, cause: "target-proof-invalid" };
+	}
+	return { ok: true, proof: observed };
+}
+
+/**
  * Produce one Session Identity Proof observation around a reviewed read action.
  *
  * Native U7 proof runs before and after the reviewed identity read. The action

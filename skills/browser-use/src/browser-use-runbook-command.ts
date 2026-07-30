@@ -22,18 +22,35 @@ import {
 import type { BrowserAdapterId } from "./discovery-model";
 import {
 	type AgentBrowserExecutionResult,
+	type AgentBrowserTaskStep,
 	type AgentBrowserTargetResolutionResult,
 	type AgentBrowserVerifiedHandoff,
+	agentBrowserHandoffEvidenceIdOf,
+	observeAgentBrowserSessionIdentity,
+	proveAgentBrowserTarget,
 	resolveAgentBrowserTaskTarget,
+	executeAgentBrowserTask,
 } from "./browser-use-agent-browser";
+import {
+	type BrowserUseSessionIdentityVerificationResult,
+	commitAuthTransaction,
+	createBrowserUseAuthContract,
+	verifyBrowserUseSessionIdentityObservation,
+} from "./browser-use-auth";
 import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
 import {
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseSessionIdentityObservationV1,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 } from "./browser-use-auth-model";
+import {
+	type BrowserUseAuthTransactionEvent,
+	applyAuthTransition,
+	beginAuthTransaction,
+} from "./browser-use-auth-transaction";
 import { createBrowserUseAuthBindingStore } from "./browser-use-auth-binding-store";
 import type { BrowserUseResolvedAuthCandidate } from "./browser-use-auth-bindings";
 import type { HandoffFacts } from "./browser-use-discovery";
@@ -41,6 +58,10 @@ import {
 	type BrowserUseGenerationRuntime,
 	createBrowserUseGenerationRuntime,
 } from "./browser-use-generation-runtime";
+import type {
+	BrowserUseGenerationReviewedActionRef,
+	BrowserUseGenerationSessionPolicy,
+} from "./browser-use-generation-schemas";
 import {
 	type LeaseWriteClaim,
 	acquireLease,
@@ -57,12 +78,14 @@ import {
 } from "./browser-use-migration";
 import type {
 	BrowserUseArtifactReference,
+	BrowserUseAuthRunContinuation,
 	BrowserUseCallerMetadata,
 	BrowserUseRunStructuredResult,
 	BrowserUseRunState,
 	BrowserUseSharedRun,
 	BrowserUseTaskIntent,
 } from "./browser-use-run-model";
+import { isBrowserUseAuthRunContinuation } from "./browser-use-run-model";
 import {
 	type BrowserUseRunbookAuthDelivery,
 	type BrowserUseRunbookDiscoveryFailure,
@@ -81,14 +104,24 @@ import type {
 	BrowserUseRunbookCatalogRow,
 	BrowserUseRunbookInputs,
 } from "./browser-use-runbook-model";
+import {
+	type BrowserUseActionGenerationSeam,
+	resolveReviewedAction,
+} from "./browser-use-runbook-actions";
 import { nextRunbookStepAfterExecution } from "./browser-use-runbook-model";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
+	BROWSER_USE_EXTERNAL_EFFECT_NONE,
 	attestationByDigestFrom,
+	claimRunContinuation,
+	createRunIntegrationPort,
 	createSharedRun,
 	leaseKeyForRun,
 	loadSharedRun,
+	recoverRunContinuationPreEffectClaim,
+	type RunContinuationPreEffectClaimRecoveryResult,
 	type RunStoreDeps,
+	writeAuthAttestationRecord,
 } from "./browser-use-runs";
 import type { BrowserUseLeasePayload } from "./browser-use-schemas";
 import {
@@ -171,6 +204,40 @@ export type BrowserUseRunbookTaskFailure = {
 };
 
 /**
+ * Map a failed pre-effect recovery to the only safe handoff result.
+ *
+ * The ordinary handoff failure stays deferred until this check passes, so one
+ * JSON result cannot advertise a retry while the continuation remains claimed.
+ */
+export function runbookPreEffectClaimRecoveryFailure(input: {
+	runId: string;
+	continuationId: string;
+	recovery: RunContinuationPreEffectClaimRecoveryResult;
+}): BrowserUseRunbookTaskFailure | undefined {
+	if (input.recovery.status === "recovered") return undefined;
+	const detail =
+		input.recovery.status === "unavailable"
+			? input.recovery.code
+			: input.recovery.status === "mismatch" ||
+					input.recovery.status === "not-recoverable"
+				? input.recovery.kind
+				: "unknown";
+	return {
+		code: "run_continuation_claim_recovery_failed",
+		message: `run ${input.runId} could not release auth continuation ${input.continuationId} after handoff acquisition failed; claim recovery resolved as ${input.recovery.status}:${detail}. Inspect and repair this exact shared run before retrying.`,
+		actionId: "inspect_task_run_result",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+		dataExtra: {
+			claim_recovery_status: input.recovery.status,
+			claim_recovery_detail: detail,
+			stranded_continuation_id: input.continuationId,
+			external_effect: "none",
+		},
+	};
+}
+
+/**
  * Runbook lane outcome translated into shared-run truth.
  *
  * @internal
@@ -222,6 +289,592 @@ type RecordRunbookOutcomeOptions = {
 	structuredResults?: readonly BrowserUseRunStructuredResult[];
 };
 
+type RunbookAuthField = "username" | "password" | "otp";
+
+type RunbookAuthCheckpoint =
+	| `before-${RunbookAuthField}-delivery`
+	| `before-${RunbookAuthField}-submit`
+	| "human-presence-required"
+	| "delivery-outcome-unknown"
+	| "submission-outcome-unknown"
+	| "session-identity-unproven";
+
+/** Effect ports for the U8 session-first auth state machine. */
+export type BrowserUseRunbookAuthOrchestratorPorts = {
+	claimContinuation(): Promise<
+		| { status: "claimed" }
+		| {
+				status:
+					| "already-claimed"
+					| "in-progress"
+					| "terminal"
+					| "mismatch"
+					| "unavailable";
+		  }
+	>;
+	inspectSession(input: {
+		approvedOrigins: readonly string[];
+		verifier: BrowserUseGenerationSessionPolicy["identity_verifier"];
+	}): Promise<
+		| { status: "authenticated" }
+		| { status: "login-required"; observed_origin: string }
+		| { status: "unproven" }
+	>;
+	identifyAuthState(input: {
+		approvedOrigins: readonly string[];
+		action: BrowserUseGenerationReviewedActionRef;
+	}): Promise<
+		| {
+				status: "fields-required";
+				fields: readonly RunbookAuthField[];
+		  }
+		| {
+				status: "human-presence-required";
+				challenge: "mfa" | "captcha" | "passkey";
+		  }
+		| { status: "unproven" }
+	>;
+	prepareBinding(): Promise<{ ok: true } | { ok: false }>;
+	persistCheckpoint(checkpoint: RunbookAuthCheckpoint): Promise<boolean>;
+	deliverField(input: {
+		field: RunbookAuthField;
+		locator: BrowserUseGenerationSessionPolicy["auth_flow"]["fields"][RunbookAuthField];
+		approvedOrigins: readonly string[];
+	}): Promise<
+		| { status: "delivered" }
+		| { status: "blocked" }
+		| { status: "unknown" }
+	>;
+	submitAuthAction(input: {
+		field: RunbookAuthField;
+		action: BrowserUseGenerationReviewedActionRef;
+		approvedOrigins: readonly string[];
+	}): Promise<
+		| { status: "confirmed" }
+		| { status: "blocked" }
+		| { status: "unknown" }
+	>;
+};
+
+/** Secret-free result from one complete U8 auth decision. */
+export type BrowserUseRunbookAuthOrchestratorResult =
+	| { ok: true; status: "authenticated" }
+	| {
+			ok: false;
+			code:
+				| "auth-continuation-already-claimed"
+				| "auth-continuation-unavailable"
+				| "auth-session-policy-unproven"
+				| "auth-session-identity-unproven"
+				| "auth-login-origin-refused"
+				| "auth-login-state-unproven"
+				| "auth-human-presence-required"
+				| "auth-binding-unavailable"
+				| "auth-field-policy-unproven"
+				| "auth-delivery-blocked"
+				| "auth-delivery-outcome-unknown"
+				| "auth-submit-blocked"
+				| "auth-submission-outcome-unknown";
+			safe_to_retry: false;
+	  };
+
+function submitActionForField(
+	policy: BrowserUseGenerationSessionPolicy,
+	field: RunbookAuthField,
+): BrowserUseGenerationReviewedActionRef | undefined {
+	switch (field) {
+		case "username":
+			return policy.auth_flow.username_submit;
+		case "password":
+			return policy.auth_flow.password_submit;
+		case "otp":
+			return policy.auth_flow.otp_submit;
+	}
+}
+
+/**
+ * Execute the U8 session-first state machine.
+ *
+ * Every effect is phase-scoped by the immutable route policy. The caller owns
+ * native target proof, reviewed-action execution, opaque delivery, and durable
+ * continuation construction; this owner fixes their safe order.
+ */
+export async function orchestrateRunbookAuthentication(input: {
+	policy: BrowserUseGenerationSessionPolicy | undefined;
+	resumeContinuation: boolean;
+	resumeCheckpoint?: string;
+	ports: BrowserUseRunbookAuthOrchestratorPorts;
+}): Promise<BrowserUseRunbookAuthOrchestratorResult> {
+	const policy = input.policy;
+	if (policy === undefined) {
+		return {
+			ok: false,
+			code: "auth-session-policy-unproven",
+			safe_to_retry: false,
+		};
+	}
+	if (input.resumeContinuation) {
+		const claim = await input.ports.claimContinuation();
+		if (claim.status !== "claimed") {
+			return {
+				ok: false,
+				code:
+					claim.status === "already-claimed"
+						? "auth-continuation-already-claimed"
+						: "auth-continuation-unavailable",
+				safe_to_retry: false,
+			};
+		}
+	}
+
+	const initialSession = await input.ports.inspectSession({
+		approvedOrigins: policy.approved_service_origins,
+		verifier: policy.identity_verifier,
+	});
+	if (initialSession.status === "authenticated") {
+		return { ok: true, status: "authenticated" };
+	}
+	if (initialSession.status === "unproven") {
+		const persisted = await input.ports.persistCheckpoint(
+			"session-identity-unproven",
+		);
+		return {
+			ok: false,
+			code: persisted
+				? "auth-session-identity-unproven"
+				: "auth-continuation-unavailable",
+			safe_to_retry: false,
+		};
+	}
+	if (
+		input.resumeCheckpoint === "delivery-outcome-unknown" ||
+		input.resumeCheckpoint === "submission-outcome-unknown"
+	) {
+		return {
+			ok: false,
+			code:
+				input.resumeCheckpoint === "delivery-outcome-unknown"
+					? "auth-delivery-outcome-unknown"
+					: "auth-submission-outcome-unknown",
+			safe_to_retry: false,
+		};
+	}
+	if (
+		!policy.approved_identity_provider_origins.includes(
+			initialSession.observed_origin,
+		)
+	) {
+		return {
+			ok: false,
+			code: "auth-login-origin-refused",
+			safe_to_retry: false,
+		};
+	}
+
+	const identified = await input.ports.identifyAuthState({
+		approvedOrigins: policy.approved_identity_provider_origins,
+		action: policy.auth_flow.identify_state,
+	});
+	if (identified.status === "unproven") {
+		return {
+			ok: false,
+			code: "auth-login-state-unproven",
+			safe_to_retry: false,
+		};
+	}
+	if (identified.status === "human-presence-required") {
+		const persisted = await input.ports.persistCheckpoint(
+			"human-presence-required",
+		);
+		return {
+			ok: false,
+			code: persisted
+				? "auth-human-presence-required"
+				: "auth-continuation-unavailable",
+			safe_to_retry: false,
+		};
+	}
+
+	const prepared = await input.ports.prepareBinding();
+	if (!prepared.ok) {
+		return {
+			ok: false,
+			code: "auth-binding-unavailable",
+			safe_to_retry: false,
+		};
+	}
+	for (const field of identified.fields) {
+		const locator = policy.auth_flow.fields[field];
+		if (locator === undefined) {
+			return {
+				ok: false,
+				code: "auth-field-policy-unproven",
+				safe_to_retry: false,
+			};
+		}
+		if (!(await input.ports.persistCheckpoint(`before-${field}-delivery`))) {
+			return {
+				ok: false,
+				code: "auth-delivery-blocked",
+				safe_to_retry: false,
+			};
+		}
+		const delivered = await input.ports.deliverField({
+			field,
+			locator,
+			approvedOrigins: policy.approved_identity_provider_origins,
+		});
+		if (delivered.status === "unknown") {
+			const persisted = await input.ports.persistCheckpoint(
+				"delivery-outcome-unknown",
+			);
+			return {
+				ok: false,
+				code: persisted
+					? "auth-delivery-outcome-unknown"
+					: "auth-continuation-unavailable",
+				safe_to_retry: false,
+			};
+		}
+		if (delivered.status === "blocked") {
+			return {
+				ok: false,
+				code: "auth-delivery-blocked",
+				safe_to_retry: false,
+			};
+		}
+
+		const submitAction = submitActionForField(policy, field);
+		if (submitAction === undefined) continue;
+		if (!(await input.ports.persistCheckpoint(`before-${field}-submit`))) {
+			return {
+				ok: false,
+				code: "auth-submit-blocked",
+				safe_to_retry: false,
+			};
+		}
+		const submitted = await input.ports.submitAuthAction({
+			field,
+			action: submitAction,
+			approvedOrigins: policy.approved_identity_provider_origins,
+		});
+		if (submitted.status === "unknown") {
+			const persisted = await input.ports.persistCheckpoint(
+				"submission-outcome-unknown",
+			);
+			return {
+				ok: false,
+				code: persisted
+					? "auth-submission-outcome-unknown"
+					: "auth-continuation-unavailable",
+				safe_to_retry: false,
+			};
+		}
+		if (submitted.status === "blocked") {
+			return {
+				ok: false,
+				code: "auth-submit-blocked",
+				safe_to_retry: false,
+			};
+		}
+	}
+
+	const finalSession = await input.ports.inspectSession({
+		approvedOrigins: policy.approved_service_origins,
+		verifier: policy.identity_verifier,
+	});
+	if (finalSession.status === "authenticated") {
+		return { ok: true, status: "authenticated" };
+	}
+	const persisted = await input.ports.persistCheckpoint(
+		"session-identity-unproven",
+	);
+	return {
+		ok: false,
+		code: persisted
+			? "auth-session-identity-unproven"
+			: "auth-continuation-unavailable",
+		safe_to_retry: false,
+	};
+}
+
+async function resolveRunbookAuthAction(input: {
+	ref: BrowserUseGenerationReviewedActionRef;
+	origins: readonly string[];
+	actionSeam: BrowserUseActionGenerationSeam;
+}): Promise<
+	| {
+			ok: true;
+			step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>;
+	  }
+	| { ok: false }
+> {
+	for (const origin of input.origins) {
+		const resolved = await resolveReviewedAction({
+			actionId: input.ref.action_id,
+			expectedDigest: input.ref.expected_digest,
+			requestedOrigin: origin,
+			inputs: {},
+			seam: input.actionSeam,
+		});
+		if (resolved.ok) {
+			return {
+				ok: true,
+				step: resolved.resolved.step,
+			};
+		}
+	}
+	return { ok: false };
+}
+
+/**
+ * Run the real reviewed-action/native-target Session Identity Proof adapter.
+ *
+ * No 1Password metadata, field, delivery, or submit port is representable.
+ */
+export async function inspectRunbookAuthenticatedSession(input: {
+	policy: BrowserUseGenerationSessionPolicy;
+	actionSeam: BrowserUseActionGenerationSeam;
+	runCommand: BrowserUseRunbookCommandPorts["runtime"]["runCommand"];
+	targetProof: NonNullable<BrowserUseRuntime["authTargetProof"]>;
+	handoff: AgentBrowserVerifiedHandoff;
+	runId: string;
+	targetId: string;
+	serviceId: string;
+	authContext: string;
+	environment: string;
+	profile: string;
+	clock: () => number;
+}): Promise<
+	| {
+			status: "authenticated";
+			observation: BrowserUseSessionIdentityObservationV1;
+			verification: Extract<
+				BrowserUseSessionIdentityVerificationResult,
+				{ ok: true }
+			>;
+	  }
+	| { status: "login-required"; observed_origin: string }
+	| { status: "unproven" }
+> {
+	const verifier = input.policy.identity_verifier;
+	const action = await resolveRunbookAuthAction({
+		ref: verifier.action,
+		origins: input.policy.approved_service_origins,
+		actionSeam: input.actionSeam,
+	});
+	if (action.ok) {
+		const observed = await observeAgentBrowserSessionIdentity({
+			runtime: { runCommand: input.runCommand },
+			targetProof: input.targetProof,
+			handoff: input.handoff,
+			run_id: input.runId,
+			target_id: input.targetId,
+			verifier: action.step,
+			freshness_ms: verifier.freshness_ms,
+			now: input.clock,
+		});
+		if (observed.ok) {
+			const observation = observed.observation;
+			const verified = verifyBrowserUseSessionIdentityObservation(
+				observation,
+				{
+					verifier_action_id: verifier.action.action_id,
+					verifier_action_digest:
+						verifier.action.expected_digest,
+					lane_id: "agent-browser",
+					run_id: input.runId,
+					handoff_evidence_id:
+						agentBrowserHandoffEvidenceIdOf(input.handoff),
+					environment: input.environment,
+					profile: input.profile,
+					target_id: input.targetId,
+					page_id: observation.page_id,
+					frame_id: observation.frame_id,
+					top_level_origin: observation.top_level_origin,
+					frame_origin: observation.frame_origin,
+					target_proof_digest:
+						observation.target_proof_digest,
+					subject_reference:
+						verifier.expected.subject_reference,
+					account_reference:
+						verifier.expected.account_reference,
+					tenant_reference:
+						verifier.expected.tenant_reference,
+					observed_at_epoch_ms:
+						observation.observed_at_epoch_ms,
+					fresh_until_epoch_ms:
+						observation.fresh_until_epoch_ms,
+					implementation_integrity_key:
+						"agent-browser@session-policy-1",
+					service_id: input.serviceId,
+					auth_context: input.authContext,
+					at_epoch_ms: input.clock(),
+				},
+			);
+			if (verified.ok) {
+				return {
+					status: "authenticated",
+					observation,
+					verification: verified,
+				};
+			}
+		}
+	}
+	const idpTarget = await proveAgentBrowserTarget({
+		targetProof: input.targetProof,
+		handoff: input.handoff,
+		target_id: input.targetId,
+	});
+	return idpTarget.ok &&
+		idpTarget.proof.top_level_origin ===
+			idpTarget.proof.frame_origin &&
+		input.policy.approved_identity_provider_origins.includes(
+			idpTarget.proof.top_level_origin,
+		)
+		? {
+				status: "login-required",
+				observed_origin:
+					idpTarget.proof.top_level_origin,
+			}
+		: { status: "unproven" };
+}
+
+function runbookSessionCommitFailure(
+	message: string,
+): BrowserUseRunbookCommandFailure {
+	return {
+		code: "runbook_auth_attestation_commit_failed",
+		message,
+		actionId: "inspect-auth-readiness",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: "repair_state",
+	};
+}
+
+async function commitRunbookAuthenticatedSession(input: {
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	claim: LeaseWriteClaim;
+	session: Extract<
+		Awaited<ReturnType<typeof inspectRunbookAuthenticatedSession>>,
+		{ status: "authenticated" }
+	>;
+	serviceId: string;
+	authContext: string;
+}): Promise<RunbookStateWriteResult> {
+	const observation = input.session.observation;
+	const begun = beginAuthTransaction({
+		binding: {
+			run_id: input.run.run_id,
+			handoff_evidence_id: observation.handoff_evidence_id,
+			lane_id: observation.lane_id,
+			environment: observation.environment,
+			profile: observation.profile,
+			service_id: input.serviceId,
+			auth_context: input.authContext,
+			origin: observation.top_level_origin,
+			target_id: observation.target_id,
+			page_id: observation.page_id,
+			frame_id: observation.frame_id,
+		},
+		method: "session-reuse",
+		attempt_limit: 1,
+		attempts_already_consumed: 0,
+	});
+	if (!begun.ok) {
+		return {
+			ok: false,
+			failure: runbookSessionCommitFailure(
+				"the authenticated session could not begin its run-bound transaction.",
+			),
+		};
+	}
+	let fragment = begun.fragment;
+	const events: readonly BrowserUseAuthTransactionEvent[] = [
+		{ type: "session-already-authenticated" },
+		{
+			type: "postcondition-proven",
+			identity_basis: "session-identity-proof",
+			identity_basis_digest:
+				input.session.verification.identity_basis_digest,
+		},
+	];
+	for (const event of events) {
+		const transitioned = applyAuthTransition(fragment, event);
+		if (!transitioned.ok) {
+			return {
+				ok: false,
+				failure: runbookSessionCommitFailure(
+					"the authenticated session transaction refused its reviewed transition.",
+				),
+			};
+		}
+		fragment = transitioned.fragment;
+	}
+	const written = await writeAuthAttestationRecord(input.deps, {
+		digest: input.session.verification.attestation_digest,
+		record: input.session.verification.attestation,
+	});
+	if (!written.ok) {
+		return {
+			ok: false,
+			failure: runbookSessionCommitFailure(
+				"the authenticated session attestation could not be persisted.",
+			),
+		};
+	}
+	const terminal = applyAuthTransition(fragment, {
+		type: "attestation-issued",
+		attestation_digest:
+			input.session.verification.attestation_digest,
+		fresh_until_epoch_ms:
+			input.session.verification.attestation
+				.fresh_until_epoch_ms,
+	});
+	if (!terminal.ok) {
+		return {
+			ok: false,
+			failure: runbookSessionCommitFailure(
+				"the authenticated session attestation could not close its transaction.",
+			),
+		};
+	}
+	try {
+		const committed = await commitAuthTransaction(
+			createRunIntegrationPort(
+				input.deps,
+				createBrowserUseAuthContract({
+					attestationByDigest:
+						attestationByDigestFrom(input.deps),
+				}),
+				input.claim,
+			),
+			{
+				run_id: input.run.run_id,
+				expected_revision: input.run.revision,
+				fragment: terminal.fragment,
+			},
+		);
+		if (!committed.ok) {
+			return {
+				ok: false,
+				failure: runbookSessionCommitFailure(
+					"the authenticated session attestation was not bound to the shared run.",
+				),
+			};
+		}
+		return { ok: true, run: committed.run };
+	} catch {
+		return {
+			ok: false,
+			failure: runbookSessionCommitFailure(
+				"the authenticated session attestation commit failed at the run store.",
+			),
+		};
+	}
+}
+
 /**
  * Existing driver-owned ports used by runbook command orchestration.
  *
@@ -229,7 +882,13 @@ type RecordRunbookOutcomeOptions = {
  */
 export type BrowserUseRunbookCommandPorts = {
 	clock: () => number;
-	runtime: Pick<BrowserUseRuntime, "runCommand" | "authAdmission">;
+	runtime: Pick<
+		BrowserUseRuntime,
+		| "runCommand"
+		| "authAdmission"
+		| "authTargetProof"
+		| "authConfidentialDelivery"
+	>;
 	store: {
 		open: (
 			access?: "read" | "write",
@@ -265,7 +924,11 @@ export type BrowserUseRunbookCommandPorts = {
 					handoff: HandoffFacts;
 					rawHandoffData: unknown;
 			  }
-			| { ok: false; exitCode: number }
+			| {
+					ok: false;
+					exitCode: number;
+					reportFailure?: () => number;
+			  }
 		>;
 		checkSameLaneResume: (
 			run: BrowserUseSharedRun,
@@ -584,6 +1247,7 @@ function persistRunbookAuthBlock(
 	run: BrowserUseSharedRun,
 	claim: LeaseWriteClaim,
 	failure: BrowserUseRunbookCommandFailure,
+	continuation?: BrowserUseAuthRunContinuation,
 ): Promise<RunbookStateWriteResult> {
 	return persistRunbookPrivateState(
 		ports,
@@ -592,17 +1256,112 @@ function persistRunbookAuthBlock(
 		(current) => ({
 			...current,
 			state:
-				failure.authBlockedCause === undefined
+				continuation?.required_actor === "human"
+					? "needs-human"
+					: failure.authBlockedCause === undefined
 					? "awaiting-auth"
 					: BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[failure.authBlockedCause]
 							.run_state,
-			continuation: {
-				next_action_id: failure.actionId,
-				summary: failure.message,
-			},
+			continuation:
+				continuation ?? {
+					next_action_id: failure.actionId,
+					summary: failure.message,
+				},
 		}),
 		claim,
 	);
+}
+
+function authContinuationReasonOf(
+	failure: BrowserUseRunbookCommandFailure,
+): BrowserUseAuthRunContinuation["reason"] {
+	if (failure.code.includes("human_presence")) {
+		return "user-presence-required";
+	}
+	if (failure.code.includes("delivery_outcome_unknown")) {
+		return "delivery-outcome-unknown";
+	}
+	if (failure.code.includes("submission_outcome_unknown")) {
+		return "submission-outcome-unknown";
+	}
+	if (
+		failure.code.includes("session_identity") ||
+		failure.code.includes("attestation")
+	) {
+		return "session-identity-unproven";
+	}
+	return "login-required";
+}
+
+function buildRunbookAuthContinuation(input: {
+	run: BrowserUseSharedRun;
+	failure: BrowserUseRunbookCommandFailure;
+	now: number;
+	generationRuntime: BrowserUseGenerationRuntime;
+	resolution: BrowserUseResolvedAuthCandidate;
+	policy: BrowserUseGenerationSessionPolicy;
+	handoff: HandoffFacts;
+	targetBindingId: string;
+}): BrowserUseAuthRunContinuation {
+	const reason = authContinuationReasonOf(input.failure);
+	return {
+		schema_version: "1",
+		kind: "auth",
+		continuation_id: targetEnvelopeIdOf({
+			runId: input.run.run_id,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId:
+				input.handoff.handoffEvidenceId,
+		}),
+		run_id: input.run.run_id,
+		state: "pending",
+		reason,
+		required_actor:
+			reason === "user-presence-required"
+				? "human"
+				: "agent",
+		safe_to_retry: false,
+		checkpoint: input.failure.code.replaceAll("_", "-"),
+		expires_at_epoch_ms: input.now + 15 * 60_000,
+		resume_action: {
+			command: "run",
+			args: [
+				"resume",
+				"--run",
+				input.run.run_id,
+				"--json",
+			],
+		},
+		bindings: {
+			generation_id:
+				input.generationRuntime.manifest.generation_id,
+			activation_epoch:
+				input.generationRuntime.manifest.activation_epoch,
+			route_digest: input.resolution.route_digest,
+			lane_id: "agent-browser",
+			adapter_id: "agent-browser",
+			handoff_evidence_id:
+				input.handoff.handoffEvidenceId,
+			environment: input.handoff.environmentName,
+			profile: input.handoff.environmentProfile,
+			target_binding_id: input.targetBindingId,
+			expected_identity: {
+				subject_ref:
+					input.policy.identity_verifier.expected
+						.subject_reference,
+				account_ref:
+					input.policy.identity_verifier.expected
+						.account_reference,
+				tenant_ref:
+					input.policy.identity_verifier.expected
+						.tenant_reference,
+			},
+		},
+		next_action_id: "resume-auth-continuation",
+		summary:
+			"Claim and re-prove this bound authentication continuation before resuming the runbook.",
+	};
 }
 
 function runbookResumeCursorOf(run: BrowserUseSharedRun): number {
@@ -1048,6 +1807,7 @@ async function runRunbookRun(
 		);
 	}
 	let resolvedAuthCandidate: BrowserUseResolvedAuthCandidate | undefined;
+	let resolvedSessionPolicy: BrowserUseGenerationSessionPolicy | undefined;
 	if (shown.runbook.auth_context_ref !== undefined) {
 		if (generationRuntime === undefined) {
 			return ports.output.emitPlatformFailure(
@@ -1083,6 +1843,21 @@ async function runRunbookRun(
 			);
 		}
 		resolvedAuthCandidate = resolved.resolution;
+		if (
+			resolved.resolution.route === undefined ||
+			!("session_policy" in resolved.resolution.route)
+		) {
+			return ports.output.emitPlatformFailure({
+				code: "runbook_auth_session_policy_unproven",
+				message:
+					"the captured auth route has no reviewed session policy; candidate and runbook origins are not fallback authority.",
+				actionId: "inspect-auth-readiness",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		resolvedSessionPolicy =
+			resolved.resolution.route.session_policy;
 	}
 	const custody = enforceRunbookInputCustody(shown.runbook, {
 		publicInputIds: Object.keys(parsedInputs.inputs),
@@ -1204,8 +1979,129 @@ async function runRunbookRun(
 		}
 	}
 
+	let preEffectClaim:
+		| {
+				continuationId: string;
+				claimedRevision: number;
+				claimantId: string;
+		  }
+		| undefined;
+	if (
+		runFlag !== undefined &&
+		run !== undefined &&
+		isBrowserUseAuthRunContinuation(run.continuation)
+	) {
+		const continuation = run.continuation;
+		const bindings = continuation.bindings;
+		const expectedIdentity =
+			resolvedSessionPolicy?.identity_verifier.expected;
+		const bindingsMatch =
+			generationRuntime !== undefined &&
+			resolvedAuthCandidate !== undefined &&
+			expectedIdentity !== undefined &&
+			bindings.generation_id ===
+				generationRuntime.manifest.generation_id &&
+			bindings.activation_epoch ===
+				generationRuntime.manifest.activation_epoch &&
+			bindings.route_digest ===
+				resolvedAuthCandidate.route_digest &&
+			bindings.lane_id === "agent-browser" &&
+			bindings.adapter_id === "agent-browser" &&
+			bindings.handoff_evidence_id ===
+				run.handoff_evidence_id &&
+			bindings.environment ===
+				run.environment_profile.environment &&
+			bindings.profile ===
+				run.environment_profile.profile &&
+			bindings.target_binding_id ===
+				run.runbook_target_binding?.binding_id &&
+			bindings.expected_identity.subject_ref ===
+				expectedIdentity.subject_reference &&
+			bindings.expected_identity.account_ref ===
+				expectedIdentity.account_reference &&
+			bindings.expected_identity.tenant_ref ===
+				expectedIdentity.tenant_reference;
+		if (!bindingsMatch) {
+			return ports.output.emitTaskFailure(run.run_id, {
+				code: "run_continuation_binding_mismatch",
+				message:
+					"the durable auth continuation no longer matches the pinned generation, route, lane, profile, target, or expected identity.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		const claimStore = await ports.store.open("write");
+		if (!claimStore.ok) return claimStore.exitCode;
+		deps = { ...claimStore.deps, clock: ports.clock };
+		const claimed = await claimRunContinuation(deps, {
+			runId: run.run_id,
+			continuationId: run.continuation.continuation_id,
+			expectedRevision: run.revision,
+			claimantId: input.runId,
+			actor: "agent",
+		});
+		if (claimed.status !== "claimed") {
+			const code =
+				claimed.status === "already-claimed"
+					? "run_continuation_already_claimed"
+					: claimed.status === "in-progress"
+						? "run_continuation_in_progress"
+						: claimed.status === "terminal"
+							? "run_continuation_terminal"
+							: claimed.status === "mismatch"
+								? "run_continuation_binding_mismatch"
+								: claimed.code;
+			const message =
+				claimed.status === "unavailable"
+					? claimed.message
+					: `the auth continuation claim resolved as ${claimed.status}; no browser or authentication effect was attempted.`;
+			return ports.output.emitTaskFailure(run.run_id, {
+				code,
+				message,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		run = claimed.run;
+		preEffectClaim = {
+			continuationId:
+				claimed.continuation.continuation_id,
+			claimedRevision: claimed.run.revision,
+			claimantId: input.runId,
+		};
+	}
+
 	const acquired = await ports.handoff.acquire();
-	if (!acquired.ok) return acquired.exitCode;
+	if (!acquired.ok) {
+		if (preEffectClaim !== undefined && run !== undefined) {
+			const recovery = await recoverRunContinuationPreEffectClaim(deps, {
+				runId: run.run_id,
+				continuationId:
+					preEffectClaim.continuationId,
+				expectedRevision:
+					preEffectClaim.claimedRevision,
+				claimantId: preEffectClaim.claimantId,
+				external_effect:
+					BROWSER_USE_EXTERNAL_EFFECT_NONE,
+			});
+			const recoveryFailure =
+				runbookPreEffectClaimRecoveryFailure({
+					runId: run.run_id,
+					continuationId:
+						preEffectClaim.continuationId,
+					recovery,
+				});
+			if (recoveryFailure !== undefined) {
+				return ports.output.emitTaskFailure(
+					run.run_id,
+					recoveryFailure,
+				);
+			}
+		}
+		return acquired.reportFailure?.() ?? acquired.exitCode;
+	}
 	const handoff = acquired.handoff;
 	const rawHandoffData = acquired.rawHandoffData;
 	if (handoff.adapter !== "agent-browser") {
@@ -1342,32 +2238,54 @@ async function runRunbookRun(
 			return ports.output.emitMigrationFailure(tripped);
 		}
 	}
-	const targetResolution = await resolveAgentBrowserTaskTarget(
-		{ runCommand: ports.runtime.runCommand },
-		{
-			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
-			run_id: run?.run_id ?? handoff.runId,
-			allowed_origins: plan.allowed_origins,
-			steps: plan.steps,
-			target:
-				explicitTabId !== undefined
-					? {
-							kind: "exact",
-							tab_id: explicitTabId,
-							target_envelope_id: targetEnvelopeId,
-						}
-					: {
-							kind: "auto",
-							target_envelope_id: targetEnvelopeId,
-							...(storedBinding !== undefined
-								? {
-										bound_target_candidate_id:
-											storedBinding.binding_id,
-									}
-								: {}),
-						},
-		},
+	const targetRequest =
+		explicitTabId !== undefined
+			? ({
+					kind: "exact",
+					tab_id: explicitTabId,
+					target_envelope_id: targetEnvelopeId,
+				} as const)
+			: ({
+					kind: "auto",
+					target_envelope_id: targetEnvelopeId,
+					...(storedBinding !== undefined
+						? {
+								bound_target_candidate_id:
+									storedBinding.binding_id,
+							}
+						: {}),
+				} as const);
+	const resolveTargetForOrigins = (origins: readonly string[]) =>
+		resolveAgentBrowserTaskTarget(
+			{ runCommand: ports.runtime.runCommand },
+			{
+				handoff:
+					rawHandoffData as AgentBrowserVerifiedHandoff,
+				run_id: run?.run_id ?? handoff.runId,
+				allowed_origins: origins,
+				steps:
+					resolvedSessionPolicy === undefined
+						? plan.steps
+						: [{ kind: "snapshot", interactive: false }],
+				target: targetRequest,
+			},
+		);
+	let targetResolution = await resolveTargetForOrigins(
+		resolvedSessionPolicy?.approved_service_origins ??
+			plan.allowed_origins,
 	);
+	if (
+		!targetResolution.ok &&
+		(targetResolution.code ===
+			"agent_browser_target_origin_refused" ||
+			targetResolution.code ===
+				"agent_browser_target_unavailable") &&
+		resolvedSessionPolicy !== undefined
+	) {
+		targetResolution = await resolveTargetForOrigins(
+			resolvedSessionPolicy.approved_identity_provider_origins,
+		);
+	}
 	if (!targetResolution.ok) {
 		if (run === undefined) {
 			const actionId =
@@ -1575,12 +2493,30 @@ async function runRunbookRun(
 		const emitPersistedAuthFailure = async (
 			failure: BrowserUseRunbookCommandFailure,
 		): Promise<number> => {
+			const continuation =
+				resolvedAuthCandidate !== undefined &&
+				resolvedSessionPolicy !== undefined &&
+				generationRuntime !== undefined
+					? buildRunbookAuthContinuation({
+							run: authBlockRun,
+							failure,
+							now: ports.clock(),
+							generationRuntime,
+							resolution: resolvedAuthCandidate,
+							policy: resolvedSessionPolicy,
+							handoff,
+							targetBindingId:
+								targetResolution.binding
+									.target_candidate_id,
+						})
+					: undefined;
 			const persisted = await persistRunbookAuthBlock(
 				ports,
 				deps,
 				authBlockRun,
 				dispatchClaim,
 				failure,
+				continuation,
 			);
 			if (!persisted.ok) {
 				return ports.output.emitPlatformFailure(persisted.failure);
@@ -1603,39 +2539,109 @@ async function runRunbookRun(
 					})
 				: undefined;
 		if (resolvedAuthCandidate !== undefined) {
-			if (authProvider === undefined) {
-				const failure: BrowserUseRunbookCommandFailure =
-					admission?.kind === "blocked"
-						? blockedAdmissionFailure(
-								admission,
-								"authentication lane admission blocked before generation binding proof.",
-							)
-						: {
-								code: "runbook_auth_capability_missing",
-								message:
-									"the runbook auth route requires an admitted authentication capability.",
-								actionId: "inspect-capability-loss",
-								exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-								recoverability: "repair_state" as const,
-							};
-				return await emitPersistedAuthFailure(failure);
+			const policy = resolvedSessionPolicy;
+			const targetProof = ports.runtime.authTargetProof;
+			if (
+				policy === undefined ||
+				generationRuntime === undefined ||
+				targetProof === undefined
+			) {
+				return await emitPersistedAuthFailure({
+					code: "runbook_auth_session_policy_unproven",
+					message:
+						"the runbook session policy, generation action authority, or native target proof owner is unavailable.",
+					actionId: "inspect-auth-readiness",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
 			}
-			const preparedAuth = await prepareRunbookGenerationAuthBinding(
-				authProvider,
-				resolvedAuthCandidate,
-				shown.runbook.allowed_origins,
-			);
-			if (!preparedAuth.ok) {
-				return await emitPersistedAuthFailure(preparedAuth.failure);
-			}
-			return await emitPersistedAuthFailure({
-				code: "runbook_auth_browser_principal_unproven",
-				message:
-					"metadata binding is proven, but the active browser principal has not been re-proven.",
-				actionId: "inspect-auth-readiness",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "repair_state",
+			const verifiedHandoff =
+				rawHandoffData as AgentBrowserVerifiedHandoff;
+			let authenticatedSession:
+				| Extract<
+						Awaited<
+							ReturnType<
+								typeof inspectRunbookAuthenticatedSession
+							>
+						>,
+						{ status: "authenticated" }
+				  >
+				| undefined;
+			const authResult = await orchestrateRunbookAuthentication({
+				policy,
+				resumeContinuation: false,
+				ports: {
+					claimContinuation: async () => ({ status: "claimed" }),
+					inspectSession: async () => {
+						const inspected =
+							await inspectRunbookAuthenticatedSession({
+							policy,
+							actionSeam:
+								generationRuntime.actionGenerationSeam,
+							runCommand: ports.runtime.runCommand,
+							targetProof,
+							handoff: verifiedHandoff,
+							runId: authBlockRun.run_id,
+							targetId:
+								targetResolution.target_tab_id,
+							serviceId:
+								resolvedAuthCandidate.candidate.service_id,
+							authContext:
+								resolvedAuthCandidate.candidate.auth_context,
+							environment: handoff.environmentName,
+							profile: handoff.environmentProfile,
+							clock: ports.clock,
+						});
+						if (inspected.status === "authenticated") {
+							authenticatedSession = inspected;
+						}
+						return inspected;
+					},
+					identifyAuthState: async () => ({
+						status: "unproven",
+					}),
+					prepareBinding: async () => ({ ok: false }),
+					persistCheckpoint: async () => false,
+					deliverField: async () => ({ status: "blocked" }),
+					submitAuthAction: async () => ({
+						status: "blocked",
+					}),
+				},
 			});
+			if (!authResult.ok) {
+				return await emitPersistedAuthFailure({
+					code: `runbook_${authResult.code.replaceAll("-", "_")}`,
+					message:
+						"the reviewed runbook authentication session could not be proven.",
+					actionId: "inspect-auth-readiness",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			if (authenticatedSession === undefined) {
+				return await emitPersistedAuthFailure(
+					runbookSessionCommitFailure(
+						"the authenticated session result carried no run-bound identity proof.",
+					),
+				);
+			}
+			const committedSession =
+				await commitRunbookAuthenticatedSession({
+					deps,
+					run,
+					claim: dispatchClaim,
+					session: authenticatedSession,
+					serviceId:
+						resolvedAuthCandidate.candidate.service_id,
+					authContext:
+						resolvedAuthCandidate.candidate.auth_context,
+				});
+			if (!committedSession.ok) {
+				return ports.output.emitPlatformFailure(
+					committedSession.failure,
+				);
+			}
+			run = committedSession.run;
 		}
 
 		let dispatchRun = run;

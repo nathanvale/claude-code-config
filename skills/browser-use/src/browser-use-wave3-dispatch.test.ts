@@ -873,7 +873,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		});
 	});
 
-	test("auth-bound read-only runbook persists the auth block before runbook steps", async () => {
+	test("a legacy auth route blocks before handoff or browser effects", async () => {
 		const store = await makeStore();
 		await seedActiveGeneration(store, authBoundReadOnlyRunbook());
 		const handoffPath = writeHandoff(
@@ -916,192 +916,15 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(result.exitCode).toBe(20);
 		const envelope = parseJson(result.stdout);
 		expect(envelope.error).toMatchObject({
-			code: "runbook_auth_capability_missing",
+			code: "runbook_auth_session_policy_unproven",
 		});
 		expect(envelope.runtime_actions).toMatchObject([
-			{ id: "inspect-capability-loss" },
+			{ id: "inspect-auth-readiness" },
 		]);
-		expect(calls.every((call) => !call.includes("open"))).toBe(true);
-		expect(calls.every((call) => !call.includes("snapshot"))).toBe(true);
+		expect(calls).toEqual([]);
 		const loaded = await loadSharedRun(store.deps, "run-auth-bound-1");
-		expect(loaded.ok).toBe(true);
-		if (loaded.ok) {
-			expect(loaded.run.state).toBe("awaiting-auth");
-			expect(loaded.run.continuation).toMatchObject({
-				next_action_id: "inspect-capability-loss",
-			});
-			expect(loaded.run.mutation_dispatched).toBe(false);
-		}
+		expect(loaded.ok).toBe(false);
 	});
-
-	test.each([
-		{
-			label:
-				"admitted metadata proof still blocks before warm-session identity proof",
-			supportedMethods: ["password"] as const,
-			runId: "run-auth-session-proof-1",
-			invocationId: "invocation-auth-session-proof-1",
-			expectedCode: "runbook_auth_browser_principal_unproven",
-			expectedState: "awaiting-auth",
-			expectedAction: "inspect-auth-readiness",
-		},
-		{
-			label: "unsupported auth method persists the canonical human state",
-			supportedMethods: ["otp"] as const,
-			runId: "run-auth-unsupported-method-1",
-			invocationId: "invocation-auth-unsupported-method-1",
-			expectedCode: "runbook_auth_unsupported_method",
-			expectedState: "needs-human",
-			expectedAction: "choose-supported-auth-method",
-		},
-	])(
-		"$label",
-		async ({
-			supportedMethods,
-			runId,
-			invocationId,
-			expectedCode,
-			expectedState,
-			expectedAction,
-		}) => {
-		const store = await makeStore();
-		await seedActiveGeneration(store, authBoundReadOnlyRunbook());
-		const handoffPath = writeHandoff(
-			store.base,
-			"agent-browser",
-			runId,
-		);
-		const tokenRetrieval = {
-			async getBindingEvidence() {
-				return {
-					ok: true as const,
-					evidence: {
-						identity: {
-							service_account_id: "service-account-1",
-							state: "ACTIVE" as const,
-							type: "SERVICE_ACCOUNT" as const,
-						},
-						vaults: [{ vault_id: "vault-1" }],
-						item_evidence: {
-							kind: "list" as const,
-							items: [
-								{
-									item_id: "item-1",
-									vault_id: "vault-1",
-									item_revision: 7,
-									origins: ["https://example.test"],
-									login_paths: [],
-									supported_methods: supportedMethods,
-									state: "active" as const,
-								},
-							],
-						},
-					},
-				};
-			},
-			async getServiceAccountIdentity() {
-				return {
-					ok: true as const,
-					identity: {
-						service_account_id: "service-account-1",
-						state: "ACTIVE" as const,
-						type: "SERVICE_ACCOUNT" as const,
-					},
-				};
-			},
-			async listVaults() {
-				return { ok: true as const, vaults: [{ vault_id: "vault-1" }] };
-			},
-			async listLoginItems() {
-				return { ok: true as const, items: [] };
-			},
-			async getLoginItem() {
-				return {
-					ok: false as const,
-					rejection: {
-						code: "item-missing" as const,
-						message: "fixture item absent",
-					},
-				};
-			},
-			async fetchCredentialField() {
-				return {
-					ok: false as const,
-					rejection: {
-						code: "field-not-permitted" as const,
-						message: "fixture field unavailable",
-					},
-				};
-			},
-		};
-		const { runtime, calls } = scriptedRuntime(
-			store.env,
-			[
-				{
-					stdout: agentSuccess({
-						tabs: [
-							{
-								tabId: "t1",
-								active: true,
-								type: "page",
-								url: "https://example.test/",
-							},
-						],
-					}),
-				},
-			],
-			createDefaultPlatformFs(),
-			{
-				authAdmission: {
-					kind: "environment-admitted",
-					evidence: {
-						lane: "environment-injected-op",
-						assurance: "lower-assurance",
-						native: { verdict: "native-capability-absent" },
-						environment: {
-							state: "ready",
-							next_action: "validate-service-account",
-						},
-					},
-					tokenRetrieval,
-				},
-			},
-		);
-		const result = await runForTest(
-			[
-				"runbook",
-				"run",
-				"--service",
-				"oncore",
-				"--flow",
-				"snapshot-verify",
-				"--handoff",
-				handoffPath,
-				"--tab",
-				"t1",
-				"--run-id",
-				invocationId,
-				"--json",
-			],
-			runtime,
-		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: expectedCode,
-		});
-		expect(calls.every((call) => !call.includes("open"))).toBe(true);
-		expect(calls.every((call) => !call.includes("snapshot"))).toBe(true);
-		const loaded = await loadSharedRun(
-			store.deps,
-			runId,
-		);
-		expect(loaded.ok).toBe(true);
-		if (loaded.ok) {
-			expect(loaded.run.state).toBe(expectedState);
-			expect(loaded.run.continuation?.next_action_id).toBe(expectedAction);
-		}
-		},
-	);
 
 	test("inactive generation target refuses before handoff acquisition", async () => {
 		const store = await makeStore();

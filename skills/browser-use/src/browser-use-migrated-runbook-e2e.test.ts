@@ -154,7 +154,7 @@ function handoffEnvelope(runId: string) {
 }
 
 describe("migrated runbook execution", () => {
-	test("imports and activates Oncore diagnosis, then stops at the auth capability gate", async () => {
+	test("imports Oncore diagnosis but blocks a legacy auth route before browser effects", async () => {
 		const sourceRoot = mkdtempSync(join(tmpdir(), "bu-migrated-e2e-"));
 		tempRoots.push(sourceRoot);
 		cpSync(fixtureRoot, sourceRoot, { recursive: true });
@@ -353,14 +353,13 @@ describe("migrated runbook execution", () => {
 		expect(result.exitCode).toBe(20);
 		expect(parseJson(result.stdout)).toMatchObject({
 			error: {
-				code: "runbook_auth_capability_missing",
+				code: "runbook_auth_session_policy_unproven",
 			},
 			continuation: {
-				next_action_id: "inspect-capability-loss",
+				next_action_id: "inspect-auth-readiness",
 			},
 		});
-		expect(calls).toHaveLength(1);
-		expect(calls[0]?.slice(-3)).toEqual(["tab", "list", "--json"]);
+		expect(calls).toEqual([]);
 		expect(calls.every((call) => !call.includes("open"))).toBe(true);
 		expect(calls.every((call) => !call.includes("snapshot"))).toBe(true);
 		expect(calls.every((call) => !call.includes("eval"))).toBe(true);
