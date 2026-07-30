@@ -567,6 +567,213 @@ export async function claimRunContinuation(
 	return outcome.result;
 }
 
+/**
+ * The only admissible effect observation for releasing a claim.
+ *
+ * Callers may recover a claim only while the browser/auth effect boundary has
+ * not been crossed. Any other runtime value fails closed.
+ */
+export const BROWSER_USE_EXTERNAL_EFFECT_NONE = "none" as const;
+
+/** Typed result of atomically recovering one pre-effect auth claim. */
+export type RunContinuationPreEffectClaimRecoveryResult =
+	| {
+			status: "recovered";
+			run: BrowserUseSharedRun;
+			continuation: BrowserUseAuthRunContinuation;
+	  }
+	| {
+			status: "mismatch";
+			kind: "run-id" | "continuation-id" | "revision" | "claimant-id";
+			run: BrowserUseSharedRun;
+	  }
+	| {
+			status: "not-recoverable";
+			kind: "external-effect" | "state";
+			run?: BrowserUseSharedRun;
+	  }
+	| {
+			status: "unavailable";
+			code: string;
+			message: string;
+	  };
+
+/**
+ * Return one exact auth continuation claim to pending before any external
+ * effect begins.
+ *
+ * The activation barrier holds while a per-run CAS checks the standing
+ * revision and writes the next record. The continuation binding and all other
+ * continuation fields remain byte-for-byte equivalent; only state, claim,
+ * run revision, and persistence update time change.
+ */
+export async function recoverRunContinuationPreEffectClaim(
+	deps: RunStoreDeps,
+	input: {
+		runId: string;
+		continuationId: string;
+		expectedRevision: number;
+		claimantId: string;
+		external_effect: typeof BROWSER_USE_EXTERNAL_EFFECT_NONE;
+	},
+): Promise<RunContinuationPreEffectClaimRecoveryResult> {
+	if (input.external_effect !== BROWSER_USE_EXTERNAL_EFFECT_NONE) {
+		return { status: "not-recoverable", kind: "external-effect" };
+	}
+	const dirs = await ensureRunDirs(deps, input.runId);
+	if (!dirs.ok) {
+		return { status: "unavailable", code: dirs.code, message: dirs.message };
+	}
+	const recoverUnderBarrier = async (): Promise<
+		| { ok: true; result: RunContinuationPreEffectClaimRecoveryResult }
+		| { ok: false; code: string; message: string }
+	> => {
+		const loaded = await loadSharedRun(deps, input.runId);
+		if (!loaded.ok) {
+			return {
+				ok: true,
+				result: {
+					status: "unavailable",
+					code: loaded.code,
+					message: loaded.message,
+				},
+			};
+		}
+		const { run } = loaded;
+		if (run.run_id !== input.runId) {
+			return {
+				ok: true,
+				result: { status: "mismatch", kind: "run-id", run },
+			};
+		}
+		const continuation = run.continuation;
+		if (
+			continuation === undefined ||
+			!isBrowserUseAuthRunContinuation(continuation)
+		) {
+			return {
+				ok: true,
+				result: {
+					status: "unavailable",
+					code: "run_continuation_not_recoverable",
+					message:
+						"the run does not carry a versioned auth continuation claim.",
+				},
+			};
+		}
+		if (continuation.continuation_id !== input.continuationId) {
+			return {
+				ok: true,
+				result: { status: "mismatch", kind: "continuation-id", run },
+			};
+		}
+		if (run.revision !== input.expectedRevision) {
+			return {
+				ok: true,
+				result: { status: "mismatch", kind: "revision", run },
+			};
+		}
+		if (continuation.state !== "claimed") {
+			return {
+				ok: true,
+				result: { status: "not-recoverable", kind: "state", run },
+			};
+		}
+		if (continuation.claim?.claimant_id !== input.claimantId) {
+			return {
+				ok: true,
+				result: { status: "mismatch", kind: "claimant-id", run },
+			};
+		}
+		const { claim: _claim, ...withoutClaim } = continuation;
+		const pending: BrowserUseAuthRunContinuation = {
+			...withoutClaim,
+			state: "pending",
+		};
+		const next: BrowserUseSharedRun = {
+			...run,
+			revision: run.revision + 1,
+			continuation: pending,
+		};
+		const issues = validateSharedRun(next);
+		const firstIssue = issues[0];
+		if (firstIssue !== undefined) {
+			return {
+				ok: true,
+				result: {
+					status: "unavailable",
+					code: firstIssue.code,
+					message: redactUnsafeText(
+						issues.map((issue) => issue.message).join(" "),
+					),
+				},
+			};
+		}
+		const payload: BrowserUseSharedRunPayload = {
+			...next,
+			created_at_epoch_ms: loaded.payload.created_at_epoch_ms,
+			updated_at_epoch_ms: deps.clock(),
+		};
+		const admitted = admitRedactionClean(payload);
+		if (!admitted.ok) {
+			return {
+				ok: true,
+				result: {
+					status: "unavailable",
+					code: admitted.code,
+					message: admitted.message,
+				},
+			};
+		}
+		const written = await casReplaceRecord(deps.fs, {
+			path: deps.paths.state.runFile(input.runId),
+			lockPath: runLockPath(deps.paths, input.runId),
+			holderId: `continuation-recover-${input.runId}`,
+			staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+			clock: deps.clock,
+			expectedRevision: input.expectedRevision,
+			revisionOf: revisionOfRaw,
+			nextContents: encodeDurableRecord("shared-run", payload),
+		});
+		if (!written.ok) {
+			if (written.failure.code === "store_record_conflict") {
+				return {
+					ok: true,
+					result: { status: "mismatch", kind: "revision", run },
+				};
+			}
+			return {
+				ok: true,
+				result: {
+					status: "unavailable",
+					code: written.failure.code,
+					message: written.failure.message,
+				},
+			};
+		}
+		return {
+			ok: true,
+			result: { status: "recovered", run: next, continuation: pending },
+		};
+	};
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `continuation-recover-epoch-${input.runId}` },
+		recoverUnderBarrier,
+	);
+	if (isLockFailure(outcome)) {
+		return {
+			status: "unavailable",
+			code: outcome.failure.code,
+			message: outcome.failure.message,
+		};
+	}
+	if (!outcome.ok) {
+		return { status: "unavailable", code: outcome.code, message: outcome.message };
+	}
+	return outcome.result;
+}
+
 // --- CAS update (R13, R27) ----------------------------------------------------
 
 /**
