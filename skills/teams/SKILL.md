@@ -105,6 +105,7 @@ Common routes:
 | Ask | Command |
 |-----|---------|
 | what happened recently | `digest [--hours N]` |
+| tell me when my channels move | `poll [--once]` |
 | find an exact string (recent) | `search "<text>"` |
 | keyword recall on recent chat, scoped | `search "<kw>" --since YYYY-MM-DD [--from NAME\|MRI]` |
 | fast keyword recall over months | `qmd search "<kw>" -c teams` (durable corpus, ~0.5s) |
@@ -123,6 +124,29 @@ Common routes:
 Add `--json` to any command for a structured envelope. Diagnostics go to
 stderr, so `--json` stdout stays parseable.
 
+## Pull vs notify
+
+Two different jobs, two different commands. Keeping them separate is what lets
+each one be simple.
+
+- **`digest --hours N` is the pull path, and covers everything.** The time
+  window IS the filter: a conversation with activity in the window is relevant
+  by definition, one without contributes nothing. It never narrows by channel.
+  (Measured 2026-07-30: a 24h window had 12 active conversations out of 156
+  cached, only 4 of which were on the watch list — the old allowlist behaviour
+  was silently dropping the other 8, including the channel where PRs are
+  reviewed.) Pass `--only-watched` to get the old narrowing back.
+- **`poll` is the notify path, and that is what `watch` is for.** It appends
+  new messages in watched channels, plus any `@mention` wherever it lands, to a
+  tailable log (default `$XDG_STATE_HOME/teams/watch.log`, mode `0600`). Own
+  messages are never reported back. `--once` for cron; bare `poll` loops with
+  `--interval` seconds between passes. Its cursor is
+  `$XDG_STATE_HOME/teams/poll-cursor.json` — separate from the corpus cursor,
+  so polling never consumes a window `digest` or `sync` would otherwise see.
+
+`watch` therefore no longer affects `digest` at all. Its only job is deciding
+what is worth interrupting you for.
+
 ## Gotchas That Change Results
 
 - **Freshness.** The newest messages are not in the cache until Teams flushes
@@ -130,6 +154,17 @@ stderr, so `--json` stdout stays parseable.
   recent message is usually lag, not absence.
 - **Attribution.** Two people can share a display name. Attribute by
   `creator_mri`, not by `author`, and run `disambiguate` when it matters.
+- **Synthetic `48:*` feeds are not chats.** Teams keeps client-side feeds
+  alongside real conversations, addressed as `48:notifications` (the activity /
+  mentions panel) and `48:calllogs`. Every record in them is stored with *your*
+  MRI as `creator` and `isSentByCurrentUser=True`, because you own the feed —
+  not because you wrote the message. The reader now forces `from_me=False` and
+  `creator_mri=None` on these, so they cannot be misattributed to you; their
+  `author` reads `(unknown)`. They are **not** filtered out, because 10 of the
+  12 notification entries in this store exist only there with no real twin, so
+  dropping them would lose real content. Treat a `48:*` message as "something
+  addressed to you, sender unrecoverable from this record" — find the real
+  sender by searching the message text in its source conversation.
 - **Unread is not per-message.** This cache keeps no per-message read horizon.
   `unread` reports unread *activity-feed items* and *conversations*; channel
   threads carry no read flag at all.

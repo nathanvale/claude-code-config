@@ -66,6 +66,12 @@ def _secure_mkdir(path: Path) -> None:
             pass
 
 
+# Public alias: other modules in this skill write private state too (the poll
+# log and its cursor), and they should reuse this instead of re-implementing
+# the permission handling or reaching for the underscore name.
+secure_mkdir = _secure_mkdir
+
+
 def assert_not_in_repo(path: Path) -> None:
     """Refuse to write corporate chat anywhere inside a git working tree."""
     probe = path.resolve()

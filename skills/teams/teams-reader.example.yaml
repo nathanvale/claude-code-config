@@ -8,7 +8,11 @@
 # get no default watch list, so `digest` covers all named conversations.
 
 # ---------------------------------------------------------------- watch list
-# Channels and chats included in `digest` and `standup` by default.
+# The channels worth INTERRUPTING you for. This is the `poll` notify list.
+#
+# It does NOT narrow `digest` or `standup` — those cover every conversation
+# with activity in the time window, because the window is already the filter.
+# (Pass --only-watched to either if you want the old narrowing behaviour.)
 #
 # Names are fuzzy-matched (case-insensitive substring) against the conversation
 # names Teams has cached, so a short distinctive fragment is enough. Matching

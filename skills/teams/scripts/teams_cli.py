@@ -11,15 +11,25 @@ Run with no arguments for a dashboard of what is available.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from teams_config import Config, ConfigError, load_config  # noqa: E402
-from teams_corpus import CorpusWriter, Cursor, NoteInput, reindex  # noqa: E402
+from teams_corpus import (  # noqa: E402
+    CorpusWriter,
+    Cursor,
+    NoteInput,
+    default_state_dir,
+    reindex,
+    secure_mkdir,
+)
 from teams_output import (  # noqa: E402
     EXIT_FAILURE,
     EXIT_OK,
@@ -44,8 +54,11 @@ COMMANDS: list[dict] = [
      "summary": "List named conversations Teams has cached.",
      "usage": "channels [--limit N]"},
     {"name": "digest", "group": "read", "heuristic": False,
-     "summary": "Recent activity in watched channels.",
-     "usage": "digest [--hours N] [--limit N]"},
+     "summary": "Everything that happened in the window, across all conversations.",
+     "usage": "digest [--hours N] [--limit N] [--only-watched]"},
+    {"name": "poll", "group": "read", "heuristic": False,
+     "summary": "New messages in watched channels and @mentions since the last poll.",
+     "usage": "poll [--log PATH] [--once] [--interval SECONDS]"},
     {"name": "search", "group": "read", "heuristic": False,
      "summary": "Full-text search across all cached messages, with optional date/sender filters.",
      "usage": "search <query> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--from NAME|MRI] [--limit N]"},
@@ -155,6 +168,20 @@ def resolve_watch(reader: TeamsReader, names: list[str],
             warn(msg)
         ids.update(c.id for c in matches)
     return ids
+
+
+def active_conversations(reader: TeamsReader, hours: int,
+                         scope: set[str] | None = None) -> list:
+    """Conversations with activity inside the window, newest first.
+
+    Uses the cached ``lastMessageTimeUtc`` on each conversation record, so this
+    is a cheap metadata read — it does not walk the message store.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    convs = [c for c in reader.conversations().values()
+             if c.last and c.last >= cutoff and (scope is None or c.id in scope)]
+    convs.sort(key=lambda c: c.last, reverse=True)
+    return convs
 
 
 def nearest_names(reader: TeamsReader, want: str, k: int = 5) -> list[str]:
@@ -304,19 +331,179 @@ def cmd_channels(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
 
 
 def cmd_digest(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
-    watch_ids = resolve_watch(reader, cfg.watch, warnings)
+    """Everything that happened in the window, across every conversation.
+
+    The time window IS the filter: a conversation with activity in the last N
+    hours is relevant by definition, and one without contributes nothing. So
+    the digest never narrows by channel — narrowing is what made the old
+    watch-list-as-allowlist quietly drop channels nobody had thought to list
+    (measured 2026-07-30: a 24h window had 12 active conversations, only 4 of
+    which were on the watch list).
+
+    `watch` plays no part here any more; it belongs to the notify path, not the
+    pull path. --only-watched restores the old allowlist behaviour on demand.
+
+    Returns a plain list of message rows. Do not change that shape: the
+    productivity-sync skill iterates `data[]` from `digest --json` on every run.
+    """
     hours = args.hours or cfg.lookback_hours
-    if not watch_ids:
-        if cfg.watch:
-            warn("no watch entries resolved; falling back to all conversations")
-        else:
-            warn("config has no watch list; digesting all conversations")
-        watch_ids = None
-    limit = args.limit or (cfg.max_per_channel * max(1, len(watch_ids or [1])))
-    messages = reader.digest(watch_ids, hours=hours, limit=limit)
+
+    scope = None
+    if args.only_watched:
+        scope = resolve_watch(reader, cfg.watch, warnings) or None
+        if scope is None:
+            warn("--only-watched given but no watch entries resolved; covering all conversations")
+
+    # Budget scales with how many conversations were actually active. The old
+    # `or [1]` collapsed an empty watch list to a single channel's worth of
+    # messages spread across the entire store.
+    active = active_conversations(reader, hours, scope)
+    limit = args.limit or (cfg.max_per_channel * max(1, len(active)))
+    messages = reader.digest(scope, hours=hours, limit=limit)
+
     if not args.json:
-        print_messages(reader, messages, f"Digest — last {hours}h")
+        title = f"Digest — last {hours}h"
+        if scope is not None:
+            title += " (watched only)"
+        elif active:
+            title += f" — {len(active)} active conversation{'s' if len(active) != 1 else ''}"
+        print_messages(reader, messages, title)
     return msg_rows(messages)
+
+
+def _poll_cursor_path() -> Path:
+    return default_state_dir() / "poll-cursor.json"
+
+
+def _poll_read_cursor() -> datetime | None:
+    try:
+        raw = json.loads(_poll_cursor_path().read_text()).get("last_seen_at")
+        return datetime.fromisoformat(raw) if raw else None
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return None
+
+
+def _poll_write_cursor(when: datetime | None) -> None:
+    if not when:
+        return
+    path = _poll_cursor_path()
+    secure_mkdir(path.parent)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"last_seen_at": when.isoformat()}, indent=2))
+    tmp.replace(path)
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+
+
+def poll_once(reader: TeamsReader, cfg: Config, warnings: list[str], *,
+              log_path: Path, since: datetime | None,
+              fallback_hours: int) -> dict:
+    """One pass: append anything new in watched channels or @mentions to the log.
+
+    Two signals, deliberately: watched channels are the ones you always care
+    about, and an @mention matters wherever it lands. Everything else is what
+    `digest` is for — this path stays quiet enough to leave running.
+    """
+    watch_ids = resolve_watch(reader, cfg.watch, warnings) if cfg.watch else set()
+    cutoff = since or (datetime.now(timezone.utc) - timedelta(hours=fallback_hours))
+
+    fresh = [m for m in reader.iter_messages() if m.time and m.time > cutoff]
+
+    mention_ids = set()
+    for item in reader.mentions(unread_only=False, limit=200):
+        when = item.get("time")
+        if when and when > cutoff and item.get("message_id"):
+            mention_ids.add(str(item["message_id"]))
+
+    names = reader.conversations()
+    hits = []
+    for m in fresh:
+        # Never report your own messages back to you.
+        if m.from_me:
+            continue
+        why = []
+        if watch_ids and m.conversation_id in watch_ids:
+            why.append("watch")
+        if str(m.message_id) in mention_ids:
+            why.append("mention")
+        if why:
+            hits.append((m, why))
+    hits.sort(key=lambda pair: pair[0].time)
+
+    if hits:
+        secure_mkdir(log_path.parent)
+        with log_path.open("a", encoding="utf-8") as fh:
+            for m, why in hits:
+                conv = names.get(m.conversation_id)
+                where = (conv.name if conv else None) or m.conversation_id
+                stamp = m.time.astimezone().strftime("%Y-%m-%d %H:%M")
+                fh.write(f"[{stamp}] ({'+'.join(why)}) {where} | "
+                         f"{m.author}: {truncate(m.content, 220)}\n")
+        with contextlib.suppress(OSError):
+            log_path.chmod(0o600)
+
+    newest = max((m.time for m, _ in hits), default=None) or (
+        max((m.time for m in fresh), default=None))
+    return {"new": len(hits), "scanned": len(fresh), "newest": newest,
+            "log": str(log_path),
+            "hits": [{"time": m.time, "author": m.author, "why": why,
+                      "conversation_id": m.conversation_id,
+                      "creator_mri": m.creator_mri,
+                      "content": m.content} for m, why in hits]}
+
+
+def cmd_poll(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    """Append new watched-channel and @mention activity to a tailable log.
+
+    The corpus answers "what was said"; this answers "tell me when something
+    I care about lands". Watch exists for exactly this — `digest` no longer
+    narrows by channel, so the watch list's only job is deciding what is worth
+    interrupting you for.
+
+    --once does a single pass (cron-friendly). Without it, loops in-process.
+    """
+    log_path = Path(args.log).expanduser() if args.log else default_state_dir() / "watch.log"
+    if not cfg.watch:
+        warn("no watch list configured; poll will only report @mentions")
+
+    result = poll_once(reader, cfg, warnings, log_path=log_path,
+                       since=_poll_read_cursor(),
+                       fallback_hours=args.hours or cfg.lookback_hours)
+    _poll_write_cursor(result["newest"])
+
+    # Loop mode re-opens the store each pass: `reader` holds a snapshot taken at
+    # startup, so reusing it would re-read the same frozen bytes forever and the
+    # poller would never see a new message.
+    if not args.once and not args.json:
+        interval = max(30, args.interval)
+        total = result["new"]
+        try:
+            while True:
+                time.sleep(interval)
+                with open_reader() as fresh_reader:
+                    result = poll_once(fresh_reader, cfg, warnings, log_path=log_path,
+                                       since=_poll_read_cursor(),
+                                       fallback_hours=args.hours or cfg.lookback_hours)
+                _poll_write_cursor(result["newest"])
+                total += result["new"]
+                if result["new"]:
+                    print(f"{result['new']} new -> {result['log']}")
+                    for h in result["hits"]:
+                        print(f"  ({'+'.join(h['why'])}) {h['author']}: "
+                              f"{truncate(h['content'], 100)}")
+        except KeyboardInterrupt:
+            print(f"\nstopped. {total} logged this run -> {log_path}")
+            return result
+
+    if not args.json:
+        if result["new"]:
+            print(f"{result['new']} new -> {result['log']}")
+            for h in result["hits"]:
+                print(f"  ({'+'.join(h['why'])}) {h['author']}: "
+                      f"{truncate(h['content'], 100)}")
+        else:
+            print(f"nothing new (scanned {result['scanned']} messages since last poll)")
+    return result
 
 
 def cmd_search(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
@@ -577,11 +764,15 @@ def cmd_action_items(reader: TeamsReader, cfg: Config, args, warnings: list[str]
 
 def cmd_standup(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     identity = resolve_identity(reader, cfg, warnings)
-    watch_ids = resolve_watch(reader, cfg.watch, warnings)
-    if not watch_ids:
-        warn("no watch list resolved; standup covers all conversations")
     hours = args.hours or cfg.lookback_hours
-    result = reader.standup_prep(watch_ids or None, hours=hours,
+    # Same rule as digest: the window is the filter. Narrowing to the watch list
+    # hides tickets and questions raised in channels you did not think to list,
+    # which is exactly what standup prep must not miss. --only-watched opts back in.
+    watch_ids = resolve_watch(reader, cfg.watch, warnings) if cfg.watch else set()
+    scope = watch_ids if (args.only_watched and watch_ids) else None
+    if args.only_watched and not watch_ids:
+        warn("--only-watched given but no watch entries resolved; covering all conversations")
+    result = reader.standup_prep(scope, hours=hours,
                                  ticket_pattern=cfg.ticket_pattern,
                                  identity=identity, name_gate=cfg.name_gate)
     data = {
@@ -609,6 +800,7 @@ HANDLERS = {
     "doctor": cmd_doctor,
     "channels": cmd_channels,
     "digest": cmd_digest,
+    "poll": cmd_poll,
     "search": cmd_search,
     "mentions": cmd_mentions,
     "thread": cmd_thread,
@@ -733,9 +925,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("channels", "List named conversations Teams has cached.")
     p.add_argument("--limit", type=int, default=60)
 
-    p = add("digest", "Recent activity in watched channels.")
+    p = add("digest", "Everything that happened in the window, all conversations.")
     p.add_argument("--hours", type=int, default=None)
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--only-watched", action="store_true",
+                   help="narrow to the config watch list instead of all conversations")
+
+    p = add("poll", "Append new watched-channel and @mention activity to a log.")
+    p.add_argument("--log", default=None,
+                   help="log file to append to (default: $XDG_STATE_HOME/teams/watch.log)")
+    p.add_argument("--hours", type=int, default=None,
+                   help="lookback for the FIRST poll, before a cursor exists")
+    p.add_argument("--once", action="store_true",
+                   help="single pass then exit (cron-friendly); default loops")
+    p.add_argument("--interval", type=int, default=300,
+                   help="seconds between passes when looping (default 300)")
 
     p = add("search", "Full-text search across all cached messages.")
     p.add_argument("query")
@@ -810,8 +1014,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--since", default=None)
     p.add_argument("--limit", type=int, default=50)
 
-    p = add("standup", "HEURISTIC: bucket recent watched activity for standup.")
+    p = add("standup", "HEURISTIC: bucket recent activity for standup.")
     p.add_argument("--hours", type=int, default=None)
+    p.add_argument("--only-watched", action="store_true",
+                   help="narrow to the config watch list instead of all conversations")
 
     return parser
 
