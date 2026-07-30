@@ -49,6 +49,10 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/browser-use-environment-auth": {
+      "name": "@side-quest/browser-use-environment-auth",
+      "version": "0.1.0",
+    },
     "runtime/browser-use-security": {
       "name": "@side-quest/browser-use-security",
       "version": "0.1.0",
@@ -261,6 +265,8 @@
     "@puppeteer/replay": ["@puppeteer/replay@4.0.2", "", { "peerDependencies": { "lighthouse": ">=13.0.0", "puppeteer": ">=25.0.0" }, "optionalPeers": ["lighthouse", "puppeteer"], "bin": { "replay-extension-test": "lib/extension-test.js", "replay": "lib/cli.js" } }, "sha512-EeE0THQFSTsI2RGxWI07PURCutx9JBM8QbwlFjdykfDu0MMiBrdSmXX9eXZf5Wvo9DmtvGAimWTCZnty44NYqQ=="],
 
     "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:runtime/browser-connect"],
+
+    "@side-quest/browser-use-environment-auth": ["@side-quest/browser-use-environment-auth@workspace:runtime/browser-use-environment-auth"],
 
     "@side-quest/browser-use-security": ["@side-quest/browser-use-security@workspace:runtime/browser-use-security"],
 
