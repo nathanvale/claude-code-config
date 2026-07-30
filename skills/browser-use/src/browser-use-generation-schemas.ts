@@ -164,6 +164,7 @@ const SESSION_IDENTITY_KEYS = [
 	"tenant_reference",
 ] as const;
 const REVIEWED_ACTION_REF_KEYS = ["action_id", "expected_digest"] as const;
+const SAFE_ROUTE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const SAFE_IDENTITY_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
 const SAFE_ACTION_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const UNSAFE_SEMANTIC_NAME =
@@ -181,9 +182,9 @@ export function parseGenerationAuthRouteRecord(
 		(!hasExactKeys(value, AUTH_ROUTE_BASE_KEYS) &&
 			!hasExactKeys(value, AUTH_ROUTE_SESSION_KEYS)) ||
 		typeof value.auth_context_ref !== "string" ||
-		value.auth_context_ref.length === 0 ||
+		!SAFE_ROUTE_REFERENCE.test(value.auth_context_ref) ||
 		typeof value.candidate_id !== "string" ||
-		value.candidate_id.length === 0 ||
+		!SAFE_ROUTE_REFERENCE.test(value.candidate_id) ||
 		value.status !== "active"
 	) {
 		return undefined;

@@ -143,6 +143,18 @@ describe("Corpus Generation schema owner", () => {
 		expect(
 			parseGenerationAuthRouteRecord({
 				...route,
+				auth_context_ref: "op://vault/item",
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
+				candidate_id: "../candidate-oncore",
+			}),
+		).toBeUndefined();
+		expect(
+			parseGenerationAuthRouteRecord({
+				...route,
 				session_policy: {
 					...route.session_policy,
 					identity_verifier: undefined,
