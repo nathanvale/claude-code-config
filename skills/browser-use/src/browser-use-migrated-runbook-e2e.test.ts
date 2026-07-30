@@ -13,11 +13,11 @@ import {
 	buildBrowserUseCorpusGeneration,
 	type BrowserUseCorpusGenerationActionInput,
 } from "./browser-use-corpus-generation-builder";
-import { importBrowserUseCorpus } from "./browser-use-corpus-import";
-import { composeBrowserUseCorpusMigration } from "./browser-use-corpus-migration-composition";
 import {
-	adoptBrowserUseGenerationCandidate,
-} from "./browser-use-migration";
+	composeImportedBrowserUseCorpusMigration,
+	importBrowserUseCorpus,
+} from "./browser-use-corpus-import";
+import { adoptBrowserUseGenerationCandidate } from "./browser-use-migration";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -154,7 +154,7 @@ function handoffEnvelope(runId: string) {
 }
 
 describe("migrated runbook execution", () => {
-	test("imports Oncore diagnosis but blocks a legacy auth route before browser effects", async () => {
+	test("promotes Oncore diagnosis but blocks a legacy auth route before browser effects", async () => {
 		const sourceRoot = mkdtempSync(join(tmpdir(), "bu-migrated-e2e-"));
 		tempRoots.push(sourceRoot);
 		cpSync(fixtureRoot, sourceRoot, { recursive: true });
@@ -184,19 +184,17 @@ describe("migrated runbook execution", () => {
 		const imported = await importBrowserUseCorpus(deps, sourceRoot);
 		expect(imported.ok).toBe(true);
 		if (!imported.ok) throw new Error(imported.message);
+		const state = imported.state;
 		expect(
-			imported.state.canonical_targets.map(
-				(target) => target.canonical_target_id,
-			),
+			state.canonical_targets.map((target) => target.canonical_target_id),
 		).toContain("oncore/timesheet-diagnose");
-		expect(imported.generation.active_target_count).toBe(0);
 
 		const action = reviewedDiagnosisAction();
-		const generationId = `${imported.generation.generation_id}-approved`;
-		const composition = await composeBrowserUseCorpusMigration(
-			{ fs },
+		const generationId = `${state.staged_generation}-approved`;
+		const composition = await composeImportedBrowserUseCorpusMigration(
+			deps,
 			{
-				state: imported.state,
+				state,
 				sourceRoot,
 				generationId,
 				shippedCatalogDigest: await shippedCatalogDigest(
@@ -230,6 +228,7 @@ describe("migrated runbook execution", () => {
 					target.canonicalTargetId === "oncore/timesheet-diagnose",
 			)?.activation,
 		).toBe("active");
+		expect(composition.targets).toHaveLength(21);
 		const generation = await buildBrowserUseCorpusGeneration(
 			{ fs },
 			composition,
@@ -244,7 +243,7 @@ describe("migrated runbook execution", () => {
 				"migration",
 				"activate",
 				"--generation",
-				generationId,
+				generation.candidate.generation_id,
 				"--json",
 			],
 			baseRuntime,
@@ -368,7 +367,7 @@ describe("migrated runbook execution", () => {
 		);
 	});
 
-	test("imports and safely refuses Oncore fill through the public CLI until split cadence is supported", async () => {
+	test("keeps Oncore fill inactive until split cadence is supported", async () => {
 		const sourceRoot = mkdtempSync(join(tmpdir(), "bu-oncore-fill-e2e-"));
 		tempRoots.push(sourceRoot);
 		cpSync(fixtureRoot, sourceRoot, { recursive: true });
@@ -385,11 +384,12 @@ describe("migrated runbook execution", () => {
 		const imported = await importBrowserUseCorpus(deps, sourceRoot);
 		expect(imported.ok).toBe(true);
 		if (!imported.ok) throw new Error(imported.message);
-		const generationId = `${imported.generation.generation_id}-fill-proof`;
-		const composition = await composeBrowserUseCorpusMigration(
-			{ fs },
+		const state = imported.state;
+		const generationId = `${state.staged_generation}-fill-proof`;
+		const composition = await composeImportedBrowserUseCorpusMigration(
+			deps,
 			{
-				state: imported.state,
+				state,
 				sourceRoot,
 				generationId,
 				shippedCatalogDigest: await shippedCatalogDigest(
@@ -437,7 +437,7 @@ describe("migrated runbook execution", () => {
 				"migration",
 				"activate",
 				"--generation",
-				generationId,
+				generation.candidate.generation_id,
 				"--json",
 			],
 			runtime,

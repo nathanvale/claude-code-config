@@ -6,6 +6,11 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join, normalize } from "node:path";
 import { redactUnsafeText } from "./browser-use-core";
+import {
+	BROWSER_USE_CORPUS_LEDGER_PROOF_PATH,
+	BROWSER_USE_CORPUS_LEDGER_PROOF_REF,
+	browserUseCorpusDispositionLedgerContents,
+} from "./browser-use-corpus-generation-builder";
 import currentCorpusReceipt from "./browser-use-migration-corpus-receipt.json";
 import {
 	activateBrowserUseGeneration,
@@ -27,13 +32,15 @@ import type {
 	BrowserUseTargetProvenance,
 } from "./browser-use-migration-model";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
-import type {
-	BrowserUseCorpusGenerationCandidatePayload,
-	BrowserUseSourceSnapshotPayload,
+import {
+	type BrowserUseCorpusGenerationCandidatePayload,
+	type BrowserUseSourceSnapshotPayload,
+	parseDurableRecord,
 } from "./browser-use-schemas";
 import type { RetentionDeps } from "./browser-use-retention";
 import {
 	generationFilePath,
+	sourceSnapshotPath,
 	stageGeneration,
 	type StageGenerationFile,
 	writeSourceSnapshot,
@@ -115,6 +122,37 @@ const CORPUS_CENSUS_FIELDS = [
 
 function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
+}
+
+/** Prove one retained snapshot is the exact source evidence for a state. */
+export function browserUseSourceSnapshotMatchesMigrationState(
+	state: BrowserUseMigrationState,
+	snapshot: BrowserUseSourceSnapshotPayload,
+): boolean {
+	if (
+		state.snapshot_id === null ||
+		state.snapshot_digest === null ||
+		state.source_root_identity === null
+	) {
+		return false;
+	}
+	const entriesByPath = new Map(
+		snapshot.entries.map((entry) => [entry.relative_path, entry]),
+	);
+	return (
+		snapshot.snapshot_id === state.snapshot_id &&
+		snapshot.snapshot_digest === state.snapshot_digest &&
+		snapshot.root_identity === state.source_root_identity &&
+		snapshot.entries.length === state.source_entry_count &&
+		state.source_entry_count === state.dispositions.length &&
+		entriesByPath.size === snapshot.entries.length &&
+		sha256(JSON.stringify(snapshot.entries)) === state.snapshot_digest &&
+		state.dispositions.every(
+			(row) =>
+				entriesByPath.get(row.source_relative_path)?.content_hash ===
+				row.source_content_hash,
+		)
+	);
 }
 
 function migrationFailure(
@@ -1898,6 +1936,271 @@ async function verifyBrowserUseMigrationUnderLock(
 	});
 }
 
+function verifiedStateExtensionProblem(
+	base: BrowserUseMigrationState,
+	extension: BrowserUseMigrationState,
+): string | undefined {
+	if (
+		base.phase !== "verified" ||
+		extension.contract !== base.contract ||
+		extension.schema_version !== base.schema_version ||
+		extension.phase !== "verified" ||
+		extension.activation_state !== base.activation_state ||
+		extension.staged_generation !== base.staged_generation ||
+		extension.last_apply_verified_noop !== base.last_apply_verified_noop ||
+		extension.snapshot_id === null ||
+		extension.snapshot_digest === null ||
+		extension.source_root_identity === null ||
+		!SHA256_PATTERN.test(extension.snapshot_digest) ||
+		!SHA256_PATTERN.test(extension.source_root_identity) ||
+		extension.snapshot_id !==
+			`snapshot-${extension.snapshot_digest.slice(0, 16)}` ||
+		extension.source_entry_count !== extension.disposition_count ||
+		extension.disposition_count !== extension.dispositions.length ||
+		extension.source_entry_count <= base.source_entry_count
+	) {
+		return "verified corpus extension changes base authority or has inconsistent counts.";
+	}
+	const dispositionsByPath = new Map(
+		extension.dispositions.map((row) => [row.source_relative_path, row]),
+	);
+	if (
+		dispositionsByPath.size !== extension.dispositions.length ||
+		base.dispositions.some(
+			(row) =>
+				JSON.stringify(dispositionsByPath.get(row.source_relative_path)) !==
+				JSON.stringify(row),
+		)
+	) {
+		return "verified corpus extension removes or changes a base disposition.";
+	}
+	const targetsById = new Map(
+		extension.canonical_targets.map((target) => [
+			target.canonical_target_id,
+			target,
+		]),
+	);
+	const baseTargetsById = new Map(
+		base.canonical_targets.map((target) => [
+			target.canonical_target_id,
+			target,
+		]),
+	);
+	if (
+		targetsById.size !== extension.canonical_targets.length ||
+		extension.canonical_targets.some(
+			(target) =>
+				target.source_relative_paths.length === 0 ||
+				new Set(target.source_relative_paths).size !==
+					target.source_relative_paths.length ||
+				target.source_relative_paths.some(
+					(path) => !dispositionsByPath.has(path),
+				),
+		) ||
+		base.canonical_targets.some((target) => {
+			const extended = targetsById.get(target.canonical_target_id);
+			return (
+				extended === undefined ||
+				target.source_relative_paths.some(
+					(path) => !extended.source_relative_paths.includes(path),
+				)
+			);
+		})
+	) {
+		return "verified corpus extension removes or changes base target provenance.";
+	}
+	const extensionProvenance = extension.target_provenance ?? [];
+	const baseProvenance = base.target_provenance ?? [];
+	const provenance = new Set(
+		extensionProvenance.map((row) => JSON.stringify(row)),
+	);
+	const baseProvenanceIdentities = new Set(
+		baseProvenance.map(
+			(row) => `${row.source_relative_path}\0${row.source_flow_id}`,
+		),
+	);
+	const provenanceIdentities = new Set(
+		extensionProvenance.map(
+			(row) => `${row.source_relative_path}\0${row.source_flow_id}`,
+		),
+	);
+	const appendedProvenance = extensionProvenance.filter(
+		(row) =>
+			!baseProvenanceIdentities.has(
+				`${row.source_relative_path}\0${row.source_flow_id}`,
+			),
+	);
+	if (
+		provenanceIdentities.size !== extensionProvenance.length ||
+		baseProvenance.some(
+			(row) => !provenance.has(JSON.stringify(row)),
+		) ||
+		extensionProvenance.some(
+			(row) =>
+				!dispositionsByPath.has(row.source_relative_path) ||
+				(row.canonical_target_id !== null &&
+					!targetsById
+						.get(row.canonical_target_id)
+						?.source_relative_paths.includes(row.source_relative_path)),
+		) ||
+		extension.canonical_targets.some((target) => {
+			const baseTarget = baseTargetsById.get(
+				target.canonical_target_id,
+			);
+			const appendedSources = target.source_relative_paths.filter(
+				(path) =>
+					!baseTarget?.source_relative_paths.includes(path),
+			);
+			return (
+				appendedSources.length > 0 &&
+				!appendedProvenance.some(
+					(row) =>
+						row.canonical_target_id ===
+							target.canonical_target_id &&
+						appendedSources.includes(row.source_relative_path),
+				)
+			);
+		})
+	) {
+		return "verified corpus extension does not preserve exact provenance.";
+	}
+	const baseCensus = base.corpus_census;
+	const extensionCensus = extension.corpus_census;
+	const baseDispositionPaths = new Set(
+		base.dispositions.map((row) => row.source_relative_path),
+	);
+	const appendedDispositions = extension.dispositions.filter(
+		(row) => !baseDispositionPaths.has(row.source_relative_path),
+	);
+	const censusDelta: BrowserUseCorpusCensus = {
+		formal_artifacts: appendedDispositions.filter(
+			(row) =>
+				row.artifact_class === "formal-runbook" ||
+				row.artifact_class === "formal-playbook",
+		).length,
+		target_flows: appendedProvenance.length,
+		scripts: appendedDispositions.filter(
+			(row) =>
+				row.artifact_class === "script" ||
+				row.artifact_class === "domain-script-action",
+		).length,
+		auth_narratives: appendedDispositions.filter(
+			(row) => row.artifact_class === "auth-narrative",
+		).length,
+		login_capabilities: appendedDispositions.filter(
+			(row) => row.artifact_class === "login-capability",
+		).length,
+		domain_script_actions: appendedDispositions.filter(
+			(row) => row.artifact_class === "domain-script-action",
+		).length,
+	};
+	if (
+		baseCensus === null ||
+		extensionCensus === null ||
+		CORPUS_CENSUS_FIELDS.some(
+			(field) =>
+				extensionCensus[field] !==
+				baseCensus[field] + censusDelta[field],
+		)
+	) {
+		return "verified corpus extension census does not match appended evidence.";
+	}
+	return undefined;
+}
+
+async function verifiedStateExtensionEvidenceProblem(
+	deps: RetentionDeps,
+	candidate: BrowserUseCorpusGenerationCandidatePayload,
+	files: readonly StageGenerationFile[],
+	base: BrowserUseMigrationState,
+	extension: BrowserUseMigrationState,
+): Promise<string | undefined> {
+	if (
+		extension.snapshot_id === null ||
+		extension.snapshot_digest === null ||
+		extension.source_root_identity === null
+	) {
+		return "verified corpus extension lacks exact source snapshot authority.";
+	}
+	const snapshotRead = await readDurableFile(
+		deps.fs,
+		sourceSnapshotPath(deps.paths, extension.snapshot_id),
+	);
+	if (snapshotRead.status !== "present") {
+		return "verified corpus extension source snapshot is missing.";
+	}
+	const snapshot = parseDurableRecord(
+		snapshotRead.raw,
+		"source-snapshot",
+	);
+	if (!snapshot.ok) {
+		return "verified corpus extension source snapshot is corrupt.";
+	}
+	if (
+		base.snapshot_id === null ||
+		base.snapshot_digest === null ||
+		base.source_root_identity === null
+	) {
+		return "verified corpus extension lacks retained base snapshot authority.";
+	}
+	const baseSnapshotRead = await readDurableFile(
+		deps.fs,
+		sourceSnapshotPath(deps.paths, base.snapshot_id),
+	);
+	if (baseSnapshotRead.status !== "present") {
+		return "verified corpus extension retained base snapshot is missing.";
+	}
+	const baseSnapshot = parseDurableRecord(
+		baseSnapshotRead.raw,
+		"source-snapshot",
+	);
+	if (!baseSnapshot.ok) {
+		return "verified corpus extension retained base snapshot is corrupt.";
+	}
+	const entriesByPath = new Map(
+		snapshot.payload.entries.map((entry) => [
+			entry.relative_path,
+			entry,
+		]),
+	);
+	if (
+		!browserUseSourceSnapshotMatchesMigrationState(
+			base,
+			baseSnapshot.payload,
+		) ||
+		!browserUseSourceSnapshotMatchesMigrationState(
+			extension,
+			snapshot.payload,
+		) ||
+		baseSnapshot.payload.entries.some(
+			(entry) =>
+				JSON.stringify(entriesByPath.get(entry.relative_path)) !==
+				JSON.stringify(entry),
+		)
+	) {
+		return "verified corpus extension does not match its exact source snapshot.";
+	}
+	const ledgerProof = candidate.proofs.find(
+		(proof) =>
+			proof.proof_ref === BROWSER_USE_CORPUS_LEDGER_PROOF_REF,
+	);
+	const ledgerFile =
+		ledgerProof === undefined
+			? undefined
+			: files.find((file) => file.relPath === ledgerProof.path);
+	const expectedLedger =
+		browserUseCorpusDispositionLedgerContents(extension);
+	if (
+		ledgerProof === undefined ||
+		ledgerProof.path !== BROWSER_USE_CORPUS_LEDGER_PROOF_PATH ||
+		ledgerFile?.contents !== expectedLedger ||
+		sha256(expectedLedger) !== ledgerProof.digest
+	) {
+		return "verified corpus extension does not match its generation ledger.";
+	}
+	return undefined;
+}
+
 /**
  * Adopt one generated candidate into the exact verified migration state.
  *
@@ -1922,6 +2225,7 @@ export async function adoptBrowserUseGenerationCandidate(
 	input: {
 		candidate: BrowserUseCorpusGenerationCandidatePayload;
 		files: readonly StageGenerationFile[];
+		verifiedStateExtension?: BrowserUseMigrationState;
 	},
 ): Promise<
 	| {
@@ -1955,6 +2259,35 @@ export async function adoptBrowserUseGenerationCandidate(
 			}
 			const standing = await readBrowserUseMigrationStatus(deps);
 			if (!standing.ok) return standing;
+			const standingState = durableMigrationState(standing.state);
+			const candidateState =
+				input.verifiedStateExtension ?? standingState;
+			if (input.verifiedStateExtension !== undefined) {
+				const extensionProblem = verifiedStateExtensionProblem(
+					standingState,
+					input.verifiedStateExtension,
+				);
+				if (extensionProblem !== undefined) {
+					return migrationFailure(
+						"migration_manifest_incomplete",
+						extensionProblem,
+					);
+				}
+				const evidenceProblem =
+					await verifiedStateExtensionEvidenceProblem(
+						deps,
+						input.candidate,
+						input.files,
+						standingState,
+						input.verifiedStateExtension,
+					);
+				if (evidenceProblem !== undefined) {
+					return migrationFailure(
+						"migration_manifest_incomplete",
+						evidenceProblem,
+					);
+				}
+			}
 			const preflightState = await readDurableFile(deps.fs, statePath);
 			if (
 				preflightState.status !== "present" ||
@@ -1969,7 +2302,7 @@ export async function adoptBrowserUseGenerationCandidate(
 				await validateBrowserUseGenerationCandidateForMigrationState(
 					deps,
 					input.candidate,
-					standing.state,
+					candidateState,
 				);
 			if (!preflight.ok) return preflight;
 			let staged: Awaited<ReturnType<typeof stageGeneration>>;
@@ -2009,11 +2342,20 @@ export async function adoptBrowserUseGenerationCandidate(
 				);
 			}
 			if (!closure.ok) return closure;
+			if (
+				JSON.stringify(closure.candidate) !==
+				JSON.stringify(input.candidate)
+			) {
+				return migrationFailure(
+					"migration_generation_corrupt",
+					"staged generation candidate differs from preflight authority.",
+				);
+			}
 			const committedBinding =
 				await validateBrowserUseGenerationCandidateForMigrationState(
 					deps,
 					closure.candidate,
-					standing.state,
+					candidateState,
 				);
 			if (!committedBinding.ok) return committedBinding;
 			const observed = await readDurableFile(deps.fs, statePath);
@@ -2026,11 +2368,11 @@ export async function adoptBrowserUseGenerationCandidate(
 			const adopted = await writeMigrationStateIfUnchanged(
 				deps,
 				{
-					...standing.state,
+					...candidateState,
 					phase: "verified",
 					staged_generation: input.candidate.generation_id,
 					last_apply_verified_noop: staged.verified_noop,
-					activation_state: standing.state.activation_state,
+					activation_state: standingState.activation_state,
 				},
 				before.raw,
 			);

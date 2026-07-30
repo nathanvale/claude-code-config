@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
+import bundledCandidates from "./browser-use-monash-smst-candidate-census.json";
 import bundledReceipt from "./browser-use-monash-smst-corpus-receipt.json";
-import bundledCandidates from "./fixtures/browser-use-migration/monash-smst-corpus/candidate-census.json";
-import bundledSourceClosure from "./fixtures/browser-use-migration/monash-smst-corpus/source-closure.json";
+import bundledSourceClosure from "./browser-use-monash-smst-source-closure.json";
 import { findRedactionViolations } from "./browser-use-schemas";
 
 const SHA256 = /^[0-9a-f]{64}$/;

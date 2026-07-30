@@ -80,8 +80,10 @@ export type BrowserUseCorpusGenerationBuild = {
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const LEDGER_PROOF_REF = "corpus-disposition-ledger";
-const LEDGER_PROOF_PATH = "proofs/corpus-ledger.json";
+export const BROWSER_USE_CORPUS_LEDGER_PROOF_REF =
+	"corpus-disposition-ledger";
+export const BROWSER_USE_CORPUS_LEDGER_PROOF_PATH =
+	"proofs/corpus-ledger.json";
 
 function sha256(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
@@ -89,6 +91,70 @@ function sha256(value: string): string {
 
 function json(value: unknown): string {
 	return `${JSON.stringify(value, null, "\t")}\n`;
+}
+
+/** Canonical generation ledger bytes for one exact migration state. */
+export function browserUseCorpusDispositionLedgerContents(
+	state: BrowserUseMigrationState,
+): string {
+	return json({
+		contract: "browser-use.corpus-disposition-ledger",
+		schema_version: "2",
+		phase: state.phase,
+		snapshot_id: state.snapshot_id,
+		snapshot_digest: state.snapshot_digest,
+		source_root_identity: state.source_root_identity,
+		source_entry_count: state.source_entry_count,
+		disposition_count: state.disposition_count,
+		dispositions: [...state.dispositions]
+			.sort((left, right) =>
+				left.source_relative_path.localeCompare(
+					right.source_relative_path,
+				),
+			)
+			.map((disposition) => ({
+				source_relative_path: disposition.source_relative_path,
+				source_content_hash: disposition.source_content_hash,
+				artifact_class: disposition.artifact_class,
+				formal_flow_id: disposition.formal_flow_id,
+				canonical_target_id: disposition.canonical_target_id,
+				disposition: disposition.disposition,
+				reason: disposition.reason,
+				transform_version: disposition.transform_version,
+				logical_destination_id:
+					disposition.logical_destination_id,
+				expected_hash: disposition.expected_hash,
+			})),
+		corpus_census:
+			state.corpus_census === null
+				? null
+				: {
+						formal_artifacts: state.corpus_census.formal_artifacts,
+						target_flows: state.corpus_census.target_flows,
+						scripts: state.corpus_census.scripts,
+						identity_narratives: state.corpus_census.auth_narratives,
+						identity_capabilities:
+							state.corpus_census.login_capabilities,
+						domain_script_actions:
+							state.corpus_census.domain_script_actions,
+					},
+		canonical_targets: [...state.canonical_targets]
+			.map((target) => ({
+				canonical_target_id: target.canonical_target_id,
+				source_relative_paths: [...target.source_relative_paths].sort(),
+			}))
+			.sort((left, right) =>
+				left.canonical_target_id.localeCompare(
+					right.canonical_target_id,
+				),
+			),
+		target_provenance: [...(state.target_provenance ?? [])].sort(
+			(left, right) =>
+				`${left.source_relative_path}\0${left.source_flow_id}`.localeCompare(
+					`${right.source_relative_path}\0${right.source_flow_id}`,
+				),
+		),
+	});
 }
 
 function safeRelativePath(value: string): boolean {
@@ -271,34 +337,18 @@ export async function buildBrowserUseCorpusGeneration(
 	const knowledge = await buildKnowledgeFiles(deps, input);
 	files.push(...knowledge.files);
 
-	const ledgerPayload = {
-		contract: "browser-use.corpus-disposition-ledger",
-		schema_version: "1",
-		snapshot_id: input.state.snapshot_id,
-		snapshot_digest: input.state.snapshot_digest,
-		dispositions: [...input.state.dispositions]
-			.sort((left, right) =>
-				left.source_relative_path.localeCompare(right.source_relative_path),
-			)
-			.map((disposition) => ({
-				source_relative_path: disposition.source_relative_path,
-				source_content_hash: disposition.source_content_hash,
-				artifact_class: disposition.artifact_class,
-				formal_flow_id: disposition.formal_flow_id,
-				canonical_target_id: disposition.canonical_target_id,
-				disposition: disposition.disposition,
-				reason: disposition.reason,
-				transform_version: disposition.transform_version,
-			})),
-	};
-	assertRedacted(ledgerPayload, "Corpus ledger");
-	const ledgerContents = json(ledgerPayload);
-	files.push({ relPath: LEDGER_PROOF_PATH, contents: ledgerContents });
+	const ledgerContents =
+		browserUseCorpusDispositionLedgerContents(input.state);
+	assertRedacted(JSON.parse(ledgerContents), "Corpus ledger");
+	files.push({
+		relPath: BROWSER_USE_CORPUS_LEDGER_PROOF_PATH,
+		contents: ledgerContents,
+	});
 
 	const proofs: BrowserUseCorpusGenerationCandidatePayload["proofs"][number][] = [
 		{
-			proof_ref: LEDGER_PROOF_REF,
-			path: LEDGER_PROOF_PATH,
+			proof_ref: BROWSER_USE_CORPUS_LEDGER_PROOF_REF,
+			path: BROWSER_USE_CORPUS_LEDGER_PROOF_PATH,
 			digest: sha256(ledgerContents),
 		},
 	];
@@ -328,7 +378,7 @@ export async function buildBrowserUseCorpusGeneration(
 		const runbookPath = `runbooks/${targetSlug}/runbook.json`;
 		files.push({ relPath: runbookPath, contents: runbookContents });
 
-		const targetProofRefs = [LEDGER_PROOF_REF];
+		const targetProofRefs = [BROWSER_USE_CORPUS_LEDGER_PROOF_REF];
 		for (const proof of [...target.proofs].sort((left, right) =>
 			left.proofRef.localeCompare(right.proofRef),
 		)) {

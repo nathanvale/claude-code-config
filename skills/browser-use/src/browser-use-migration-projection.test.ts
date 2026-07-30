@@ -24,7 +24,7 @@ afterAll(() => {
 });
 
 describe("large corpus migration projections", () => {
-	test("status and activate stay compact parseable JSON while plan and durable state retain all 133 rows", async () => {
+	test("status and activate stay compact while import appends 20 bundled Monash rows", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const source = join(xdg.base, "large-corpus");
@@ -85,7 +85,7 @@ describe("large corpus migration projections", () => {
 			target_provenance_omitted: boolean;
 		};
 		expect(statusData).toMatchObject({
-			disposition_count: 133,
+			disposition_count: 153,
 			dispositions: [],
 			dispositions_omitted: true,
 			target_provenance: [],
@@ -95,7 +95,7 @@ describe("large corpus migration projections", () => {
 				(total, count) => total + count,
 				0,
 			),
-		).toBe(133);
+		).toBe(153);
 		expect(statusData.target_provenance_omitted).toBe(
 			statusData.target_provenance_count > 0,
 		);
@@ -114,7 +114,7 @@ describe("large corpus migration projections", () => {
 		expect(Buffer.byteLength(activated.stdout, "utf8")).toBeLessThan(16 * 1024);
 		expect(parseJson(activated.stdout).data).toMatchObject({
 			activation_state: "active",
-			disposition_count: 133,
+			disposition_count: 153,
 			dispositions: [],
 			dispositions_omitted: true,
 		});
@@ -129,7 +129,7 @@ describe("large corpus migration projections", () => {
 		});
 		expect(durable.ok).toBe(true);
 		if (!durable.ok) throw new Error(durable.code);
-		expect(durable.state.dispositions).toHaveLength(133);
+		expect(durable.state.dispositions).toHaveLength(153);
 		expect(durable.state.target_provenance).toHaveLength(
 			statusData.target_provenance_count,
 		);

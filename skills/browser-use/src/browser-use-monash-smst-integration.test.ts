@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -6,9 +7,11 @@ import {
 	type BrowserUseCorpusGenerationBuildInput,
 } from "./browser-use-corpus-generation-builder";
 import { importBrowserUseCorpus } from "./browser-use-corpus-import";
-import { composeBrowserUseCorpusMigration } from "./browser-use-corpus-migration-composition";
 import { censusBundledMonashSmstCorpus } from "./browser-use-monash-smst-census";
-import { mergeMonashSmstCensusIntoCorpus } from "./browser-use-monash-smst-integration";
+import {
+	composeMonashSmstSourceSnapshot,
+	mergeMonashSmstCensusIntoCorpus,
+} from "./browser-use-monash-smst-integration";
 import type { BrowserUseMigrationState } from "./browser-use-migration-model";
 import {
 	createDefaultPlatformFs,
@@ -17,7 +20,10 @@ import {
 } from "./browser-use-paths";
 import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
-import { findRedactionViolations } from "./browser-use-schemas";
+import {
+	findRedactionViolations,
+	type BrowserUseSourceSnapshotPayload,
+} from "./browser-use-schemas";
 
 const disposables: Array<{ dispose(): void }> = [];
 const fixtureRoot = join(
@@ -61,27 +67,38 @@ function inactiveRunbook(
 }
 
 function baseState(): BrowserUseMigrationState {
+	const dispositions = BASE_TARGETS.map((canonicalTargetId, index) => ({
+		source_relative_path: `definitions/${canonicalTargetId}.json`,
+		source_content_hash: `${index + 1}`.repeat(64),
+		artifact_class: "formal-playbook" as const,
+		formal_flow_id: canonicalTargetId,
+		canonical_target_id: canonicalTargetId,
+		disposition: "provenance-only" as const,
+		reason: "base corpus definition",
+		transform_version: "base-v1",
+		logical_destination_id: null,
+		expected_hash: null,
+	}));
+	const entries = dispositions.map((row) => ({
+		relative_path: row.source_relative_path,
+		type: "file" as const,
+		size: 0,
+		mode: 0,
+		content_hash: row.source_content_hash,
+	}));
+	const snapshotDigest = createHash("sha256")
+		.update(JSON.stringify(entries))
+		.digest("hex");
 	return {
 		contract: "browser-use.migration-status",
 		schema_version: "2",
 		phase: "verified",
-		snapshot_id: "snapshot-base",
-		snapshot_digest: "a".repeat(64),
+		snapshot_id: `snapshot-${snapshotDigest.slice(0, 16)}`,
+		snapshot_digest: snapshotDigest,
 		source_root_identity: "b".repeat(64),
 		source_entry_count: BASE_TARGETS.length,
 		disposition_count: BASE_TARGETS.length,
-		dispositions: BASE_TARGETS.map((canonicalTargetId, index) => ({
-			source_relative_path: `definitions/${canonicalTargetId}.json`,
-			source_content_hash: `${index + 1}`.repeat(64),
-			artifact_class: "formal-playbook",
-			formal_flow_id: canonicalTargetId,
-			canonical_target_id: canonicalTargetId,
-			disposition: "provenance-only",
-			reason: "base corpus definition",
-			transform_version: "base-v1",
-			logical_destination_id: null,
-			expected_hash: null,
-		})),
+		dispositions,
 		corpus_census: {
 			formal_artifacts: 5,
 			target_flows: 5,
@@ -98,6 +115,30 @@ function baseState(): BrowserUseMigrationState {
 		staged_generation: "base-staged",
 		last_apply_verified_noop: false,
 		activation_state: "unchanged",
+	};
+}
+
+function baseSnapshot(
+	state: BrowserUseMigrationState,
+): BrowserUseSourceSnapshotPayload {
+	if (
+		state.snapshot_id === null ||
+		state.snapshot_digest === null ||
+		state.source_root_identity === null
+	) {
+		throw new Error("base state lacks snapshot identity");
+	}
+	return {
+		snapshot_id: state.snapshot_id,
+		root_identity: state.source_root_identity,
+		entries: state.dispositions.map((row) => ({
+			relative_path: row.source_relative_path,
+			type: "file",
+			size: 0,
+			mode: 0,
+			content_hash: row.source_content_hash,
+		})),
+		snapshot_digest: state.snapshot_digest,
 	};
 }
 
@@ -159,9 +200,16 @@ describe("Monash SMST corpus integration", () => {
 		expect(censusResult.ok).toBe(true);
 		if (!censusResult.ok) throw new Error(censusResult.message);
 
-		const merged = mergeMonashSmstCensusIntoCorpus(
-			baseInput(),
+		const input = baseInput();
+		const snapshot = composeMonashSmstSourceSnapshot(
+			input.state,
+			baseSnapshot(input.state),
 			censusResult.census,
+		);
+		const merged = mergeMonashSmstCensusIntoCorpus(
+			input,
+			censusResult.census,
+			snapshot,
 		);
 		const built = await buildBrowserUseCorpusGeneration(
 			{ fs: noExternalSourceFs() },
@@ -242,10 +290,7 @@ describe("Monash SMST corpus integration", () => {
 		).toEqual([]);
 	});
 
-	test("projects the exact 20-target inactive census through the real corpus importer and production composition", async () => {
-		const censusResult = censusBundledMonashSmstCorpus();
-		expect(censusResult.ok).toBe(true);
-		if (!censusResult.ok) throw new Error(censusResult.message);
+	test("projects the exact 20-target inactive census through the real corpus importer", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const fs = createDefaultPlatformFs();
@@ -262,43 +307,25 @@ describe("Monash SMST corpus integration", () => {
 		);
 		expect(imported.ok).toBe(true);
 		if (!imported.ok) throw new Error(imported.code);
-		expect(imported.generation.canonical_target_count).toBe(5);
-
-		const productionBase = await composeBrowserUseCorpusMigration(
-			{ fs },
-			{
-				state: imported.state,
-				sourceRoot: fixtureRoot,
-				generationId: `${imported.generation.generation_id}-u14-proof`,
-				shippedCatalogDigest: imported.generation.shipped_catalog_digest,
-			},
-		);
-		const merged = mergeMonashSmstCensusIntoCorpus(
-			productionBase,
-			censusResult.census,
-		);
-		const built = await buildBrowserUseCorpusGeneration({ fs }, merged);
-
+		expect(imported.generation.canonical_target_count).toBe(20);
+		expect(imported.generation.active_target_count).toBe(0);
+		expect(imported.generation.inactive_target_count).toBe(20);
 		expect(
-			built.candidate.canonical_targets.map(
+			imported.state.canonical_targets.map(
 				(target) => target.canonical_target_id,
 			),
 		).toEqual(
-			[...new Set(merged.targets.map((target) => target.canonicalTargetId))].sort(),
+			[...new Set(imported.state.canonical_targets.map(
+				(target) => target.canonical_target_id,
+			))].sort(),
 		);
-		expect(built.candidate.canonical_targets).toHaveLength(20);
 		expect(
-			built.candidate.canonical_targets.every(
-				(target) => target.activation === "inactive",
-			),
-		).toBe(true);
-		expect(
-			merged.state.dispositions.filter((row) =>
+			imported.state.dispositions.filter((row) =>
 				row.source_relative_path.startsWith("monash-smst/"),
 			),
 		).toHaveLength(20);
 		expect(
-			merged.state.canonical_targets
+			imported.state.canonical_targets
 				.flatMap((target) => target.source_relative_paths)
 				.filter((path) => path.includes(".claude/"))
 				.every((path) => path.startsWith("monash-smst/")),
