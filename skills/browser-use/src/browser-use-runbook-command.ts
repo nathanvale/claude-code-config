@@ -2044,6 +2044,7 @@ async function runRunbookRun(
 				continuationId: string;
 				claimedRevision: number;
 				claimantId: string;
+				checkpoint: string;
 		  }
 		| undefined;
 	if (
@@ -2130,6 +2131,7 @@ async function runRunbookRun(
 				claimed.continuation.continuation_id,
 			claimedRevision: claimed.run.revision,
 			claimantId: input.runId,
+			checkpoint: claimed.continuation.checkpoint,
 		};
 	}
 
@@ -2549,20 +2551,32 @@ async function runRunbookRun(
 		ports.run.platformFailureOf,
 	);
 	let authRun = run;
-	let authCheckpointCommitted = false;
+	let authCheckpointCommitted =
+		authRun.auth_fragment !== undefined &&
+		isBrowserUseAuthRunContinuation(authRun.continuation);
 	try {
 		const emitPersistedAuthFailure = async (
 			failure: BrowserUseRunbookCommandFailure,
 		): Promise<number> => {
-			if (authCheckpointCommitted) {
-				run = authRun;
-				return ports.output.emitPlatformFailure(failure);
-			}
-			const continuation =
+			let continuation: BrowserUseAuthRunContinuation | undefined;
+			if (
+				authCheckpointCommitted &&
+				isBrowserUseAuthRunContinuation(
+					authRun.continuation,
+				)
+			) {
+				const { claim: _claim, ...unclaimed } =
+					authRun.continuation;
+				continuation = {
+					...unclaimed,
+					state: "pending",
+				};
+			} else if (
 				resolvedAuthCandidate !== undefined &&
 				resolvedSessionPolicy !== undefined &&
 				generationRuntime !== undefined
-					? buildRunbookAuthContinuation({
+			) {
+				continuation = buildRunbookAuthContinuation({
 							run: authRun,
 							failure,
 							now: ports.clock(),
@@ -2573,8 +2587,8 @@ async function runRunbookRun(
 							targetBindingId:
 								targetResolution.binding
 									.target_candidate_id,
-						})
-					: undefined;
+						});
+			}
 			const persisted = await persistRunbookAuthBlock(
 				ports,
 				deps,
@@ -2649,6 +2663,8 @@ async function runRunbookRun(
 			const authResult = await orchestrateRunbookAuthentication({
 				policy,
 				resumeContinuation: false,
+				resumeCheckpoint:
+					preEffectClaim?.checkpoint,
 				ports: {
 					claimContinuation: async () => ({ status: "claimed" }),
 					inspectSession: async () => {
