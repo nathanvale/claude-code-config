@@ -482,7 +482,9 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
-	test("agent-browser activates the native tab before a bounded native snapshot", async () => {
+	// Regression seam for the 2026-07-31 operate pageId diagnosis: discovery
+	// must retain the adapter-owned tab ref through facade-level execution.
+	test("a discovered agent-browser t1 tab survives target resolution and executes", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
 			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
@@ -495,8 +497,18 @@ describe("U7 operation success and transport", () => {
 			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
+		const json = parseJson(result.stdout);
+		expect(
+			calls.some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("tab") && vector.includes("list");
+			}),
+		).toBe(true);
+		expect((json.error as { code?: string } | undefined)?.code).not.toBe(
+			"browser_operation_target_missing",
+		);
 		expect(result.exitCode).toBe(0);
-		expect(parseJson(result.stdout).data).toMatchObject({
+		expect(json.data).toMatchObject({
 			adapter: "agent-browser",
 			snapshot: { text: "Root\nButton" },
 		});
@@ -523,8 +535,7 @@ describe("U7 operation success and transport", () => {
 		]);
 		expect(calls[1].timeoutMs).toBe(30_000);
 		expect(calls[2].timeoutMs).toBe(30_000);
-		expect(result.stdout).not.toContain("t1");
-		expect(result.stderr).not.toContain("t1");
+		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 	});
 
@@ -546,7 +557,7 @@ describe("U7 operation success and transport", () => {
 		expect(result.stderr).not.toContain("bad tab");
 	});
 
-	test("agent-browser maps failure envelopes and timeouts without retry or ref disclosure", async () => {
+	test("agent-browser maps failure envelopes and timeouts without retry or ref disclosure (AE2)", async () => {
 		for (const operationResult of [
 			okCommand(JSON.stringify({ success: false, error: "tab t1 unavailable" })),
 			{ exitCode: 1, stdout: "", stderr: "", timedOut: true },
@@ -567,8 +578,7 @@ describe("U7 operation success and transport", () => {
 					: "browser_operation_transport_failed",
 			});
 			expect(calls).toHaveLength(2);
-			expect(result.stdout).not.toContain("t1");
-			expect(result.stderr).not.toContain("t1");
+			expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
 			expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 		}
 	});
