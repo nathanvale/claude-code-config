@@ -97,10 +97,10 @@
 - Legacy storage framework lives under `$HOME/code/claude-code-config/context/archive/legacy-memory-framework/`.
 - Repos own operational truth; context folders own durable recall and synthesis.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
-- Never force push, hard reset, `clean -f`, or `checkout/restore .`.
-- Never use `git add .` or `git add -A`.
+- Never force push, hard reset, `clean -f`, `checkout/restore .`, `git add .`, or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
 - Protected branches: no direct commits.
+- After entering any fresh worktree (ce-work unit, `worktree`/`ce-worktree`, harness-native, or manual), run `$HOME/code/claude-code-config/scripts/bootstrap-worktree.sh <path>` before any test/lint/build; a `node_modules`-less worktree resolves nothing, so its results are false.
 
 ## Communication
 
