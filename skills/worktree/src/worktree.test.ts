@@ -151,6 +151,7 @@ function runtimeWithRemoveFailure(): ReturnType<typeof fakeRuntime> {
 }
 
 function newIsolationFailureRuntime(): ReturnType<typeof fakeRuntime> {
+	const base = fakeRuntime();
 	return fakeRuntime({
 		run: async (args, options) => {
 			if (args.join(" ") === "git worktree add -b feat/z /code/my-repo/.worktrees/feat-z main") {
@@ -161,7 +162,7 @@ function newIsolationFailureRuntime(): ReturnType<typeof fakeRuntime> {
 					code: 1,
 				};
 			}
-			return fakeRuntime().run(args, options);
+			return base.run(args, options);
 		},
 	});
 }
@@ -276,6 +277,20 @@ describe("parseInvocation", () => {
 		expect(parsed.parseError?.ok).toBe(false);
 		if (parsed.parseError && !parsed.parseError.ok) {
 			expect(parsed.parseError.exitCode).toBe(2);
+		}
+	});
+
+	test("rejects non-integer and missing --pr values", () => {
+		for (const argv of [
+			["attach", "--pr", "abc", "--json"],
+			["attach", "--pr", "--json"],
+		]) {
+			const parsed = parseInvocation(argv);
+			expect(parsed.parseError?.ok).toBe(false);
+			if (parsed.parseError && !parsed.parseError.ok) {
+				expect(parsed.parseError.exitCode).toBe(2);
+				expect(parsed.parseError.message).toBe("--pr needs a positive integer.");
+			}
 		}
 	});
 });
@@ -960,6 +975,41 @@ describe("shared lifecycle verbs", () => {
 			"remove",
 			"/code/my-repo/.worktrees/browser-use-refactor",
 		]);
+	});
+
+	test("attach rejects conflicting or incomplete selectors", async () => {
+		const cases: Array<{
+			invocation: Parameters<typeof runCommand>[0];
+			message: string;
+		}> = [
+			{
+				invocation: { command: "attach", positionals: ["feat/x"], pr: 7, force: false },
+				message: "attach accepts either <ref> or --pr, not both.",
+			},
+			{
+				invocation: { command: "attach", positionals: [], track: true, force: false },
+				message: "attach --track needs --pr <n>.",
+			},
+			{
+				invocation: { command: "attach", positionals: [], force: false },
+				message: "attach needs <ref> or --pr <n>.",
+			},
+			{
+				invocation: { command: "attach", positionals: ["a", "b"], force: false },
+				message: "attach accepts one positional <ref>.",
+			},
+		];
+		for (const { invocation, message } of cases) {
+			const runtime = fakeRuntime();
+			const result = await runCommand(invocation, runtime);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.code).toBe("usage_error");
+				expect(result.exitCode).toBe(2);
+				expect(result.message).toBe(message);
+			}
+			expect(runtime.runCalls).toEqual([]);
+		}
 	});
 
 	test("lifecycle verbs require a branch", async () => {
