@@ -9,15 +9,31 @@ let package = Package(
             name: "browser-use-op-supervisor",
             targets: ["BrowserUseEnvironmentOpSupervisor"]
         ),
+        .executable(
+            name: "browser-use-field-delivery",
+            targets: ["BrowserUseFieldDelivery"]
+        ),
     ],
     targets: [
         .target(
             name: "BrowserUseEnvironmentAuth",
-            sources: ["EnvironmentOp.swift", "TokenCustody.swift"],
+            sources: [
+                "DeliveryOriginSafety.swift",
+                "EnvironmentOp.swift",
+                "TokenCustody.swift",
+            ],
             linkerSettings: [.linkedFramework("CryptoKit")]
         ),
         .executableTarget(
             name: "BrowserUseEnvironmentOpSupervisor",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .executableTarget(
+            name: "BrowserUseFieldDelivery",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .testTarget(
+            name: "BrowserUseEnvironmentAuthTests",
             dependencies: ["BrowserUseEnvironmentAuth"]
         ),
     ]

@@ -1448,6 +1448,10 @@ function compileStep(
 			target: { role: step.target.role, name: step.target.name },
 			value: "",
 			sensitivity: "confidential",
+			// The step's own binding slug rides the compiled step so the executor
+			// resolves its credential field at fill time via the delivery context's
+			// `field_by_binding_slug` (KTD5) — never a positional lookup.
+			item_binding: step.item_binding,
 			postcondition: step.postcondition,
 		};
 	}

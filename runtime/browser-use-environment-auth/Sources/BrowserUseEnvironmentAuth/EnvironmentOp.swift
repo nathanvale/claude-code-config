@@ -452,6 +452,9 @@ private func opMonotonicMilliseconds() -> Int64 {
     return Int64(value.tv_sec) * 1_000 + Int64(value.tv_nsec) / 1_000_000
 }
 
+// Darwin's _IOR('f', 127, int). Swift cannot import the structure-sized macro.
+private let environmentOpBytesAvailableRequest = UInt(0x4004667f)
+
 private func closeOpDescriptor(_ descriptor: Int32) {
     if descriptor >= 0 {
         _ = Darwin.close(descriptor)
@@ -462,10 +465,13 @@ private func childExit(_ code: Int32) -> Never {
     _exit(code)
 }
 
-private func closeUnrelatedChildDescriptors() {
+private func closeUnrelatedChildDescriptors(
+    preserving preservedDescriptor: Int32? = nil
+) {
     let observed = sysconf(_SC_OPEN_MAX)
     let maximum = observed > 0 ? min(observed, Int(Int32.max)) : 1_024
     for descriptor in 3..<Int32(maximum) {
+        if descriptor == preservedDescriptor { continue }
         _ = Darwin.close(descriptor)
     }
 }
@@ -1045,9 +1051,100 @@ public enum EnvironmentOpProcessRunner {
             return .blocked(.ioFailure)
         }
 
-        let delivery = consume(stdoutPipe[0], Int32(max(1, deadline - opMonotonicMilliseconds())))
-        closeOpDescriptor(stdoutPipe[0])
         var status: Int32 = 0
+        var outputReady = false
+        while !outputReady {
+            if opMonotonicMilliseconds() >= deadline {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                closeOpDescriptor(stdoutPipe[0])
+                return .blocked(.timeout)
+            }
+            var descriptor = pollfd(
+                fd: stdoutPipe[0],
+                events: Int16(POLLIN | POLLHUP),
+                revents: 0
+            )
+            let pollResult = poll(&descriptor, 1, 20)
+            if pollResult < 0, errno != EINTR {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                closeOpDescriptor(stdoutPipe[0])
+                return .blocked(.ioFailure)
+            }
+            if pollResult > 0, descriptor.revents & Int16(POLLIN) != 0 {
+                var availableBytes: Int32 = 0
+                guard ioctl(
+                    stdoutPipe[0],
+                    environmentOpBytesAvailableRequest,
+                    &availableBytes
+                ) == 0 else {
+                    terminateEnvironmentOpGroup(
+                        child: child,
+                        status: &status,
+                        reapChild: true
+                    )
+                    closeOpDescriptor(stdoutPipe[0])
+                    return .blocked(.ioFailure)
+                }
+                if availableBytes > 0 {
+                    outputReady = true
+                    break
+                }
+            }
+            let waited = waitpid(child, &status, WNOHANG)
+            if waited == child {
+                activeEnvironmentOpProcessGroup = 0
+                closeOpDescriptor(stdoutPipe[0])
+                let childSignal = status & 0x7f
+                guard childSignal == 0 else {
+                    return .blocked(.processSignalled)
+                }
+                let exitCode = (status >> 8) & 0xff
+                guard exitCode == 0 else {
+                    return .blocked(exitCode == 124 ? .tokenInvalid : .processFailed)
+                }
+                return .blocked(.outputShapeInvalid)
+            }
+            if waited < 0, errno != EINTR {
+                terminateEnvironmentOpGroup(
+                    child: child,
+                    status: &status,
+                    reapChild: true
+                )
+                closeOpDescriptor(stdoutPipe[0])
+                return .blocked(.ioFailure)
+            }
+        }
+
+        // The consumer forwards this descriptor to the disposable delivery
+        // child, which reads fd 3 to EOF with blocking reads and treats
+        // EAGAIN as pipe failure. O_NONBLOCK lives on the shared open file
+        // description (it survives dup2 and execve), so guarantee blocking
+        // semantics before the descriptor leaves the readiness poll.
+        let pipeFlags = fcntl(stdoutPipe[0], F_GETFL)
+        guard pipeFlags >= 0,
+              fcntl(stdoutPipe[0], F_SETFL, pipeFlags & ~O_NONBLOCK) == 0
+        else {
+            terminateEnvironmentOpGroup(
+                child: child,
+                status: &status,
+                reapChild: true
+            )
+            closeOpDescriptor(stdoutPipe[0])
+            return .blocked(.ioFailure)
+        }
+        let delivery = consume(
+            stdoutPipe[0],
+            Int32(max(1, deadline - opMonotonicMilliseconds()))
+        )
+        closeOpDescriptor(stdoutPipe[0])
         while true {
             let waited = waitpid(child, &status, WNOHANG)
             if waited == child {
@@ -1079,6 +1176,214 @@ public enum EnvironmentOpProcessRunner {
                 return .blocked(.timeout)
             }
             usleep(1_000)
+        }
+    }
+}
+
+private func deliveryFailureEnvelope(
+    _ reason: String,
+    fieldCleared: Bool = false
+) -> Data {
+    let object: [String: Any] = [
+        "ok": false,
+        "reason": reason,
+        "field_cleared": fieldCleared,
+    ]
+    return (try? JSONSerialization.data(
+        withJSONObject: object,
+        options: [.sortedKeys]
+    )) ?? Data(
+        "{\"field_cleared\":false,\"ok\":false,\"reason\":\"delivery-child-failed\"}".utf8
+    )
+}
+
+private func validDeliveryExecutable(_ path: String) -> Bool {
+    guard path.hasPrefix("/"), !path.contains("\0") else { return false }
+    var metadata = stat()
+    return lstat(path, &metadata) == 0
+        && metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG)
+        && (metadata.st_uid == 0 || metadata.st_uid == geteuid())
+        && metadata.st_nlink == 1
+        && metadata.st_mode & mode_t(0o022) == 0
+        && access(path, X_OK) == 0
+}
+
+private func deliveryChild(
+    executablePath: String,
+    arguments: [String],
+    secretReadDescriptor: Int32,
+    stdoutRead: Int32,
+    stdoutWrite: Int32,
+    inheritedSignalMask: sigset_t
+) -> Never {
+    var childSignalMask = inheritedSignalMask
+    guard pthread_sigmask(SIG_SETMASK, &childSignalMask, nil) == 0 else {
+        childExit(125)
+    }
+    let processGroup = activeEnvironmentOpProcessGroup
+    if processGroup > 0 {
+        guard setpgid(0, processGroup) == 0 else {
+            childExit(125)
+        }
+    }
+    closeOpDescriptor(stdoutRead)
+    let nullInput = Darwin.open("/dev/null", O_RDONLY | O_CLOEXEC)
+    let nullError = Darwin.open("/dev/null", O_WRONLY | O_CLOEXEC)
+    guard nullInput >= 0,
+          nullError >= 0,
+          dup2(nullInput, STDIN_FILENO) >= 0,
+          dup2(stdoutWrite, STDOUT_FILENO) >= 0,
+          dup2(nullError, STDERR_FILENO) >= 0,
+          dup2(secretReadDescriptor, 3) >= 0
+    else {
+        childExit(125)
+    }
+    closeOpDescriptor(nullInput)
+    closeOpDescriptor(nullError)
+    closeOpDescriptor(stdoutWrite)
+    if secretReadDescriptor != 3 {
+        closeOpDescriptor(secretReadDescriptor)
+    }
+    var zeroLimit = rlimit(rlim_cur: 0, rlim_max: 0)
+    guard setrlimit(RLIMIT_CORE, &zeroLimit) == 0 else {
+        childExit(125)
+    }
+    closeUnrelatedChildDescriptors(preserving: 3)
+    execExact(
+        executablePath: executablePath,
+        arguments: arguments,
+        environment: [
+            "PATH=/usr/bin:/bin",
+            "LANG=C.UTF-8",
+        ]
+    )
+}
+
+/// Fork one disposable delivery executable.
+///
+/// The secret descriptor is inherited only as fd 3. The parent reads only the
+/// bounded outcome emitted by the child, never the private pipe.
+@_spi(Executor)
+public enum EnvironmentOpDeliveryRunner {
+    public static func run(
+        executablePath: String,
+        arguments: [String],
+        secretReadDescriptor: Int32,
+        timeoutMilliseconds: Int32
+    ) -> Data {
+        guard validDeliveryExecutable(executablePath),
+              timeoutMilliseconds > 0,
+              arguments.allSatisfy({
+                  !$0.contains("\0") && $0.utf8.count <= 4_096
+              })
+        else {
+            return deliveryFailureEnvelope("delivery-child-unavailable")
+        }
+        var stdoutPipe: [Int32] = [-1, -1]
+        guard pipe(&stdoutPipe) == 0 else {
+            return deliveryFailureEnvelope("delivery-child-io-failed")
+        }
+        var handledSignals = sigset_t()
+        sigemptyset(&handledSignals)
+        sigaddset(&handledSignals, SIGTERM)
+        sigaddset(&handledSignals, SIGINT)
+        sigaddset(&handledSignals, SIGHUP)
+        var inheritedSignalMask = sigset_t()
+        guard pthread_sigmask(
+            SIG_BLOCK,
+            &handledSignals,
+            &inheritedSignalMask
+        ) == 0 else {
+            stdoutPipe.forEach(closeOpDescriptor)
+            return deliveryFailureEnvelope("delivery-child-io-failed")
+        }
+        let child = opFork()
+        guard child >= 0 else {
+            _ = pthread_sigmask(SIG_SETMASK, &inheritedSignalMask, nil)
+            stdoutPipe.forEach(closeOpDescriptor)
+            return deliveryFailureEnvelope("delivery-child-spawn-failed")
+        }
+        if child == 0 {
+            deliveryChild(
+                executablePath: executablePath,
+                arguments: arguments,
+                secretReadDescriptor: secretReadDescriptor,
+                stdoutRead: stdoutPipe[0],
+                stdoutWrite: stdoutPipe[1],
+                inheritedSignalMask: inheritedSignalMask
+            )
+        }
+        let processGroup = activeEnvironmentOpProcessGroup
+        if processGroup > 0 {
+            _ = setpgid(child, processGroup)
+        }
+        _ = pthread_sigmask(SIG_SETMASK, &inheritedSignalMask, nil)
+        closeOpDescriptor(stdoutPipe[1])
+        guard setNonBlocking(stdoutPipe[0]) else {
+            _ = kill(child, SIGKILL)
+            var failedStatus: Int32 = 0
+            while waitpid(child, &failedStatus, 0) < 0, errno == EINTR {}
+            closeOpDescriptor(stdoutPipe[0])
+            return deliveryFailureEnvelope("delivery-child-io-failed")
+        }
+        defer { closeOpDescriptor(stdoutPipe[0]) }
+
+        let deadline = opMonotonicMilliseconds() + Int64(timeoutMilliseconds)
+        var output: [UInt8]? = []
+        var outputCount = 0
+        var status: Int32 = 0
+        while true {
+            if let cause = drainDescriptor(
+                stdoutPipe[0],
+                bytes: &output,
+                count: &outputCount,
+                maximum: 8_192
+            ) {
+                _ = kill(child, SIGKILL)
+                while waitpid(child, &status, 0) < 0, errno == EINTR {}
+                return deliveryFailureEnvelope(
+                    cause == .outputTooLarge
+                        ? "delivery-child-output-too-large"
+                        : "delivery-child-io-failed"
+                )
+            }
+            let waited = waitpid(child, &status, WNOHANG)
+            if waited == child {
+                _ = drainDescriptor(
+                    stdoutPipe[0],
+                    bytes: &output,
+                    count: &outputCount,
+                    maximum: 8_192
+                )
+                let childSignal = status & 0x7f
+                guard childSignal == 0 else {
+                    return deliveryFailureEnvelope("delivery-child-signalled")
+                }
+                let data = Data(output ?? [])
+                guard let object = try? JSONSerialization.jsonObject(with: data)
+                        as? [String: Any],
+                      object["ok"] is Bool
+                else {
+                    return deliveryFailureEnvelope("delivery-child-output-invalid")
+                }
+                return data
+            }
+            if waited < 0, errno != EINTR {
+                _ = kill(child, SIGKILL)
+                while waitpid(child, &status, 0) < 0, errno == EINTR {}
+                return deliveryFailureEnvelope("delivery-child-wait-failed")
+            }
+            if opMonotonicMilliseconds() >= deadline {
+                _ = kill(child, SIGKILL)
+                while waitpid(child, &status, 0) < 0, errno == EINTR {}
+                return deliveryFailureEnvelope("delivery-child-timeout")
+            }
+            var descriptor = pollfd(
+                fd: stdoutPipe[0],
+                events: Int16(POLLIN),
+                revents: 0
+            )
+            _ = poll(&descriptor, 1, 20)
         }
     }
 }
@@ -1680,6 +1985,36 @@ public enum EnvironmentOpSupervisor {
             vaultID: vaultID,
             itemID: itemID,
             field: field,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: timeoutMilliseconds,
+            consume: consume
+        )
+    }
+
+    /// Debug process-boundary seam for a fixture OP executable.
+    ///
+    /// Production and native tests use the identity-bound snapshot path. This
+    /// seam exists only because managed Bun test sandboxes reject the native
+    /// token snapshot's temporary-file copy before either disposable child.
+    @_spi(Testing)
+    public static func executeUnsnappedPrivateFieldForTesting(
+        executablePath: String,
+        vaultID: String,
+        itemID: String,
+        field: EnvironmentOpPrivateField,
+        tokenDescriptor: Int32,
+        timeoutMilliseconds: Int32 = 10_000,
+        consume: (Int32, Int32) -> Data
+    ) -> EnvironmentOpPrivatePipeResult {
+        guard boundedString(vaultID) == vaultID,
+              boundedString(itemID) == itemID,
+              case .admitted = admitExecutable(executablePath: executablePath)
+        else {
+            return .blocked(.executableUnavailable)
+        }
+        return EnvironmentOpProcessRunner.runPrivatePipe(
+            executablePath: executablePath,
+            arguments: field.arguments(vaultID: vaultID, itemID: itemID),
             tokenDescriptor: tokenDescriptor,
             timeoutMilliseconds: timeoutMilliseconds,
             consume: consume

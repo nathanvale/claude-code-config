@@ -45,10 +45,10 @@
         `<td><select ng-model="rxg.attendanceTypeId"><option>Standard</option><option>Overtime</option><option>Leave</option></select></td>`;
       grid.appendChild(tr);
       const [s,e]=tr.querySelectorAll('input'); const sel=tr.querySelector('select');
-      const commit=(kind,el)=>()=>{ (model[dateStr] ??= {})[kind]=el.value; dump(); };
+      const commit=(kind,el)=>()=>{ model[dateStr] ??= {}; model[dateStr][kind]=el.value; dump(); };
       s.addEventListener('input',commit('start',s)); s.addEventListener('change',commit('start',s));
       e.addEventListener('input',commit('end',e)); e.addEventListener('change',commit('end',e));
-      sel.addEventListener('change',()=>{ (model[dateStr] ??= {}).attendance=sel.value; dump(); });
+      sel.addEventListener('change',()=>{ model[dateStr] ??= {}; model[dateStr].attendance=sel.value; dump(); });
     });
     function dump(n){document.getElementById('dump').textContent=(n?'>> '+n+'\n':'')+JSON.stringify({week:weekStr,bad,rowCount,model},null,2);}
     window.__ts = () => ({ week:weekStr, bad, rowCount, model, title:document.title });

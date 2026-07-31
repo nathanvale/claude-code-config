@@ -215,17 +215,12 @@ describe("front door: error identity (D6)", () => {
 		expect(envelope.error.message).toContain("task");
 	});
 
-	test("invalid leaf --help never masquerades as family help", async () => {
-		// `auth status` does not exist; silent family help here previously read
-		// as a successful help render (handoff defect list).
+	test("auth status leaf help is derived from its command contract", async () => {
 		const result = await runForTest(["auth", "status", "--help"], makeRuntime());
-		expect(result.exitCode).toBe(2);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Usage: browser-use auth status");
+		expect(result.stdout).toContain("--json");
 		expect(result.stdout).not.toContain("Subcommands:");
-		const envelope = parseJson(result.stdout) as {
-			status: string;
-			error: { message: string };
-		};
-		expect(envelope.error.message).toContain("status");
 	});
 });
 

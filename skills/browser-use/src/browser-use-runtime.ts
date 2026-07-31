@@ -66,6 +66,17 @@ export type BrowserUseSecuritySeam = {
 	};
 };
 
+export type AuthTokenSupervisorInput =
+	| { mode: "install"; input: "prompt" | "stdin"; replace: boolean }
+	| { mode: "remove" }
+	| { mode: "status" };
+
+export type AuthTokenSupervisorResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+};
+
 /**
  * The production security seam: native capability is absent until the signed
  * product exists (ADR 0028). `admission` always reports
@@ -111,14 +122,27 @@ async function resolveAuthTokenRetrieval(
 function environmentTokenRetrievalOf(
 	runtime: BrowserUseRuntime,
 ): BrowserUseTokenRetrievalPort | undefined {
-	const paths = resolveBrowserUsePaths(runtime.env);
+	const deps = environmentTokenSupervisorDeps(runtime.env);
+	if (deps === undefined || deps.opPath === undefined) return undefined;
+	return createEnvironmentTokenRetrievalPort({
+		supervisorPath: deps.supervisorPath,
+		opPath: deps.opPath,
+		configRoot: deps.configRoot,
+	});
+}
+
+type EnvironmentTokenSupervisorDeps = {
+	supervisorPath: string;
+	opPath?: string;
+	configRoot: string;
+	profilePath: string;
+};
+
+function environmentTokenSupervisorDeps(
+	env: Record<string, string | undefined>,
+): EnvironmentTokenSupervisorDeps | undefined {
+	const paths = resolveBrowserUsePaths(env);
 	if (!paths.ok) return undefined;
-	let configRoot: string;
-	try {
-		configRoot = realpathSync(paths.resolution.roots.config);
-	} catch {
-		return undefined;
-	}
 	const nativeBinRoot = import.meta.dir.endsWith("/dist")
 		? join(import.meta.dir, "bin")
 		: join(
@@ -131,21 +155,122 @@ function environmentTokenRetrievalOf(
 				".build",
 				"release",
 			);
-	const supervisorPath = join(
-		nativeBinRoot,
-		"browser-use-op-supervisor",
-	);
+	const supervisorPath = join(nativeBinRoot, "browser-use-op-supervisor");
+	if (!existsSync(supervisorPath)) return undefined;
 	const opPaths =
 		process.arch === "arm64"
 			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
 			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
-	const opPath = opPaths.find((path) => existsSync(path));
-	if (!existsSync(supervisorPath) || opPath === undefined) return undefined;
-	return createEnvironmentTokenRetrievalPort({
+	const home = env.HOME;
+	const profileInput = env.WARM_CHROME_PROFILE_DIR;
+	const profilePath =
+		profileInput?.startsWith("/") === true
+			? profileInput
+			: profileInput?.startsWith("~/") === true && home !== undefined
+				? join(home, profileInput.slice(2))
+				: home !== undefined
+					? join(home, ".agent-warm-profile")
+					: "";
+	return {
 		supervisorPath,
-		opPath,
-		configRoot,
+		opPath: opPaths.find((path) => existsSync(path)),
+		configRoot: paths.resolution.roots.config,
+		profilePath,
+	};
+}
+
+// Deadline for the non-interactive supervisor modes (`remove`, `status`): a
+// hung supervisor must not block the CLI forever. `install` stays unbounded
+// because it inherits stdin for the interactive token prompt.
+const NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS = 30_000;
+
+function authSupervisorUnavailable(code: string): AuthTokenSupervisorResult {
+	return {
+		exitCode: 20,
+		stdout: JSON.stringify({
+			schema_version: 1,
+			ok: false,
+			state: "blocked",
+			cause: code,
+			next_action: "repair-op-admission",
+		}),
+		stderr: "",
+	};
+}
+
+async function runAuthTokenSupervisor(
+	env: Record<string, string | undefined>,
+	input: AuthTokenSupervisorInput,
+): Promise<AuthTokenSupervisorResult> {
+	const deps = environmentTokenSupervisorDeps(env);
+	if (deps === undefined) {
+		return authSupervisorUnavailable("token-supervisor-unavailable");
+	}
+	if (input.mode !== "remove" && deps.opPath === undefined) {
+		return authSupervisorUnavailable("op-path-unavailable");
+	}
+	if (input.mode === "install") {
+		await mkdir(deps.configRoot, { recursive: true, mode: 0o700 });
+	}
+	let configRoot: string;
+	try {
+		configRoot = realpathSync(deps.configRoot);
+	} catch {
+		return authSupervisorUnavailable("unsafe-config-root");
+	}
+	const args = [input.mode, "--config-root", configRoot];
+	if (input.mode === "install") {
+		args.push(
+			"--op-path",
+			deps.opPath ?? "",
+			"--input",
+			input.input,
+			"--replace",
+			String(input.replace),
+		);
+	} else if (input.mode === "status") {
+		args.push(
+			"--op-path",
+			deps.opPath ?? "",
+			"--profile-path",
+			deps.profilePath,
+		);
+	}
+	const child = Bun.spawn([deps.supervisorPath, ...args], {
+		env: {
+			PATH: "/usr/bin:/bin",
+			LANG: "C.UTF-8",
+			TMPDIR: configRoot,
+		},
+		stdin: input.mode === "install" ? "inherit" : "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		// Bound the non-interactive modes so `await child.exited` below has a
+		// deadline; Bun kills a timed-out child with SIGTERM (the default
+		// killSignal), which surfaces as a non-null signalCode.
+		...(input.mode === "install"
+			? {}
+			: { timeout: NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS }),
 	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	if (input.mode !== "install" && child.signalCode != null) {
+		// The deadline (or an external signal) killed the supervisor before it
+		// completed; a signalled child never produced a trustworthy envelope, so
+		// report the typed unavailable state instead of the partial result.
+		return authSupervisorUnavailable("token-supervisor-unavailable");
+	}
+	const maximumOutputBytes = 1_048_576;
+	if (
+		Buffer.byteLength(stdout, "utf8") > maximumOutputBytes ||
+		Buffer.byteLength(stderr, "utf8") > maximumOutputBytes
+	) {
+		return authSupervisorUnavailable("token-supervisor-output-too-large");
+	}
+	return { exitCode, stdout, stderr };
 }
 
 export type BrowserUseRuntime = {
@@ -186,6 +311,13 @@ export type BrowserUseRuntime = {
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 	/**
+	 * Native token lifecycle boundary. The default child inherits stdin
+	 * directly for install, so token bytes never enter the TypeScript process.
+	 */
+	runAuthTokenSupervisor?: (
+		input: AuthTokenSupervisorInput,
+	) => Promise<AuthTokenSupervisorResult>;
+	/**
 	 * Internal Verified Handoff Envelope mint (design brief D4): prove the
 	 * connection and mint the envelope in-process through browser-connect's
 	 * exported `main` — the everyday `task run --intent` path needs no caller-
@@ -215,6 +347,8 @@ export function createDefaultBrowserUseRuntime(
 		},
 		readStdin: () => readAllStdin(),
 		platformFs: createDefaultPlatformFs(),
+		runAuthTokenSupervisor: (input) =>
+			runAuthTokenSupervisor(overrides.env ?? process.env, input),
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,
 	};

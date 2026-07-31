@@ -12,15 +12,15 @@
 
   <div class="screen active" data-step="username">
     <label>Username <input id="u" type="text" aria-label="Username" ng-model="login.username"></label>
-    <button id="nextU" onclick="advance('username')">Next</button>
+    <button type="button" id="nextU" onclick="advance('username')">Next</button>
   </div>
   <div class="screen" data-step="password">
     <label>Password <input id="p" type="password" aria-label="Password" ng-model="login.password"></label>
-    <button id="nextP" onclick="advance('password')">Continue</button>
+    <button type="button" id="nextP" onclick="advance('password')">Continue</button>
   </div>
   <div class="screen" data-step="otp">
     <label>One-time code <input id="o" type="text" aria-label="One-time code" ng-model="login.otp"></label>
-    <button id="nextO" onclick="advance('otp')">Verify</button>
+    <button type="button" id="nextO" onclick="advance('otp')">Verify</button>
   </div>
   <div class="screen" data-step="done"><h3 id="welcome">Welcome — signed in</h3></div>
 
@@ -31,7 +31,7 @@
     wire('u','username');wire('p','password');wire('o','otp');
     const order=['username','password','otp','done'];
     function current(){return document.querySelector('.screen.active').dataset.step;}
-    function show(step){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.dataset.step===step));
+    function show(step){document.querySelectorAll('.screen').forEach(s=>{ s.classList.toggle('active',s.dataset.step===step); });
       document.getElementById('heading').textContent={username:'Sign in',password:'Enter password',otp:'Two-factor',done:'Done'}[step];dump();}
     function advance(from){
       // gate: the field for THIS step must be committed via events (not raw .value)

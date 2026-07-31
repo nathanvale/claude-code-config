@@ -6,6 +6,8 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -940,6 +942,11 @@ describe("runbook discovery over the XDG data root", () => {
 					health: "healthy",
 				}),
 				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "login",
+					health: "healthy",
+				}),
+				expect.objectContaining({
 					service_id: "matest",
 					flow_id: "development-snapshot-verify",
 					health: "healthy",
@@ -1092,7 +1099,7 @@ describe("runbook discovery over the XDG data root", () => {
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the three daily-driver runbooks", async () => {
+	test("ships exactly the four daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1100,6 +1107,7 @@ describe("shipped runbooks root resolution", () => {
 				rows.map((row) => `${row.service_id}/${row.flow_id}`).sort(),
 			).toEqual([
 				"fasttrack/fill-week",
+				"fasttrack/login",
 				"matest/development-snapshot-verify",
 				"oncore/timesheet-snapshot-verify",
 			]);
@@ -1674,7 +1682,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					proven: true,
 					observed_digest: "d".repeat(32),
 				}),
-				field_by_ref: {},
+				field_by_binding_slug: {},
 			};
 			const seamCalls: Array<readonly string[]> = [];
 			// tab list + select, then the interactive snapshot yields the @e1 ref
@@ -1900,7 +1908,7 @@ function confidentialSeam(
 			tokenRetrieval: confidentialFakePort,
 			deliver: hook,
 			reproveTarget: confidentialReproveOk,
-			field_by_ref: { "@e1": "password" },
+			field_by_binding_slug: { oncore_password: "password" },
 		};
 		return { ok: true, context };
 	};
@@ -1908,6 +1916,100 @@ function confidentialSeam(
 }
 
 describe("(C) runbook-run confidential path — wired delivery seam", () => {
+	test(
+		"a multi-slug plan reaches the seam with every pending slug and its per-step field mapping; a blocked seam maps to the typed delivery-unavailable refusal",
+		withDataRoot(async (dataRoot) => {
+			// U6: multiple binding SLUGS are legal at the engine (a login flow's
+			// username + password slugs resolve to one login item). R10's
+			// single-binding v1 gate lives in the auth-delivery seam, which refuses
+			// typed when the slugs resolve to more than one DISTINCT Item Binding.
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "multiple-bindings",
+					steps: [
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "Password" },
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "One-time code" },
+							sensitivity: "confidential",
+							item_binding: "oncore_otp_current",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			const seamInputs: Array<{
+				slugs: readonly string[];
+				fields: readonly { bindingSlug: string; credentialField: string }[];
+			}> = [];
+			const runtime = runtimeFor([]);
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						seamInputs.push({
+							slugs: seamInput.pendingItemBindings,
+							fields: seamInput.confidentialFields.map((field) => ({
+								bindingSlug: field.bindingSlug,
+								credentialField: field.credentialField,
+							})),
+						});
+						return {
+							ok: false,
+							message:
+								"binding resolution blocked (single-binding-v1); pending slugs resolved to more than one distinct Item Binding.",
+						};
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "multiple-bindings",
+					handoff: HANDOFF,
+					runId: "run-multiple-bindings",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			// The seam saw BOTH slugs and the per-step slug -> field pairing (KTD5).
+			expect(seamInputs).toEqual([
+				{
+					slugs: ["oncore_password", "oncore_otp_current"],
+					fields: [
+						{ bindingSlug: "oncore_password", credentialField: "password" },
+						{
+							bindingSlug: "oncore_otp_current",
+							credentialField: "otp-current",
+						},
+					],
+				},
+			]);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			expect(outcome.refusal.message).toContain("single-binding-v1");
+			// The seam's refusal fired BEFORE any browser effect.
+			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
 	test(
 		"Seam A: an in-interval seam routes a confidential field through deliverConfidentialFields instead of refusing",
 		withDataRoot(async (dataRoot) => {
@@ -1968,6 +2070,70 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 	);
 
 	test(
+		"a throwing auth-delivery release never replaces the confirmed execution result",
+		withDataRoot(async (dataRoot) => {
+			// The release runs in the engine's `finally`; if its rejection escaped it
+			// would REPLACE the returned result — losing executed-steps and
+			// mutation-dispatched truth for a run that already dispatched browser
+			// effects. Release failure is contained: the lease self-expires by TTL.
+			const RUN = "run-c-release-throws";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const PASS = deriveConformanceSentinel("password", "runcrelthr1");
+			expect(PASS.ok).toBe(true);
+			if (!PASS.ok) return;
+			const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+				username: PASS.value,
+				password: PASS.value,
+				"otp-current": PASS.value,
+			};
+			const { hook } = confidentialLeakHelper(sentinelValue);
+			const { seam } = confidentialSeam(RUN, hook, true);
+			let releaseCalls = 0;
+			const runtime = confidentialRuntime();
+
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						const built = await seam(seamInput);
+						if (!built.ok) return built;
+						return {
+							...built,
+							release: async () => {
+								releaseCalls += 1;
+								throw new Error("lease release transport closed unexpectedly");
+							},
+						};
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+
+			// The release was reached AND rejected, yet the confirmed execution
+			// result survives verbatim — not the release's rejection.
+			expect(releaseCalls).toBe(1);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			if (!outcome.result.ok) return;
+			expect(outcome.result.executed_steps).toBe(2);
+			expect(outcome.result.delivery?.method_step_events).toEqual([
+				"fill-password",
+			]);
+		}),
+	);
+
+	test(
 		"Seam B: compact/pretty serialization of the seam-built context carries no delivered value (port-boundary parity)",
 		withDataRoot(async (dataRoot) => {
 			const RUN = "run-c-seam-b";
@@ -1991,7 +2157,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 					tokenRetrieval: confidentialFakePort,
 					deliver: hook,
 					reproveTarget: confidentialReproveOk,
-					field_by_ref: { "@e1": "password" },
+					field_by_binding_slug: { oncore_password: "password" },
 				};
 				expect(seamInput.pendingItemBindings).toEqual(["oncore_password"]);
 				captured = context;
@@ -2019,7 +2185,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 				in_sensitive_interval: captured.in_sensitive_interval,
 				binding: captured.binding,
 				target: captured.target,
-				field_by_ref: captured.field_by_ref,
+				field_by_binding_slug: captured.field_by_binding_slug,
 			};
 			const compact = JSON.stringify(dataOnly);
 			const pretty = JSON.stringify(dataOnly, null, 2);
@@ -2027,7 +2193,9 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			expect(compact).not.toContain(sentinelValue.password);
 			expect(pretty).not.toContain(sentinelValue.password);
 			// The field mapping names the field kind only, no value.
-			expect(captured.field_by_ref).toEqual({ "@e1": "password" });
+			expect(captured.field_by_binding_slug).toEqual({
+				oncore_password: "password",
+			});
 		}),
 	);
 
@@ -3883,6 +4051,245 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 				mutation_dispatched: true,
 			});
 			expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+		}),
+	);
+});
+
+// --- (U6) FastTrack login runbook — shipped catalog + hermetic end-to-end ----
+//
+// The shipped `fasttrack/login` flow exercises the WHOLE confidential-delivery
+// path hermetically through the real engine with fixture transports (R11): the
+// runbook file carries only binding slugs + allowed origins (KTD4), the seam is
+// consulted with the plan's pending slugs, the sensitive interval spans exactly
+// two bounded writes (username then password), the sign-in postcondition is a
+// fresh structural observation, and the on-disk run record sweeps clean for the
+// derived conformance sentinels. See fixtures/fasttrack-login-runbook-fixture.ts.
+
+const LOGIN_FIXTURE = join(
+	import.meta.dir,
+	"fixtures",
+	"fasttrack-login-runbook-fixture.ts",
+);
+const LOGIN_NONCE = "u6ftlogin01";
+
+async function waitForLoginJournal(path: string, event: string): Promise<void> {
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf8")) as string[];
+			if (parsed.includes(event)) return;
+		} catch {
+			// journal not written yet
+		}
+		await Bun.sleep(25);
+	}
+	throw new Error(`login fixture journal never reached event: ${event}`);
+}
+
+function loginFilesUnder(root: string): string[] {
+	if (!existsSync(root)) return [];
+	return readdirSync(root, { recursive: true, encoding: "utf8" })
+		.map((entry) => join(root, entry))
+		.filter((path) => statSync(path).isFile());
+}
+
+describe("(U6) FastTrack login runbook", () => {
+	test("ships fasttrack/login and lists it healthy with confidential auth", async () => {
+		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
+		try {
+			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
+			const login = rows.find(
+				(row) => row.service_id === "fasttrack" && row.flow_id === "login",
+			);
+			expect(login).toBeDefined();
+			if (login === undefined) return;
+			expect(login.health).toBe("healthy");
+			expect(login.requires_auth).toBe(true);
+			expect(login.effect_class).toBe("mutation");
+		} finally {
+			rmSync(dataRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("the shipped login runbook carries no secret, endpoint, or vault UUID (R11)", () => {
+		const raw = readFileSync(
+			join(shippedRunbooksRoot(), "fasttrack", "login", "runbook.json"),
+			"utf8",
+		);
+		// No op secret references, no vault/item UUIDs, no ws/cdp endpoints.
+		expect(raw).not.toMatch(/op:\/\//i);
+		expect(raw).not.toMatch(
+			/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+		);
+		expect(raw).not.toMatch(/ws:\/\/|127\.0\.0\.1|devtools/i);
+		const parsed = JSON.parse(raw) as BrowserUseRunbook;
+		expect(validateRunbook(parsed)).toEqual([]);
+		expect(parsed.allowed_origins).toEqual([
+			"https://manpowergroup.fasttrack360.com.au",
+		]);
+		const bindings = parsed.steps.flatMap((step) =>
+			step.kind === "fill" && step.sensitivity === "confidential"
+				? [step.item_binding]
+				: [],
+		);
+		expect(bindings).toEqual(["fasttrack_username", "fasttrack_password"]);
+	});
+
+	test(
+		"hermetic end-to-end: the real engine drives binding mint, sensitive interval, two bounded writes, postcondition, and a clean run-record sweep",
+		async () => {
+			// realpath the temp base: macOS tmpdirs sit behind /var -> /private/var
+			// and the XDG root guard refuses a symlinked ancestor.
+			const root = realpathSync(
+				mkdtempSync(join(tmpdir(), "browser-use-ft-login-")),
+			);
+			const dataRoot = join(root, "data");
+			const stateRoot = join(root, "state");
+			const journalPath = join(root, "journal.json");
+
+			const usernameSentinel = deriveConformanceSentinel(
+				"username",
+				LOGIN_NONCE,
+			);
+			const passwordSentinel = deriveConformanceSentinel(
+				"password",
+				LOGIN_NONCE,
+			);
+			expect(usernameSentinel.ok).toBe(true);
+			expect(passwordSentinel.ok).toBe(true);
+			if (!usernameSentinel.ok || !passwordSentinel.ok) return;
+
+			try {
+				const child = Bun.spawn(
+					[
+						process.execPath,
+						LOGIN_FIXTURE,
+						dataRoot,
+						stateRoot,
+						journalPath,
+						LOGIN_NONCE,
+					],
+					{ cwd: root, stdout: "pipe", stderr: "pipe" },
+				);
+				await waitForLoginJournal(journalPath, "cleanup:released");
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+
+				// The real run confirmed and released.
+				expect(stderr).toBe("");
+				expect(exitCode).toBe(0);
+				expect(stdout).toContain("fasttrack-login-delivery-complete");
+
+				// The journal proves the phase ORDER: quarantine raised BEFORE any
+				// secret acquisition; the seam consulted with BOTH pending slugs;
+				// username delivered before password; postcondition confirmed; release.
+				const journal = JSON.parse(
+					readFileSync(journalPath, "utf8"),
+				) as string[];
+				expect(journal[0]).toBe("quarantine:raised");
+				expect(journal).toContain(
+					"lease:acquired:fasttrack_username,fasttrack_password",
+				);
+				expect(journal.indexOf("quarantine:raised")).toBeLessThan(
+					journal.indexOf("op-execute:secret-acquired:username"),
+				);
+				expect(
+					journal.indexOf("delivery:bounded-write:username"),
+				).toBeLessThan(journal.indexOf("delivery:bounded-write:password"));
+				// Exactly TWO bounded writes — one per credential field.
+				expect(
+					journal.filter((event) =>
+						event.startsWith("delivery:bounded-write:"),
+					),
+				).toEqual([
+					"delivery:bounded-write:username",
+					"delivery:bounded-write:password",
+				]);
+				expect(journal).toContain("postcondition:confirmed");
+				expect(journal[journal.length - 1]).toBe("cleanup:released");
+
+				// Zero-sentinel sweep over every real governed surface the process
+				// produced: run-store bytes (and every state file), stdout, stderr.
+				const stateFiles = loginFilesUnder(stateRoot);
+				expect(
+					stateFiles.filter((file) => file.endsWith("run.json")).length,
+				).toBeGreaterThan(0);
+				const surfaces = [
+					stdout,
+					stderr,
+					...stateFiles.map((file) => readFileSync(file, "utf8")),
+				];
+				for (const surface of surfaces) {
+					expect(surface).not.toContain(usernameSentinel.value);
+					expect(surface).not.toContain(passwordSentinel.value);
+				}
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+		20_000,
+	);
+
+	test(
+		"a confidential step with an unknown binding slug refuses typed before the seam or any browser effect",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "login-unknown-slug",
+					steps: [
+						{ kind: "snapshot", interactive: true },
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "Security PIN" },
+							sensitivity: "confidential",
+							// No supported credential-field suffix: not _username,
+							// _password, _otp, or _otp_current.
+							item_binding: "fasttrack_pin",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			let seamCalls = 0;
+			const runtime = runtimeFor([]);
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async () => {
+						seamCalls += 1;
+						return { ok: false, message: "must not resolve" };
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "login-unknown-slug",
+					handoff: HANDOFF,
+					runId: "run-unknown-slug",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			expect(outcome.refusal.message).toContain(
+				"supported credential field",
+			);
+			// The refusal fired BEFORE the seam and before any browser effect.
+			expect(seamCalls).toBe(0);
+			expect(runtime.calls).toHaveLength(0);
 		}),
 	);
 });

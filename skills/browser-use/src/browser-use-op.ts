@@ -640,6 +640,13 @@ export type BrowserUseTokenRetrievalPort = {
 	fetchCredentialField(input: {
 		binding: BrowserUseItemBinding;
 		field: BrowserUseOpCredentialField;
+		/**
+		 * Environment-lane reservation binding. Generic injected executors may
+		 * omit it; the environment lane refuses minting without it.
+		 */
+		target_digest?: string;
+		/** Freshly observed normalized origin used by env-lane prevalidation. */
+		observed_origin?: string;
 	}): Promise<
 		| { ok: true; handle: BrowserUseSecretHandle }
 		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }

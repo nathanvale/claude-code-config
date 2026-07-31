@@ -64,7 +64,7 @@
       o[parts[parts.length-1]] = value;
       dump();
     }
-    ['username','password','otp'].forEach(id => bindNg(document.getElementById(id), 'login.'+id));
+    ['username','password','otp'].forEach(id => { bindNg(document.getElementById(id), 'login.'+id); });
 
     function signIn(){
       // A real login: the model must carry the values (proves insert committed
@@ -105,7 +105,7 @@
       dump();
     }
     function bindCell(el, date, kind){
-      const commit = () => { (model.cells[date] ??= {})[kind] = el.value; dump(); };
+      const commit = () => { model.cells[date] ??= {}; model.cells[date][kind] = el.value; dump(); };
       el.addEventListener('input', commit);
       el.addEventListener('change', commit);
     }
