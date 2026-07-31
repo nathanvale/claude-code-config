@@ -166,6 +166,7 @@ type AgentWorktreeDoctorData = {
 	summary: {
 		status: DoctorMap["status"];
 		repo_root: DoctorMap["repo"]["gitRoot"] | undefined;
+		isolation: DoctorMap["repo"]["isolation"] | undefined;
 		main_owner_root: DoctorMap["repo"]["mainOwnerRoot"] | undefined;
 		active_worktree: DoctorMap["repo"]["activeWorktree"] | undefined;
 		current_branch: DoctorMap["repo"]["currentBranch"] | undefined;
@@ -206,10 +207,10 @@ const READ_PROJECTION_KEYS = {
 		actions: ["truncated"],
 	},
 	status: {
-		default: ["statuses", "total", "truncated"],
-		refs: ["statuses"],
-		evidence: ["statuses", "total", "truncated"],
-		actions: ["statuses"],
+		default: ["isolation", "statuses", "total", "truncated"],
+		refs: ["isolation", "statuses"],
+		evidence: ["isolation", "statuses", "total", "truncated"],
+		actions: ["isolation", "statuses"],
 	},
 	clean: {
 		default: [
@@ -825,6 +826,7 @@ function doctorData(data: DoctorMap): AgentWorktreeDoctorData {
 		summary: {
 			status: data.status,
 			repo_root: data.repo.gitRoot,
+			isolation: data.repo.isolation,
 			main_owner_root: data.repo.mainOwnerRoot,
 			active_worktree: data.repo.activeWorktree,
 			current_branch: data.repo.currentBranch,

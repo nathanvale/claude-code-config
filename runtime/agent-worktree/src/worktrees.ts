@@ -5,6 +5,7 @@ import {
 	type DiscoverRepoOptions,
 	type DiscoveredWorktree,
 	type GitRunner,
+	type RepoIsolation,
 	type RepoDiscovery,
 	defaultGitRunner,
 	discoverRepo,
@@ -122,6 +123,8 @@ export interface WorktreeStatus {
  * Status rows plus projection metadata.
  */
 export interface WorktreeStatusResult {
+	/** Git repository isolation for the invocation cwd, when classifiable. */
+	isolation?: RepoIsolation;
 	/** Status rows after projection limits. */
 	statuses: readonly WorktreeStatus[];
 	/** Total worktrees before projection. */
@@ -389,6 +392,7 @@ export async function statusWorktreeResult(options: DiscoverRepoOptions & Worktr
 		projection.limit,
 	);
 	return {
+		isolation: discovery.isolation,
 		statuses,
 		total: projectionSummary.total,
 		truncated: projectionSummary.truncated,

@@ -88,6 +88,23 @@ describe("agent-worktree CLI surface", () => {
 		expect(envelope.data?.summary).toBeUndefined();
 	});
 
+	test("status surfaces the invocation isolation classification", async () => {
+		const outputs = {
+			...mainRepoGitOutputs("/repo"),
+			["git status --porcelain"]: "",
+			["git rev-parse --is-shallow-repository"]: "false\n",
+			["git merge-base --is-ancestor main main"]: "",
+			["git rev-list --left-right --count main...main"]: "0 0\n",
+		};
+		const { exitCode, envelope } = await runJsonCli(
+			["status", "--repo", "/repo", "--json"],
+			{ runtime: repoRuntime("/repo", outputs) },
+		);
+
+		expect(exitCode).toBe(0);
+		expect(envelope.data?.isolation).toBe("main");
+	});
+
 	test("unknown projection fields fail instead of acting inertly", async () => {
 		const envelope = await expectUsageError([
 			"doctor",
