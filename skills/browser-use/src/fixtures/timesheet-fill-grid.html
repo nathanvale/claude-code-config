@@ -52,7 +52,9 @@
 				const [start, end] = row.querySelectorAll("input");
 				const attendance = row.querySelector("select");
 				const commit = (field, element) => {
-					(state.cells[key] ??= {})[field] = element.value;
+					const cell = state.cells[key] ?? {};
+					state.cells[key] = cell;
+					cell[field] = element.value;
 				};
 				start.addEventListener("input", () => commit("start", start));
 				end.addEventListener("input", () => commit("end", end));
