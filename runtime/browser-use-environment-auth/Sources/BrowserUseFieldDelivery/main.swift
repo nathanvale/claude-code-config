@@ -491,6 +491,19 @@ private enum BrowserUseFieldDelivery {
                 "Accessibility.enable",
                 sessionID: sessionID
             )
+
+            // Fresh target reproof FIRST, then field resolution from an AX
+            // snapshot taken after it: the node the secret lands in is never
+            // staler than the last target proof, closing the same-origin
+            // field-swap window between observation and write.
+            let freshTarget = try await proveTarget(
+                client: client,
+                targetURL: arguments.targetURL,
+                targetOrigin: arguments.targetOrigin
+            )
+            guard freshTarget == initialTarget else {
+                throw DeliveryFailure.targetChanged
+            }
             let tree = try await client.send(
                 "Accessibility.getFullAXTree",
                 sessionID: sessionID
@@ -520,15 +533,6 @@ private enum BrowserUseFieldDelivery {
                   let fieldObjectID = resolvedObject["objectId"] as? String
             else {
                 throw DeliveryFailure.fieldNotFound
-            }
-
-            let freshTarget = try await proveTarget(
-                client: client,
-                targetURL: arguments.targetURL,
-                targetOrigin: arguments.targetOrigin
-            )
-            guard freshTarget == initialTarget else {
-                throw DeliveryFailure.targetChanged
             }
             privateValue = try readPrivateValue()
             guard let value = String(data: privateValue, encoding: .utf8) else {
