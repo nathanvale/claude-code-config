@@ -358,10 +358,15 @@ async function observe(
 				},
 			};
 		} finally {
-			await transport.request({
-				method: "Target.detachFromTarget",
-				params: { sessionId },
-			});
+			try {
+				await transport.request({
+					method: "Target.detachFromTarget",
+					params: { sessionId },
+				});
+			} catch {
+				// The observation result stays authoritative. A closed target can
+				// make detach race with a completed proof.
+			}
 		}
 	} catch {
 		return { ok: false, cause: "target-proof-invalid" };

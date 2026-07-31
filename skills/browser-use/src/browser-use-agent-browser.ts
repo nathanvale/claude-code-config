@@ -1292,7 +1292,9 @@ export type AgentBrowserResumeContinuityInput = {
 /**
  * Resume continuity truth. Success carries the discarded pre-delivery refs and
  * ONE fresh identity basis — the only legal source of post-resume refs. When
- * no fresh basis is observable the lane must not continue at all.
+ * no fresh basis is observable the lane must not continue at all, and when the
+ * offered CDP target is not the directive's target the lane is refused before
+ * any observation happens.
  */
 export type AgentBrowserResumeContinuityResult =
 	| {
@@ -1307,16 +1309,25 @@ export type AgentBrowserResumeContinuityResult =
 	  }
 	| {
 			ok: false;
+			code: "agent_browser_resume_target_mismatch";
+			message: string;
+	  }
+	| {
+			ok: false;
 			code: "agent_browser_fresh_identity_basis_unavailable";
 			message: string;
 	  };
 
 /**
- * Obey one resume directive before the task lane continues (R18). Discards
- * every pre-delivery ref, then takes exactly one fresh observer snapshot as
- * the new identity basis. The directive's demands are type-level truths
- * (`discard_stale_refs: true`, `require_fresh_identity_basis: true`), so
- * obedience is unconditional — there is no branch that keeps an old ref.
+ * Obey one resume directive before the task lane continues (R18). The offered
+ * CDP target must BE the directive's target: `resume.target_id` and
+ * `cdp_target_id` name the same CDP target, so a mismatch is refused before
+ * any snapshot — resuming on a different target would mint an identity basis
+ * the delivery never verified. Then discards every pre-delivery ref and takes
+ * exactly one fresh observer snapshot as the new identity basis. The
+ * directive's demands are type-level truths (`discard_stale_refs: true`,
+ * `require_fresh_identity_basis: true`), so obedience is unconditional —
+ * there is no branch that keeps an old ref.
  *
  * @param observer - U8 main-process CDP observer bound to a verified endpoint
  * @param input - The choreography's directive, exact CDP target, captured refs
@@ -1336,6 +1347,13 @@ export async function resumeAgentBrowserAfterDelivery(
 	observer: BrowserUseCdpObserver,
 	input: AgentBrowserResumeContinuityInput,
 ): Promise<AgentBrowserResumeContinuityResult> {
+	if (input.cdp_target_id !== input.resume.target_id) {
+		return {
+			ok: false,
+			code: "agent_browser_resume_target_mismatch",
+			message: `The resume directive names CDP target ${input.resume.target_id} but the lane offered ${input.cdp_target_id}; resume only on the directive's target — a fresh identity basis on any other target was never verified by delivery.`,
+		};
+	}
 	const discarded_refs = input.captured_refs.map((captured) => captured.ref);
 	const observed = await observer.snapshot({
 		target_id: input.cdp_target_id,

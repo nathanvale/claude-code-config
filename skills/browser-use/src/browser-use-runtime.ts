@@ -179,6 +179,11 @@ function environmentTokenSupervisorDeps(
 	};
 }
 
+// Deadline for the non-interactive supervisor modes (`remove`, `status`): a
+// hung supervisor must not block the CLI forever. `install` stays unbounded
+// because it inherits stdin for the interactive token prompt.
+const NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS = 30_000;
+
 function authSupervisorUnavailable(code: string): AuthTokenSupervisorResult {
 	return {
 		exitCode: 20,
@@ -240,12 +245,24 @@ async function runAuthTokenSupervisor(
 		stdin: input.mode === "install" ? "inherit" : "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
+		// Bound the non-interactive modes so `await child.exited` below has a
+		// deadline; Bun kills a timed-out child with SIGTERM (the default
+		// killSignal), which surfaces as a non-null signalCode.
+		...(input.mode === "install"
+			? {}
+			: { timeout: NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS }),
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
+	if (input.mode !== "install" && child.signalCode != null) {
+		// The deadline (or an external signal) killed the supervisor before it
+		// completed; a signalled child never produced a trustworthy envelope, so
+		// report the typed unavailable state instead of the partial result.
+		return authSupervisorUnavailable("token-supervisor-unavailable");
+	}
 	const maximumOutputBytes = 1_048_576;
 	if (
 		Buffer.byteLength(stdout, "utf8") > maximumOutputBytes ||

@@ -3,7 +3,13 @@ import Darwin
 import Foundation
 import Testing
 
-@Suite
+// Serialized: these tests fork real children and share process-global
+// signal-handler and process-group state (activeEnvironmentOpProcessGroup),
+// so parallel execution lets one test's group termination signal a sibling's
+// child (observed as spurious .processSignalled). Production never runs two
+// private pipes in one process — the supervisor is single-shot — so the
+// constraint is test-only.
+@Suite(.serialized)
 struct EnvironmentOpDeliveryTests {
     private func temporaryExecutable(
         _ body: String
@@ -61,7 +67,7 @@ struct EnvironmentOpDeliveryTests {
 
         #expect(!consumerStarted)
         guard case .blocked(.processFailed) = result else {
-            Issue.record("expected process-failed")
+            Issue.record("expected process-failed, got \(result)")
             return
         }
     }
@@ -145,6 +151,7 @@ struct EnvironmentOpDeliveryTests {
             Issue.record("expected private-field success")
             return
         }
-        #expect(String(decoding: output, as: UTF8.self) == "PRIVATE_FIELD_VALUE")
+        let decodedOutput = try #require(String(bytes: output, encoding: .utf8))
+        #expect(decodedOutput == "PRIVATE_FIELD_VALUE")
     }
 }

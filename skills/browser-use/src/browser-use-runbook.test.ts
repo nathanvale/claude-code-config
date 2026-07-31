@@ -2070,6 +2070,70 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 	);
 
 	test(
+		"a throwing auth-delivery release never replaces the confirmed execution result",
+		withDataRoot(async (dataRoot) => {
+			// The release runs in the engine's `finally`; if its rejection escaped it
+			// would REPLACE the returned result — losing executed-steps and
+			// mutation-dispatched truth for a run that already dispatched browser
+			// effects. Release failure is contained: the lease self-expires by TTL.
+			const RUN = "run-c-release-throws";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const PASS = deriveConformanceSentinel("password", "runcrelthr1");
+			expect(PASS.ok).toBe(true);
+			if (!PASS.ok) return;
+			const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+				username: PASS.value,
+				password: PASS.value,
+				"otp-current": PASS.value,
+			};
+			const { hook } = confidentialLeakHelper(sentinelValue);
+			const { seam } = confidentialSeam(RUN, hook, true);
+			let releaseCalls = 0;
+			const runtime = confidentialRuntime();
+
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						const built = await seam(seamInput);
+						if (!built.ok) return built;
+						return {
+							...built,
+							release: async () => {
+								releaseCalls += 1;
+								throw new Error("lease release transport closed unexpectedly");
+							},
+						};
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+
+			// The release was reached AND rejected, yet the confirmed execution
+			// result survives verbatim — not the release's rejection.
+			expect(releaseCalls).toBe(1);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			if (!outcome.result.ok) return;
+			expect(outcome.result.executed_steps).toBe(2);
+			expect(outcome.result.delivery?.method_step_events).toEqual([
+				"fill-password",
+			]);
+		}),
+	);
+
+	test(
 		"Seam B: compact/pretty serialization of the seam-built context carries no delivered value (port-boundary parity)",
 		withDataRoot(async (dataRoot) => {
 			const RUN = "run-c-seam-b";

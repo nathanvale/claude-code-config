@@ -720,21 +720,41 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					bindingSlug: "oncore_username",
 					credentialField: "username" as const,
-					target: { role: "textbox", name: "Password" },
+					target: { role: "textbox", name: "Username" },
 				},
 			],
 		});
 
 		// Positive: both slugs resolve to the SAME item — one distinct Item
-		// Binding — so the real seam builds the context with both mappings.
+		// Binding — so the real seam builds the context with both mappings, and
+		// the REAL environmentDeliveryHook redeems EACH field with ITS OWN node
+		// descriptor — the username redemption must never carry the password
+		// field's descriptor (a constant descriptor would write the password
+		// into the username node).
 		{
+			const redeemedDescriptors: {
+				field: BrowserUseOpCredentialField;
+				descriptor: { role: string; accessible_name: string };
+			}[] = [];
 			const port = {
 				...activeVaultPort(),
-				// Present so environmentDeliveryHook can build; never invoked here.
-				redeemCredentialField: async () => ({
-					ok: true as const,
-					shape: { field: "password" as const, byte_length: 1 },
-				}),
+				redeemCredentialField: async (request: {
+					handle: BrowserUseSecretHandle;
+					target_digest: string;
+					ws_url: string;
+					target_url: string;
+					target_origin: string;
+					field: { role: string; accessible_name: string };
+				}) => {
+					redeemedDescriptors.push({
+						field: request.handle.field,
+						descriptor: request.field,
+					});
+					return {
+						ok: true as const,
+						shape: { field: request.handle.field, byte_length: 1 },
+					};
+				},
 			};
 			const provider = createBrowserUseAuthProvider({
 				store: store.deps,
@@ -756,6 +776,34 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 					oncore_password: "password",
 					oncore_username: "username",
 				});
+				// Redeem BOTH fields through the REAL hook the seam built.
+				for (const field of ["password", "username"] as const) {
+					const delivered = await built.context.deliver({
+						handle: {
+							handle_id: `handle-${field}`,
+							field,
+							expires_at_epoch_ms: 9_999_999,
+						},
+						field,
+						target: built.context.target,
+					});
+					expect(delivered.ok).toBe(true);
+				}
+				expect(redeemedDescriptors).toEqual([
+					{
+						field: "password",
+						descriptor: { role: "textbox", accessible_name: "Password" },
+					},
+					{
+						field: "username",
+						descriptor: { role: "textbox", accessible_name: "Username" },
+					},
+				]);
+				// The username redemption must NOT receive the password descriptor.
+				expect(redeemedDescriptors[1]?.descriptor.accessible_name).not.toBe(
+					"Password",
+				);
+				await built.release?.();
 			}
 		}
 

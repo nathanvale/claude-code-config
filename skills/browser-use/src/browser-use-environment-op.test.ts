@@ -174,18 +174,20 @@ function redemptionInput(
 	>["handle"],
 	overrides: Partial<{
 		target_digest: string;
+		ws_url: string;
 		target_url: string;
 		target_origin: string;
+		timeout_ms: number;
 	}> = {},
 ) {
 	return {
 		handle,
 		target_digest: overrides.target_digest ?? TARGET_DIGEST,
-		ws_url: "ws://127.0.0.1:9222/devtools/browser/fixture",
+		ws_url: overrides.ws_url ?? "ws://127.0.0.1:9222/devtools/browser/fixture",
 		target_url: overrides.target_url ?? `${ORIGIN}/login`,
 		target_origin: overrides.target_origin ?? ORIGIN,
 		field: { role: "textbox", accessible_name: "Password" },
-		timeout_ms: 5_000,
+		timeout_ms: overrides.timeout_ms ?? 5_000,
 	};
 }
 
@@ -291,6 +293,82 @@ describe("environment OP secret-handle registry", () => {
 			expect(drifted.rejection.code).toBe("target-digest-mismatch");
 		}
 		expect(supervisor.calls()).toHaveLength(1);
+	});
+
+	test("non-loopback ws_url rejects typed before any delivery spawn", async () => {
+		const supervisor = fixture();
+		const port = portOf(supervisor);
+		const hostileWsUrls = [
+			"ws://203.0.113.7:9222/devtools/browser/fixture",
+			"wss://evil.test/devtools/browser/fixture",
+			"ws://127.0.0.1.evil.test:9222/devtools/browser/fixture",
+			"ws://user:secret@127.0.0.1:9222/devtools/browser/fixture",
+			"ws://127.0.0.1:9222/devtools/browser/fixture?redirect=1",
+			"http://127.0.0.1:9222/devtools/browser/fixture",
+			`ws://127.0.0.1:9222/${"a".repeat(2_049)}`,
+			"not a url",
+		];
+		for (const wsUrl of hostileWsUrls) {
+			const fetched = await mintPassword(port);
+			if (!fetched.ok) throw new Error("fixture mint failed");
+			const refused = await port.redeemCredentialField(
+				redemptionInput(fetched.handle, { ws_url: wsUrl }),
+			);
+			expect(refused).toEqual({
+				ok: false,
+				rejection: {
+					code: "target-proof-invalid",
+					message: "environment credential delivery was refused.",
+				},
+				external_effect_possible: false,
+				field_cleared: false,
+			});
+		}
+		// Only the per-mint metadata prevalidations ran; no deliver spawn ever
+		// happened for a non-loopback endpoint.
+		expect(supervisor.calls()).toHaveLength(hostileWsUrls.length);
+		for (const call of supervisor.calls()) {
+			expect(call).toContain("metadata");
+			expect(call).not.toContain("deliver");
+		}
+	});
+
+	test("loopback ws_url hosts are accepted for delivery", async () => {
+		const supervisor = fixture();
+		const port = portOf(supervisor);
+		const loopbackWsUrls = [
+			"ws://127.0.0.1:9222/devtools/browser/fixture",
+			"ws://localhost:9222/devtools/browser/fixture",
+			"ws://[::1]:9222/devtools/browser/fixture",
+		];
+		for (const wsUrl of loopbackWsUrls) {
+			const fetched = await mintPassword(port);
+			if (!fetched.ok) throw new Error("fixture mint failed");
+			const delivered = await port.redeemCredentialField(
+				redemptionInput(fetched.handle, { ws_url: wsUrl }),
+			);
+			expect(delivered.ok).toBe(true);
+		}
+	});
+
+	test("out-of-bound timeout_ms rejects typed before any delivery spawn", async () => {
+		const supervisor = fixture();
+		const port = portOf(supervisor);
+		for (const timeoutMs of [100, 60_000, 0, -1, 10_000.5, Number.NaN]) {
+			const fetched = await mintPassword(port);
+			if (!fetched.ok) throw new Error("fixture mint failed");
+			const refused = await port.redeemCredentialField(
+				redemptionInput(fetched.handle, { timeout_ms: timeoutMs }),
+			);
+			expect(refused.ok).toBe(false);
+			if (!refused.ok) {
+				expect(refused.rejection.code).toBe("target-proof-invalid");
+				expect(refused.external_effect_possible).toBe(false);
+			}
+		}
+		for (const call of supervisor.calls()) {
+			expect(call).not.toContain("deliver");
+		}
 	});
 
 	test("possibly-landed write reports external effect and cannot retry", async () => {

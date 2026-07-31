@@ -511,6 +511,51 @@ function parseDeliveryResult(
 	});
 }
 
+const WS_URL_LIMIT_BYTES = 2_048;
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
+const DELIVERY_TIMEOUT_MINIMUM_MS = 500;
+const DELIVERY_TIMEOUT_MAXIMUM_MS = 30_000;
+
+/**
+ * TypeScript mirror of the native supervisor's ws-url validator plus a
+ * loopback-host restriction: the credential-bearing CDP session may only ever
+ * attach to the local browser (127.0.0.1 / ::1 / localhost). A substituted
+ * remote endpoint is refused here, before any supervisor spawn; the native
+ * boundary applies the same guard independently.
+ */
+function loopbackWebSocketUrl(raw: string): boolean {
+	if (Buffer.byteLength(raw, "utf8") > WS_URL_LIMIT_BYTES) return false;
+	let url: URL;
+	try {
+		url = new URL(raw);
+	} catch {
+		return false;
+	}
+	return (
+		(url.protocol === "ws:" || url.protocol === "wss:") &&
+		LOOPBACK_HOSTNAMES.has(url.hostname) &&
+		url.username === "" &&
+		url.password === "" &&
+		url.search === "" &&
+		url.hash === ""
+	);
+}
+
+/**
+ * Mirror of the native supervisor's `500...30_000` timeout bound, applied to
+ * the TypeScript `setTimeout` race as well: an out-of-bound timeout is refused
+ * before spawn instead of unbounding the local wait or being rejected only by
+ * the native argv parser after the child has started.
+ */
+function boundedDeliveryTimeout(value: number | undefined): boolean {
+	return (
+		value === undefined ||
+		(Number.isSafeInteger(value) &&
+			value >= DELIVERY_TIMEOUT_MINIMUM_MS &&
+			value <= DELIVERY_TIMEOUT_MAXIMUM_MS)
+	);
+}
+
 function validDigest(value: unknown): value is string {
 	return (
 		typeof value === "string" &&
@@ -713,6 +758,14 @@ export function createEnvironmentTokenRetrievalPort(
 				targetOrigin.origin !== reservation.observed_origin
 			) {
 				return redemptionRejection("origin-mismatch");
+			}
+			if (
+				!loopbackWebSocketUrl(input.ws_url) ||
+				!boundedDeliveryTimeout(input.timeout_ms)
+			) {
+				// Refused before any spawn: no supervisor child ran, so no
+				// external effect is possible and no field was touched.
+				return redemptionRejection("target-proof-invalid");
 			}
 
 			const operation: EnvironmentDeliveryOperation = {

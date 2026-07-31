@@ -22,9 +22,11 @@ struct TokenCustodyLifecycleTests {
             .appendingPathComponent("custody-fixtures", isDirectory: true)
             .resolvingSymlinksInPath()
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        // Nothing pre-creates .build/custody-fixtures on a clean checkout,
+        // so create intermediates alongside the per-test UUID directory.
         try FileManager.default.createDirectory(
             at: root,
-            withIntermediateDirectories: false,
+            withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
         return root

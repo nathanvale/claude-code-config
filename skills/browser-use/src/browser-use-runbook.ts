@@ -1115,7 +1115,16 @@ export async function executePreparedRunbook(
 				: {}),
 		};
 	} finally {
-		await releaseAuthDelivery?.();
+		try {
+			await releaseAuthDelivery?.();
+		} catch {
+			// Contained on purpose: a rejected release (lease release or transport
+			// close) in this `finally` would otherwise REPLACE the returned
+			// execution result — losing executed-steps / mutation-dispatched truth
+			// for a run that already dispatched browser effects. The result shape
+			// has no warning slot, and release is best-effort cleanup: the
+			// sensitive-interval lease self-expires by TTL.
+		}
 	}
 }
 

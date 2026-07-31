@@ -104,13 +104,24 @@ private func origin(of raw: String) -> String? {
     EnvironmentDeliveryOriginSafety.origin(of: raw)
 }
 
+/// The CDP endpoint carries the credential-bearing session, so the ws host
+/// must be loopback: a substituted URL must never ship the session to a
+/// remote endpoint. The TypeScript boundary enforces the same guard.
+private func loopbackWebSocketHost(_ rawHost: String?) -> Bool {
+    guard var host = rawHost?.lowercased() else { return false }
+    if host.hasPrefix("["), host.hasSuffix("]") {
+        host = String(host.dropFirst().dropLast())
+    }
+    return ["127.0.0.1", "::1", "localhost"].contains(host)
+}
+
 private func parseArguments(_ values: [String]) -> DeliveryArguments? {
     guard let options = exactOptions(values[...]),
           let rawWebSocketURL = options["--ws-url"],
           rawWebSocketURL.utf8.count <= 2_048,
           let webSocketURL = URL(string: rawWebSocketURL),
           ["ws", "wss"].contains(webSocketURL.scheme?.lowercased() ?? ""),
-          webSocketURL.host != nil,
+          loopbackWebSocketHost(webSocketURL.host),
           webSocketURL.user == nil,
           webSocketURL.password == nil,
           webSocketURL.query == nil,
@@ -189,6 +200,22 @@ private func emit(
     FileHandle.standardOutput.write(encodedOutcome(object))
     FileHandle.standardOutput.write(Data([0x0a]))
     Foundation.exit(exitCode)
+}
+
+/// Every exit taken after the CDP client exists must pass through here:
+/// `emit` terminates through `Foundation.exit`, so `defer` blocks never run
+/// and the private value would otherwise survive in memory on failure paths.
+private func finish(
+    client: CDPClient,
+    privateValue: inout Data,
+    _ object: [String: Any],
+    exitCode: Int32
+) -> Never {
+    if !privateValue.isEmpty {
+        privateValue.resetBytes(in: 0..<privateValue.count)
+    }
+    client.close()
+    emit(object, exitCode: exitCode)
 }
 
 private final class CDPClient: @unchecked Sendable {
@@ -387,6 +414,14 @@ private func activate(
     sessionID: String,
     backendNodeID: Int
 ) async throws {
+    // Scroll the resolved node into the viewport first: DOM.getBoxModel
+    // returns coordinates even for off-viewport nodes, and a centroid click
+    // there would land on whatever occupies that position.
+    _ = try await client.send(
+        "DOM.scrollIntoViewIfNeeded",
+        parameters: ["backendNodeId": backendNodeID],
+        sessionID: sessionID
+    )
     let box = try await client.send(
         "DOM.getBoxModel",
         parameters: ["backendNodeId": backendNodeID],
@@ -464,12 +499,6 @@ private enum BrowserUseFieldDelivery {
         let client = CDPClient(url: arguments.webSocketURL)
         let fieldCleared = false
         var privateValue = Data()
-        defer {
-            if !privateValue.isEmpty {
-                privateValue.resetBytes(in: 0..<privateValue.count)
-            }
-            client.close()
-        }
         do {
             let initialTarget = try await proveTarget(
                 client: client,
@@ -569,18 +598,23 @@ private enum BrowserUseFieldDelivery {
                     throw DeliveryFailure.activation
                 }
             }
-            emit(
+            let byteLength = privateValue.count
+            finish(
+                client: client,
+                privateValue: &privateValue,
                 [
                     "ok": true,
                     "shape": [
                         "kind": "utf8",
-                        "byte_length": privateValue.count,
+                        "byte_length": byteLength,
                     ],
                 ],
                 exitCode: 0
             )
         } catch let failure as DeliveryFailure {
-            emit(
+            finish(
+                client: client,
+                privateValue: &privateValue,
                 [
                     "ok": false,
                     "reason": failure.reason,
@@ -589,7 +623,9 @@ private enum BrowserUseFieldDelivery {
                 exitCode: 20
             )
         } catch {
-            emit(
+            finish(
+                client: client,
+                privateValue: &privateValue,
                 [
                     "ok": false,
                     "reason": DeliveryFailure.write.reason,

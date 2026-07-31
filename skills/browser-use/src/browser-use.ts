@@ -3528,6 +3528,14 @@ type RunbookAuthDeliveryBuilderDeps = {
 		handoff: AgentBrowserVerifiedHandoff;
 		expectedTargetUrl: string;
 		target: BrowserUseMintedVerifiedTarget;
+		descriptorByField?: Readonly<
+			Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			>
+		>;
 	}): BrowserUseDeliveryHook | undefined;
 };
 
@@ -3572,10 +3580,25 @@ function environmentDeliveryHook(input: {
 	handoff: AgentBrowserVerifiedHandoff;
 	expectedTargetUrl: string;
 	target: BrowserUseMintedVerifiedTarget;
+	descriptorByField?: Readonly<
+		Partial<
+			Record<
+				BrowserUseOpCredentialField,
+				{ role: string; accessible_name: string }
+			>
+		>
+	>;
 }): BrowserUseDeliveryHook | undefined {
 	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
 	if (typeof port.redeemCredentialField !== "function") return undefined;
 	return async ({ handle, target }) => {
+		// Each redemption re-resolves its node in the delivery child from THIS
+		// descriptor, so it must name the field being redeemed — a constant
+		// first-field descriptor would write a later secret into the wrong node.
+		const descriptor = input.descriptorByField?.[handle.field] ?? {
+			role: input.target.field.role,
+			accessible_name: input.target.field.accessible_name,
+		};
 		const delivered = await port.redeemCredentialField?.({
 			handle,
 			target_digest: target.target_proof_digest,
@@ -3583,8 +3606,8 @@ function environmentDeliveryHook(input: {
 			target_url: input.expectedTargetUrl,
 			target_origin: target.frame_origin,
 			field: {
-				role: input.target.field.role,
-				accessible_name: input.target.field.accessible_name,
+				role: descriptor.role,
+				accessible_name: descriptor.accessible_name,
 			},
 		});
 		if (delivered?.ok) return delivered;
@@ -3840,11 +3863,26 @@ function buildRunbookAuthDelivery(
 				};
 			}
 			lease = acquired.lease;
+			// Per-field node descriptors from the runbook's confidential field plan:
+			// each redemption selects ITS OWN descriptor, never the first field's.
+			const descriptorByField: Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			> = {};
+			for (const field of input.confidentialFields) {
+				descriptorByField[field.credentialField] ??= {
+					role: field.target.role,
+					accessible_name: field.target.name,
+				};
+			}
 			const deliver = deps.createDeliveryHook({
 				tokenRetrieval: deps.tokenRetrieval,
 				handoff: input.handoff,
 				expectedTargetUrl: input.expectedTargetUrl,
 				target: proof.target,
+				descriptorByField,
 			});
 			if (deliver === undefined) {
 				await release();

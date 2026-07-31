@@ -12,7 +12,20 @@ async ({ inputs }) => {
   };
   const fail = (reason, extra = {}) => {
     const { reason: detail, ...context } = extra;
-    throw new Error(JSON.stringify({ reason, ...(detail ? { detail } : {}), ...context }).slice(0, 2000));
+    // Consumers JSON.parse the error message, so the payload must always be
+    // valid JSON. Cap each embedded string value before serializing instead of
+    // slicing the serialized string (which could cut mid-token). The final
+    // length check is a never-hit backstop that drops context rather than emit
+    // broken JSON.
+    const cap = (value) =>
+      typeof value === "string" && value.length > 256 ? `${value.slice(0, 256)}[truncated]` : value;
+    const payload = { reason, ...(detail ? { detail: cap(detail) } : {}) };
+    for (const [key, value] of Object.entries(context)) payload[key] = cap(value);
+    let message = JSON.stringify(payload);
+    if (message.length > 2000) {
+      message = JSON.stringify({ reason, ...(detail ? { detail: cap(detail) } : {}), truncated: true });
+    }
+    throw new Error(message);
   };
   const parseDate = (value) => {
     const text = String(value || "");

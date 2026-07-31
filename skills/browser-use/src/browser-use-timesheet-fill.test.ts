@@ -32,6 +32,8 @@ type ActionResult =
 	| {
 			ok: false;
 			reason: string;
+			detail?: string;
+			title?: string;
 			fieldsUpdated?: unknown[];
 		};
 
@@ -292,7 +294,7 @@ function createFixtureDom(scenario: string): {
 		"06/08/2026",
 		"07/08/2026",
 	];
-	if (scenario === "wrong-week") {
+	if (scenario === "wrong-week" || scenario === "wrong-week-oversized-title") {
 		dates.push(
 			"10/08/2026",
 			"11/08/2026",
@@ -318,7 +320,10 @@ function createFixtureDom(scenario: string): {
 
 	return {
 		document: {
-			title: "Time - Search Timesheet",
+			title:
+				scenario === "wrong-week-oversized-title"
+					? `Time - Search Timesheet ${"x".repeat(4000)}`
+					: "Time - Search Timesheet",
 			querySelectorAll: (selector) =>
 				selector === "tr[ng-repeat]" ? rows : [],
 			querySelector: () => null,
@@ -417,6 +422,29 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 			expect(state.submitAttempts).toBe(0);
 		});
 	}
+
+	test("oversized embedded fields still yield parseable typed JSON", async () => {
+		// A huge document.title would have pushed the serialized failure payload
+		// past the old 2000-char slice, cutting the JSON mid-string. JSON.parse in
+		// evaluateAction throws on such output, so this test passing proves the
+		// payload stays parseable with the typed reason and detail intact.
+		const { result, state } = await runAction("wrong-week-oversized-title");
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "wrong_week_open",
+		});
+		if (result.ok) return;
+		expect(result.detail).toBe(
+			"an editable grid is open but does not match the target week; refusing to fill",
+		);
+		expect(result.title?.length ?? 0).toBeLessThanOrEqual(
+			256 + "[truncated]".length,
+		);
+		expect(result.title).toEndWith("[truncated]");
+		expect(state.cells).toEqual({});
+		expect(state.submitAttempts).toBe(0);
+	});
 
 	test("reports an absent attendance option by typed reason", async () => {
 		const { result, state } = await runAction("attendance-absent", [

@@ -383,7 +383,7 @@ Usage:
   browser-use-op-supervisor install --config-root <absolute-path> --op-path <absolute-path> --input <stdin|prompt> --replace <true|false>
   browser-use-op-supervisor remove --config-root <absolute-path>
   browser-use-op-supervisor status --config-root <absolute-path> --op-path <absolute-path> --profile-path <absolute-path>
-  browser-use-op-supervisor deliver --config-root <absolute-path> --op-path <absolute-path> --vault-id <id> --item-id <id> --field <name> --ws-url <url> --target-url <url> --target-origin <origin> --field-role <role> --field-name <name> --timeout-ms <milliseconds>
+  browser-use-op-supervisor deliver --config-root <absolute-path> --op-path <absolute-path> --vault-id <id> --item-id <id> --field <name> --ws-url <url> --target-url <url> --target-origin <origin> --field-role <role> --field-name <name> --timeout-ms <milliseconds> [--activate-role <role> --activate-name <name>]
 
 Commands:
   admit      Check the fixed official OP path without reading a token.
@@ -852,9 +852,32 @@ private func emitValidator(
     Foundation.exit(result == .approved ? 0 : 20)
 }
 
+/// Resolve the actually loaded supervisor image through dyld, never argv[0]:
+/// argv[0] is caller-controlled, so trusting it would let a caller steer the
+/// sibling lookup at an attacker-chosen directory. Fails closed (nil) when the
+/// loaded image cannot be resolved to a canonical absolute path.
+private func loadedSupervisorExecutable() -> String? {
+    var capacity = UInt32(MAXPATHLEN)
+    var buffer = [CChar](repeating: 0, count: Int(capacity))
+    if _NSGetExecutablePath(&buffer, &capacity) != 0 {
+        buffer = [CChar](repeating: 0, count: Int(capacity))
+        guard _NSGetExecutablePath(&buffer, &capacity) == 0 else {
+            return nil
+        }
+    }
+    var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+    guard realpath(buffer, &resolved) != nil else {
+        return nil
+    }
+    return resolved.withUnsafeBufferPointer { pointer in
+        pointer.baseAddress.map { String(cString: $0) }
+    }
+}
+
 private func siblingDeliveryExecutable() -> String? {
-    let executable = CommandLine.arguments[0]
-    guard executable.hasPrefix("/"), !executable.contains("\0") else {
+    guard let executable = loadedSupervisorExecutable(),
+          executable.hasPrefix("/"), !executable.contains("\0")
+    else {
         return nil
     }
     return URL(fileURLWithPath: executable)

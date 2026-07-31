@@ -144,6 +144,42 @@ describe("verified target proof", () => {
 		expect(minted.target.account_ref).not.toContain(BINDING.vault_id);
 	});
 
+	test("a detach rejection after successful observation still yields the proof", async () => {
+		// A closed or racing target can make Target.detachFromTarget reject
+		// AFTER the identity was fully observed; the observation result stays
+		// authoritative and must not become target-proof-invalid.
+		const stable = stableTransport();
+		const detachRejecting: BrowserUseDevToolsTransport = {
+			request: async (request) => {
+				if (request.method === "Target.detachFromTarget") {
+					throw new Error("No session with given id");
+				}
+				return stable.request(request);
+			},
+		};
+
+		const minted = await mintBrowserUseVerifiedTarget(detachRejecting, {
+			lane_id: "agent-browser",
+			run_id: "run-1",
+			expected_url: "https://portal.example.test/login",
+			allowed_origins: BINDING.allowed_origins,
+			binding: BINDING,
+			field: { role: "textbox", accessible_name: "Username" },
+		});
+
+		expect(minted.ok).toBe(true);
+		if (!minted.ok) return;
+		expect(minted.target.target_id).toBe("cdp-target-7");
+
+		// Reproof re-observes through the same transport; its detach also
+		// rejects, and the successful reproof still stands.
+		const reproof = await minted.reproveTarget({ target: minted.target });
+		expect(reproof).toEqual({
+			proven: true,
+			observed_digest: minted.target.target_proof_digest,
+		});
+	});
+
 	test("resolves one CDP target by exact URL then exact origin, never adapter tab id", async () => {
 		const exactAttachments: string[] = [];
 		const exact = await mintBrowserUseVerifiedTarget(

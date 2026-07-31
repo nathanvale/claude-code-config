@@ -1123,6 +1123,23 @@ public enum EnvironmentOpProcessRunner {
             }
         }
 
+        // The consumer forwards this descriptor to the disposable delivery
+        // child, which reads fd 3 to EOF with blocking reads and treats
+        // EAGAIN as pipe failure. O_NONBLOCK lives on the shared open file
+        // description (it survives dup2 and execve), so guarantee blocking
+        // semantics before the descriptor leaves the readiness poll.
+        let pipeFlags = fcntl(stdoutPipe[0], F_GETFL)
+        guard pipeFlags >= 0,
+              fcntl(stdoutPipe[0], F_SETFL, pipeFlags & ~O_NONBLOCK) == 0
+        else {
+            terminateEnvironmentOpGroup(
+                child: child,
+                status: &status,
+                reapChild: true
+            )
+            closeOpDescriptor(stdoutPipe[0])
+            return .blocked(.ioFailure)
+        }
         let delivery = consume(
             stdoutPipe[0],
             Int32(max(1, deadline - opMonotonicMilliseconds()))

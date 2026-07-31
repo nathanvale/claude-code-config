@@ -165,7 +165,10 @@ const VERIFIED_TARGET: BrowserUseVerifiedTarget = {
 	run_id: "run-resume-1",
 	top_level_origin: "https://oncore.test",
 	frame_origin: "https://oncore.test",
-	target_id: "target-1",
+	// The verified target IS the CDP target the lane resumes on; the resume
+	// directive echoes this id and resumeAgentBrowserAfterDelivery refuses any
+	// other target.
+	target_id: TARGET_ID,
 	page_id: "page-1",
 	frame_id: "frame-1",
 	account_ref: "acct-ref-redacted",
@@ -346,6 +349,31 @@ describe("pause/resume continuity around confidential delivery (R18, AE10)", () 
 
 		// The judgement never consulted the false still-valid signal.
 		expect(methods).not.toContain("DOM.resolveNode");
+	});
+
+	test("resume refuses a CDP target that is not the directive's target, before any observation", async () => {
+		const state = { nodes: advancedScreen() };
+		const methods: string[] = [];
+		const observer = createBrowserUseCdpObserver(
+			fixtureTransport(state, methods),
+		);
+		const resume = await deliverPassword();
+
+		// The lane offers a DIFFERENT CDP target than the one the directive
+		// (and the delivery's verified target) names.
+		const resumed = await resumeAgentBrowserAfterDelivery(observer, {
+			resume,
+			cdp_target_id: "cdp-target-other",
+			captured_refs: [{ ref: "@e2", backend_node_id: 41 }],
+		});
+		expect(resumed).toEqual({
+			ok: false,
+			code: "agent_browser_resume_target_mismatch",
+			message: expect.stringContaining("directive's target"),
+		});
+		// Refused BEFORE snapshot: the mismatched target is never observed.
+		expect(methods).not.toContain("Target.attachToTarget");
+		expect(methods).not.toContain("Accessibility.getFullAXTree");
 	});
 
 	test("resume refuses when no fresh identity basis is observable", async () => {
