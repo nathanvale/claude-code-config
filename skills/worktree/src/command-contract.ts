@@ -9,13 +9,14 @@ import { WORKTREE_COLOR_PALETTE, WORKTREE_CONTRACT_ID, WORKTREE_SCHEMA_VERSION }
  *
  * `status` is the low-load front door. Owned render verbs
  * (`sync`/`focus`/`color`/`open`/`app`) plus shared-runtime worktree verbs
- * (`new`/`rm`/`clean`) are powered by `agent-worktree`. `commands` emits
+ * (`new`/`attach`/`rm`/`clean`) are powered by `agent-worktree`. `commands` emits
  * machine-readable discovery metadata.
  */
 export const WORKTREE_COMMAND_ORDER = [
 	"status",
 	"app",
 	"new",
+	"attach",
 	"rm",
 	"clean",
 	"sync",
@@ -45,6 +46,8 @@ export const WORKTREE_DIAGNOSTIC_CODES = [
 	"worktree_list_failed",
 	"agent_worktree_blocked",
 	"agent_worktree_failed",
+	"attach_branch_already_checked_out",
+	"attach_isolation_unavailable",
 	"unknown_color",
 	"code_not_found",
 	"codex_app_not_found",
@@ -134,6 +137,23 @@ const WORKTREE_DELEGATE_FAILURE_ACTIONS = [
 ] as const;
 
 /**
+ * Discovery actions advertised when attach is refused.
+ */
+const WORKTREE_ATTACH_FAILURE_ACTIONS = [
+	{
+		id: "use_existing_checkout",
+		summary: "Continue in the existing checkout at the reported path.",
+		sideEffects: ["read"],
+	},
+	{
+		id: "choose_attach_isolation_recovery",
+		summary:
+			"Ask the operator to choose between working in the current checkout and resolving worktree isolation.",
+		sideEffects: ["read"],
+	},
+] as const;
+
+/**
  * Discovery action advertised when a Codex App launch target is not available.
  */
 const WORKTREE_CODEX_APP_FAILURE_ACTIONS = [
@@ -161,14 +181,16 @@ const renderResultContract = worktreeRenderResultContract;
  * Exit-code contract shared across worktree commands.
  *
  * `3` is the distinct drift-blocked code: it lets an agent branch on "manual
- * edits detected" without scraping stderr text. The facade permits codes
- * beyond the 0/1/2 baseline.
+ * edits detected" without scraping stderr text. `4` identifies attach
+ * refusals that need an operator choice. The facade permits codes beyond the
+ * 0/1/2 baseline.
  */
 const exitCodes = {
 	"0": "Command succeeded.",
 	"1": "Runtime failure.",
 	"2": "Usage or input error.",
 	"3": "Render blocked: the workspace was edited since the last render.",
+	"4": "Refused: human decision required.",
 } as const satisfies WorkTreeCommandContract["exitCodes"];
 
 const jsonFlag = {
@@ -193,6 +215,28 @@ const forceRenderFlag = {
 	"--force-render": {
 		type: "boolean",
 		description: "Overwrite a drift-detected workspace after lifecycle completion.",
+	},
+} as const;
+
+const dryRunFlag = {
+	"--dry-run": {
+		type: "boolean",
+		description: "Preview write effects without mutating state.",
+	},
+} as const;
+
+const prFlag = {
+	"--pr": {
+		type: "string",
+		description: "Pull request number whose head should be attached.",
+	},
+} as const;
+
+const trackFlag = {
+	"--track": {
+		type: "boolean",
+		description:
+			"Use GitHub CLI checkout inside a detached worktree for push tracking.",
 	},
 } as const;
 
@@ -357,6 +401,36 @@ export const worktreeContracts = defineCommandFacadeContract(
 				reason: "Worktree creation is owned by agent-worktree; WorkTree only re-renders through the drift gate after.",
 			},
 			flags: { ...repoFlag, ...forceRenderFlag, ...jsonFlag },
+			exitCodes,
+		},
+		attach: {
+			script: "worktree",
+			summary: "Attach an existing ref or pull request, then re-render.",
+			usage: [
+				"worktree attach <ref> --json",
+				"worktree attach --pr <n> --json",
+				"worktree attach --pr <n> --track --json",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["read", "check", "network", "write"],
+			executionModes: ["dry_run", "normal"],
+			outputModes: ["json"],
+			interactivity: "none",
+			resultContract: renderResultContract,
+			actionAffordances: {
+				success: WORKTREE_SYNC_SUCCESS_ACTIONS,
+				failure: WORKTREE_ATTACH_FAILURE_ACTIONS,
+			},
+			flags: {
+				...repoFlag,
+				...dryRunFlag,
+				...prFlag,
+				...trackFlag,
+				...forceRenderFlag,
+				...jsonFlag,
+			},
 			exitCodes,
 		},
 		rm: {
