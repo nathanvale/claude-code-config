@@ -22,6 +22,7 @@ type ActionResult =
 	| {
 			ok: true;
 			fieldsUpdated: Array<{
+				dayIndex: number;
 				date: string;
 				startTime: string;
 				endTime: string;
@@ -119,10 +120,11 @@ async function runAction(
 	expect(servedFixture).toContain('id="submit-timesheet"');
 
 	const fixture = createFixtureDom(scenario);
+	const pageGlobals = globalThis as Record<string, unknown>;
 	const originals = {
-		document: globalThis.document,
-		location: globalThis.location,
-		window: globalThis.window,
+		document: pageGlobals.document,
+		location: pageGlobals.location,
+		window: pageGlobals.window,
 	};
 	Object.assign(globalThis, {
 		document: fixture.document,
@@ -138,6 +140,7 @@ async function runAction(
 }
 
 async function evaluateAction(inputRows: typeof rows): Promise<ActionResult> {
+	// biome-ignore lint/security/noGlobalEval: the shipped fill-week.js asset is an in-page function expression; eval is the hermetic loading mechanism for the exact promoted bytes.
 	const action = (0, eval)(`(${actionSource})`) as (input: {
 		inputs: Record<string, unknown>;
 	}) => Promise<unknown>;
@@ -236,7 +239,9 @@ class FixtureRow extends FixtureElement {
 	) {
 		super();
 		const write = (field: "start" | "end" | "attendance", value: string) => {
-			(state.cells[stateDate] ??= {})[field] = value;
+			const cell = state.cells[stateDate] ?? {};
+			state.cells[stateDate] = cell;
+			cell[field] = value;
 		};
 		this.start = new FixtureInput(readableDate, (value) =>
 			write("start", value),
