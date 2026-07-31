@@ -13,7 +13,12 @@ concurrency:
 jobs:
   test:
     name: test + lint
-    runs-on: ubuntu-latest
+    # macOS runner: the browser-use stack is darwin-oriented (1Password `op`,
+    # Swift code-signing / App Sandbox custody, Agent Chrome). The U0 custody
+    # tests spawn a native probe that requires a codesigning identity and
+    # returns empty output on Linux (JSON parse EOF). Running on macos-latest
+    # exercises them in their real environment; the suite is green there.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
