@@ -1,35 +1,49 @@
 ---
 name: browser-use-prototyper
-description: "Falsify a plan's risky browser mechanics with a throwaway harness spike before implementing. Use before or during ce-plan for CDP writes, login/auth, credential delivery, adapter/lane behavior, or form/timesheet fills — prove it on real Chrome first."
+description: "Prove browser mechanics with a throwaway harness spike — before implementing (falsify the plan's risky CDP writes, login/auth, credential delivery, adapter/lane behavior) AND after implementing (acceptance-spike the built CLI feature or end-to-end flow against real Chrome). Use during ce-plan and after ce-work."
 role: tool-workflow
 ---
 
 # Browser Use Prototyper
 
-Prove the risky browser mechanics of a plan **before** implementation, against
-real Agent Chrome, secret-free. A plan that rests on unproven CDP/login/custody
-behavior burns hours of build + review + tokens before anyone learns it does not
-work. Spike first; fold the receipt into the plan.
+Prove browser mechanics with a throwaway spike against real Agent Chrome,
+secret-free — at **both ends** of a plan's life. Guessing wastes hours of build,
+review, and tokens; a spike settles it in minutes.
 
-Use when a plan (or a `ce-plan` run) depends on browser mechanics no shipped
-code has exercised: a CDP field write, a login/auth flow, credential delivery,
-adapter/lane behavior, target discovery, or a form/timesheet fill.
+- **Pre-build (falsify).** Before implementing, prove the plan's risky mechanics
+  actually work, so a plan never rests on an unproven CDP write, login/auth flow,
+  credential delivery, or adapter/lane assumption. The receipt feeds `ce-plan`.
+- **Post-build (accept).** Once a plan is implemented, spike the *built* thing to
+  prove it does what the plan promised — a new CLI feature exercised end to end,
+  a login/fill flow driven against a fixture, a lane proven neutral. The receipt
+  is acceptance evidence, not a design question.
+
+Use whenever a plan — being planned OR just implemented — touches browser
+mechanics: a CDP field write, a login/auth flow, credential delivery, adapter or
+lane behavior, target discovery, a new browser-facing CLI surface, or a
+form/timesheet fill.
 
 ## First safe action
 
-1. Name the falsifiable questions — the exact mechanics the plan cannot proceed
-   without (one pass/fail each).
-2. Attach the real harness: `browser-connect connect <adapter> --json` for the
-   verified endpoint; drive through the `browser-use` CLI or a flat-session CDP
-   client. Never a convention port, never the real default Chrome.
-3. Spike one question at a time in `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/`,
+1. **Pick the lane.** Is the plan still being planned (pre-build falsify) or
+   just implemented (post-build accept)? The lane sets what "pass" means:
+   *the mechanic is possible* vs *the shipped code does what the plan promised*.
+2. Name the falsifiable questions — pre-build: the mechanics the plan cannot
+   proceed without; post-build: the acceptance claims the implementation must
+   satisfy (one pass/fail each).
+3. Attach the real harness: `browser-connect connect <adapter> --json` for the
+   verified endpoint; drive through the `browser-use` CLI (or the built CLI
+   feature itself, post-build) or a flat-session CDP client. Never a convention
+   port, never the real default Chrome.
+4. Spike one question at a time in `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/`,
    secret-free, against an **http-served** fixture.
-4. Write a `findings.md` receipt (pass/fail + exact call sequence per question).
-   That receipt is `ce-plan`'s single source.
+5. Write a `findings.md` receipt (pass/fail + exact call sequence per question).
+   Pre-build it feeds `ce-plan`; post-build it is the acceptance receipt attached
+   to the implementation (and any gap becomes a bug or a plan-revision).
 
-Then read `references/prototyper-workflow.md` for the spike loop, the fixture +
-CDP toolkit, the custody/auth discipline, lane-neutrality proof, and the
-graduation-into-plan step.
+Then read `references/prototyper-workflow.md` for the spike loop, the two lanes'
+graduation steps, the fixture + CDP toolkit, the custody/auth discipline, and the
+lane-neutrality proof.
 
 ## Invariants (fail closed)
 

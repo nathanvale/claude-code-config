@@ -1,8 +1,27 @@
 # Browser Use Prototyper — Workflow
 
-Read after questions are named and the harness is attached. The `SKILL.md`
-invariants (secret-free, never-real-default-Chrome, lane-neutral, served
-fixtures, throwaway) apply throughout.
+Read after the lane and questions are named and the harness is attached. The
+`SKILL.md` invariants (secret-free, never-real-default-Chrome, lane-neutral,
+served fixtures, throwaway) apply throughout.
+
+## Two lanes
+
+Same spike loop, same invariants, same toolkit — the lane only changes what a
+question *is* and where the receipt goes.
+
+- **Pre-build (falsify).** Question = a mechanic the plan cannot proceed without.
+  Pass = *this is possible against real Chrome*. Receipt feeds `ce-plan`: proven
+  → acceptance criterion, refuted → forced plan edit, unproven-but-needed → named
+  open question. Run before/during `ce-plan`.
+- **Post-build (accept).** Question = an acceptance claim the shipped code must
+  satisfy — a new CLI feature invoked for real, an end-to-end flow driven against
+  a fixture, a lane proven still neutral after the change. Pass = *the built thing
+  does what the plan promised*. Drive the **actual implementation** (the new CLI
+  command, the built runbook, the real seam) — not a stand-in for it. Run after
+  `ce-work` implements a plan. A gap is a **bug against the implementation** (route
+  to `diagnosing-bugs`) or a **plan-was-wrong revision**, not a silent pass. Match
+  the spike to the plan's shape: a CLI-feature plan gets a CLI-invocation spike; an
+  end-to-end delivery plan gets the full flow spiked to its gated boundary.
 
 ## The spike loop
 
@@ -96,14 +115,21 @@ Reusable scaffolding so a spike starts in minutes:
 
 - **Save** each spike to `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/` with its
   `findings.md`.
-- **The findings note is `ce-plan`'s single source** — one note per prototype
-  session, folded in wholesale, so the plan cites proven receipts and drops
-  refuted assumptions.
-- **Graduate:** a proven mechanic becomes a plan acceptance criterion; a refuted
-  one becomes a forced plan edit; an unproven-but-needed mechanic becomes a named
-  open question, not a silent assumption.
+- **The findings note is the single source** — one note per prototype session.
+  Pre-build: `ce-plan` folds it in wholesale, citing proven receipts and dropping
+  refuted assumptions. Post-build: it is the **acceptance receipt** attached to
+  the implementation (link it from the PR or the plan's Verification Contract).
+- **Graduate by lane:**
+  - *Pre-build:* a proven mechanic → plan acceptance criterion; a refuted one →
+    forced plan edit; an unproven-but-needed mechanic → named open question, not a
+    silent assumption.
+  - *Post-build:* every acceptance claim PASS → the implementation is proven end
+    to end for that claim; any FAIL → a bug filed against the implementation
+    (`diagnosing-bugs`) or, if the plan itself was wrong, a plan revision. Never
+    let a post-build FAIL pass as "close enough."
 - **Capture to a branch, not `main`.** Commit the spike to a throwaway branch and
-  leave a pointer; `main` keeps only the validated decision.
+  leave a pointer; `main` keeps only the validated decision (and, when useful, a
+  worked-example spike dir under `prototypes/`).
 
 ## When NOT to spike
 
