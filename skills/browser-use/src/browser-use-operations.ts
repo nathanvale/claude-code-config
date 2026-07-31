@@ -488,7 +488,7 @@ async function resolveOperationTargetEntry(input: {
 async function focusOperationPage(input: {
 	runtime: BrowserUseRuntime;
 	handoff: HandoffFacts;
-	pageId: string | number;
+	pageId: number;
 }): Promise<{ ok: true } | { ok: false; failure: OperationFailure }> {
 	const selectPage = await runEnvelopeAdapterCall(input.runtime, {
 		probeExecutable: input.handoff.probeExecutable,
@@ -799,7 +799,6 @@ async function runOperationLane(
 	input: OperationLaneInput,
 ): Promise<OperationLaneResult> {
 	if (input.handoff.adapter === "agent-browser") {
-		// Native agent-browser execution replaces this interim transport next.
 		return runAgentBrowserOperation(input);
 	}
 	return runChromeDevtoolsOperation(input);
@@ -899,13 +898,19 @@ async function runAgentBrowserOperation(
 				),
 			};
 		}
-		if (!isJsonObject(envelope) || envelope.success !== true) {
+		if (!isJsonObject(envelope)) {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					"The adapter reported a failure response.",
+				),
+			};
+		}
+		if (envelope.success !== true) {
 			const errorText =
-				isJsonObject(envelope) &&
-				typeof envelope.error === "string" &&
-				envelope.error.trim() !== ""
+				typeof envelope.error === "string" && envelope.error.trim() !== ""
 					? redactUnsafeText(
-							envelope.error.split(input.adapterPageRef).join("[redacted]"),
+							envelope.error.replaceAll(input.adapterPageRef, "[redacted]"),
 						)
 					: "The adapter reported a failure response.";
 			return {
@@ -938,7 +943,7 @@ async function runAgentBrowserOperation(
 
 async function runOperationCalls(
 	input: OperationLaneInput,
-	pageId: string | number,
+	pageId: number,
 ): Promise<OperationLaneResult> {
 	if (input.bringToFront) {
 		const focused = await focusOperationPage({
@@ -966,7 +971,7 @@ async function runOperationCalls(
 // the spawn routes the call to that page directly on a fresh adapter process.
 async function runOperationTransport(
 	input: OperationLaneInput,
-	pageId: string | number,
+	pageId: number,
 ): Promise<BrowserOperationTransportResult> {
 	const call = (tool: string, args: Record<string, unknown>) =>
 		runEnvelopeAdapterCall(input.runtime, {

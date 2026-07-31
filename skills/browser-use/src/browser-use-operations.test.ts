@@ -482,8 +482,6 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
-	// Regression seam for the 2026-07-31 operate pageId diagnosis: discovery
-	// must retain the adapter-owned tab ref through facade-level execution.
 	test("a discovered agent-browser t1 tab survives target resolution and executes", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
