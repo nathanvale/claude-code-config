@@ -1314,6 +1314,7 @@ describe("Command Surface Alignment Proof", () => {
 			expect.arrayContaining([
 				"use_existing_checkout",
 				"choose_attach_isolation_recovery",
+				"inspect_worktrees",
 			]),
 		);
 	});

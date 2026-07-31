@@ -274,7 +274,12 @@ export function buildRecoveryPlan(input: {
 	handoffReason?: HumanHandoffReason;
 	existingCheckoutPath?: string;
 }): RecoveryPlan {
-	if (input.handoffReason === "isolation_unavailable") {
+	// Handoff and existing-checkout shortcuts only apply before mutation; a
+	// partial-state failure must keep the inspect_failure_ref plan (KTD9).
+	if (
+		input.changedState === "none" &&
+		input.handoffReason === "isolation_unavailable"
+	) {
 		return {
 			changedState: input.changedState,
 			nextActionId: "work_in_current_checkout",
@@ -294,7 +299,7 @@ export function buildRecoveryPlan(input: {
 			],
 		};
 	}
-	if (input.existingCheckoutPath) {
+	if (input.changedState === "none" && input.existingCheckoutPath) {
 		return {
 			changedState: input.changedState,
 			nextActionId: "use_existing_checkout",

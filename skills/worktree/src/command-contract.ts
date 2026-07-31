@@ -423,7 +423,7 @@ export const worktreeContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WORKTREE_SYNC_SUCCESS_ACTIONS,
-				failure: WORKTREE_ISOLATION_FAILURE_ACTIONS,
+				failure: [...WORKTREE_ISOLATION_FAILURE_ACTIONS, ...WORKTREE_DELEGATE_FAILURE_ACTIONS],
 			},
 			flags: {
 				...repoFlag,

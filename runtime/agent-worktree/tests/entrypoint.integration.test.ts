@@ -6,7 +6,7 @@ import {
 	realpathSync,
 	rmSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
@@ -145,7 +145,9 @@ function expectStringArrayContaining(
 function gitOutput(cwd: string, args: readonly string[]): string {
 	const result = spawnSync("git", [...args], {
 		cwd,
-		env: process.env,
+		// Isolate temp repos from global/system git config (gpgsign, hooksPath,
+		// templates); explicit `git config` calls inside the repos still apply.
+		env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
 		encoding: "utf8",
 		timeout: SPAWN_TIMEOUT_MS,
 		killSignal: KILL_SIGNAL,

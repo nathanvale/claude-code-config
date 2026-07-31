@@ -805,6 +805,88 @@ branch refs/heads/feat/x
 			]);
 		});
 
+		test("PR add permission failure after fetch keeps the partial inspect plan", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-perm-"));
+			const target = join(root, ".worktrees", "pr-7");
+			const baseRun = fakeGitRunner({
+				...mainRepoGitOutputs(root),
+				["git fetch origin pull/7/head:pr-7"]: "",
+			});
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 7,
+				dryRun: false,
+				runId: "attach/pr-perm",
+				run: async (args, options) =>
+					args.join(" ") === `git worktree add ${target} pr-7`
+						? {
+								ok: false,
+								stdout: "",
+								stderr: "fatal: cannot create directory: Permission denied",
+								code: 128,
+							}
+						: baseRun(args, options),
+			});
+
+			expect(result).toMatchObject({
+				changedState: "partial",
+				reason: "isolation_unavailable",
+				recovery: {
+					changedState: "partial",
+					nextActionId: "inspect_failure_ref",
+					choices: [
+						expect.objectContaining({
+							id: "inspect_failure_ref",
+							retrySafety: "inspect_first",
+							handoffReason: "partial_mutation",
+						}),
+					],
+				},
+			});
+		});
+
+		test("PR add checked-out-elsewhere failure after fetch keeps the partial inspect plan", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-co-"));
+			const target = join(root, ".worktrees", "pr-8");
+			const baseRun = fakeGitRunner({
+				...mainRepoGitOutputs(root),
+				["git fetch origin pull/8/head:pr-8"]: "",
+			});
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 8,
+				dryRun: false,
+				runId: "attach/pr-co",
+				run: async (args, options) =>
+					args.join(" ") === `git worktree add ${target} pr-8`
+						? {
+								ok: false,
+								stdout: "",
+								stderr: `fatal: 'pr-8' is already checked out at '${join(root, "elsewhere")}'`,
+								code: 128,
+							}
+						: baseRun(args, options),
+			});
+
+			expect(result).toMatchObject({
+				changedState: "partial",
+				reason: "branch_already_checked_out",
+				recovery: {
+					changedState: "partial",
+					nextActionId: "inspect_failure_ref",
+					choices: [
+						expect.objectContaining({
+							id: "inspect_failure_ref",
+							retrySafety: "inspect_first",
+							handoffReason: "partial_mutation",
+						}),
+					],
+				},
+			});
+		});
+
 		test("permission failure from worktree add requires exactly two operator choices", async () => {
 			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-permission-"));
 			const target = join(root, ".worktrees", "feat-permission");
