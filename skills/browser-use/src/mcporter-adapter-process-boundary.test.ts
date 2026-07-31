@@ -75,7 +75,8 @@ const PINNED_ADAPTER = join(
 	homedir(),
 	".side-quest/browser-connect/adapters/chrome-devtools-mcp/1.5.0/node_modules/.bin/chrome-devtools-mcp",
 );
-if (!existsSync(PINNED_ADAPTER)) {
+const pinnedAdapterPresent = existsSync(PINNED_ADAPTER);
+if (!pinnedAdapterPresent && !IS_CI) {
 	throw new Error(
 		`The pinned chrome-devtools-mcp 1.5.0 adapter is missing at ${PINNED_ADAPTER}. Run \`browser-connect connect chrome-devtools-mcp --json\` once to install the pinned adapter tree.`,
 	);
@@ -221,7 +222,7 @@ async function closedPort(): Promise<number> {
 	return port;
 }
 
-describe.skipIf(IS_CI && !mcporterOnPath)(
+describe.skipIf(IS_CI && (!mcporterOnPath || !pinnedAdapterPresent))(
 	"U1 envelope-derived transport proof against real mcporter",
 	() => {
 	test(
