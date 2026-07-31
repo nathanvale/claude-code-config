@@ -2,11 +2,11 @@
 // Browser Operations (plan U7, transport re-anchored in migration U3).
 //
 // Owns the operate workflow: the runOperate pipeline (read inputs -> load
-// binding -> resolve target context -> optional explicit focus -> run
-// transport) plus the failure bridges that map discovery/selection/transport/
-// resolution failures onto the operation diagnostic taxonomy, and snapshot
-// bounding. Orchestrates every layer below it — imports down into core,
-// runtime, transport, discovery, and selection. Single public entry:
+// binding -> resolve target context -> lane-routed optional explicit focus
+// and execution) plus the failure bridges that map discovery/selection/
+// transport/resolution failures onto the operation diagnostic taxonomy, and
+// snapshot bounding. Orchestrates every layer below it — imports down into
+// core, runtime, transport, discovery, and selection. Single public entry:
 // runOperate.
 // ---------------------------------------------------------------------------
 
@@ -75,20 +75,21 @@ import {
 	runScopedKey,
 } from "./browser-use-selection";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
 
 // ---------------------------------------------------------------------------
 // Browser Operations (plan U7, evidence re-based in migration U1).
 //
 // `browser-use operate snapshot|screenshot|emulate` runs one authorized live
 // browser operation. The pipeline reads inputs, loads the Verified Handoff
-// Envelope binding, loads the selected-target context, resolves the operation
-// target, runs the envelope-derived mcporter transport (the operation args
-// carry the resolved pageId via --experimentalPageIdRouting; no select_page
-// step — selection state is process-local and meaningless on a fresh adapter
-// spawn), and emits a bounded result. --bring-to-front keeps its contract
-// meaning as an explicit select_page focus call before the operation. Every
-// failure mode bridges down into the operation failure taxonomy (handoff,
-// selection, discovery, transport, resolution).
+// Envelope binding, loads the selected-target context, resolves an opaque
+// adapter page ref, and dispatches per lane. chrome-devtools-mcp runs the
+// envelope-derived mcporter transport (the operation args carry an integer
+// pageId via --experimentalPageIdRouting; an explicit select_page call happens
+// only for --bring-to-front). agent-browser runs the native CLI transport
+// (tab activation then snapshot; activation carries the focus side effect).
+// Every failure mode bridges down into the operation failure taxonomy
+// (handoff, selection, discovery, transport, resolution).
 // ---------------------------------------------------------------------------
 
 const SNAPSHOT_MAX_BYTES = 64 * 1024;
@@ -114,7 +115,7 @@ type OperationSideEffects = {
 
 type OperationTargetEntry = {
 	candidate: BrowserTargetCandidate;
-	pageId?: number;
+	adapterPageRef?: string;
 };
 
 type ScreenshotArtifact = {
@@ -153,7 +154,7 @@ type OperationTargetContext = {
 type ResolvedOperationTarget = {
 	candidate: BrowserTargetCandidate;
 	source: "hints" | "selected_state" | "single_candidate";
-	pageId: number;
+	adapterPageRef: string;
 };
 
 export async function runOperate(input: {
@@ -226,32 +227,19 @@ export async function runOperate(input: {
 		: undefined;
 	if (artifactDirectory && !artifactDirectory.ok) return fail(artifactDirectory.failure);
 
-	// Explicit focus side effect only (U3): with pageId routing on the spawn,
-	// no default select_page call exists. --bring-to-front issues one
-	// deliberately, through the same envelope-derived transport.
 	const bringToFront = flags["--bring-to-front"] !== undefined;
-	if (bringToFront) {
-		const focused = await focusOperationPage({
-			runtime,
-			handoff: binding.context.handoff,
-			pageId: target.target.pageId,
-		});
-		if (!focused.ok) return fail(focused.failure);
-	}
-
-	const operationCall = await runOperationTransport({
+	const operationCall = await runOperationLane({
 		runtime,
 		handoff: binding.context.handoff,
-		pageId: target.target.pageId,
+		adapterPageRef: target.target.adapterPageRef,
 		operation: operationInputs.inputs.operation,
 		screenshot: operationInputs.inputs.screenshot,
 		viewport: operationInputs.inputs.viewport,
 		verbose: input.diagnosticVerbose,
+		bringToFront,
 	});
 	if (!operationCall.ok) {
-		return fail(operationFailureFromTransport(operationCall.failure), {
-			focus: bringToFront,
-		});
+		return fail(operationCall.failure, { focus: operationCall.focus });
 	}
 	if (operationCall.result.exitCode !== 0) {
 		return fail(
@@ -278,7 +266,11 @@ export async function runOperate(input: {
 		...(operationInputs.inputs.viewport
 			? { viewport: operationInputs.inputs.viewport }
 			: {}),
-		focusSideEffect: bringToFront,
+		// agent-browser native tab activation always carries the window-focus
+		// side effect, so focus is truthfully reported even without
+		// --bring-to-front.
+		focusSideEffect:
+			binding.context.handoff.adapter === "agent-browser" || bringToFront,
 	});
 }
 
@@ -468,7 +460,7 @@ async function resolveOperationTargetEntry(input: {
 	const targetEntry = input.targetEntries.find(
 		(entry) => entry.candidate.candidate_id === resolution.candidate.candidate_id,
 	);
-	if (!targetEntry || targetEntry.pageId === undefined) {
+	if (!targetEntry || targetEntry.adapterPageRef === undefined) {
 		return {
 			ok: false,
 			failure: {
@@ -487,7 +479,7 @@ async function resolveOperationTargetEntry(input: {
 		target: {
 			candidate: resolution.candidate,
 			source: resolution.source,
-			pageId: targetEntry.pageId,
+			adapterPageRef: targetEntry.adapterPageRef,
 		},
 	};
 }
@@ -554,14 +546,8 @@ function operationTargetEntries(
 		.filter((page) => parseUrlSafe(page.url))
 		.map((page, index) => ({
 			candidate: toCandidate(page, index, targetEnvelopeId, true),
-			pageId: parseAdapterPageId(page.id),
+			adapterPageRef: page.id === "" ? undefined : page.id,
 		}));
-}
-
-function parseAdapterPageId(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const parsed = Number(value);
-	return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 type OperationStateLoad =
@@ -797,24 +783,219 @@ function positiveNumberFlag(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-// Run the operation tool through the envelope-derived transport. Each
-// operation's args carry the resolved pageId: --experimentalPageIdRouting on
-// the spawn routes the call to that page directly on a fresh adapter process.
-async function runOperationTransport(input: {
+type OperationLaneInput = {
 	runtime: BrowserUseRuntime;
 	handoff: HandoffFacts;
-	pageId: number;
+	adapterPageRef: string;
 	operation: BrowserOperationClass;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 	verbose: boolean;
-}): Promise<BrowserOperationTransportResult> {
+	bringToFront: boolean;
+};
+
+type OperationLaneResult =
+	| { ok: true; result: McporterCommandResult }
+	| { ok: false; failure: OperationFailure; focus: boolean };
+
+async function runOperationLane(
+	input: OperationLaneInput,
+): Promise<OperationLaneResult> {
+	if (input.handoff.adapter === "agent-browser") {
+		return runAgentBrowserOperation(input);
+	}
+	return runChromeDevtoolsOperation(input);
+}
+
+async function runChromeDevtoolsOperation(
+	input: OperationLaneInput,
+): Promise<OperationLaneResult> {
+	const pageId = Number(input.adapterPageRef);
+	if (!Number.isInteger(pageId) || pageId < 0) {
+		return {
+			ok: false,
+			failure: operationTransportExitedFailure(
+				"The chrome-devtools-mcp page ref must be a non-negative integer.",
+			),
+			focus: false,
+		};
+	}
+	return runOperationCalls(input, pageId);
+}
+
+async function runAgentBrowserOperation(
+	input: OperationLaneInput,
+): Promise<OperationLaneResult> {
+	if (
+		!SAFE_RUN_ID.test(input.handoff.runId) ||
+		!SAFE_TAB_ID.test(input.adapterPageRef)
+	) {
+		return {
+			ok: false,
+			failure: {
+				code: "browser_operation_transport_failed",
+				message: "The agent-browser operation identifiers are unsafe.",
+				actionId: "change_operation_input",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			},
+			focus: false,
+		};
+	}
+	const baseArgs = [
+		"--cdp",
+		input.handoff.endpointWs,
+		"--session",
+		`browser-use-${input.handoff.runId}`,
+	];
+	const call = async (
+		args: string[],
+		label: string,
+	): Promise<
+		| { ok: true; result: McporterCommandResult; data: unknown }
+		| { ok: false; failure: OperationFailure }
+	> => {
+		let result: McporterCommandResult;
+		try {
+			result = await input.runtime.runCommand({
+				command: input.handoff.probeExecutable,
+				args: [...baseArgs, ...args, "--json"],
+				timeoutMs: 30_000,
+			});
+		} catch {
+			return {
+				ok: false,
+				failure: dependencyOperationFailure(
+					"browser_operation_dependency_missing",
+					`The agent-browser ${label} call could not be started.`,
+				),
+			};
+		}
+		if (result.timedOut === true) {
+			return {
+				ok: false,
+				failure: {
+					code: "browser_operation_transport_timeout",
+					message: `The agent-browser ${label} call timed out.`,
+					actionId: "inspect_operation_diagnostics",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "retry",
+				},
+			};
+		}
+		if (result.exitCode !== 0) {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					`The agent-browser ${label} call failed.`,
+				),
+			};
+		}
+		let envelope: unknown;
+		try {
+			envelope = JSON.parse(result.stdout);
+		} catch {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					`The agent-browser ${label} call returned unparsable output.`,
+				),
+			};
+		}
+		if (!isJsonObject(envelope)) {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					"The adapter reported a failure response.",
+				),
+			};
+		}
+		if (envelope.success !== true) {
+			const errorText =
+				typeof envelope.error === "string" && envelope.error.trim() !== ""
+					? redactUnsafeText(
+							envelope.error.replaceAll(input.adapterPageRef, "[redacted]"),
+						)
+					: "The adapter reported a failure response.";
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(errorText),
+			};
+		}
+		return { ok: true, result, data: envelope.data };
+	};
+
+	const activated = await call(["tab", input.adapterPageRef], "tab activation");
+	if (!activated.ok) {
+		return { ok: false, failure: activated.failure, focus: false };
+	}
+	const snapshot = await call(["snapshot"], "snapshot");
+	if (!snapshot.ok) {
+		return { ok: false, failure: snapshot.failure, focus: true };
+	}
+	// agent-browser snapshot data is either a plain string or {snapshot, refs}.
+	const snapshotText =
+		typeof snapshot.data === "string"
+			? snapshot.data
+			: isJsonObject(snapshot.data) && typeof snapshot.data.snapshot === "string"
+				? snapshot.data.snapshot
+				: undefined;
+	if (snapshotText === undefined) {
+		return {
+			ok: false,
+			failure: operationTransportExitedFailure(
+				"The agent-browser snapshot call returned an unexpected payload shape.",
+			),
+			focus: true,
+		};
+	}
+	return {
+		ok: true,
+		result: {
+			...snapshot.result,
+			stdout: snapshotText,
+		},
+	};
+}
+
+async function runOperationCalls(
+	input: OperationLaneInput,
+	pageId: number,
+): Promise<OperationLaneResult> {
+	if (input.bringToFront) {
+		const focused = await focusOperationPage({
+			runtime: input.runtime,
+			handoff: input.handoff,
+			pageId,
+		});
+		if (!focused.ok) {
+			return { ok: false, failure: focused.failure, focus: false };
+		}
+	}
+	const operationCall = await runOperationTransport(input, pageId);
+	if (!operationCall.ok) {
+		return {
+			ok: false,
+			failure: operationFailureFromTransport(operationCall.failure),
+			focus: input.bringToFront,
+		};
+	}
+	return operationCall;
+}
+
+// Run the operation tool through the envelope-derived transport. Each
+// operation's args carry the lane-owned pageId: --experimentalPageIdRouting on
+// the spawn routes the call to that page directly on a fresh adapter process.
+async function runOperationTransport(
+	input: OperationLaneInput,
+	pageId: number,
+): Promise<BrowserOperationTransportResult> {
 	const call = (tool: string, args: Record<string, unknown>) =>
 		runEnvelopeAdapterCall(input.runtime, {
 			probeExecutable: input.handoff.probeExecutable,
 			endpointHttp: input.handoff.endpointHttp,
 			tool,
-			argsJson: JSON.stringify({ pageId: input.pageId, ...args }),
+			argsJson: JSON.stringify({ pageId, ...args }),
 		});
 	if (input.operation === "snapshot") {
 		return call("take_snapshot", input.verbose ? { verbose: true } : {});
