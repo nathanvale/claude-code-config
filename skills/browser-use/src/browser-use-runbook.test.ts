@@ -1674,7 +1674,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					proven: true,
 					observed_digest: "d".repeat(32),
 				}),
-				field_by_ref: {},
+				field_by_binding_slug: {},
 			};
 			const seamCalls: Array<readonly string[]> = [];
 			// tab list + select, then the interactive snapshot yields the @e1 ref
@@ -1900,7 +1900,7 @@ function confidentialSeam(
 			tokenRetrieval: confidentialFakePort,
 			deliver: hook,
 			reproveTarget: confidentialReproveOk,
-			field_by_ref: { "@e1": "password" },
+			field_by_binding_slug: { oncore_password: "password" },
 		};
 		return { ok: true, context };
 	};
@@ -1908,6 +1908,68 @@ function confidentialSeam(
 }
 
 describe("(C) runbook-run confidential path — wired delivery seam", () => {
+	test(
+		"single-binding v1 refuses a plan with multiple pending binding slugs before auth resolution",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "multiple-bindings",
+					steps: [
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "Password" },
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "One-time code" },
+							sensitivity: "confidential",
+							item_binding: "oncore_otp_current",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			let seamCalls = 0;
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime: runtimeFor([]),
+					dataRoot,
+					authDelivery: async () => {
+						seamCalls += 1;
+						return { ok: false, message: "must not resolve" };
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "multiple-bindings",
+					handoff: HANDOFF,
+					runId: "run-multiple-bindings",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			expect(outcome.refusal.message).toContain("single Item Binding");
+			expect(seamCalls).toBe(0);
+		}),
+	);
+
 	test(
 		"Seam A: an in-interval seam routes a confidential field through deliverConfidentialFields instead of refusing",
 		withDataRoot(async (dataRoot) => {
@@ -1991,7 +2053,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 					tokenRetrieval: confidentialFakePort,
 					deliver: hook,
 					reproveTarget: confidentialReproveOk,
-					field_by_ref: { "@e1": "password" },
+					field_by_binding_slug: { oncore_password: "password" },
 				};
 				expect(seamInput.pendingItemBindings).toEqual(["oncore_password"]);
 				captured = context;
@@ -2019,7 +2081,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 				in_sensitive_interval: captured.in_sensitive_interval,
 				binding: captured.binding,
 				target: captured.target,
-				field_by_ref: captured.field_by_ref,
+				field_by_binding_slug: captured.field_by_binding_slug,
 			};
 			const compact = JSON.stringify(dataOnly);
 			const pretty = JSON.stringify(dataOnly, null, 2);
@@ -2027,7 +2089,9 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			expect(compact).not.toContain(sentinelValue.password);
 			expect(pretty).not.toContain(sentinelValue.password);
 			// The field mapping names the field kind only, no value.
-			expect(captured.field_by_ref).toEqual({ "@e1": "password" });
+			expect(captured.field_by_binding_slug).toEqual({
+				oncore_password: "password",
+			});
 		}),
 	);
 

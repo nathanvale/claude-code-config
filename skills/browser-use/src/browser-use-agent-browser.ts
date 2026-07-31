@@ -103,6 +103,8 @@ export type AgentBrowserTaskStep =
 	| {
 			kind: "fill";
 			ref: string;
+			/** Binding slug resolved by confidential delivery at fill time. */
+			item_binding?: string;
 			value: string;
 			sensitivity: "ordinary" | "confidential";
 			/**
@@ -136,7 +138,7 @@ export type AgentBrowserTaskStep =
  *
  * The context is only ever handed in DURING the auth transaction's
  * sensitive-interval (`in_sensitive_interval` — post lease-granted, pre
- * submission-dispatched); `field_by_ref` names, per snapshot ref, which
+ * submission-dispatched); `field_by_binding_slug` names, per runbook binding,
  * credential field the choreography must deliver into that field. Every effect
  * is an injected port owned by the auth wiring: the disposable delivery helper
  * (`deliver`), the fresh target re-proof (`reproveTarget`), the verified target
@@ -158,8 +160,10 @@ export type AgentBrowserAuthDeliveryContext = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	deliver: BrowserUseDeliveryHook;
 	reproveTarget: BrowserUseTargetReproof;
-	/** Snapshot ref -> the credential field the choreography must deliver. */
-	field_by_ref: Readonly<Record<string, BrowserUseOpCredentialField>>;
+	/** Runbook binding slug -> credential field delivered for that step. */
+	field_by_binding_slug: Readonly<
+		Record<string, BrowserUseOpCredentialField>
+	>;
 };
 
 /**
@@ -1031,12 +1035,15 @@ export async function executeAgentBrowserTask(
 			// of the executor's own `fill`. The choreography re-proves the target,
 			// mints an opaque handle, and performs one bounded write inside the
 			// disposable delivery helper — the executor never observes a value.
-			const field = delivery.field_by_ref[mutationRef];
+			const field =
+				step.item_binding === undefined
+					? undefined
+					: delivery.field_by_binding_slug[step.item_binding];
 			if (field === undefined) {
 				return withDelivery(failure(
 					"agent_browser_confidential_delivery_blocked",
 					"not-achieved",
-					"The confidential fill ref has no mapped credential field in the auth-delivery context.",
+					"The confidential fill binding has no mapped credential field in the auth-delivery context.",
 					executedSteps,
 				));
 			}

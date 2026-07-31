@@ -210,7 +210,7 @@ const context: AgentBrowserAuthDeliveryContext = {
 		proven: true,
 		observed_digest: target.target_proof_digest,
 	}),
-	field_by_ref: { "@e1": "password" },
+	field_by_binding_slug: { oncore_password: "password" },
 };
 
 const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
