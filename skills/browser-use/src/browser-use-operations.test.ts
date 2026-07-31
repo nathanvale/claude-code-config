@@ -548,6 +548,26 @@ describe("U7 operation success and transport", () => {
 		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
 	});
 
+	test("agent-browser snapshot accepts plain string data", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(
+					JSON.stringify({ success: true, data: "Root\nButton" }),
+				),
+			],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			snapshot: { text: "Root\nButton" },
+		});
+	});
+
 	test("agent-browser rejects an unsafe native tab ref before operation spawn", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
@@ -773,6 +793,7 @@ describe("U7 operation success and transport", () => {
 				run_id: FIXTURE_RUN_ID,
 				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
 			},
+			side_effects: { focus: false },
 		});
 		expect((json.data as Record<string, any>).snapshot.text).toContain("Root");
 		// Default operate path (U3): list_pages then the operation — no
