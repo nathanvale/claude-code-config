@@ -46,6 +46,7 @@ export const AGENT_WORKTREE_COMMANDS = [
 	"doctor",
 	"list",
 	"create",
+	"attach",
 	"status",
 	"check",
 	"delete",
@@ -199,6 +200,52 @@ export type AgentWorktreeRecoveryRetrySafety =
 	(typeof AGENT_WORKTREE_RECOVERY_RETRY_SAFETY)[number];
 
 /**
+ * Human-only recovery reasons emitted by lifecycle refusals.
+ */
+export const AGENT_WORKTREE_HUMAN_HANDOFF_REASONS = [
+	"destructive_confirmation",
+	"dirty_state",
+	"unreliable_evidence",
+	"partial_mutation",
+	"isolation_unavailable",
+] as const;
+
+/**
+ * Reason automation stops and transfers lifecycle choice to an operator.
+ */
+export type AgentWorktreeHumanHandoffReason =
+	(typeof AGENT_WORKTREE_HUMAN_HANDOFF_REASONS)[number];
+
+/**
+ * Stable lifecycle reasons exposed in structured command data.
+ */
+export const AGENT_WORKTREE_LIFECYCLE_REASONS = [
+	"branch_already_checked_out",
+	"branch_already_exists",
+	"checked_out_elsewhere",
+	"dirty",
+	"evidence_unreliable",
+	"gh_not_found",
+	"gh_pr_checkout_failed",
+	"isolation_unavailable",
+	"merged",
+	"missing_force",
+	"pr_fetch_failed",
+	"protected_branch",
+	"ref_not_found",
+	"target_not_found",
+	"target_path_exists",
+	"unmerged",
+	"worktree_add_failed",
+] as const;
+
+/**
+ * Typed reason attached to a lifecycle result.
+ */
+export type AgentWorktreeLifecycleReason =
+	(typeof AGENT_WORKTREE_LIFECYCLE_REASONS)[number];
+
+/**
  * Retention warning threshold for local records and backup refs.
  *
  * V1 warns after this age but does not delete. Pruning requires a later
@@ -319,6 +366,8 @@ export const AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY =
  * Behavior-bearing units will expand this list as recovery paths land.
  */
 export const AGENT_WORKTREE_DIAGNOSTIC_CODES = [
+	"gh_not_found",
+	"gh_pr_checkout_failed",
 	"usage_error",
 	"runtime_error",
 ] as const;

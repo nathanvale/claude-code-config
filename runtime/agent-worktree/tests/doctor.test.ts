@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
 import type { RepoDiscovery } from "../src/discovery.ts";
 import { createFileStore } from "../src/store.ts";
-import { fakeGitRunner } from "./support.ts";
+import { fakeGitRunner, mainRepoGitOutputs } from "./support.ts";
 
 describe("agent-worktree doctor", () => {
 	test("returns a blocked map when git root cannot be read", async () => {
@@ -29,6 +29,7 @@ describe("agent-worktree doctor", () => {
 		const discovery = {
 			requestedRoot: "/repo",
 			gitRoot: "/repo",
+			isolation: "main",
 			mainOwnerRoot: "/repo",
 			worktrees: [],
 			linkedWorktrees: [],
@@ -54,6 +55,7 @@ describe("agent-worktree doctor", () => {
 		const discovery = {
 			requestedRoot: "/repo",
 			gitRoot: "/repo",
+			isolation: "main",
 			mainOwnerRoot: "/repo",
 			worktrees: [],
 			linkedWorktrees: [],
@@ -87,6 +89,32 @@ describe("agent-worktree doctor", () => {
 		expect(issueCheckIds).toContain("default_branch");
 		expect(issueCheckIds).toContain("stale_dirs");
 		expect(issueCheckIds.filter((id) => id === "repo")).toHaveLength(1);
+	});
+
+	test("keeps failed isolation detection readable in the doctor map", async () => {
+		const outputs: Record<string, string> = {
+			...mainRepoGitOutputs("/repo"),
+			["git status --porcelain"]: "",
+			["git rev-parse --is-shallow-repository"]: "false\n",
+			["git merge-base --is-ancestor main main"]: "",
+			["git rev-list --left-right --count main...main"]: "0 0\n",
+		};
+		delete outputs["git rev-parse --git-common-dir"];
+
+		const map = await runDoctor({
+			cwd: "/repo",
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(map.status).toBe("unknown");
+		expect(map.repo.isolation).toBeUndefined();
+		expect(
+			map.checks.some(
+				(check) =>
+					check.owner === "discovery" &&
+					check.summary === "Git isolation could not be classified.",
+			),
+		).toBe(true);
 	});
 
 	test("reports dirty linked worktrees as mutation blockers", async () => {

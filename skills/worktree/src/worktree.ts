@@ -18,6 +18,7 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	attachWorktree,
 	cleanPreview,
 	createWorktree,
 	deleteWorktree,
@@ -117,6 +118,10 @@ type WorkTreeLifecyclePayload = {
 		| NonNullable<LifecycleResult["recovery"]>["choices"][number]["retrySafety"]
 		| undefined;
 	backup_ref: LifecycleResult["backupRef"] | undefined;
+	resolved_ref: LifecycleResult["resolvedRef"] | undefined;
+	target_path: LifecycleResult["targetPath"] | undefined;
+	mode: LifecycleResult["mode"] | undefined;
+	existing_checkout_path: LifecycleResult["existingCheckoutPath"] | undefined;
 };
 
 /**
@@ -616,7 +621,47 @@ function lifecyclePayload(
 		recovery: lifecycle.recovery,
 		retry_safety: lifecycle.recovery?.choices[0]?.retrySafety,
 		backup_ref: lifecycle.backupRef,
+		resolved_ref: lifecycle.resolvedRef,
+		target_path: lifecycle.targetPath,
+		mode: lifecycle.mode,
+		existing_checkout_path: lifecycle.existingCheckoutPath,
 	};
+}
+
+function fromIsolationLifecycleFailure(
+	command: "new" | "attach",
+	lifecycle: LifecycleResult,
+): CommandResult {
+	if (lifecycle.reason === "branch_already_checked_out") {
+		return {
+			ok: false,
+			code:
+				command === "attach"
+					? "attach_branch_already_checked_out"
+					: "new_branch_already_checked_out",
+			message: "The requested branch is already checked out in another worktree.",
+			action: "Use the existing checkout at the path reported in structured result data.",
+			exitCode: 2,
+			recoverability: "change_input",
+			data: lifecyclePayload(command, lifecycle),
+		};
+	}
+	if (lifecycle.reason === "isolation_unavailable") {
+		return {
+			ok: false,
+			code:
+				command === "attach" ? "attach_isolation_unavailable" : "new_isolation_unavailable",
+			message: `Worktree isolation is unavailable for this ${
+				command === "attach" ? "attach" : "create"
+			}.`,
+			action:
+				"Ask the operator to choose between working in the current checkout and resolving worktree isolation.",
+			exitCode: 4,
+			recoverability: "repair_state",
+			data: lifecyclePayload(command, lifecycle),
+		};
+	}
+	return fromLifecycleFailure(command, lifecycle);
 }
 
 function fromLifecycleFailure(command: string, lifecycle: LifecycleResult): CommandResult {
@@ -905,11 +950,14 @@ export interface ParsedInvocation {
 	forceRender?: boolean;
 	noInput?: boolean;
 	repoRoot?: string;
+	dryRun?: boolean;
+	track?: boolean;
+	pr?: number;
 	parseError?: CommandResult;
 }
 
 /**
- * Parse a diagnostic-stripped argv into a verb, positionals, and the force flag.
+ * Parse a diagnostic-stripped argv into a verb, positionals, and command flags.
  *
  * @param argv - argv tail with diagnostic flags already removed
  * @returns The parsed invocation
@@ -926,6 +974,9 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let forceRender = false;
 	let noInput = false;
 	let repoRoot: string | undefined;
+	let dryRun = false;
+	let track = false;
+	let pr: number | undefined;
 	let command = "";
 	const usedFlags = new Set<string>();
 	const fail = (message: string): ParsedInvocation => ({
@@ -935,6 +986,9 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		forceRender,
 		noInput,
 		repoRoot,
+		...(dryRun ? { dryRun } : {}),
+		...(track ? { track } : {}),
+		...(pr !== undefined ? { pr } : {}),
 		parseError: usageFailure("usage_error", message, "Review the command help and retry."),
 	});
 	for (let i = 0; i < argv.length; i += 1) {
@@ -948,6 +1002,12 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		} else if (arg === "--no-input") {
 			noInput = true;
 			usedFlags.add(arg);
+		} else if (arg === "--dry-run") {
+			dryRun = true;
+			usedFlags.add(arg);
+		} else if (arg === "--track") {
+			track = true;
+			usedFlags.add(arg);
 		} else if (arg === "--json") {
 			// --json selects output mode; WorkTree always emits JSON envelopes.
 			usedFlags.add(arg);
@@ -958,6 +1018,18 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 				return fail("--repo needs a path value.");
 			}
 			repoRoot = value;
+			i += 1;
+		} else if (arg === "--pr") {
+			usedFlags.add(arg);
+			const value = argv[i + 1];
+			if (!value || value.startsWith("--")) {
+				return fail("--pr needs a positive integer.");
+			}
+			const parsedPr = Number.parseInt(value, 10);
+			if (!/^\d+$/.test(value) || parsedPr < 1) {
+				return fail("--pr needs a positive integer.");
+			}
+			pr = parsedPr;
 			i += 1;
 		} else if (arg.startsWith("--")) {
 			return fail(`Unknown flag '${arg}'.`);
@@ -975,7 +1047,17 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			}
 		}
 	}
-	return { command, positionals, force, forceRender, noInput, repoRoot };
+	return {
+		command,
+		positionals,
+		force,
+		forceRender,
+		noInput,
+		repoRoot,
+		...(dryRun ? { dryRun } : {}),
+		...(track ? { track } : {}),
+		...(pr !== undefined ? { pr } : {}),
+	};
 }
 
 async function runFocusCommand(
@@ -1073,7 +1155,9 @@ async function runLifecycleCommand(
 					runId: `worktree-${runtime.now()}`,
 				});
 	if (lifecycle.changedState !== "complete") {
-		return fromLifecycleFailure(command, lifecycle);
+		return command === "new"
+			? fromIsolationLifecycleFailure("new", lifecycle)
+			: fromLifecycleFailure(command, lifecycle);
 	}
 	const codexCleanup =
 		command === "rm" && removedWorktreePath
@@ -1085,6 +1169,70 @@ async function runLifecycleCommand(
 		return fromPostLifecycleSyncFailure(command, lifecycle, sync, extra);
 	}
 	return { ok: true, data: renderSuccessData(command, sync.path, extra) };
+}
+
+async function runAttachCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [ref] = invocation.positionals;
+	if (ref && invocation.pr !== undefined) {
+		return usageFailure(
+			"usage_error",
+			"attach accepts either <ref> or --pr, not both.",
+			"Choose one attach selector and retry.",
+		);
+	}
+	if (invocation.track && invocation.pr === undefined) {
+		return usageFailure(
+			"usage_error",
+			"attach --track needs --pr <n>.",
+			"Add a pull request selector or omit tracking.",
+		);
+	}
+	if (!ref && invocation.pr === undefined) {
+		return usageFailure(
+			"usage_error",
+			"attach needs <ref> or --pr <n>.",
+			"Choose an existing ref or pull request.",
+		);
+	}
+	if (invocation.positionals.length > 1) {
+		return usageFailure(
+			"usage_error",
+			"attach accepts one positional <ref>.",
+			"Remove extra positional values and retry.",
+		);
+	}
+
+	const lifecycle = await attachWorktree({
+		cwd: runtime.repoRoot(),
+		run: adaptRunner(runtime.run),
+		ref,
+		pr: invocation.pr,
+		track: invocation.track,
+		dryRun: Boolean(invocation.dryRun),
+		runId: `worktree-${runtime.now()}`,
+		now: runtime.now,
+	});
+	if (lifecycle.preview) {
+		return { ok: true, data: lifecycleEnvelopeData("attach", lifecycle) };
+	}
+	if (lifecycle.changedState !== "complete") {
+		return fromIsolationLifecycleFailure("attach", lifecycle);
+	}
+	const sync = await syncWorkspace(runtime, Boolean(invocation.forceRender));
+	if (sync.kind !== "written") {
+		return fromPostLifecycleSyncFailure("attach", lifecycle, sync);
+	}
+	return {
+		ok: true,
+		data: lifecycleResultData({
+			...lifecyclePayload("attach", lifecycle),
+			render_status: "written",
+			render_workspace_path: sync.path,
+		}),
+	};
 }
 
 async function runCleanCommand(runtime: WorkTreeRuntime): Promise<CommandResult> {
@@ -1266,6 +1414,8 @@ export async function runCommand(
 		case "new":
 		case "rm":
 			return runLifecycleCommand(invocation, runtime);
+		case "attach":
+			return runAttachCommand(invocation, runtime);
 		case "clean":
 			return runCleanCommand(runtime);
 		case "open":
@@ -1302,6 +1452,7 @@ function renderFrontDoorUsage(): string {
 		"",
 		"Worktree CRUD:",
 		"  Create a worktree                worktree new <branch> --json",
+		"  Attach an existing ref or PR     worktree attach <ref> --json | worktree attach --pr <n> --json",
 		"  Read/list current worktrees      worktree status --json",
 		"  Update the VS Code view          worktree sync --json",
 		"  Update focus or color            worktree focus <branch> <subfolder> --json | worktree color <branch> <color> --json",
@@ -1316,6 +1467,7 @@ function renderFrontDoorUsage(): string {
 		"  worktree sync --json",
 		"  worktree app <branch> --json",
 		"  worktree new <branch> --json",
+		"  worktree attach <ref> --json",
 		"  worktree rm <branch> --force --json",
 		"",
 		"Commands:",

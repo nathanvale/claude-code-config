@@ -7,7 +7,11 @@ import {
 	discoverRepo,
 	parseWorktreePorcelain,
 } from "../src/discovery.ts";
-import { fakeGitRunner } from "./support.ts";
+import {
+	fakeGitRunner,
+	linkedRepoGitOutputs,
+	mainRepoGitOutputs,
+} from "./support.ts";
 
 describe("agent-worktree discovery", () => {
 	test("parses porcelain worktree output with main and linked entries", () => {
@@ -51,6 +55,14 @@ branch refs/heads/feat/x
 			cwd: linked,
 			run: fakeGitRunner({
 				["git rev-parse --show-toplevel"]: `${root}\n`,
+				["git rev-parse --git-dir"]: `${join(
+					root,
+					".git",
+					"worktrees",
+					"feat-x",
+				)}\n`,
+				["git rev-parse --git-common-dir"]: `${join(root, ".git")}\n`,
+				["git rev-parse --show-superproject-working-tree"]: "\n",
 				["git worktree list --porcelain"]: `worktree ${root}
 HEAD abc
 branch refs/heads/main
@@ -71,5 +83,70 @@ branch refs/heads/feat/x
 		expect(discovery.staleDirs).toEqual([stale]);
 		expect(discovery.defaultBranch).toBe("main");
 		expect(discovery.storeRoot).toBe(join(root, ".agent-worktree"));
+	});
+
+	test("classifies a normal checkout when resolved git dirs match", async () => {
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			run: fakeGitRunner(mainRepoGitOutputs("/repo")),
+		});
+
+		expect(discovery.isolation).toBe("main");
+	});
+
+	test("classifies a linked worktree when resolved git dirs differ", async () => {
+		const discovery = await discoverRepo({
+			cwd: "/repo/.worktrees/feat-x",
+			run: fakeGitRunner(
+				linkedRepoGitOutputs("/repo", "/repo/.worktrees/feat-x"),
+			),
+		});
+
+		expect(discovery.isolation).toBe("linked_worktree");
+	});
+
+	test("classifies a submodule before treating differing git dirs as linked", async () => {
+		const outputs = {
+			...mainRepoGitOutputs("/repo"),
+			["git rev-parse --git-dir"]: "/super/.git/modules/repo\n",
+			["git rev-parse --git-common-dir"]: "/super/.git\n",
+			["git rev-parse --show-superproject-working-tree"]: "/super\n",
+		};
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBe("submodule");
+	});
+
+	test("normalizes relative and absolute git dir forms before comparing", async () => {
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			run: fakeGitRunner({
+				...mainRepoGitOutputs("/repo"),
+				["git rev-parse --git-dir"]: ".git\n",
+				["git rev-parse --git-common-dir"]: "/repo/.git\n",
+			}),
+		});
+
+		expect(discovery.isolation).toBe("main");
+	});
+
+	test("records an unknown issue when an isolation probe fails", async () => {
+		const outputs = mainRepoGitOutputs("/repo");
+		delete outputs["git rev-parse --git-common-dir"];
+
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBeUndefined();
+		expect(discovery.issues).toContainEqual({
+			code: "isolation_detection_failed",
+			status: "unknown",
+			summary: "Git isolation could not be classified.",
+		});
 	});
 });

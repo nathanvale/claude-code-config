@@ -73,10 +73,16 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 		run: async (args, options) => {
 			runCalls.push([...args]);
 			const key = args.join(" ");
+			const ownerRoot = options?.cwd?.includes("/code/other-repo")
+				? "/code/other-repo"
+				: "/code/my-repo";
 			const outputs: Record<string, string> = {
-				"git rev-parse --show-toplevel": options?.cwd?.includes("/code/other-repo")
-					? "/code/other-repo\n"
-					: "/code/my-repo\n",
+				"git rev-parse --show-toplevel": `${ownerRoot}\n`,
+				"git rev-parse --git-dir": options?.cwd?.includes("/.worktrees/")
+					? `${ownerRoot}/.git/worktrees/browser-use-refactor\n`
+					: `${ownerRoot}/.git\n`,
+				"git rev-parse --git-common-dir": `${ownerRoot}/.git\n`,
+				"git rev-parse --show-superproject-working-tree": "\n",
 				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd),
 				"git branch --show-current": "main\n",
 				"git symbolic-ref --short refs/remotes/origin/HEAD": "origin/main\n",
@@ -86,6 +92,11 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 				"git rev-list --left-right --count main...codex/browser-use-refactor":
 					"1 0\n",
 				"git worktree add -b feat/z /code/my-repo/.worktrees/feat-z main":
+					"",
+				"git show-ref --verify --hash refs/heads/feat/existing": "jkl\n",
+				"git show-ref --verify --hash refs/heads/codex/browser-use-refactor":
+					"def\n",
+				"git worktree add /code/my-repo/.worktrees/feat-existing feat/existing":
 					"",
 				"git worktree remove /code/my-repo/.worktrees/browser-use-refactor":
 					"",
@@ -135,6 +146,23 @@ function runtimeWithRemoveFailure(): ReturnType<typeof fakeRuntime> {
 				return { ok: false, stdout: "", stderr: "remove failed", code: 1 };
 			}
 			return fakeRuntime().run(args, options);
+		},
+	});
+}
+
+function newIsolationFailureRuntime(): ReturnType<typeof fakeRuntime> {
+	const base = fakeRuntime();
+	return fakeRuntime({
+		run: async (args, options) => {
+			if (args.join(" ") === "git worktree add -b feat/z /code/my-repo/.worktrees/feat-z main") {
+				return {
+					ok: false,
+					stdout: "",
+					stderr: "fatal: could not create work tree dir: Permission denied",
+					code: 1,
+				};
+			}
+			return base.run(args, options);
 		},
 	});
 }
@@ -224,11 +252,45 @@ describe("parseInvocation", () => {
 		});
 	});
 
+	test("captures attach selectors, tracking, and dry-run", () => {
+		const parsed = parseInvocation([
+			"attach",
+			"--pr",
+			"42",
+			"--track",
+			"--dry-run",
+			"--force-render",
+			"--json",
+		]);
+		expect(parsed).toMatchObject({
+			command: "attach",
+			positionals: [],
+			pr: 42,
+			track: true,
+			dryRun: true,
+			forceRender: true,
+		});
+	});
+
 	test("rejects a foreign flag for the selected command", () => {
 		const parsed = parseInvocation(["open", "--force", "--json"]);
 		expect(parsed.parseError?.ok).toBe(false);
 		if (parsed.parseError && !parsed.parseError.ok) {
 			expect(parsed.parseError.exitCode).toBe(2);
+		}
+	});
+
+	test("rejects non-integer and missing --pr values", () => {
+		for (const argv of [
+			["attach", "--pr", "abc", "--json"],
+			["attach", "--pr", "--json"],
+		]) {
+			const parsed = parseInvocation(argv);
+			expect(parsed.parseError?.ok).toBe(false);
+			if (parsed.parseError && !parsed.parseError.ok) {
+				expect(parsed.parseError.exitCode).toBe(2);
+				expect(parsed.parseError.message).toBe("--pr needs a positive integer.");
+			}
 		}
 	});
 });
@@ -519,6 +581,156 @@ describe("shared lifecycle verbs", () => {
 		]);
 	});
 
+	test("attach delegates to agent-worktree then re-renders with lifecycle state", async () => {
+		const runtime = fakeRuntime();
+		let output = "";
+		const exitCode = await main(["attach", "feat/existing", "--json"], {
+			runtime,
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+		const envelope = JSON.parse(output);
+
+		expect(exitCode).toBe(0);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			contract_id: "worktree.workspace",
+			action: "attach",
+			lifecycle_action: "attach",
+			changed_state: "complete",
+			preview: false,
+			target_path: "/code/my-repo/.worktrees/feat-existing",
+			mode: "branch",
+			render_status: "written",
+			render_workspace_path: "/code/my-repo.code-workspace",
+		});
+		expect(runtime.runCalls).toContainEqual([
+			"git",
+			"worktree",
+			"add",
+			"/code/my-repo/.worktrees/feat-existing",
+			"feat/existing",
+		]);
+	});
+
+	test("attach dry-run previews the resolved ref and target without mutation or render", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{
+				command: "attach",
+				positionals: ["feat/existing"],
+				force: false,
+				dryRun: true,
+			},
+			runtime,
+		);
+		const data = expectOkData(result);
+
+		expect(data).toMatchObject({
+			action: "attach",
+			lifecycle_action: "attach",
+			changed_state: "none",
+			preview: true,
+			resolved_ref: "jkl",
+			target_path: "/code/my-repo/.worktrees/feat-existing",
+			mode: "branch",
+		});
+		expect(runtime.runCalls.some((call) => call[1] === "worktree" && call[2] === "add")).toBe(false);
+		expect(runtime.writes.has("/code/my-repo.code-workspace")).toBe(false);
+	});
+
+	test("attach guard refusal points to the existing checkout without suggesting retry", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{
+				command: "attach",
+				positionals: ["codex/browser-use-refactor"],
+				force: false,
+			},
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("attach_branch_already_checked_out");
+			expect(result.exitCode).toBe(2);
+			expect(result.action).toContain("Use the existing checkout");
+			expect(result.action.toLowerCase()).not.toContain("retry");
+			expect(result.data).toMatchObject({
+				reason: "branch_already_checked_out",
+				existing_checkout_path:
+					"/code/my-repo/.worktrees/browser-use-refactor",
+			});
+		}
+	});
+
+	test("attach isolation refusal exits 4 and asks for the human decision", async () => {
+		const linked = "/code/my-repo/.worktrees/browser-use-refactor";
+		const runtime = fakeRuntime({ repoRoot: () => linked });
+		const result = await runCommand(
+			{
+				command: "attach",
+				positionals: ["feat/existing"],
+				force: false,
+			},
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("attach_isolation_unavailable");
+			expect(result.exitCode).toBe(4);
+			expect(result.action).toContain("Ask the operator to choose");
+			expect(result.data).toMatchObject({
+				reason: "isolation_unavailable",
+				retry_safety: "operator_required",
+			});
+		}
+	});
+
+	test("new guard refusal points to the existing checkout without suggesting retry", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{
+				command: "new",
+				positionals: ["codex/browser-use-refactor"],
+				force: false,
+			},
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("new_branch_already_checked_out");
+			expect(result.exitCode).toBe(2);
+			expect(result.action).toContain("Use the existing checkout");
+			expect(result.action.toLowerCase()).not.toContain("retry");
+			expect(result.data).toMatchObject({
+				reason: "branch_already_checked_out",
+				existing_checkout_path:
+					"/code/my-repo/.worktrees/browser-use-refactor",
+			});
+		}
+	});
+
+	test("new isolation refusal exits 4 and asks for the human decision", async () => {
+		const runtime = newIsolationFailureRuntime();
+		const result = await runCommand(
+			{ command: "new", positionals: ["feat/z"], force: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("new_isolation_unavailable");
+			expect(result.exitCode).toBe(4);
+			expect(result.action).toContain("Ask the operator to choose");
+			expect(result.data).toMatchObject({
+				reason: "isolation_unavailable",
+				retry_safety: "operator_required",
+			});
+		}
+	});
+
 	test("rm removes through agent-worktree", async () => {
 		const runtime = fakeRuntime();
 		await runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true, noInput: false }, runtime);
@@ -763,6 +975,41 @@ describe("shared lifecycle verbs", () => {
 			"remove",
 			"/code/my-repo/.worktrees/browser-use-refactor",
 		]);
+	});
+
+	test("attach rejects conflicting or incomplete selectors", async () => {
+		const cases: Array<{
+			invocation: Parameters<typeof runCommand>[0];
+			message: string;
+		}> = [
+			{
+				invocation: { command: "attach", positionals: ["feat/x"], pr: 7, force: false },
+				message: "attach accepts either <ref> or --pr, not both.",
+			},
+			{
+				invocation: { command: "attach", positionals: [], track: true, force: false },
+				message: "attach --track needs --pr <n>.",
+			},
+			{
+				invocation: { command: "attach", positionals: [], force: false },
+				message: "attach needs <ref> or --pr <n>.",
+			},
+			{
+				invocation: { command: "attach", positionals: ["a", "b"], force: false },
+				message: "attach accepts one positional <ref>.",
+			},
+		];
+		for (const { invocation, message } of cases) {
+			const runtime = fakeRuntime();
+			const result = await runCommand(invocation, runtime);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.code).toBe("usage_error");
+				expect(result.exitCode).toBe(2);
+				expect(result.message).toBe(message);
+			}
+			expect(runtime.runCalls).toEqual([]);
+		}
 	});
 
 	test("lifecycle verbs require a branch", async () => {
@@ -1053,6 +1300,11 @@ describe("Command Surface Alignment Proof", () => {
 			expect(JSON.stringify(result.data)).toContain("worktree.commands");
 			const commands = result.data.commands as Record<string, unknown>;
 			expect(Object.keys(commands)[0]).toBe("status");
+			expect(commands.attach).toMatchObject({
+				summary: worktreeContracts.attach.summary,
+				mutation: "write",
+				execution_modes: ["dry_run", "normal"],
+			});
 			expect(commands.status).toMatchObject({
 				summary: worktreeContracts.status.summary,
 				mutation: "check",
@@ -1089,10 +1341,44 @@ describe("Command Surface Alignment Proof", () => {
 			absentFlags: ["--force"],
 		});
 		expect(Object.keys(worktreeContracts.app.flags)).not.toContain("--force");
+		const attachHelp = renderCommandUsage(worktreeContracts.attach);
+		assertCommandHelpFlagSurface({
+			command: "attach",
+			contract: worktreeContracts.attach,
+			help: attachHelp,
+			absentFlags: ["--ref", "--force"],
+		});
+		expect(attachHelp).toContain("worktree attach <ref> --json");
+		expect(attachHelp).toContain("worktree attach --pr <n> --json");
 	});
 
 	test("the drift-blocked exit code 3 is declared in the contract", () => {
 		expect(worktreeContracts.sync.exitCodes["3"]).toBeDefined();
+	});
+
+	test("the human-decision exit code 4 and attach refusal affordances are declared", () => {
+		expect(worktreeContracts.attach.exitCodes["4"]).toContain("human decision");
+		expect(
+			worktreeContracts.attach.actionAffordances?.failure.map((action) => action.id),
+		).toEqual(
+			expect.arrayContaining([
+				"use_existing_checkout",
+				"choose_attach_isolation_recovery",
+				"inspect_worktrees",
+			]),
+		);
+	});
+
+	test("the human-decision exit code 4 and isolation refusal affordances are declared for new", () => {
+		expect(worktreeContracts.new.exitCodes["4"]).toContain("human decision");
+		expect(
+			worktreeContracts.new.actionAffordances?.failure.map((action) => action.id),
+		).toEqual(
+			expect.arrayContaining([
+				"use_existing_checkout",
+				"choose_attach_isolation_recovery",
+			]),
+		);
 	});
 
 	test("no-args help renders the front door menu, not a single subcommand", async () => {
@@ -1111,6 +1397,7 @@ describe("Command Surface Alignment Proof", () => {
 		expect(output).toContain("Find the VS Code workspace path  worktree open --json");
 		expect(output).toContain("Worktree CRUD:");
 		expect(output).toContain("Create a worktree                worktree new <branch> --json");
+		expect(output).toContain("Attach an existing ref or PR     worktree attach <ref> --json | worktree attach --pr <n> --json");
 		expect(output).toContain("Read/list current worktrees      worktree status --json");
 		expect(output).toContain("Update the VS Code view          worktree sync --json");
 		expect(output).toContain("Delete a worktree                worktree rm <branch> --force --json");
@@ -1169,6 +1456,13 @@ describe("Command Surface Alignment Proof", () => {
 			runCommand({ command: "sync", positionals: [], force: true }, writeFailure),
 			runCommand({ command: "rm", positionals: ["codex/missing"], force: true }, fakeRuntime()),
 			runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true }, lifecycleFailure),
+			runCommand({ command: "attach", positionals: ["codex/browser-use-refactor"], force: false }, fakeRuntime()),
+			runCommand(
+				{ command: "attach", positionals: ["feat/existing"], force: false },
+				fakeRuntime({ repoRoot: () => "/code/my-repo/.worktrees/browser-use-refactor" }),
+			),
+			runCommand({ command: "new", positionals: ["codex/browser-use-refactor"], force: false }, fakeRuntime()),
+			runCommand({ command: "new", positionals: ["feat/z"], force: false }, newIsolationFailureRuntime()),
 		]);
 
 		for (const result of results) {
@@ -1251,11 +1545,38 @@ describe("Command Surface Alignment Proof", () => {
 
 	test("public argv rejects command-foreign flags", async () => {
 		const runtime = fakeRuntime();
-		const exitCode = await main(["open", "--force", "--json"], {
+		const openExitCode = await main(["open", "--force", "--json"], {
 			runtime,
 			stdout: { write: () => {} },
 		});
-		expect(exitCode).toBe(2);
+		const attachExitCode = await main(["attach", "--ref", "feat/existing", "--json"], {
+			runtime,
+			stdout: { write: () => {} },
+		});
+		expect(openExitCode).toBe(2);
+		expect(attachExitCode).toBe(2);
+	});
+
+	test("public argv emits the attach human-decision refusal with exit 4", async () => {
+		const runtime = fakeRuntime({
+			repoRoot: () => "/code/my-repo/.worktrees/browser-use-refactor",
+		});
+		let output = "";
+		const exitCode = await main(["attach", "feat/existing", "--json"], {
+			runtime,
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+		const envelope = JSON.parse(output);
+
+		expect(exitCode).toBe(4);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error).toMatchObject({
+			code: "attach_isolation_unavailable",
+			exit_code: 4,
+			hint: {
+				summary: expect.stringContaining("Ask the operator to choose"),
+			},
+		});
 	});
 
 	test("public argv preserves shared lifecycle recovery data on blocks", async () => {
