@@ -47,4 +47,4 @@ jobs:
       # permanently red. Catching a browser-use cross-PR collision on-branch is
       # the immediate value; broader coverage lands incrementally.
       - name: Test (browser-use)
-        run: bash skills/test-runner/src/test-runner.sh run --mode triage -- skills/browser-use/src/
+        run: bun test skills/browser-use/src/
