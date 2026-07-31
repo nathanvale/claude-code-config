@@ -465,6 +465,150 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		expect(transportClosed).toBe(1);
 	});
 
+	test("U7/R2/R12: the LIVE composition delivers a conformance sentinel with clean lane argv, no fill dispatch, and clean on-disk run bytes through the containment gate", async () => {
+		const RUN = "run-live-seam-sentinel";
+		const store = await makeStore();
+
+		// Sentinel minted under the driver's OWN run-scoped nonce so the marker
+		// markGuardForDeliveryOutcome registers EQUALS the delivered value — the
+		// argv/on-disk sweeps below hunt for the exact bytes the helper typed.
+		const nonce = runScopedSentinelNonce(RUN);
+		const PASS = deriveConformanceSentinel("password", nonce);
+		expect(PASS.ok).toBe(true);
+		if (!PASS.ok) return;
+
+		const helperObserved: string[] = [];
+		const port = {
+			...activeVaultPort(),
+			redeemCredentialField: async (request: {
+				handle: BrowserUseSecretHandle;
+				target_digest: string;
+				ws_url: string;
+				target_url: string;
+				target_origin: string;
+				field: { role: string; accessible_name: string };
+			}) => {
+				// The disposable helper stand-in "types" the sentinel bytes; only the
+				// non-secret shape leaves this boundary (byte_length == value length).
+				helperObserved.push(PASS.value);
+				expect(request.handle.handle_id.length).toBeGreaterThan(0);
+				return {
+					ok: true as const,
+					shape: {
+						field: "password" as const,
+						byte_length: PASS.shape.byte_length,
+					},
+				};
+			},
+		};
+		const provider = createBrowserUseAuthProvider({
+			store: store.deps,
+			tokenRetrieval: port,
+			attestationByDigest: () => undefined,
+		});
+		const seam = buildRunbookAuthDelivery(provider, {
+			tokenRetrieval: port,
+			createTargetTransport: () => ({
+				transport: stableProofTransport(),
+				close: () => {},
+			}),
+			createDeliveryHook: environmentDeliveryHook,
+		});
+		const built = await seam(liveSeamInput(RUN));
+		expect(built.ok).toBe(true);
+		if (!built.ok) return;
+
+		const runtime = runtimeFor([
+			...attachAndSnapshot(),
+			{ stdout: adapterSuccess({ value: "•••" }) },
+		]);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: RUN,
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: built.context,
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					item_binding: "oncore_password",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		// The delivery genuinely completed (the helper saw the sentinel bytes), so
+		// a clean lane sweep below is meaningful, not vacuous.
+		expect(helperObserved).toContain(PASS.value);
+		expect(result.delivery?.delivered_shapes).toEqual([
+			{ field: "password", byte_length: PASS.value.length },
+		]);
+
+		// The existing argv-leak assertion holds against the LIVE composition: no
+		// adapter argv carried the delivered value, and the executor dispatched no
+		// native fill for the confidential step.
+		expect(JSON.stringify(runtime.calls)).not.toContain(PASS.value);
+		expect(runtime.calls.some((call) => call.includes("fill"))).toBe(false);
+
+		// Driver guard seam over REAL on-disk run bytes: mark from the live result,
+		// prove the registered sentinel IS the delivered value, then release clean.
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		const marked = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+		const guard = marked.guard;
+		expect(guard?.sensitive).toBe(true);
+		if (guard === undefined) return;
+		// Loop closed by construction: what was delivered is exactly what is hunted.
+		expect(guard.sentinels).toContain(PASS.value);
+
+		const surfaces = await collectRunGovernedSurfaces(store.deps, RUN);
+		expect(surfaces.some((s) => s.kind === "run-store-file")).toBe(true);
+		for (const surface of surfaces) {
+			expect(surface.content).not.toContain(PASS.value);
+		}
+		const gate = assertContainmentBeforeRelease(guard, surfaces);
+		expect(gate.release).toBe(true);
+
+		// Non-vacuous flip: the SAME guard withholds when a run surface carries the
+		// delivered value, proving the clean release above is a real verdict.
+		const planted = assertContainmentBeforeRelease(guard, [
+			...surfaces,
+			{
+				kind: "run-store-file",
+				label: "planted-live-leak",
+				content: `{"leaked":"${PASS.value}"}`,
+			},
+		]);
+		expect(planted.release).toBe(false);
+		if (planted.release) return;
+		expect(planted.reason).toBe("containment_failed");
+		await built.release?.();
+	});
+
 	test("token absence refuses before target proof and names the install-token continuation chain", async () => {
 		const store = await makeStore();
 		const port = activeVaultPort({
@@ -1614,23 +1758,35 @@ describe("(H) hermetic real-process runbook confidential delivery (U13)", () => 
 			expect(stdout).toContain("runbook-delivery-complete");
 
 			// The journal proves the phase ORDER: quarantine raised BEFORE the op
-			// executor was asked for a secret, then lease, one bounded write, release.
+			// executor was asked for a secret, then lease, one bounded write per
+			// field, re-keyed containment, release.
 			const journal = JSON.parse(
 				await readFile(journalPath, "utf8"),
 			) as string[];
 			expect(journal[0]).toBe("quarantine:raised");
 			expect(journal).toContain("lease:acquired:oncore_password");
 			expect(journal).toContain("op-execute:secret-acquired");
-			expect(journal).toContain("delivery:bounded-write");
+			expect(journal).toContain("delivery:bounded-write:password");
+			expect(journal).toContain("containment:sentinels-rekeyed");
 			expect(journal[journal.length - 1]).toBe("cleanup:released");
-			// Quarantine strictly precedes secret acquisition.
-			expect(journal.indexOf("quarantine:raised")).toBeLessThan(
-				journal.indexOf("op-execute:secret-acquired"),
-			);
-			// Exactly one bounded write occurred.
+			// Strict phase order: quarantine < lease < secret acquisition < the
+			// bounded write < re-keyed containment < release.
+			const order = [
+				"quarantine:raised",
+				"lease:acquired:oncore_password",
+				"op-execute:secret-acquired",
+				"delivery:bounded-write:password",
+				"containment:sentinels-rekeyed",
+				"cleanup:released",
+			].map((event) => journal.indexOf(event));
+			for (let i = 1; i < order.length; i += 1) {
+				expect(order[i - 1]).toBeLessThan(order[i] ?? -1);
+			}
+			// Exactly one bounded write occurred, and it was PER FIELD: one write
+			// for the single delivered field, none for any other field.
 			expect(
-				journal.filter((e) => e === "delivery:bounded-write"),
-			).toHaveLength(1);
+				journal.filter((e) => e.startsWith("delivery:bounded-write:")),
+			).toEqual(["delivery:bounded-write:password"]);
 
 			// Zero-sentinel sweep over EVERY real governed surface: run-store bytes
 			// (and every state file), stdout, stderr, and any artifacts.
