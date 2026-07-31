@@ -75,6 +75,7 @@ import {
 	runScopedKey,
 } from "./browser-use-selection";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
+import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
 
 // ---------------------------------------------------------------------------
 // Browser Operations (plan U7, evidence re-based in migration U1).
@@ -265,7 +266,8 @@ export async function runOperate(input: {
 		...(operationInputs.inputs.viewport
 			? { viewport: operationInputs.inputs.viewport }
 			: {}),
-		focusSideEffect: bringToFront,
+		focusSideEffect:
+			binding.context.handoff.adapter === "agent-browser" || bringToFront,
 	});
 }
 
@@ -822,7 +824,116 @@ async function runChromeDevtoolsOperation(
 async function runAgentBrowserOperation(
 	input: OperationLaneInput,
 ): Promise<OperationLaneResult> {
-	return runOperationCalls(input, input.adapterPageRef);
+	if (
+		!SAFE_RUN_ID.test(input.handoff.runId) ||
+		!SAFE_TAB_ID.test(input.adapterPageRef)
+	) {
+		return {
+			ok: false,
+			failure: {
+				...operationTransportExitedFailure(
+					"The agent-browser operation identifiers are unsafe.",
+				),
+				recoverability: "change_input",
+			},
+			focus: false,
+		};
+	}
+	const baseArgs = [
+		"--cdp",
+		input.handoff.endpointWs,
+		"--session",
+		`browser-use-${input.handoff.runId}`,
+	];
+	const call = async (
+		args: string[],
+		label: string,
+	): Promise<
+		| { ok: true; result: McporterCommandResult; data: unknown }
+		| { ok: false; failure: OperationFailure }
+	> => {
+		let result: McporterCommandResult;
+		try {
+			result = await input.runtime.runCommand({
+				command: input.handoff.probeExecutable,
+				args: [...baseArgs, ...args, "--json"],
+				timeoutMs: 30_000,
+			});
+		} catch {
+			return {
+				ok: false,
+				failure: dependencyOperationFailure(
+					"browser_operation_dependency_missing",
+					`The agent-browser ${label} call could not be started.`,
+				),
+			};
+		}
+		if (result.timedOut === true) {
+			return {
+				ok: false,
+				failure: {
+					code: "browser_operation_transport_timeout",
+					message: `The agent-browser ${label} call timed out.`,
+					actionId: "inspect_operation_diagnostics",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "retry",
+				},
+			};
+		}
+		if (result.exitCode !== 0) {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					`The agent-browser ${label} call failed.`,
+				),
+			};
+		}
+		let envelope: unknown;
+		try {
+			envelope = JSON.parse(result.stdout);
+		} catch {
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					`The agent-browser ${label} call returned unparsable output.`,
+				),
+			};
+		}
+		if (!isJsonObject(envelope) || envelope.success !== true) {
+			const errorText =
+				isJsonObject(envelope) &&
+				typeof envelope.error === "string" &&
+				envelope.error.trim() !== ""
+					? redactUnsafeText(
+							envelope.error.split(input.adapterPageRef).join("[redacted]"),
+						)
+					: "The adapter reported a failure response.";
+			return {
+				ok: false,
+				failure: operationTransportExitedFailure(errorText),
+			};
+		}
+		return { ok: true, result, data: envelope.data };
+	};
+
+	const activated = await call(["tab", input.adapterPageRef], "tab activation");
+	if (!activated.ok) {
+		return { ok: false, failure: activated.failure, focus: false };
+	}
+	const snapshot = await call(["snapshot"], "snapshot");
+	if (!snapshot.ok) {
+		return { ok: false, failure: snapshot.failure, focus: true };
+	}
+	return {
+		ok: true,
+		result: {
+			...snapshot.result,
+			stdout:
+				typeof snapshot.data === "string"
+					? snapshot.data
+					: JSON.stringify(snapshot.data ?? ""),
+		},
+	};
 }
 
 async function runOperationCalls(

@@ -85,6 +85,7 @@ function operationRuntime(input: {
 	adapter?: "agent-browser" | "chrome-devtools-mcp";
 	env?: Record<string, string | undefined>;
 	operationResult?: McporterCommandResult;
+	nativeResults?: McporterCommandResult[];
 	now?: () => number;
 } = {}): {
 	runtime: BrowserUseRuntime;
@@ -93,6 +94,7 @@ function operationRuntime(input: {
 } {
 	const calls: McporterCommandInput[] = [];
 	const ensuredDirectories: string[] = [];
+	const nativeResults = [...(input.nativeResults ?? [])];
 	const files: Record<string, string> = {
 		"/h.json":
 			input.adapter === "agent-browser"
@@ -131,6 +133,10 @@ function operationRuntime(input: {
 						},
 					}),
 				);
+			}
+			if (input.adapter === "agent-browser" && nativeResults.length > 0) {
+				const nativeResult = nativeResults.shift();
+				if (nativeResult) return nativeResult;
 			}
 			// The envelope-derived argv names the tool via --tool (U3); route the
 			// fake on that token, mirroring the real ad-hoc invocation shape.
@@ -476,17 +482,95 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
-	test("an agent-browser native tab ref reaches the execution seam verbatim", async () => {
+	test("agent-browser activates the native tab before a bounded native snapshot", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
 			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
 		});
 		const result = await runForTest(
 			["operate", "snapshot", "--handoff", "/h.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(commandJsonArgs(calls[1])).toEqual({ pageId: "t1" });
+		expect(parseJson(result.stdout).data).toMatchObject({
+			adapter: "agent-browser",
+			snapshot: { text: "Root\nButton" },
+		});
+		expect(calls.slice(1).map(commandVector)).toEqual([
+			[
+				FIXTURE_ENVELOPE.data.attachment.probe_executable,
+				"--cdp",
+				FIXTURE_ENVELOPE.data.endpoint.ws,
+				"--session",
+				`browser-use-${FIXTURE_RUN_ID}`,
+				"tab",
+				"t1",
+				"--json",
+			],
+			[
+				FIXTURE_ENVELOPE.data.attachment.probe_executable,
+				"--cdp",
+				FIXTURE_ENVELOPE.data.endpoint.ws,
+				"--session",
+				`browser-use-${FIXTURE_RUN_ID}`,
+				"snapshot",
+				"--json",
+			],
+		]);
+		expect(calls[1].timeoutMs).toBe(30_000);
+		expect(calls[2].timeoutMs).toBe(30_000);
+		expect(result.stdout).not.toContain("t1");
+		expect(result.stderr).not.toContain("t1");
+		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
+	});
+
+	test("agent-browser rejects an unsafe native tab ref before operation spawn", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [{ id: "bad tab", url: "https://example.com/app", title: "App" }],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_transport_failed",
+		});
+		expect(calls).toHaveLength(1);
+		expect(result.stdout).not.toContain("bad tab");
+		expect(result.stderr).not.toContain("bad tab");
+	});
+
+	test("agent-browser maps failure envelopes and timeouts without retry or ref disclosure", async () => {
+		for (const operationResult of [
+			okCommand(JSON.stringify({ success: false, error: "tab t1 unavailable" })),
+			{ exitCode: 1, stdout: "", stderr: "", timedOut: true },
+		]) {
+			const { runtime, calls } = operationRuntime({
+				adapter: "agent-browser",
+				pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+				nativeResults: [operationResult],
+			});
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: operationResult.timedOut
+					? "browser_operation_transport_timeout"
+					: "browser_operation_transport_failed",
+			});
+			expect(calls).toHaveLength(2);
+			expect(result.stdout).not.toContain("t1");
+			expect(result.stderr).not.toContain("t1");
+			expect(calls.some((call) => call.command === "mcporter")).toBe(false);
+		}
 	});
 
 	test("a malformed chrome page ref fails as a lane-honest transport failure", async () => {
