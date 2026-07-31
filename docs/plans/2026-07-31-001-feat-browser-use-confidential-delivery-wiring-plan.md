@@ -15,7 +15,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** replace the `buildRunbookAuthDelivery` stub so a FastTrack runbook run resolves its credential from the 1Password vault over the Environment-Injected OP Lane and delivers it into the login field through the existing pure choreography — one delivery implementation, no adapter in the write path, no secret bytes in the main TypeScript process or any adapter argv/output.
-- **Immediate value:** the daily-driver timesheet run becomes true end-to-end: an agent that hits a missing token follows typed continuations to install it, the run mints the binding deterministically from the vault, and logs in; the daily driver then runs `fill-week` as its next flow (flow chaining is the driver's own orchestration, not a unit of this plan).
+- **Immediate value:** the daily-driver timesheet run gains its secure login + fill spine: an agent that hits a missing token follows typed continuations to install it, the run mints the binding deterministically from the vault, logs in (generically, U8), and fills the timesheet to a pre-submit state (U9). **This plan lands login + fill-to-pre-submit, NOT the hands-off end-to-end outcome** — autonomous submit (a human click in every prototype run) is a named follow-up with its own gate and owner (see Scope Boundaries), because a possibly-landed autonomous submit is an irreversible real-world effect that needs dedicated design. Flow chaining across login and fill is the driver's own orchestration.
 - **Authority hierarchy:** ADRs 0021/0022/0027/0028/0030 govern custody; the cross-adapter auth plan (`origin:`) governs transaction semantics; this plan wires the deferred live tail only.
 - **Stop conditions:** any raw secret in the main TypeScript process, an adapter/plugin/daemon, argv, inherited environment (beyond the single wrapper→`exec(op)` process), stdout/stderr, model context, or durable file; any second raw-secret process beyond the disposable `op` child and the disposable delivery child; any delivery without fresh target reproof; any automatic retry after a possible write; any selection authority minted in the unsigned lane.
 - **Tail:** hermetic end-to-end green, per-lane sentinel-leak proofs, agent-followable token setup, and a documented operator-gated live login proof. Live mutation of the real portal is never autonomous in this plan.
@@ -59,6 +59,13 @@ The pure choreography (`deliverConfidentialFields`), the agent-browser executor'
 - R12. Sentinel-leak proof per lane: the agent-browser seam harness extends to the live-shaped wiring, playwright-cdp and chrome-devtools-mcp gain hook-level conformance tests (no sentinel in that lane's argv/output, no native fill dispatched), and a planted-regression test proves the harness catches a leaking delivery child.
 - R13. Live login against the real portal is an operator-gated proof step (`auth status` then one controlled run), never part of autonomous verification.
 
+**Login, fill, and optimization (prototype-forced, 2026-07-31)**
+
+- R14. Generic LLM-driven adapter reasoning over the accessibility tree is the default login path, with no per-portal login script. The engine handles arbitrary step sequences (single-page, username-first multi-step, OTP/2FA) by classifying each screen from its snapshot (role + accessible name, with an unlabelled-field fallback that reasons from page structure), delivering the matching credential field, re-verifying origin before EACH secret step, and advancing. **Named failure mode:** when the classifier cannot confidently disambiguate a screen (e.g. two co-present unlabelled textboxes, a CAPTCHA-gated step that looks like a submit, a non-semantic canvas login), the engine fails closed to a resumable human-challenge continuation and delivers nothing — never a bespoke per-portal login script, and never a low-confidence secret delivery. Proven across the tested shapes (six structural fixtures + FastTrack/Oncore live, n=2 real portals); the fallback is the designed escape hatch for shapes beyond those. The only per-portal artifacts are a binding (which credential → which origin) and an optional post-login task runbook.
+- R15. The bounded confidential write is **clear-then-insert** (select the field's existing value, then `Input.insertText`) so a re-entered field never concatenates; control activation (submit/advance) uses a trusted CDP mouse event or the real mouse-event sequence, never `element.click()` (which does not fire inline handlers reliably). The CDP target is resolved from `Target.getTargets` by exact URL/origin (never the adapter's tab id), and the field is bridged via the accessibility tree → `backendNodeId` in the delivery child's own session.
+- R16. Timesheet fill is correct and fail-closed: fills each cell by its exact calendar date (never a blind weekday index), and refuses typed before any write on a wrong-week grid (superset/foreign dates), a duplicate row date, or unreadable row dates. Fill stops before submit; the product's autonomous submit is a distinct, separately-gated action.
+- R18. Delivery preserves pause/resume continuity: the task lane pauses at the confidential step and, per the resume directive, discards its stale adapter refs and re-observes a fresh identity basis before continuing — never reusing a ref captured before delivery. Ref staleness is judged by visibility/operability (a still-resolvable but hidden node is stale), not by `DOM.resolveNode` succeeding.
+
 ### Acceptance Examples
 
 - AE1. **R7-R8.** Given no token file, `runbook run` on a confidential flow refuses with a continuation chain that reaches `auth install-token`; after a stdin install and a clean `auth status --json`, the same command proceeds past binding resolution.
@@ -66,6 +73,10 @@ The pure choreography (`deliverConfidentialFields`), the agent-browser executor'
 - AE3. **R4.** Given a target whose observed digest changes between proof and delivery, the run refuses before a secret handle is minted.
 - AE4. **R3, R5.** Given a delivery-child crash mid-write, the field blocks with `external_effect_possible: true` and honest `field_cleared` truth, and no retry occurs.
 - AE5. **R2, R12.** Given sentinel credential values, every lane's recorded argv/output, the shared run's on-disk bytes, and the main-process outputs sweep clean; only the `op` child and the delivery child ever observe the sentinel.
+- AE6. **R14.** Given a login page in any structural shape (label-wrapped, aria-labelledby, placeholder-only, iframe-embedded, shadow-DOM, or username-first multi-step with an unlabelled field), the engine fills the right fields by reasoning over the accessibility tree with no per-portal code; given an OTP screen mid-flow, it delivers `otp-current` and advances. Origin is re-verified before every secret step.
+- AE7. **R15.** Given a field already holding a value, the bounded write clears then inserts (no concatenation); given a submit control, activation fires via a trusted mouse event and the inline handler runs; given the adapter's tab id `t1`, the delivery target is resolved from `Target.getTargets` by URL, not from the tab id.
+- AE8. **R16.** Given a clean target-week grid, every day fills on its exact date and stops before submit; given a fortnight superset, a duplicate row date, or unreadable dates, the fill refuses typed (`wrong_week_open` / `duplicate_row_date` / `row_dates_unreadable`) before any cell is written.
+- AE10. **R18.** Given a ref captured before delivery on a screen that then advances, reusing it is refused because the ref is no longer visible/operable; obeying the resume directive (discard refs, re-observe fresh identity basis) continues cleanly past the confidential step.
 
 ### Scope Boundaries
 
@@ -73,7 +84,9 @@ The pure choreography (`deliverConfidentialFields`), the agent-browser executor'
 
 - Runbook execution on the playwright-cdp and chrome-devtools-mcp lanes (they have no fill vocabulary; the seam is proven lane-neutral here, but only agent-browser executes runbooks).
 - Multi-binding delivery contexts (one distinct Item Binding per run in v1).
-- OTP delivery for FastTrack (binding methods start password-only; the choreography already supports `otp-current` when needed).
+- **Autonomous timesheet submit (named follow-up, own gate + owner).** This plan lands login + fill-to-pre-submit; the hands-off submit that completes true end-to-end automation is deliberately deferred. A possibly-landed autonomous submit is an irreversible external effect, so it needs dedicated design: an explicit gate, external-effect handling (honest possibly-landed reporting, no auto-retry), and an owner. Built on U1's supervisor path; until then, submit stays behind the same operator gate as live login (R13/KTD9).
+- **Post-run background runbook optimization (split to a follow-up plan).** The distillation/versioning store (keyed by `portal::task::framework`, cost baselines, re-distill triggers, off-critical-path ordering) is a self-contained performance product whose only tie to confidential delivery is running after the same task. It has no dependency the delivery seam needs and can land after U1-U9/U11 without touching custody. Prototype-proven (findings 4, 5, 12: real distill = 20x fewer round-trips, materially-faster-or-not-written, speed-first background ordering); drafted as a separate plan so this custody-critical change stays focused.
+- **Credential enrollment when no vault item exists yet (v-next feature).** First-time automation against a new portal has no item, so `fetchCredentialField` correctly fails closed (`revoked-binding`). Capturing a new credential is a separate feature that must route the user's typed bytes through a **1Password-owned input surface** (op hidden prompt or the 1Password app), which writes the vault item — the agent never collects or holds the typed bytes, only triggers "enroll this login" and waits for the item to appear. Deliberately out of scope here; this plan keeps item-missing fail-closed.
 - Signed-lane re-integration (ADR 0028 U3b, operator-gated on Apple Developer enrollment); installing an admitted signed product later changes lane selection without deleting the env lane.
 - The deferred review findings: Swift fork-safety P1, token-String-zeroing P2, `op item-get` contract-drift P2, SIGKILL-cleanup P2.
 - Committing the uncommitted daily-driver review fixes (separate, user-approved operation).
@@ -88,7 +101,10 @@ The pure choreography (`deliverConfidentialFields`), the agent-browser executor'
 - Env lane: `runtime/browser-use-environment-auth/Sources/BrowserUseEnvironmentAuth/EnvironmentOp.swift` (`runPrivatePipe` ~971, `EnvironmentOpPrivateField` ~1115, `op` digest pin ~73-86), supervisor `Sources/BrowserUseEnvironmentOpSupervisor/main.swift`; port gap `skills/browser-use/src/browser-use-environment-op.ts:23-61` (`operationOf` admits json-evidence only).
 - Binding: `skills/browser-use/src/browser-use-auth-bindings.ts` (`matchItemBinding` ~838); no durable binding store exists — mint is in-memory per run.
 - Harnesses to extend: `skills/browser-use/src/browser-use-confidential-delivery-seam.test.ts` (argv-leak assertion ~311), `browser-use-confidential-field-delivery-leak.test.ts`, `fixtures/confidential-runbook-delivery-fixture.ts`.
-- Custody state on this machine: supervisor binary built; `op` 2.35.0 at `/opt/homebrew/bin/op` (a probed path); `enroll-browser-automation-token` → `token-operational`; signed product absent by design (U0 receipts: `skills/browser-use/docs/research/2026-07-23-browser-auth-u0-evidence-receipt.md`, `2026-07-27-browser-auth-u0-rerun-readiness.md`).
+- Custody state on this machine: supervisor binary **NOT currently built** at `runtime/browser-use-environment-auth/.build/release/browser-use-op-supervisor` (verified 2026-07-31 — U1 builds it); `op` 2.35.0 at `/opt/homebrew/bin/op` (a probed path); `enroll-browser-automation-token` → `token-operational`; signed product absent by design (U0 receipts: `skills/browser-use/docs/research/2026-07-23-browser-auth-u0-evidence-receipt.md`, `2026-07-27-browser-auth-u0-rerun-readiness.md`).
+- **Prototype evidence (2026-07-31): all 13 findings in `skills/browser-use/docs/research/2026-07-31-confidential-delivery-prototype-findings.md`** — proven against live Agent Chrome and the real "Browser Automation" 1Password vault (items `6he7gmnrc54ssdm7fzzvk4rmne` Fasttrack360, `br3dx7qe6loo264sonmtj2czny` Oncore). CDP write mechanics, custody control flow, generic + multi-step/OTP login, real vault resolution, unhappy-path fail-closed, lane-neutral custody, timesheet fill correctness, real distill (20x), pause/resume continuity, and the secret-never-seen seam are all falsified-or-confirmed there. **Scope of the real-portal proof:** the real FastTrack + Oncore *login pages* were driven live (field shapes, multi-step flow), but every real-vault *secret delivery* landed in a scratch page — the custody boundary used a bash `op read | child` stand-in, NOT the signed supervisor, which the findings note lists as unbuilt. Live login with a real secret into the real portal field remains operator-gated and unproven (R13/KTD9). This plan cites those receipts in the affected units; the note is the single evidence source.
+
+**Product Contract preservation:** restructured, no scope change — R1-R13 unchanged; R14-R18 added (18 requirements total). The 2026-07-31 enrichment strengthens existing units U1-U7 with prototype proof and adds units U8-U11 for scope the prototypes proved is required (generic/multi-step login, timesheet fill correctness, post-run background optimization, pause/resume continuity). One scope removal (no per-portal LOGIN script) and one new deferral (credential enrollment as v-next) are recorded in Scope Boundaries.
 
 ---
 
@@ -134,8 +150,9 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
 
 ### Open Questions
 
-- **Deferred to implementation:** whether `Input.insertText` alone satisfies FastTrack's Angular form bindings or the delivery child must also dispatch input/change events — the runbook step's postcondition catches a silent miss either way; resolve against the hermetic fixture first.
+- **Resolved (prototype finding 1, 2026-07-31):** `Input.insertText` fires a real `input` event and commits to an ngModel-equivalent binding for `input`-bound fields (a raw `.value` write does not). It does NOT fire `change`/blur. Direction: the delivery child's bounded action is clear-then-insert (R15); if FastTrack validation keys off `change`/blur, add that dispatch — the U6 hermetic fixture is the final arbiter, and the step postcondition fails closed on a silent miss.
 - **Deferred to implementation:** the exact supervisor `deliver` argv/JSON shape (non-secret: ws URL, target id, field descriptor, timeout) — design within the existing supervisor mode conventions.
+- **External dependency (handed off 2026-07-31):** `browser-use operate`/`task` on the agent-browser lane cannot resolve a target — `operationTargetEntries` → `parseAdapterPageId` requires an integer page id, but agent-browser reports string tab ids (`t1`), so `pageId` is `undefined` and resolution fails. The correct fix is architectural: the harness must treat the adapter tab handle as an **opaque adapter-owned ref** it never parses (mirroring the custody seam, which carries a CDP target id it never interprets), not widen the parser to accept strings. Tracked in `/private/tmp/handoff-browser-use-operate-pageid-bug-2026-07-31.md`; owning files `skills/browser-use/src/browser-use-operations.ts:471,549-566`, `browser-use-discovery.ts:867`. **The custody seam (U1-U7) is unaffected — it attaches by CDP target id.** But U8's login loop and U11's re-probe drive a snapshot/classify/advance cycle that is exactly what this defect blocks on the agent-browser lane. Direction (U8 must resolve this, see U8 Files): U8 depends on a dedicated **non-secret main-process CDP observer** that bypasses `operate` (attaches by CDP target id like the custody seam), OR on the operate opaque-ref fix landing first. Until one holds, U8/U11's production snapshot/advance path is blocked; the operator-gated live login (R13) also exercises this loop and inherits the same dependency.
 
 ---
 
@@ -148,18 +165,21 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
 - **Dependencies:** none.
 - **Files:** `runtime/browser-use-environment-auth/Package.swift`; new `Sources/BrowserUseFieldDelivery/main.swift` (delivery child: pipe read, DevTools WebSocket attach, bounded write, outcome JSON); `Sources/BrowserUseEnvironmentOpSupervisor/main.swift` (new `deliver` mode); `Sources/BrowserUseEnvironmentAuth/EnvironmentOp.swift` (wire `runPrivatePipe` + `EnvironmentOpPrivateField` to the child); Swift tests alongside existing ones.
 - **Approach:**
-  1. Add the delivery child executable: reads exactly one value from the inherited pipe, attaches to the given target over `URLSessionWebSocketTask`, focuses the described field, performs one insert, reports `{ok, shape}` or `{ok: false, reason, field_cleared}` on stdout, exits.
+  1. Add the delivery child executable: reads exactly one value from the inherited pipe, attaches to the given target over `URLSessionWebSocketTask`, resolves the field via the accessibility tree → `backendNodeId` in its own session, focuses it, performs a **clear-then-insert** (select the existing value, then `Input.insertText`), reports `{ok, shape}` or `{ok: false, reason, field_cleared}` on stdout, exits. (Proven: the exact CDP sequence `Target.getTargets` → `Target.attachToTarget{flatten:true}` → `Accessibility.getFullAXTree` match role+name → `DOM.resolveNode` → `DOM.focus` → select → `Input.insertText`; prototype finding 1. Bare `insertText` inserts at the cursor and concatenates on re-entry — clear first per R15.)
   2. Add the supervisor `deliver` operation: validates non-secret inputs, forks the admitted `op` child via `runPrivatePipe`, forks the delivery child with the pipe read end, never reads the pipe itself, relays the child's outcome verbatim.
-  3. Keep the existing ambient-token rejection and `op` digest admission unchanged.
+  3. Resolve the delivery target from `Target.getTargets` by exact URL/origin — never from an adapter tab id (agent-browser tab ids like `t1` are NOT CDP target ids; prototype finding 1). Control activation, when the child clicks a submit/advance control, uses a trusted `Input.dispatchMouseEvent` (or the real mouse-event sequence), never `element.click()` — a bare `.click()` did not fire an inline onclick in the prototype (R15).
+  4. Keep the existing ambient-token rejection and `op` digest admission unchanged.
 - **Patterns to follow:** existing supervisor mode dispatch and typed-blocker JSON in `main.swift`; the no-copy `consume` posture documented at `EnvironmentOp.swift:969-970`.
 - **Test scenarios:**
-  - Happy path: sentinel value written, outcome reports shape (kind + length) and never the value.
+  - Happy path: sentinel value written, outcome reports shape (kind + length) and never the value. Covers AE5.
+  - Clear-then-insert: a field pre-seeded with a value is replaced, not concatenated. Covers AE7.
   - `op` failure (bad token, missing field) surfaces a typed blocker; delivery child never spawns.
-  - Delivery child crash mid-action: supervisor reports the crash reason with `field_cleared` truth; exit is nonzero.
-  - Sentinel absent from supervisor and child argv, environment, stdout/stderr, and any log surface (planted-regression variant proves the scan catches a leak).
+  - Delivery child crash mid-action: supervisor reports the crash reason with `field_cleared` truth; exit is nonzero. Covers AE4.
+  - Sentinel absent from supervisor and child argv, environment, stdout/stderr, and any log surface (planted-regression variant proves the scan catches a leak — the prototype's planted-leak child flipped the verdict to `SEAM VIOLATED`, so this case must be non-vacuous). Covers AE5.
+  - Target resolved by URL when only a `t1`-style adapter tab id is available (never treat the tab id as a CDP target id). Covers AE7.
   - A second write attempt on the same invocation is impossible (process exits after one action).
   - Target/ws parameters malformed: typed refusal before any fork.
-- **Verification:** Swift package tests green; a TypeScript process-boundary test drives the real supervisor binary with a fake `op` executable fixture and sweeps all captured output for the sentinel.
+- **Verification:** Swift package tests green; a TypeScript process-boundary test drives the real supervisor binary with a fake `op` executable fixture and sweeps all captured output for the sentinel. (The prototype proved the *delivery mechanic* — real vault read → child → field, secret-unseen — for both FastTrack and Oncore via a bash `op read | child` **stand-in**. The signed supervisor's `deliver` path (fork / private pipe / single-write / exit) is **first proven here in U1**, not prototype-proven; it is the highest-risk unbuilt surface in this plan, and its fresh-target-reproof and single-write invariants must be proven at the real process boundary, not inherited from the stand-in.)
 
 ### U2. Env-lane secret-handle capability and handle registry
 
@@ -174,22 +194,25 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
   - Expired handle: typed rejection.
   - Redemption with a drifted target digest: typed rejection before any process spawn.
   - Metadata operations (vault-list, item-get) unchanged.
-- **Verification:** port-level tests green; no code path returns bytes into TypeScript (type-level: no value slot; test-level: sentinel sweep of port outputs).
+  - **Unhappy vault paths fail closed with typed causes (prototype finding 8, proven against the real vault): bogus token → `missing-token`; non-existent item → `revoked-binding`; real item missing the requested field → `unsupported-method`; observed origin outside allowed set → `origin-mismatch`, refused before any secret read. The happy control (real item + field + origin) is deliverable.**
+- **Verification:** port-level tests green; no code path returns bytes into TypeScript (type-level: no value slot; test-level: sentinel sweep of port outputs). The unhappy-path causes above were proven end to end against the real "Browser Automation" vault.
 
 ### U3. Verified-target mint and reproof
 
 - **Goal:** a secret-free, adapter-independent producer of `BrowserUseVerifiedTarget` and its `reproveTarget` closure.
-- **Requirements:** R2, R4.
+- **Requirements:** R2, R4, R15 (target/field resolution).
 - **Dependencies:** none (parallel with U1-U2).
 - **Files:** new `skills/browser-use/src/browser-use-target-proof.ts` and test; read-only DevTools observation over the handoff endpoint (target info, frame tree, URL → normalized origins).
-- **Approach:** observe the resolved target tab through the browser-level DevTools endpoint (read-only, no secrets involved, so main-process execution is legal); derive exact top-level and frame origins; compose the canonical digest over the normalized identity bundle; `reproveTarget` re-runs the same observation and returns the fresh digest. `account_ref` per KTD8. Refuse when the observed origin falls outside the runbook's allowed origins.
+- **Approach:** resolve the target tab from `Target.getTargets` by exact URL/origin single-match (never an adapter tab id; prototype finding 1), then observe it read-only through the browser-level DevTools endpoint (no secrets, so main-process execution is legal); derive exact top-level and frame origins; bridge the confidential field via the accessibility tree → `backendNodeId` (role + accessible name, with an unlabelled-field fallback) so the delivery child re-locates the same node in its own session; compose the canonical digest over the normalized identity bundle; `reproveTarget` re-runs the same observation and returns the fresh digest. `account_ref` per KTD8. Refuse when the observed origin falls outside the runbook's allowed origins.
 - **Test scenarios:**
   - Stable page: mint then reprove reproduces the digest.
+  - Target single-match by exact URL yields one candidate; a `t1`-style adapter tab id is never treated as the CDP target id. Covers AE7.
+  - Field bridge: role + accessible name resolves to a `backendNodeId` that is the same DOM node (identity check), across labelled, aria-labelledby, placeholder, iframe, shadow-DOM, and unlabelled shapes. Covers AE6.
   - URL/origin change between mint and reprove: digest differs; choreography-level test confirms delivery refuses.
-  - Origin outside allowed set: typed refusal at mint.
+  - Origin outside allowed set: typed refusal at mint. Covers AE8 (origin guard shared with fill).
   - Target gone (tab closed): typed `target-proof-invalid` shape, no throw.
   - Digest canonicalization: key order and volatile fields (title, timing) do not perturb the digest.
-- **Verification:** unit tests green against a faked observation transport; the U6 fixture run proves the composed shape hermetically (live-portal behavior remains operator-gated per R13).
+- **Verification:** unit tests green against a faked observation transport; the U6 fixture run proves the composed shape hermetically (live-portal behavior remains operator-gated per R13). Prototype proved the second-client attach, target single-match, and AX-tree field bridge live (finding 1); the custody seam is adapter-neutral because it binds by CDP target id, not adapter page id (finding 9).
 
 ### U4. Replace the stub: live seam composition and context re-keying
 
@@ -198,7 +221,7 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
 - **Dependencies:** U2, U3.
 - **Files:** `skills/browser-use/src/browser-use.ts` (stub body, seam invocation plumbing); `skills/browser-use/src/browser-use-agent-browser.ts` (context type `field_by_binding_slug`, fill-time lookup by the step's `item_binding`); `skills/browser-use/src/browser-use-auth-provider.ts` (context input shape); `skills/browser-use/src/browser-use-runbook.ts` (single-binding guard on `pending_item_bindings`); `skills/browser-use/src/fixtures/confidential-runbook-delivery-fixture.ts` (re-key); tests: `browser-use-runbook.test.ts`, `browser-use-confidential-delivery-seam.test.ts`.
 - **Approach:**
-  1. Resolve the plan's pending binding slugs; refuse typed when they map to more than one distinct Item Binding (KTD5/R10).
+  1. Resolve the plan's pending binding slugs; refuse typed when they map to more than one distinct Item Binding (KTD4/R10).
   2. Mint the binding via `provider.prepareSecretFree` (existing gates: token, exactly-one-vault, deterministic match).
   3. Mint the verified target (U3) for the resolved `targetTabId`.
   4. Acquire the sensitive-interval lease under its own key family (KTD7), stamp `in_sensitive_interval`, and release on completion or failure.
@@ -256,7 +279,58 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
   - Playwright-cdp and chrome-devtools-mcp: recorded `runCommand` argv/stdout sweep clean; zero fill vocabulary dispatched.
   - Planted leak in a delivery-child fake (value echoed to stdout): harness fails.
   - On-disk shared-run bytes sweep clean after `markGuardForDeliveryOutcome` and containment release.
-- **Verification:** full browser-use suite green via the test-runner; the planted-regression cases prove non-vacuity.
+- **Verification:** full browser-use suite green via the test-runner; the planted-regression cases prove non-vacuity. Prototype finding 9 proved lane-neutrality live: `browser-connect connect` for agent-browser, playwright-cdp, and chrome-devtools-mcp all verify to the same Warm Chrome endpoint, and the same custody child delivered identically (secret-unseen, zero leak) on every one — the seam is adapter-neutral by construction because it binds by CDP target id, not adapter page id.
+
+### U8. Generic multi-step login engine (no per-portal login script)
+
+- **Goal:** an LLM-driven login engine logs into any portal by reasoning over the accessibility snapshot, handling arbitrary step sequences (single-page, username-first multi-step, OTP/2FA) with no per-portal login code.
+- **Requirements:** R14; R15 (activation), R4 (origin reproof per step).
+- **Dependencies:** U1 (delivery child), U3 (field bridge + origin reproof), and the non-secret CDP observer below (a prerequisite this unit introduces). Blocked on the operate opaque-ref fix ONLY if the observer routes through `browser-use operate` — the observer is specified to bypass operate (attach by CDP target id) precisely to avoid that dependency.
+- **Files:** new `skills/browser-use/src/browser-use-cdp-observer.ts` and test — a **reusable, non-secret, main-process CDP observer** (legal in the main process because it carries no secret bytes) that owns: full-accessibility-tree snapshot, control activation via `Input.dispatchMouseEvent` (R15), and node visibility/operability probing (used by U11). It attaches by CDP target id (like the custody seam), NOT via `browser-use operate`, so it is not blocked by the `parseAdapterPageId` defect. Distinct from U3's read-only single-field bridge and U1's one-shot write-path child (which exits after one insert). Plus new `skills/browser-use/src/browser-use-login-engine.ts` and test (snapshot → classify step → deliver matching field → advance → re-snapshot loop, driving the observer); classifier that keys off role + accessible name with an unlabelled-field fallback (structural reasoning: a lone textbox next to a Next button is the username); wiring into the runbook confidential step so a login flow declares only the binding + allowed origins, never field selectors.
+- **Approach:**
+  1. Loop until signed-in or no progress: snapshot the accessibility tree; classify the current step (`username` | `password` | `otp` | `submit` | `challenge` | `unknown`).
+  2. For a credential step, re-verify origin (R4) immediately before delivering, then deliver the matching field (`username`/`password`/`otp-current`) via the custody seam (U1).
+  3. Advance via a trusted control activation (R15), re-snapshot, repeat.
+  4. A human-only challenge (passkey/CAPTCHA/consent) short-circuits to the choreography's resumable human continuation — never a bypass.
+  5. No hardcoded step order and no per-portal field names — FastTrack (username-first, unlabelled fields) and Oncore (single-page, colon-labelled) are just two classified shapes.
+- **Patterns to follow:** the choreography's blocked-cause table and human-challenge routing in `browser-use-confidential-field-delivery.ts`; the accessibility-tree resolution in U3.
+- **Test scenarios:**
+  - Six structural login shapes (label-wrapped, aria-labelledby, placeholder-only, iframe, shadow-DOM, for/id) all classify to the same username/password fields and fill by name alone. Covers AE6.
+  - Username-first multi-step with unlabelled fields: engine fills username, advances, then password, then reaches signed-in. Covers AE6.
+  - OTP screen mid-flow: engine classifies it, delivers `otp-current`, advances. Covers AE6.
+  - Origin drift before a secret step: refused before delivery.
+  - Human challenge screen: resumable human continuation, no secret delivered.
+- **Verification:** engine suite green against served http fixtures (finding: harness discovery is http(s)-only; `file://` fixtures are filtered — serve fixtures over http). Prototype proved generic fill across six shapes and the multi-step/OTP flow live (findings 3, 11), and the real FastTrack + Oncore logins live (findings 7, 9).
+
+### U9. Timesheet fill correctness and fail-closed guards
+
+- **Goal:** the timesheet fill fills by exact date and refuses typed on any ambiguous or wrong grid, stopping before submit.
+- **Requirements:** R16.
+- **Dependencies:** none (parallel; post-login task, independent of the custody seam).
+- **Files:** `skills/browser-use/actions/fasttrack/fill-week.js` is the shipped reference; new hermetic coverage `skills/browser-use/src/browser-use-timesheet-fill.test.ts` and a served Angular grid fixture under `skills/browser-use/src/fixtures/`.
+- **Approach:** anchor each edit row to its own calendar date; fill requested days by date (never a blind weekday index); before any write, refuse typed when the open grid is a superset/foreign-week (`wrong_week_open`), has a duplicate row date (`duplicate_row_date`), or has unreadable row dates (`row_dates_unreadable`); select attendance from the dropdown by option text; never click submit — autonomous submit is a separate gated action.
+- **Patterns to follow:** the existing guard set in `fill-week.js` (the `fail(...)` cases are the canonical fail-closed vocabulary).
+- **Test scenarios:**
+  - Clean target-week grid: Mon-Fri fill on exact dates with correct start/end/attendance; `submitted:false`. Covers AE8.
+  - Fortnight superset grid: `wrong_week_open`, no cell written. Covers AE8.
+  - Two rows share a date: `duplicate_row_date`, no cell written. Covers AE8.
+  - Unreadable row dates: `row_dates_unreadable`, no cell written. Covers AE8.
+  - Attendance option absent: `attendance_option_not_found`.
+- **Verification:** hermetic suite green against the served grid fixture. Prototype proved all four scenarios live (finding 10), including per-date value commit.
+
+### U11. Pause/resume continuity around confidential delivery
+
+- **Goal:** the task lane pauses at the confidential step and resumes cleanly per the resume directive, never reusing a stale pre-delivery ref.
+- **Requirements:** R18; R2/R5 (continuity around the custody seam), aligns with origin plan R22-R24.
+- **Dependencies:** U4 (seam composition emits the resume directive), U8 (the login flow that pauses/resumes, and the non-secret CDP observer U8 introduces).
+- **Files:** the lane-side resume handling in `skills/browser-use/src/browser-use-agent-browser.ts` (ref invalidation + fresh-observation on resume); the visibility/operability staleness probe runs over U8's non-secret CDP observer (`browser-use-cdp-observer.ts`), not U1's one-shot write-path child; test `skills/browser-use/src/browser-use-resume-continuity.test.ts`.
+- **Approach:** on the resume directive, the lane discards its adapter-local refs and re-observes a fresh identity basis before continuing; it never operates a ref captured before delivery. Ref staleness is judged by **visibility/operability** (a still-resolvable but hidden node is stale) — not by `DOM.resolveNode` succeeding, which is a false "still valid" signal for SPA logins that hide rather than remove screens (prototype finding 13).
+- **Patterns to follow:** the resume-directive semantics owned by `browser-use-confidential-field-delivery.ts` (`discard_stale_refs`, `require_fresh_identity_basis`).
+- **Test scenarios:**
+  - A ref captured before delivery, on a screen that then advances, is refused on reuse (no longer visible/operable). Covers AE10.
+  - Obeying the resume directive (discard, re-observe) continues cleanly to the next step. Covers AE10.
+  - A resolvable-but-hidden node is classified stale (visibility check, not `DOM.resolveNode`).
+- **Verification:** continuity suite green against the multi-step fixture. Prototype proved the hazard and the resume path live, and that visibility/operability is the correct staleness signal (finding 13).
 
 ---
 
@@ -269,17 +343,25 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
 | Process boundary | seam + fixture child-process suites (real binaries, temp XDG, sentinel sweeps) | U1, U4, U6, U7 |
 | Command contract parity | derived help/parser/JSON/runtime gates for new auth subcommands | U5 |
 | Runbook health | `bun run browser-use runbook list --json` shows `fasttrack/login` healthy | U6 |
+| Login engine | login-engine suite green against served http fixtures (six shapes + multi-step + OTP) | U8 |
+| Timesheet fill | fill suite green: clean week fills by date; wrong-week/duplicate/unreadable refuse typed | U9 |
+| Resume continuity | continuity suite green: stale pre-delivery ref refused, resume directive re-observes fresh | U11 |
 | Types / lint | `tsc_check`, `biome_lintCheck` MCP runners | all units |
-| Operator-gated live proof | `browser-use auth status --json` green, then one controlled FastTrack login run observed by the operator | after all units; not autonomous |
+| Operator-gated live proof | `browser-use auth status --json` green, then one controlled FastTrack login run observed by the operator, routed through `browser-use auth` (U1/U2) — NOT prototype scaffolding | after all units; not autonomous |
 
 ---
 
 ## Definition of Done
 
 - The stub is gone: `buildRunbookAuthDelivery` composes live binding, target proof, lease, and context, and every failure branch is a typed continuation.
+- Custody foundation proven per unit: U1's supervisor `deliver` path (fork/private-pipe/single-write/exit) proven at the real process boundary; U2's handle is single-use, expiring, and digest-bound (replay/expiry/target-drift rejected); U3's reproof reproduces the digest or delivery refuses before any handle mint.
 - Hermetic end-to-end green: `fasttrack/login` runs through the real engine with fixture transports, including binding mint, sensitive interval, two bounded writes, and a clean containment sweep.
 - Sentinel-leak proofs pass on all three lanes, including the planted-regression cases; only the `op` child and the delivery child ever observe sentinel bytes.
 - An unenrolled machine is agent-repairable: refusal → `auth install-token` → `auth status` → re-run, proven by tests.
+- Login is generic: the login engine (U8) logs into the six structural shapes plus a multi-step/OTP flow with no per-portal login script; only bindings + allowed origins are per-portal.
+- Timesheet fill (U9) fills by date and refuses typed on wrong-week/duplicate/unreadable grids, stopping before submit.
+- Pause/resume continuity (U11) never reuses a stale pre-delivery ref; the resume directive re-observes a fresh identity basis.
+- The real login proof routes through `browser-use auth` (U1/U2), never the prototype's `op read | child` scaffolding; the product path performs login autonomously with no human-clicks-submit step for login. **"Done" here means login + fill-to-pre-submit — NOT true end-to-end timesheet automation.** Autonomous submit is out of scope (Scope Boundaries) and does not gate this plan's completion.
 - The dirty daily-driver review-fix set remains preserved and uncommitted unless separately approved; no unrelated files are reformatted.
 - Abandoned-attempt code from the implementation run is removed before declaring done.
 - The operator-gated live login proof is documented as the remaining manual step, with `auth status` as its precondition.
@@ -293,3 +375,6 @@ The choreography, blocked-cause table, and resume-directive semantics are owned 
 - **Lease collision.** The dispatch lease and sensitive-interval lease both derive from run-keyed helpers today. Mitigation: KTD7 distinct key families, with a contention test in U4.
 - **Credential-clean profile gate.** ADR 0030 blocks delivery until the dedicated Agent Chrome profile proves password-save/autofill/sync off; `auth status` (U5) reports it, and an unsafe profile is never scrubbed in place — repair is operator-approved profile creation.
 - **Context re-keying touches the executor's hot path.** The `field_by_ref` → binding-slug change alters the one live confidential routing site. Mitigation: the seam test and fixture change in the same units (U4/U7), keeping the co-change proof intact.
+- **`browser-use operate`/`task` cannot resolve a target on the agent-browser lane (external dependency).** The harness's `parseAdapterPageId` requires an integer page id but agent-browser reports `t1`-style string ids, so operate fails `browser_operation_target_missing`. Mitigation: fix tracked in the handoff (`/private/tmp/handoff-browser-use-operate-pageid-bug-2026-07-31.md`) as an opaque-adapter-ref abstraction fix (harness must not interpret adapter tab-handle shape). The custody seam is unaffected (it binds by CDP target id), so U1-U11 proceed; only a unit that drives delivery *through* `browser-use operate` on that lane blocks on the fix.
+- **Autonomous submit is unbuilt.** The prototype proved delivery-to-field and fill-to-pre-submit; the product's hands-off submit (no human click) is built on U1's supervisor path and is a distinct, separately-gated action. Mitigation: keep submit behind the same operator gate as live login until U1 lands; the prototype's human-clicks-submit was scaffolding, not a product feature.
+- **Prototype scaffolding must not leak into the product.** The live proofs used a bash `op read | custody-child` stand-in and a hand-rolled CDP client. Mitigation: acceptance criterion (Verification Contract, DoD) that the shipped path routes through `browser-use auth` (U1/U2) with no raw `op read` wrapper and no agent-process CDP client in the write path.

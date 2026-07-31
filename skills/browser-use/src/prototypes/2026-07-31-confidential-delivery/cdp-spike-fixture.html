@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway CDP spike fixture. Not production. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>CDP Spike Fixture</title></head>
+<body>
+  <h1>CDP Spike — Angular-style binding fixture</h1>
+
+  <!-- Simulates an Angular two-way-bound control: the "model" only updates
+       on a real 'input' event (ngModel listens to 'input'), and 'change'
+       (blur) is tracked separately. A raw DOM value set with NO events must
+       NOT update the model — that is exactly the FastTrack risk. -->
+  <label>Confidential field
+    <input id="secret" type="text" autocomplete="off" aria-label="Confidential value" />
+  </label>
+
+  <div>model (ngModel-equivalent): <span id="model">&lt;empty&gt;</span></div>
+  <div>input-event count: <span id="inputCount">0</span></div>
+  <div>change-event count: <span id="changeCount">0</span></div>
+  <div>keydown-event count: <span id="keyCount">0</span></div>
+  <div>last-input-value: <span id="lastInput">&lt;none&gt;</span></div>
+  <div>dom-value-readback: <span id="domValue">&lt;none&gt;</span></div>
+
+  <button id="readback" onclick="readback()">readback</button>
+
+  <script>
+    const el = document.getElementById('secret');
+    let inputCount = 0, changeCount = 0, keyCount = 0;
+    // ngModel-equivalent: model tracks ONLY input events, never raw .value writes.
+    el.addEventListener('input', (e) => {
+      inputCount++;
+      document.getElementById('inputCount').textContent = inputCount;
+      document.getElementById('model').textContent = e.target.value || '<empty>';
+      document.getElementById('lastInput').textContent = JSON.stringify(e.target.value);
+    });
+    el.addEventListener('change', () => {
+      changeCount++;
+      document.getElementById('changeCount').textContent = changeCount;
+    });
+    el.addEventListener('keydown', () => {
+      keyCount++;
+      document.getElementById('keyCount').textContent = keyCount;
+    });
+    function readback() {
+      document.getElementById('domValue').textContent = JSON.stringify(el.value);
+    }
+    // Expose a global probe so the spike can read model state via Runtime.evaluate.
+    window.__spike = () => ({
+      model: document.getElementById('model').textContent,
+      inputCount, changeCount, keyCount,
+      domValue: el.value,
+      origin: location.origin,
+      href: location.href,
+    });
+  </script>
+</body>
+</html>
