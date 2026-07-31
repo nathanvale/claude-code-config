@@ -1,4 +1,4 @@
-@_spi(Executor) import BrowserUseEnvironmentAuth
+@_spi(Executor) @_spi(Testing) import BrowserUseEnvironmentAuth
 import Darwin
 import Foundation
 
@@ -10,6 +10,27 @@ private enum SupervisorArguments {
         operation: EnvironmentOpMetadataOperation
     )
     case validate(validatorDescriptor: Int32, opPath: String)
+    case deliver(DeliveryRequest)
+}
+
+private struct DeliveryRequest {
+    let configRoot: String?
+    let tokenDescriptor: Int32?
+    let tokenPath: String?
+    let opPath: String
+    let deliveryPath: String?
+    let vaultID: String
+    let itemID: String
+    let field: EnvironmentOpPrivateField
+    let webSocketURL: String
+    let targetURL: String
+    let targetOrigin: String
+    let fieldRole: String
+    let fieldName: String
+    let activationRole: String?
+    let activationName: String?
+    let timeoutMilliseconds: Int32
+    let useUnadmittedOp: Bool
 }
 
 private func exactOptions(_ values: ArraySlice<String>) -> [String: String]? {
@@ -36,6 +57,88 @@ private func safeCoordinate(_ value: String) -> Bool {
             || ($0 >= 97 && $0 <= 122)
             || $0 == 45 || $0 == 46 || $0 == 58 || $0 == 95
     }
+}
+
+private func safeDescriptorPart(
+    _ value: String,
+    allowEmpty: Bool
+) -> Bool {
+    (allowEmpty || !value.isEmpty)
+        && value.utf8.count <= 512
+        && !value.contains("\0")
+        && !value.contains("\n")
+        && !value.contains("\r")
+}
+
+private func normalizedOrigin(_ raw: String) -> String? {
+    guard raw.utf8.count <= 2_048,
+          var components = URLComponents(string: raw),
+          let scheme = components.scheme?.lowercased(),
+          ["http", "https"].contains(scheme),
+          let host = components.host?.lowercased(),
+          components.user == nil,
+          components.password == nil,
+          components.path.isEmpty || components.path == "/",
+          components.query == nil,
+          components.fragment == nil
+    else {
+        return nil
+    }
+    let defaultPort = scheme == "https" ? 443 : 80
+    let port = components.port == defaultPort ? nil : components.port
+    components = URLComponents()
+    components.scheme = scheme
+    components.host = host
+    components.port = port
+    return components.string
+}
+
+private func origin(of raw: String) -> String? {
+    guard let url = URL(string: raw),
+          let scheme = url.scheme,
+          let host = url.host
+    else {
+        return nil
+    }
+    var components = URLComponents()
+    components.scheme = scheme
+    components.host = host
+    components.port = url.port
+    return normalizedOrigin(components.string ?? "")
+}
+
+private func safeWebSocketURL(_ raw: String) -> Bool {
+    guard raw.utf8.count <= 2_048,
+          let url = URL(string: raw),
+          ["ws", "wss"].contains(url.scheme?.lowercased() ?? ""),
+          url.host != nil,
+          url.user == nil,
+          url.password == nil,
+          url.query == nil,
+          url.fragment == nil
+    else {
+        return false
+    }
+    return true
+}
+
+private func safeTarget(
+    url rawURL: String,
+    origin rawOrigin: String
+) -> Bool {
+    guard rawURL.utf8.count <= 2_048,
+          let url = URL(string: rawURL),
+          ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+          url.host != nil,
+          url.user == nil,
+          url.password == nil,
+          url.fragment == nil,
+          let expectedOrigin = normalizedOrigin(rawOrigin),
+          origin(of: rawURL) == expectedOrigin
+    else {
+        return false
+    }
+    return true
 }
 
 private func parseArguments(_ values: [String]) -> SupervisorArguments? {
@@ -125,6 +228,117 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
             return nil
         }
         return .validate(validatorDescriptor: descriptor, opPath: opPath)
+    case "deliver":
+        guard let opPath = options["--op-path"],
+              let vaultID = options["--vault-id"],
+              let itemID = options["--item-id"],
+              let fieldName = options["--field"],
+              let field = EnvironmentOpPrivateField(rawValue: fieldName),
+              let webSocketURL = options["--ws-url"],
+              let targetURL = options["--target-url"],
+              let targetOrigin = options["--target-origin"],
+              let fieldRole = options["--field-role"],
+              let accessibleName = options["--field-name"],
+              let rawTimeout = options["--timeout-ms"],
+              let timeout = Int32(rawTimeout),
+              (500...30_000).contains(timeout),
+              safeCoordinate(vaultID),
+              safeCoordinate(itemID),
+              safeWebSocketURL(webSocketURL),
+              safeTarget(url: targetURL, origin: targetOrigin),
+              safeDescriptorPart(fieldRole, allowEmpty: false),
+              safeDescriptorPart(accessibleName, allowEmpty: true)
+        else {
+            return nil
+        }
+        let activationRole = options["--activate-role"]
+        let activationName = options["--activate-name"]
+        guard (activationRole == nil) == (activationName == nil),
+              activationRole.map({
+                  safeDescriptorPart($0, allowEmpty: false)
+              }) ?? true,
+              activationName.map({
+                  safeDescriptorPart($0, allowEmpty: true)
+              }) ?? true
+        else {
+            return nil
+        }
+
+        var requiredKeys: Set<String> = [
+            "--config-root",
+            "--op-path",
+            "--vault-id",
+            "--item-id",
+            "--field",
+            "--ws-url",
+            "--target-url",
+            "--target-origin",
+            "--field-role",
+            "--field-name",
+            "--timeout-ms",
+        ]
+        if activationRole != nil {
+            requiredKeys.formUnion(["--activate-role", "--activate-name"])
+        }
+        let configRoot = options["--config-root"]
+        var tokenDescriptor: Int32?
+        var tokenPath: String?
+        var deliveryPath: String?
+        var useUnadmittedOp = false
+#if DEBUG
+        if let rawDescriptor = options["--test-token-fd"],
+           let descriptor = Int32(rawDescriptor),
+           descriptor >= 3
+        {
+            guard configRoot == nil else { return nil }
+            tokenDescriptor = descriptor
+            requiredKeys.remove("--config-root")
+            requiredKeys.insert("--test-token-fd")
+        }
+        if let path = options["--test-token-path"] {
+            guard configRoot == nil, tokenDescriptor == nil, path.hasPrefix("/") else {
+                return nil
+            }
+            tokenPath = path
+            requiredKeys.remove("--config-root")
+            requiredKeys.insert("--test-token-path")
+        }
+        if let path = options["--test-delivery-path"] {
+            deliveryPath = path
+            requiredKeys.insert("--test-delivery-path")
+        }
+        if let testMode = options["--test-unadmitted-op"] {
+            guard testMode == "true" else { return nil }
+            useUnadmittedOp = true
+            requiredKeys.insert("--test-unadmitted-op")
+        }
+#endif
+        guard Set(options.keys) == requiredKeys,
+              configRoot != nil || tokenDescriptor != nil || tokenPath != nil
+        else {
+            return nil
+        }
+        return .deliver(
+            DeliveryRequest(
+                configRoot: configRoot,
+                tokenDescriptor: tokenDescriptor,
+                tokenPath: tokenPath,
+                opPath: opPath,
+                deliveryPath: deliveryPath,
+                vaultID: vaultID,
+                itemID: itemID,
+                field: field,
+                webSocketURL: webSocketURL,
+                targetURL: targetURL,
+                targetOrigin: normalizedOrigin(targetOrigin) ?? targetOrigin,
+                fieldRole: fieldRole,
+                fieldName: accessibleName,
+                activationRole: activationRole,
+                activationName: activationName,
+                timeoutMilliseconds: timeout,
+                useUnadmittedOp: useUnadmittedOp
+            )
+        )
     default:
         return nil
     }
@@ -135,11 +349,13 @@ Usage:
   browser-use-op-supervisor admit --op-path <absolute-path>
   browser-use-op-supervisor metadata --config-root <absolute-path> --op-path <absolute-path> --operation <name>
   browser-use-op-supervisor validate --validator-fd <fd> --op-path <absolute-path>
+  browser-use-op-supervisor deliver --config-root <absolute-path> --op-path <absolute-path> --vault-id <id> --item-id <id> --field <name> --ws-url <url> --target-url <url> --target-origin <origin> --field-role <role> --field-name <name> --timeout-ms <milliseconds>
 
 Commands:
   admit      Check the fixed official OP path without reading a token.
   metadata   Execute one admitted projected metadata operation.
   validate   Validate one token received through an inherited socket.
+  deliver    Deliver one admitted private field through the disposable child.
 """
 
 private func rejection(_ code: String) -> Data {
@@ -220,6 +436,36 @@ private func emitValidator(
     Foundation.exit(result == .approved ? 0 : 20)
 }
 
+private func siblingDeliveryExecutable() -> String? {
+    let executable = CommandLine.arguments[0]
+    guard executable.hasPrefix("/"), !executable.contains("\0") else {
+        return nil
+    }
+    return URL(fileURLWithPath: executable)
+        .deletingLastPathComponent()
+        .appendingPathComponent("browser-use-field-delivery")
+        .path
+}
+
+private func deliveryArguments(_ request: DeliveryRequest) -> [String] {
+    var arguments = [
+        "--ws-url", request.webSocketURL,
+        "--target-url", request.targetURL,
+        "--target-origin", request.targetOrigin,
+        "--field-role", request.fieldRole,
+        "--field-name", request.fieldName,
+    ]
+    if let activationRole = request.activationRole,
+       let activationName = request.activationName
+    {
+        arguments.append(contentsOf: [
+            "--activate-role", activationRole,
+            "--activate-name", activationName,
+        ])
+    }
+    return arguments
+}
+
 _ = signal(SIGPIPE, SIG_IGN)
 let rawArguments = Array(CommandLine.arguments.dropFirst())
 if rawArguments == ["--help"] || rawArguments == ["help"] {
@@ -293,5 +539,85 @@ case let .validate(validatorDescriptor, opPath):
         )
     } catch {
         emitValidator(.rejected, socket: validatorDescriptor)
+    }
+case let .deliver(request):
+    let deliveryPath = request.deliveryPath ?? siblingDeliveryExecutable()
+    guard let deliveryPath else {
+        emit(rejection("delivery-child-unavailable"), exitCode: 20)
+    }
+    let tokenDescriptor: Int32
+    do {
+        if let inheritedDescriptor = request.tokenDescriptor {
+            tokenDescriptor = inheritedDescriptor
+        } else if let tokenPath = request.tokenPath {
+            let opened = Darwin.open(tokenPath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard opened >= 0, proveEnvironmentTokenDescriptor(opened) else {
+                if opened >= 0 { _ = Darwin.close(opened) }
+                emit(rejection("token-invalid"), exitCode: 20)
+            }
+            tokenDescriptor = opened
+        } else if let configRoot = request.configRoot {
+            tokenDescriptor = try openEnvironmentTokenDescriptor(
+                configRoot: configRoot
+            )
+        } else {
+            emit(rejection("token-custody-unavailable"), exitCode: 20)
+        }
+    } catch let cause as TokenCustodyCause {
+        emit(rejection(cause.rawValue), exitCode: 20)
+    } catch {
+        emit(rejection("token-custody-unavailable"), exitCode: 20)
+    }
+    defer { _ = Darwin.close(tokenDescriptor) }
+
+    let consume: (Int32, Int32) -> Data = { secretDescriptor, remaining in
+        EnvironmentOpDeliveryRunner.run(
+            executablePath: deliveryPath,
+            arguments: deliveryArguments(request),
+            secretReadDescriptor: secretDescriptor,
+            timeoutMilliseconds: remaining
+        )
+    }
+    let result: EnvironmentOpPrivatePipeResult
+#if DEBUG
+    if request.useUnadmittedOp {
+        result = EnvironmentOpSupervisor.executeUnsnappedPrivateFieldForTesting(
+            executablePath: request.opPath,
+            vaultID: request.vaultID,
+            itemID: request.itemID,
+            field: request.field,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: request.timeoutMilliseconds,
+            consume: consume
+        )
+    } else {
+        result = EnvironmentOpSupervisor.executeAdmittedPrivateField(
+            executablePath: request.opPath,
+            vaultID: request.vaultID,
+            itemID: request.itemID,
+            field: request.field,
+            tokenDescriptor: tokenDescriptor,
+            timeoutMilliseconds: request.timeoutMilliseconds,
+            consume: consume
+        )
+    }
+#else
+    result = EnvironmentOpSupervisor.executeAdmittedPrivateField(
+        executablePath: request.opPath,
+        vaultID: request.vaultID,
+        itemID: request.itemID,
+        field: request.field,
+        tokenDescriptor: tokenDescriptor,
+        timeoutMilliseconds: request.timeoutMilliseconds,
+        consume: consume
+    )
+#endif
+    switch result {
+    case let .blocked(cause):
+        emit(rejection(cause.rawValue), exitCode: 20)
+    case let .success(outcome):
+        let decoded = try? JSONSerialization.jsonObject(with: outcome)
+            as? [String: Any]
+        emit(outcome, exitCode: decoded?["ok"] as? Bool == true ? 0 : 20)
     }
 }

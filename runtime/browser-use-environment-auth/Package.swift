@@ -9,6 +9,10 @@ let package = Package(
             name: "browser-use-op-supervisor",
             targets: ["BrowserUseEnvironmentOpSupervisor"]
         ),
+        .executable(
+            name: "browser-use-field-delivery",
+            targets: ["BrowserUseFieldDelivery"]
+        ),
     ],
     targets: [
         .target(
@@ -18,6 +22,14 @@ let package = Package(
         ),
         .executableTarget(
             name: "BrowserUseEnvironmentOpSupervisor",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .executableTarget(
+            name: "BrowserUseFieldDelivery",
+            dependencies: ["BrowserUseEnvironmentAuth"]
+        ),
+        .testTarget(
+            name: "BrowserUseEnvironmentAuthTests",
             dependencies: ["BrowserUseEnvironmentAuth"]
         ),
     ]
