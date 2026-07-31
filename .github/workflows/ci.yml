@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per branch; a new push cancels the previous.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # Install workspace deps FIRST. Skipping this is what makes a fresh
+      # checkout/worktree fail to resolve workspace packages (e.g.
+      # @side-quest/browser-use-security) and every CLI-spawning test exit 1 —
+      # a false "regression" that only reproduces without node_modules.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Lint (biome)
+        run: bun run biome:check
+
+      # Full test suite. This is the check a PR must pass green — it catches a
+      # cross-PR semantic collision on the PR's own branch, which per-branch
+      # review alone cannot.
+      - name: Test
+        run: bun test
