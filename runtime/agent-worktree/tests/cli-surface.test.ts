@@ -7,10 +7,15 @@ import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/tes
 
 import type { AgentWorktreeCliRuntime } from "../src/cli.ts";
 import { agentWorktreeContracts } from "../src/command-contract.ts";
-import { AGENT_WORKTREE_CONTRACT_ID } from "../src/model.ts";
+import {
+	AGENT_WORKTREE_CONTRACT_ID,
+	AGENT_WORKTREE_HUMAN_HANDOFF_REASONS,
+	AGENT_WORKTREE_LIFECYCLE_REASONS,
+} from "../src/model.ts";
 import { createFileStore } from "../src/store.ts";
 import {
 	mainRepoGitOutputs,
+	linkedRepoGitOutputs,
 	repoRuntime,
 	runJsonCli,
 	type TestJsonEnvelope,
@@ -44,6 +49,89 @@ describe("agent-worktree CLI surface", () => {
 
 		expect(help).toContain("--base");
 		expect(Object.keys(agentWorktreeContracts.create.flags)).toContain("--base");
+	});
+
+	test("attach advertises positional ref, PR selector, and dry-run", () => {
+		const help = renderCommandUsage(agentWorktreeContracts.attach);
+		const flags = Object.keys(agentWorktreeContracts.attach.flags);
+
+		expect(help).toContain("agent-worktree attach <ref> --json");
+		expect(help).toContain("agent-worktree attach --pr <n> --json");
+		expect(flags).toContain("--pr");
+		expect(flags).toContain("--dry-run");
+		expect(flags).not.toContain("--ref");
+	});
+
+	test("attach refusal and handoff reasons stay closed in the model", () => {
+		expect(AGENT_WORKTREE_LIFECYCLE_REASONS).toEqual(
+			expect.arrayContaining([
+				"branch_already_checked_out",
+				"branch_already_exists",
+				"isolation_unavailable",
+				"pr_fetch_failed",
+				"ref_not_found",
+				"target_path_exists",
+				"worktree_add_failed",
+			]),
+		);
+		expect(AGENT_WORKTREE_HUMAN_HANDOFF_REASONS).toContain(
+			"isolation_unavailable",
+		);
+	});
+
+	test("attach dry-run routes positional refs through the lifecycle envelope", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-attach-preview-"));
+		const { exitCode, envelope } = await runJsonCli(
+			["attach", "feat/existing", "--dry-run", "--repo", root, "--json"],
+			{
+				runtime: repoRuntime(root, {
+					...mainRepoGitOutputs(root),
+					["git show-ref --verify --hash refs/heads/feat/existing"]: "def\n",
+				}),
+			},
+		);
+
+		expect(exitCode).toBe(0);
+		expect(envelope.data).toMatchObject({
+			action: "attach",
+			changed_state: "none",
+			preview: true,
+			resolved_ref: "def",
+			target_path: join(root, ".worktrees", "feat-existing"),
+			mode: "branch",
+		});
+	});
+
+	test("attach linked-context refusal matches doctor isolation evidence", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-attach-linked-"));
+		const linked = join(root, ".worktrees", "feat-active");
+		const runtime = repoRuntime(
+			linked,
+			linkedRepoGitOutputs(root, linked, {
+				currentBranch: "feat/x",
+			}),
+		);
+
+		const refused = await runJsonCli(
+			["attach", "feat/other", "--repo", linked, "--json"],
+			{ runtime },
+		);
+		const doctor = await runJsonCli(
+			["doctor", "--repo", linked, "--json"],
+			{ runtime },
+		);
+
+		expect(refused.exitCode).toBe(1);
+		expect(refused.envelope.data).toMatchObject({
+			reason: "isolation_unavailable",
+			changed_state: "none",
+			recovery: {
+				nextActionId: "work_in_current_checkout",
+			},
+		});
+		expect(
+			(doctor.envelope.data?.summary as { isolation?: string }).isolation,
+		).toBe("linked_worktree");
 	});
 
 	test("context-heavy reads advertise projection flags", () => {

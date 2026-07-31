@@ -42,6 +42,7 @@ import {
 	type ProjectionFieldSet,
 } from "./projection.ts";
 import {
+	attachWorktree,
 	checkWorktree,
 	cleanPreview,
 	createWorktree,
@@ -96,6 +97,8 @@ export interface ParsedInvocation {
 	ref?: string;
 	/** Base branch or revision for creation. */
 	base?: string;
+	/** Pull request number for attach. */
+	pr?: number;
 	/** Output limit. */
 	limit?: number;
 	/** Projection field sets. */
@@ -160,6 +163,10 @@ type AgentWorktreeLifecycleData = {
 	reason: LifecycleResult["reason"] | undefined;
 	recovery: LifecycleResult["recovery"] | undefined;
 	backup_ref: LifecycleResult["backupRef"] | undefined;
+	resolved_ref: LifecycleResult["resolvedRef"] | undefined;
+	target_path: LifecycleResult["targetPath"] | undefined;
+	mode: LifecycleResult["mode"] | undefined;
+	existing_checkout_path: LifecycleResult["existingCheckoutPath"] | undefined;
 };
 
 type AgentWorktreeDoctorData = {
@@ -347,6 +354,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let repo: string | undefined;
 	let ref: string | undefined;
 	let base: string | undefined;
+	let pr: number | undefined;
 	let limit: number | undefined;
 	let fields: readonly ProjectionFieldSet[] | undefined;
 	let select: readonly string[] | undefined;
@@ -367,6 +375,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		deleteBranch,
 		ref,
 		base,
+		pr,
 		limit,
 		fields,
 		select,
@@ -394,6 +403,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			arg === "--repo" ||
 			arg === "--ref" ||
 			arg === "--base" ||
+			arg === "--pr" ||
 			arg === "--limit" ||
 			arg === "--fields" ||
 			arg === "--select"
@@ -406,6 +416,13 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			if (arg === "--repo") repo = value;
 			if (arg === "--ref") ref = value;
 			if (arg === "--base") base = value;
+			if (arg === "--pr") {
+				const parsedPr = Number.parseInt(value, 10);
+				if (!/^\d+$/.test(value) || parsedPr < 1) {
+					return fail("--pr needs a positive integer.");
+				}
+				pr = parsedPr;
+			}
 			if (arg === "--fields") {
 				const parsedFields = parseProjectionFields(value);
 				if (!parsedFields.ok) return fail(parsedFields.message);
@@ -453,6 +470,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		deleteBranch,
 		ref,
 		base,
+		pr,
 		limit,
 		fields,
 		select,
@@ -538,6 +556,28 @@ export async function runCommand(
 					now: runtime.now,
 				});
 				return lifecycleCommandResult("create", result, invocation.dryRun);
+			}
+			case "attach": {
+				const ref = invocation.positionals[0];
+				if (ref && invocation.pr !== undefined) {
+					return usageFailure("attach accepts either <ref> or --pr, not both.");
+				}
+				if (!ref && invocation.pr === undefined) {
+					return usageFailure("attach needs <ref> or --pr <n>.");
+				}
+				if (invocation.positionals.length > 1) {
+					return usageFailure("attach accepts one positional <ref>.");
+				}
+				const result = await attachWorktree({
+					cwd,
+					run: runtime.run,
+					ref,
+					pr: invocation.pr,
+					dryRun: invocation.dryRun,
+					runId,
+					now: runtime.now,
+				});
+				return lifecycleCommandResult("attach", result, invocation.dryRun);
 			}
 			case "delete": {
 				const branch = invocation.positionals[0];
@@ -883,6 +923,10 @@ function lifecycleData(result: LifecycleResult): AgentWorktreeLifecycleData {
 		reason: result.reason,
 		recovery: result.recovery,
 		backup_ref: result.backupRef,
+		resolved_ref: result.resolvedRef,
+		target_path: result.targetPath,
+		mode: result.mode,
+		existing_checkout_path: result.existingCheckoutPath,
 	};
 }
 

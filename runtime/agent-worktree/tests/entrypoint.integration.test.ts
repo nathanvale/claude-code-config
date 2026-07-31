@@ -17,7 +17,6 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
-import { agentWorktreeContracts } from "../src/command-contract.ts";
 import {
 	AGENT_WORKTREE_CLI_NAME,
 	AGENT_WORKTREE_CONTRACT_ID,
@@ -201,6 +200,57 @@ async function withTempRepo<T>(
 	});
 }
 
+async function withTempPullRequestRepo<T>(
+	prefix: string,
+	pullRequest: number,
+	body: (repo: string) => Promise<T>,
+): Promise<T> {
+	return withTempRoot(prefix, async (root) => {
+		const origin = join(root, "origin.git");
+		const seed = join(root, "seed");
+		const checkout = join(root, "repo");
+		mkdirSync(origin, { recursive: true });
+		mkdirSync(seed, { recursive: true });
+
+		gitOutput(origin, ["init", "--bare", "--initial-branch=main"]);
+		gitOutput(seed, ["init", "--initial-branch=main"]);
+		gitOutput(seed, [
+			"config",
+			"user.name",
+			"agent-worktree Integration Test",
+		]);
+		gitOutput(seed, [
+			"config",
+			"user.email",
+			"agent-worktree-integration@example.test",
+		]);
+		gitOutput(seed, ["commit", "--allow-empty", "-m", "chore: seed main"]);
+		gitOutput(seed, ["remote", "add", "origin", origin]);
+		gitOutput(seed, ["push", "origin", "main"]);
+		gitOutput(seed, ["switch", "-c", "pull-request-head"]);
+		gitOutput(seed, ["commit", "--allow-empty", "-m", "feat: pull request head"]);
+		gitOutput(seed, [
+			"push",
+			"origin",
+			`HEAD:refs/pull/${pullRequest}/head`,
+		]);
+		gitOutput(root, ["clone", origin, checkout]);
+		const repo = realpathSync(checkout);
+		gitOutput(repo, [
+			"config",
+			"user.name",
+			"agent-worktree Integration Test",
+		]);
+		gitOutput(repo, [
+			"config",
+			"user.email",
+			"agent-worktree-integration@example.test",
+		]);
+
+		return body(repo);
+	});
+}
+
 async function expectInspectableRef(
 	repo: string,
 	ref: { kind: string; id: string },
@@ -216,6 +266,40 @@ async function expectInspectableRef(
 }
 
 describe("agent-worktree package entrypoint integration", () => {
+	test(
+		"PR attach fetches a local branch and leaves the new worktree attached",
+		async () => {
+			await withTempPullRequestRepo("pull-request", 42, async (repo) => {
+				const targetPath = join(repo, ".worktrees", "pr-42");
+
+				const attach = await runAgentWorktreePackage(
+					["attach", "--pr", "42", "--repo", repo, "--json"],
+					"agent-worktree attach --pr real local origin",
+				);
+				const data = expectOkAction(attach, "attach", {
+					changedState: "complete",
+					preview: false,
+				});
+
+				expect(data.mode, describeCliProcessRun(attach)).toBe("pr");
+				expect(data.resolved_ref, describeCliProcessRun(attach)).toBe("pr-42");
+				expect(existsSync(targetPath), describeCliProcessRun(attach)).toBe(true);
+				expect(
+					gitOutput(targetPath, ["symbolic-ref", "--short", "HEAD"]).trim(),
+				).toBe("pr-42");
+				expect(
+					gitOutput(repo, [
+						"show-ref",
+						"--verify",
+						"--hash",
+						"refs/heads/pr-42",
+					]).trim().length,
+				).toBeGreaterThan(0);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
 	test(
 		"create, inspect, check, and delete dry-run work through the package script",
 		async () => {

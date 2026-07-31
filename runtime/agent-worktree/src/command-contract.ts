@@ -73,6 +73,13 @@ const baseFlag = {
 	},
 } as const;
 
+const prFlag = {
+	"--pr": {
+		type: "string",
+		description: "Pull request number whose head should be attached.",
+	},
+} as const;
+
 const dryRunFlag = {
 	"--dry-run": {
 		type: "boolean",
@@ -214,6 +221,28 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 				failure: inspectFailure,
 			},
 			flags: { ...commonWriteFlags, ...baseFlag },
+			exitCodes,
+		},
+		attach: {
+			script: AGENT_WORKTREE_CLI_NAME,
+			summary: "Attach a linked worktree to an existing ref or pull request.",
+			usage: [
+				"agent-worktree attach <ref> --json",
+				"agent-worktree attach --pr <n> --json",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["read", "check", "network", "write"],
+			executionModes: ["dry_run", "normal"],
+			outputModes: ["json"],
+			interactivity: "none",
+			resultContract,
+			actionAffordances: {
+				success: inspectBeforeMutating,
+				failure: inspectFailure,
+			},
+			flags: { ...commonWriteFlags, ...prFlag },
 			exitCodes,
 		},
 		status: {

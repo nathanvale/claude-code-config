@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import {
 	type DiscoverRepoOptions,
 	type DiscoveredWorktree,
+	type GitRunResult,
 	type GitRunner,
 	type RepoIsolation,
 	type RepoDiscovery,
@@ -22,6 +23,8 @@ import { deregisterCodexProject, registerCodexProject } from "./codex-state.ts";
 import {
 	AGENT_WORKTREE_RECOVERY_RETRY_SAFETY,
 	type AgentWorktreeChangedState,
+	type AgentWorktreeHumanHandoffReason,
+	type AgentWorktreeLifecycleReason,
 	type AgentWorktreeRef,
 	type AgentWorktreeRecoveryRetrySafety,
 	type AgentWorktreeSeam,
@@ -46,11 +49,7 @@ export type RecoveryRetrySafety = AgentWorktreeRecoveryRetrySafety;
 /**
  * Human handoff reason for lifecycle commands.
  */
-export type HumanHandoffReason =
-	| "destructive_confirmation"
-	| "dirty_state"
-	| "unreliable_evidence"
-	| "partial_mutation";
+export type HumanHandoffReason = AgentWorktreeHumanHandoffReason;
 
 /**
  * Recovery choice advertised after a failed lifecycle command.
@@ -67,6 +66,8 @@ export interface RecoveryChoice {
 	ref?: AgentWorktreeRef;
 	/** Human handoff reason when automation should stop. */
 	handoffReason?: HumanHandoffReason;
+	/** Existing checkout path when the safe action is to use that worktree. */
+	path?: string;
 }
 
 /**
@@ -170,11 +171,19 @@ export interface LifecycleResult {
 	/** Safe next action id. */
 	nextSafeAction: string;
 	/** Stable reason when no mutation or a failure path blocks execution. */
-	reason?: string;
+	reason?: AgentWorktreeLifecycleReason;
 	/** Recovery plan for mutation/failure paths. */
 	recovery?: RecoveryPlan;
 	/** Backup ref created before branch deletion. */
 	backupRef?: string;
+	/** Git object id resolved before attach. */
+	resolvedRef?: string;
+	/** Standard worktree path selected for attach. */
+	targetPath?: string;
+	/** Attach checkout mode. */
+	mode?: "branch" | "detached" | "pr";
+	/** Existing checkout that caused the one-branch guard refusal. */
+	existingCheckoutPath?: string;
 }
 
 /**
@@ -263,7 +272,42 @@ export function buildRecoveryPlan(input: {
 	failureRef?: AgentWorktreeRef;
 	retrySafety?: RecoveryRetrySafety;
 	handoffReason?: HumanHandoffReason;
+	existingCheckoutPath?: string;
 }): RecoveryPlan {
+	if (input.handoffReason === "isolation_unavailable") {
+		return {
+			changedState: input.changedState,
+			nextActionId: "work_in_current_checkout",
+			choices: [
+				{
+					id: "work_in_current_checkout",
+					retrySafety: "operator_required",
+					handoffReason: "isolation_unavailable",
+					...(input.failureRef ? { ref: input.failureRef } : {}),
+				},
+				{
+					id: "stop_and_resolve_environment",
+					retrySafety: "operator_required",
+					handoffReason: "isolation_unavailable",
+					...(input.failureRef ? { ref: input.failureRef } : {}),
+				},
+			],
+		};
+	}
+	if (input.existingCheckoutPath) {
+		return {
+			changedState: input.changedState,
+			nextActionId: "use_existing_checkout",
+			choices: [
+				{
+					id: "use_existing_checkout",
+					retrySafety: "same_input_unsafe",
+					path: input.existingCheckoutPath,
+					...(input.failureRef ? { ref: input.failureRef } : {}),
+				},
+			],
+		};
+	}
 	if (input.changedState === "none") {
 		const retrySafety = input.retrySafety ?? "same_input_safe";
 		const nextActionId =
@@ -271,7 +315,9 @@ export function buildRecoveryPlan(input: {
 				? "operator_handoff"
 				: retrySafety === "inspect_first"
 					? "inspect_first"
-					: "retry_same_input";
+					: retrySafety === "same_input_unsafe"
+						? "change_input"
+						: "retry_same_input";
 		return {
 			changedState: "none",
 			nextActionId,
@@ -532,6 +578,16 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	if (discovery.isolation === "linked_worktree") {
+		return isolationRefusal("create");
+	}
+	const existingCheckoutPath = findBranchCheckoutPath(
+		discovery,
+		options.branch,
+	);
+	if (existingCheckoutPath) {
+		return branchCheckoutRefusal("create", existingCheckoutPath);
+	}
 	const base = options.base ?? discovery.currentBranch ?? discovery.defaultBranch ?? "HEAD";
 	const targetPath = join(
 		discovery.mainOwnerRoot ?? discovery.gitRoot ?? options.cwd,
@@ -557,14 +613,19 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 		{ cwd: discovery.gitRoot ?? options.cwd },
 	);
 	if (!result.ok) {
+		const failure = classifyWorktreeAddFailure(result);
 		return failedLifecycle({
 			command: "create",
 			storeRoot: discovery.storeRoot,
 			runId: options.runId,
 			stepId: "create_worktree",
 			changedState: "none",
-			whatHappened: "Worktree creation failed.",
+			whatHappened: failure.whatHappened,
 			whatChanged: [],
+			reason: failure.reason,
+			retrySafety: failure.retrySafety,
+			handoffReason: failure.handoffReason,
+			existingCheckoutPath: failure.existingCheckoutPath,
 			now: options.now,
 		});
 	}
@@ -590,6 +651,253 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 		changes,
 		nextSafeAction: "status",
 		recovery: buildRecoveryPlan({ changedState: "complete" }),
+	};
+}
+
+/**
+ * Attach a worktree to an existing branch, tag, commit, or pull request head.
+ *
+ * @param options - Attach options
+ * @returns Lifecycle result
+ *
+ * @example
+ * ```typescript
+ * const result = await attachWorktree({ cwd: "/repo", ref: "feat/x", dryRun: true, runId: "r1" })
+ * ```
+ */
+export async function attachWorktree(options: DiscoverRepoOptions & {
+	ref?: string;
+	pr?: number;
+	dryRun: boolean;
+	runId: string;
+	now?: () => number;
+}): Promise<LifecycleResult> {
+	const run = options.run ?? defaultGitRunner;
+	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	if (discovery.isolation === "linked_worktree") {
+		return isolationRefusal("attach");
+	}
+	const prBranch = options.pr === undefined ? undefined : `pr-${options.pr}`;
+	const requestedRef = prBranch ?? options.ref;
+	if (!requestedRef) {
+		return {
+			action: "attach",
+			changedState: "none",
+			preview: false,
+			changes: [],
+			nextSafeAction: "change_input",
+			reason: "ref_not_found",
+			recovery: buildRecoveryPlan({
+				changedState: "none",
+				retrySafety: "same_input_unsafe",
+			}),
+		};
+	}
+	const targetPath = join(
+		discovery.mainOwnerRoot ?? discovery.gitRoot ?? options.cwd,
+		".worktrees",
+		sanitizeBranchPath(requestedRef),
+	);
+	if (prBranch) {
+		const existingCheckoutPath = findBranchCheckoutPath(discovery, prBranch);
+		if (existingCheckoutPath) {
+			return branchCheckoutRefusal("attach", existingCheckoutPath);
+		}
+		const changes = [
+			`fetch pull request ${options.pr} into ${prBranch}`,
+			`attach worktree ${targetPath}`,
+			`checkout existing branch ${prBranch}`,
+		];
+		if (options.dryRun) {
+			return {
+				action: "attach",
+				changedState: "none",
+				preview: true,
+				changes,
+				nextSafeAction: "attach",
+				recovery: buildRecoveryPlan({ changedState: "none" }),
+				resolvedRef: prBranch,
+				targetPath,
+				mode: "pr",
+			};
+		}
+		const fetchResult = await run(
+			["git", "fetch", "origin", `pull/${options.pr}/head:${prBranch}`],
+			{ cwd: discovery.gitRoot ?? options.cwd },
+		);
+		if (!fetchResult.ok) {
+			const failure = classifyPrFetchFailure(fetchResult);
+			return failedLifecycle({
+				command: "attach",
+				storeRoot: discovery.storeRoot,
+				runId: options.runId,
+				stepId: "fetch_pr",
+				changedState: "none",
+				whatHappened: failure.whatHappened,
+				whatChanged: [],
+				reason: failure.reason,
+				retrySafety: failure.retrySafety,
+				now: options.now,
+			});
+		}
+		const addResult = await run(
+			["git", "worktree", "add", targetPath, prBranch],
+			{ cwd: discovery.gitRoot ?? options.cwd },
+		);
+		if (!addResult.ok) {
+			const failure = classifyWorktreeAddFailure(addResult);
+			return failedLifecycle({
+				command: "attach",
+				storeRoot: discovery.storeRoot,
+				runId: options.runId,
+				stepId: "attach_worktree",
+				changedState: "partial",
+				whatHappened: failure.whatHappened,
+				whatChanged: [`Fetched pull request ${options.pr} into ${prBranch}.`],
+				reason: failure.reason,
+				retrySafety: failure.retrySafety,
+				handoffReason: failure.handoffReason,
+				existingCheckoutPath: failure.existingCheckoutPath,
+				priorSteps: [
+					{
+						id: "fetch_pr",
+						action: "fetch pull request",
+						status: "completed",
+						changedState: "complete",
+					},
+				],
+				now: options.now,
+			});
+		}
+		const runRef = await writeRun(discovery.storeRoot, {
+			runId: options.runId,
+			command: "attach",
+			now: options.now,
+			steps: [
+				{
+					id: "fetch_pr",
+					action: "fetch pull request",
+					status: "completed",
+					changedState: "complete",
+				},
+				{
+					id: "attach_worktree",
+					action: "attach worktree",
+					status: "completed",
+					changedState: "complete",
+				},
+			],
+		});
+		await registerCodexProject(targetPath).catch(() => {});
+		return {
+			action: "attach",
+			changedState: "complete",
+			preview: false,
+			runRef,
+			changes,
+			nextSafeAction: "status",
+			recovery: buildRecoveryPlan({ changedState: "complete" }),
+			resolvedRef: prBranch,
+			targetPath,
+			mode: "pr",
+		};
+	}
+	const resolved = await resolveAttachRef(
+		run,
+		discovery.gitRoot ?? options.cwd,
+		requestedRef,
+	);
+	if (!resolved) {
+		return {
+			action: "attach",
+			changedState: "none",
+			preview: false,
+			changes: [],
+			nextSafeAction: "change_input",
+			reason: "ref_not_found",
+			recovery: buildRecoveryPlan({
+				changedState: "none",
+				retrySafety: "same_input_unsafe",
+			}),
+		};
+	}
+	const resolvedRef = resolved.objectId;
+	if (resolved.mode === "branch") {
+		const existingCheckoutPath = findBranchCheckoutPath(
+			discovery,
+			requestedRef,
+		);
+		if (existingCheckoutPath) {
+			return branchCheckoutRefusal("attach", existingCheckoutPath);
+		}
+	}
+	const changes = [
+		`attach worktree ${targetPath}`,
+		resolved.mode === "branch"
+			? `checkout existing branch ${requestedRef}`
+			: `checkout detached ref ${requestedRef}`,
+	];
+	if (options.dryRun) {
+		return {
+			action: "attach",
+			changedState: "none",
+			preview: true,
+			changes,
+			nextSafeAction: "attach",
+			recovery: buildRecoveryPlan({ changedState: "none" }),
+			resolvedRef,
+			targetPath,
+			mode: resolved.mode,
+		};
+	}
+	const result = await run(
+		resolved.mode === "branch"
+			? ["git", "worktree", "add", targetPath, requestedRef]
+			: ["git", "worktree", "add", "--detach", targetPath, requestedRef],
+		{ cwd: discovery.gitRoot ?? options.cwd },
+	);
+	if (!result.ok) {
+		const failure = classifyWorktreeAddFailure(result);
+		return failedLifecycle({
+			command: "attach",
+			storeRoot: discovery.storeRoot,
+			runId: options.runId,
+			stepId: "attach_worktree",
+			changedState: "none",
+			whatHappened: failure.whatHappened,
+			whatChanged: [],
+			reason: failure.reason,
+			retrySafety: failure.retrySafety,
+			handoffReason: failure.handoffReason,
+			existingCheckoutPath: failure.existingCheckoutPath,
+			now: options.now,
+		});
+	}
+	const runRef = await writeRun(discovery.storeRoot, {
+		runId: options.runId,
+		command: "attach",
+		now: options.now,
+		steps: [
+			{
+				id: "attach_worktree",
+				action: "attach worktree",
+				status: "completed",
+				changedState: "complete",
+			},
+		],
+	});
+	await registerCodexProject(targetPath).catch(() => {});
+	return {
+		action: "attach",
+		changedState: "complete",
+		preview: false,
+		runRef,
+		changes,
+		nextSafeAction: "status",
+		recovery: buildRecoveryPlan({ changedState: "complete" }),
+		resolvedRef,
+		targetPath,
+		mode: resolved.mode,
 	};
 }
 
@@ -978,17 +1286,173 @@ async function listBranches(
 		.filter(Boolean);
 }
 
+async function resolveAttachRef(
+	run: GitRunner,
+	cwd: string,
+	ref: string,
+): Promise<{ mode: "branch" | "detached"; objectId: string } | undefined> {
+	const branch = await run(
+		["git", "show-ref", "--verify", "--hash", `refs/heads/${ref}`],
+		{ cwd },
+	);
+	if (branch.ok) {
+		return { mode: "branch", objectId: branch.stdout.trim() };
+	}
+	const tag = await run(
+		["git", "show-ref", "--verify", "--hash", `refs/tags/${ref}`],
+		{ cwd },
+	);
+	const commit = await run(["git", "rev-parse", "--verify", `${ref}^{commit}`], {
+		cwd,
+	});
+	if (!commit.ok) return undefined;
+	return {
+		mode: "detached",
+		objectId: commit.stdout.trim() || tag.stdout.trim(),
+	};
+}
+
+function findBranchCheckoutPath(
+	discovery: RepoDiscovery,
+	branch: string | undefined,
+	currentPath?: string,
+): string | undefined {
+	if (!branch) return undefined;
+	return discovery.worktrees.find(
+		(worktree) =>
+			worktree.branch === branch &&
+			(currentPath === undefined || worktree.path !== currentPath),
+	)?.path;
+}
+
 function isBranchCheckedOutElsewhere(
 	discovery: RepoDiscovery,
 	branch: string | undefined,
 	currentPath: string | undefined,
 ): boolean {
-	if (!branch) return false;
-	return discovery.worktrees.some(
-		(worktree) =>
-			worktree.branch === branch &&
-			(currentPath === undefined || worktree.path !== currentPath),
+	return findBranchCheckoutPath(discovery, branch, currentPath) !== undefined;
+}
+
+function isolationRefusal(action: "attach" | "create"): LifecycleResult {
+	return {
+		action,
+		changedState: "none",
+		preview: false,
+		changes: [],
+		nextSafeAction: "work_in_current_checkout",
+		reason: "isolation_unavailable",
+		recovery: buildRecoveryPlan({
+			changedState: "none",
+			retrySafety: "operator_required",
+			handoffReason: "isolation_unavailable",
+		}),
+	};
+}
+
+function branchCheckoutRefusal(
+	action: "attach" | "create",
+	existingCheckoutPath: string,
+): LifecycleResult {
+	return {
+		action,
+		changedState: "none",
+		preview: false,
+		changes: [],
+		nextSafeAction: "use_existing_checkout",
+		reason: "branch_already_checked_out",
+		recovery: buildRecoveryPlan({
+			changedState: "none",
+			retrySafety: "same_input_unsafe",
+			existingCheckoutPath,
+		}),
+		existingCheckoutPath,
+	};
+}
+
+interface WorktreeFailureClassification {
+	reason: AgentWorktreeLifecycleReason;
+	retrySafety: RecoveryRetrySafety;
+	whatHappened: string;
+	handoffReason?: HumanHandoffReason;
+	existingCheckoutPath?: string;
+}
+
+function classifyWorktreeAddFailure(
+	result: GitRunResult,
+): WorktreeFailureClassification {
+	const diagnostic = `${result.stderr}\n${result.stdout}`.trim();
+	const checkedOutMatch = diagnostic.match(
+		/already checked out at ['"]?([^'"\r\n]+)['"]?/i,
 	);
+	if (checkedOutMatch?.[1]) {
+		return {
+			reason: "branch_already_checked_out",
+			retrySafety: "same_input_unsafe",
+			whatHappened: "The requested branch is already checked out.",
+			existingCheckoutPath: checkedOutMatch[1],
+		};
+	}
+	if (/a branch named .+ already exists/i.test(diagnostic)) {
+		return {
+			reason: "branch_already_exists",
+			retrySafety: "same_input_unsafe",
+			whatHappened: "The requested branch already exists.",
+		};
+	}
+	if (
+		/permission denied|operation not permitted|read-only file system|sandbox/i.test(
+			diagnostic,
+		)
+	) {
+		return {
+			reason: "isolation_unavailable",
+			retrySafety: "operator_required",
+			whatHappened:
+				"Worktree isolation is unavailable in the current environment.",
+			handoffReason: "isolation_unavailable",
+		};
+	}
+	if (/already exists|directory .+ exists/i.test(diagnostic)) {
+		return {
+			reason: "target_path_exists",
+			retrySafety: "same_input_unsafe",
+			whatHappened: "The target worktree path already exists.",
+		};
+	}
+	if (
+		/invalid reference|not a valid object name|unknown revision|ambiguous argument|not found/i.test(
+			diagnostic,
+		)
+	) {
+		return {
+			reason: "ref_not_found",
+			retrySafety: "same_input_unsafe",
+			whatHappened: "The requested branch or ref was not found.",
+		};
+	}
+	return {
+		reason: "worktree_add_failed",
+		retrySafety: "inspect_first",
+		whatHappened: "Git could not add the worktree.",
+	};
+}
+
+function classifyPrFetchFailure(
+	result: GitRunResult,
+): WorktreeFailureClassification {
+	const diagnostic = `${result.stderr}\n${result.stdout}`.trim();
+	if (/couldn't find remote ref|remote ref .+ not found/i.test(diagnostic)) {
+		return {
+			reason: "ref_not_found",
+			retrySafety: "same_input_unsafe",
+			whatHappened: "The pull request head ref was not found.",
+		};
+	}
+	return {
+		reason: "pr_fetch_failed",
+		retrySafety: "inspect_first",
+		whatHappened: "Git could not fetch the pull request head.",
+	};
 }
 
 function unknownDefaultBranchEvidence(): MergeEvidence {
@@ -1029,7 +1493,7 @@ function worktreeRecordId(worktree: DiscoveredWorktree): string {
 }
 
 async function failedLifecycle(input: {
-	command: "create" | "delete" | "refresh";
+	command: "attach" | "create" | "delete" | "refresh";
 	storeRoot?: string;
 	runId: string;
 	stepId: string;
@@ -1037,18 +1501,28 @@ async function failedLifecycle(input: {
 	whatHappened: string;
 	whatChanged: readonly string[];
 	backupRef?: string;
-	reason?: string;
+	reason?: AgentWorktreeLifecycleReason;
 	retrySafety?: RecoveryRetrySafety;
 	handoffReason?: HumanHandoffReason;
+	existingCheckoutPath?: string;
+	priorSteps?: readonly AgentWorktreeOperationStep[];
 	now?: () => number;
 }): Promise<LifecycleResult> {
 	const failureRef = { kind: "failure", id: `${packageRunId(input.runId)}/${input.stepId}` } as const;
+	const recovery = buildRecoveryPlan({
+		changedState: input.changedState,
+		failureRef,
+		retrySafety: input.retrySafety,
+		handoffReason: input.handoffReason,
+		existingCheckoutPath: input.existingCheckoutPath,
+	});
 	const runRef = await writeRun(input.storeRoot, {
 		runId: input.runId,
 		command: input.command,
 		backupRef: input.backupRef,
 		now: input.now,
 		steps: [
+			...(input.priorSteps ?? []),
 			{
 				id: input.stepId,
 				action: input.stepId,
@@ -1071,7 +1545,7 @@ async function failedLifecycle(input: {
 					(input.changedState === "none" ? "same_input_safe" : "inspect_first"),
 				whatHappened: input.whatHappened,
 				whatChanged: input.whatChanged,
-				nextSafeActions: ["inspect", "handoff"],
+				nextSafeActions: recovery.choices.map((choice) => choice.id),
 				backupRef: input.backupRef,
 			});
 		} catch {
@@ -1086,15 +1560,12 @@ async function failedLifecycle(input: {
 		runRef,
 		failureRef,
 		changes: input.whatChanged,
-		nextSafeAction: "inspect",
+		nextSafeAction:
+			input.command === "attach" ? recovery.nextActionId : "inspect",
 		reason: input.reason,
-		recovery: buildRecoveryPlan({
-			changedState: input.changedState,
-			failureRef,
-			retrySafety: input.retrySafety,
-			handoffReason: input.handoffReason,
-		}),
+		recovery,
 		backupRef: input.backupRef,
+		existingCheckoutPath: input.existingCheckoutPath,
 	};
 }
 
@@ -1102,7 +1573,7 @@ async function writeRun(
 	storeRoot: string | undefined,
 	input: {
 		runId: string;
-		command: "create" | "delete" | "refresh";
+		command: "attach" | "create" | "delete" | "refresh";
 		steps: readonly AgentWorktreeOperationStep[];
 		backupRef?: string;
 		now?: () => number;
