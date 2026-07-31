@@ -706,6 +706,109 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		}
 	});
 
+	test("two slugs of one Item Binding proceed; two distinct Item Bindings refuse single-binding-v1 (R10)", async () => {
+		const store = await makeStore();
+		const twoSlugInput = (runId: string) => ({
+			...liveSeamInput(runId),
+			pendingItemBindings: ["oncore_password", "oncore_username"],
+			confidentialFields: [
+				{
+					bindingSlug: "oncore_password",
+					credentialField: "password" as const,
+					target: { role: "textbox", name: "Password" },
+				},
+				{
+					bindingSlug: "oncore_username",
+					credentialField: "username" as const,
+					target: { role: "textbox", name: "Password" },
+				},
+			],
+		});
+
+		// Positive: both slugs resolve to the SAME item — one distinct Item
+		// Binding — so the real seam builds the context with both mappings.
+		{
+			const port = {
+				...activeVaultPort(),
+				// Present so environmentDeliveryHook can build; never invoked here.
+				redeemCredentialField: async () => ({
+					ok: true as const,
+					shape: { field: "password" as const, byte_length: 1 },
+				}),
+			};
+			const provider = createBrowserUseAuthProvider({
+				store: store.deps,
+				tokenRetrieval: port,
+				attestationByDigest: () => undefined,
+			});
+			const seam = buildRunbookAuthDelivery(provider, {
+				tokenRetrieval: port,
+				createTargetTransport: () => ({
+					transport: stableProofTransport(),
+					close: () => {},
+				}),
+				createDeliveryHook: environmentDeliveryHook,
+			});
+			const built = await seam(twoSlugInput("run-r10-one-item"));
+			expect(built.ok).toBe(true);
+			if (built.ok) {
+				expect(built.context.field_by_binding_slug).toEqual({
+					oncore_password: "password",
+					oncore_username: "username",
+				});
+			}
+		}
+
+		// Negative: the slugs resolve to TWO distinct items — the real seam
+		// refuses single-binding-v1 before any target proof or handle mint.
+		{
+			let handleMints = 0;
+			let transportCalls = 0;
+			let listCalls = 0;
+			const itemFor = (itemId: string) => ({
+				item_id: itemId,
+				vault_id: "vault-1",
+				origins: ["https://oncore.test"],
+				login_paths: ["/login"],
+				supported_methods: ["password" as const],
+				state: "active" as const,
+			});
+			const port = activeVaultPort({
+				listLoginItems: async () => {
+					listCalls += 1;
+					return {
+						ok: true,
+						items: [itemFor(listCalls === 1 ? "item-a" : "item-b")],
+					};
+				},
+				fetchCredentialField: async (request) => {
+					handleMints += 1;
+					return await fakePort.fetchCredentialField(request);
+				},
+			});
+			const provider = createBrowserUseAuthProvider({
+				store: store.deps,
+				tokenRetrieval: port,
+				attestationByDigest: () => undefined,
+			});
+			const seam = buildRunbookAuthDelivery(provider, {
+				tokenRetrieval: port,
+				createTargetTransport: () => {
+					transportCalls += 1;
+					return { transport: stableProofTransport(), close: () => {} };
+				},
+				createDeliveryHook: () => undefined,
+			});
+			const outcome = await seam(twoSlugInput("run-r10-two-items"));
+			expect(outcome.ok).toBe(false);
+			if (!outcome.ok) {
+				expect(outcome.message).toContain("single-binding-v1");
+			}
+			expect(handleMints).toBe(0);
+			expect(transportCalls).toBe(0);
+		}
+	});
+
 	test("target digest drift blocks before handle mint or bounded delivery", async () => {
 		const store = await makeStore();
 		let handleMints = 0;
