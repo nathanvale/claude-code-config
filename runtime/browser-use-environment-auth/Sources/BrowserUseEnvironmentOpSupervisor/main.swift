@@ -2,6 +2,9 @@
 import Darwin
 import Foundation
 
+@_silgen_name("fork")
+private func supervisorFork() -> pid_t
+
 private enum SupervisorArguments {
     case admit(opPath: String)
     case metadata(
@@ -10,7 +13,23 @@ private enum SupervisorArguments {
         operation: EnvironmentOpMetadataOperation
     )
     case validate(validatorDescriptor: Int32, opPath: String)
+    case install(TokenInstallRequest)
+    case remove(configRoot: String)
+    case status(TokenStatusRequest)
     case deliver(DeliveryRequest)
+}
+
+private struct TokenInstallRequest {
+    let configRoot: String
+    let opPath: String
+    let input: String
+    let replacing: Bool
+}
+
+private struct TokenStatusRequest {
+    let configRoot: String
+    let opPath: String
+    let profilePath: String
 }
 
 private struct DeliveryRequest {
@@ -228,6 +247,47 @@ private func parseArguments(_ values: [String]) -> SupervisorArguments? {
             return nil
         }
         return .validate(validatorDescriptor: descriptor, opPath: opPath)
+    case "install":
+        guard options.count == 4,
+              let configRoot = options["--config-root"],
+              let opPath = options["--op-path"],
+              let input = options["--input"],
+              input == "stdin" || input == "prompt",
+              let rawReplacing = options["--replace"],
+              rawReplacing == "true" || rawReplacing == "false"
+        else {
+            return nil
+        }
+        return .install(
+            TokenInstallRequest(
+                configRoot: configRoot,
+                opPath: opPath,
+                input: input,
+                replacing: rawReplacing == "true"
+            )
+        )
+    case "remove":
+        guard options.count == 1,
+              let configRoot = options["--config-root"]
+        else {
+            return nil
+        }
+        return .remove(configRoot: configRoot)
+    case "status":
+        guard options.count == 3,
+              let configRoot = options["--config-root"],
+              let opPath = options["--op-path"],
+              let profilePath = options["--profile-path"]
+        else {
+            return nil
+        }
+        return .status(
+            TokenStatusRequest(
+                configRoot: configRoot,
+                opPath: opPath,
+                profilePath: profilePath
+            )
+        )
     case "deliver":
         guard let opPath = options["--op-path"],
               let vaultID = options["--vault-id"],
@@ -349,12 +409,18 @@ Usage:
   browser-use-op-supervisor admit --op-path <absolute-path>
   browser-use-op-supervisor metadata --config-root <absolute-path> --op-path <absolute-path> --operation <name>
   browser-use-op-supervisor validate --validator-fd <fd> --op-path <absolute-path>
+  browser-use-op-supervisor install --config-root <absolute-path> --op-path <absolute-path> --input <stdin|prompt> --replace <true|false>
+  browser-use-op-supervisor remove --config-root <absolute-path>
+  browser-use-op-supervisor status --config-root <absolute-path> --op-path <absolute-path> --profile-path <absolute-path>
   browser-use-op-supervisor deliver --config-root <absolute-path> --op-path <absolute-path> --vault-id <id> --item-id <id> --field <name> --ws-url <url> --target-url <url> --target-origin <origin> --field-role <role> --field-name <name> --timeout-ms <milliseconds>
 
 Commands:
   admit      Check the fixed official OP path without reading a token.
   metadata   Execute one admitted projected metadata operation.
   validate   Validate one token received through an inherited socket.
+  install    Read hidden or piped input and atomically install validated custody.
+  remove     Remove only the exact admitted local custody file.
+  status     Report the five secret-free environment-lane admission checks.
   deliver    Deliver one admitted private field through the disposable child.
 """
 
@@ -405,6 +471,385 @@ private func admissionEnvelope(_ result: EnvironmentOpAdmissionResult) -> Data {
     )) ?? Data(
         "{\"ok\":false,\"schema_version\":1,\"state\":\"unproven\",\"rejection\":{\"code\":\"op-staging-failed\"}}".utf8
     )
+}
+
+private func jsonData(_ object: [String: Any]) -> Data {
+    (try? JSONSerialization.data(
+        withJSONObject: object,
+        options: [.sortedKeys]
+    )) ?? rejection("token-supervisor-json-failed")
+}
+
+private func publicNextAction(_ result: TokenCustodyResult) -> String {
+    switch result.nextAction {
+    case "validate-service-account":
+        return "auth-status"
+    case "install-local-token":
+        return "install-token"
+    case "repair-vault-grant":
+        return "repair-vault-grant"
+    case "repair-op-admission":
+        return "repair-op-admission"
+    case "revoke-service-account-token-remotely":
+        return "revoke-service-account-token-remotely"
+    default:
+        return "repair-token-custody"
+    }
+}
+
+private func custodyEnvelope(_ result: TokenCustodyResult) -> Data {
+    let successfulStates: Set<TokenCustodyState> = [
+        .ready,
+        .installed,
+        .replaced,
+        .removed,
+    ]
+    var object: [String: Any] = [
+        "schema_version": 1,
+        "ok": successfulStates.contains(result.state),
+        "state": result.state.rawValue,
+        "next_action": publicNextAction(result),
+    ]
+    if let cause = result.cause {
+        object["cause"] = cause.rawValue
+    }
+    if let remoteAuthority = result.remoteAuthority {
+        object["remote_authority"] = remoteAuthority
+    }
+    return jsonData(object)
+}
+
+private func blockedCustodyEnvelope(
+    cause: String,
+    nextAction: String
+) -> Data {
+    jsonData([
+        "schema_version": 1,
+        "ok": false,
+        "state": "blocked",
+        "cause": cause,
+        "next_action": nextAction,
+    ])
+}
+
+private func readBoundedStandardInput() throws -> [UInt8] {
+    var bytes: [UInt8] = []
+    var buffer = [UInt8](repeating: 0, count: 4_096)
+    defer {
+        _ = buffer.withUnsafeMutableBytes {
+            $0.initializeMemory(as: UInt8.self, repeating: 0)
+        }
+    }
+    while true {
+        let capacity = buffer.count
+        let count = buffer.withUnsafeMutableBytes {
+            Darwin.read(STDIN_FILENO, $0.baseAddress, capacity)
+        }
+        if count == 0 { return bytes }
+        guard count > 0 else {
+            if errno == EINTR { continue }
+            throw TokenCustodyCause.inputInvalid
+        }
+        guard bytes.count + count <= 65_536 else {
+            throw TokenCustodyCause.inputInvalid
+        }
+        bytes.append(contentsOf: buffer.prefix(count))
+    }
+}
+
+private func reapValidator(_ child: pid_t) {
+    var status: Int32 = 0
+    let waited = waitpid(child, &status, WNOHANG)
+    if waited == 0 {
+        _ = kill(child, SIGKILL)
+        while waitpid(child, &status, 0) < 0, errno == EINTR {}
+    }
+}
+
+private func installToken(_ request: TokenInstallRequest) -> TokenCustodyResult {
+    switch EnvironmentOpSupervisor.admitOfficialExecutable(
+        executablePath: request.opPath
+    ) {
+    case let .blocked(cause):
+        return TokenCustodyResult(
+            state: .blocked,
+            cause: cause == .pathUnavailable ? .validationUnavailable : .validationFailed,
+            nextAction: "repair-op-admission"
+        )
+    case .admitted:
+        break
+    }
+    var tokenBytes: [UInt8]
+    do {
+        tokenBytes = try request.input == "stdin"
+            ? readBoundedStandardInput()
+            : TokenCustodyHiddenTerminal.read()
+    } catch let cause as TokenCustodyCause {
+        return TokenCustodyResult(
+            state: .blocked,
+            cause: cause,
+            nextAction: "repair-token-custody"
+        )
+    } catch {
+        return TokenCustodyResult(
+            state: .blocked,
+            cause: .inputInvalid,
+            nextAction: "repair-token-custody"
+        )
+    }
+    defer {
+        _ = tokenBytes.withUnsafeMutableBytes {
+            $0.initializeMemory(as: UInt8.self, repeating: 0)
+        }
+    }
+    var validatorSockets: [Int32] = [-1, -1]
+    guard socketpair(AF_UNIX, SOCK_STREAM, 0, &validatorSockets) == 0 else {
+        return TokenCustodyResult(
+            state: .blocked,
+            cause: .validationUnavailable,
+            nextAction: "repair-token-custody"
+        )
+    }
+    let child = supervisorFork()
+    guard child >= 0 else {
+        validatorSockets.forEach { _ = Darwin.close($0) }
+        return TokenCustodyResult(
+            state: .blocked,
+            cause: .validationUnavailable,
+            nextAction: "repair-token-custody"
+        )
+    }
+    if child == 0 {
+        _ = Darwin.close(validatorSockets[0])
+        do {
+            let tokenDescriptor = try EnvironmentOpSupervisor.receiveTokenDescriptor(
+                socket: validatorSockets[1],
+                timeoutMilliseconds: 45_000
+            )
+            defer { _ = Darwin.close(tokenDescriptor) }
+            emitValidator(
+                EnvironmentOpSupervisor.validateStagedToken(
+                    executablePath: request.opPath,
+                    tokenDescriptor: tokenDescriptor
+                ),
+                socket: validatorSockets[1]
+            )
+        } catch {
+            emitValidator(.rejected, socket: validatorSockets[1])
+        }
+    }
+    _ = Darwin.close(validatorSockets[1])
+    let result = TokenCustody.install(
+        configRoot: request.configRoot,
+        tokenBytes: &tokenBytes,
+        validatorDescriptor: validatorSockets[0],
+        replacing: request.replacing
+    )
+    _ = Darwin.close(validatorSockets[0])
+    reapValidator(child)
+    return result
+}
+
+private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
+    guard profilePath.hasPrefix("/"),
+          !profilePath.contains("\0"),
+          URL(fileURLWithPath: profilePath).standardizedFileURL.path == profilePath
+    else {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    var profileMetadata = stat()
+    guard lstat(profilePath, &profileMetadata) == 0,
+          profileMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+          profileMetadata.st_uid == geteuid(),
+          profileMetadata.st_mode & mode_t(0o777) == mode_t(0o700)
+    else {
+        return ["status": "blocked", "cause": "profile-policy-unproven"]
+    }
+    let preferencesPath = URL(fileURLWithPath: profilePath)
+        .appendingPathComponent("Default")
+        .appendingPathComponent("Preferences")
+        .path
+    guard let data = try? Data(
+              contentsOf: URL(fileURLWithPath: preferencesPath),
+              options: [.mappedIfSafe]
+          ),
+          data.count <= 1_048_576,
+          let preferences = try? JSONSerialization.jsonObject(with: data)
+              as? [String: Any],
+          preferences["credentials_enable_service"] as? Bool == false,
+          let profile = preferences["profile"] as? [String: Any],
+          profile["password_manager_enabled"] as? Bool == false,
+          let autofill = preferences["autofill"] as? [String: Any],
+          autofill["profile_enabled"] as? Bool == false,
+          autofill["credit_card_enabled"] as? Bool == false,
+          let sync = preferences["sync"] as? [String: Any],
+          sync["requested"] as? Bool == false
+    else {
+        return ["status": "blocked", "cause": "profile-policy-unproven"]
+    }
+    let loginDataPath = URL(fileURLWithPath: profilePath)
+        .appendingPathComponent("Default")
+        .appendingPathComponent("Login Data")
+        .path
+    var loginMetadata = stat()
+    if lstat(loginDataPath, &loginMetadata) == 0, loginMetadata.st_size > 0 {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    return ["status": "ready"]
+}
+
+private func tokenStatusEnvelope(_ request: TokenStatusRequest) -> Data {
+    let custody = TokenCustody.status(configRoot: request.configRoot)
+    var checks: [String: Any] = [
+        "token_file": ["status": "unproven"],
+        "op": ["status": "unproven"],
+        "token": ["status": "unproven"],
+        "vault_scope": ["status": "unproven"],
+        "profile_policy": ["status": "unproven"],
+    ]
+    guard custody.state == .ready else {
+        let status = custody.state == .missing ? "missing" : "blocked"
+        var tokenFile: [String: Any] = ["status": status]
+        if let cause = custody.cause { tokenFile["cause"] = cause.rawValue }
+        checks["token_file"] = tokenFile
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": custody.state.rawValue,
+            "cause": custody.cause?.rawValue ?? "token-missing",
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": custody.state == .missing
+                ? "install-token"
+                : "repair-token-custody",
+        ])
+    }
+    checks["token_file"] = ["status": "ready"]
+    switch EnvironmentOpSupervisor.admitOfficialExecutable(
+        executablePath: request.opPath
+    ) {
+    case let .blocked(cause):
+        checks["op"] = ["status": "blocked", "cause": cause.rawValue]
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": "blocked",
+            "cause": cause.rawValue,
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": "repair-op-admission",
+        ])
+    case .admitted:
+        checks["op"] = ["status": "ready"]
+    }
+    let tokenDescriptor: Int32
+    do {
+        tokenDescriptor = try openEnvironmentTokenDescriptor(
+            configRoot: request.configRoot
+        )
+    } catch let cause as TokenCustodyCause {
+        checks["token"] = ["status": "blocked", "cause": cause.rawValue]
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": "blocked",
+            "cause": cause.rawValue,
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": "repair-token-custody",
+        ])
+    } catch {
+        return blockedCustodyEnvelope(
+            cause: "token-unsafe",
+            nextAction: "repair-token-custody"
+        )
+    }
+    defer { _ = Darwin.close(tokenDescriptor) }
+    let vaultResult = EnvironmentOpSupervisor.executeAdmittedMetadata(
+        executablePath: request.opPath,
+        operation: .vaultList,
+        tokenDescriptor: tokenDescriptor
+    )
+    guard let envelope = try? JSONSerialization.jsonObject(with: vaultResult)
+              as? [String: Any],
+          envelope["ok"] as? Bool == true,
+          let vaults = envelope["value"] as? [Any]
+    else {
+        let rejection = (try? JSONSerialization.jsonObject(with: vaultResult)
+            as? [String: Any])?["rejection"] as? [String: Any]
+        let cause = rejection?["code"] as? String ?? "validation-failed"
+        checks["token"] = ["status": "blocked", "cause": cause]
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": "blocked",
+            "cause": cause,
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": "install-token",
+        ])
+    }
+    checks["token"] = ["status": "ready"]
+    guard vaults.count == 1 else {
+        checks["vault_scope"] = [
+            "status": "blocked",
+            "cause": "invalid-vault-scope",
+            "visible_count": vaults.count,
+        ]
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": "blocked",
+            "cause": "invalid-vault-scope",
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": "repair-vault-grant",
+        ])
+    }
+    checks["vault_scope"] = ["status": "ready", "visible_count": 1]
+    let profile = profilePolicyCheck(request.profilePath)
+    checks["profile_policy"] = profile
+    guard profile["status"] as? String == "ready" else {
+        let cause = profile["cause"] as? String ?? "profile-policy-unproven"
+        return jsonData([
+            "schema_version": 1,
+            "ok": false,
+            "state": "blocked",
+            "cause": cause,
+            "lane": [
+                "selected": "environment-injected-op",
+                "status": "blocked",
+            ],
+            "checks": checks,
+            "next_action": "create-credential-clean-profile",
+        ])
+    }
+    return jsonData([
+        "schema_version": 1,
+        "ok": true,
+        "state": "ready",
+        "lane": [
+            "selected": "environment-injected-op",
+            "status": "ready",
+        ],
+        "checks": checks,
+        "next_action": "rerun-confidential-command",
+    ])
 }
 
 private func emit(_ data: Data, exitCode: Int32) -> Never {
@@ -540,6 +985,21 @@ case let .validate(validatorDescriptor, opPath):
     } catch {
         emitValidator(.rejected, socket: validatorDescriptor)
     }
+case let .install(request):
+    let result = installToken(request)
+    let success = result.state == .installed || result.state == .replaced
+    emit(custodyEnvelope(result), exitCode: success ? 0 : 20)
+case let .remove(configRoot):
+    let result = TokenCustody.remove(configRoot: configRoot)
+    emit(
+        custodyEnvelope(result),
+        exitCode: result.state == .removed ? 0 : 20
+    )
+case let .status(request):
+    let result = tokenStatusEnvelope(request)
+    let decoded = try? JSONSerialization.jsonObject(with: result)
+        as? [String: Any]
+    emit(result, exitCode: decoded?["ok"] as? Bool == true ? 0 : 20)
 case let .deliver(request):
     let deliveryPath = request.deliveryPath ?? siblingDeliveryExecutable()
     guard let deliveryPath else {

@@ -48,6 +48,7 @@ import {
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 	BROWSER_USE_TRANSPORT_ADAPTERS,
+	type BrowserUseAuthRepairSubcommand,
 	type BrowserUseAuthSubcommand,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
@@ -613,10 +614,23 @@ async function executeCommand(input: {
 		});
 	}
 
-	// R27 auth repair surface (auth plan U3a): the blocked-cause continuations
-	// as live check commands. Native custody absence is a typed evaluation,
-	// never a crash; dry-run keeps the mock envelope below.
+	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
 	if (parsed.family === "auth" && !parsed.dryRun) {
+		if (
+			parsed.subcommand === "install-token" ||
+			parsed.subcommand === "remove-token" ||
+			parsed.subcommand === "status"
+		) {
+			return runAuthTokenLifecycle({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
 		return runAuthReadiness({
 			parsed,
 			runtime,
@@ -3330,7 +3344,10 @@ function runbookFailureOf(
 			// named in the message.
 			return {
 				code,
-				message,
+				message:
+					code === "runbook_confidential_native_capability_absent"
+						? `${message} Continue with browser-use auth install-token, then browser-use auth status --json, then re-run this command.`
+						: message,
 				actionId: "inspect_shared_run",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "repair_state",
@@ -4617,12 +4634,330 @@ type AuthReadinessEvaluation = {
 	continuationId: AuthActionId;
 };
 
+const AUTH_TOKEN_FORBIDDEN_ENV_KEYS = [
+	"OP_SERVICE_ACCOUNT_TOKEN",
+	"OP_CONNECT_HOST",
+	"OP_CONNECT_TOKEN",
+	"BROWSER_USE_TOKEN",
+	"BROWSER_USE_OP_TOKEN",
+] as const;
+
+const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
+	"ready",
+	"installed",
+	"replaced",
+	"removed",
+	"removed-sync-unproven",
+	"missing",
+	"cleanup-required",
+	"blocked",
+]);
+const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
+	"invalid-arguments",
+	"unsafe-ancestry",
+	"unsafe-config-root",
+	"unsafe-custody-directory",
+	"backup-exclusion-unproven",
+	"sync-exclusion-unproven",
+	"token-missing",
+	"token-already-installed",
+	"token-unsafe",
+	"staging-residue",
+	"removal-residue",
+	"input-cancelled",
+	"input-invalid",
+	"write-failed",
+	"invalid-service-account",
+	"invalid-vault-scope",
+	"validation-failed",
+	"validation-timeout",
+	"validation-unavailable",
+	"path-identity-changed",
+	"atomic-replace-failed",
+	"cleanup-failed",
+	"parent-sync-failed",
+	"core-dump-disable-failed",
+	"op-path-not-absolute",
+	"op-path-unapproved",
+	"op-path-unavailable",
+	"op-path-unsafe",
+	"op-path-not-executable",
+	"op-binary-untrusted",
+	"op-staging-failed",
+	"op-version-invalid",
+	"op-version-unsupported",
+	"token-invalid",
+	"timeout",
+	"output-too-large",
+	"process-failed",
+	"process-signalled",
+	"io-failure",
+	"output-shape-invalid",
+	"item-missing",
+	"validator-protocol-invalid",
+	"profile-policy-unproven",
+	"profile-policy-unsafe",
+	"token-supervisor-unavailable",
+	"token-supervisor-output-too-large",
+]);
+const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
+	"auth-status",
+	"rerun-confidential-command",
+	"repair-token-custody",
+	"repair-op-admission",
+	"repair-vault-grant",
+	"create-credential-clean-profile",
+	"revoke-service-account-token-remotely",
+	"install-token",
+]);
+const AUTH_TOKEN_CHECK_STATUSES = new Set([
+	"ready",
+	"blocked",
+	"missing",
+	"unproven",
+]);
+
+type AuthTokenSupervisorProjection = {
+	ok: boolean;
+	state: string;
+	cause?: string;
+	nextAction: AuthActionId;
+	detail?: Record<string, unknown>;
+};
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function safeAuthTokenCause(value: unknown): string | undefined {
+	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSES.has(value)
+		? value
+		: undefined;
+}
+
+function safeAuthTokenCheck(value: unknown): Record<string, unknown> | undefined {
+	const check = recordField(value);
+	if (
+		check === undefined ||
+		typeof check.status !== "string" ||
+		!AUTH_TOKEN_CHECK_STATUSES.has(check.status)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(check.cause);
+	if (check.cause !== undefined && cause === undefined) return undefined;
+	const visibleCount = check.visible_count;
+	if (
+		visibleCount !== undefined &&
+		(!Number.isSafeInteger(visibleCount) || (visibleCount as number) < 0)
+	) {
+		return undefined;
+	}
+	return {
+		status: check.status,
+		...(cause === undefined ? {} : { cause }),
+		...(visibleCount === undefined ? {} : { visible_count: visibleCount }),
+	};
+}
+
+function parseAuthTokenSupervisorResult(
+	stdout: string,
+	exitCode: number,
+): AuthTokenSupervisorProjection | undefined {
+	let value: unknown;
+	try {
+		value = JSON.parse(stdout);
+	} catch {
+		return undefined;
+	}
+	const object = recordField(value);
+	if (
+		object === undefined ||
+		object.schema_version !== 1 ||
+		typeof object.ok !== "boolean" ||
+		typeof object.state !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_STATES.has(object.state) ||
+		typeof object.next_action !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_ACTIONS.has(object.next_action as AuthActionId) ||
+		(object.ok ? exitCode !== 0 : exitCode !== BINDING_FAIL_CLOSED_EXIT_CODE)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(object.cause);
+	if (object.cause !== undefined && cause === undefined) return undefined;
+	const detail: Record<string, unknown> = {};
+	const lane = recordField(object.lane);
+	const checks = recordField(object.checks);
+	if (lane !== undefined || checks !== undefined) {
+		if (
+			lane?.selected !== "environment-injected-op" ||
+			typeof lane.status !== "string" ||
+			!AUTH_TOKEN_CHECK_STATUSES.has(lane.status) ||
+			checks === undefined
+		) {
+			return undefined;
+		}
+		const safeChecks = {
+			token_file: safeAuthTokenCheck(checks.token_file),
+			op: safeAuthTokenCheck(checks.op),
+			token: safeAuthTokenCheck(checks.token),
+			vault_scope: safeAuthTokenCheck(checks.vault_scope),
+			profile_policy: safeAuthTokenCheck(checks.profile_policy),
+		};
+		if (Object.values(safeChecks).some((check) => check === undefined)) {
+			return undefined;
+		}
+		detail.lane = { selected: lane.selected, status: lane.status };
+		detail.checks = safeChecks;
+	}
+	if (object.remote_authority === "may-remain-live") {
+		detail.remote_authority = "may-remain-live";
+	}
+	return {
+		ok: object.ok,
+		state: object.state,
+		...(cause === undefined ? {} : { cause }),
+		nextAction: object.next_action as AuthActionId,
+		...(Object.keys(detail).length === 0 ? {} : { detail }),
+	};
+}
+
+function emitAuthTokenLifecycleResult(
+	input: PlatformCommandInput,
+	projection: AuthTokenSupervisorProjection,
+	errorCode: "auth_token_input_rejected" | "auth_token_supervisor_failed",
+): number {
+	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const evaluation = {
+		status: projection.state,
+		...(projection.cause === undefined
+			? {}
+			: { blocked_cause: projection.cause }),
+		...(projection.detail === undefined ? {} : { detail: projection.detail }),
+	};
+	if (input.parsed.outputMode === "plain") {
+		const line = [
+			`action=${subcommand}`,
+			`status=${projection.state}`,
+			`continuation=${projection.nextAction}`,
+			...(projection.cause === undefined
+				? []
+				: [`blocked_cause=${projection.cause}`]),
+		].join(" ");
+		const writer = projection.ok ? input.stdout : input.stderr;
+		writer.write(
+			`${platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller)}${line}\n`,
+		);
+		return projection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	const envelopeInput = {
+		run_id: input.runId,
+		data: {
+			contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+			action: subcommand,
+			evaluation,
+			caller: input.caller,
+		},
+		runtime_actions: [authAction(projection.nextAction)],
+		continuation: { next_action_id: projection.nextAction },
+	};
+	if (projection.ok) {
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope(envelopeInput),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			...envelopeInput,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: errorCode,
+				message:
+					errorCode === "auth_token_input_rejected"
+						? "token input through process environment is forbidden; use native hidden input or --stdin."
+						: "native token custody operation was blocked; follow the typed continuation.",
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+async function runAuthTokenLifecycle(
+	input: PlatformCommandInput,
+): Promise<number> {
+	if (
+		AUTH_TOKEN_FORBIDDEN_ENV_KEYS.some(
+			(key) => input.runtime.env[key] !== undefined,
+		)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_input_rejected",
+		);
+	}
+	const subcommand = input.parsed.subcommand;
+	const nativeInput =
+		subcommand === "install-token"
+			? ({
+					mode: "install",
+					input:
+						input.parsed.flagValues["--stdin"] === undefined
+							? "prompt"
+							: "stdin",
+					replace: input.parsed.flagValues["--replace"] !== undefined,
+				} as const)
+			: subcommand === "remove-token"
+				? ({ mode: "remove" } as const)
+				: ({ mode: "status" } as const);
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? {
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					stdout: "",
+					stderr: "",
+				}
+			: await input.runtime.runAuthTokenSupervisor(nativeInput);
+	const projection = parseAuthTokenSupervisorResult(
+		result.stdout,
+		result.exitCode,
+	);
+	return emitAuthTokenLifecycleResult(
+		input,
+		projection ?? {
+			ok: false,
+			state: "blocked",
+			cause: "token-supervisor-unavailable",
+			nextAction: "repair-op-admission",
+		},
+		"auth_token_supervisor_failed",
+	);
+}
+
 // Map a retrieval block back onto the ONE repair command that discharges it;
 // causes outside the four dispatchable continuations route to inspection.
 function authContinuationForCause(cause: string): AuthActionId {
 	switch (cause) {
 		case "missing-token":
-			return "enroll-browser-automation-token";
+			return "install-token";
 		case "invalid-vault-scope":
 			return "repair-vault-grant";
 		case "revoked-binding":
@@ -4637,7 +4972,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 const NATIVE_CAPABILITY_ABSENT: AuthReadinessEvaluation = {
 	status: "native-capability-absent",
 	blocked_cause: "missing-token",
-	continuationId: "acquire-native-capability",
+	continuationId: "install-token",
 };
 
 // Retrieval blocked before the evaluation could answer: report the block's
@@ -4655,7 +4990,7 @@ function retrievalBlockedEvaluation(
 }
 
 async function evaluateAuthReadiness(
-	subcommand: BrowserUseAuthSubcommand,
+	subcommand: BrowserUseAuthRepairSubcommand,
 	input: PlatformCommandInput,
 ): Promise<AuthReadinessEvaluation> {
 	const port = input.runtime.authTokenRetrieval;
@@ -4672,7 +5007,7 @@ async function evaluateAuthReadiness(
 					status: "token-rejected",
 					blocked_cause: block.blocked_cause,
 					detail: { rejection_code: vaults.rejection.code },
-					continuationId: "acquire-native-capability",
+					continuationId: "install-token",
 				};
 			}
 			return {
@@ -4808,7 +5143,7 @@ function emitAuthContinuationMismatch(
  * @returns Process exit code
  */
 async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
-	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const subcommand = input.parsed.subcommand as BrowserUseAuthRepairSubcommand;
 	const runFlag = stringField(input.parsed.flagValues["--run"]);
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }

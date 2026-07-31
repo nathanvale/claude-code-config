@@ -434,21 +434,32 @@ const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
 export type BrowserUseRepairSubcommand =
 	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
 
-// R27 auth repair surface (auth plan U3a; ADR 0028). Each subcommand name IS
+// R27 auth repair surface (auth plan U3a; ADR 0028). Each repair subcommand name IS
 // the blocked-cause continuation id from BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE
 // (browser-use-auth-model.ts), so an agent holding a blocked run's
 // continuation dispatches it verbatim — no mapping table to drift. U3a
 // bodies are check-stance evaluations: native custody (token launcher,
 // approval broker) is legally absent until U3b, and that absence is a typed
 // state, never a crash or a stub.
-export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+export const BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS = [
 	"enroll-browser-automation-token",
 	"repair-vault-grant",
 	"repair-item-binding",
 	"request-binding-selection-grant",
 ] as const;
+export const BROWSER_USE_AUTH_SETUP_SUBCOMMANDS = [
+	"install-token",
+	"remove-token",
+	"status",
+] as const;
+export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+	...BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
+	...BROWSER_USE_AUTH_SETUP_SUBCOMMANDS,
+] as const;
 export type BrowserUseAuthSubcommand =
 	(typeof BROWSER_USE_AUTH_SUBCOMMANDS)[number];
+export type BrowserUseAuthRepairSubcommand =
+	(typeof BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS)[number];
 
 // Version-matched bundled guidance (agent-first front door, design brief D3:
 // docs/plans/2026-07-27-agent-first-front-door-brief.md). The guide ships
@@ -555,7 +566,10 @@ export type BrowserUseCommand =
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
-	| "auth-request-binding-selection-grant";
+	| "auth-request-binding-selection-grant"
+	| "auth-install-token"
+	| "auth-remove-token"
+	| "auth-status";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -674,6 +688,8 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// against a run whose persisted continuation names a DIFFERENT next safe
 	// action fails closed — the run's own continuation stays the one truth.
 	"auth_continuation_mismatch",
+	"auth_token_input_rejected",
+	"auth_token_supervisor_failed",
 	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
 	// Each routing/dispatch failure class maps to its own recovery, never a
 	// silent lane substitution (R10, AE3) or an optimistic retry (R26, F7).
@@ -1069,7 +1085,7 @@ export const browserUseTaskRunSuccessActions = [
 ] as const;
 
 type BrowserUseAudience = "agent" | "operator";
-type BrowserUseMutation = "check" | "browser";
+type BrowserUseMutation = "check" | "browser" | "write";
 type BrowserUseCommandContract = CommandFacadeContract<
 	BrowserUseCommand,
 	BrowserUseAudience,
@@ -1614,7 +1630,49 @@ export const browserUseAuthRepairActions = [
 	{
 		id: "acquire-native-capability",
 		summary:
-			"Native auth custody is absent until the signed Browser Use Security product ships (ADR 0028); complete its entry gate, then re-run.",
+			"Install the environment-lane token with browser-use auth install-token, then verify with browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "auth-status",
+		summary:
+			"Verify environment-lane token custody and all confidential-delivery admission gates with browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "install-token",
+		summary:
+			"Install environment-lane custody with browser-use auth install-token, then verify status.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "rerun-confidential-command",
+		summary:
+			"Re-run the refused Browser Use command with the same inputs.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-token-custody",
+		summary:
+			"Repair the reported local token custody cause, then re-run browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-op-admission",
+		summary:
+			"Restore the pinned official OP CLI binary, then re-run browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "create-credential-clean-profile",
+		summary:
+			"Ask the operator to create a fresh dedicated Agent Chrome profile using the documented clean policy.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "revoke-service-account-token-remotely",
+		summary:
+			"Retire remote service authority from a trusted device; local removal does not change remote authority.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1657,6 +1715,20 @@ const browserUseAuthFlags = {
 		type: "string",
 		description:
 			"Blocked shared run id to bind this evaluation to; the run's persisted continuation must name this command.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthInstallFlags = {
+	"--stdin": {
+		type: "boolean",
+		description:
+			"Read the token directly in the native supervisor from standard input. Omit for a hidden terminal prompt.",
+	},
+	"--replace": {
+		type: "boolean",
+		description:
+			"Validate a staged token, then atomically replace the existing token only on success.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -2362,6 +2434,81 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseAuthRepairFailureActions,
 			},
 			flags: browserUseAuthSelectionFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-install-token": {
+			script: "browser-use",
+			summary:
+				"Install or replace the environment-lane service-account token through native hidden input or standard input; token argv and environment values are rejected.",
+			usage: [
+				"auth install-token [--stdin] [--replace] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Validation needs the private token input; failed validation preserves the prior token and publishes no staged value.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthInstallFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-remove-token": {
+			script: "browser-use",
+			summary:
+				"Remove only the fixed admitted local token file; remote service-account revocation remains an explicit operator action.",
+			usage: [
+				"auth remove-token [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Removal is explicitly selected, targets one fixed custody file, and reports remote revocation as the remaining action.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-status": {
+			script: "browser-use",
+			summary:
+				"Report the five environment-lane admission checks and one repair action.",
+			usage: ["auth status [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,
