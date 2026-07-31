@@ -449,6 +449,57 @@ branch refs/heads/feat/x
 			expect(calls.some((call) => call.startsWith("git worktree add"))).toBe(false);
 		});
 
+		test("create and attach fail closed when isolation probes fail", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-probe-fail-"));
+			const outputs = mainRepoGitOutputs(root);
+			delete outputs["git rev-parse --git-common-dir"];
+			const calls: string[] = [];
+			const run = fakeGitRunner(outputs);
+			const recordingRun: typeof run = async (args, options) => {
+				calls.push(args.join(" "));
+				return run(args, options);
+			};
+
+			const attached = await attachWorktree({
+				cwd: root,
+				ref: "feat/other",
+				dryRun: false,
+				runId: "attach/probe-fail",
+				run: recordingRun,
+			});
+			const created = await createWorktree({
+				cwd: root,
+				branch: "feat/new",
+				dryRun: false,
+				runId: "create/probe-fail",
+				run: recordingRun,
+			});
+
+			for (const result of [attached, created]) {
+				expect(result).toMatchObject({
+					changedState: "none",
+					reason: "isolation_unavailable",
+					nextSafeAction: "work_in_current_checkout",
+					recovery: {
+						nextActionId: "work_in_current_checkout",
+						choices: [
+							{
+								id: "work_in_current_checkout",
+								retrySafety: "operator_required",
+								handoffReason: "isolation_unavailable",
+							},
+							{
+								id: "stop_and_resolve_environment",
+								retrySafety: "operator_required",
+								handoffReason: "isolation_unavailable",
+							},
+						],
+					},
+				});
+			}
+			expect(calls.some((call) => call.startsWith("git worktree add"))).toBe(false);
+		});
+
 		test("attach treats submodule invocation contexts as normal checkouts", async () => {
 			const root = await mkdtemp(join(tmpdir(), "agent-worktree-submodule-"));
 			const target = join(root, ".worktrees", "feat-submodule");

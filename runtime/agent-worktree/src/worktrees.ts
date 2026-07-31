@@ -578,7 +578,8 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
-	if (discovery.isolation === "linked_worktree") {
+	// Probe failure fails closed on mutation; read verbs still degrade to an issue.
+	if (discovery.isolation === "linked_worktree" || discovery.isolation === undefined) {
 		return isolationRefusal("create");
 	}
 	const existingCheckoutPath = findBranchCheckoutPath(
@@ -675,7 +676,8 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
-	if (discovery.isolation === "linked_worktree") {
+	// Probe failure fails closed on mutation; read verbs still degrade to an issue.
+	if (discovery.isolation === "linked_worktree" || discovery.isolation === undefined) {
 		return isolationRefusal("attach");
 	}
 	const prBranch = options.pr === undefined ? undefined : `pr-${options.pr}`;
