@@ -265,7 +265,6 @@ branch refs/heads/feat/x
 			const commitTarget = join(root, ".worktrees", "abc1234");
 			const run = fakeGitRunner({
 				...mainRepoGitOutputs(root),
-				["git show-ref --verify --hash refs/tags/v1.0.0"]: "tag-object\n",
 				["git rev-parse --verify v1.0.0^{commit}"]: "tag-commit\n",
 				[`git worktree add --detach ${tagTarget} v1.0.0`]: "",
 				["git rev-parse --verify abc1234^{commit}"]: "commit-object\n",
@@ -429,6 +428,7 @@ branch refs/heads/feat/x
 				expect(result).toMatchObject({
 					changedState: "none",
 					reason: "isolation_unavailable",
+					nextSafeAction: "work_in_current_checkout",
 					recovery: {
 						nextActionId: "work_in_current_checkout",
 						choices: [
@@ -887,7 +887,9 @@ branch refs/heads/feat/x
 			expect(existing).toMatchObject({
 				changedState: "none",
 				reason: "branch_already_exists",
+				nextSafeAction: "change_input",
 				recovery: {
+					nextActionId: "change_input",
 					choices: [
 						{ id: "change_input", retrySafety: "same_input_unsafe" },
 					],
@@ -896,7 +898,9 @@ branch refs/heads/feat/x
 			expect(missingBase).toMatchObject({
 				changedState: "none",
 				reason: "ref_not_found",
+				nextSafeAction: "change_input",
 				recovery: {
+					nextActionId: "change_input",
 					choices: [
 						{ id: "change_input", retrySafety: "same_input_unsafe" },
 					],

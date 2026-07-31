@@ -1710,7 +1710,9 @@ async function failedLifecycle(input: {
 		failureRef,
 		changes: input.whatChanged,
 		nextSafeAction:
-			input.command === "attach" ? recovery.nextActionId : "inspect",
+			input.command === "attach" || input.command === "create"
+				? recovery.nextActionId
+				: "inspect",
 		reason: input.reason,
 		recovery,
 		backupRef: input.backupRef,

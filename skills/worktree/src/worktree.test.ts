@@ -150,6 +150,22 @@ function runtimeWithRemoveFailure(): ReturnType<typeof fakeRuntime> {
 	});
 }
 
+function newIsolationFailureRuntime(): ReturnType<typeof fakeRuntime> {
+	return fakeRuntime({
+		run: async (args, options) => {
+			if (args.join(" ") === "git worktree add -b feat/z /code/my-repo/.worktrees/feat-z main") {
+				return {
+					ok: false,
+					stdout: "",
+					stderr: "fatal: could not create work tree dir: Permission denied",
+					code: 1,
+				};
+			}
+			return fakeRuntime().run(args, options);
+		},
+	});
+}
+
 function stubCodexThreadArchive(
 	runtime: ReturnType<typeof fakeRuntime>,
 	threadIds: readonly string[],
@@ -647,6 +663,50 @@ describe("shared lifecycle verbs", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.code).toBe("attach_isolation_unavailable");
+			expect(result.exitCode).toBe(4);
+			expect(result.action).toContain("Ask the operator to choose");
+			expect(result.data).toMatchObject({
+				reason: "isolation_unavailable",
+				retry_safety: "operator_required",
+			});
+		}
+	});
+
+	test("new guard refusal points to the existing checkout without suggesting retry", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{
+				command: "new",
+				positionals: ["codex/browser-use-refactor"],
+				force: false,
+			},
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("new_branch_already_checked_out");
+			expect(result.exitCode).toBe(2);
+			expect(result.action).toContain("Use the existing checkout");
+			expect(result.action.toLowerCase()).not.toContain("retry");
+			expect(result.data).toMatchObject({
+				reason: "branch_already_checked_out",
+				existing_checkout_path:
+					"/code/my-repo/.worktrees/browser-use-refactor",
+			});
+		}
+	});
+
+	test("new isolation refusal exits 4 and asks for the human decision", async () => {
+		const runtime = newIsolationFailureRuntime();
+		const result = await runCommand(
+			{ command: "new", positionals: ["feat/z"], force: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("new_isolation_unavailable");
 			expect(result.exitCode).toBe(4);
 			expect(result.action).toContain("Ask the operator to choose");
 			expect(result.data).toMatchObject({
@@ -1258,6 +1318,18 @@ describe("Command Surface Alignment Proof", () => {
 		);
 	});
 
+	test("the human-decision exit code 4 and isolation refusal affordances are declared for new", () => {
+		expect(worktreeContracts.new.exitCodes["4"]).toContain("human decision");
+		expect(
+			worktreeContracts.new.actionAffordances?.failure.map((action) => action.id),
+		).toEqual(
+			expect.arrayContaining([
+				"use_existing_checkout",
+				"choose_attach_isolation_recovery",
+			]),
+		);
+	});
+
 	test("no-args help renders the front door menu, not a single subcommand", async () => {
 		let output = "";
 		const exitCode = await main([], {
@@ -1338,6 +1410,8 @@ describe("Command Surface Alignment Proof", () => {
 				{ command: "attach", positionals: ["feat/existing"], force: false },
 				fakeRuntime({ repoRoot: () => "/code/my-repo/.worktrees/browser-use-refactor" }),
 			),
+			runCommand({ command: "new", positionals: ["codex/browser-use-refactor"], force: false }, fakeRuntime()),
+			runCommand({ command: "new", positionals: ["feat/z"], force: false }, newIsolationFailureRuntime()),
 		]);
 
 		for (const result of results) {

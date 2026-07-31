@@ -46,7 +46,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
   explicitly approved loss.
 - On orphan branch deletion: check `git log main..<branch>` first. If commits
   exist that were never PR'd or merged, ask before deleting.
-- On `attach_isolation_unavailable` (exit 4): stop. Use the harness
+- On `attach_isolation_unavailable` or `new_isolation_unavailable` (exit 4): stop. Use the harness
   blocking-question tool with two choices: work in the current checkout, or
   stop and resolve the environment. If unavailable, ask the same numbered
   options in chat.

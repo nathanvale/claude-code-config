@@ -48,6 +48,8 @@ export const WORKTREE_DIAGNOSTIC_CODES = [
 	"agent_worktree_failed",
 	"attach_branch_already_checked_out",
 	"attach_isolation_unavailable",
+	"new_branch_already_checked_out",
+	"new_isolation_unavailable",
 	"unknown_color",
 	"code_not_found",
 	"codex_app_not_found",
@@ -137,9 +139,9 @@ const WORKTREE_DELEGATE_FAILURE_ACTIONS = [
 ] as const;
 
 /**
- * Discovery actions advertised when attach is refused.
+ * Discovery actions advertised when attach or create is refused for isolation.
  */
-const WORKTREE_ATTACH_FAILURE_ACTIONS = [
+const WORKTREE_ISOLATION_FAILURE_ACTIONS = [
 	{
 		id: "use_existing_checkout",
 		summary: "Continue in the existing checkout at the reported path.",
@@ -395,7 +397,7 @@ export const worktreeContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WORKTREE_SYNC_SUCCESS_ACTIONS,
-				failure: WORKTREE_DELEGATE_FAILURE_ACTIONS,
+				failure: [...WORKTREE_ISOLATION_FAILURE_ACTIONS, ...WORKTREE_DELEGATE_FAILURE_ACTIONS],
 			},
 			previewExemption: {
 				reason: "Worktree creation is owned by agent-worktree; WorkTree only re-renders through the drift gate after.",
@@ -421,7 +423,7 @@ export const worktreeContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WORKTREE_SYNC_SUCCESS_ACTIONS,
-				failure: WORKTREE_ATTACH_FAILURE_ACTIONS,
+				failure: WORKTREE_ISOLATION_FAILURE_ACTIONS,
 			},
 			flags: {
 				...repoFlag,

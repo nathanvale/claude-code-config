@@ -628,31 +628,40 @@ function lifecyclePayload(
 	};
 }
 
-function fromAttachLifecycleFailure(lifecycle: LifecycleResult): CommandResult {
+function fromIsolationLifecycleFailure(
+	command: "new" | "attach",
+	lifecycle: LifecycleResult,
+): CommandResult {
 	if (lifecycle.reason === "branch_already_checked_out") {
 		return {
 			ok: false,
-			code: "attach_branch_already_checked_out",
+			code:
+				command === "attach"
+					? "attach_branch_already_checked_out"
+					: "new_branch_already_checked_out",
 			message: "The requested branch is already checked out in another worktree.",
 			action: "Use the existing checkout at the path reported in structured result data.",
 			exitCode: 2,
 			recoverability: "change_input",
-			data: lifecyclePayload("attach", lifecycle),
+			data: lifecyclePayload(command, lifecycle),
 		};
 	}
 	if (lifecycle.reason === "isolation_unavailable") {
 		return {
 			ok: false,
-			code: "attach_isolation_unavailable",
-			message: "Worktree isolation is unavailable for this attach.",
+			code:
+				command === "attach" ? "attach_isolation_unavailable" : "new_isolation_unavailable",
+			message: `Worktree isolation is unavailable for this ${
+				command === "attach" ? "attach" : "create"
+			}.`,
 			action:
 				"Ask the operator to choose between working in the current checkout and resolving worktree isolation.",
 			exitCode: 4,
 			recoverability: "repair_state",
-			data: lifecyclePayload("attach", lifecycle),
+			data: lifecyclePayload(command, lifecycle),
 		};
 	}
-	return fromLifecycleFailure("attach", lifecycle);
+	return fromLifecycleFailure(command, lifecycle);
 }
 
 function fromLifecycleFailure(command: string, lifecycle: LifecycleResult): CommandResult {
@@ -1146,7 +1155,9 @@ async function runLifecycleCommand(
 					runId: `worktree-${runtime.now()}`,
 				});
 	if (lifecycle.changedState !== "complete") {
-		return fromLifecycleFailure(command, lifecycle);
+		return command === "new"
+			? fromIsolationLifecycleFailure("new", lifecycle)
+			: fromLifecycleFailure(command, lifecycle);
 	}
 	const codexCleanup =
 		command === "rm" && removedWorktreePath
@@ -1208,7 +1219,7 @@ async function runAttachCommand(
 		return { ok: true, data: lifecycleEnvelopeData("attach", lifecycle) };
 	}
 	if (lifecycle.changedState !== "complete") {
-		return fromAttachLifecycleFailure(lifecycle);
+		return fromIsolationLifecycleFailure("attach", lifecycle);
 	}
 	const sync = await syncWorkspace(runtime, Boolean(invocation.forceRender));
 	if (sync.kind !== "written") {
