@@ -82,6 +82,7 @@ function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 function operationRuntime(input: {
 	files?: Record<string, string>;
 	pages?: Array<{ id?: string; url?: string; title?: string }>;
+	adapter?: "agent-browser" | "chrome-devtools-mcp";
 	env?: Record<string, string | undefined>;
 	operationResult?: McporterCommandResult;
 	now?: () => number;
@@ -93,7 +94,12 @@ function operationRuntime(input: {
 	const calls: McporterCommandInput[] = [];
 	const ensuredDirectories: string[] = [];
 	const files: Record<string, string> = {
-		"/h.json": REAL_VERIFIED_HANDOFF_ENVELOPE,
+		"/h.json":
+			input.adapter === "agent-browser"
+				? verifiedHandoffEnvelope((envelope) => {
+						envelope.data.attachment.adapter_id = "agent-browser";
+					})
+				: REAL_VERIFIED_HANDOFF_ENVELOPE,
 		...(input.files ?? {}),
 	};
 	const pages = input.pages ?? [
@@ -111,6 +117,21 @@ function operationRuntime(input: {
 		},
 		runCommand: async (call) => {
 			calls.push(call);
+			const vector = commandVector(call);
+			if (vector.includes("tab") && vector.includes("list")) {
+				return okCommand(
+					JSON.stringify({
+						success: true,
+						data: {
+							tabs: pages.map((page) => ({
+								tabId: page.id,
+								url: page.url,
+								title: page.title,
+							})),
+						},
+					}),
+				);
+			}
 			// The envelope-derived argv names the tool via --tool (U3); route the
 			// fake on that token, mirroring the real ad-hoc invocation shape.
 			const toolIndex = call.args.indexOf("--tool");
@@ -455,6 +476,37 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
+	test("an agent-browser native tab ref reaches the execution seam verbatim", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(commandJsonArgs(calls[1])).toEqual({ pageId: "t1" });
+	});
+
+	test("a discovered page without a handle retains target-missing recovery", async () => {
+		const { runtime, calls } = operationRuntime({
+			pages: [{ url: "https://example.com/app", title: "App" }],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "browser_operation_target_missing" },
+			continuation: {
+				next_action_id: "rerun_handoff_bound_target_discovery",
+			},
+		});
+		expect(calls).toHaveLength(1);
+	});
+
 	test("snapshot emits normalized JSON for the selected Browser Target (AE7)", async () => {
 		const { runtime, calls } = operationRuntime({
 			files: { "/state.json": selectedStateFile() },

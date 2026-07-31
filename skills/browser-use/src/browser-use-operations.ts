@@ -114,7 +114,7 @@ type OperationSideEffects = {
 
 type OperationTargetEntry = {
 	candidate: BrowserTargetCandidate;
-	pageId?: number;
+	adapterPageRef?: string;
 };
 
 type ScreenshotArtifact = {
@@ -153,7 +153,7 @@ type OperationTargetContext = {
 type ResolvedOperationTarget = {
 	candidate: BrowserTargetCandidate;
 	source: "hints" | "selected_state" | "single_candidate";
-	pageId: number;
+	adapterPageRef: string;
 };
 
 export async function runOperate(input: {
@@ -234,7 +234,7 @@ export async function runOperate(input: {
 		const focused = await focusOperationPage({
 			runtime,
 			handoff: binding.context.handoff,
-			pageId: target.target.pageId,
+			adapterPageRef: target.target.adapterPageRef,
 		});
 		if (!focused.ok) return fail(focused.failure);
 	}
@@ -242,7 +242,7 @@ export async function runOperate(input: {
 	const operationCall = await runOperationTransport({
 		runtime,
 		handoff: binding.context.handoff,
-		pageId: target.target.pageId,
+		adapterPageRef: target.target.adapterPageRef,
 		operation: operationInputs.inputs.operation,
 		screenshot: operationInputs.inputs.screenshot,
 		viewport: operationInputs.inputs.viewport,
@@ -468,7 +468,7 @@ async function resolveOperationTargetEntry(input: {
 	const targetEntry = input.targetEntries.find(
 		(entry) => entry.candidate.candidate_id === resolution.candidate.candidate_id,
 	);
-	if (!targetEntry || targetEntry.pageId === undefined) {
+	if (!targetEntry || targetEntry.adapterPageRef === undefined) {
 		return {
 			ok: false,
 			failure: {
@@ -487,7 +487,7 @@ async function resolveOperationTargetEntry(input: {
 		target: {
 			candidate: resolution.candidate,
 			source: resolution.source,
-			pageId: targetEntry.pageId,
+			adapterPageRef: targetEntry.adapterPageRef,
 		},
 	};
 }
@@ -499,13 +499,17 @@ async function resolveOperationTargetEntry(input: {
 async function focusOperationPage(input: {
 	runtime: BrowserUseRuntime;
 	handoff: HandoffFacts;
-	pageId: number;
+	adapterPageRef: string;
 }): Promise<{ ok: true } | { ok: false; failure: OperationFailure }> {
+	const pageId =
+		input.handoff.adapter === "chrome-devtools-mcp"
+			? Number(input.adapterPageRef)
+			: input.adapterPageRef;
 	const selectPage = await runEnvelopeAdapterCall(input.runtime, {
 		probeExecutable: input.handoff.probeExecutable,
 		endpointHttp: input.handoff.endpointHttp,
 		tool: "select_page",
-		argsJson: JSON.stringify({ pageId: input.pageId, bringToFront: true }),
+		argsJson: JSON.stringify({ pageId, bringToFront: true }),
 	});
 	if (!selectPage.ok) {
 		return { ok: false, failure: operationFailureFromTransport(selectPage.failure) };
@@ -554,14 +558,8 @@ function operationTargetEntries(
 		.filter((page) => parseUrlSafe(page.url))
 		.map((page, index) => ({
 			candidate: toCandidate(page, index, targetEnvelopeId, true),
-			pageId: parseAdapterPageId(page.id),
+			adapterPageRef: page.id,
 		}));
-}
-
-function parseAdapterPageId(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const parsed = Number(value);
-	return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 type OperationStateLoad =
@@ -803,18 +801,22 @@ function positiveNumberFlag(value: string | undefined): number | undefined {
 async function runOperationTransport(input: {
 	runtime: BrowserUseRuntime;
 	handoff: HandoffFacts;
-	pageId: number;
+	adapterPageRef: string;
 	operation: BrowserOperationClass;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 	verbose: boolean;
 }): Promise<BrowserOperationTransportResult> {
+	const pageId =
+		input.handoff.adapter === "chrome-devtools-mcp"
+			? Number(input.adapterPageRef)
+			: input.adapterPageRef;
 	const call = (tool: string, args: Record<string, unknown>) =>
 		runEnvelopeAdapterCall(input.runtime, {
 			probeExecutable: input.handoff.probeExecutable,
 			endpointHttp: input.handoff.endpointHttp,
 			tool,
-			argsJson: JSON.stringify({ pageId: input.pageId, ...args }),
+			argsJson: JSON.stringify({ pageId, ...args }),
 		});
 	if (input.operation === "snapshot") {
 		return call("take_snapshot", input.verbose ? { verbose: true } : {});
