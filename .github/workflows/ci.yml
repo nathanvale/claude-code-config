@@ -33,6 +33,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # mcporter (custom tap) is required by the U1 envelope-derived transport
+      # proof (mcporter-adapter-process-boundary.test.ts), which deliberately
+      # throws rather than skips when the binary is absent — installing it here
+      # runs that proof for real instead of silently dropping it.
+      - name: Install mcporter
+        run: brew install steipete/tap/mcporter
+
       - name: Lint (biome)
         run: bun run biome:check
 
@@ -47,4 +54,4 @@ jobs:
       # permanently red. Catching a browser-use cross-PR collision on-branch is
       # the immediate value; broader coverage lands incrementally.
       - name: Test (browser-use)
-        run: bun test skills/browser-use/src/
+        run: bash skills/test-runner/src/test-runner.sh run -- skills/browser-use/src/
