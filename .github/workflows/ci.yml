@@ -36,6 +36,13 @@ jobs:
       - name: Lint (biome)
         run: bun run biome:check
 
+      # The confidential-delivery process-boundary suite drives the REAL
+      # supervisor + field-delivery binaries (.build/debug), so build the
+      # darwin-only Swift custody package before testing. Debug build only:
+      # the TS suite needs the executables, not the Swift test target.
+      - name: Build Swift custody package
+        run: swift build --package-path runtime/browser-use-environment-auth
+
       # Test scope: skills/browser-use/src, via the repo's test-runner (which
       # knows to exclude the intentional-fail fixtures under
       # skills/test-runner/src/fixtures that a bare `bun test` would count as

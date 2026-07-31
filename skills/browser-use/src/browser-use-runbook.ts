@@ -64,6 +64,7 @@ import {
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
 import type { AgentBrowserTaskStep } from "./browser-use-agent-browser";
+import type { BrowserUseOpCredentialField } from "./browser-use-op";
 import type { BrowserUseRunStructuredResult } from "./browser-use-run-model";
 
 // --- Discovery location ------------------------------------------------------
@@ -487,15 +488,42 @@ export type BrowserUseRunbookExecutionRefusal = {
  * never a public bypass in either branch.
  */
 export type BrowserUseRunbookAuthDeliveryOutcome =
-	| { ok: true; context: AgentBrowserAuthDeliveryContext }
+	| {
+			ok: true;
+			context: AgentBrowserAuthDeliveryContext;
+			release?: () => Promise<void>;
+	  }
 	| { ok: false; message: string };
 
 export type BrowserUseRunbookAuthDelivery = (input: {
 	pendingItemBindings: readonly string[];
+	serviceId: string;
+	allowedOrigins: readonly string[];
+	expectedTargetUrl: string;
+	confidentialFields: readonly {
+		bindingSlug: string;
+		credentialField: BrowserUseOpCredentialField;
+		target: { role: string; name: string };
+	}[];
 	handoff: AgentBrowserVerifiedHandoff;
 	runId: string;
 	targetTabId: string;
 }) => Promise<BrowserUseRunbookAuthDeliveryOutcome>;
+
+function credentialFieldForBindingSlug(
+	slug: string,
+): BrowserUseOpCredentialField | undefined {
+	const normalized = slug.toLowerCase().replaceAll("-", "_");
+	if (normalized.endsWith("_username")) return "username";
+	if (normalized.endsWith("_password")) return "password";
+	if (
+		normalized.endsWith("_otp") ||
+		normalized.endsWith("_otp_current")
+	) {
+		return "otp-current";
+	}
+	return undefined;
+}
 
 /**
  * A runbook execution outcome. `refused` is a typed engine refusal reached
@@ -917,6 +945,7 @@ export async function executePreparedRunbook(
 		}
 	}
 	let authDelivery: AgentBrowserAuthDeliveryContext | undefined;
+	let releaseAuthDelivery: (() => Promise<void>) | undefined;
 	if (plan.pending_item_bindings.length > 0) {
 		if (deps.authDelivery === undefined) {
 			return {
@@ -928,8 +957,90 @@ export async function executePreparedRunbook(
 				},
 			};
 		}
+		// Every pending binding slug must name a supported credential field
+		// (KTD5): an unknown slug is a typed refusal BEFORE the seam or any
+		// browser effect. Multiple slugs are allowed here — R10's single-binding
+		// v1 gate lives in the auth-delivery seam, which refuses typed when the
+		// slugs resolve to more than one DISTINCT Item Binding (a login flow's
+		// username + password slugs resolve to one login item).
+		const credentialFieldBySlug = new Map<
+			string,
+			BrowserUseOpCredentialField
+		>();
+		for (const slug of plan.pending_item_bindings) {
+			const field = credentialFieldForBindingSlug(slug);
+			if (field === undefined) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_confidential_delivery_unavailable",
+						message: `the confidential binding slug ${slug} does not name a supported credential field; use a _username, _password, _otp, or _otp_current suffix, then rerun.`,
+					},
+				};
+			}
+			credentialFieldBySlug.set(slug, field);
+		}
+		// Each compiled confidential step carries its OWN binding slug (KTD5);
+		// pair every step with its slug's credential field. A step whose slug is
+		// unmapped fails closed — never silently skipped.
+		const confidentialFields: {
+			bindingSlug: string;
+			credentialField: BrowserUseOpCredentialField;
+			target: { role: string; name: string };
+		}[] = [];
+		for (const step of plan.steps) {
+			if (!(step.kind === "fill" && step.sensitivity === "confidential")) {
+				continue;
+			}
+			const slug = step.item_binding;
+			const field =
+				slug === undefined ? undefined : credentialFieldBySlug.get(slug);
+			if (slug === undefined || field === undefined) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_confidential_delivery_unavailable",
+						message:
+							"a compiled confidential fill carries no mapped binding slug; recompile the runbook plan, then rerun.",
+					},
+				};
+			}
+			confidentialFields.push({
+				bindingSlug: slug,
+				credentialField: field,
+				target: step.target ?? { role: "textbox", name: "" },
+			});
+		}
+		if (confidentialFields.length === 0) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_confidential_delivery_unavailable",
+					message:
+						"the plan surfaces a pending Item Binding with no compiled confidential fill step; recompile the runbook plan, then rerun.",
+				},
+			};
+		}
+		const expectedTargetUrl =
+			completedNeutralOpen === undefined
+				? (input.expectedTargetUrl ?? plan.allowed_origins[0])
+				: neutralOpen?.url;
+		if (expectedTargetUrl === undefined) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_confidential_delivery_unavailable",
+					message:
+						"the confidential target URL is unavailable; refresh the verified handoff target, then rerun.",
+				},
+			};
+		}
 		const built = await deps.authDelivery({
 			pendingItemBindings: plan.pending_item_bindings,
+			serviceId: plan.service_id,
+			allowedOrigins: plan.allowed_origins,
+			expectedTargetUrl,
+			confidentialFields,
 			handoff: input.handoff,
 			runId: input.runId,
 			targetTabId: input.targetTabId,
@@ -944,12 +1055,16 @@ export async function executePreparedRunbook(
 			};
 		}
 		authDelivery = built.context;
+		releaseAuthDelivery = built.release;
 	}
 	const task: AgentBrowserTask = {
 		handoff: input.handoff,
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
 		allowed_origins: plan.allowed_origins,
+		// Compiled confidential fills already carry their OWN `item_binding` slug
+		// (KTD5, stamped at compile time); the executor resolves each slug's
+		// credential field at fill time through `field_by_binding_slug`.
 		steps:
 			completedNeutralOpen === undefined ? plan.steps : plan.steps.slice(1),
 		allow_neutral_target:
@@ -964,40 +1079,53 @@ export async function executePreparedRunbook(
 			: {}),
 		...(authDelivery !== undefined ? { auth_delivery: authDelivery } : {}),
 	};
-	if (task.steps.length === 0 && completedNeutralOpen !== undefined) {
+	try {
+		if (task.steps.length === 0 && completedNeutralOpen !== undefined) {
+			return {
+				ok: true,
+				plan: executionPlanOf(plan),
+				result: completedNeutralOpen,
+			};
+		}
+		const result = await executeAgentBrowserTask(deps.runtime, task);
+		const combinedResult: AgentBrowserExecutionResult =
+			completedNeutralOpen === undefined
+				? result
+				: {
+						...result,
+						executed_steps:
+							completedNeutralOpen.executed_steps + result.executed_steps,
+						mutation_dispatched:
+							completedNeutralOpen.mutation_dispatched ||
+							result.mutation_dispatched,
+					};
+		const structuredResults = captureRunbookReadResults(
+			combinedResult,
+			plan.read_action_meta,
+		);
+		const structuralResult: RawFreeAgentBrowserExecutionResult = combinedResult.ok
+			? (({ read_results: _rawReadResults, ...result }) => result)(combinedResult)
+			: combinedResult;
 		return {
 			ok: true,
 			plan: executionPlanOf(plan),
-			result: completedNeutralOpen,
+			result: structuralResult,
+			...(structuredResults.length > 0
+				? { structured_results: structuredResults }
+				: {}),
 		};
+	} finally {
+		try {
+			await releaseAuthDelivery?.();
+		} catch {
+			// Contained on purpose: a rejected release (lease release or transport
+			// close) in this `finally` would otherwise REPLACE the returned
+			// execution result — losing executed-steps / mutation-dispatched truth
+			// for a run that already dispatched browser effects. The result shape
+			// has no warning slot, and release is best-effort cleanup: the
+			// sensitive-interval lease self-expires by TTL.
+		}
 	}
-	const result = await executeAgentBrowserTask(deps.runtime, task);
-	const combinedResult: AgentBrowserExecutionResult =
-		completedNeutralOpen === undefined
-			? result
-			: {
-					...result,
-					executed_steps:
-						completedNeutralOpen.executed_steps + result.executed_steps,
-					mutation_dispatched:
-						completedNeutralOpen.mutation_dispatched ||
-						result.mutation_dispatched,
-				};
-	const structuredResults = captureRunbookReadResults(
-		combinedResult,
-		plan.read_action_meta,
-	);
-	const structuralResult: RawFreeAgentBrowserExecutionResult = combinedResult.ok
-		? (({ read_results: _rawReadResults, ...result }) => result)(combinedResult)
-		: combinedResult;
-	return {
-		ok: true,
-		plan: executionPlanOf(plan),
-		result: structuralResult,
-		...(structuredResults.length > 0
-			? { structured_results: structuredResults }
-			: {}),
-	};
 }
 
 /**

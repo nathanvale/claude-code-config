@@ -4,8 +4,8 @@
       "asset_path": "fasttrack/fill-week.js",
       "record": {
         "action_id": "fasttrack-fill-week",
-        "asset_id": "3b94d7a94def50c425594eaa78f1a29be2f50656104cacb27631f9236297d1db",
-        "expected_digest": "3b94d7a94def50c425594eaa78f1a29be2f50656104cacb27631f9236297d1db",
+        "asset_id": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
+        "expected_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
         "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
         "effect_class": "mutation",
         "containment": "none",
@@ -243,7 +243,7 @@
         },
         "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/fill-week.js",
         "promotion_receipt": {
-          "approved_digest": "3b94d7a94def50c425594eaa78f1a29be2f50656104cacb27631f9236297d1db",
+          "approved_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
           "disposition": "approved",
           "approved_origin": "https://manpowergroup.fasttrack360.com.au",
           "approved_effect": "mutation",

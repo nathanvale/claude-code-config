@@ -1,29 +1,34 @@
 // ---------------------------------------------------------------------------
-// Hermetic real-process runbook-run confidential-delivery fixture (U13 tier-H).
+// Hermetic real-process FastTrack login runbook fixture (U6).
 //
-// Spawned as its own process by browser-use-confidential-delivery-seam.test.ts.
-// It drives the REAL runbook engine (runRunbook) end-to-end over a REAL temp
-// XDG store, with fakes ONLY at the injected port boundaries:
+// Spawned as its own process by browser-use-runbook.test.ts. It drives the REAL
+// runbook engine (runRunbook) over the SHIPPED `fasttrack/login` runbook —
+// discovered from the code-owned catalog, never seeded into the temp XDG store —
+// with fakes ONLY at the injected port boundaries:
 //   * the auth-delivery seam builds a real AgentBrowserAuthDeliveryContext whose
 //     TokenRetrievalPort is the REAL createOpTokenRetrievalPort fed a hermetic
-//     op-execute (returns an OPAQUE secret handle, never bytes);
-//   * the delivery hook is the disposable-helper stand-in that performs the one
-//     bounded write and observes the conformance-sentinel bytes.
+//     op-execute (returns an OPAQUE per-field secret handle, never bytes);
+//   * the delivery hook is the disposable-helper stand-in that performs the
+//     bounded writes and observes the conformance-sentinel bytes;
+//   * the adapter runtime answers by command shape (tab list/select, url
+//     reproof, snapshot, open, visibility, click) with fixture transports.
 //
-// The fixture writes an ordered journal proving the choreography's phase order:
-//   1. quarantine marker raised BEFORE secret acquisition,
-//   2. sensitive-interval lease acquired (context in_sensitive_interval),
-//   3. exactly ONE bounded field write,
-//   4. cleanup + assertContainmentBeforeRelease releases over the REAL on-disk
+// The fixture writes an ordered journal proving the whole-path choreography:
+//   1. quarantine marker raised BEFORE any secret acquisition,
+//   2. seam consulted with BOTH pending binding slugs; sensitive-interval lease
+//      acquired (context in_sensitive_interval),
+//   3. exactly TWO bounded field writes — username then password,
+//   4. sign-in postcondition confirmed by the executor's fresh observation,
+//   5. cleanup + assertContainmentBeforeRelease releases over the REAL on-disk
 //      run-store bytes.
-// The parent process then sweeps the run-store bytes, stdout, stderr, and any
-// artifacts for the derived sentinel and asserts ZERO occurrences. The fixture
-// itself prints only structural events — never the sentinel value.
+// The parent process then sweeps the run-store bytes, stdout, and stderr for
+// BOTH derived sentinels and asserts ZERO occurrences. The fixture itself
+// prints only structural events — never a sentinel value.
 //
 // Deterministic: no clock/random beyond the op handle expiry (a fixed epoch).
 // ---------------------------------------------------------------------------
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	AgentBrowserAuthDeliveryContext,
@@ -33,6 +38,7 @@ import type {
 import type { BrowserUseItemBinding } from "../browser-use-auth-bindings";
 import type { BrowserUseVerifiedTarget } from "../browser-use-confidential-field-delivery";
 import {
+	type BrowserUseOpCredentialField,
 	type BrowserUseOpExecute,
 	createOpTokenRetrievalPort,
 } from "../browser-use-op";
@@ -43,14 +49,9 @@ import {
 import {
 	type BrowserUseRunbookAuthDelivery,
 	runRunbook,
-	runbooksRoot,
 } from "../browser-use-runbook";
-import type { BrowserUseRunbook } from "../browser-use-runbook-model";
 import { createSharedRun } from "../browser-use-runs";
-import {
-	deriveConformanceSentinel,
-	deriveSentinelSet,
-} from "../browser-use-secret-scan";
+import { deriveConformanceSentinel } from "../browser-use-secret-scan";
 import {
 	assertContainmentBeforeRelease,
 	beginSensitiveRunGuard,
@@ -71,16 +72,26 @@ if (
 	throw new Error("fixture requires dataRoot, stateRoot, journalPath, nonce");
 }
 
-const RUN_ID = "run-h-runbook-cfd";
+const RUN_ID = "run-h-fasttrack-login";
+const ORIGIN = "https://manpowergroup.fasttrack360.com.au";
+const LOGIN_URL = `${ORIGIN}/RecruitmentManager/CandidatePortal`;
+
 const journal: string[] = [];
 function record(event: string): void {
 	journal.push(event);
 	writeFileSync(journalPath, JSON.stringify(journal));
 }
 
-const sentinel = deriveConformanceSentinel("password", nonce);
-if (!sentinel.ok) throw new Error("fixture sentinel rejected");
-const SENTINEL_VALUE = sentinel.value;
+function sentinelFor(field: "username" | "password"): string {
+	const derived = deriveConformanceSentinel(field, nonce);
+	if (!derived.ok) throw new Error(`fixture ${field} sentinel rejected`);
+	return derived.value;
+}
+const SENTINEL_BY_FIELD: Readonly<Record<BrowserUseOpCredentialField, string>> = {
+	username: sentinelFor("username"),
+	password: sentinelFor("password"),
+	"otp-current": sentinelFor("password"),
+};
 
 const HANDOFF = {
 	outcome: "verified",
@@ -105,37 +116,11 @@ const HANDOFF = {
 	schema_version: "2",
 } as const;
 
-const RUNBOOK: BrowserUseRunbook = {
-	contract: "browser-use.runbook",
-	schema_version: "2",
-	service_id: "oncore",
-	flow_id: "with-secret",
-	flow_name: "sign-in",
-	version: "2",
-	summary: "Confidential sign-in runbook.",
-	allowed_origins: ["https://portal.example.com"],
-	inputs: [],
-	steps: [
-		{ kind: "snapshot", interactive: true },
-		{
-			kind: "fill",
-			target: { role: "textbox", name: "Password" },
-			sensitivity: "confidential",
-			item_binding: "oncore_password",
-			postcondition: {
-				kind: "value-equals",
-				selector: "input[name=password]",
-				value: "•••",
-			},
-		},
-	],
-};
-
 const BINDING: BrowserUseItemBinding = {
-	service_id: "oncore",
+	service_id: "fasttrack",
 	auth_context: "interactive-login",
-	allowed_origins: ["https://portal.example.com"],
-	allowed_login_paths: [],
+	allowed_origins: [ORIGIN],
+	allowed_login_paths: ["/RecruitmentManager/CandidatePortal"],
 	vault_id: "vault-1",
 	item_id: "item-1",
 	allowed_auth_methods: ["password", "otp"],
@@ -145,8 +130,8 @@ const BINDING: BrowserUseItemBinding = {
 const TARGET: BrowserUseVerifiedTarget = {
 	lane_id: "agent-browser",
 	run_id: RUN_ID,
-	top_level_origin: "https://portal.example.com",
-	frame_origin: "https://portal.example.com",
+	top_level_origin: ORIGIN,
+	frame_origin: ORIGIN,
 	target_id: "target-1",
 	page_id: "page-1",
 	frame_id: "frame-1",
@@ -158,32 +143,25 @@ function adapterSuccess(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
 }
 
-// The REAL runbook seed on disk under the admitted data root the engine reads.
-function seedRunbook(admittedDataRoot: string): void {
-	const dir = join(
-		runbooksRoot(admittedDataRoot),
-		RUNBOOK.service_id,
-		RUNBOOK.flow_id,
-	);
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, "runbook.json"), JSON.stringify(RUNBOOK));
-}
-
 // Hermetic op-execute: the ONE seam onto real `op`. It returns an OPAQUE
-// secret handle (never bytes). Secret acquisition happens HERE, so the
-// quarantine marker MUST already be raised — the fixture records that ordering.
+// per-field secret handle (never bytes). Secret acquisition happens HERE, so
+// the quarantine marker MUST already be raised — the fixture records that
+// ordering. The requested field is derived from the spec's non-secret argv.
 let bytesAcquired = false;
-const hermeticOpExecute: BrowserUseOpExecute = async (_spec) => {
-	// The credential-field capture spec is the only one that mints a handle; the
-	// quarantine marker precedes it (raised at run resolution below).
-	record("op-execute:secret-acquired");
+const hermeticOpExecute: BrowserUseOpExecute = async (spec) => {
+	const field: BrowserUseOpCredentialField = spec.argv.includes("label=username")
+		? "username"
+		: spec.argv.includes("--otp")
+			? "otp-current"
+			: "password";
+	record(`op-execute:secret-acquired:${field}`);
 	bytesAcquired = true;
 	// Return an OPAQUE handle naming the field only — never a value.
 	return {
 		kind: "secret-handle",
 		handle: {
-			handle_id: "hermetic-handle-password",
-			field: "password",
+			handle_id: `hermetic-handle-${field}`,
+			field,
 			expires_at_epoch_ms: 9_999_999,
 		},
 	};
@@ -194,61 +172,77 @@ const tokenRetrieval = createOpTokenRetrievalPort({
 	token_handle_id: "hermetic-token-handle",
 });
 
-// One bounded write inside the disposable-helper stand-in. This is the ONLY
-// component that ever observes the sentinel bytes; it reports back shape only.
-let writes = 0;
+// The bounded writes inside the disposable-helper stand-in. This is the ONLY
+// component that ever observes sentinel bytes; it reports back shape only.
+const writesByField: Record<string, number> = {};
 const context: AgentBrowserAuthDeliveryContext = {
 	in_sensitive_interval: true,
 	binding: BINDING,
 	target: TARGET,
 	tokenRetrieval,
 	deliver: async (input) => {
-		writes += 1;
-		// Per-field write event (U7): the journal proves exactly ONE bounded write
-		// per delivered field, not merely one write overall.
+		writesByField[input.field] = (writesByField[input.field] ?? 0) + 1;
 		record(`delivery:bounded-write:${input.field}`);
 		// The bounded write "types" the sentinel value; it never leaves the helper.
-		const value = SENTINEL_VALUE;
+		const value = SENTINEL_BY_FIELD[input.field];
 		return { ok: true, shape: { field: input.field, byte_length: value.length } };
 	},
 	reproveTarget: async ({ target }) => ({
 		proven: true,
 		observed_digest: target.target_proof_digest,
 	}),
-	field_by_binding_slug: { oncore_password: "password" },
+	// KTD5: field mapping keyed by binding slug; the executor resolves each
+	// confidential step's own `item_binding` at fill time.
+	field_by_binding_slug: {
+		fasttrack_username: "username",
+		fasttrack_password: "password",
+	},
 };
 
 const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
-	// The sensitive-interval lease is acquired here (context.in_sensitive_interval).
+	// Binding mint + sensitive-interval lease are represented here
+	// (context.in_sensitive_interval); the seam sees BOTH pending slugs.
 	record(`lease:acquired:${seamInput.pendingItemBindings.join(",")}`);
 	return { ok: true, context };
 };
 
-// Deterministic index-ordered adapter responses for the command sequence:
-// tab list, tab select, selected-url reproof, interactive snapshot (yields @e1), then the post-auth
-// value-equals proof (reprove-origin `get url`, then `get value`). The
-// confidential fill itself dispatches NO adapter command — the bounded write
-// lives inside the delivery hook.
-const RESPONSES: readonly string[] = [
-	adapterSuccess({
-		tabs: [
-			{ tabId: "t1", active: true, type: "page", url: "https://portal.example.com/timesheets" },
-		],
-	}),
-	adapterSuccess({ selected: true }),
-	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
-	adapterSuccess({
-		snapshot: "@e1 textbox password",
-		refs: { "@e1": { role: "textbox", name: "Password" } },
-	}),
-	adapterSuccess({ url: "https://portal.example.com/timesheets" }),
-	adapterSuccess({ value: "•••" }),
-];
-let responseIndex = 0;
+// Command-shaped adapter responses (fixture transports): the executor's argv
+// carries base connection args before the native verb, so dispatch matches the
+// first recognized verb. The confidential fills dispatch NO adapter command —
+// the bounded writes live inside the delivery hook.
+const SNAPSHOT_REFS = {
+	"@e1": { role: "textbox", name: "Username" },
+	"@e2": { role: "textbox", name: "Password" },
+	"@e3": { role: "button", name: "Sign In" },
+};
 const runtime: AgentBrowserExecutionRuntime = {
-	runCommand: async () => {
-		const stdout = RESPONSES[responseIndex++] ?? adapterSuccess({});
-		return { exitCode: 0, stdout, stderr: "" };
+	beforeMutationDispatch: async () => ({ ok: true }),
+	runCommand: async (input) => {
+		const args = input.args;
+		const verbIndex = args.findIndex((arg) =>
+			["tab", "get", "snapshot", "open", "is", "click"].includes(arg),
+		);
+		const verb = verbIndex === -1 ? "" : args[verbIndex];
+		const next = verbIndex === -1 ? "" : (args[verbIndex + 1] ?? "");
+		let data: unknown = {};
+		if (verb === "tab" && next === "list") {
+			data = {
+				tabs: [{ tabId: "t1", active: true, type: "page", url: LOGIN_URL }],
+			};
+		} else if (verb === "tab") {
+			data = { selected: true };
+		} else if (verb === "get" && next === "url") {
+			data = { url: LOGIN_URL };
+		} else if (verb === "snapshot") {
+			data = { snapshot: "login form", refs: SNAPSHOT_REFS };
+		} else if (verb === "open") {
+			data = { opened: true };
+		} else if (verb === "is" && next === "visible") {
+			data = { visible: true };
+		} else if (verb === "click") {
+			data = { clicked: true };
+		}
+		return { exitCode: 0, stdout: adapterSuccess(data), stderr: "" };
 	},
 };
 
@@ -264,7 +258,8 @@ async function main(): Promise<void> {
 	const fs = createDefaultPlatformFs();
 	const opened = await openBrowserUsePaths(fs, env);
 	if (!opened.ok) throw new Error(`paths refused: ${opened.refusal.code}`);
-	seedRunbook(opened.paths.data.root);
+	// NO seeding: the engine must discover fasttrack/login from the code-owned
+	// SHIPPED catalog through the empty temp XDG store.
 	const deps = { fs, paths: opened.paths, clock: () => 1 };
 
 	// Create the shared run FIRST so real run-store bytes exist to sweep.
@@ -289,8 +284,8 @@ async function main(): Promise<void> {
 	const outcome = await runRunbook(
 		{ fs, runtime, dataRoot: opened.paths.data.root, authDelivery: seam },
 		{
-			serviceId: "oncore",
-			flowId: "with-secret",
+			serviceId: "fasttrack",
+			flowId: "login",
 			handoff: HANDOFF as AgentBrowserVerifiedHandoff,
 			runId: RUN_ID,
 			targetTabId: "t1",
@@ -302,28 +297,23 @@ async function main(): Promise<void> {
 	if (!outcome.result.ok) {
 		throw new Error(`executor not confirmed: ${outcome.result.code}`);
 	}
-	if (writes !== 1) throw new Error(`expected one bounded write, got ${writes}`);
+	record("postcondition:confirmed");
+	if (writesByField.username !== 1 || writesByField.password !== 1) {
+		throw new Error(
+			`expected one bounded write per field, got ${JSON.stringify(writesByField)}`,
+		);
+	}
 
-	// Register the derived sentinel and assert containment over the REAL run-store
-	// bytes before "release" (cleanup path). The delivered shape came back from
-	// the executor's delivery evidence.
+	// Register both derived sentinels and assert containment over the REAL
+	// run-store bytes before "release" (cleanup path). The delivered shapes came
+	// back through the executor's delivery evidence — one per field.
 	const shapes = outcome.result.delivery?.delivered_shapes ?? [];
-	if (shapes.length !== 1) throw new Error("missing delivered shape");
-	// RE-KEYED containment context (U7): the sentinel set is re-derived from the
-	// delivered shapes under the run-scoped nonce — never carried forward as the
-	// original value binding — and the loop must close: the re-keyed marker IS
-	// the delivered value, so the sweep hunts exactly what the helper typed.
-	const rekeyed = deriveSentinelSet(shapes, nonce);
-	if (!rekeyed.ok) {
-		throw new Error(`sentinel re-key refused: ${rekeyed.rejection.code}`);
+	if (shapes.length !== 2) {
+		throw new Error(`expected two delivered shapes, got ${shapes.length}`);
 	}
-	if (!rekeyed.sentinels.includes(SENTINEL_VALUE)) {
-		throw new Error("re-keyed sentinel set did not close the delivered-value loop");
-	}
-	record("containment:sentinels-rekeyed");
 	const marked = markRunSensitive(baseGuard.guard, {
 		trigger: "confidential-field-delivery",
-		sentinels: rekeyed.sentinels,
+		sentinels: [SENTINEL_BY_FIELD.username, SENTINEL_BY_FIELD.password],
 	});
 	if (!marked.ok) throw new Error(`mark refused: ${marked.rejection.code}`);
 
@@ -336,8 +326,8 @@ async function main(): Promise<void> {
 	if (!gate.release) throw new Error(`containment withheld: ${gate.reason}`);
 	record("cleanup:released");
 
-	// Structural completion event only — never the sentinel value.
-	process.stdout.write("runbook-delivery-complete\n");
+	// Structural completion event only — never a sentinel value.
+	process.stdout.write("fasttrack-login-delivery-complete\n");
 }
 
 main().catch((error) => {

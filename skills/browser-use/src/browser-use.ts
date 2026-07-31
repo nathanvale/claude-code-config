@@ -48,6 +48,7 @@ import {
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 	BROWSER_USE_TRANSPORT_ADAPTERS,
+	type BrowserUseAuthRepairSubcommand,
 	type BrowserUseAuthSubcommand,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
@@ -61,10 +62,20 @@ import {
 	browserUseTaskRunSuccessActions,
 } from "./command-contract";
 import {
+	type BrowserUseOpCredentialField,
+	type BrowserUseTokenRetrievalPort,
 	type BrowserUseTokenRetrievalRejection,
 	blockOfRetrievalRejection,
 	proveVaultScope,
 } from "./browser-use-op";
+import type { BrowserUseDeliveryHook } from "./browser-use-confidential-field-delivery";
+import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
+import {
+	type BrowserUseDevToolsRequest,
+	type BrowserUseDevToolsTransport,
+	type BrowserUseMintedVerifiedTarget,
+	mintBrowserUseVerifiedTarget,
+} from "./browser-use-target-proof";
 import {
 	type BrowserUseAdapterLaneView,
 	createAdapterLaneRegistry,
@@ -613,10 +624,23 @@ async function executeCommand(input: {
 		});
 	}
 
-	// R27 auth repair surface (auth plan U3a): the blocked-cause continuations
-	// as live check commands. Native custody absence is a typed evaluation,
-	// never a crash; dry-run keeps the mock envelope below.
+	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
 	if (parsed.family === "auth" && !parsed.dryRun) {
+		if (
+			parsed.subcommand === "install-token" ||
+			parsed.subcommand === "remove-token" ||
+			parsed.subcommand === "status"
+		) {
+			return runAuthTokenLifecycle({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
 		return runAuthReadiness({
 			parsed,
 			runtime,
@@ -3330,7 +3354,10 @@ function runbookFailureOf(
 			// named in the message.
 			return {
 				code,
-				message,
+				message:
+					code === "runbook_confidential_native_capability_absent"
+						? `${message} Continue with browser-use auth install-token, then browser-use auth status --json, then re-run this command.`
+						: message,
 				actionId: "inspect_shared_run",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "repair_state",
@@ -3486,29 +3513,412 @@ function sanitizeInputPairForError(pair: string): string {
 	return eq > 0 ? `${pair.slice(0, eq)}=[redacted]` : "[redacted]";
 }
 
-// Auth-delivery seam for `runbook run` (auth plan U11). Built ONLY when a native
-// Token Retrieval Port exists; the provider is the sole credential capability
-// (R7/R16). The provider composes into the sensitive-interval delivery context
-// via `buildAgentBrowserDeliveryContext`, but that context also needs a live
-// VERIFIED TARGET proof, the disposable delivery hook, and the target-reproof
-// closure — all produced by the live sensitive-interval transaction that a later
-// unit drives end-to-end for the runbook lane. Until that transaction is wired
-// here, this seam returns a typed `blocked` outcome (never a fabricated target,
-// never an unauthenticated fill): the run stays fail-closed with a repair
-// pointer even when the native capability is present. The engine consults the
-// seam with the plan's pending bindings, so the composition is proven live; only
-// the live-target assembly remains for the transaction unit.
+type CloseableTargetTransport = {
+	transport: BrowserUseDevToolsTransport;
+	close(): void;
+};
+
+type RunbookAuthDeliveryBuilderDeps = {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	createTargetTransport(
+		handoff: AgentBrowserVerifiedHandoff,
+	): CloseableTargetTransport;
+	createDeliveryHook(input: {
+		tokenRetrieval: BrowserUseTokenRetrievalPort;
+		handoff: AgentBrowserVerifiedHandoff;
+		expectedTargetUrl: string;
+		target: BrowserUseMintedVerifiedTarget;
+		descriptorByField?: Readonly<
+			Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			>
+		>;
+	}): BrowserUseDeliveryHook | undefined;
+};
+
+function preparationRefusalMessage(
+	outcome: Extract<
+		Awaited<ReturnType<BrowserUseAuthProvider["prepareSecretFree"]>>,
+		{ ok: false }
+	>,
+): string {
+	const selection =
+		outcome.detail.kind === "selection"
+			? ` Ranked redacted candidates: ${outcome.detail.selection
+					.map(
+						(candidate) =>
+							`rank ${candidate.rank} item ${candidate.item_id}`,
+					)
+					.join(", ")}.`
+			: "";
+	const tokenSetup =
+		outcome.event.cause === "missing-token"
+			? " Continue with browser-use auth install-token, then browser-use auth status --json, then rerun."
+			: "";
+	return `binding resolution blocked (${outcome.event.cause}); continuation ${outcome.continuation.next_action_id}: ${outcome.continuation.summary}${selection}${tokenSetup}`;
+}
+
+function bindingIdentity(binding: {
+	vault_id: string;
+	item_id: string;
+	binding_revision: number;
+}): string {
+	return `${binding.vault_id}\0${binding.item_id}\0${binding.binding_revision}`;
+}
+
+function fieldMethod(
+	field: BrowserUseOpCredentialField,
+): "password" | "otp" {
+	return field === "otp-current" ? "otp" : "password";
+}
+
+function environmentDeliveryHook(input: {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	expectedTargetUrl: string;
+	target: BrowserUseMintedVerifiedTarget;
+	descriptorByField?: Readonly<
+		Partial<
+			Record<
+				BrowserUseOpCredentialField,
+				{ role: string; accessible_name: string }
+			>
+		>
+	>;
+}): BrowserUseDeliveryHook | undefined {
+	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
+	if (typeof port.redeemCredentialField !== "function") return undefined;
+	return async ({ handle, target }) => {
+		// Each redemption re-resolves its node in the delivery child from THIS
+		// descriptor, so it must name the field being redeemed — a constant
+		// first-field descriptor would write a later secret into the wrong node.
+		const descriptor = input.descriptorByField?.[handle.field] ?? {
+			role: input.target.field.role,
+			accessible_name: input.target.field.accessible_name,
+		};
+		const delivered = await port.redeemCredentialField?.({
+			handle,
+			target_digest: target.target_proof_digest,
+			ws_url: input.handoff.endpoint.ws,
+			target_url: input.expectedTargetUrl,
+			target_origin: target.frame_origin,
+			field: {
+				role: descriptor.role,
+				accessible_name: descriptor.accessible_name,
+			},
+		});
+		if (delivered?.ok) return delivered;
+		const rejection = delivered?.rejection.code;
+		const targetDrift =
+			rejection === "target-digest-mismatch" ||
+			rejection === "origin-mismatch" ||
+			rejection === "target-proof-invalid";
+		return {
+			ok: false,
+			reason: targetDrift
+				? "target-drift"
+				: delivered?.external_effect_possible === true
+					? "helper-crash"
+					: "helper-unavailable",
+			field_cleared: delivered?.field_cleared ?? false,
+		};
+	};
+}
+
+function createWebSocketTargetTransport(
+	handoff: AgentBrowserVerifiedHandoff,
+): CloseableTargetTransport {
+	const socket = new WebSocket(handoff.endpoint.ws);
+	const pending = new Map<
+		number,
+		{
+			resolve(value: unknown): void;
+			reject(reason: Error): void;
+			timer: ReturnType<typeof setTimeout>;
+		}
+	>();
+	let nextId = 1;
+	let closed = false;
+	const opened = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error("DevTools transport open timed out.")),
+			10_000,
+		);
+		socket.addEventListener(
+			"open",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+		socket.addEventListener(
+			"error",
+			() => {
+				clearTimeout(timer);
+				reject(new Error("DevTools transport could not open."));
+			},
+			{ once: true },
+		);
+	});
+	socket.addEventListener("message", (event) => {
+		if (typeof event.data !== "string") return;
+		let response: unknown;
+		try {
+			response = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+		if (
+			typeof response !== "object" ||
+			response === null ||
+			!("id" in response) ||
+			typeof response.id !== "number"
+		) {
+			return;
+		}
+		const waiter = pending.get(response.id);
+		if (waiter === undefined) return;
+		pending.delete(response.id);
+		clearTimeout(waiter.timer);
+		if ("error" in response) {
+			waiter.reject(new Error("DevTools request was refused."));
+			return;
+		}
+		waiter.resolve("result" in response ? response.result : undefined);
+	});
+	const rejectPending = () => {
+		closed = true;
+		for (const waiter of pending.values()) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error("DevTools transport closed."));
+		}
+		pending.clear();
+	};
+	socket.addEventListener("close", rejectPending);
+	return {
+		transport: {
+			async request(request: BrowserUseDevToolsRequest): Promise<unknown> {
+				await opened;
+				if (closed) throw new Error("DevTools transport is closed.");
+				const id = nextId;
+				nextId += 1;
+				return await new Promise<unknown>((resolve, reject) => {
+					const timer = setTimeout(() => {
+						pending.delete(id);
+						reject(new Error("DevTools request timed out."));
+					}, 10_000);
+					pending.set(id, { resolve, reject, timer });
+					socket.send(JSON.stringify({ id, ...request }));
+				});
+			},
+		},
+		close() {
+			if (closed) return;
+			rejectPending();
+			socket.close();
+		},
+	};
+}
+
+// Auth-delivery seam for `runbook run`. Built only when a Token Retrieval Port
+// exists. Every refusal carries the blocking cause and its repair continuation.
 function buildRunbookAuthDelivery(
 	provider: BrowserUseAuthProvider,
+	deps: RunbookAuthDeliveryBuilderDeps,
 ): BrowserUseRunbookAuthDelivery {
-	// Reference the provider so the sole credential capability is captured here
-	// and a miswiring that drops it is a type error, not a silent bypass.
-	void provider;
-	return async () => ({
-		ok: false,
-		message:
-			"the native Browser Authentication capability is present, but the runbook lane's live sensitive-interval delivery (verified-target proof and confidential-field hook) is not wired here yet. Complete the authentication transaction for this runbook lane before running a confidential runbook.",
-	});
+	return async (input) => {
+		let closeable: CloseableTargetTransport | undefined;
+		let lease:
+			| Extract<
+					Awaited<
+						ReturnType<BrowserUseAuthProvider["acquireSensitiveIntervalLease"]>
+					>,
+					{ granted: true }
+			  >["lease"]
+			| undefined;
+		const release = async () => {
+			if (lease !== undefined) {
+				await provider.releaseSensitiveIntervalLease({ lease });
+				lease = undefined;
+			}
+			closeable?.close();
+			closeable = undefined;
+		};
+		try {
+			const fieldBySlug = new Map(
+				input.confidentialFields.map((field) => [
+					field.bindingSlug,
+					field,
+				]),
+			);
+			const preparedBindings = [];
+			for (const slug of input.pendingItemBindings) {
+				const field = fieldBySlug.get(slug);
+				if (field === undefined) {
+					return {
+						ok: false,
+						message:
+							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: the runbook binding has no confidential field plan.",
+					};
+				}
+				const loginPath = (() => {
+					try {
+						return new URL(input.expectedTargetUrl).pathname;
+					} catch {
+						return null;
+					}
+				})();
+				const prepared = await provider.prepareSecretFree({
+					service_id: input.serviceId,
+					auth_context: "interactive-login",
+					target_origins: input.allowedOrigins,
+					login_path: loginPath,
+					method: fieldMethod(field.credentialField),
+					binding: null,
+					candidate_hint: {
+						hint_item_id: slug,
+						legacy_vault_name: null,
+					},
+				});
+				if (!prepared.ok) {
+					return { ok: false, message: preparationRefusalMessage(prepared) };
+				}
+				if (prepared.binding === null) {
+					return {
+						ok: false,
+						message:
+							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: confidential delivery produced no Item Binding.",
+					};
+				}
+				preparedBindings.push(prepared.binding);
+			}
+			const binding = preparedBindings[0];
+			if (binding === undefined) {
+				return {
+					ok: false,
+					message:
+						"binding resolution blocked (capability-loss); continuation inspect-auth-capability: no pending Item Binding was supplied.",
+				};
+			}
+			if (
+				new Set(preparedBindings.map((candidate) => bindingIdentity(candidate)))
+					.size !== 1
+			) {
+				return {
+					ok: false,
+					message:
+						"binding resolution blocked (single-binding-v1); continuation split-confidential-runbook: pending slugs resolved to more than one distinct Item Binding.",
+				};
+			}
+
+			const firstField = input.confidentialFields[0];
+			if (firstField === undefined) {
+				return {
+					ok: false,
+					message:
+						"target proof blocked (target-proof-invalid); continuation refresh-runbook-target: no confidential field target was supplied.",
+				};
+			}
+			closeable = deps.createTargetTransport(input.handoff);
+			const proof = await mintBrowserUseVerifiedTarget(closeable.transport, {
+				lane_id: "agent-browser",
+				run_id: input.runId,
+				expected_url: input.expectedTargetUrl,
+				allowed_origins: input.allowedOrigins,
+				binding,
+				field: {
+					role: firstField.target.role,
+					accessible_name: firstField.target.name,
+				},
+			});
+			if (!proof.ok) {
+				await release();
+				return {
+					ok: false,
+					message: `target proof blocked (${proof.cause}); continuation refresh-runbook-target: refresh the verified handoff target, then rerun.`,
+				};
+			}
+
+			const acquired = await provider.acquireSensitiveIntervalLease({
+				run: {
+					environment_profile: {
+						environment: input.handoff.environment.name,
+						profile: input.handoff.environment.profile,
+					},
+				},
+				holder_id: `runbook-sensitive-${input.runId}`,
+				ttl_ms: 30_000,
+				scope: { target_id: proof.target.target_id },
+				key_family: "sensitive-interval",
+			});
+			if (!acquired.granted) {
+				await release();
+				return {
+					ok: false,
+					message: `sensitive interval blocked (${acquired.blocked_cause}); continuation ${acquired.continuation.next_action_id}: ${acquired.continuation.summary}`,
+				};
+			}
+			lease = acquired.lease;
+			// Per-field node descriptors from the runbook's confidential field plan:
+			// each redemption selects ITS OWN descriptor, never the first field's.
+			const descriptorByField: Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			> = {};
+			for (const field of input.confidentialFields) {
+				descriptorByField[field.credentialField] ??= {
+					role: field.target.role,
+					accessible_name: field.target.name,
+				};
+			}
+			const deliver = deps.createDeliveryHook({
+				tokenRetrieval: deps.tokenRetrieval,
+				handoff: input.handoff,
+				expectedTargetUrl: input.expectedTargetUrl,
+				target: proof.target,
+				descriptorByField,
+			});
+			if (deliver === undefined) {
+				await release();
+				return {
+					ok: false,
+					message:
+						"sensitive interval blocked (capability-loss); continuation install-token: the active credential lane cannot redeem a confidential delivery handle.",
+				};
+			}
+			const field_by_binding_slug = Object.fromEntries(
+				input.confidentialFields.map((field) => [
+					field.bindingSlug,
+					field.credentialField,
+				]),
+			);
+			return {
+				ok: true,
+				context: provider.buildAgentBrowserDeliveryContext({
+					binding,
+					target: proof.target,
+					deliver,
+					reproveTarget: proof.reproveTarget,
+					field_by_binding_slug,
+					in_sensitive_interval: true,
+				}),
+				release,
+			};
+		} catch {
+			await release();
+			return {
+				ok: false,
+				message:
+					"sensitive interval blocked (capability-loss); continuation inspect-auth-capability: live confidential delivery composition failed closed.",
+			};
+		}
+	};
 }
 
 /**
@@ -3975,7 +4385,14 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				},
 			},
 			...(authProvider !== undefined
-				? { authDelivery: buildRunbookAuthDelivery(authProvider) }
+				? {
+						authDelivery: buildRunbookAuthDelivery(authProvider, {
+							tokenRetrieval:
+								tokenRetrieval as BrowserUseTokenRetrievalPort,
+							createTargetTransport: createWebSocketTargetTransport,
+							createDeliveryHook: environmentDeliveryHook,
+						}),
+					}
 				: {}),
 			afterNeutralOpen: async (nextStep) => {
 				const checkpointed = await persistRunbookPrivateState(
@@ -4617,12 +5034,330 @@ type AuthReadinessEvaluation = {
 	continuationId: AuthActionId;
 };
 
+const AUTH_TOKEN_FORBIDDEN_ENV_KEYS = [
+	"OP_SERVICE_ACCOUNT_TOKEN",
+	"OP_CONNECT_HOST",
+	"OP_CONNECT_TOKEN",
+	"BROWSER_USE_TOKEN",
+	"BROWSER_USE_OP_TOKEN",
+] as const;
+
+const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
+	"ready",
+	"installed",
+	"replaced",
+	"removed",
+	"removed-sync-unproven",
+	"missing",
+	"cleanup-required",
+	"blocked",
+]);
+const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
+	"invalid-arguments",
+	"unsafe-ancestry",
+	"unsafe-config-root",
+	"unsafe-custody-directory",
+	"backup-exclusion-unproven",
+	"sync-exclusion-unproven",
+	"token-missing",
+	"token-already-installed",
+	"token-unsafe",
+	"staging-residue",
+	"removal-residue",
+	"input-cancelled",
+	"input-invalid",
+	"write-failed",
+	"invalid-service-account",
+	"invalid-vault-scope",
+	"validation-failed",
+	"validation-timeout",
+	"validation-unavailable",
+	"path-identity-changed",
+	"atomic-replace-failed",
+	"cleanup-failed",
+	"parent-sync-failed",
+	"core-dump-disable-failed",
+	"op-path-not-absolute",
+	"op-path-unapproved",
+	"op-path-unavailable",
+	"op-path-unsafe",
+	"op-path-not-executable",
+	"op-binary-untrusted",
+	"op-staging-failed",
+	"op-version-invalid",
+	"op-version-unsupported",
+	"token-invalid",
+	"timeout",
+	"output-too-large",
+	"process-failed",
+	"process-signalled",
+	"io-failure",
+	"output-shape-invalid",
+	"item-missing",
+	"validator-protocol-invalid",
+	"profile-policy-unproven",
+	"profile-policy-unsafe",
+	"token-supervisor-unavailable",
+	"token-supervisor-output-too-large",
+]);
+const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
+	"auth-status",
+	"rerun-confidential-command",
+	"repair-token-custody",
+	"repair-op-admission",
+	"repair-vault-grant",
+	"create-credential-clean-profile",
+	"revoke-service-account-token-remotely",
+	"install-token",
+]);
+const AUTH_TOKEN_CHECK_STATUSES = new Set([
+	"ready",
+	"blocked",
+	"missing",
+	"unproven",
+]);
+
+type AuthTokenSupervisorProjection = {
+	ok: boolean;
+	state: string;
+	cause?: string;
+	nextAction: AuthActionId;
+	detail?: Record<string, unknown>;
+};
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function safeAuthTokenCause(value: unknown): string | undefined {
+	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSES.has(value)
+		? value
+		: undefined;
+}
+
+function safeAuthTokenCheck(value: unknown): Record<string, unknown> | undefined {
+	const check = recordField(value);
+	if (
+		check === undefined ||
+		typeof check.status !== "string" ||
+		!AUTH_TOKEN_CHECK_STATUSES.has(check.status)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(check.cause);
+	if (check.cause !== undefined && cause === undefined) return undefined;
+	const visibleCount = check.visible_count;
+	if (
+		visibleCount !== undefined &&
+		(!Number.isSafeInteger(visibleCount) || (visibleCount as number) < 0)
+	) {
+		return undefined;
+	}
+	return {
+		status: check.status,
+		...(cause === undefined ? {} : { cause }),
+		...(visibleCount === undefined ? {} : { visible_count: visibleCount }),
+	};
+}
+
+function parseAuthTokenSupervisorResult(
+	stdout: string,
+	exitCode: number,
+): AuthTokenSupervisorProjection | undefined {
+	let value: unknown;
+	try {
+		value = JSON.parse(stdout);
+	} catch {
+		return undefined;
+	}
+	const object = recordField(value);
+	if (
+		object === undefined ||
+		object.schema_version !== 1 ||
+		typeof object.ok !== "boolean" ||
+		typeof object.state !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_STATES.has(object.state) ||
+		typeof object.next_action !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_ACTIONS.has(object.next_action as AuthActionId) ||
+		(object.ok ? exitCode !== 0 : exitCode !== BINDING_FAIL_CLOSED_EXIT_CODE)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(object.cause);
+	if (object.cause !== undefined && cause === undefined) return undefined;
+	const detail: Record<string, unknown> = {};
+	const lane = recordField(object.lane);
+	const checks = recordField(object.checks);
+	if (lane !== undefined || checks !== undefined) {
+		if (
+			lane?.selected !== "environment-injected-op" ||
+			typeof lane.status !== "string" ||
+			!AUTH_TOKEN_CHECK_STATUSES.has(lane.status) ||
+			checks === undefined
+		) {
+			return undefined;
+		}
+		const safeChecks = {
+			token_file: safeAuthTokenCheck(checks.token_file),
+			op: safeAuthTokenCheck(checks.op),
+			token: safeAuthTokenCheck(checks.token),
+			vault_scope: safeAuthTokenCheck(checks.vault_scope),
+			profile_policy: safeAuthTokenCheck(checks.profile_policy),
+		};
+		if (Object.values(safeChecks).some((check) => check === undefined)) {
+			return undefined;
+		}
+		detail.lane = { selected: lane.selected, status: lane.status };
+		detail.checks = safeChecks;
+	}
+	if (object.remote_authority === "may-remain-live") {
+		detail.remote_authority = "may-remain-live";
+	}
+	return {
+		ok: object.ok,
+		state: object.state,
+		...(cause === undefined ? {} : { cause }),
+		nextAction: object.next_action as AuthActionId,
+		...(Object.keys(detail).length === 0 ? {} : { detail }),
+	};
+}
+
+function emitAuthTokenLifecycleResult(
+	input: PlatformCommandInput,
+	projection: AuthTokenSupervisorProjection,
+	errorCode: "auth_token_input_rejected" | "auth_token_supervisor_failed",
+): number {
+	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const evaluation = {
+		status: projection.state,
+		...(projection.cause === undefined
+			? {}
+			: { blocked_cause: projection.cause }),
+		...(projection.detail === undefined ? {} : { detail: projection.detail }),
+	};
+	if (input.parsed.outputMode === "plain") {
+		const line = [
+			`action=${subcommand}`,
+			`status=${projection.state}`,
+			`continuation=${projection.nextAction}`,
+			...(projection.cause === undefined
+				? []
+				: [`blocked_cause=${projection.cause}`]),
+		].join(" ");
+		const writer = projection.ok ? input.stdout : input.stderr;
+		writer.write(
+			`${platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller)}${line}\n`,
+		);
+		return projection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	const envelopeInput = {
+		run_id: input.runId,
+		data: {
+			contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+			action: subcommand,
+			evaluation,
+			caller: input.caller,
+		},
+		runtime_actions: [authAction(projection.nextAction)],
+		continuation: { next_action_id: projection.nextAction },
+	};
+	if (projection.ok) {
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope(envelopeInput),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			...envelopeInput,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: errorCode,
+				message:
+					errorCode === "auth_token_input_rejected"
+						? "token input through process environment is forbidden; use native hidden input or --stdin."
+						: "native token custody operation was blocked; follow the typed continuation.",
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+async function runAuthTokenLifecycle(
+	input: PlatformCommandInput,
+): Promise<number> {
+	if (
+		AUTH_TOKEN_FORBIDDEN_ENV_KEYS.some(
+			(key) => input.runtime.env[key] !== undefined,
+		)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_input_rejected",
+		);
+	}
+	const subcommand = input.parsed.subcommand;
+	const nativeInput =
+		subcommand === "install-token"
+			? ({
+					mode: "install",
+					input:
+						input.parsed.flagValues["--stdin"] === undefined
+							? "prompt"
+							: "stdin",
+					replace: input.parsed.flagValues["--replace"] !== undefined,
+				} as const)
+			: subcommand === "remove-token"
+				? ({ mode: "remove" } as const)
+				: ({ mode: "status" } as const);
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? {
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					stdout: "",
+					stderr: "",
+				}
+			: await input.runtime.runAuthTokenSupervisor(nativeInput);
+	const projection = parseAuthTokenSupervisorResult(
+		result.stdout,
+		result.exitCode,
+	);
+	return emitAuthTokenLifecycleResult(
+		input,
+		projection ?? {
+			ok: false,
+			state: "blocked",
+			cause: "token-supervisor-unavailable",
+			nextAction: "repair-op-admission",
+		},
+		"auth_token_supervisor_failed",
+	);
+}
+
 // Map a retrieval block back onto the ONE repair command that discharges it;
 // causes outside the four dispatchable continuations route to inspection.
 function authContinuationForCause(cause: string): AuthActionId {
 	switch (cause) {
 		case "missing-token":
-			return "enroll-browser-automation-token";
+			return "install-token";
 		case "invalid-vault-scope":
 			return "repair-vault-grant";
 		case "revoked-binding":
@@ -4637,7 +5372,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 const NATIVE_CAPABILITY_ABSENT: AuthReadinessEvaluation = {
 	status: "native-capability-absent",
 	blocked_cause: "missing-token",
-	continuationId: "acquire-native-capability",
+	continuationId: "install-token",
 };
 
 // Retrieval blocked before the evaluation could answer: report the block's
@@ -4655,7 +5390,7 @@ function retrievalBlockedEvaluation(
 }
 
 async function evaluateAuthReadiness(
-	subcommand: BrowserUseAuthSubcommand,
+	subcommand: BrowserUseAuthRepairSubcommand,
 	input: PlatformCommandInput,
 ): Promise<AuthReadinessEvaluation> {
 	const port = input.runtime.authTokenRetrieval;
@@ -4672,7 +5407,7 @@ async function evaluateAuthReadiness(
 					status: "token-rejected",
 					blocked_cause: block.blocked_cause,
 					detail: { rejection_code: vaults.rejection.code },
-					continuationId: "acquire-native-capability",
+					continuationId: "install-token",
 				};
 			}
 			return {
@@ -4808,7 +5543,7 @@ function emitAuthContinuationMismatch(
  * @returns Process exit code
  */
 async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
-	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const subcommand = input.parsed.subcommand as BrowserUseAuthRepairSubcommand;
 	const runFlag = stringField(input.parsed.flagValues["--run"]);
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
@@ -4998,6 +5733,8 @@ export const __confidentialDeliveryDriverForTest = {
 	collectRunGovernedSurfaces,
 	sentinelRegistrationWithheldFailure,
 	recordTaskRunOutcome,
+	buildRunbookAuthDelivery,
+	environmentDeliveryHook,
 } as const;
 
 if (import.meta.main) {

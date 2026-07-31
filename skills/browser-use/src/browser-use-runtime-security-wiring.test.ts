@@ -243,7 +243,7 @@ describe("U10 byte-identical typed absence on this (unsigned) machine", () => {
 	test("auth enroll-browser-automation-token --json still reports native-capability-absent", async () => {
 		// Drive the REAL production runtime (default native-absent seam) through
 		// the REAL CLI: the observable envelope must be the typed absence with the
-		// acquire-native-capability continuation, exit 0, no crash.
+		// install-token continuation, exit 0, no crash.
 		const runtime = await createProductionBrowserUseRuntime(EMPTY_OVERRIDES);
 		expect(runtime.authTokenRetrieval).toBeUndefined();
 
@@ -265,7 +265,7 @@ describe("U10 byte-identical typed absence on this (unsigned) machine", () => {
 			blocked_cause: "missing-token",
 		});
 		expect(envelope.continuation.next_action_id).toBe(
-			"acquire-native-capability",
+			"install-token",
 		);
 	});
 });

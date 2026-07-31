@@ -11,7 +11,21 @@ async ({ inputs }) => {
     sun: 6, sunday: 6,
   };
   const fail = (reason, extra = {}) => {
-    throw new Error(JSON.stringify({ reason, ...extra }).slice(0, 2000));
+    const { reason: detail, ...context } = extra;
+    // Consumers JSON.parse the error message, so the payload must always be
+    // valid JSON. Cap each embedded string value before serializing instead of
+    // slicing the serialized string (which could cut mid-token). The final
+    // length check is a never-hit backstop that drops context rather than emit
+    // broken JSON.
+    const cap = (value) =>
+      typeof value === "string" && value.length > 256 ? `${value.slice(0, 256)}[truncated]` : value;
+    const payload = { reason, ...(detail ? { detail: cap(detail) } : {}) };
+    for (const [key, value] of Object.entries(context)) payload[key] = cap(value);
+    let message = JSON.stringify(payload);
+    if (message.length > 2000) {
+      message = JSON.stringify({ reason, ...(detail ? { detail: cap(detail) } : {}), truncated: true });
+    }
+    throw new Error(message);
   };
   const parseDate = (value) => {
     const text = String(value || "");
@@ -167,21 +181,22 @@ async ({ inputs }) => {
   // write into a blindly-open grid.
   const targetWeekDates = new Set();
   for (let i = 0; i < 7; i += 1) targetWeekDates.add(dmy(addDays(weekStart, i)));
-  const openGridMatchesTargetWeek = () => {
+  const openGridFailureReason = () => {
     const rows = editRows();
-    if (rows.length < 5) return false;
-    const dates = rows.map(rowDate).filter(Boolean);
-    if (dates.length < rows.length) return false; // cannot prove -> refuse
-    if (new Set(dates).size !== dates.length) return false; // duplicate date -> refuse
-    if (!dates.every((date) => targetWeekDates.has(date))) return false; // foreign date -> refuse
-    return dates.includes(targetStart);
+    if (rows.length < 5) return "wrong_week_open";
+    const dates = rows.map(rowDate);
+    if (dates.some((date) => !date)) return "row_dates_unreadable";
+    if (new Set(dates).size !== dates.length) return "duplicate_row_date";
+    if (!dates.every((date) => targetWeekDates.has(date))) return "wrong_week_open";
+    return dates.includes(targetStart) ? "" : "wrong_week_open";
   };
   const openTargetIfNeeded = async () => {
     if (editRows().length >= 5) {
-      if (openGridMatchesTargetWeek()) return { mode: "already_editing", targetStart, targetEnd };
+      const failureReason = openGridFailureReason();
+      if (!failureReason) return { mode: "already_editing", targetStart, targetEnd };
       // An editable grid is open but is NOT provably the target week: refuse to
       // fill it. Fall through to navigate + open the target row by date.
-      fail("wrong_week_open", {
+      fail(failureReason, {
         reason: "an editable grid is open but does not match the target week; refusing to fill",
         targetStart,
         targetEnd,

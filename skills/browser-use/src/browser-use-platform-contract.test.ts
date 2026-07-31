@@ -105,6 +105,9 @@ describe("platform family help and discovery", () => {
 			"auth-repair-item-binding": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 			"auth-request-binding-selection-grant":
 				BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-install-token": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-remove-token": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			"auth-status": BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 		} as const;
 		// Store-backed commands (platform plan U2) additionally declare the XDG
 		// env vars the one path owner consumes; the pure/shell commands keep the
@@ -137,6 +140,9 @@ describe("platform family help and discovery", () => {
 			"auth-repair-vault-grant",
 			"auth-repair-item-binding",
 			"auth-request-binding-selection-grant",
+			"auth-install-token",
+			"auth-remove-token",
+			"auth-status",
 		]);
 		for (const [command, contractId] of Object.entries(expectedContractIds)) {
 			const discovered = tree.commands[command];

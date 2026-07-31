@@ -52,6 +52,9 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"auth-repair-vault-grant",
 	"auth-repair-item-binding",
 	"auth-request-binding-selection-grant",
+	"auth-install-token",
+	"auth-remove-token",
+	"auth-status",
 ];
 
 function discoveryTree() {

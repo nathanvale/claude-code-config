@@ -19,10 +19,15 @@ import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
 import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
 } from "./command-contract";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+import type {
+	AuthTokenSupervisorInput,
+	AuthTokenSupervisorResult,
+} from "./browser-use-runtime";
 
 // Narrowed envelope view for assertions (parseJson returns unknown-valued
 // records; the facade's own tests prove the envelope schema).
@@ -38,6 +43,37 @@ type EnvelopeView = {
 function envelopeOf(stdout: string): EnvelopeView {
 	return parseJson(stdout) as unknown as EnvelopeView;
 }
+
+function supervisorRuntime(
+	result: AuthTokenSupervisorResult,
+	calls: AuthTokenSupervisorInput[] = [],
+) {
+	return makeRuntime({
+		runAuthTokenSupervisor: async (input) => {
+			calls.push(input);
+			return result;
+		},
+	});
+}
+
+const healthyStatus = {
+	exitCode: 0,
+	stdout: JSON.stringify({
+		schema_version: 1,
+		ok: true,
+		state: "ready",
+		lane: { selected: "environment-injected-op", status: "ready" },
+		checks: {
+			token_file: { status: "ready" },
+			op: { status: "ready" },
+			token: { status: "ready" },
+			vault_scope: { status: "ready", visible_count: 1 },
+			profile_policy: { status: "ready" },
+		},
+		next_action: "rerun-confidential-command",
+	}),
+	stderr: "",
+} as const satisfies AuthTokenSupervisorResult;
 
 // =========================================================================
 // R27 auth repair surface (auth plan 2026-07-21-003 U3a; ADR 0028).
@@ -159,9 +195,224 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 				(entry) => entry.continuation.next_action_id,
 			),
 		);
-		for (const subcommand of BROWSER_USE_AUTH_SUBCOMMANDS) {
+		for (const subcommand of BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS) {
 			expect(tableIds.has(subcommand)).toBe(true);
 		}
+	});
+});
+
+describe("ADR 0030 token lifecycle commands", () => {
+	test("install-token --stdin delegates token input to the native supervisor", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const runtime = supervisorRuntime(
+			{
+				exitCode: 0,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: true,
+					state: "installed",
+					next_action: "auth-status",
+				}),
+				stderr: "",
+			},
+			calls,
+		);
+		const result = await runForTest(
+			["auth", "install-token", "--stdin", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([
+			{ mode: "install", input: "stdin", replace: false },
+		]);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({ status: "installed" });
+		expect(envelope.continuation.next_action_id).toBe("auth-status");
+	});
+
+	test("install-token defaults to a hidden prompt and supports atomic replacement", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const runtime = supervisorRuntime(
+			{
+				exitCode: 0,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: true,
+					state: "replaced",
+					next_action: "auth-status",
+				}),
+				stderr: "",
+			},
+			calls,
+		);
+		const result = await runForTest(
+			["auth", "install-token", "--replace", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([
+			{ mode: "install", input: "prompt", replace: true },
+		]);
+		expect(result.stdout).not.toContain("OP_SERVICE_ACCOUNT_TOKEN");
+		expect(result.stderr).toBe("");
+	});
+
+	test("token argv and ambient token env are rejected before supervisor or stdin reads", async () => {
+		let supervisorCalls = 0;
+		let stdinReads = 0;
+		const runtime = makeRuntime({
+			env: { OP_SERVICE_ACCOUNT_TOKEN: "AUTH_SENTINEL_9f31" },
+			readStdin: async () => {
+				stdinReads += 1;
+				throw new Error("stdin must remain unread");
+			},
+			runAuthTokenSupervisor: async () => {
+				supervisorCalls += 1;
+				return healthyStatus;
+			},
+		});
+		const ambient = await runForTest(
+			["auth", "install-token", "--stdin", "--json"],
+			runtime,
+		);
+		expect(ambient.exitCode).toBe(20);
+		expect(supervisorCalls).toBe(0);
+		expect(stdinReads).toBe(0);
+		expect(ambient.stdout + ambient.stderr).not.toContain("AUTH_SENTINEL_9f31");
+
+		const argv = await runForTest(
+			["auth", "install-token", "--token", "AUTH_SENTINEL_argv", "--json"],
+			supervisorRuntime(healthyStatus),
+		);
+		expect(argv.exitCode).toBe(2);
+		expect(argv.stdout + argv.stderr).not.toContain("AUTH_SENTINEL_argv");
+	});
+
+	test("failed replacement stays blocked and names custody repair", async () => {
+		const result = await runForTest(
+			["auth", "install-token", "--stdin", "--replace", "--json"],
+			supervisorRuntime({
+				exitCode: 20,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: false,
+					state: "blocked",
+					cause: "invalid-service-account",
+					next_action: "repair-token-custody",
+				}),
+				stderr: "",
+			}),
+		);
+		expect(result.exitCode).toBe(20);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "blocked",
+			blocked_cause: "invalid-service-account",
+		});
+		expect(envelope.continuation.next_action_id).toBe("repair-token-custody");
+	});
+
+	test("remove-token targets native custody and retains remote revocation as next action", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "remove-token", "--json"],
+			supervisorRuntime(
+				{
+					exitCode: 0,
+					stdout: JSON.stringify({
+						schema_version: 1,
+						ok: true,
+						state: "removed",
+						next_action: "revoke-service-account-token-remotely",
+						remote_authority: "may-remain-live",
+					}),
+					stderr: "",
+				},
+				calls,
+			),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([{ mode: "remove" }]);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.continuation.next_action_id).toBe(
+			"revoke-service-account-token-remotely",
+		);
+		expect(result.stdout).toContain("may-remain-live");
+	});
+
+	test("status --json projects every secret-free admission gate", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			supervisorRuntime(healthyStatus, calls),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([{ mode: "status" }]);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation).toEqual({
+			status: "ready",
+			detail: {
+				lane: { selected: "environment-injected-op", status: "ready" },
+				checks: {
+					token_file: { status: "ready" },
+					op: { status: "ready" },
+					token: { status: "ready" },
+					vault_scope: { status: "ready", visible_count: 1 },
+					profile_policy: { status: "ready" },
+				},
+			},
+		});
+		expect(envelope.continuation.next_action_id).toBe(
+			"rerun-confidential-command",
+		);
+	});
+
+	test("status allowlists native fields and never forwards native stderr", async () => {
+		const sentinel = "NATIVE_OUTPUT_SENTINEL_b871";
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			supervisorRuntime({
+				...healthyStatus,
+				stdout: JSON.stringify({
+					...JSON.parse(healthyStatus.stdout),
+					debug: sentinel,
+				}),
+				stderr: sentinel,
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout + result.stderr).not.toContain(sentinel);
+	});
+
+	test("unsafe token custody blocks with exactly one repair action", async () => {
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			supervisorRuntime({
+				exitCode: 20,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: false,
+					state: "blocked",
+					cause: "token-unsafe",
+					lane: { selected: "environment-injected-op", status: "blocked" },
+					checks: {
+						token_file: { status: "blocked", cause: "token-unsafe" },
+						op: { status: "unproven" },
+						token: { status: "unproven" },
+						vault_scope: { status: "unproven" },
+						profile_policy: { status: "unproven" },
+					},
+					next_action: "repair-token-custody",
+				}),
+				stderr: "",
+			}),
+		);
+		expect(result.exitCode).toBe(20);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.continuation.next_action_id).toBe("repair-token-custody");
+		expect(
+			(parseJson(result.stdout).runtime_actions as unknown[]).length,
+		).toBe(1);
 	});
 });
 
@@ -184,7 +435,7 @@ describe("native capability absent (the default runtime, ADR 0028)", () => {
 				blocked_cause: "missing-token",
 			});
 			expect(envelope.continuation.next_action_id).toBe(
-				"acquire-native-capability",
+				"install-token",
 			);
 		});
 	}
@@ -199,7 +450,7 @@ describe("native capability absent (the default runtime, ADR 0028)", () => {
 			`contract=${BROWSER_USE_AUTH_READINESS_CONTRACT_ID}`,
 		);
 		expect(result.stdout).toContain("action=repair-vault-grant");
-		expect(result.stdout).toContain("continuation=acquire-native-capability");
+		expect(result.stdout).toContain("continuation=install-token");
 		expect(result.stdout).toContain("status=native-capability-absent");
 	});
 });
@@ -239,7 +490,7 @@ describe("enroll-browser-automation-token over an injected port", () => {
 			detail: { rejection_code: "token-revoked" },
 		});
 		expect(envelope.continuation.next_action_id).toBe(
-			"acquire-native-capability",
+			"install-token",
 		);
 	});
 });
@@ -298,7 +549,7 @@ describe("repair-vault-grant over an injected port (R8)", () => {
 			blocked_cause: "missing-token",
 		});
 		expect(envelope.continuation.next_action_id).toBe(
-			"enroll-browser-automation-token",
+			"install-token",
 		);
 	});
 });

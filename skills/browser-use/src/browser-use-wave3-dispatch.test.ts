@@ -149,6 +149,32 @@ function readOnlyRunbook(): BrowserUseRunbook {
 	};
 }
 
+function confidentialRunbook(): BrowserUseRunbook {
+	return {
+		contract: "browser-use.runbook",
+		schema_version: "2",
+		service_id: "oncore",
+		flow_id: "confidential-login",
+		flow_name: "confidential-login",
+		version: "1",
+		summary: "Confidential login refusal fixture.",
+		allowed_origins: ["https://example.test"],
+		inputs: [],
+		steps: [
+			{
+				kind: "fill",
+				target: { role: "textbox", name: "Password" },
+				sensitivity: "confidential",
+				item_binding: "oncore_password",
+				postcondition: {
+					kind: "element-visible",
+					selector: ".signed-in",
+				},
+			},
+		],
+	};
+}
+
 // A runtime replaying a scripted adapter response sequence over the real store.
 function scriptedRuntime(
 	env: Record<string, string | undefined>,
@@ -451,6 +477,59 @@ describe("runbook family — live (U4 wiring)", () => {
 		const loaded = await loadSharedRun(store.deps, "run-runbook-1");
 		expect(loaded.ok).toBe(true);
 		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+	});
+
+	test("unenrolled confidential runbook refusal chains through install-token and status", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, confidentialRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-runbook-unenrolled",
+		);
+		const { runtime } = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "confidential-login",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "runbook_confidential_native_capability_absent",
+		});
+		expect(result.stdout).toContain("browser-use auth install-token");
+		expect(result.stdout).toContain("browser-use auth status --json");
 	});
 
 	test("runbook run on a chrome handoff fails closed, never substitutes the lane (R11)", async () => {

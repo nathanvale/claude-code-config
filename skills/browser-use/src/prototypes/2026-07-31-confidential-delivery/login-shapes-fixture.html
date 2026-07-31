@@ -31,7 +31,7 @@
 
   <!-- Shape 4: fields inside a same-origin iframe -->
   <fieldset id="s4"><legend>4. iframe-embedded</legend>
-    <iframe id="s4frame" style="width:100%;height:90px;border:1px solid #ccc"></iframe>
+    <iframe id="s4frame" title="iframe-embedded login shape" style="width:100%;height:90px;border:1px solid #ccc"></iframe>
   </fieldset>
 
   <!-- Shape 5: fields inside an open shadow root -->
@@ -59,7 +59,7 @@
       input.addEventListener('change', commit);
     }
     // wire shapes 1-3 + 6 (light DOM)
-    document.querySelectorAll('#s1 input, #s2 input, #s3 input, #s6 input').forEach(i => wire(i, i.dataset.shape, i.dataset.role));
+    document.querySelectorAll('#s1 input, #s2 input, #s3 input, #s6 input').forEach(i => { wire(i, i.dataset.shape, i.dataset.role); });
 
     // shape 4: iframe (same-origin srcdoc)
     const frame = document.getElementById('s4frame');

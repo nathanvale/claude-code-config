@@ -411,7 +411,10 @@ function buildCrashContext(
 		target: crashVerifiedTarget(runId),
 		deliver: hook,
 		reproveTarget: crashReproveOk,
-		field_by_ref: { "@e2": "password", "@e3": "otp-current" },
+		field_by_binding_slug: {
+			oncore_password: "password",
+			oncore_otp_current: "otp-current",
+		},
 		in_sensitive_interval: true,
 	});
 }
@@ -554,6 +557,7 @@ describe("value-aware leak harness (AE5)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -568,6 +572,7 @@ describe("value-aware leak harness (AE5)", () => {
 				{
 					kind: "fill",
 					ref: "@e3",
+					item_binding: "oncore_otp_current",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
