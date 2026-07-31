@@ -124,27 +124,7 @@ function scriptedObserver(
 	screens: readonly BrowserUseAccessibilitySnapshot[],
 	activated: number[] = [],
 ): BrowserUseCdpObserver {
-	let index = 0;
-	const current = (): BrowserUseAccessibilitySnapshot => {
-		const snapshot = screens[Math.min(index, screens.length - 1)];
-		if (snapshot === undefined) throw new Error("scripted observer needs a screen");
-		return snapshot;
-	};
-	return {
-		snapshot: async () => ({
-			ok: true,
-			snapshot: current(),
-		}),
-		probeNode: async () => ({
-			ok: true,
-			probe: { visible: true, operable: true },
-		}),
-		activateControl: async ({ backend_node_id }) => {
-			activated.push(backend_node_id);
-			index += 1;
-			return { ok: true };
-		},
-	};
+	return statefulObserver(screens, activated).observer;
 }
 
 function statefulObserver(

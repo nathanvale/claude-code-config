@@ -17,7 +17,11 @@ let package = Package(
     targets: [
         .target(
             name: "BrowserUseEnvironmentAuth",
-            sources: ["EnvironmentOp.swift", "TokenCustody.swift"],
+            sources: [
+                "DeliveryOriginSafety.swift",
+                "EnvironmentOp.swift",
+                "TokenCustody.swift",
+            ],
             linkerSettings: [.linkedFramework("CryptoKit")]
         ),
         .executableTarget(

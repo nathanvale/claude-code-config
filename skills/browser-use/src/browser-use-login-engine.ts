@@ -417,7 +417,12 @@ export async function runBrowserUseLoginEngine(
 		if (!observed.ok) {
 			return failed("blocked", "target-proof-invalid", trace);
 		}
-		const currentFingerprint = fingerprint(observed.snapshot);
+		// Serialized only when a prior submit set a fingerprint to compare
+		// against, or when a submit is about to record one (below).
+		const currentFingerprint =
+			activationFingerprint === undefined
+				? undefined
+				: fingerprint(observed.snapshot);
 		if (signedIn(observed.snapshot)) {
 			return { ok: true, signed_in: true, trace };
 		}
@@ -460,7 +465,8 @@ export async function runBrowserUseLoginEngine(
 				backend_node_id: classification.control_node.backend_node_id,
 			});
 			deliveredBackendNodeIds.clear();
-			activationFingerprint = currentFingerprint;
+			activationFingerprint =
+				currentFingerprint ?? fingerprint(observed.snapshot);
 			continue;
 		}
 
