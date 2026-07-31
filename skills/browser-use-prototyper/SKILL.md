@@ -1,6 +1,6 @@
 ---
 name: browser-use-prototyper
-description: "Falsify a plan's risky browser mechanics with a throwaway harness spike before implementing. Use before or during ce-plan for CDP writes, login/auth, credential delivery, adapter/lane behavior, or timesheet/form fills — prove it works on real Chrome first, don't discover after hours of build that it doesn't."
+description: "Falsify a plan's risky browser mechanics with a throwaway harness spike before implementing. Use before or during ce-plan for CDP writes, login/auth, credential delivery, adapter/lane behavior, or form/timesheet fills — prove it on real Chrome first."
 role: tool-workflow
 ---
 
@@ -22,7 +22,7 @@ adapter/lane behavior, target discovery, or a form/timesheet fill.
 2. Attach the real harness: `browser-connect connect <adapter> --json` for the
    verified endpoint; drive through the `browser-use` CLI or a flat-session CDP
    client. Never a convention port, never the real default Chrome.
-3. Spike one question at a time in `skills/browser-use/src/prototypes/<date-slug>/`,
+3. Spike one question at a time in `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/`,
    secret-free, against an **http-served** fixture.
 4. Write a `findings.md` receipt (pass/fail + exact call sequence per question).
    That receipt is `ce-plan`'s single source.

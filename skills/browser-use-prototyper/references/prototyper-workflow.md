@@ -12,7 +12,7 @@ fixtures, throwaway) apply throughout.
    `data.endpoint.ws`. Drive through the `browser-use` CLI, or a flat-session
    CDP client (below) against that endpoint. The endpoint travels in the
    envelope — never hardcode `9222`.
-3. **Serve the fixture.** Put HTML under `skills/browser-use/src/prototypes/<slug>/`
+3. **Serve the fixture.** Put HTML under `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/`
    and serve it over `http://localhost:<port>` (Bun static server, below). Open
    it in Agent Chrome with the adapter, or `browser-connect run`.
 4. **Falsify.** Drive the mechanic; assert the exact symptom (not "didn't
@@ -94,7 +94,7 @@ Reusable scaffolding so a spike starts in minutes:
 
 ## Auto-capture + graduation
 
-- **Save** each spike to `skills/browser-use/src/prototypes/<date-slug>/` with its
+- **Save** each spike to `skills/browser-use/src/prototypes/YYYY-MM-DD-<question-slug>/` with its
   `findings.md`.
 - **The findings note is `ce-plan`'s single source** — one note per prototype
   session, folded in wholesale, so the plan cites proven receipts and drops
