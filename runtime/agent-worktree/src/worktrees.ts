@@ -681,18 +681,7 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 	const prBranch = options.pr === undefined ? undefined : `pr-${options.pr}`;
 	const requestedRef = prBranch ?? options.ref;
 	if (!requestedRef) {
-		return {
-			action: "attach",
-			changedState: "none",
-			preview: false,
-			changes: [],
-			nextSafeAction: "change_input",
-			reason: "ref_not_found",
-			recovery: buildRecoveryPlan({
-				changedState: "none",
-				retrySafety: "same_input_unsafe",
-			}),
-		};
+		return refNotFoundRefusal("attach");
 	}
 	const targetPath = join(
 		discovery.mainOwnerRoot ?? discovery.gitRoot ?? options.cwd,
@@ -821,18 +810,7 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 		requestedRef,
 	);
 	if (!resolved) {
-		return {
-			action: "attach",
-			changedState: "none",
-			preview: false,
-			changes: [],
-			nextSafeAction: "change_input",
-			reason: "ref_not_found",
-			recovery: buildRecoveryPlan({
-				changedState: "none",
-				retrySafety: "same_input_unsafe",
-			}),
-		};
+		return refNotFoundRefusal("attach");
 	}
 	const resolvedRef = resolved.objectId;
 	if (resolved.mode === "branch") {
@@ -1461,18 +1439,11 @@ async function resolveAttachRef(
 	if (branch.ok) {
 		return { mode: "branch", objectId: branch.stdout.trim() };
 	}
-	const tag = await run(
-		["git", "show-ref", "--verify", "--hash", `refs/tags/${ref}`],
-		{ cwd },
-	);
 	const commit = await run(["git", "rev-parse", "--verify", `${ref}^{commit}`], {
 		cwd,
 	});
 	if (!commit.ok) return undefined;
-	return {
-		mode: "detached",
-		objectId: commit.stdout.trim() || tag.stdout.trim(),
-	};
+	return { mode: "detached", objectId: commit.stdout.trim() };
 }
 
 function findBranchCheckoutPath(
@@ -1494,6 +1465,21 @@ function isBranchCheckedOutElsewhere(
 	currentPath: string | undefined,
 ): boolean {
 	return findBranchCheckoutPath(discovery, branch, currentPath) !== undefined;
+}
+
+function refNotFoundRefusal(action: "attach" | "create"): LifecycleResult {
+	return {
+		action,
+		changedState: "none",
+		preview: false,
+		changes: [],
+		nextSafeAction: "change_input",
+		reason: "ref_not_found",
+		recovery: buildRecoveryPlan({
+			changedState: "none",
+			retrySafety: "same_input_unsafe",
+		}),
+	};
 }
 
 function isolationRefusal(action: "attach" | "create"): LifecycleResult {
