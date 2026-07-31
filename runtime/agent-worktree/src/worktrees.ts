@@ -668,6 +668,7 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 export async function attachWorktree(options: DiscoverRepoOptions & {
 	ref?: string;
 	pr?: number;
+	track?: boolean;
 	dryRun: boolean;
 	runId: string;
 	now?: () => number;
@@ -699,6 +700,18 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 		sanitizeBranchPath(requestedRef),
 	);
 	if (prBranch) {
+		if (options.track) {
+			return attachTrackedPullRequest({
+				run,
+				discovery,
+				cwd: discovery.gitRoot ?? options.cwd,
+				pr: options.pr as number,
+				targetPath,
+				dryRun: options.dryRun,
+				runId: options.runId,
+				now: options.now,
+			});
+		}
 		const existingCheckoutPath = findBranchCheckoutPath(discovery, prBranch);
 		if (existingCheckoutPath) {
 			return branchCheckoutRefusal("attach", existingCheckoutPath);
@@ -899,6 +912,156 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 		targetPath,
 		mode: resolved.mode,
 	};
+}
+
+async function attachTrackedPullRequest(input: {
+	run: GitRunner;
+	discovery: RepoDiscovery;
+	cwd: string;
+	pr: number;
+	targetPath: string;
+	dryRun: boolean;
+	runId: string;
+	now?: () => number;
+}): Promise<LifecycleResult> {
+	const changes = [
+		`attach detached worktree ${input.targetPath}`,
+		`checkout pull request ${input.pr} with gh for push tracking`,
+	];
+	if (input.dryRun) {
+		return {
+			action: "attach",
+			changedState: "none",
+			preview: true,
+			changes,
+			nextSafeAction: "attach",
+			recovery: buildRecoveryPlan({ changedState: "none" }),
+			targetPath: input.targetPath,
+			mode: "pr",
+		};
+	}
+
+	const addResult = await input.run(
+		["git", "worktree", "add", "--detach", input.targetPath],
+		{ cwd: input.cwd },
+	);
+	if (!addResult.ok) {
+		const failure = classifyWorktreeAddFailure(addResult);
+		return failedLifecycle({
+			command: "attach",
+			storeRoot: input.discovery.storeRoot,
+			runId: input.runId,
+			stepId: "attach_worktree",
+			changedState: "none",
+			whatHappened: failure.whatHappened,
+			whatChanged: [],
+			reason: failure.reason,
+			retrySafety: failure.retrySafety,
+			handoffReason: failure.handoffReason,
+			existingCheckoutPath: failure.existingCheckoutPath,
+			now: input.now,
+		});
+	}
+
+	let checkoutResult: GitRunResult;
+	try {
+		checkoutResult = await input.run(["gh", "pr", "checkout", String(input.pr)], {
+			cwd: input.targetPath,
+		});
+	} catch (error) {
+		return trackedCheckoutFailure(input, isMissingExecutableError(error));
+	}
+	if (!checkoutResult.ok) {
+		return trackedCheckoutFailure(
+			input,
+			isMissingExecutableResult(checkoutResult),
+		);
+	}
+
+	const runRef = await writeRun(input.discovery.storeRoot, {
+		runId: input.runId,
+		command: "attach",
+		now: input.now,
+		steps: [
+			{
+				id: "attach_worktree",
+				action: "attach detached worktree",
+				status: "completed",
+				changedState: "complete",
+			},
+			{
+				id: "checkout_pr",
+				action: "checkout pull request with gh",
+				status: "completed",
+				changedState: "complete",
+			},
+		],
+	});
+	await registerCodexProject(input.targetPath).catch(() => {});
+	return {
+		action: "attach",
+		changedState: "complete",
+		preview: false,
+		runRef,
+		changes,
+		nextSafeAction: "status",
+		recovery: buildRecoveryPlan({ changedState: "complete" }),
+		targetPath: input.targetPath,
+		mode: "pr",
+	};
+}
+
+function trackedCheckoutFailure(
+	input: {
+		discovery: RepoDiscovery;
+		pr: number;
+		targetPath: string;
+		runId: string;
+		now?: () => number;
+	},
+	missingGh: boolean,
+): Promise<LifecycleResult> {
+	return failedLifecycle({
+		command: "attach",
+		storeRoot: input.discovery.storeRoot,
+		runId: input.runId,
+		stepId: "checkout_pr",
+		changedState: "partial",
+		whatHappened: missingGh
+			? "GitHub CLI is unavailable for push-tracking checkout."
+			: "GitHub CLI could not check out the pull request.",
+		whatChanged: [`Created detached worktree at ${input.targetPath}.`],
+		reason: missingGh ? "gh_not_found" : "gh_pr_checkout_failed",
+		retrySafety: "inspect_first",
+		handoffReason: "partial_mutation",
+		priorSteps: [
+			{
+				id: "attach_worktree",
+				action: "attach detached worktree",
+				status: "completed",
+				changedState: "complete",
+			},
+		],
+		now: input.now,
+	});
+}
+
+function isMissingExecutableError(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "ENOENT"
+	);
+}
+
+function isMissingExecutableResult(result: GitRunResult): boolean {
+	return (
+		result.code === 127 ||
+		/\bENOENT\b|command not found|executable not found|not found in .*PATH/i.test(
+			`${result.stderr}\n${result.stdout}`,
+		)
+	);
 }
 
 /**

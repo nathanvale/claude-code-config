@@ -36,6 +36,7 @@ import {
 	AGENT_WORKTREE_COMMANDS,
 	type AgentWorktreeChangedState,
 	type AgentWorktreeCommand,
+	type AgentWorktreeDiagnosticCode,
 } from "./model.ts";
 import {
 	PROJECTION_FIELD_SETS,
@@ -99,6 +100,8 @@ export interface ParsedInvocation {
 	base?: string;
 	/** Pull request number for attach. */
 	pr?: number;
+	/** Use gh checkout for push-tracking PR attach. */
+	track: boolean;
 	/** Output limit. */
 	limit?: number;
 	/** Projection field sets. */
@@ -140,7 +143,7 @@ type CommandResult =
 	| {
 			ok: false;
 			exitCode: 1 | 2;
-			code: "usage_error" | "runtime_error";
+			code: AgentWorktreeDiagnosticCode;
 			message: string;
 			action: string;
 			changedState: AgentWorktreeChangedState;
@@ -363,6 +366,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let preview = false;
 	let force = false;
 	let deleteBranch = false;
+	let track = false;
 	const usedFlags = new Set<string>();
 	const fail = (message: string): ParsedInvocation => ({
 		command,
@@ -373,6 +377,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		preview,
 		force,
 		deleteBranch,
+		track,
 		ref,
 		base,
 		pr,
@@ -398,6 +403,9 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			usedFlags.add(arg);
 		} else if (arg === "--delete-branch") {
 			deleteBranch = true;
+			usedFlags.add(arg);
+		} else if (arg === "--track") {
+			track = true;
 			usedFlags.add(arg);
 		} else if (
 			arg === "--repo" ||
@@ -468,6 +476,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		preview,
 		force,
 		deleteBranch,
+		track,
 		ref,
 		base,
 		pr,
@@ -562,6 +571,9 @@ export async function runCommand(
 				if (ref && invocation.pr !== undefined) {
 					return usageFailure("attach accepts either <ref> or --pr, not both.");
 				}
+				if (invocation.track && invocation.pr === undefined) {
+					return usageFailure("attach --track needs --pr <n>.");
+				}
 				if (!ref && invocation.pr === undefined) {
 					return usageFailure("attach needs <ref> or --pr <n>.");
 				}
@@ -573,6 +585,7 @@ export async function runCommand(
 					run: runtime.run,
 					ref,
 					pr: invocation.pr,
+					track: invocation.track,
 					dryRun: invocation.dryRun,
 					runId,
 					now: runtime.now,
@@ -724,11 +737,12 @@ function runtimeFailure(
 	action: string,
 	changedState: AgentWorktreeChangedState,
 	data?: Record<string, unknown>,
+	code: AgentWorktreeDiagnosticCode = "runtime_error",
 ): CommandResult {
 	return {
 		ok: false,
 		exitCode: 1,
-		code: "runtime_error",
+		code,
 		message,
 		action,
 		changedState,
@@ -749,13 +763,31 @@ function lifecycleCommandResult(
 			changedState: result.changedState,
 		};
 	}
+	const diagnostic =
+		result.reason === "gh_not_found"
+			? {
+					code: "gh_not_found" as const,
+					action:
+						"Install GitHub CLI (gh), then inspect the created worktree before retrying.",
+				}
+			: result.reason === "gh_pr_checkout_failed"
+				? {
+						code: "gh_pr_checkout_failed" as const,
+						action:
+							"Inspect the failure ref and GitHub CLI authentication or pull request state before retrying.",
+					}
+				: {
+						code: "runtime_error" as const,
+						action: `Follow lifecycle recovery action: ${result.nextSafeAction}.`,
+					};
 	return runtimeFailure(
 		result.reason
 			? `Lifecycle ${result.action} did not complete: ${result.reason}.`
 			: `Lifecycle ${result.action} did not complete.`,
-		`Follow lifecycle recovery action: ${result.nextSafeAction}.`,
+		diagnostic.action,
 		result.changedState,
 		data,
+		diagnostic.code,
 	);
 }
 

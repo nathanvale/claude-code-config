@@ -547,6 +547,153 @@ branch refs/heads/feat/x
 			]);
 		});
 
+		test("tracked PR attach creates detached then checks out through gh", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-track-"));
+			const target = join(root, ".worktrees", "pr-42");
+			const calls: string[] = [];
+			const run = fakeGitRunner({
+				...mainRepoGitOutputs(root),
+				[`git worktree add --detach ${target}`]: "",
+				["gh pr checkout 42"]: "",
+			});
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 42,
+				track: true,
+				dryRun: false,
+				runId: "attach/track",
+				run: async (args, options) => {
+					calls.push(`${options.cwd}: ${args.join(" ")}`);
+					return run(args, options);
+				},
+			});
+
+			expect(result).toMatchObject({
+				changedState: "complete",
+				mode: "pr",
+				targetPath: target,
+			});
+			expect(calls).toContain(`${root}: git worktree add --detach ${target}`);
+			expect(calls).toContain(`${target}: gh pr checkout 42`);
+			expect(calls.findIndex((call) => call.includes("worktree add"))).toBeLessThan(
+				calls.findIndex((call) => call.includes("gh pr checkout")),
+			);
+			const stored = await createFileStore(
+				join(root, ".agent-worktree"),
+			).readRun("attach_track");
+			expect(stored?.steps.map((step) => step.id)).toEqual([
+				"attach_worktree",
+				"checkout_pr",
+			]);
+		});
+
+		test("missing gh returns a typed degradation while pure-git PR mode stays available", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-gh-missing-"));
+			const trackedTarget = join(root, ".worktrees", "pr-42");
+			const pureTarget = join(root, ".worktrees", "pr-43");
+			const baseRun = fakeGitRunner({
+				...mainRepoGitOutputs(root),
+				[`git worktree add --detach ${trackedTarget}`]: "",
+				["git fetch origin pull/43/head:pr-43"]: "",
+				[`git worktree add ${pureTarget} pr-43`]: "",
+			});
+			const run: typeof baseRun = async (args, options) => {
+				if (args[0] === "gh") {
+					throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+				}
+				return baseRun(args, options);
+			};
+
+			const tracked = await attachWorktree({
+				cwd: root,
+				pr: 42,
+				track: true,
+				dryRun: false,
+				runId: "attach/gh-missing",
+				run,
+			});
+			const pureGit = await attachWorktree({
+				cwd: root,
+				pr: 43,
+				dryRun: false,
+				runId: "attach/pure-git",
+				run,
+			});
+
+			expect(tracked).toMatchObject({
+				changedState: "partial",
+				reason: "gh_not_found",
+				failureRef: {
+					kind: "failure",
+					id: "attach_gh-missing/checkout_pr",
+				},
+				recovery: {
+					nextActionId: "inspect_failure_ref",
+					choices: [
+						expect.objectContaining({
+							retrySafety: "inspect_first",
+						}),
+					],
+				},
+			});
+			expect(pureGit).toMatchObject({
+				changedState: "complete",
+				mode: "pr",
+				resolvedRef: "pr-43",
+				targetPath: pureTarget,
+			});
+		});
+
+		test("gh checkout failure records partial state at its own step", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-gh-fail-"));
+			const target = join(root, ".worktrees", "pr-7");
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 7,
+				track: true,
+				dryRun: false,
+				runId: "attach/gh-fail",
+				run: fakeGitRunner({
+					...mainRepoGitOutputs(root),
+					[`git worktree add --detach ${target}`]: "",
+				}),
+			});
+
+			expect(result).toMatchObject({
+				changedState: "partial",
+				reason: "gh_pr_checkout_failed",
+				failureRef: {
+					kind: "failure",
+					id: "attach_gh-fail/checkout_pr",
+				},
+				recovery: {
+					nextActionId: "inspect_failure_ref",
+					choices: [
+						expect.objectContaining({
+							retrySafety: "inspect_first",
+						}),
+					],
+				},
+			});
+			const stored = await createFileStore(
+				join(root, ".agent-worktree"),
+			).readRun("attach_gh-fail");
+			expect(stored?.steps).toEqual([
+				expect.objectContaining({
+					id: "attach_worktree",
+					status: "completed",
+					changedState: "complete",
+				}),
+				expect.objectContaining({
+					id: "checkout_pr",
+					status: "failed",
+					changedState: "partial",
+				}),
+			]);
+		});
+
 		test("PR fetch failure records a typed step-scoped no-change failure", async () => {
 			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-fetch-"));
 

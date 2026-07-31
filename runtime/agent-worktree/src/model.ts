@@ -225,6 +225,8 @@ export const AGENT_WORKTREE_LIFECYCLE_REASONS = [
 	"checked_out_elsewhere",
 	"dirty",
 	"evidence_unreliable",
+	"gh_not_found",
+	"gh_pr_checkout_failed",
 	"isolation_unavailable",
 	"merged",
 	"missing_force",
@@ -364,6 +366,8 @@ export const AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY =
  * Behavior-bearing units will expand this list as recovery paths land.
  */
 export const AGENT_WORKTREE_DIAGNOSTIC_CODES = [
+	"gh_not_found",
+	"gh_pr_checkout_failed",
 	"usage_error",
 	"runtime_error",
 ] as const;

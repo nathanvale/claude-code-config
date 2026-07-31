@@ -9,6 +9,7 @@ import type { AgentWorktreeCliRuntime } from "../src/cli.ts";
 import { agentWorktreeContracts } from "../src/command-contract.ts";
 import {
 	AGENT_WORKTREE_CONTRACT_ID,
+	AGENT_WORKTREE_DIAGNOSTIC_CODES,
 	AGENT_WORKTREE_HUMAN_HANDOFF_REASONS,
 	AGENT_WORKTREE_LIFECYCLE_REASONS,
 } from "../src/model.ts";
@@ -51,13 +52,15 @@ describe("agent-worktree CLI surface", () => {
 		expect(Object.keys(agentWorktreeContracts.create.flags)).toContain("--base");
 	});
 
-	test("attach advertises positional ref, PR selector, and dry-run", () => {
+	test("attach advertises positional ref, PR selector, tracking, and dry-run", () => {
 		const help = renderCommandUsage(agentWorktreeContracts.attach);
 		const flags = Object.keys(agentWorktreeContracts.attach.flags);
 
 		expect(help).toContain("agent-worktree attach <ref> --json");
 		expect(help).toContain("agent-worktree attach --pr <n> --json");
+		expect(help).toContain("agent-worktree attach --pr <n> --track --json");
 		expect(flags).toContain("--pr");
+		expect(flags).toContain("--track");
 		expect(flags).toContain("--dry-run");
 		expect(flags).not.toContain("--ref");
 	});
@@ -67,6 +70,8 @@ describe("agent-worktree CLI surface", () => {
 			expect.arrayContaining([
 				"branch_already_checked_out",
 				"branch_already_exists",
+				"gh_not_found",
+				"gh_pr_checkout_failed",
 				"isolation_unavailable",
 				"pr_fetch_failed",
 				"ref_not_found",
@@ -76,6 +81,9 @@ describe("agent-worktree CLI surface", () => {
 		);
 		expect(AGENT_WORKTREE_HUMAN_HANDOFF_REASONS).toContain(
 			"isolation_unavailable",
+		);
+		expect(AGENT_WORKTREE_DIAGNOSTIC_CODES).toEqual(
+			expect.arrayContaining(["gh_not_found", "gh_pr_checkout_failed"]),
 		);
 	});
 
@@ -100,6 +108,58 @@ describe("agent-worktree CLI surface", () => {
 			target_path: join(root, ".worktrees", "feat-existing"),
 			mode: "branch",
 		});
+	});
+
+	test("tracked PR missing gh emits its typed code and install hint", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-track-missing-"));
+		const target = join(root, ".worktrees", "pr-42");
+		const baseRun = repoRuntime(root, {
+			...mainRepoGitOutputs(root),
+			[`git worktree add --detach ${target}`]: "",
+		}).run;
+		if (!baseRun) throw new Error("Expected repo runtime runner.");
+
+		const { exitCode, envelope } = await runJsonCli(
+			["attach", "--pr", "42", "--track", "--repo", root, "--json"],
+			{
+				runtime: {
+					cwd: () => root,
+					now: () => 1,
+					run: async (args, options) => {
+						if (args[0] === "gh") {
+							throw Object.assign(new Error("spawn gh ENOENT"), {
+								code: "ENOENT",
+							});
+						}
+						return baseRun(args, options);
+					},
+				},
+			},
+		);
+
+		expect(exitCode).toBe(1);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.code).toBe("gh_not_found");
+		expect(
+			(envelope.error?.hint as { summary?: string } | undefined)?.summary,
+		).toContain("Install GitHub CLI");
+		expect(envelope.data).toMatchObject({
+			action: "attach",
+			changed_state: "partial",
+			reason: "gh_not_found",
+			next_safe_action: "inspect_failure_ref",
+		});
+	});
+
+	test("attach rejects --track without a pull request", async () => {
+		const envelope = await expectUsageError([
+			"attach",
+			"feat/existing",
+			"--track",
+			"--json",
+		]);
+
+		expect(envelope.error?.message).toContain("--track needs --pr");
 	});
 
 	test("attach linked-context refusal matches doctor isolation evidence", async () => {

@@ -80,6 +80,14 @@ const prFlag = {
 	},
 } as const;
 
+const trackFlag = {
+	"--track": {
+		type: "boolean",
+		description:
+			"Use GitHub CLI checkout inside a detached worktree for push tracking.",
+	},
+} as const;
+
 const dryRunFlag = {
 	"--dry-run": {
 		type: "boolean",
@@ -229,6 +237,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 			usage: [
 				"agent-worktree attach <ref> --json",
 				"agent-worktree attach --pr <n> --json",
+				"agent-worktree attach --pr <n> --track --json",
 			],
 			json: true,
 			audience: "agent",
@@ -242,7 +251,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 				success: inspectBeforeMutating,
 				failure: inspectFailure,
 			},
-			flags: { ...commonWriteFlags, ...prFlag },
+			flags: { ...commonWriteFlags, ...prFlag, ...trackFlag },
 			exitCodes,
 		},
 		status: {
