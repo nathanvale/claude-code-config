@@ -488,7 +488,14 @@ describe("U7 operation success and transport", () => {
 			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
 			nativeResults: [
 				okCommand(JSON.stringify({ success: true, data: {} })),
-				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+				// Real adapter snapshot payload shape: {snapshot, refs}. The lane
+				// unwraps data.snapshot and discards refs (opaque-ref contract).
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root\nButton", refs: {} },
+					}),
+				),
 			],
 		});
 		const result = await runForTest(
@@ -509,6 +516,10 @@ describe("U7 operation success and transport", () => {
 		expect(json.data).toMatchObject({
 			adapter: "agent-browser",
 			snapshot: { text: "Root\nButton" },
+			// Native tab activation always carries the window-focus side effect,
+			// so successful agent-browser operates report focus even without
+			// --bring-to-front.
+			side_effects: { focus: true },
 		});
 		expect(calls.slice(1).map(commandVector)).toEqual([
 			[
@@ -581,6 +592,107 @@ describe("U7 operation success and transport", () => {
 		}
 	});
 
+	test("agent-browser snapshot-step failures after activation map fail-closed with the focus side effect", async () => {
+		// Activation succeeded (window focus already happened), then the snapshot
+		// step fails three ways: adapter failure envelope, unparsable stdout, and
+		// a success envelope whose data is not a string and has no string
+		// `snapshot` field (opaque-ref unwrap contract).
+		for (const { snapshotResult, message } of [
+			{
+				snapshotResult: okCommand(
+					JSON.stringify({ success: false, error: "tab t1 unavailable" }),
+				),
+			},
+			{
+				snapshotResult: {
+					exitCode: 0,
+					stdout: "not-json",
+					stderr: "",
+					timedOut: false,
+				},
+			},
+			{
+				snapshotResult: okCommand(
+					JSON.stringify({ success: true, data: { refs: {} } }),
+				),
+				message:
+					"The agent-browser snapshot call returned an unexpected payload shape.",
+			},
+		]) {
+			const { runtime, calls } = operationRuntime({
+				adapter: "agent-browser",
+				pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+				nativeResults: [
+					okCommand(JSON.stringify({ success: true, data: {} })),
+					snapshotResult,
+				],
+			});
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			const json = parseJson(result.stdout);
+			expect(json.error).toMatchObject({
+				code: "browser_operation_transport_failed",
+				...(message ? { message } : {}),
+			});
+			// Discovery + activation + snapshot: the snapshot spawn happened.
+			expect(calls).toHaveLength(3);
+			// Activation succeeded, so the failure envelope truthfully reports the
+			// window-focus side effect.
+			expect(json.data).toMatchObject({ side_effects: { focus: true } });
+			expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+		}
+	});
+
+	test("agent-browser maps an unstartable operation spawn to dependency-missing", async () => {
+		// Discovery (tab list) works; every subsequent native spawn throws, as a
+		// missing agent-browser binary would. The lane maps the thrown spawn to
+		// browser_operation_dependency_missing instead of leaking the throw.
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			env: {},
+			now: () => 2_000,
+			readTextFile: async (path) => {
+				if (path === "/h.json") {
+					return verifiedHandoffEnvelope((envelope) => {
+						envelope.data.attachment.adapter_id = "agent-browser";
+					});
+				}
+				throw enoent(path);
+			},
+			runCommand: async (call) => {
+				calls.push(call);
+				const vector = commandVector(call);
+				if (vector.includes("tab") && vector.includes("list")) {
+					return okCommand(
+						JSON.stringify({
+							success: true,
+							data: {
+								tabs: [
+									{ tabId: "t1", url: "https://example.com/app", title: "App" },
+								],
+							},
+						}),
+					);
+				}
+				throw new Error("spawn agent-browser ENOENT");
+			},
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(1);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_dependency_missing",
+		});
+		// Discovery plus the one activation spawn that threw.
+		expect(calls).toHaveLength(2);
+		expect([result.stdout, result.stderr].join("\n")).not.toContain("t1");
+	});
+
 	test("a malformed chrome page ref fails as a lane-honest transport failure", async () => {
 		const { runtime, calls } = operationRuntime({
 			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
@@ -614,6 +726,28 @@ describe("U7 operation success and transport", () => {
 			},
 		});
 		expect(calls).toHaveLength(1);
+	});
+
+	test("a discovered page with an empty-string id retains target-missing recovery", async () => {
+		// An empty id is not a usable adapter page handle: same fail-closed
+		// target-missing mapping as a page with no id at all, before any
+		// operation transport.
+		const { runtime, calls } = operationRuntime({
+			pages: [{ id: "", url: "https://example.com/app", title: "App" }],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "browser_operation_target_missing" },
+			continuation: {
+				next_action_id: "rerun_handoff_bound_target_discovery",
+			},
+		});
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toContain("list_pages");
 	});
 
 	test("snapshot emits normalized JSON for the selected Browser Target (AE7)", async () => {

@@ -82,14 +82,14 @@ import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
 //
 // `browser-use operate snapshot|screenshot|emulate` runs one authorized live
 // browser operation. The pipeline reads inputs, loads the Verified Handoff
-// Envelope binding, loads the selected-target context, resolves the operation
-// target, runs the envelope-derived mcporter transport (the operation args
-// carry the resolved pageId via --experimentalPageIdRouting; no select_page
-// step — selection state is process-local and meaningless on a fresh adapter
-// spawn), and emits a bounded result. --bring-to-front keeps its contract
-// meaning as an explicit select_page focus call before the operation. Every
-// failure mode bridges down into the operation failure taxonomy (handoff,
-// selection, discovery, transport, resolution).
+// Envelope binding, loads the selected-target context, resolves an opaque
+// adapter page ref, and dispatches per lane. chrome-devtools-mcp runs the
+// envelope-derived mcporter transport (the operation args carry an integer
+// pageId via --experimentalPageIdRouting; an explicit select_page call happens
+// only for --bring-to-front). agent-browser runs the native CLI transport
+// (tab activation then snapshot; activation carries the focus side effect).
+// Every failure mode bridges down into the operation failure taxonomy
+// (handoff, selection, discovery, transport, resolution).
 // ---------------------------------------------------------------------------
 
 const SNAPSHOT_MAX_BYTES = 64 * 1024;
@@ -266,6 +266,9 @@ export async function runOperate(input: {
 		...(operationInputs.inputs.viewport
 			? { viewport: operationInputs.inputs.viewport }
 			: {}),
+		// agent-browser native tab activation always carries the window-focus
+		// side effect, so focus is truthfully reported even without
+		// --bring-to-front.
 		focusSideEffect:
 			binding.context.handoff.adapter === "agent-browser" || bringToFront,
 	});
@@ -543,7 +546,7 @@ function operationTargetEntries(
 		.filter((page) => parseUrlSafe(page.url))
 		.map((page, index) => ({
 			candidate: toCandidate(page, index, targetEnvelopeId, true),
-			adapterPageRef: page.id,
+			adapterPageRef: page.id === "" ? undefined : page.id,
 		}));
 }
 
@@ -830,9 +833,10 @@ async function runAgentBrowserOperation(
 		return {
 			ok: false,
 			failure: {
-				...operationTransportExitedFailure(
-					"The agent-browser operation identifiers are unsafe.",
-				),
+				code: "browser_operation_transport_failed",
+				message: "The agent-browser operation identifiers are unsafe.",
+				actionId: "change_operation_input",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "change_input",
 			},
 			focus: false,
@@ -929,14 +933,27 @@ async function runAgentBrowserOperation(
 	if (!snapshot.ok) {
 		return { ok: false, failure: snapshot.failure, focus: true };
 	}
+	// agent-browser snapshot data is either a plain string or {snapshot, refs}.
+	const snapshotText =
+		typeof snapshot.data === "string"
+			? snapshot.data
+			: isJsonObject(snapshot.data) && typeof snapshot.data.snapshot === "string"
+				? snapshot.data.snapshot
+				: undefined;
+	if (snapshotText === undefined) {
+		return {
+			ok: false,
+			failure: operationTransportExitedFailure(
+				"The agent-browser snapshot call returned an unexpected payload shape.",
+			),
+			focus: true,
+		};
+	}
 	return {
 		ok: true,
 		result: {
 			...snapshot.result,
-			stdout:
-				typeof snapshot.data === "string"
-					? snapshot.data
-					: JSON.stringify(snapshot.data ?? ""),
+			stdout: snapshotText,
 		},
 	};
 }
