@@ -489,6 +489,23 @@ describe("U7 operation success and transport", () => {
 		expect(commandJsonArgs(calls[1])).toEqual({ pageId: "t1" });
 	});
 
+	test("a malformed chrome page ref fails as a lane-honest transport failure", async () => {
+		const { runtime, calls } = operationRuntime({
+			pages: [{ id: "t1", url: "https://example.com/app", title: "App" }],
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_transport_failed",
+			message:
+				"The chrome-devtools-mcp page ref must be a non-negative integer.",
+		});
+		expect(calls).toHaveLength(1);
+	});
+
 	test("a discovered page without a handle retains target-missing recovery", async () => {
 		const { runtime, calls } = operationRuntime({
 			pages: [{ url: "https://example.com/app", title: "App" }],
