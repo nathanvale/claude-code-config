@@ -947,16 +947,6 @@ export async function executePreparedRunbook(
 	let authDelivery: AgentBrowserAuthDeliveryContext | undefined;
 	let releaseAuthDelivery: (() => Promise<void>) | undefined;
 	if (plan.pending_item_bindings.length > 0) {
-		if (plan.pending_item_bindings.length !== 1) {
-			return {
-				ok: false,
-				refusal: {
-					code: "runbook_confidential_delivery_unavailable",
-					message:
-						"single-binding v1 requires one single Item Binding; split this plan or use one binding slug, then rerun.",
-				},
-			};
-		}
 		if (deps.authDelivery === undefined) {
 			return {
 				ok: false,
@@ -967,25 +957,67 @@ export async function executePreparedRunbook(
 				},
 			};
 		}
-		const bindingSlug = plan.pending_item_bindings[0];
-		const credentialField =
-			bindingSlug === undefined
-				? undefined
-				: credentialFieldForBindingSlug(bindingSlug);
-		const confidentialSteps = plan.steps.filter(
-			(step) => step.kind === "fill" && step.sensitivity === "confidential",
-		);
-		if (
-			bindingSlug === undefined ||
-			credentialField === undefined ||
-			confidentialSteps.length === 0
-		) {
+		// Every pending binding slug must name a supported credential field
+		// (KTD5): an unknown slug is a typed refusal BEFORE the seam or any
+		// browser effect. Multiple slugs are allowed here — R10's single-binding
+		// v1 gate lives in the auth-delivery seam, which refuses typed when the
+		// slugs resolve to more than one DISTINCT Item Binding (a login flow's
+		// username + password slugs resolve to one login item).
+		const credentialFieldBySlug = new Map<
+			string,
+			BrowserUseOpCredentialField
+		>();
+		for (const slug of plan.pending_item_bindings) {
+			const field = credentialFieldForBindingSlug(slug);
+			if (field === undefined) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_confidential_delivery_unavailable",
+						message: `the confidential binding slug ${slug} does not name a supported credential field; use a _username, _password, _otp, or _otp_current suffix, then rerun.`,
+					},
+				};
+			}
+			credentialFieldBySlug.set(slug, field);
+		}
+		// Each compiled confidential step carries its OWN binding slug (KTD5);
+		// pair every step with its slug's credential field. A step whose slug is
+		// unmapped fails closed — never silently skipped.
+		const confidentialFields: {
+			bindingSlug: string;
+			credentialField: BrowserUseOpCredentialField;
+			target: { role: string; name: string };
+		}[] = [];
+		for (const step of plan.steps) {
+			if (!(step.kind === "fill" && step.sensitivity === "confidential")) {
+				continue;
+			}
+			const slug = step.item_binding;
+			const field =
+				slug === undefined ? undefined : credentialFieldBySlug.get(slug);
+			if (slug === undefined || field === undefined) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_confidential_delivery_unavailable",
+						message:
+							"a compiled confidential fill carries no mapped binding slug; recompile the runbook plan, then rerun.",
+					},
+				};
+			}
+			confidentialFields.push({
+				bindingSlug: slug,
+				credentialField: field,
+				target: step.target ?? { role: "textbox", name: "" },
+			});
+		}
+		if (confidentialFields.length === 0) {
 			return {
 				ok: false,
 				refusal: {
 					code: "runbook_confidential_delivery_unavailable",
 					message:
-						"the confidential binding slug does not name a supported credential field; use a _username, _password, _otp, or _otp_current suffix, then rerun.",
+						"the plan surfaces a pending Item Binding with no compiled confidential fill step; recompile the runbook plan, then rerun.",
 				},
 			};
 		}
@@ -1008,17 +1040,7 @@ export async function executePreparedRunbook(
 			serviceId: plan.service_id,
 			allowedOrigins: plan.allowed_origins,
 			expectedTargetUrl,
-			confidentialFields: confidentialSteps.flatMap((step) =>
-				step.kind === "fill" && step.sensitivity === "confidential"
-					? [
-							{
-								bindingSlug,
-								credentialField,
-								target: step.target ?? { role: "textbox", name: "" },
-							},
-						]
-					: [],
-			),
+			confidentialFields,
 			handoff: input.handoff,
 			runId: input.runId,
 			targetTabId: input.targetTabId,
@@ -1040,16 +1062,11 @@ export async function executePreparedRunbook(
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
 		allowed_origins: plan.allowed_origins,
-		steps: (
-			completedNeutralOpen === undefined ? plan.steps : plan.steps.slice(1)
-		).map((step) =>
-			step.kind === "fill" && step.sensitivity === "confidential"
-				? {
-						...step,
-						item_binding: plan.pending_item_bindings[0],
-					}
-				: step,
-		),
+		// Compiled confidential fills already carry their OWN `item_binding` slug
+		// (KTD5, stamped at compile time); the executor resolves each slug's
+		// credential field at fill time through `field_by_binding_slug`.
+		steps:
+			completedNeutralOpen === undefined ? plan.steps : plan.steps.slice(1),
 		allow_neutral_target:
 			completedNeutralOpen === undefined && plan.steps[0]?.kind === "open",
 		...(input.expectedTargetUrl !== undefined
