@@ -23,6 +23,11 @@ const SUPERVISOR = join(
 	"debug",
 	"browser-use-op-supervisor",
 );
+// The supervisor and delivery child are a macOS-only Swift package (Darwin
+// imports); on any other platform the binary cannot exist, so this real
+// process-boundary proof runs only on darwin. On darwin an absent binary
+// still hard-fails: build the package rather than skipping the proof.
+const DARWIN = process.platform === "darwin";
 const SENTINEL = "DELIVERY_SENTINEL_U1_9173";
 const TARGET_URL = "https://portal.test/login";
 const TARGET_ORIGIN = "https://portal.test";
@@ -141,7 +146,7 @@ const cdpServer = startCDPServer();
 const temporaryRoots: string[] = [];
 
 beforeAll(() => {
-	if (!existsSync(SUPERVISOR)) {
+	if (DARWIN && !existsSync(SUPERVISOR)) {
 		throw new Error(
 			`real supervisor binary missing; build the Swift package first: ${SUPERVISOR}`,
 		);
@@ -304,7 +309,7 @@ function surfacesContainSentinel(surfaces: readonly string[]): boolean {
 	return surfaces.some((surface) => surface.includes(SENTINEL));
 }
 
-describe("environment OP supervisor deliver process boundary", () => {
+describe.skipIf(!DARWIN)("environment OP supervisor deliver process boundary", () => {
 	test("real child re-proves by URL, replaces the field, activates with trusted events, and exits after one write", async () => {
 		if (!cdpServer) throw new Error("loopback fixture unavailable");
 		resetCDP();
