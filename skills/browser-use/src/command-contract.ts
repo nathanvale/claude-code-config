@@ -1679,6 +1679,11 @@ export const browserUseAuthRepairActions = [
 		sideEffects: ["check", "write"],
 	},
 	{
+		id: "authenticate-op-session",
+		summary: "Unlock the operator OP session, then retry the reload.",
+		sideEffects: ["check"],
+	},
+	{
 		id: "repair-config-root",
 		summary:
 			"Repair the browser-use configuration root, then inspect readiness.",
@@ -1741,6 +1746,11 @@ const browserUseAuthFlags = {
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseAuthInstallFlags = {
+	"--from": {
+		type: "string",
+		description:
+			"Fetch from one OP item field reference and record that source only after installation succeeds.",
+	},
 	"--stdin": {
 		type: "boolean",
 		description:
@@ -2462,7 +2472,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Install or replace the environment-lane service-account token through native hidden input or standard input; token argv and environment values are rejected.",
 			usage: [
-				"auth install-token [--stdin] [--replace] [--caller <label>] [--json|--plain]",
+				"auth install-token [--from <reference>|--stdin] [--replace] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",

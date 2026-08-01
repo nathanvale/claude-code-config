@@ -1,4 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import {
+	chmod,
+	link,
+	lstat,
+	mkdir,
+	readFile,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
 import { findCommandFacadeMetadataDrift } from "@side-quest/cli-command-facade";
 import type {
 	BrowserUseTokenRetrievalPort,
@@ -34,10 +44,14 @@ import {
 } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import type {
+	AuthTokenProcessSpawn,
 	AuthTokenSupervisorInput,
 	AuthTokenSupervisorResult,
 } from "./browser-use-runtime";
-import { AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS } from "./browser-use-runtime";
+import {
+	AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS,
+	__authTokenSupervisorForTest,
+} from "./browser-use-runtime";
 
 // Narrowed envelope view for assertions (parseJson returns unknown-valued
 // records; the facade's own tests prove the envelope schema).
@@ -142,6 +156,10 @@ function stableEnvelopeBytes(stdout: string): string {
 	return stdout.replace(/("duration_ms": )-?\d+/, "$1<duration>");
 }
 
+function fixtureStream(contents = ""): ReadableStream<Uint8Array> {
+	return new Blob([contents]).stream();
+}
+
 describe("token doctor repair groundwork", () => {
 	test("the repair map covers every supervisor cause with the Repair Path rubric", () => {
 		expect(AUTH_TOKEN_GATE_ORDER).toEqual([
@@ -207,7 +225,7 @@ describe("token doctor repair groundwork", () => {
 		).toEqual([]);
 	});
 
-	test("setup commands keep doctor on the status envelope and reload pending", async () => {
+	test("setup commands keep doctor on status and route reload through its typed gate", async () => {
 		const calls: AuthTokenSupervisorInput[] = [];
 		const doctor = await runForTest(
 			["auth", "doctor", "--json"],
@@ -220,14 +238,16 @@ describe("token doctor repair groundwork", () => {
 		const reload = await runForTest(
 			["auth", "reload", "--json"],
 			makeRuntime({
+				readAuthTokenSource: async () => ({ status: "missing" }),
+				stdinIsTTY: () => false,
 				runAuthTokenSupervisor: async () => {
-					throw new Error("reload must remain pending in U1");
+					throw new Error("non-TTY reload without a source must not spawn");
 				},
 			}),
 		);
-		expect(reload.exitCode).toBe(1);
+		expect(reload.exitCode).toBe(20);
 		expect((parseJson(reload.stdout).error as { code: string }).code).toBe(
-			"browser_use_not_implemented",
+			"auth_token_source_missing",
 		);
 	});
 });
@@ -555,6 +575,630 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 });
 
 describe("ADR 0030 token lifecycle commands", () => {
+	test("install-token --from rejects a malformed source before custody work", async () => {
+		for (const sourceRef of [
+			"not-a-source",
+			"op://vault?/item/field",
+			"op://vault/item?/field",
+			"op://vault/item/field\n",
+			"op://vault/item/field\0",
+		]) {
+			const calls: AuthTokenSupervisorInput[] = [];
+			let sourceWrites = 0;
+			const result = await runForTest(
+				["auth", "install-token", "--from", sourceRef, "--json"],
+				makeRuntime({
+					runAuthTokenSupervisor: async (input) => {
+						calls.push(input);
+						return healthyStatus;
+					},
+					writeAuthTokenSource: async () => {
+						sourceWrites += 1;
+						return { ok: true };
+					},
+				}),
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+				"auth_token_source_invalid",
+			);
+			expect(calls).toEqual([]);
+			expect(sourceWrites).toBe(0);
+		}
+	});
+
+	test("install-token help advertises the source flag and its exclusive stdin form", async () => {
+		const result = await runForTest(
+			["auth", "install-token", "--help"],
+			makeRuntime(),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("[--from <reference>|--stdin]");
+		expect(result.stdout).toContain("--from Fetch from one OP item field reference");
+	});
+
+	test("install-token refuses source and stdin together before custody work", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			[
+				"auth",
+				"install-token",
+				"--from",
+				"op://Vault/Item/field",
+				"--stdin",
+				"--json",
+			],
+			supervisorRuntime(healthyStatus, calls),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_invalid",
+		);
+		expect(calls).toEqual([]);
+	});
+
+	test("install-token --from records the source only after a successful install", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const calls: AuthTokenSupervisorInput[] = [];
+		const sourceRef = "op://Browser Automation/Service Account/credential";
+		const result = await runForTest(
+			["auth", "install-token", "--from", sourceRef, "--json"],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async (input) => {
+					calls.push(input);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({
+							schema_version: 1,
+							ok: true,
+							state: "installed",
+							next_action: "auth-status",
+						}),
+						stderr: "",
+					};
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([
+			{ mode: "install", input: "source", replace: false, sourceRef },
+		]);
+		const sourcePath = join(custodyDir, "token-source.json");
+		expect(JSON.parse(await readFile(sourcePath, "utf8"))).toEqual({
+			schema_version: 1,
+			source: sourceRef,
+		});
+		const sourceMetadata = await lstat(sourcePath);
+		const effectiveUserId = process.geteuid?.() ?? process.getuid?.();
+		if (effectiveUserId === undefined) {
+			throw new Error("POSIX user id unavailable");
+		}
+		expect(sourceMetadata.mode & 0o777).toBe(0o600);
+		expect(sourceMetadata.uid).toBe(effectiveUserId);
+		expect(sourceMetadata.nlink).toBe(1);
+		expect(envelopeOf(result.stdout).data.evaluation.detail).toEqual({
+			source_present: true,
+		});
+		expect(result.stdout + result.stderr).not.toContain(sourceRef);
+	});
+
+	test("AE3: reload uses the validated stored source non-interactively", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourceRef = "op://Browser Automation/Service Account/credential";
+		await writeFile(
+			join(custodyDir, "token-source.json"),
+			`${JSON.stringify({ schema_version: 1, source: sourceRef })}\n`,
+			{ mode: 0o600 },
+		);
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				env: scratch.env,
+				stdinIsTTY: () => false,
+				runAuthTokenSupervisor: async (input) => {
+					calls.push(input);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({
+							schema_version: 1,
+							ok: true,
+							state: "replaced",
+							next_action: "auth-status",
+						}),
+						stderr: "",
+					};
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([
+			{ mode: "install", input: "source", replace: true, sourceRef },
+		]);
+		expect(envelopeOf(result.stdout).data.evaluation.detail).toEqual({
+			source_present: true,
+		});
+		expect(result.stdout + result.stderr).not.toContain(sourceRef);
+	});
+
+	test("AE3: reload without a source refuses non-TTY input without prompting", async () => {
+		let supervisorCalls = 0;
+		const startedAt = Date.now();
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				readAuthTokenSource: async () => ({ status: "missing" }),
+				stdinIsTTY: () => false,
+				runAuthTokenSupervisor: async () => {
+					supervisorCalls += 1;
+					throw new Error("must not prompt or spawn");
+				},
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeLessThan(500);
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_missing",
+		);
+		expect(supervisorCalls).toBe(0);
+		expect(envelopeOf(result.stdout).data.evaluation.detail).toEqual({
+			source_present: false,
+		});
+	});
+
+	test("reload without a source uses the hidden prompt only on a TTY", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				readAuthTokenSource: async () => ({ status: "missing" }),
+				stdinIsTTY: () => true,
+				runAuthTokenSupervisor: async (input) => {
+					calls.push(input);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({
+							schema_version: 1,
+							ok: true,
+							state: "replaced",
+							next_action: "auth-status",
+						}),
+						stderr: "",
+					};
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls).toEqual([
+			{ mode: "install", input: "prompt", replace: true },
+		]);
+		expect(envelopeOf(result.stdout).data.evaluation.detail).toEqual({
+			source_present: false,
+		});
+	});
+
+	test("a failed source install does not persist its reference", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourceRef = "op://Browser Automation/Revoked Item/credential";
+		const result = await runForTest(
+			["auth", "install-token", "--from", sourceRef, "--json"],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async () => ({
+					exitCode: 20,
+					stdout: JSON.stringify({
+						schema_version: 1,
+						ok: false,
+						state: "blocked",
+						cause: "invalid-service-account",
+						next_action: "repair-token-custody",
+					}),
+					stderr: "",
+				}),
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelopeOf(result.stdout).data.evaluation.blocked_cause).toBe(
+			"invalid-service-account",
+		);
+		expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		expect(result.stdout + result.stderr).not.toContain(sourceRef);
+	});
+
+	test("a successful install refuses to replace an unsafe recorded source", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourcePath = join(custodyDir, "token-source.json");
+		const targetPath = join(scratch.base, "unsafe-source-target.json");
+		const targetContents = "do-not-replace";
+		await writeFile(targetPath, targetContents, { mode: 0o600 });
+		await symlink(targetPath, sourcePath);
+		const sourceRef = "op://Browser Automation/Service Account/credential";
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "install-token", "--from", sourceRef, "--json"],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async (input) => {
+					calls.push(input);
+					return {
+						exitCode: 0,
+						stdout: JSON.stringify({
+							schema_version: 1,
+							ok: true,
+							state: "installed",
+							next_action: "auth-status",
+						}),
+						stderr: "",
+					};
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_unsafe",
+		);
+		expect(calls).toEqual([
+			{ mode: "install", input: "source", replace: false, sourceRef },
+		]);
+		expect(await readFile(targetPath, "utf8")).toBe(targetContents);
+		expect((await lstat(sourcePath)).isSymbolicLink()).toBe(true);
+		expect(result.stdout + result.stderr).not.toContain(sourceRef);
+	});
+
+	test("reload refuses symlinked and hard-linked source files before spawning", async () => {
+		for (const linkKind of ["symbolic", "hard"] as const) {
+			const scratch = makeTempXdgEnv();
+			disposables.push(scratch);
+			const custodyDir = join(
+				scratch.env.XDG_CONFIG_HOME ?? "",
+				"browser-use",
+				"auth.nosync",
+			);
+			await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+			const target = join(scratch.base, `${linkKind}-source.json`);
+			await writeFile(
+				target,
+				JSON.stringify({
+					schema_version: 1,
+					source: "op://Vault/Item/field",
+				}),
+				{ mode: 0o600 },
+			);
+			const sourcePath = join(custodyDir, "token-source.json");
+			if (linkKind === "symbolic") await symlink(target, sourcePath);
+			else await link(target, sourcePath);
+			let supervisorCalls = 0;
+			const result = await runForTest(
+				["auth", "reload", "--json"],
+				makeRuntime({
+					env: scratch.env,
+					runAuthTokenSupervisor: async () => {
+						supervisorCalls += 1;
+						return healthyStatus;
+					},
+				}),
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+				"auth_token_source_unsafe",
+			);
+			expect(supervisorCalls).toBe(0);
+		}
+	});
+
+	test("reload refuses a non-owner-only source mode before spawning", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourcePath = join(custodyDir, "token-source.json");
+		await writeFile(
+			sourcePath,
+			JSON.stringify({
+				schema_version: 1,
+				source: "op://Vault/Item/field",
+			}),
+			{ mode: 0o600 },
+		);
+		await chmod(sourcePath, 0o640);
+		let supervisorCalls = 0;
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async () => {
+					supervisorCalls += 1;
+					return healthyStatus;
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_unsafe",
+		);
+		expect(supervisorCalls).toBe(0);
+	});
+
+	test("reload refuses a symlink in the stored source ancestry before spawning", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const realConfigHome = join(scratch.base, "real-config");
+		const linkedConfigHome = join(scratch.base, "linked-config");
+		const custodyDir = join(
+			realConfigHome,
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		await writeFile(
+			join(custodyDir, "token-source.json"),
+			JSON.stringify({
+				schema_version: 1,
+				source: "op://Vault/Item/field",
+			}),
+			{ mode: 0o600 },
+		);
+		await symlink(realConfigHome, linkedConfigHome);
+		let supervisorCalls = 0;
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				env: { ...scratch.env, XDG_CONFIG_HOME: linkedConfigHome },
+				runAuthTokenSupervisor: async () => {
+					supervisorCalls += 1;
+					return healthyStatus;
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_unsafe",
+		);
+		expect(supervisorCalls).toBe(0);
+	});
+
+	test("reload refuses a stored reference that no longer parses", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		await writeFile(
+			join(custodyDir, "token-source.json"),
+			JSON.stringify({ schema_version: 1, source: "not-a-source" }),
+			{ mode: 0o600 },
+		);
+		let supervisorCalls = 0;
+		const result = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async () => {
+					supervisorCalls += 1;
+					return healthyStatus;
+				},
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_invalid",
+		);
+		expect(supervisorCalls).toBe(0);
+	});
+
+	test("source install passes the OP pipe directly and scrubs every child env", async () => {
+		const sourcePipe = fixtureStream();
+		const spawns: Parameters<AuthTokenProcessSpawn>[0][] = [];
+		const spawn: AuthTokenProcessSpawn = (input) => {
+			spawns.push(input);
+			const stdout =
+				input.argv[1] === "read"
+					? sourcePipe
+					: input.argv[0] === "/fixture/supervisor"
+						? fixtureStream(
+								JSON.stringify({
+									schema_version: 1,
+									ok: true,
+									state: "installed",
+									next_action: "auth-status",
+								}),
+							)
+						: null;
+			const stderr =
+				input.argv[0] === "/fixture/supervisor" ? fixtureStream() : null;
+			return {
+				stdout,
+				stderr,
+				exited: Promise.resolve({ exitCode: 0, signalCode: null }),
+				kill: () => {},
+			};
+		};
+		const sourceRef = "op://Browser Automation/Service Account/credential";
+		const result = await __authTokenSupervisorForTest.run(
+			{
+				HOME: "/fixture/home",
+				OP_SERVICE_ACCOUNT_TOKEN: "AUTH_SENTINEL_must_not_spawn",
+				OP_SESSION_operator: "operator-session",
+			},
+			{ mode: "install", input: "source", replace: false, sourceRef },
+			{
+				supervisorPath: "/fixture/supervisor",
+				opPath: "/fixture/op",
+				configRoot: "/fixture/config",
+				profilePath: "/fixture/profile",
+			},
+			spawn,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawns.map((call) => call.argv)).toEqual([
+			["/fixture/op", "whoami"],
+			["/fixture/op", "read", sourceRef],
+			expect.arrayContaining([
+				"/fixture/supervisor",
+				"install",
+				"--input",
+				"stdin",
+			]),
+		]);
+		expect(spawns[2]?.stdin).toBe(sourcePipe);
+		expect(spawns.every((call) => call.timeoutMs > 0)).toBe(true);
+		expect(
+			spawns.every(
+				(call) => call.env.OP_SERVICE_ACCOUNT_TOKEN === undefined,
+			),
+		).toBe(true);
+		expect(JSON.stringify(spawns)).not.toContain("AUTH_SENTINEL_must_not_spawn");
+	});
+
+	test("the Bun process adapter hands child stdout directly to child stdin", async () => {
+		const source = __authTokenSupervisorForTest.spawn({
+			argv: ["/usr/bin/printf", "fd-proof"],
+			env: { PATH: "/usr/bin:/bin" },
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "ignore",
+			timeoutMs: 1_000,
+		});
+		expect(source.stdout).not.toBeNull();
+		const sink = __authTokenSupervisorForTest.spawn({
+			argv: ["/bin/cat"],
+			env: { PATH: "/usr/bin:/bin" },
+			stdin: source.stdout as ReadableStream<Uint8Array>,
+			stdout: "pipe",
+			stderr: "pipe",
+			timeoutMs: 1_000,
+		});
+
+		const [sourceExit, sinkExit, stdout, stderr] = await Promise.all([
+			source.exited,
+			sink.exited,
+			new Response(sink.stdout).text(),
+			new Response(sink.stderr).text(),
+		]);
+		expect(sourceExit).toEqual({ exitCode: 0, signalCode: null });
+		expect(sinkExit).toEqual({ exitCode: 0, signalCode: null });
+		expect(stdout).toBe("fd-proof");
+		expect(stderr).toBe("");
+	});
+
+	test("install-token --from refuses a signed-out OP session quickly and persists nothing", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		let spawnCalls = 0;
+		const signedOut = await __authTokenSupervisorForTest.run(
+			{},
+			{
+				mode: "install",
+				input: "source",
+				replace: false,
+				sourceRef: "op://Browser Automation/Service Account/credential",
+			},
+			{
+				supervisorPath: "/fixture/supervisor",
+				opPath: "/fixture/op",
+				configRoot: "/fixture/config",
+				profilePath: "/fixture/profile",
+			},
+			() => {
+				spawnCalls += 1;
+				return {
+					stdout: null,
+					stderr: null,
+					exited: Promise.resolve({ exitCode: 1, signalCode: null }),
+					kill: () => {},
+				};
+			},
+		);
+		const startedAt = Date.now();
+		const result = await runForTest(
+			[
+				"auth",
+				"install-token",
+				"--from",
+				"op://Browser Automation/Service Account/credential",
+				"--json",
+			],
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async () => signedOut,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeLessThan(500);
+		expect(spawnCalls).toBe(1);
+		expect(result.exitCode).toBe(20);
+		expect((parseJson(result.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_auth_required",
+		);
+		expect(envelopeOf(result.stdout).data.evaluation.blocked_cause).toBe(
+			"op-session-unavailable",
+		);
+		expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+		expect(result.stdout + result.stderr).not.toContain(
+			"op://Browser Automation/Service Account/credential",
+		);
+	});
+
 	test("install-token --stdin delegates token input to the native supervisor", async () => {
 		const calls: AuthTokenSupervisorInput[] = [];
 		const runtime = supervisorRuntime(
@@ -666,11 +1310,28 @@ describe("ADR 0030 token lifecycle commands", () => {
 	});
 
 	test("remove-token targets native custody and retains remote revocation as next action", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourcePath = join(custodyDir, "token-source.json");
+		const sourceBytes = `${JSON.stringify({
+			schema_version: 1,
+			source: "op://Browser Automation/Service Account/credential",
+		})}\n`;
+		await writeFile(sourcePath, sourceBytes, { mode: 0o600 });
 		const calls: AuthTokenSupervisorInput[] = [];
 		const result = await runForTest(
 			["auth", "remove-token", "--json"],
-			supervisorRuntime(
-				{
+			makeRuntime({
+				env: scratch.env,
+				runAuthTokenSupervisor: async (input) => {
+					calls.push(input);
+					return {
 					exitCode: 0,
 					stdout: JSON.stringify({
 						schema_version: 1,
@@ -680,9 +1341,9 @@ describe("ADR 0030 token lifecycle commands", () => {
 						remote_authority: "may-remain-live",
 					}),
 					stderr: "",
+					};
 				},
-				calls,
-			),
+			}),
 		);
 		expect(result.exitCode).toBe(0);
 		expect(calls).toEqual([{ mode: "remove" }]);
@@ -691,6 +1352,7 @@ describe("ADR 0030 token lifecycle commands", () => {
 			"revoke-service-account-token-remotely",
 		);
 		expect(result.stdout).toContain("may-remain-live");
+		expect(await readFile(sourcePath, "utf8")).toBe(sourceBytes);
 	});
 
 	test("status --json projects every secret-free admission gate", async () => {

@@ -124,9 +124,11 @@ import {
 	truncateText,
 } from "./browser-use-core";
 import {
+	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
+	isAuthTokenSourceReference,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
@@ -627,14 +629,14 @@ async function executeCommand(input: {
 	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
 	if (
 		parsed.family === "auth" &&
-		!parsed.dryRun &&
-		parsed.subcommand !== "reload"
+		!parsed.dryRun
 	) {
 		if (
 			parsed.subcommand === "install-token" ||
 			parsed.subcommand === "remove-token" ||
 			parsed.subcommand === "status" ||
-			parsed.subcommand === "doctor"
+			parsed.subcommand === "doctor" ||
+			parsed.subcommand === "reload"
 		) {
 			return runAuthTokenLifecycle({
 				parsed,
@@ -5039,14 +5041,6 @@ type AuthReadinessEvaluation = {
 	continuationId: AuthActionId;
 };
 
-const AUTH_TOKEN_FORBIDDEN_ENV_KEYS = [
-	"OP_SERVICE_ACCOUNT_TOKEN",
-	"OP_CONNECT_HOST",
-	"OP_CONNECT_TOKEN",
-	"BROWSER_USE_TOKEN",
-	"BROWSER_USE_OP_TOKEN",
-] as const;
-
 const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
 	"ready",
 	"installed",
@@ -5091,6 +5085,7 @@ export const AUTH_TOKEN_SUPERVISOR_CAUSES = [
 	"op-staging-failed",
 	"op-version-invalid",
 	"op-version-unsupported",
+	"op-session-unavailable",
 	"token-invalid",
 	"timeout",
 	"output-too-large",
@@ -5102,6 +5097,11 @@ export const AUTH_TOKEN_SUPERVISOR_CAUSES = [
 	"validator-protocol-invalid",
 	"profile-policy-unproven",
 	"profile-policy-unsafe",
+	"source-file-unsafe",
+	"source-fetch-failed",
+	"source-missing",
+	"source-reference-invalid",
+	"source-write-failed",
 	"token-supervisor-unavailable",
 	"token-supervisor-output-too-large",
 ] as const;
@@ -5145,6 +5145,13 @@ const INSTALL_OP_CLI_REPAIR = {
 	successSignal: "The runtime gate resolves an approved executable OP CLI path.",
 	stopCondition:
 		"Stop if the resolved OP CLI path remains missing, unsafe, or untrusted.",
+} as const satisfies AuthTokenRepairPath;
+
+const AUTHENTICATE_OP_SESSION = {
+	repairCommand: "op signin",
+	posture: "manual-only",
+	successSignal: "The operator OP session passes the bounded identity check.",
+	stopCondition: "Stop if the operator session remains locked or unavailable.",
 } as const satisfies AuthTokenRepairPath;
 
 const REPAIR_CONFIG_ROOT = {
@@ -5238,6 +5245,7 @@ export const AUTH_TOKEN_REPAIR_PATHS = {
 	"op-staging-failed": INSTALL_OP_CLI_REPAIR,
 	"op-version-invalid": INSTALL_OP_CLI_REPAIR,
 	"op-version-unsupported": INSTALL_OP_CLI_REPAIR,
+	"op-session-unavailable": AUTHENTICATE_OP_SESSION,
 	"token-invalid": RELOAD_TOKEN,
 	timeout: RELOAD_TOKEN,
 	"output-too-large": RELOAD_TOKEN,
@@ -5249,6 +5257,11 @@ export const AUTH_TOKEN_REPAIR_PATHS = {
 	"validator-protocol-invalid": INSTALL_OP_CLI_REPAIR,
 	"profile-policy-unproven": REPAIR_PROFILE_POLICY,
 	"profile-policy-unsafe": RECREATE_UNSAFE_PROFILE,
+	"source-file-unsafe": REINSTALL_TOKEN,
+	"source-fetch-failed": REINSTALL_TOKEN,
+	"source-missing": REINSTALL_TOKEN,
+	"source-reference-invalid": REINSTALL_TOKEN,
+	"source-write-failed": REINSTALL_TOKEN,
 	"token-supervisor-unavailable": BUILD_TOKEN_SUPERVISOR_REPAIR,
 	"token-supervisor-output-too-large": BUILD_TOKEN_SUPERVISOR_REPAIR,
 } as const satisfies Record<AuthTokenSupervisorCause, AuthTokenRepairPath>;
@@ -5313,6 +5326,7 @@ const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
 	"repair-op-admission",
 	"build-token-supervisor",
 	"install-op-cli",
+	"authenticate-op-session",
 	"repair-config-root",
 	"repair-vault-grant",
 	"create-credential-clean-profile",
@@ -5498,7 +5512,15 @@ function renderAuthTokenDoctor(
 function emitAuthTokenLifecycleResult(
 	input: PlatformCommandInput,
 	projection: AuthTokenSupervisorProjection,
-	errorCode: "auth_token_input_rejected" | "auth_token_supervisor_failed",
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
 ): number {
 	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
 	if (subcommand === "doctor" && input.parsed.outputMode === "plain") {
@@ -5552,13 +5574,10 @@ function emitAuthTokenLifecycleResult(
 		createCliRuntimeErrorEnvelope({
 			...envelopeInput,
 			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
-			error: createCliRuntimeError({
+				error: createCliRuntimeError({
 				run_id: input.runId,
 				code: errorCode,
-				message:
-					errorCode === "auth_token_input_rejected"
-						? "token input through process environment is forbidden; use native hidden input or --stdin."
-						: "native token custody operation was blocked; follow the typed continuation.",
+				message: authTokenLifecycleErrorMessage(errorCode),
 				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
 				...retryabilityForRecoverability("repair_state"),
@@ -5570,9 +5589,87 @@ function emitAuthTokenLifecycleResult(
 	return BINDING_FAIL_CLOSED_EXIT_CODE;
 }
 
+function authTokenLifecycleErrorMessage(
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
+): string {
+	switch (errorCode) {
+		case "auth_token_input_rejected":
+			return "token input through process environment is forbidden; use native hidden input or --stdin.";
+		case "auth_token_source_invalid":
+			return "the source reference is invalid or conflicts with standard input; use one OP item field reference.";
+		case "auth_token_source_auth_required":
+			return "the operator OP session is unavailable; follow the typed continuation before retrying.";
+		case "auth_token_source_missing":
+			return "no recorded source is available and standard input is not interactive; use the manual install step.";
+		case "auth_token_source_unavailable":
+			return "the recorded source could not be fetched; use the manual install step before retrying.";
+		case "auth_token_source_unsafe":
+			return "the recorded source failed owner-only file validation; use the manual install step.";
+		case "auth_token_source_write_failed":
+			return "the token changed but its reload source could not be recorded; repeat the source install after inspecting custody.";
+		case "auth_token_supervisor_failed":
+			return "native token custody operation was blocked; follow the typed continuation.";
+	}
+}
+
+function authProjectionWithSourcePresence(
+	projection: AuthTokenSupervisorProjection,
+	sourcePresent: boolean,
+): AuthTokenSupervisorProjection {
+	return {
+		...projection,
+		detail: {
+			...(projection.detail ?? {}),
+			source_present: sourcePresent,
+		},
+	};
+}
+
+function authTokenLifecycleErrorForProjection(
+	projection: AuthTokenSupervisorProjection | undefined,
+):
+	| "auth_token_source_auth_required"
+	| "auth_token_source_unavailable"
+	| "auth_token_supervisor_failed" {
+	if (projection?.cause === "op-session-unavailable") {
+		return "auth_token_source_auth_required";
+	}
+	if (projection?.cause === "source-fetch-failed") {
+		return "auth_token_source_unavailable";
+	}
+	return "auth_token_supervisor_failed";
+}
+
 async function runAuthTokenLifecycle(
 	input: PlatformCommandInput,
 ): Promise<number> {
+	let sourceRef = stringField(input.parsed.flagValues["--from"]);
+	let sourcePresence: boolean | undefined;
+	if (
+		input.parsed.subcommand === "install-token" &&
+		sourceRef !== undefined &&
+		(!isAuthTokenSourceReference(sourceRef) ||
+			input.parsed.flagValues["--stdin"] !== undefined)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_source_invalid",
+		);
+	}
 	if (
 		AUTH_TOKEN_FORBIDDEN_ENV_KEYS.some(
 			(key) => input.runtime.env[key] !== undefined,
@@ -5589,17 +5686,69 @@ async function runAuthTokenLifecycle(
 			"auth_token_input_rejected",
 		);
 	}
+	if (input.parsed.subcommand === "reload") {
+		const stored =
+			input.runtime.readAuthTokenSource === undefined
+				? ({ status: "blocked", cause: "source-file-unsafe" } as const)
+				: await input.runtime.readAuthTokenSource();
+		if (stored.status === "blocked") {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: stored.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				stored.cause === "source-reference-invalid"
+					? "auth_token_source_invalid"
+					: "auth_token_source_unsafe",
+			);
+		}
+		if (stored.status === "missing") {
+			sourcePresence = false;
+			if (input.runtime.stdinIsTTY?.() !== true) {
+				return emitAuthTokenLifecycleResult(
+					input,
+					{
+						ok: false,
+						state: "blocked",
+						cause: "source-missing",
+						nextAction: "install-token",
+						detail: { source_present: false },
+					},
+					"auth_token_source_missing",
+				);
+			}
+		} else {
+			sourceRef = stored.sourceRef;
+			sourcePresence = true;
+		}
+	}
 	const subcommand = input.parsed.subcommand;
 	const nativeInput =
-		subcommand === "install-token"
-			? ({
-					mode: "install",
-					input:
-						input.parsed.flagValues["--stdin"] === undefined
-							? "prompt"
-							: "stdin",
-					replace: input.parsed.flagValues["--replace"] !== undefined,
-				} as const)
+		subcommand === "install-token" || subcommand === "reload"
+			? sourceRef === undefined
+				? ({
+						mode: "install",
+						input:
+							subcommand === "reload" ||
+							input.parsed.flagValues["--stdin"] === undefined
+								? "prompt"
+								: "stdin",
+						replace:
+							subcommand === "reload" ||
+							input.parsed.flagValues["--replace"] !== undefined,
+					} as const)
+				: ({
+						mode: "install",
+						input: "source",
+						replace:
+							subcommand === "reload" ||
+							input.parsed.flagValues["--replace"] !== undefined,
+						sourceRef,
+					} as const)
 			: subcommand === "remove-token"
 				? ({ mode: "remove" } as const)
 				: ({ mode: "status" } as const);
@@ -5615,15 +5764,45 @@ async function runAuthTokenLifecycle(
 		result.stdout,
 		result.exitCode,
 	);
+	if (subcommand === "install-token" && sourceRef !== undefined && projection?.ok) {
+		const persisted =
+			input.runtime.writeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.writeAuthTokenSource(sourceRef);
+		if (!persisted.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: persisted.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				persisted.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			authProjectionWithSourcePresence(projection, true),
+			"auth_token_supervisor_failed",
+		);
+	}
 	return emitAuthTokenLifecycleResult(
 		input,
-		projection ?? {
+		projection === undefined
+			? {
 			ok: false,
 			state: "blocked",
 			cause: "token-supervisor-unavailable",
 			nextAction: "repair-op-admission",
-		},
-		"auth_token_supervisor_failed",
+			}
+			: sourcePresence === undefined
+				? projection
+				: authProjectionWithSourcePresence(projection, sourcePresence),
+		authTokenLifecycleErrorForProjection(projection),
 	);
 }
 
