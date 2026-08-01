@@ -5648,21 +5648,36 @@ function emitCliError(input: {
 		);
 		return exitCode;
 	}
+	// The last-resort emitter must be total. redactUnsafeText scrubs VALUES
+	// (op:// refs, sensitive --flags, paths) while the envelope leak-guard
+	// bans VOCABULARY, so a message can pass the scrub and still be rejected
+	// (e.g. an upstream CliRuntimeContractError whose issue text quotes a
+	// banned label). Withhold the message rather than crash with a stack trace.
+	const buildError = (message: string) =>
+		createCliRuntimeError({
+			run_id: input.runId,
+			code: isUsage ? "usage_error" : "runtime_error",
+			message,
+			exit_code: exitCode,
+			severity: isUsage ? "error" : "fatal",
+			recoverability: isUsage ? "change_input" : "none",
+			retryable: false,
+			failure_domain: isUsage ? "input" : "runtime_diagnostics",
+		});
+	let structuredError: ReturnType<typeof buildError>;
+	try {
+		structuredError = buildError(safeMessage);
+	} catch {
+		structuredError = buildError(
+			"runtime error message withheld: it did not pass the runtime-contract text safety gate.",
+		);
+	}
 	writeJsonEnvelope(
 		input.stdout,
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: createCliRuntimeError({
-				run_id: input.runId,
-				code: isUsage ? "usage_error" : "runtime_error",
-				message: safeMessage,
-				exit_code: exitCode,
-				severity: isUsage ? "error" : "fatal",
-				recoverability: isUsage ? "change_input" : "none",
-				retryable: false,
-				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-			}),
+			error: structuredError,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);

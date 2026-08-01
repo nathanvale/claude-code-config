@@ -384,6 +384,68 @@ describe("ADR 0030 token lifecycle commands", () => {
 		expect(result.stdout + result.stderr).not.toContain(sentinel);
 	});
 
+	// Regression: the create-credential-clean-profile continuation contains the
+	// word "credential", which the envelope leak-guard bans in free text. The
+	// id must ride the envelope's id fields (shape-gated), so a profile-policy
+	// block emits its typed envelope instead of crashing the CLI with
+	// CliRuntimeContractError at emit time.
+	test("profile-policy blocked status emits the typed clean-profile continuation", async () => {
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			supervisorRuntime({
+				exitCode: 20,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: false,
+					state: "blocked",
+					cause: "profile-policy-unproven",
+					lane: { selected: "environment-injected-op", status: "blocked" },
+					checks: {
+						token_file: { status: "ready" },
+						op: { status: "ready" },
+						token: { status: "ready" },
+						vault_scope: { status: "ready", visible_count: 1 },
+						profile_policy: {
+							status: "blocked",
+							cause: "profile-policy-unproven",
+						},
+					},
+					next_action: "create-credential-clean-profile",
+				}),
+				stderr: "",
+			}),
+		);
+		expect(result.exitCode).toBe(20);
+		const envelope = envelopeOf(result.stdout);
+		expect(envelope.data.evaluation.status).toBe("blocked");
+		expect(envelope.data.evaluation.blocked_cause).toBe(
+			"profile-policy-unproven",
+		);
+		expect(envelope.continuation.next_action_id).toBe(
+			"create-credential-clean-profile",
+		);
+	});
+
+	// Regression: the last-resort error emitter must be total. An upstream
+	// failure whose message carries leak-guard vocabulary (here the word
+	// "credential") must produce a typed runtime_error envelope with the
+	// message withheld — never an uncaught CliRuntimeContractError.
+	test("a supervisor failure carrying banned vocabulary still emits a typed envelope", async () => {
+		const sentinel = "supervisor rejected the credential material";
+		const result = await runForTest(
+			["auth", "status", "--json"],
+			makeRuntime({
+				runAuthTokenSupervisor: async () => {
+					throw new Error(sentinel);
+				},
+			}),
+		);
+		expect(result.exitCode).toBe(1);
+		const envelope = parseJson(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("runtime_error");
+		expect(result.stdout).not.toContain(sentinel);
+	});
+
 	test("unsafe token custody blocks with exactly one repair action", async () => {
 		const result = await runForTest(
 			["auth", "status", "--json"],

@@ -547,6 +547,24 @@ function validateAllowedKeys(
 		.map((key) => `${path}.${key} is not a supported runtime-contract field`);
 }
 
+// Action ids are controlled enum identifiers, not agent-facing prose. They
+// are gated by SHAPE (a bounded lowercase token), never by the free-text
+// vocabulary scan: an id may legitimately contain a banned prose word (e.g.
+// browser-use's create-credential-clean-profile), and scanning it as free
+// text makes the envelope for that continuation unconstructible. Same split
+// as the env-var NAME gate vs the free-text VALUE scan in runtime-text-safety.
+const RUNTIME_ACTION_ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
+
+function validateRuntimeActionIdText(path: string, value: unknown): string[] {
+	if (typeof value !== "string" || value.trim().length === 0) {
+		return [`${path} must be a non-empty string`];
+	}
+	if (value.length > 128 || !RUNTIME_ACTION_ID_PATTERN.test(value)) {
+		return [`${path} must be a lowercase identifier token`];
+	}
+	return [];
+}
+
 function validateOptionalRuntimeActions(
 	actions: unknown,
 	path = "runtime_actions",
@@ -571,7 +589,7 @@ function validateOptionalRuntimeActions(
 				"side_effects",
 				"docs_url",
 			]),
-			...validateNonEmptyString(`${actionPath}.id`, action.id),
+			...validateRuntimeActionIdText(`${actionPath}.id`, action.id),
 			...validateNonEmptyString(`${actionPath}.summary`, action.summary),
 		];
 		if (action.docs_url !== undefined) {
@@ -651,7 +669,7 @@ function validateOptionalRuntimeContinuation(
 	}
 	if (hasNextAction) {
 		issues.push(
-			...validateNonEmptyString(
+			...validateRuntimeActionIdText(
 				`${path}.next_action_id`,
 				continuation.next_action_id,
 			),
