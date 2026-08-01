@@ -550,25 +550,28 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		]);
 	});
 
-	test("routine automation without a tab fails closed for zero or multiple admissible tabs", async () => {
-		for (const scenario of [
-			{
-				tabs: [
-					{ tabId: "t7", active: true, type: "page", url: "https://other.test/" },
-				],
-				laneOutcome: "agent_browser_target_unavailable",
-			},
-			{
-				tabs: [
-					{ tabId: "t7", active: true, type: "page", url: "https://example.test/one" },
-					{ tabId: "t8", active: false, type: "page", url: "https://example.test/two" },
-				],
-				laneOutcome: "agent_browser_target_ambiguous",
-			},
-		]) {
+	test.each([
+		[
+			"zero",
+			[
+				{ tabId: "t7", active: true, type: "page", url: "https://other.test/" },
+			],
+			"agent_browser_target_unavailable",
+		],
+		[
+			"multiple",
+			[
+				{ tabId: "t7", active: true, type: "page", url: "https://example.test/one" },
+				{ tabId: "t8", active: false, type: "page", url: "https://example.test/two" },
+			],
+			"agent_browser_target_ambiguous",
+		],
+	] as const)(
+		"routine automation without a tab fails closed for %s exact-origin matches",
+		async (_matchCount, tabs, laneOutcome) => {
 			const store = await makeStore();
 			const { runtime, calls } = taskRunRuntime(store.env, [
-				{ stdout: adapterSuccess({ tabs: scenario.tabs }) },
+				{ stdout: adapterSuccess({ tabs }) },
 			]);
 			const result = await runForTest(
 				[
@@ -588,7 +591,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			expect(result.exitCode).toBe(20);
 			const data = parseJson(result.stdout).data as Record<string, unknown>;
 			expect(data).toMatchObject({
-				lane_outcome: scenario.laneOutcome,
+				lane_outcome: laneOutcome,
 				external_effect: "none",
 			});
 			const loaded = await loadSharedRun(store.deps, "run-task-run-1");
@@ -602,8 +605,8 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			expect(calls.map((call) => call.slice(-3))).toEqual([
 				["tab", "list", "--json"],
 			]);
-		}
-	});
+		},
+	);
 
 	test("the shared run records mutation dispatch before the adapter receives the click", async () => {
 		const store = await makeStore();

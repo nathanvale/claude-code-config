@@ -4,7 +4,20 @@ set -euo pipefail
 prototype_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(git -C "$prototype_dir" rev-parse --show-toplevel)
 built_cli="$repo_root/skills/browser-use/dist/browser-use.js"
-fixture_port=41873
+
+allocate_fixture_port() {
+	bun -e '
+		const server = Bun.serve({
+			hostname: "localhost",
+			port: 0,
+			fetch() { return new Response(); },
+		});
+		process.stdout.write(String(server.port));
+		server.stop(true);
+	'
+}
+
+fixture_port=$(allocate_fixture_port)
 fixture_origin="http://localhost:$fixture_port"
 zero_origin="http://127.0.0.1:$fixture_port"
 primary_url="$fixture_origin/fixture.html?case=primary"
@@ -26,6 +39,22 @@ close_tab() {
 	browser_connect agent-browser tab close --json >/dev/null || true
 }
 
+open_tab() {
+	local expected_url=$1
+	local output
+	output=$(browser_connect agent-browser tab new "$expected_url" --json)
+	jq -er --arg url "$expected_url" '
+		if .success == true
+			and .error == null
+			and (.data.tabId | type == "string")
+			and ((.data.tabId | length) > 0)
+			and .data.url == $url
+		then .data.tabId
+		else error("agent-browser tab new returned an invalid response")
+		end
+	' <<<"$output"
+}
+
 cleanup() {
 	if [[ -n "$secondary_tab" ]]; then close_tab "$secondary_tab"; fi
 	if [[ -n "$primary_tab" ]]; then close_tab "$primary_tab"; fi
@@ -36,22 +65,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-tab_id_for_url() {
-	local expected_url=$1
-	browser_connect agent-browser tab list --json |
-		jq -er --arg url "$expected_url" '.data.tabs[] | select(.url == $url) | .tabId' |
-		head -n 1
-}
-
 wait_for_tab() {
-	local expected_url=$1
-	local tab_id=""
+	local tab_id=$1
+	local expected_url=$2
+	local observed_tab_id=""
 	for _ in $(seq 1 50); do
-		tab_id=$(tab_id_for_url "$expected_url" 2>/dev/null || true)
-		if [[ -n "$tab_id" ]]; then
-			printf '%s\n' "$tab_id"
-			return 0
-		fi
+		observed_tab_id=$(
+			browser_connect agent-browser tab list --json |
+				jq -er --arg id "$tab_id" --arg url "$expected_url" \
+					'.data.tabs[] | select(.tabId == $id and .url == $url) | .tabId' \
+					2>/dev/null || true
+		)
+		[[ "$observed_tab_id" == "$tab_id" ]] && return 0
 		sleep 0.1
 	done
 	return 1
@@ -88,8 +113,8 @@ for _ in $(seq 1 50); do
 done
 curl --fail --silent "$fixture_origin/fixture.html" >/dev/null
 
-browser_connect agent-browser tab new "$primary_url" --json >/dev/null
-primary_tab=$(wait_for_tab "$primary_url")
+primary_tab=$(open_tab "$primary_url")
+wait_for_tab "$primary_tab" "$primary_url"
 primary_initial=$(read_state "$primary_tab")
 
 zero_result=$(run_built_task "$zero_origin")
@@ -111,8 +136,8 @@ positive_after=$(read_state "$primary_tab")
 [[ "$positive_after" == "clicks=1;committed=true" ]]
 printf 'PASS single-target selects, clicks, and proves; state=%s\n' "$positive_after"
 
-browser_connect agent-browser tab new "$secondary_url" --json >/dev/null
-secondary_tab=$(wait_for_tab "$secondary_url")
+secondary_tab=$(open_tab "$secondary_url")
+wait_for_tab "$secondary_tab" "$secondary_url"
 primary_before_multiple=$(read_state "$primary_tab")
 secondary_before_multiple=$(read_state "$secondary_tab")
 

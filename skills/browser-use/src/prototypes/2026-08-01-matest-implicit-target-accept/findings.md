@@ -3,23 +3,23 @@
 Date: 2026-08-01
 Lane: post-build accept
 Adapter: Agent Browser through Browser Connect
-Fixture: secret-free HTTP page on `http://localhost:41873`
+Fixture: secret-free HTTP page on a run-specific ephemeral localhost port
 
 ## Verdicts
 
 ### PASS: zero eligible tabs fail closed
 
 - Invoked the built worktree CLI with omitted `--tab` and allowed origin
-  `http://127.0.0.1:41873` while the sole fixture tab used the distinct exact
-  origin `http://localhost:41873`.
+  `http://127.0.0.1:<port>` while the sole fixture tab used the distinct exact
+  origin `http://localhost:<port>`.
 - Observed exit 20 and `agent_browser_target_unavailable`.
 - Fixture state stayed `clicks=0;committed=false`.
-- No snapshot, click, or postcondition command reached the fixture tab.
+- The fail-closed result left the fixture state unchanged.
 
 ### PASS: one eligible tab resolves and proves the mutation
 
 - Invoked the built worktree CLI with omitted `--tab`, exact allowed origin
-  `http://localhost:41873`, role `button`, and name `Commit marker`.
+  `http://localhost:<port>`, role `button`, and name `Commit marker`.
 - Observed shared-run state `confirmed` with `mutation_dispatched: true`.
 - Fresh structural proof found visible selector `#committed`.
 - Fixture state became exactly `clicks=1;committed=true`.
@@ -38,15 +38,16 @@ Fixture: secret-free HTTP page on `http://localhost:41873`
 The executable receipt is `accept-spike.sh`. It ran this sequence:
 
 ```text
-bun serve.mjs 41873
-browser-connect run agent-browser --json -- agent-browser tab new http://localhost:41873/fixture.html?case=primary --json
+PORT=<ephemeral-port>
+bun serve.mjs "$PORT"
+browser-connect run agent-browser --json -- agent-browser tab new http://localhost:$PORT/fixture.html?case=primary --json
 browser-connect run agent-browser --json -- agent-browser get text #state --json
-bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://127.0.0.1:41873 --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
+bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://127.0.0.1:$PORT --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
 browser-connect run agent-browser --json -- agent-browser get text #state --json
-bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://localhost:41873 --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
+bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://localhost:$PORT --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
 browser-connect run agent-browser --json -- agent-browser get text #state --json
-browser-connect run agent-browser --json -- agent-browser tab new http://localhost:41873/fixture.html?case=secondary --json
-bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://localhost:41873 --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
+browser-connect run agent-browser --json -- agent-browser tab new http://localhost:$PORT/fixture.html?case=secondary --json
+bun ../../../dist/browser-use.js task run --intent routine-automation --allowed-origin http://localhost:$PORT --click-role button --click-name "Commit marker" --postcondition-id committed --expect-visible "#committed" --caller matest-implicit-target-accept --json
 browser-connect run agent-browser --json -- agent-browser get text #state --json
 browser-connect run agent-browser --json -- agent-browser tab close --json
 ```
