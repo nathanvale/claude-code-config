@@ -184,7 +184,19 @@ function environmentTokenSupervisorDeps(
 // because it inherits stdin for the interactive token prompt.
 const NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS = 30_000;
 
-function authSupervisorUnavailable(code: string): AuthTokenSupervisorResult {
+export const AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS = {
+	"token-supervisor-unavailable": "build-token-supervisor",
+	"op-path-unavailable": "install-op-cli",
+	"unsafe-config-root": "repair-config-root",
+	"token-supervisor-output-too-large": "repair-op-admission",
+} as const;
+
+export type AuthTokenSupervisorDegradedCause =
+	keyof typeof AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS;
+
+function authSupervisorUnavailable(
+	code: AuthTokenSupervisorDegradedCause,
+): AuthTokenSupervisorResult {
 	return {
 		exitCode: 20,
 		stdout: JSON.stringify({
@@ -192,7 +204,7 @@ function authSupervisorUnavailable(code: string): AuthTokenSupervisorResult {
 			ok: false,
 			state: "blocked",
 			cause: code,
-			next_action: "repair-op-admission",
+			next_action: AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS[code],
 		}),
 		stderr: "",
 	};

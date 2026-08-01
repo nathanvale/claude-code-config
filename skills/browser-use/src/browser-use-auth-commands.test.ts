@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { findCommandFacadeMetadataDrift } from "@side-quest/cli-command-facade";
 import type {
 	BrowserUseTokenRetrievalPort,
 	BrowserUseTokenRetrievalRejection,
@@ -20,14 +21,23 @@ import { type RunStoreDeps, createSharedRun } from "./browser-use-runs";
 import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
+	BROWSER_USE_AUTH_SETUP_SUBCOMMANDS,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
+	browserUseContracts,
 } from "./command-contract";
-import { runForTest } from "./browser-use";
+import {
+	AUTH_TOKEN_GATE_ORDER,
+	AUTH_TOKEN_REPAIR_PATHS,
+	AUTH_TOKEN_SUPERVISOR_CAUSES,
+	authTokenRepairPathFor,
+	runForTest,
+} from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import type {
 	AuthTokenSupervisorInput,
 	AuthTokenSupervisorResult,
 } from "./browser-use-runtime";
+import { AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS } from "./browser-use-runtime";
 
 // Narrowed envelope view for assertions (parseJson returns unknown-valued
 // records; the facade's own tests prove the envelope schema).
@@ -74,6 +84,96 @@ const healthyStatus = {
 	}),
 	stderr: "",
 } as const satisfies AuthTokenSupervisorResult;
+
+describe("token doctor repair groundwork", () => {
+	test("the repair map covers every supervisor cause with the Repair Path rubric", () => {
+		expect(AUTH_TOKEN_GATE_ORDER).toEqual([
+			"token_file",
+			"op",
+			"token",
+			"vault_scope",
+			"profile_policy",
+		]);
+		expect(Object.keys(AUTH_TOKEN_REPAIR_PATHS).sort()).toEqual(
+			[...AUTH_TOKEN_SUPERVISOR_CAUSES].sort(),
+		);
+		for (const cause of AUTH_TOKEN_SUPERVISOR_CAUSES) {
+			const repair = AUTH_TOKEN_REPAIR_PATHS[cause];
+			expect(repair.repairCommand.length).toBeGreaterThan(0);
+			expect(["auto-fixable", "manual-only"]).toContain(repair.posture);
+			expect(repair.successSignal.length).toBeGreaterThan(0);
+			expect(repair.stopCondition.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("an unmapped future cause falls back to a gate-owned explain hint", () => {
+		expect(authTokenRepairPathFor("future-supervisor-cause", "token")).toEqual({
+			repairCommand: "browser-use auth status --json",
+			posture: "manual-only",
+			successSignal: "The token gate reports a code-owned cause.",
+			stopCondition:
+				"Stop and explain the unmapped token cause before attempting repair.",
+		});
+	});
+
+	test("the three cold runtime causes own distinct repair commands and actions", () => {
+		const causes = [
+			"token-supervisor-unavailable",
+			"op-path-unavailable",
+			"unsafe-config-root",
+		] as const;
+		const commands = causes.map(
+			(cause) => AUTH_TOKEN_REPAIR_PATHS[cause].repairCommand,
+		);
+		expect(commands[0]).toBe(
+			"bun --cwd runtime/browser-use-environment-auth run build:release",
+		);
+		expect(new Set(commands).size).toBe(3);
+		expect(AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS).toMatchObject({
+			"token-supervisor-unavailable": "build-token-supervisor",
+			"op-path-unavailable": "install-op-cli",
+			"unsafe-config-root": "repair-config-root",
+		});
+	});
+
+	test("doctor and reload are setup commands with vocabulary-safe contracts", () => {
+		expect(BROWSER_USE_AUTH_SETUP_SUBCOMMANDS).toContain("doctor");
+		expect(BROWSER_USE_AUTH_SETUP_SUBCOMMANDS).toContain("reload");
+		expect(BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS).not.toContain("doctor");
+		expect(BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS).not.toContain("reload");
+		expect(browserUseContracts["auth-doctor"]).toBeDefined();
+		expect(browserUseContracts["auth-reload"]).toBeDefined();
+		expect(
+			findCommandFacadeMetadataDrift(browserUseContracts, {
+				path: "skills/browser-use/src/command-contract.ts",
+			}),
+		).toEqual([]);
+	});
+
+	test("U1 keeps doctor on the status projection and reload on a typed pending surface", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const doctor = await runForTest(
+			["auth", "doctor", "--json"],
+			supervisorRuntime(healthyStatus, calls),
+		);
+		expect(doctor.exitCode).toBe(0);
+		expect(calls).toEqual([{ mode: "status" }]);
+		expect(envelopeOf(doctor.stdout).data.action).toBe("doctor");
+
+		const reload = await runForTest(
+			["auth", "reload", "--json"],
+			makeRuntime({
+				runAuthTokenSupervisor: async () => {
+					throw new Error("reload must remain pending in U1");
+				},
+			}),
+		);
+		expect(reload.exitCode).toBe(1);
+		expect((parseJson(reload.stdout).error as { code: string }).code).toBe(
+			"browser_use_not_implemented",
+		);
+	});
+});
 
 // =========================================================================
 // R27 auth repair surface (auth plan 2026-07-21-003 U3a; ADR 0028).
@@ -475,6 +575,32 @@ describe("ADR 0030 token lifecycle commands", () => {
 		expect(
 			(parseJson(result.stdout).runtime_actions as unknown[]).length,
 		).toBe(1);
+	});
+
+	test("degraded runtime causes retain distinct typed repair actions", async () => {
+		for (const [cause, nextAction] of [
+			["token-supervisor-unavailable", "build-token-supervisor"],
+			["op-path-unavailable", "install-op-cli"],
+			["unsafe-config-root", "repair-config-root"],
+		] as const) {
+			const result = await runForTest(
+				["auth", "status", "--json"],
+				supervisorRuntime({
+					exitCode: 20,
+					stdout: JSON.stringify({
+						schema_version: 1,
+						ok: false,
+						state: "blocked",
+						cause,
+						next_action: nextAction,
+					}),
+					stderr: "",
+				}),
+			);
+			const envelope = envelopeOf(result.stdout);
+			expect(envelope.data.evaluation.blocked_cause).toBe(cause);
+			expect(envelope.continuation.next_action_id).toBe(nextAction);
+		}
 	});
 });
 

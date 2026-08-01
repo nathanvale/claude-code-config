@@ -625,11 +625,16 @@ async function executeCommand(input: {
 	}
 
 	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
-	if (parsed.family === "auth" && !parsed.dryRun) {
+	if (
+		parsed.family === "auth" &&
+		!parsed.dryRun &&
+		parsed.subcommand !== "reload"
+	) {
 		if (
 			parsed.subcommand === "install-token" ||
 			parsed.subcommand === "remove-token" ||
-			parsed.subcommand === "status"
+			parsed.subcommand === "status" ||
+			parsed.subcommand === "doctor"
 		) {
 			return runAuthTokenLifecycle({
 				parsed,
@@ -5052,7 +5057,7 @@ const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
 	"cleanup-required",
 	"blocked",
 ]);
-const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
+export const AUTH_TOKEN_SUPERVISOR_CAUSES = [
 	"invalid-arguments",
 	"unsafe-ancestry",
 	"unsafe-config-root",
@@ -5099,12 +5104,216 @@ const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
 	"profile-policy-unsafe",
 	"token-supervisor-unavailable",
 	"token-supervisor-output-too-large",
-]);
+] as const;
+export type AuthTokenSupervisorCause =
+	(typeof AUTH_TOKEN_SUPERVISOR_CAUSES)[number];
+const AUTH_TOKEN_SUPERVISOR_CAUSE_SET = new Set<string>(
+	AUTH_TOKEN_SUPERVISOR_CAUSES,
+);
+
+export const AUTH_TOKEN_GATE_ORDER = [
+	"token_file",
+	"op",
+	"token",
+	"vault_scope",
+	"profile_policy",
+] as const;
+export type AuthTokenCustodyGate = (typeof AUTH_TOKEN_GATE_ORDER)[number];
+export type AuthTokenDoctorGate = "runtime" | AuthTokenCustodyGate;
+export type AuthTokenRepairPosture = "auto-fixable" | "manual-only";
+export type AuthTokenRepairPath = {
+	repairCommand: string;
+	posture: AuthTokenRepairPosture;
+	successSignal: string;
+	stopCondition: string;
+};
+
+const BUILD_TOKEN_SUPERVISOR_REPAIR = {
+	repairCommand:
+		"bun --cwd runtime/browser-use-environment-auth run build:release",
+	posture: "manual-only",
+	successSignal:
+		"The runtime gate can start the supervisor built from this worktree.",
+	stopCondition:
+		"Stop if the build fails or the release artifact does not belong to this worktree.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSTALL_OP_CLI_REPAIR = {
+	repairCommand:
+		'brew bundle --file "$HOME/code/dotfiles/config/brew/Brewfile"',
+	posture: "manual-only",
+	successSignal: "The runtime gate resolves an approved executable OP CLI path.",
+	stopCondition:
+		"Stop if the resolved OP CLI path remains missing, unsafe, or untrusted.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_CONFIG_ROOT = {
+	repairCommand: "browser-use auth install-token",
+	posture: "manual-only",
+	successSignal:
+		"The browser-use configuration root resolves as an owner-only real directory.",
+	stopCondition:
+		"Stop if the configuration root ancestry remains missing, linked, or unsafe.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSPECT_AUTH_STATUS = {
+	repairCommand: "browser-use auth status --json",
+	posture: "manual-only",
+	successSignal: "The status envelope reports a known cause and typed action.",
+	stopCondition:
+		"Stop if status remains invalid or does not report a code-owned cause.",
+} as const satisfies AuthTokenRepairPath;
+
+const REINSTALL_TOKEN = {
+	repairCommand: "browser-use auth install-token --replace",
+	posture: "manual-only",
+	successSignal: "The token file gate reports ready after atomic replacement.",
+	stopCondition:
+		"Stop if native validation fails or the prior admitted token cannot be preserved.",
+} as const satisfies AuthTokenRepairPath;
+
+const RELOAD_TOKEN = {
+	repairCommand: "browser-use auth reload",
+	posture: "auto-fixable",
+	successSignal: "The token and token file gates both report ready.",
+	stopCondition:
+		"Stop if the admitted source is absent, invalid, interactive, or still rejected.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_VAULT_GRANT = {
+	repairCommand: "browser-use auth repair-vault-grant",
+	posture: "manual-only",
+	successSignal: "The vault scope gate reports exactly one visible vault.",
+	stopCondition:
+		"Stop if the grant still exposes zero or multiple vaults after re-proof.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_PROFILE_POLICY = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "auto-fixable",
+	successSignal: "The profile policy gate reports ready after owner verification.",
+	stopCondition:
+		"Stop if the profile owner refuses the path, live state, or saved-login state.",
+} as const satisfies AuthTokenRepairPath;
+
+const RECREATE_UNSAFE_PROFILE = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "manual-only",
+	successSignal: "A fresh dedicated profile passes the profile policy gate.",
+	stopCondition:
+		"Stop before deleting, scrubbing, or rewriting an unsafe existing profile.",
+} as const satisfies AuthTokenRepairPath;
+
+export const AUTH_TOKEN_REPAIR_PATHS = {
+	"invalid-arguments": INSPECT_AUTH_STATUS,
+	"unsafe-ancestry": REINSTALL_TOKEN,
+	"unsafe-config-root": REPAIR_CONFIG_ROOT,
+	"unsafe-custody-directory": REINSTALL_TOKEN,
+	"backup-exclusion-unproven": REINSTALL_TOKEN,
+	"sync-exclusion-unproven": REINSTALL_TOKEN,
+	"token-missing": RELOAD_TOKEN,
+	"token-already-installed": INSPECT_AUTH_STATUS,
+	"token-unsafe": REINSTALL_TOKEN,
+	"staging-residue": REINSTALL_TOKEN,
+	"removal-residue": REINSTALL_TOKEN,
+	"input-cancelled": REINSTALL_TOKEN,
+	"input-invalid": REINSTALL_TOKEN,
+	"write-failed": REINSTALL_TOKEN,
+	"invalid-service-account": RELOAD_TOKEN,
+	"invalid-vault-scope": REPAIR_VAULT_GRANT,
+	"validation-failed": RELOAD_TOKEN,
+	"validation-timeout": RELOAD_TOKEN,
+	"validation-unavailable": INSTALL_OP_CLI_REPAIR,
+	"path-identity-changed": REINSTALL_TOKEN,
+	"atomic-replace-failed": REINSTALL_TOKEN,
+	"cleanup-failed": REINSTALL_TOKEN,
+	"parent-sync-failed": REINSTALL_TOKEN,
+	"core-dump-disable-failed": REINSTALL_TOKEN,
+	"op-path-not-absolute": INSTALL_OP_CLI_REPAIR,
+	"op-path-unapproved": INSTALL_OP_CLI_REPAIR,
+	"op-path-unavailable": INSTALL_OP_CLI_REPAIR,
+	"op-path-unsafe": INSTALL_OP_CLI_REPAIR,
+	"op-path-not-executable": INSTALL_OP_CLI_REPAIR,
+	"op-binary-untrusted": INSTALL_OP_CLI_REPAIR,
+	"op-staging-failed": INSTALL_OP_CLI_REPAIR,
+	"op-version-invalid": INSTALL_OP_CLI_REPAIR,
+	"op-version-unsupported": INSTALL_OP_CLI_REPAIR,
+	"token-invalid": RELOAD_TOKEN,
+	timeout: RELOAD_TOKEN,
+	"output-too-large": RELOAD_TOKEN,
+	"process-failed": RELOAD_TOKEN,
+	"process-signalled": RELOAD_TOKEN,
+	"io-failure": RELOAD_TOKEN,
+	"output-shape-invalid": INSTALL_OP_CLI_REPAIR,
+	"item-missing": REINSTALL_TOKEN,
+	"validator-protocol-invalid": INSTALL_OP_CLI_REPAIR,
+	"profile-policy-unproven": REPAIR_PROFILE_POLICY,
+	"profile-policy-unsafe": RECREATE_UNSAFE_PROFILE,
+	"token-supervisor-unavailable": BUILD_TOKEN_SUPERVISOR_REPAIR,
+	"token-supervisor-output-too-large": BUILD_TOKEN_SUPERVISOR_REPAIR,
+} as const satisfies Record<AuthTokenSupervisorCause, AuthTokenRepairPath>;
+
+const AUTH_TOKEN_EXPLAIN_PATHS = {
+	runtime: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The runtime gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped runtime cause before attempting repair.",
+	},
+	token_file: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token file gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token file cause before attempting repair.",
+	},
+	op: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The OP gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped OP cause before attempting repair.",
+	},
+	token: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token cause before attempting repair.",
+	},
+	vault_scope: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The vault scope gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped vault scope cause before attempting repair.",
+	},
+	profile_policy: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The profile policy gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped profile policy cause before attempting repair.",
+	},
+} as const satisfies Record<AuthTokenDoctorGate, AuthTokenRepairPath>;
+
+export function authTokenRepairPathFor(
+	cause: string,
+	gate: AuthTokenDoctorGate,
+): AuthTokenRepairPath {
+	return Object.hasOwn(AUTH_TOKEN_REPAIR_PATHS, cause)
+		? AUTH_TOKEN_REPAIR_PATHS[cause as AuthTokenSupervisorCause]
+		: AUTH_TOKEN_EXPLAIN_PATHS[gate];
+}
 const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
 	"auth-status",
 	"rerun-confidential-command",
 	"repair-token-custody",
 	"repair-op-admission",
+	"build-token-supervisor",
+	"install-op-cli",
+	"repair-config-root",
 	"repair-vault-grant",
 	"create-credential-clean-profile",
 	"revoke-service-account-token-remotely",
@@ -5132,7 +5341,7 @@ function recordField(value: unknown): Record<string, unknown> | undefined {
 }
 
 function safeAuthTokenCause(value: unknown): string | undefined {
-	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSES.has(value)
+	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSE_SET.has(value)
 		? value
 		: undefined;
 }
