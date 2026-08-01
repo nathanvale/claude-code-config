@@ -94,9 +94,9 @@
 
 - Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
 - New durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`.
-- Legacy storage framework lives under `$HOME/code/claude-code-config/context/archive/legacy-memory-framework/`.
 - Repos own operational truth; context folders own durable recall and synthesis.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
+- Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
