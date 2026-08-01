@@ -11,7 +11,9 @@
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -265,6 +267,7 @@ export async function runBrowserUseCli(
 		runtime?: BrowserUseRuntime;
 		stdout?: CliWriter;
 		stderr?: CliWriter;
+		authDoctor?: AuthDoctorOrchestrationDeps;
 	} = {},
 ): Promise<number> {
 	const runtime =
@@ -301,7 +304,17 @@ export async function runBrowserUseCli(
 	const outputMode = errorOutputMode(diagnosticArgv.argv);
 	let parsed: ParsedBrowserUseCommand;
 	try {
-		parsed = parseBrowserUseArgv(diagnosticArgv.argv);
+		const fixRequest = extractAuthDoctorFixRequest(diagnosticArgv.argv);
+		parsed = parseBrowserUseArgv(fixRequest.argv);
+		if (fixRequest.requested && parsed.kind === "command") {
+			parsed = {
+				...parsed,
+				flagValues: {
+					...parsed.flagValues,
+					"--fix": fixRequest.profileOnly ? "profile" : "",
+				},
+			};
+		}
 	} catch (error) {
 		return emitWithDiagnostics({
 			categoryRoot: "browser-use.cli",
@@ -370,6 +383,9 @@ export async function runBrowserUseCli(
 					runIdExplicit,
 					diagnosticVerbose: diagnosticArgv.options.verbose,
 					durationMs,
+					...(options.authDoctor === undefined
+						? {}
+						: { authDoctor: options.authDoctor }),
 				});
 			} catch (error) {
 				return emitCliError({
@@ -385,6 +401,39 @@ export async function runBrowserUseCli(
 	} finally {
 		resetCliDiagnostics();
 	}
+}
+
+function extractAuthDoctorFixRequest(argv: readonly string[]): {
+	argv: readonly string[];
+	requested: boolean;
+	profileOnly: boolean;
+} {
+	if (argv[0] !== "auth" || argv[1] !== "doctor") {
+		return { argv, requested: false, profileOnly: false };
+	}
+	const stripped = [...argv];
+	const fixIndexes: number[] = [];
+	let inlineFix = false;
+	for (let index = 2; index < stripped.length; index += 1) {
+		if (stripped[index] === "--caller") {
+			index += 1;
+			continue;
+		}
+		if (stripped[index] === "--fix") fixIndexes.push(index);
+		if (stripped[index]?.startsWith("--fix=") === true) inlineFix = true;
+	}
+	if (fixIndexes.length === 0) {
+		if (inlineFix) {
+			throw usageError("--fix does not take a value; use optional profile after it.");
+		}
+		return { argv, requested: false, profileOnly: false };
+	}
+	if (fixIndexes.length !== 1) throw usageError("--fix may be supplied once.");
+	const index = fixIndexes[0] ?? -1;
+	stripped.splice(index, 1);
+	const profileOnly = stripped[index] === "profile";
+	if (profileOnly) stripped.splice(index, 1);
+	return { argv: stripped, requested: true, profileOnly };
 }
 
 // One family -> result kind mapping for the mock/not-implemented envelopes.
@@ -432,6 +481,7 @@ async function executeCommand(input: {
 	runIdExplicit: boolean;
 	diagnosticVerbose: boolean;
 	durationMs: () => number;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	// Version-matched bundled guidance (D3): a pure render of the guide content
@@ -646,6 +696,9 @@ async function executeCommand(input: {
 				runId: input.runId,
 				caller,
 				durationMs: input.durationMs,
+				...(input.authDoctor === undefined
+					? {}
+					: { authDoctor: input.authDoctor }),
 			});
 		}
 		return runAuthReadiness({
@@ -1173,6 +1226,7 @@ type PlatformCommandInput = {
 	runId: string;
 	caller: BrowserUseCallerMetadata;
 	durationMs: () => number;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 };
 
 const platformStoreActions = [
@@ -5348,6 +5402,322 @@ type AuthTokenSupervisorProjection = {
 	detail?: Record<string, unknown>;
 };
 
+type AuthDoctorOwnerSpawnInput = {
+	argv: readonly string[];
+	env: Record<string, string | undefined>;
+	timeoutMs: number;
+};
+
+type AuthDoctorOwnerResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	timedOut: boolean;
+	failureReason?: "owner_spawn_failed";
+};
+
+type AuthDoctorOrchestrationDeps = {
+	spawnOwner?: (
+		input: AuthDoctorOwnerSpawnInput,
+	) => Promise<AuthDoctorOwnerResult>;
+	warmChromeEntrypoint?: string | null;
+};
+
+const AUTH_DOCTOR_OWNER_TIMEOUT_MS = 10_000;
+
+async function spawnAuthDoctorOwner(
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	const child = Bun.spawn([...input.argv], {
+		env: input.env,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: input.timeoutMs,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return {
+		exitCode,
+		stdout,
+		stderr,
+		timedOut: child.signalCode !== null,
+	};
+}
+
+function authDoctorOwnerEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const allowed = [
+		"HOME",
+		"PATH",
+		"LANG",
+		"LC_ALL",
+		"TMPDIR",
+		"XDG_CONFIG_HOME",
+		"WARM_CHROME_PROFILE_DIR",
+	] as const;
+	const childEnv: Record<string, string | undefined> = {
+		PATH: env.PATH ?? "/usr/bin:/bin",
+	};
+	for (const key of allowed) {
+		if (env[key] !== undefined) childEnv[key] = env[key];
+	}
+	for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) delete childEnv[key];
+	return childEnv;
+}
+
+function authDoctorProfilePath(
+	env: Record<string, string | undefined>,
+): string | undefined {
+	const input = env.WARM_CHROME_PROFILE_DIR;
+	if (input?.startsWith("/") === true) return input;
+	if (input?.startsWith("~/") === true && env.HOME !== undefined) {
+		return join(env.HOME, input.slice(2));
+	}
+	return env.HOME === undefined ? undefined : join(env.HOME, ".agent-warm-profile");
+}
+
+function defaultWarmChromeEntrypoint(): string | undefined {
+	const entrypoint = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+		"..",
+		"runtime",
+		"warm-chrome",
+		"src",
+		"cli.ts",
+	);
+	return existsSync(entrypoint) ? entrypoint : undefined;
+}
+
+function authDoctorCheck(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): Record<string, unknown> | undefined {
+	return recordField(recordField(projection.detail?.checks)?.[gate]);
+}
+
+function authDoctorGateIsRed(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): boolean {
+	return stringField(authDoctorCheck(projection, gate)?.status) !== "ready";
+}
+
+function authDoctorGateCause(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): string {
+	return stringField(authDoctorCheck(projection, gate)?.cause) ?? "unknown";
+}
+
+function authDoctorOwnerFailure(result: AuthDoctorOwnerResult): string {
+	if (result.failureReason !== undefined) return result.failureReason;
+	if (result.timedOut) return "owner_timeout";
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const code = stringField(recordField(envelope?.error)?.code);
+		if (code !== undefined) return code;
+	} catch {
+		// Owner output is only interpreted when it is a structured envelope.
+	}
+	return `owner_exit_${result.exitCode}`;
+}
+
+async function runBoundedAuthDoctorOwner(
+	spawnOwner: NonNullable<AuthDoctorOrchestrationDeps["spawnOwner"]>,
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	try {
+		return await spawnOwner(input);
+	} catch {
+		return {
+			exitCode: RUNTIME_FAILURE_EXIT_CODE,
+			stdout: "",
+			stderr: "",
+			timedOut: false,
+			failureReason: "owner_spawn_failed",
+		};
+	}
+}
+
+async function readAuthDoctorProjection(
+	input: PlatformCommandInput,
+): Promise<AuthTokenSupervisorProjection> {
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? { exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, stdout: "", stderr: "" }
+			: await input.runtime.runAuthTokenSupervisor({ mode: "status" });
+	return (
+		parseAuthTokenSupervisorResult(result.stdout, result.exitCode) ?? {
+			ok: false,
+			state: "blocked",
+			cause: "token-supervisor-unavailable",
+			nextAction: "repair-op-admission",
+		}
+	);
+}
+
+async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
+	const initial = await readAuthDoctorProjection(input);
+	const notes: string[] = [];
+	const spawnOwner = input.authDoctor?.spawnOwner ?? spawnAuthDoctorOwner;
+	const ownerEnv = authDoctorOwnerEnv(input.runtime.env);
+	const browserUseEntrypoint = fileURLToPath(import.meta.url);
+	const profileOnly = input.parsed.flagValues["--fix"] === "profile";
+	let vaultReproofAttempted = false;
+
+	if (recordField(initial.detail?.checks) === undefined) {
+		const cause = initial.cause ?? "unknown";
+		notes.push(
+			`fix runtime: refused; manual: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+	} else {
+		let tokenDependencyBlocked = false;
+		const delegatedCommands = new Set<string>();
+		if (!profileOnly) {
+			for (const gate of ["token_file", "op", "token"] as const) {
+				if (!authDoctorGateIsRed(initial, gate)) continue;
+				const cause = authDoctorGateCause(initial, gate);
+				const repair = authTokenRepairPathFor(cause, gate);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix ${gate}: skipped; manual: ${repair.repairCommand}`,
+					);
+					continue;
+				}
+				if (repair.posture === "manual-only") {
+					notes.push(
+						`fix ${gate}: refused; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+					continue;
+				}
+				if (delegatedCommands.has(repair.repairCommand)) continue;
+				delegatedCommands.add(repair.repairCommand);
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						browserUseEntrypoint,
+						"auth",
+						"reload",
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+				});
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push(`fix ${gate}: delegated`);
+				} else {
+					notes.push(
+						`fix ${gate}: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+				}
+			}
+
+			if (authDoctorGateIsRed(initial, "vault_scope")) {
+				const repair = authTokenRepairPathFor(
+					authDoctorGateCause(initial, "vault_scope"),
+					"vault_scope",
+				);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix vault_scope: skipped; manual: ${repair.repairCommand}`,
+					);
+				} else {
+					vaultReproofAttempted = true;
+					const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+						argv: [
+							process.execPath,
+							browserUseEntrypoint,
+							"auth",
+							"repair-vault-grant",
+							"--json",
+							"--quiet",
+						],
+						env: ownerEnv,
+						timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+					});
+					notes.push(
+						result.exitCode === 0 && !result.timedOut
+							? "fix vault_scope: re-proved"
+							: `fix vault_scope: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+				}
+			}
+		}
+
+		if (authDoctorGateIsRed(initial, "profile_policy")) {
+			const cause = authDoctorGateCause(initial, "profile_policy");
+			const repair = authTokenRepairPathFor(cause, "profile_policy");
+			const profilePath = authDoctorProfilePath(input.runtime.env);
+			const configuredEntrypoint = input.authDoctor?.warmChromeEntrypoint;
+			const warmChromeEntrypoint =
+				configuredEntrypoint === null
+					? undefined
+					: configuredEntrypoint ?? defaultWarmChromeEntrypoint();
+			const manualCommand =
+				repair.posture === "manual-only" || profilePath === undefined
+					? repair.repairCommand
+					: `warm-chrome repair --profile-only --profile ${JSON.stringify(profilePath)}`;
+			if (
+				repair.posture === "manual-only" ||
+				profilePath === undefined ||
+				warmChromeEntrypoint === undefined
+			) {
+				notes.push(`fix profile_policy: refused; manual: ${manualCommand}`);
+			} else {
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						warmChromeEntrypoint,
+						"repair",
+						"--profile-only",
+						"--profile",
+						profilePath,
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+				});
+				notes.push(
+					result.exitCode === 0 && !result.timedOut
+						? "fix profile_policy: delegated"
+						: `fix profile_policy: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${manualCommand}`,
+				);
+			}
+		}
+	}
+
+	const finalProjection = await readAuthDoctorProjection(input);
+	if (
+		vaultReproofAttempted &&
+		authDoctorGateIsRed(finalProjection, "vault_scope")
+	) {
+		notes.push(
+			"fix vault_scope: refused; manual: Grant the service account access to exactly one vault in 1Password, then rerun browser-use auth repair-vault-grant",
+		);
+	}
+	if (input.parsed.outputMode === "plain") {
+		if (notes.length > 0) input.stdout.write(`${notes.join("\n")}\n`);
+		input.stdout.write(renderAuthTokenDoctor(finalProjection));
+		return finalProjection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	return emitAuthTokenLifecycleResult(
+		input,
+		finalProjection,
+		"auth_token_supervisor_failed",
+	);
+}
+
 function recordField(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -5685,6 +6055,12 @@ async function runAuthTokenLifecycle(
 			},
 			"auth_token_input_rejected",
 		);
+	}
+	if (
+		input.parsed.subcommand === "doctor" &&
+		input.parsed.flagValues["--fix"] !== undefined
+	) {
+		return runAuthDoctorFix(input);
 	}
 	if (input.parsed.subcommand === "reload") {
 		const stored =
@@ -6156,10 +6532,16 @@ class BufferWriter implements CliWriter {
 export async function runForTest(
 	argv: readonly string[],
 	runtime: BrowserUseRuntime,
+	authDoctor?: AuthDoctorOrchestrationDeps,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const stdout = new BufferWriter();
 	const stderr = new BufferWriter();
-	const exitCode = await runBrowserUseCli(argv, { runtime, stdout, stderr });
+	const exitCode = await runBrowserUseCli(argv, {
+		runtime,
+		stdout,
+		stderr,
+		...(authDoctor === undefined ? {} : { authDoctor }),
+	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
 

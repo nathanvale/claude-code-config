@@ -145,6 +145,38 @@ const allRedStatus = {
 	stderr: "",
 } as const satisfies AuthTokenSupervisorResult;
 
+function blockedStatus(
+	cause: string,
+	checks: Record<string, Record<string, unknown>>,
+): AuthTokenSupervisorResult {
+	return {
+		exitCode: 20,
+		stdout: JSON.stringify({
+			schema_version: 1,
+			ok: false,
+			state: "blocked",
+			cause,
+			lane: { selected: "environment-injected-op", status: "blocked" },
+			checks,
+			next_action:
+				cause.startsWith("profile-policy")
+					? "create-credential-clean-profile"
+					: cause === "invalid-vault-scope"
+						? "repair-vault-grant"
+						: "install-token",
+		}),
+		stderr: "",
+	};
+}
+
+const greenChecks = {
+	token_file: { status: "ready" },
+	op: { status: "ready" },
+	token: { status: "ready" },
+	vault_scope: { status: "ready", visible_count: 1 },
+	profile_policy: { status: "ready" },
+} as const;
+
 function stringLeaves(value: unknown): string[] {
 	if (typeof value === "string") return [value];
 	if (Array.isArray(value)) return value.flatMap(stringLeaves);
@@ -445,6 +477,353 @@ describe("auth doctor renderer", () => {
 				projectedText.some((text) => text.includes(repair.repairCommand)),
 			).toBe(false);
 		}
+	});
+
+	test("AE2: --fix delegates stale-token and profile repairs, then exits green after re-check", async () => {
+		const profilePath = "/fixture/profiles/agent chrome";
+		const statusCalls: AuthTokenSupervisorInput[] = [];
+		const statusResults = [
+			{
+				...profilePolicyBlockedStatus,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: false,
+					state: "blocked",
+					cause: "token-invalid",
+					lane: { selected: "environment-injected-op", status: "blocked" },
+					checks: {
+						token_file: { status: "ready" },
+						op: { status: "ready" },
+						token: { status: "blocked", cause: "token-invalid" },
+						vault_scope: { status: "ready", visible_count: 1 },
+						profile_policy: {
+							status: "blocked",
+							cause: "profile-policy-unproven",
+						},
+					},
+					next_action: "install-token",
+				}),
+			},
+			healthyStatus,
+		] satisfies AuthTokenSupervisorResult[];
+		const ownerCalls: Array<{
+			argv: readonly string[];
+			env: Record<string, string | undefined>;
+			timeoutMs: number;
+		}> = [];
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({
+				env: {
+					HOME: "/fixture/home",
+					PATH: "/fixture/bin",
+					WARM_CHROME_PROFILE_DIR: profilePath,
+				},
+				runAuthTokenSupervisor: async (input) => {
+					statusCalls.push(input);
+					return statusResults.shift() ?? healthyStatus;
+				},
+			}),
+			{
+				warmChromeEntrypoint: "/fixture/worktree/runtime/warm-chrome/src/cli.ts",
+				spawnOwner: async (input) => {
+					ownerCalls.push(input);
+					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(statusCalls).toEqual([{ mode: "status" }, { mode: "status" }]);
+		expect(ownerCalls).toHaveLength(2);
+		expect(ownerCalls[0]?.argv.slice(-4)).toEqual([
+			"auth",
+			"reload",
+			"--json",
+			"--quiet",
+		]);
+		expect(ownerCalls[1]?.argv).toEqual([
+			process.execPath,
+			"/fixture/worktree/runtime/warm-chrome/src/cli.ts",
+			"repair",
+			"--profile-only",
+			"--profile",
+			profilePath,
+			"--json",
+			"--quiet",
+		]);
+		expect(ownerCalls.every((call) => call.timeoutMs > 0)).toBe(true);
+		expect(
+			ownerCalls.every(
+				(call) => call.env.OP_SERVICE_ACCOUNT_TOKEN === undefined,
+			),
+		).toBe(true);
+		expect(result.stdout).toContain("summary: 5 green, 0 red");
+	});
+
+	test("mixed safe and unsafe reds heal independently and retain the manual profile step", async () => {
+		const initial = blockedStatus("token-invalid", {
+			...greenChecks,
+			token: { status: "blocked", cause: "token-invalid" },
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unsafe",
+			},
+		});
+		const final = blockedStatus("profile-policy-unsafe", {
+			...greenChecks,
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unsafe",
+			},
+		});
+		const statuses = [initial, final];
+		const ownerCalls: readonly string[][] = [];
+		const mutableOwnerCalls = ownerCalls as string[][];
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({
+				env: { HOME: "/fixture/home", PATH: "/fixture/bin" },
+				runAuthTokenSupervisor: async () => statuses.shift() ?? final,
+			}),
+			{
+				warmChromeEntrypoint: "/fixture/warm-chrome.ts",
+				spawnOwner: async (input) => {
+					mutableOwnerCalls.push([...input.argv]);
+					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(ownerCalls).toHaveLength(1);
+		expect(ownerCalls[0]?.slice(-4)).toEqual([
+			"auth",
+			"reload",
+			"--json",
+			"--quiet",
+		]);
+		expect(result.stdout).toContain(
+			"fix profile_policy: refused; manual: browser-use auth doctor --fix profile",
+		);
+		expect(result.stdout).toContain("summary: 4 green, 1 red");
+	});
+
+	test("all-manual reds spawn no owner and render every manual continuation", async () => {
+		const manual = blockedStatus("unsafe-ancestry", {
+			token_file: { status: "blocked", cause: "unsafe-ancestry" },
+			op: { status: "blocked", cause: "op-session-unavailable" },
+			token: { status: "blocked", cause: "item-missing" },
+			vault_scope: { status: "blocked", cause: "invalid-vault-scope" },
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unsafe",
+			},
+		});
+		let ownerCalls = 0;
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({
+				env: { HOME: "/fixture/home" },
+				runAuthTokenSupervisor: async () => manual,
+			}),
+			{
+				spawnOwner: async () => {
+					ownerCalls += 1;
+					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(ownerCalls).toBe(0);
+		for (const command of [
+			"browser-use auth install-token --replace",
+			"op signin",
+			"browser-use auth repair-vault-grant",
+		]) {
+			expect(result.stdout).toContain(command);
+		}
+		expect(result.stdout).toContain("browser-use auth doctor --fix profile");
+	});
+
+	test("an owner failure skips token dependents but still runs independent profile repair", async () => {
+		const initial = blockedStatus("token-invalid", {
+			...greenChecks,
+			token: { status: "blocked", cause: "token-invalid" },
+			vault_scope: { status: "blocked", cause: "invalid-vault-scope" },
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unproven",
+			},
+		});
+		const final = blockedStatus("token-invalid", {
+			...greenChecks,
+			token: { status: "blocked", cause: "token-invalid" },
+			vault_scope: { status: "blocked", cause: "invalid-vault-scope" },
+		});
+		const statuses = [initial, final];
+		const ownerCalls: string[][] = [];
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({
+				env: { HOME: "/fixture/home" },
+				runAuthTokenSupervisor: async () => statuses.shift() ?? final,
+			}),
+			{
+				warmChromeEntrypoint: "/fixture/warm-chrome.ts",
+				spawnOwner: async (input) => {
+					ownerCalls.push([...input.argv]);
+					return ownerCalls.length === 1
+						? {
+								exitCode: 20,
+								stdout: JSON.stringify({ error: { code: "auth_token_source_auth_required" } }),
+								stderr: "",
+								timedOut: false,
+							}
+						: { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(ownerCalls).toHaveLength(2);
+		expect(ownerCalls.some((argv) => argv.includes("repair-vault-grant"))).toBe(
+			false,
+		);
+		expect(ownerCalls.some((argv) => argv.includes("--profile-only"))).toBe(true);
+		expect(result.stdout).toContain(
+			"owner_failed reason=auth_token_source_auth_required",
+		);
+		expect(result.stdout).toContain("fix vault_scope: skipped");
+	});
+
+	test("degraded runtime fix is hint-only and performs no owner mutation", async () => {
+		const degraded = {
+			exitCode: 20,
+			stdout: JSON.stringify({
+				schema_version: 1,
+				ok: false,
+				state: "blocked",
+				cause: "token-supervisor-unavailable",
+				next_action: "build-token-supervisor",
+			}),
+			stderr: "",
+		} satisfies AuthTokenSupervisorResult;
+		let ownerCalls = 0;
+		let statusCalls = 0;
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({
+				runAuthTokenSupervisor: async () => {
+					statusCalls += 1;
+					return degraded;
+				},
+			}),
+			{
+				spawnOwner: async () => {
+					ownerCalls += 1;
+					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(statusCalls).toBe(2);
+		expect(ownerCalls).toBe(0);
+		expect(result.stdout).toContain(
+			"bun --cwd runtime/browser-use-environment-auth run build:release",
+		);
+	});
+
+	test("persistent vault red gets one pure re-proof followed by the manual 1Password grant", async () => {
+		const vaultRed = blockedStatus("invalid-vault-scope", {
+			...greenChecks,
+			vault_scope: {
+				status: "blocked",
+				cause: "invalid-vault-scope",
+				visible_count: 0,
+			},
+		});
+		const ownerCalls: string[][] = [];
+		const result = await runForTest(
+			["auth", "doctor", "--fix"],
+			makeRuntime({ runAuthTokenSupervisor: async () => vaultRed }),
+			{
+				spawnOwner: async (input) => {
+					ownerCalls.push([...input.argv]);
+					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(ownerCalls).toHaveLength(1);
+		expect(ownerCalls[0]).toContain("repair-vault-grant");
+		expect(result.stdout).toContain(
+			"Grant the service account access to exactly one vault in 1Password",
+		);
+	});
+
+	test("an unresolvable warm-chrome entrypoint becomes an exact manual command", async () => {
+		let ownerCalls = 0;
+		const result = await runForTest(
+			["auth", "doctor", "--fix", "profile"],
+			makeRuntime({
+				env: {
+					HOME: "/fixture/home",
+					WARM_CHROME_PROFILE_DIR: "/fixture/exact profile",
+				},
+				runAuthTokenSupervisor: async () => profilePolicyBlockedStatus,
+			}),
+			{
+				warmChromeEntrypoint: null,
+				spawnOwner: async () => {
+					ownerCalls += 1;
+					return { exitCode: 1, stdout: "", stderr: "", timedOut: false };
+				},
+			},
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(ownerCalls).toBe(0);
+		expect(result.stdout).toContain(
+			'manual: warm-chrome repair --profile-only --profile "/fixture/exact profile"',
+		);
+		expect(result.stdout).not.toContain("not found");
+	});
+
+	test("--fix JSON re-check keeps repair commands in human output only", async () => {
+		const vaultRed = blockedStatus("invalid-vault-scope", {
+			...greenChecks,
+			vault_scope: {
+				status: "blocked",
+				cause: "invalid-vault-scope",
+				visible_count: 0,
+			},
+		});
+		const result = await runForTest(
+			["auth", "doctor", "--fix", "--json"],
+			makeRuntime({ runAuthTokenSupervisor: async () => vaultRed }),
+			{
+				spawnOwner: async () => ({
+					exitCode: 0,
+					stdout: "{}",
+					stderr: "",
+					timedOut: false,
+				}),
+			},
+		);
+		const projectedText = stringLeaves(parseJson(result.stdout));
+
+		expect(result.exitCode).toBe(20);
+		expect(projectedText).not.toContain(
+			"browser-use auth repair-vault-grant",
+		);
+		expect(projectedText.some((text) => text.includes("1Password"))).toBe(false);
+		expect(envelopeOf(result.stdout).continuation.next_action_id).toBe(
+			"repair-vault-grant",
+		);
 	});
 });
 
