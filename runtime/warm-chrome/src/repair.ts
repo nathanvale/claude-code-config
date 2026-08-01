@@ -108,6 +108,8 @@ type RepairErrorContext = {
 	port: string;
 };
 
+type ProfileOnlyRepairErrorContext = Pick<RepairErrorContext, "command">;
+
 const PROFILE_PREFERENCES_MAX_BYTES = 1_048_576;
 
 // Every unrepairable verdict fails closed on exit 20 with plain diagnostics.
@@ -117,7 +119,7 @@ const PROFILE_PREFERENCES_MAX_BYTES = 1_048_576;
 function unrepairableError(
 	reason: WarmChromeRepairReason,
 	message: string,
-	context: RepairErrorContext,
+	context: RepairErrorContext | ProfileOnlyRepairErrorContext,
 	data: Record<string, unknown> = {},
 ): WarmChromeRuntimeError {
 	return new WarmChromeRuntimeError("unrepairable", message, {
@@ -150,14 +152,21 @@ export function createRepairCommandHandler(
 		...overrides,
 	};
 	return async (invocation, runtime) => {
+		if (invocation.profileOnly) {
+			const profileOnlyContext: ProfileOnlyRepairErrorContext = {
+				command: invocation.displayCommand,
+			};
+			return repairProfilePolicyOnly(
+				invocation,
+				runtime,
+				profileOnlyContext,
+			);
+		}
 		const context: RepairErrorContext = {
 			command: invocation.displayCommand,
 			endpoint: invocation.endpoint,
 			port: invocation.port,
 		};
-		if (invocation.profileOnly) {
-			return repairProfilePolicyOnly(invocation, runtime, context);
-		}
 
 		// 1. R11 gate before ANY action: inspect the port owner. A listener whose
 		// binary path is not real Google Chrome is unverified — refuse to repair
@@ -452,7 +461,7 @@ type ProfilePolicyInspection = {
 async function repairProfilePolicyOnly(
 	invocation: Parameters<WarmChromeCommandHandler>[0],
 	runtime: WarmChromeRuntime,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<WarmChromeCommandSuccess> {
 	const profileDir = invocation.profileInput;
 	if (profileDir === undefined || !isCanonicalProfilePath(profileDir)) {
@@ -682,7 +691,7 @@ function isCanonicalProfilePath(path: string): boolean {
 
 async function assertProfilePathCanonicalOnDisk(
 	profileDir: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<void> {
 	let inspectedPath = profileDir;
 	let resolvedPath: string;
@@ -721,7 +730,7 @@ async function assertProfilePathCanonicalOnDisk(
 
 async function assertProfilePathNotSymlink(
 	profileDir: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<void> {
 	const info = await lstatForRepair(profileDir, context);
 	if (info?.isSymbolicLink()) {
@@ -744,7 +753,7 @@ async function assertProfilePathNotSymlink(
 
 async function lstatForRepair(
 	path: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<Awaited<ReturnType<typeof lstat>> | null> {
 	try {
 		return await lstat(path);
@@ -754,6 +763,7 @@ async function lstatForRepair(
 			"profile_path_uninspectable",
 			"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
 			context,
+			{ profile_dir: path },
 		);
 	}
 }
@@ -761,7 +771,7 @@ async function lstatForRepair(
 async function assertProfileUnlocked(
 	runtime: WarmChromeRuntime,
 	profileDir: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<void> {
 	let lock: Awaited<ReturnType<WarmChromeRuntime["readSingletonLock"]>>;
 	try {
@@ -798,7 +808,7 @@ async function assertProfileUnlocked(
 
 async function inspectProfilePolicy(
 	profileDir: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<ProfilePolicyInspection> {
 	const defaultDir = join(profileDir, "Default");
 	const preferencesPath = join(defaultDir, "Preferences");
@@ -860,7 +870,7 @@ async function inspectProfilePolicy(
 
 async function assertRegularDirectory(
 	path: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 	profileDir: string,
 	allowMissing = false,
 ): Promise<void> {
@@ -886,7 +896,7 @@ async function assertRegularDirectory(
 
 async function assertPathNotSymlink(
 	path: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 	profileDir: string,
 ): Promise<void> {
 	if ((await lstatForRepair(path, context))?.isSymbolicLink()) {
@@ -907,7 +917,7 @@ const PROFILE_CREDENTIAL_STORES = [
 
 async function assertLoginDataEmpty(
 	profileDir: string,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<void> {
 	for (const credentialStore of PROFILE_CREDENTIAL_STORES) {
 		const storePath = join(profileDir, "Default", credentialStore);
@@ -1005,7 +1015,7 @@ async function writeTextFileAtomically(
 async function verifyProfilePolicyClean(
 	profileDir: string,
 	runtime: WarmChromeRuntime,
-	context: RepairErrorContext,
+	context: ProfileOnlyRepairErrorContext,
 ): Promise<void> {
 	const profileInfo = await lstatForRepair(profileDir, context);
 	if (

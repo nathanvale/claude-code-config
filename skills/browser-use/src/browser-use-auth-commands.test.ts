@@ -40,6 +40,7 @@ import {
 	AUTH_TOKEN_GATE_ORDER,
 	AUTH_TOKEN_REPAIR_PATHS,
 	AUTH_TOKEN_SUPERVISOR_CAUSES,
+	__authDoctorOwnerForTest,
 	authTokenRepairPathFor,
 	runForTest,
 } from "./browser-use";
@@ -674,6 +675,31 @@ describe("auth doctor renderer", () => {
 			"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
 		);
 		expect(result.stdout).toContain("summary: 4 green, 1 red");
+	});
+
+	test("owner delegation refuses output above the supervisor child bound", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const owner = join(scratch.base, "oversized-owner.ts");
+		await writeFile(
+			owner,
+			[
+				'const chunk = "x".repeat(65_536);',
+				"for (let index = 0; index < 17; index += 1) {",
+				"  await new Promise((resolve) => process.stdout.write(chunk, resolve));",
+				"}",
+				"",
+			].join("\n"),
+		);
+		const result = await __authDoctorOwnerForTest.spawn({
+			argv: [process.execPath, owner],
+			env: { PATH: process.env.PATH },
+			timeoutMs: 10_000,
+		});
+
+		expect(result.failureReason).toBe("owner_output_too_large");
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
 	});
 
 	test("manual reds only spawn the fail-closed unsafe-profile inspector", async () => {

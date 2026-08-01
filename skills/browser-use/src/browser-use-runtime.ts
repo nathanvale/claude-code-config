@@ -826,9 +826,9 @@ function openAuthTokenPipe(): AuthTokenPipe {
 	};
 }
 
-async function readBoundedAuthChildOutput(
+export async function readBoundedAuthChildOutput(
 	stream: ReadableStream<Uint8Array> | null,
-	child: AuthTokenProcess,
+	child: Pick<AuthTokenProcess, "kill">,
 ): Promise<{ ok: true; text: string } | { ok: false }> {
 	if (stream === null) return { ok: false };
 	const chunks: Buffer[] = [];

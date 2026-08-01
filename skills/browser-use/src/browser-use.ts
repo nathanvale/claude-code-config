@@ -133,6 +133,7 @@ import {
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
 	isAuthTokenSourceReference,
+	readBoundedAuthChildOutput,
 	resolveWarmChromeProfilePath,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
@@ -5473,7 +5474,7 @@ type AuthDoctorOwnerResult = {
 	stdout: string;
 	stderr: string;
 	timedOut: boolean;
-	failureReason?: "owner_spawn_failed";
+	failureReason?: "owner_output_too_large" | "owner_spawn_failed";
 };
 
 type AuthDoctorOrchestrationDeps = {
@@ -5497,18 +5498,31 @@ async function spawnAuthDoctorOwner(
 		timeout: input.timeoutMs,
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
+		readBoundedAuthChildOutput(child.stdout, child),
+		readBoundedAuthChildOutput(child.stderr, child),
 		child.exited,
 	]);
+	if (!stdout.ok || !stderr.ok) {
+		return {
+			exitCode,
+			stdout: "",
+			stderr: "",
+			timedOut: child.signalCode !== null,
+			failureReason: "owner_output_too_large",
+		};
+	}
 	return {
 		exitCode,
-		stdout,
-		stderr,
+		stdout: stdout.text,
+		stderr: stderr.text,
 		// SIGTERM from timeout or external kill; both surface as owner_timeout.
 		timedOut: child.signalCode !== null,
 	};
 }
+
+export const __authDoctorOwnerForTest = {
+	spawn: spawnAuthDoctorOwner,
+} as const;
 
 function authDoctorOwnerEnv(
 	env: Record<string, string | undefined>,

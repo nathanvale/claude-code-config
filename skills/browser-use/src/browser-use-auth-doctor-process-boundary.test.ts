@@ -16,6 +16,7 @@ import {
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { AUTH_TOKEN_FORBIDDEN_ENV_KEYS } from "./browser-use-runtime";
 
 const WORKSPACE_ROOT = resolve(import.meta.dir, "../../..");
 const BROWSER_USE_CLI = join(import.meta.dir, "browser-use.ts");
@@ -43,15 +44,6 @@ const OP_PATH = OP_PATHS.find((path) => existsSync(path));
 const TOKEN_SOURCE = "op://Browser Automation/Service Account/credential";
 const CHILD_TIMEOUT_MS = 30_000;
 const TEST_TIMEOUT_MS = CHILD_TIMEOUT_MS + 15_000;
-// Canonical list: AUTH_TOKEN_FORBIDDEN_ENV_KEYS in browser-use-runtime.ts; keep in sync.
-const FORBIDDEN_ENV_KEYS = [
-	"OP_SERVICE_ACCOUNT_TOKEN",
-	"OP_CONNECT_HOST",
-	"OP_CONNECT_TOKEN",
-	"BROWSER_USE_TOKEN",
-	"BROWSER_USE_OP_TOKEN",
-] as const;
-
 type CommandResult = {
 	exitCode: number;
 	stdout: string;
@@ -75,7 +67,7 @@ function scrubbedOperatorEnv(): Record<string, string> {
 			(entry): entry is [string, string] => entry[1] !== undefined,
 		),
 	);
-	for (const key of FORBIDDEN_ENV_KEYS) delete env[key];
+	for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) delete env[key];
 	return env;
 }
 
@@ -171,7 +163,10 @@ async function run(
 			child.kill("SIGKILL");
 			reject(new Error(`CLI timeout: ${entrypoint} ${args.join(" ")}`));
 		}, CHILD_TIMEOUT_MS);
-		child.once("error", reject);
+		child.once("error", (error) => {
+			clearTimeout(timeout);
+			reject(error);
+		});
 		child.once("exit", (code) => {
 			clearTimeout(timeout);
 			resolveExit(code ?? -1);

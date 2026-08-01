@@ -431,7 +431,7 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 		expect(run.exitCode).toBe(0);
 		expect(run.stdout).toContain("--profile-only");
 		expect(run.stdout).toContain(
-			"Repair only profile policy files; requires explicit --profile and skips browser entry.",
+			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
 		);
 		expectNoProcessAffectingCalls(fixture);
 	});
@@ -496,6 +496,8 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 
 			const envelope = expectUnrepairable(run, "profile_login_data_present");
 			expect(envelope.data?.profile_dir).toBe(profile);
+			expect(envelope.data).not.toHaveProperty("endpoint");
+			expect(envelope.data).not.toHaveProperty("port");
 			expect(await readdir(defaultDir)).toEqual(before);
 			expect(
 				await readFile(join(defaultDir, "Login Data"), "utf8"),
