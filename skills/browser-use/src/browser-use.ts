@@ -1972,6 +1972,29 @@ type TaskRunSemanticClick = {
 	visibleSelector: string;
 };
 
+// Compile the public task-run semantic input once so target admission and
+// execution prove the same exact step sequence.
+function baselineAgentBrowserSteps(
+	semanticClick: TaskRunSemanticClick | undefined,
+): AgentBrowserTask["steps"] {
+	return [
+		{ kind: "snapshot", interactive: true },
+		...(semanticClick === undefined
+			? []
+			: [
+					{
+						kind: "click-semantic" as const,
+						role: semanticClick.role,
+						name: semanticClick.name,
+						postcondition: {
+							kind: "element-visible" as const,
+							selector: semanticClick.visibleSelector,
+						},
+					},
+				]),
+	];
+}
+
 // The Agent Browser task the front door dispatches for a routed intent (F1):
 // one fresh interactive snapshot, optionally followed by one semantic click
 // resolved from that snapshot and one structural postcondition. Raw refs never
@@ -1981,8 +2004,9 @@ function baselineAgentBrowserTask(input: {
 	rawHandoff: unknown;
 	runId: string;
 	targetTabId: string;
+	expectedTargetUrl?: string;
 	allowedOrigin: string;
-	semanticClick?: TaskRunSemanticClick;
+	steps: AgentBrowserTask["steps"];
 }): AgentBrowserTask {
 	return {
 		// The executor re-validates the handoff shape itself; the driver passes the
@@ -1990,23 +2014,11 @@ function baselineAgentBrowserTask(input: {
 		handoff: input.rawHandoff as AgentBrowserTask["handoff"],
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
+		...(input.expectedTargetUrl !== undefined
+			? { expected_target_url: input.expectedTargetUrl }
+			: {}),
 		allowed_origins: [input.allowedOrigin],
-		steps: [
-			{ kind: "snapshot", interactive: true },
-			...(input.semanticClick === undefined
-				? []
-				: [
-						{
-							kind: "click-semantic" as const,
-							role: input.semanticClick.role,
-							name: input.semanticClick.name,
-							postcondition: {
-								kind: "element-visible" as const,
-								selector: input.semanticClick.visibleSelector,
-							},
-						},
-					]),
-		],
+		steps: input.steps,
 	};
 }
 
@@ -2560,7 +2572,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 
 	const runFlag = stringField(flags["--run"]);
-	const targetTabId = stringField(flags["--tab"]) ?? "task-tab";
+	const requestedTabId = stringField(flags["--tab"]);
 	const allowedOrigin = stringField(flags["--allowed-origin"]);
 
 	// Resolve the run to route: an existing run to resume (R23) loads and re-proves
@@ -2785,6 +2797,41 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	// a numeric tab index, enforces the allowed origin, and runs the intent via
 	// baselinePlaywrightTask.
 	if (route.lane_id === "agent-browser") {
+		const steps = baselineAgentBrowserSteps(semanticClick);
+		let targetTabId = requestedTabId;
+		let expectedTargetUrl: string | undefined;
+		if (targetTabId === undefined) {
+			const targetEnvelopeId = targetEnvelopeIdOf({
+				runId: run.run_id,
+				mode: "handoff-bound",
+				adapter: "agent-browser",
+				handoffEvidenceId: handoff.handoffEvidenceId,
+			});
+			const targetResolution = await resolveAgentBrowserTaskTarget(
+				{ runCommand: input.runtime.runCommand },
+				{
+					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+					run_id: run.run_id,
+					allowed_origins: [allowedOrigin],
+					steps,
+					target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+				},
+			);
+			if (!targetResolution.ok) {
+				return await recordTaskRunOutcome(
+					input,
+					store.deps,
+					run,
+					route,
+					mapAgentBrowserOutcome(targetResolution),
+					{
+						...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+					},
+				);
+			}
+			targetTabId = targetResolution.target_tab_id;
+			expectedTargetUrl = targetResolution.target_url;
+		}
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		const result = await executeAgentBrowserTask(
@@ -2809,8 +2856,9 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 				rawHandoff: rawHandoffData,
 				runId: run.run_id,
 				targetTabId,
+				...(expectedTargetUrl !== undefined ? { expectedTargetUrl } : {}),
 				allowedOrigin,
-				...(semanticClick !== undefined ? { semanticClick } : {}),
+				steps,
 			}),
 		);
 		if (mutationMarkerFailure !== undefined) {
