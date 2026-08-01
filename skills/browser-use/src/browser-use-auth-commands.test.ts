@@ -257,6 +257,36 @@ describe("token doctor repair groundwork", () => {
 		).toEqual([]);
 	});
 
+	test("doctor --fix stays aligned across contract, help, and parser", async () => {
+		const contract = browserUseContracts["auth-doctor"];
+		expect(contract.usage).toContain(
+			"auth doctor [--fix [profile]] [--caller <label>] [--json|--plain]",
+		);
+		expect(contract.flags).toMatchObject({
+			"--fix": {
+				type: "boolean",
+				description:
+					"Attempt owner-delegated repairs for red gates, then re-check every gate; add profile to limit repair to profile policy.",
+			},
+		});
+		expect(contract.mutation).toBe("write");
+		expect(contract.sideEffects).toEqual(["check", "write"]);
+		expect(contract.executionModes).toEqual(["check", "normal"]);
+		expect(contract.interactivity).toBe("none");
+
+		const help = await runForTest(
+			["auth", "doctor", "--fix", "--help"],
+			makeRuntime(),
+		);
+		expect(help.exitCode).toBe(0);
+		expect(help.stdout).toContain(
+			"browser-use auth doctor [--fix [profile]] [--caller <label>] [--json|--plain]",
+		);
+		expect(help.stdout).toContain(
+			"--fix Attempt owner-delegated repairs for red gates, then re-check every gate; add profile to limit repair to profile policy.",
+		);
+	});
+
 	test("setup commands keep doctor on status and route reload through its typed gate", async () => {
 		const calls: AuthTokenSupervisorInput[] = [];
 		const doctor = await runForTest(

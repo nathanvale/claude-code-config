@@ -1764,6 +1764,15 @@ const browserUseAuthInstallFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseAuthDoctorFlags = {
+	"--fix": {
+		type: "boolean",
+		description:
+			"Attempt owner-delegated repairs for red gates, then re-check every gate; add profile to limit repair to profile policy.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 // R11: binding repair is a targeted read of one exact item — never a scan —
 // so both coordinates are required.
 const browserUseAuthBindingFlags = {
@@ -2546,12 +2555,14 @@ export const browserUseContracts = defineCommandFacadeContract(
 			script: "browser-use",
 			summary:
 				"Render the five environment-lane admission gates and their operator repair ownership.",
-			usage: ["auth doctor [--caller <label>] [--json|--plain]"],
+			usage: [
+				"auth doctor [--fix [profile]] [--caller <label>] [--json|--plain]",
+			],
 			json: true,
 			audience: "operator",
-			mutation: "check",
-			sideEffects: ["check"],
-			executionModes: ["check"],
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["check", "normal"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUsePlatformStoreEnvVars,
@@ -2560,7 +2571,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 				success: browserUseAuthRepairActions,
 				failure: browserUseAuthRepairFailureActions,
 			},
-			flags: browserUsePlatformFlags,
+			flags: browserUseAuthDoctorFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"auth-reload": {
