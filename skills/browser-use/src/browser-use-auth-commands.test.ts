@@ -1494,23 +1494,21 @@ describe("ADR 0030 token lifecycle commands", () => {
 	});
 
 	test("source install passes the OP pipe directly and scrubs every child env", async () => {
-		const sourcePipe = fixtureStream();
 		const spawns: Parameters<AuthTokenProcessSpawn>[0][] = [];
+		let pipeClosed = 0;
 		const spawn: AuthTokenProcessSpawn = (input) => {
 			spawns.push(input);
 			const stdout =
-				input.argv[1] === "read"
-					? sourcePipe
-					: input.argv[0] === "/fixture/supervisor"
-						? fixtureStream(
-								JSON.stringify({
-									schema_version: 1,
-									ok: true,
-									state: "installed",
-									next_action: "auth-status",
-								}),
-							)
-						: null;
+				input.argv[0] === "/fixture/supervisor"
+					? fixtureStream(
+							JSON.stringify({
+								schema_version: 1,
+								ok: true,
+								state: "installed",
+								next_action: "auth-status",
+							}),
+						)
+					: null;
 			const stderr =
 				input.argv[0] === "/fixture/supervisor" ? fixtureStream() : null;
 			return {
@@ -1541,6 +1539,13 @@ describe("ADR 0030 token lifecycle commands", () => {
 				profilePath: "/fixture/profile",
 			},
 			spawn,
+			() => ({
+				readFd: 41,
+				writeFd: 42,
+				closeParent: () => {
+					pipeClosed += 1;
+				},
+			}),
 		);
 
 		expect(result.exitCode).toBe(0);
@@ -1554,7 +1559,11 @@ describe("ADR 0030 token lifecycle commands", () => {
 				"stdin",
 			]),
 		]);
-		expect(spawns[2]?.stdin).toBe(sourcePipe);
+		expect(spawns[1]?.stdout).toBe(42);
+		expect(spawns[2]?.stdin).toBe(41);
+		expect(spawns[1]?.stdout).not.toBeInstanceOf(ReadableStream);
+		expect(spawns[2]?.stdin).not.toBeInstanceOf(ReadableStream);
+		expect(pipeClosed).toBe(1);
 		expect(spawns.every((call) => call.timeoutMs > 0)).toBe(true);
 		for (const call of spawns) {
 			for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) {
@@ -1566,24 +1575,27 @@ describe("ADR 0030 token lifecycle commands", () => {
 		}
 	});
 
-	test("the Bun process adapter hands child stdout directly to child stdin", async () => {
-		const source = __authTokenSupervisorForTest.spawn({
-			argv: ["/usr/bin/printf", "fd-proof"],
-			env: { PATH: "/usr/bin:/bin" },
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "ignore",
-			timeoutMs: 1_000,
-		});
-		expect(source.stdout).not.toBeNull();
+	test("the Bun process adapter wires raw pipe fds without a readable token stream", async () => {
+		const tokenPipe = __authTokenSupervisorForTest.openPipe();
+		expect(Number.isInteger(tokenPipe.readFd)).toBe(true);
+		expect(Number.isInteger(tokenPipe.writeFd)).toBe(true);
 		const sink = __authTokenSupervisorForTest.spawn({
 			argv: ["/bin/cat"],
 			env: { PATH: "/usr/bin:/bin" },
-			stdin: source.stdout as ReadableStream<Uint8Array>,
+			stdin: tokenPipe.readFd,
 			stdout: "pipe",
 			stderr: "pipe",
 			timeoutMs: 1_000,
 		});
+		const source = __authTokenSupervisorForTest.spawn({
+			argv: ["/usr/bin/printf", "fd-proof"],
+			env: { PATH: "/usr/bin:/bin" },
+			stdin: "ignore",
+			stdout: tokenPipe.writeFd,
+			stderr: "ignore",
+			timeoutMs: 1_000,
+		});
+		tokenPipe.closeParent();
 
 		const [sourceExit, sinkExit, stdout, stderr] = await Promise.all([
 			source.exited,
@@ -1591,6 +1603,7 @@ describe("ADR 0030 token lifecycle commands", () => {
 			new Response(sink.stdout).text(),
 			new Response(sink.stderr).text(),
 		]);
+		expect(source.stdout).toBeNull();
 		expect(sourceExit).toEqual({ exitCode: 0, signalCode: null });
 		expect(sinkExit).toEqual({ exitCode: 0, signalCode: null });
 		expect(stdout).toBe("fd-proof");

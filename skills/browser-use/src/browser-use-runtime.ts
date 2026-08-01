@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import {
+	closeSync,
 	constants as fsConstants,
 	existsSync,
 	realpathSync,
@@ -111,13 +112,13 @@ export const AUTH_TOKEN_FORBIDDEN_ENV_KEYS = [
 export type AuthTokenProcessSpawnInput = {
 	argv: readonly string[];
 	env: Record<string, string | undefined>;
-	stdin: "ignore" | "inherit" | ReadableStream<Uint8Array>;
-	stdout: "ignore" | "pipe";
+	stdin: "ignore" | "inherit" | number;
+	stdout: "ignore" | "pipe" | number;
 	stderr: "ignore" | "pipe";
 	timeoutMs: number;
 };
 
-/** Minimal child handle that keeps source-pipe wiring inspectable without reading it. */
+/** Minimal child handle exposing only bounded, non-token supervisor output streams. */
 export type AuthTokenProcess = {
 	stdout: ReadableStream<Uint8Array> | null;
 	stderr: ReadableStream<Uint8Array> | null;
@@ -129,10 +130,20 @@ export type AuthTokenProcess = {
 	kill: () => void;
 };
 
-/** Injectable process spawn used to prove direct pipe identity and scrubbed environments. */
+/** Injectable process spawn used to prove raw-fd wiring and scrubbed environments. */
 export type AuthTokenProcessSpawn = (
 	input: AuthTokenProcessSpawnInput,
 ) => AuthTokenProcess;
+
+/** Raw kernel pipe endpoints used to keep source token bytes outside JavaScript streams. */
+export type AuthTokenPipe = {
+	readFd: number;
+	writeFd: number;
+	closeParent: () => void;
+};
+
+/** Injectable raw-pipe owner for the source-install process-boundary proof. */
+export type AuthTokenPipeOpen = () => AuthTokenPipe;
 
 const AUTH_TOKEN_SOURCE_REFERENCE_PATTERN =
 	/^op:\/\/[^/?#]+\/[^/?#]+\/[^/?#]+$/;
@@ -679,6 +690,68 @@ function spawnAuthTokenProcess(
 	}
 }
 
+const DARWIN_LIBC_PATH = "/usr/lib/libSystem.B.dylib";
+const DARWIN_F_SETFD = 2;
+const DARWIN_FD_CLOEXEC = 1;
+
+function openAuthTokenPipe(): AuthTokenPipe {
+	if (process.platform !== "darwin") {
+		throw new Error("raw auth token pipe is unavailable on this platform");
+	}
+	const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
+	const libc = dlopen(DARWIN_LIBC_PATH, {
+		pipe: {
+			args: [FFIType.ptr],
+			returns: FFIType.int,
+		},
+		fcntl: {
+			args: [FFIType.int, FFIType.int, FFIType.int],
+			returns: FFIType.int,
+		},
+	});
+	const descriptors = new Int32Array(2);
+	let pipeCreated = false;
+	try {
+		if (libc.symbols.pipe(descriptors) !== 0) {
+			throw new Error("pipe(2) failed");
+		}
+		pipeCreated = true;
+		for (const descriptor of descriptors) {
+			if (
+				libc.symbols.fcntl(
+					descriptor,
+					DARWIN_F_SETFD,
+					DARWIN_FD_CLOEXEC,
+				) !== 0
+			) {
+				throw new Error("pipe fd close-on-exec setup failed");
+			}
+		}
+	} catch (error) {
+		if (pipeCreated) {
+			for (const descriptor of descriptors) closeSync(descriptor);
+		}
+		throw error;
+	} finally {
+		libc.close();
+	}
+	const [readFd, writeFd] = descriptors;
+	if (readFd === undefined || writeFd === undefined) {
+		throw new Error("pipe(2) returned incomplete descriptors");
+	}
+	let closed = false;
+	return {
+		readFd,
+		writeFd,
+		closeParent: () => {
+			if (closed) return;
+			closed = true;
+			closeSync(readFd);
+			closeSync(writeFd);
+		},
+	};
+}
+
 async function readBoundedAuthChildOutput(
 	stream: ReadableStream<Uint8Array> | null,
 	child: AuthTokenProcess,
@@ -722,6 +795,7 @@ async function runAuthTokenSourceInstall(
 	input: Extract<AuthTokenSupervisorInput, { mode: "install"; input: "source" }>,
 	deps: EnvironmentTokenSupervisorDeps,
 	spawn: AuthTokenProcessSpawn,
+	openPipe: AuthTokenPipeOpen = openAuthTokenPipe,
 ): Promise<AuthTokenSupervisorResult> {
 	if (!isAuthTokenSourceReference(input.sourceRef) || deps.opPath === undefined) {
 		return authTokenSourceUnavailable("source-fetch-failed");
@@ -744,30 +818,38 @@ async function runAuthTokenSourceInstall(
 		return authTokenSourceUnavailable("op-session-unavailable");
 	}
 
-	const source = spawn({
-		argv: [deps.opPath, "read", input.sourceRef],
-		env: operatorEnv,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "ignore",
-		timeoutMs: OP_SOURCE_FETCH_TIMEOUT_MS,
-	});
-	if (source.stdout === null) {
-		source.kill();
-		return authTokenSourceUnavailable("source-fetch-failed");
+	let tokenPipe: AuthTokenPipe;
+	try {
+		tokenPipe = openPipe();
+	} catch {
+		return authSupervisorUnavailable("token-supervisor-unavailable");
 	}
-	const supervisor = spawn({
-		argv: authTokenSupervisorArgs(deps, deps.configRoot, input),
-		env: {
-			PATH: "/usr/bin:/bin",
-			LANG: "C.UTF-8",
-			TMPDIR: deps.configRoot,
-		},
-		stdin: source.stdout,
-		stdout: "pipe",
-		stderr: "pipe",
-		timeoutMs: NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS,
-	});
+	let source: AuthTokenProcess;
+	let supervisor: AuthTokenProcess;
+	try {
+		source = spawn({
+			argv: [deps.opPath, "read", input.sourceRef],
+			env: operatorEnv,
+			stdin: "ignore",
+			stdout: tokenPipe.writeFd,
+			stderr: "ignore",
+			timeoutMs: OP_SOURCE_FETCH_TIMEOUT_MS,
+		});
+		supervisor = spawn({
+			argv: authTokenSupervisorArgs(deps, deps.configRoot, input),
+			env: {
+				PATH: "/usr/bin:/bin",
+				LANG: "C.UTF-8",
+				TMPDIR: deps.configRoot,
+			},
+			stdin: tokenPipe.readFd,
+			stdout: "pipe",
+			stderr: "pipe",
+			timeoutMs: NON_INTERACTIVE_SUPERVISOR_TIMEOUT_MS,
+		});
+	} finally {
+		tokenPipe.closeParent();
+	}
 	const [stdout, stderr, supervisorExit, sourceExit] = await Promise.all([
 		readBoundedAuthChildOutput(supervisor.stdout, supervisor),
 		readBoundedAuthChildOutput(supervisor.stderr, supervisor),
@@ -884,6 +966,7 @@ async function runAuthTokenSupervisor(
 export const __authTokenSupervisorForTest = {
 	run: runAuthTokenSourceInstall,
 	spawn: spawnAuthTokenProcess,
+	openPipe: openAuthTokenPipe,
 } as const;
 
 export type BrowserUseRuntime = {
