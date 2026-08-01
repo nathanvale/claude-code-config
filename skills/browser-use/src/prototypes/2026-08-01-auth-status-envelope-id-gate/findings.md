@@ -68,10 +68,12 @@ now total.
   This IS a shared-facade change (handoff flagged it approval-gated) — but the
   evidence shows no app-level alternative meets the objective short of
   renaming the action id, which ripples into the Swift supervisor contract and
-  the parallel session's prototype. The gate only widens acceptance (every
-  previously valid envelope stays valid); other id-ish fields
-  (choices[].id/action_id, constraints[].id, forbidden_action_ids) still use
-  the vocabulary scan — flagged as a consistency follow-up, not taken here.
+  the parallel session's prototype. Compatibility: all 69 audited current
+  action ids remain valid; formerly accepted free-form ids with uppercase,
+  whitespace, punctuation, or length >128 would now fail the shape gate (none
+  exist in-repo). Other id-ish fields (choices[].id/action_id,
+  constraints[].id, forbidden_action_ids) still use the vocabulary scan —
+  flagged as a consistency follow-up, not taken here.
 - Fix 2 (defense-in-depth, app-level): emitCliError never-throw fallback.
 - Test homes: facade envelope validation suite (id acceptance/rejection) +
   browser-use auth command test (blocked profile-policy → typed envelope) +

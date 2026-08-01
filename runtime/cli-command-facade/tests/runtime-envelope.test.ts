@@ -699,24 +699,25 @@ describe("CLI command facade runtime envelope", () => {
 
 	// Action ids are controlled enum identifiers, not agent-facing prose: they
 	// are gated by SHAPE (lowercase token), never by the free-text vocabulary
-	// scan. Regression for the browser-use `auth status` crash, where the legal
-	// id create-credential-clean-profile tripped the `credential` pattern and
-	// the blocked envelope could not be built at all.
+	// scan. Regression for a consumer crash where a legal id containing the
+	// word "credential" tripped the vocabulary pattern and the envelope could
+	// not be built at all (the consumer-specific id keeps its own end-to-end
+	// coverage in that package's tests).
 	test("action id fields accept legal ids that contain banned prose vocabulary", () => {
 		const envelope = createCliRuntimeSuccessEnvelope({
 			run_id: "run-test-1",
 			data: { ok: true },
 			runtime_actions: [
 				{
-					id: "create-credential-clean-profile",
-					summary: "Ask the operator to create a fresh dedicated profile.",
+					id: "rotate-credential-grant",
+					summary: "Ask the operator to rotate the affected grant.",
 					side_effects: ["check"],
 				},
 			],
-			continuation: { next_action_id: "create-credential-clean-profile" },
+			continuation: { next_action_id: "rotate-credential-grant" },
 		});
 		expect(envelope.continuation?.next_action_id).toBe(
-			"create-credential-clean-profile",
+			"rotate-credential-grant",
 		);
 	});
 
