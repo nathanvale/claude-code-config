@@ -154,6 +154,12 @@ describe("warm-chrome help flag surface (U2)", () => {
 		expect(warmChromeContracts.repair.flags["--profile"]?.description).toContain(
 			"rewrite local profile",
 		);
+		const profileOnlyFlag = Object.entries(
+			warmChromeContracts.repair.flags,
+		).find(([flag]) => flag === "--profile-only")?.[1];
+		expect(profileOnlyFlag?.description).toContain(
+			"does not use or prove --port/--endpoint",
+		);
 		const chromeFlag = Object.entries(warmChromeContracts.launch.flags).find(
 			([flag]) => flag === "--chrome",
 		)?.[1];

@@ -38,10 +38,17 @@ jobs:
 
       # The confidential-delivery process-boundary suite drives the REAL
       # supervisor + field-delivery binaries (.build/debug), so build the
-      # darwin-only Swift custody package before testing. Debug build only:
-      # the TS suite needs the executables, not the Swift test target.
+      # darwin-only Swift custody package before testing. Debug build covers
+      # the existing deliver process-boundary suite (.build/debug binary).
       - name: Build Swift custody package
         run: swift build --package-path runtime/browser-use-environment-auth
+
+      # The auth-doctor process-boundary suite drives the RELEASE supervisor
+      # (.build/release/browser-use-op-supervisor) and hard-fails when it is
+      # absent (build, never skip). Build it so the real-binary proof runs in
+      # CI instead of throwing.
+      - name: Build Swift custody package (release)
+        run: bun run --cwd runtime/browser-use-environment-auth build:release
 
       # Test scope: skills/browser-use/src, via the repo's test-runner (which
       # knows to exclude the intentional-fail fixtures under

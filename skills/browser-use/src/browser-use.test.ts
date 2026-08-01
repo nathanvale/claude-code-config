@@ -55,6 +55,8 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"auth-install-token",
 	"auth-remove-token",
 	"auth-status",
+	"auth-doctor",
+	"auth-reload",
 ];
 
 function discoveryTree() {

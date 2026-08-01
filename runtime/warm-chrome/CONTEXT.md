@@ -160,7 +160,8 @@ The per-station declaration of cross-tool-visible state change the drift gate
 checks: `check` stations are read-only, `launch.launched` and
 `launch.spawned_unverified` write browser state, `repair.repaired` repairs
 profile state and enumerates each mutation (`profile_dir_created`,
-`profile_permissions`, `devtools_active_port`) with its exact path.
+`profile_permissions`, `devtools_active_port`, `profile_preferences`) with its
+exact path.
 _Avoid_: undeclared side effects, implicit writes
 _Developer example_: "`repair.repaired` names the exact profile mutations in
 the envelope."

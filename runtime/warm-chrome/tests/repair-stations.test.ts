@@ -5,6 +5,20 @@
 // DevToolsActivePort state the re-prove reads). Proof failures reached via
 // repair are asserted mechanically against the U3 re-emit map.
 import { describe, expect, test } from "bun:test";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	readdir,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BranchStation } from "@side-quest/cli-command-facade";
 import {
 	assertStationEnvelope,
@@ -21,19 +35,20 @@ import {
 	projectWarmChromeBranchStationEvidence,
 	type WarmChromeBranchStationEvidence,
 } from "../src/branch-station-evidence.ts";
-import { main } from "../src/cli.ts";
+import { main, type WarmChromeExecuteInvocation } from "../src/cli.ts";
 import {
 	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_DEFAULT_CDP_PORT,
 	WARM_CHROME_NO_ADAPTER_FALLBACK_CONSTRAINT_ID,
+	WARM_CHROME_REPAIR_ACTION_IDS,
+	WARM_CHROME_REPAIR_REASONS,
 	WARM_CHROME_SCHEMA_VERSION,
+	type WarmChromeRepairReason,
 } from "../src/model.ts";
 import {
 	createRepairCommandHandler,
-	WARM_CHROME_REPAIR_REASONS,
 	type WarmChromeRepairDeps,
 	type WarmChromeRepairFileKind,
-	type WarmChromeRepairReason,
 } from "../src/repair.ts";
 import {
 	createDefaultRuntime,
@@ -286,22 +301,41 @@ type CliRun = { exitCode: number; stdout: string; stderr: string };
 async function runRepair(
 	argv: readonly string[],
 	fixture: RepairFixture,
+	overrides?: Partial<WarmChromeRepairDeps>,
 ): Promise<CliRun> {
 	const stdout = createMemoryWriter();
 	const stderr = createMemoryWriter();
 	const exitCode = await main(argv, {
 		runtime: fixture.runtime,
-		handlers: { repair: createRepairCommandHandler(fixture.deps) },
+		handlers: {
+			repair: createRepairCommandHandler(overrides ?? fixture.deps),
+		},
 		stdout,
 		stderr,
 	});
 	return { exitCode, stdout: stdout.output, stderr: stderr.output };
 }
 
+async function makeScratchProfileRoot(): Promise<string> {
+	return realpath(await mkdtemp(join(tmpdir(), "warm-chrome-profile-only-")));
+}
+
+async function scratchProfileFixture(root: string): Promise<RepairFixture> {
+	const fixture = repairFixture();
+	const owner = String((await stat(root)).uid);
+	fixture.runtime.currentUser = async () => owner;
+	return fixture;
+}
+
 type ParsedEnvelope = {
 	status: string;
 	data?: Record<string, unknown>;
-	error?: { code: string; exit_code: number; failure_domain?: string };
+	error?: {
+		code: string;
+		message?: string;
+		exit_code: number;
+		failure_domain?: string;
+	};
 	runtime_actions?: Array<{ id: string; summary: string }>;
 	continuation?: {
 		next_action_id?: string;
@@ -388,6 +422,492 @@ function expectNoProcessAffectingCalls(fixture: RepairFixture): void {
 	expect(fixture.calls.spawnChrome).toBe(0);
 	expect(fixture.calls.kills).toBe(0);
 }
+
+describe("warm-chrome repair --profile-only: credential-clean profile policy", () => {
+	test("repair --help renders the declared --profile-only flag", async () => {
+		const fixture = repairFixture();
+		const run = await runRepair(["repair", "--help"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(run.stdout).toContain("--profile-only");
+		expect(run.stdout).toContain(
+			"Repair only profile policy files; requires explicit --profile; browser-free and does not use or prove --port/--endpoint.",
+		);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("missing profile is created 0700 with the five disabled policy flags", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expect(run.exitCode).toBe(0);
+			const envelope = parseEnvelope(run);
+			expect(envelope.status).toBe("ok");
+			expect(envelope.data?.profile_policy).toBe("clean");
+			expect(envelope.data?.endpoint).toBeUndefined();
+			expect(envelope.runtime_actions).toBeUndefined();
+			expect(envelope.continuation).toBeUndefined();
+			expect(envelope.data?.repair_actions).toEqual([
+				"profile_dir_created",
+				"profile_preferences",
+			]);
+			expect((await stat(profile)).mode & 0o777).toBe(0o700);
+			const preferences = JSON.parse(
+				await readFile(join(profile, "Default", "Preferences"), "utf8"),
+			) as Record<string, unknown>;
+			expect(preferences).toMatchObject({
+				credentials_enable_service: false,
+				profile: { password_manager_enabled: false },
+				autofill: { profile_enabled: false, credit_card_enabled: false },
+				sync: { requested: false },
+			});
+			expect(fixture.calls.findListenerPorts).toEqual([]);
+			expect(fixture.calls.fetchJsonUrls).toEqual([]);
+			expectNoProcessAffectingCalls(fixture);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("non-empty Login Data refuses before writing Preferences", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const defaultDir = join(profile, "Default");
+			await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+			await writeFile(join(defaultDir, "Login Data"), "saved-login", {
+				mode: 0o600,
+			});
+			const before = await readdir(defaultDir);
+			const beforeMode = (await stat(profile)).mode & 0o777;
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = expectUnrepairable(run, "profile_login_data_present");
+			expect(envelope.data?.profile_dir).toBe(profile);
+			expect(envelope.data).not.toHaveProperty("endpoint");
+			expect(envelope.data).not.toHaveProperty("port");
+			expect(await readdir(defaultDir)).toEqual(before);
+			expect(
+				await readFile(join(defaultDir, "Login Data"), "utf8"),
+			).toBe("saved-login");
+			expect((await stat(profile)).mode & 0o777).toBe(beforeMode);
+			expect(envelope.error?.message).toContain("new empty directory");
+			expectNoProcessAffectingCalls(fixture);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	for (const credentialStore of [
+		"Login Data For Account",
+		"Web Data",
+	] as const) {
+		test(`non-empty ${credentialStore} refuses before writing Preferences`, async () => {
+			const root = await makeScratchProfileRoot();
+			try {
+				const profile = join(root, "explicit-profile");
+				const defaultDir = join(profile, "Default");
+				await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+				await writeFile(join(defaultDir, credentialStore), "saved-credential", {
+					mode: 0o600,
+				});
+				const before = await readdir(defaultDir);
+				const beforeMode = (await stat(profile)).mode & 0o777;
+				const fixture = await scratchProfileFixture(root);
+				const run = await runRepair(
+					["repair", "--profile-only", "--profile", profile],
+					fixture,
+					{},
+				);
+
+				const envelope = expectUnrepairable(
+					run,
+					"profile_login_data_present",
+				);
+				expect(envelope.data?.profile_dir).toBe(profile);
+				expect(await readdir(defaultDir)).toEqual(before);
+				expect(await readFile(join(defaultDir, credentialStore), "utf8")).toBe(
+					"saved-credential",
+				);
+				expect((await stat(profile)).mode & 0o777).toBe(beforeMode);
+				expectNoProcessAffectingCalls(fixture);
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
+		});
+	}
+
+	test("Preferences symlink refuses without changing its external target", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const defaultDir = join(profile, "Default");
+			const external = join(root, "external-preferences");
+			await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+			await chmod(profile, 0o700);
+			await writeFile(external, '{"outside":"unchanged"}\n');
+			await symlink(external, join(defaultDir, "Preferences"));
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expectUnrepairable(run, "profile_path_symlink");
+			expect(await readFile(external, "utf8")).toBe(
+				'{"outside":"unchanged"}\n',
+			);
+			expect(await readdir(defaultDir)).toEqual(["Preferences"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("symlinked profile ancestor refuses before writing through it", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const external = join(root, "external-parent");
+			const linkedParent = join(root, "linked-parent");
+			const profile = join(linkedParent, "explicit-profile");
+			await mkdir(external, { mode: 0o700 });
+			await writeFile(join(external, "marker"), "unchanged");
+			await symlink(external, linkedParent, "dir");
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expectUnrepairable(run, "profile_path_symlink");
+			expect(await readdir(external)).toEqual(["marker"]);
+			expect(await readFile(join(external, "marker"), "utf8")).toBe(
+				"unchanged",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("foreign owner evidence refuses before chmod or profile writes", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			await mkdir(profile, { mode: 0o755 });
+			await writeFile(join(profile, "marker"), "unchanged");
+			const beforeMode = (await stat(profile)).mode & 0o777;
+			const fixture = await scratchProfileFixture(root);
+			fixture.runtime.currentUser = async () => "999999";
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = expectUnrepairable(run, "profile_not_owned");
+			expect(envelope.error?.message).toContain("correct its ownership");
+			expect((await stat(profile)).mode & 0o777).toBe(beforeMode);
+			expect(await readdir(profile)).toEqual(["marker"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("oversized Preferences refuses unchanged so supervisor re-check cannot stay falsely green", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const defaultDir = join(profile, "Default");
+			const preferencesPath = join(defaultDir, "Preferences");
+			await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+			await chmod(profile, 0o700);
+			const oversized = `{"padding":"${"x".repeat(1_048_576)}"}`;
+			await writeFile(preferencesPath, oversized);
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = expectUnrepairable(
+				run,
+				"profile_preferences_too_large",
+			);
+			expect(envelope.error?.message).toContain("below the policy limit");
+			expect(await readFile(preferencesPath, "utf8")).toBe(oversized);
+			expect(await readdir(defaultDir)).toEqual(["Preferences"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("existing Preferences keeps unrelated JSON bytes while merging the five flags", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const defaultDir = join(profile, "Default");
+			await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+			await chmod(profile, 0o755);
+			const unrelatedBytes = '"unrelated":{"marker":"keep-me"}';
+			await writeFile(
+				join(defaultDir, "Preferences"),
+				`{${unrelatedBytes},"profile":{"theme":"dark","password_manager_enabled":true},"autofill":{"address_hint":"home","profile_enabled":true,"credit_card_enabled":true},"sync":{"transport":"local","requested":true},"credentials_enable_service":true}\n`,
+			);
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = parseEnvelope(run);
+			expect(run.exitCode).toBe(0);
+			expect(envelope.data?.repair_actions).toEqual([
+				"profile_permissions",
+				"profile_preferences",
+			]);
+			expect((await stat(profile)).mode & 0o777).toBe(0o700);
+			const output = await readFile(
+				join(defaultDir, "Preferences"),
+				"utf8",
+			);
+			expect(output).toContain(unrelatedBytes);
+			const preferences = JSON.parse(output) as Record<string, unknown>;
+			expect(preferences).toMatchObject({
+				unrelated: { marker: "keep-me" },
+				profile: { theme: "dark", password_manager_enabled: false },
+				autofill: {
+					address_hint: "home",
+					profile_enabled: false,
+					credit_card_enabled: false,
+				},
+				sync: { transport: "local", requested: false },
+				credentials_enable_service: false,
+			});
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("symlinked profile path refuses before touching the target", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const target = join(root, "target-profile");
+			const profile = join(root, "profile-link");
+			await mkdir(target, { mode: 0o700 });
+			await writeFile(join(target, "marker"), "unchanged");
+			await symlink(target, profile, "dir");
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = expectUnrepairable(run, "profile_path_symlink");
+			expect(envelope.error?.message).toContain("symbolic link");
+			expect(await readdir(target)).toEqual(["marker"]);
+			expect(await readFile(join(target, "marker"), "utf8")).toBe(
+				"unchanged",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("live SingletonLock refuses with the stop-and-rerun step and no mutation", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			await mkdir(profile, { mode: 0o755 });
+			await writeFile(join(profile, "marker"), "unchanged");
+			const beforeMode = (await stat(profile)).mode & 0o777;
+			const fixture = await scratchProfileFixture(root);
+			fixture.runtime.readSingletonLock = async () => ({
+				raw: "local-4242",
+				hostname: "local",
+				pid: 4242,
+				local: true,
+			});
+			fixture.runtime.isProcessAlive = async () => true;
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			const envelope = expectUnrepairable(run, "profile_locked");
+			expect(envelope.error?.message?.toLowerCase()).toContain(
+				"stop warm chrome",
+			);
+			expect(envelope.error?.message?.toLowerCase()).toContain("rerun");
+			expect((await stat(profile)).mode & 0o777).toBe(beforeMode);
+			expect(await readdir(profile)).toEqual(["marker"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("non-canonical trailing slash refuses without creating a normalized substitute", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = `${join(root, "explicit-profile")}/`;
+			const before = await readdir(root);
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expectUnrepairable(run, "profile_path_noncanonical");
+			expect(await readdir(root)).toEqual(before);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("explicit profile wins by identity over a different configured default", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const configuredDefault = join(root, "configured-default");
+			const fixture = await scratchProfileFixture(root);
+			fixture.runtime.env.WARM_CHROME_PROFILE_DIR = configuredDefault;
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expect(run.exitCode).toBe(0);
+			expect((await readdir(root)).sort()).toEqual(["explicit-profile"]);
+			expect(
+				await readFile(join(profile, "Default", "Preferences"), "utf8"),
+			).toContain('"credentials_enable_service":false');
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("profile-only requires --profile even when a configured default differs", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const configuredDefault = join(root, "configured-default");
+			const fixture = await scratchProfileFixture(root);
+			fixture.runtime.env.WARM_CHROME_PROFILE_DIR = configuredDefault;
+			const run = await runRepair(["repair", "--profile-only"], fixture, {});
+
+			expect(run.exitCode).toBe(2);
+			expect(parseEnvelope(run).error?.code).toBe("invalid_usage");
+			expect(await readdir(root)).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("profile-only flag stays repair-only at parser acceptance", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["check", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expect(run.exitCode).toBe(2);
+			expect(parseEnvelope(run).error?.code).toBe("invalid_usage");
+			expect(await readdir(root)).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("concurrent profile-only runs converge atomically and leave no temp files", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const firstFixture = await scratchProfileFixture(root);
+			const secondFixture = await scratchProfileFixture(root);
+			const invocation: WarmChromeExecuteInvocation = {
+				command: "repair",
+				displayCommand: "repair",
+				outputMode: "json",
+				endpoint: `http://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}`,
+				port: WARM_CHROME_DEFAULT_CDP_PORT,
+				profileInput: profile,
+				profileOnly: true,
+				chromeBin: REAL_GOOGLE_CHROME_BINARY,
+			};
+			const firstHandler = createRepairCommandHandler();
+			const secondHandler = createRepairCommandHandler();
+			const [first, second] = await Promise.all([
+				firstHandler(invocation, firstFixture.runtime),
+				secondHandler(invocation, secondFixture.runtime),
+			]);
+
+			expect([first.data.profile_policy, second.data.profile_policy]).toEqual([
+				"clean",
+				"clean",
+			]);
+			const defaultEntries = await readdir(join(profile, "Default"));
+			expect(defaultEntries).toEqual(["Preferences"]);
+			const preferences = JSON.parse(
+				await readFile(join(profile, "Default", "Preferences"), "utf8"),
+			) as Record<string, unknown>;
+			expect(preferences).toMatchObject({
+				credentials_enable_service: false,
+				profile: { password_manager_enabled: false },
+				autofill: { profile_enabled: false, credit_card_enabled: false },
+				sync: { requested: false },
+			});
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("a second profile-only run is idempotent and reports no mutation", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const profile = join(root, "explicit-profile");
+			const fixture = await scratchProfileFixture(root);
+			const argv = [
+				"repair",
+				"--profile-only",
+				"--profile",
+				profile,
+			] as const;
+			const first = await runRepair(argv, fixture, {});
+			expect(first.exitCode).toBe(0);
+			const preferencesPath = join(profile, "Default", "Preferences");
+			const before = await readFile(preferencesPath, "utf8");
+			const second = await runRepair(argv, fixture, {});
+
+			expect(second.exitCode).toBe(0);
+			expect(parseEnvelope(second).data?.repair_actions).toEqual([]);
+			expect(await readFile(preferencesPath, "utf8")).toBe(before);
+			expect(await readdir(join(profile, "Default"))).toEqual(["Preferences"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () => {
 	test("unsafe profile permissions are chmodded 0700 and the re-prove verifies", async () => {
@@ -939,8 +1459,14 @@ describe("warm-chrome repair reason union (U7)", () => {
 			"devtools_active_port_symlink",
 			"profile_not_owned",
 			"profile_dir_uncreatable",
+			"profile_path_noncanonical",
+			"profile_path_symlink",
+			"profile_locked",
+			"profile_login_data_present",
+			"profile_preferences_unwritable",
 		]) {
 			expect(reasons).toContain(reason);
 		}
+		expect(WARM_CHROME_REPAIR_ACTION_IDS).toContain("profile_preferences");
 	});
 });
