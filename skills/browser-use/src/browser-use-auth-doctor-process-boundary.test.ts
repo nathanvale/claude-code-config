@@ -43,6 +43,7 @@ const OP_PATH = OP_PATHS.find((path) => existsSync(path));
 const TOKEN_SOURCE = "op://Browser Automation/Service Account/credential";
 const CHILD_TIMEOUT_MS = 30_000;
 const TEST_TIMEOUT_MS = CHILD_TIMEOUT_MS + 15_000;
+// Canonical list: AUTH_TOKEN_FORBIDDEN_ENV_KEYS in browser-use-runtime.ts; keep in sync.
 const FORBIDDEN_ENV_KEYS = [
 	"OP_SERVICE_ACCOUNT_TOKEN",
 	"OP_CONNECT_HOST",

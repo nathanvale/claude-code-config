@@ -238,3 +238,22 @@ export const WARM_CHROME_REPAIR_ACTION_IDS = [
 /** Repair mutation id reported by the `repair.repaired` result. */
 export type WarmChromeRepairActionId =
 	(typeof WARM_CHROME_REPAIR_ACTION_IDS)[number];
+
+/** JSON object shape accepted for Chrome preference traversal. */
+export type JsonObject = Record<string, unknown>;
+
+/**
+ * Narrow unknown JSON values to non-null, non-array objects.
+ *
+ * @param value - Parsed JSON value to inspect
+ * @returns Whether the value is a JSON object
+ *
+ * @example
+ * ```typescript
+ * const value: unknown = JSON.parse('{"enabled":true}')
+ * if (isJsonObject(value)) console.log(value.enabled)
+ * ```
+ */
+export function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}

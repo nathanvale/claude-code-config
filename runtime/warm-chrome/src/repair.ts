@@ -35,11 +35,13 @@ import {
 	type WarmChromeVerifiedProof,
 } from "./proof.ts";
 import {
+	type JsonObject,
 	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
 	WARM_CHROME_SCHEMA_VERSION,
 	type WarmChromeRepairActionId,
 	type WarmChromeRepairReason,
+	isJsonObject,
 } from "./model.ts";
 import {
 	expandHome,
@@ -436,8 +438,6 @@ export function createRepairCommandHandler(
 	};
 }
 
-type JsonObject = Record<string, unknown>;
-
 type ProfilePolicyInspection = {
 	preferences: JsonObject;
 	preferencesPath: string;
@@ -474,7 +474,6 @@ async function repairProfilePolicyOnly(
 			{ profile_dir: profileDir },
 		);
 	}
-
 	await assertProfilePathNotSymlink(profileDir, context);
 	let profileInfo = await lstatForRepair(profileDir, context);
 	if (profileInfo !== null && !profileInfo.isDirectory()) {
@@ -874,10 +873,6 @@ async function assertLoginDataEmpty(
 			{ profile_dir: profileDir },
 		);
 	}
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function nestedObject(value: unknown): JsonObject {

@@ -127,6 +127,7 @@ import {
 } from "./browser-use-core";
 import {
 	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
+	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
@@ -303,15 +304,17 @@ export async function runBrowserUseCli(
 
 	const outputMode = errorOutputMode(diagnosticArgv.argv);
 	let parsed: ParsedBrowserUseCommand;
+	let fixScope: AuthDoctorFixScope;
 	try {
 		const fixRequest = extractAuthDoctorFixRequest(diagnosticArgv.argv);
+		fixScope = fixRequest.fixScope;
 		parsed = parseBrowserUseArgv(fixRequest.argv);
-		if (fixRequest.requested && parsed.kind === "command") {
+		if (fixRequest.fixScope !== undefined && parsed.kind === "command") {
 			parsed = {
 				...parsed,
 				flagValues: {
 					...parsed.flagValues,
-					"--fix": fixRequest.profileOnly ? "profile" : "",
+					"--fix": "",
 				},
 			};
 		}
@@ -383,6 +386,7 @@ export async function runBrowserUseCli(
 					runIdExplicit,
 					diagnosticVerbose: diagnosticArgv.options.verbose,
 					durationMs,
+					...(fixScope === undefined ? {} : { fixScope }),
 					...(options.authDoctor === undefined
 						? {}
 						: { authDoctor: options.authDoctor }),
@@ -403,13 +407,14 @@ export async function runBrowserUseCli(
 	}
 }
 
+type AuthDoctorFixScope = "all" | "profile" | undefined;
+
 function extractAuthDoctorFixRequest(argv: readonly string[]): {
 	argv: readonly string[];
-	requested: boolean;
-	profileOnly: boolean;
+	fixScope: AuthDoctorFixScope;
 } {
 	if (argv[0] !== "auth" || argv[1] !== "doctor") {
-		return { argv, requested: false, profileOnly: false };
+		return { argv, fixScope: undefined };
 	}
 	const stripped = [...argv];
 	const fixIndexes: number[] = [];
@@ -426,14 +431,14 @@ function extractAuthDoctorFixRequest(argv: readonly string[]): {
 		if (inlineFix) {
 			throw usageError("--fix does not take a value; use optional profile after it.");
 		}
-		return { argv, requested: false, profileOnly: false };
+		return { argv, fixScope: undefined };
 	}
 	if (fixIndexes.length !== 1) throw usageError("--fix may be supplied once.");
 	const index = fixIndexes[0] ?? -1;
 	stripped.splice(index, 1);
 	const profileOnly = stripped[index] === "profile";
 	if (profileOnly) stripped.splice(index, 1);
-	return { argv: stripped, requested: true, profileOnly };
+	return { argv: stripped, fixScope: profileOnly ? "profile" : "all" };
 }
 
 // One family -> result kind mapping for the mock/not-implemented envelopes.
@@ -481,6 +486,7 @@ async function executeCommand(input: {
 	runIdExplicit: boolean;
 	diagnosticVerbose: boolean;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
 	authDoctor?: AuthDoctorOrchestrationDeps;
 }): Promise<number> {
 	const { parsed, runtime } = input;
@@ -696,6 +702,9 @@ async function executeCommand(input: {
 				runId: input.runId,
 				caller,
 				durationMs: input.durationMs,
+				...(input.fixScope === undefined
+					? {}
+					: { fixScope: input.fixScope }),
 				...(input.authDoctor === undefined
 					? {}
 					: { authDoctor: input.authDoctor }),
@@ -1226,6 +1235,7 @@ type PlatformCommandInput = {
 	runId: string;
 	caller: BrowserUseCallerMetadata;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
 	authDoctor?: AuthDoctorOrchestrationDeps;
 };
 
@@ -5444,6 +5454,7 @@ async function spawnAuthDoctorOwner(
 		exitCode,
 		stdout,
 		stderr,
+		// SIGTERM from timeout or external kill; both surface as owner_timeout.
 		timedOut: child.signalCode !== null,
 	};
 }
@@ -5569,7 +5580,7 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 	const spawnOwner = input.authDoctor?.spawnOwner ?? spawnAuthDoctorOwner;
 	const ownerEnv = authDoctorOwnerEnv(input.runtime.env);
 	const browserUseEntrypoint = fileURLToPath(import.meta.url);
-	const profileOnly = input.parsed.flagValues["--fix"] === "profile";
+	const profileOnly = input.fixScope === "profile";
 	let vaultReproofAttempted = false;
 
 	if (recordField(initial.detail?.checks) === undefined) {
@@ -5944,7 +5955,7 @@ function emitAuthTokenLifecycleResult(
 		createCliRuntimeErrorEnvelope({
 			...envelopeInput,
 			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
-				error: createCliRuntimeError({
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: errorCode,
 				message: authTokenLifecycleErrorMessage(errorCode),
@@ -6016,6 +6027,38 @@ function authTokenLifecycleErrorForProjection(
 		return "auth_token_source_unavailable";
 	}
 	return "auth_token_supervisor_failed";
+}
+
+function buildNativeSupervisorInput(
+	input: PlatformCommandInput,
+	sourceRef: string | undefined,
+): AuthTokenSupervisorInput {
+	const subcommand = input.parsed.subcommand;
+	if (subcommand === "install-token" || subcommand === "reload") {
+		if (sourceRef !== undefined) {
+			return {
+				mode: "install",
+				input: "source",
+				replace:
+					subcommand === "reload" ||
+					input.parsed.flagValues["--replace"] !== undefined,
+				sourceRef,
+			};
+		}
+		return {
+			mode: "install",
+			input:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--stdin"] === undefined
+					? "prompt"
+					: "stdin",
+			replace:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--replace"] !== undefined,
+		};
+	}
+	if (subcommand === "remove-token") return { mode: "remove" };
+	return { mode: "status" };
 }
 
 async function runAuthTokenLifecycle(
@@ -6103,31 +6146,7 @@ async function runAuthTokenLifecycle(
 		}
 	}
 	const subcommand = input.parsed.subcommand;
-	const nativeInput =
-		subcommand === "install-token" || subcommand === "reload"
-			? sourceRef === undefined
-				? ({
-						mode: "install",
-						input:
-							subcommand === "reload" ||
-							input.parsed.flagValues["--stdin"] === undefined
-								? "prompt"
-								: "stdin",
-						replace:
-							subcommand === "reload" ||
-							input.parsed.flagValues["--replace"] !== undefined,
-					} as const)
-				: ({
-						mode: "install",
-						input: "source",
-						replace:
-							subcommand === "reload" ||
-							input.parsed.flagValues["--replace"] !== undefined,
-						sourceRef,
-					} as const)
-			: subcommand === "remove-token"
-				? ({ mode: "remove" } as const)
-				: ({ mode: "status" } as const);
+	const nativeInput = buildNativeSupervisorInput(input, sourceRef);
 	const result =
 		input.runtime.runAuthTokenSupervisor === undefined
 			? {
@@ -6170,11 +6189,11 @@ async function runAuthTokenLifecycle(
 		input,
 		projection === undefined
 			? {
-			ok: false,
-			state: "blocked",
-			cause: "token-supervisor-unavailable",
-			nextAction: "repair-op-admission",
-			}
+					ok: false,
+					state: "blocked",
+					cause: "token-supervisor-unavailable",
+					nextAction: "repair-op-admission",
+				}
 			: sourcePresence === undefined
 				? projection
 				: authProjectionWithSourcePresence(projection, sourcePresence),

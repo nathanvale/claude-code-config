@@ -341,8 +341,15 @@ async function readAuthTokenSource(
 		if (
 			typeof parsed !== "object" ||
 			parsed === null ||
-			Array.isArray(parsed) ||
-			Object.keys(parsed).sort().join(",") !== "schema_version,source"
+			Array.isArray(parsed)
+		) {
+			return { status: "blocked", cause: "source-reference-invalid" };
+		}
+		const keys = Object.keys(parsed);
+		if (
+			keys.length !== 2 ||
+			!("schema_version" in parsed) ||
+			!("source" in parsed)
 		) {
 			return { status: "blocked", cause: "source-reference-invalid" };
 		}
@@ -401,6 +408,7 @@ async function writeAuthTokenSource(
 			0o600,
 		);
 		tempExists = true;
+		// Reapply owner-only mode so the file stays private under any process umask.
 		await handle.chmod(0o600);
 		await handle.writeFile(`${JSON.stringify({ schema_version: 1, source: sourceRef })}\n`, {
 			encoding: "utf8",
