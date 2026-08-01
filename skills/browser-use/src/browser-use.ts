@@ -133,6 +133,7 @@ import {
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
 	isAuthTokenSourceReference,
+	resolveWarmChromeProfilePath,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
@@ -5537,17 +5538,6 @@ function authDoctorOwnerEnv(
 	return childEnv;
 }
 
-function authDoctorProfilePath(
-	env: Record<string, string | undefined>,
-): string | undefined {
-	const input = env.WARM_CHROME_PROFILE_DIR;
-	if (input?.startsWith("/") === true) return input;
-	if (input?.startsWith("~/") === true && env.HOME !== undefined) {
-		return join(env.HOME, input.slice(2));
-	}
-	return env.HOME === undefined ? undefined : join(env.HOME, ".agent-warm-profile");
-}
-
 function defaultWarmChromeEntrypoint(): string | undefined {
 	const entrypoint = join(
 		dirname(fileURLToPath(import.meta.url)),
@@ -5741,7 +5731,7 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 		if (authDoctorGateIsRed(initial, "profile_policy")) {
 			const cause = authDoctorGateCause(initial, "profile_policy");
 			const repair = authTokenRepairPathFor(cause, "profile_policy");
-			const profilePath = authDoctorProfilePath(input.runtime.env);
+			const profilePath = resolveWarmChromeProfilePath(input.runtime.env);
 			const configuredEntrypoint = input.authDoctor?.warmChromeEntrypoint;
 			const warmChromeEntrypoint =
 				configuredEntrypoint === null
@@ -6257,6 +6247,32 @@ async function runAuthTokenLifecycle(
 		return emitAuthTokenLifecycleResult(
 			input,
 			authProjectionWithSourcePresence(projection, true),
+			"auth_token_supervisor_failed",
+		);
+	}
+	if (subcommand === "install-token" && sourceRef === undefined && projection?.ok) {
+		const removed =
+			input.runtime.removeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.removeAuthTokenSource();
+		if (!removed.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: removed.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				removed.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			projection,
 			"auth_token_supervisor_failed",
 		);
 	}

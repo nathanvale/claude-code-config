@@ -424,6 +424,18 @@ function expectNoProcessAffectingCalls(fixture: RepairFixture): void {
 }
 
 describe("warm-chrome repair --profile-only: credential-clean profile policy", () => {
+	test("repair --help renders the declared --profile-only flag", async () => {
+		const fixture = repairFixture();
+		const run = await runRepair(["repair", "--help"], fixture);
+
+		expect(run.exitCode).toBe(0);
+		expect(run.stdout).toContain("--profile-only");
+		expect(run.stdout).toContain(
+			"Repair only profile policy files; requires explicit --profile and skips browser entry.",
+		);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
 	test("missing profile is created 0700 with the five disabled policy flags", async () => {
 		const root = await makeScratchProfileRoot();
 		try {
@@ -495,6 +507,45 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 			await rm(root, { recursive: true, force: true });
 		}
 	});
+
+	for (const credentialStore of [
+		"Login Data For Account",
+		"Web Data",
+	] as const) {
+		test(`non-empty ${credentialStore} refuses before writing Preferences`, async () => {
+			const root = await makeScratchProfileRoot();
+			try {
+				const profile = join(root, "explicit-profile");
+				const defaultDir = join(profile, "Default");
+				await mkdir(defaultDir, { recursive: true, mode: 0o700 });
+				await writeFile(join(defaultDir, credentialStore), "saved-credential", {
+					mode: 0o600,
+				});
+				const before = await readdir(defaultDir);
+				const beforeMode = (await stat(profile)).mode & 0o777;
+				const fixture = await scratchProfileFixture(root);
+				const run = await runRepair(
+					["repair", "--profile-only", "--profile", profile],
+					fixture,
+					{},
+				);
+
+				const envelope = expectUnrepairable(
+					run,
+					"profile_login_data_present",
+				);
+				expect(envelope.data?.profile_dir).toBe(profile);
+				expect(await readdir(defaultDir)).toEqual(before);
+				expect(await readFile(join(defaultDir, credentialStore), "utf8")).toBe(
+					"saved-credential",
+				);
+				expect((await stat(profile)).mode & 0o777).toBe(beforeMode);
+				expectNoProcessAffectingCalls(fixture);
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
+		});
+	}
 
 	test("Preferences symlink refuses without changing its external target", async () => {
 		const root = await makeScratchProfileRoot();

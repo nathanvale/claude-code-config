@@ -453,6 +453,64 @@ async function writeAuthTokenSource(
 	}
 }
 
+async function removeAuthTokenSource(
+	env: Record<string, string | undefined>,
+): Promise<AuthTokenSourceWriteResult> {
+	const paths = authTokenSourcePaths(env);
+	if (paths === undefined) return { ok: false, cause: "source-file-unsafe" };
+	if ((await proveAuthTokenSourceDirectories(paths)) !== "ready") {
+		return { ok: false, cause: "source-file-unsafe" };
+	}
+	let metadata: Stats;
+	try {
+		metadata = await lstat(paths.sourceFile);
+	} catch (error) {
+		return isMissingFileError(error)
+			? { ok: true }
+			: { ok: false, cause: "source-file-unsafe" };
+	}
+	if (!sourceFileMetadataIsSafe(metadata)) {
+		return { ok: false, cause: "source-file-unsafe" };
+	}
+	let handle: FileHandle | undefined;
+	try {
+		handle = await open(
+			paths.sourceFile,
+			fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+		);
+		const descriptorMetadata = await handle.stat();
+		if (
+			!sourceFileMetadataIsSafe(descriptorMetadata) ||
+			descriptorMetadata.dev !== metadata.dev ||
+			descriptorMetadata.ino !== metadata.ino
+		) {
+			return { ok: false, cause: "source-file-unsafe" };
+		}
+		const reproved = await lstat(paths.sourceFile);
+		if (
+			!sourceFileMetadataIsSafe(reproved) ||
+			reproved.dev !== descriptorMetadata.dev ||
+			reproved.ino !== descriptorMetadata.ino
+		) {
+			return { ok: false, cause: "source-file-unsafe" };
+		}
+		await unlink(paths.sourceFile);
+		const directoryHandle = await open(paths.custodyDirectory, fsConstants.O_RDONLY);
+		try {
+			await directoryHandle.sync();
+		} finally {
+			await directoryHandle.close();
+		}
+		return (await readAuthTokenSource(env)).status === "missing"
+			? { ok: true }
+			: { ok: false, cause: "source-write-failed" };
+	} catch {
+		return { ok: false, cause: "source-write-failed" };
+	} finally {
+		await handle?.close().catch(() => {});
+	}
+}
+
 /**
  * The production security seam: native capability is absent until the signed
  * product exists (ADR 0028). `admission` always reports
@@ -514,6 +572,30 @@ type EnvironmentTokenSupervisorDeps = {
 	profilePath: string;
 };
 
+/**
+ * Resolve the one Warm Chrome profile path shared by custody evaluation and repair.
+ *
+ * @param env - Environment carrying the profile override and home directory
+ * @returns Absolute profile path, or undefined when no safe home-based default exists
+ *
+ * @example
+ * ```typescript
+ * resolveWarmChromeProfilePath({ HOME: "/Users/agent" })
+ * ```
+ */
+export function resolveWarmChromeProfilePath(
+	env: Record<string, string | undefined>,
+): string | undefined {
+	const profileInput = env.WARM_CHROME_PROFILE_DIR;
+	if (profileInput?.startsWith("/") === true) return profileInput;
+	if (profileInput?.startsWith("~/") === true && env.HOME !== undefined) {
+		return join(env.HOME, profileInput.slice(2));
+	}
+	return env.HOME === undefined
+		? undefined
+		: join(env.HOME, ".agent-warm-profile");
+}
+
 function environmentTokenSupervisorDeps(
 	env: Record<string, string | undefined>,
 ): EnvironmentTokenSupervisorDeps | undefined {
@@ -537,16 +619,8 @@ function environmentTokenSupervisorDeps(
 		process.arch === "arm64"
 			? ["/opt/homebrew/bin/op", "/usr/local/bin/op"]
 			: ["/usr/local/bin/op", "/opt/homebrew/bin/op"];
-	const home = env.HOME;
-	const profileInput = env.WARM_CHROME_PROFILE_DIR;
-	const profilePath =
-		profileInput?.startsWith("/") === true
-			? profileInput
-			: profileInput?.startsWith("~/") === true && home !== undefined
-				? join(home, profileInput.slice(2))
-				: home !== undefined
-					? join(home, ".agent-warm-profile")
-					: "";
+	const profilePath = resolveWarmChromeProfilePath(env);
+	if (profilePath === undefined) return undefined;
 	return {
 		supervisorPath,
 		opPath: opPaths.find((path) => existsSync(path)),
@@ -1019,6 +1093,8 @@ export type BrowserUseRuntime = {
 	writeAuthTokenSource?: (
 		sourceRef: string,
 	) => Promise<AuthTokenSourceWriteResult>;
+	/** Clear a validated reload source after a non-source installation succeeds. */
+	removeAuthTokenSource?: () => Promise<AuthTokenSourceWriteResult>;
 	/** True only when the current stdin can safely host the hidden fallback prompt. */
 	stdinIsTTY?: () => boolean;
 	/**
@@ -1057,6 +1133,8 @@ export function createDefaultBrowserUseRuntime(
 			readAuthTokenSource(overrides.env ?? process.env),
 		writeAuthTokenSource: (sourceRef) =>
 			writeAuthTokenSource(overrides.env ?? process.env, sourceRef),
+		removeAuthTokenSource: () =>
+			removeAuthTokenSource(overrides.env ?? process.env),
 		stdinIsTTY: () => process.stdin.isTTY === true,
 		mintHandoff: (input) => mintHandoffInProcess(input),
 		...overrides,

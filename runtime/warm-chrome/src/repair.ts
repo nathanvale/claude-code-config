@@ -899,27 +899,35 @@ async function assertPathNotSymlink(
 	}
 }
 
+const PROFILE_CREDENTIAL_STORES = [
+	"Login Data",
+	"Login Data For Account",
+	"Web Data",
+] as const;
+
 async function assertLoginDataEmpty(
 	profileDir: string,
 	context: RepairErrorContext,
 ): Promise<void> {
-	const loginDataPath = join(profileDir, "Default", "Login Data");
-	const info = await lstatForRepair(loginDataPath, context);
-	if (info?.isSymbolicLink()) {
-		throw unrepairableError(
-			"profile_path_symlink",
-			"Choose a profile path whose existing components are directories, not symbolic links, then rerun profile-only repair.",
-			context,
-			{ profile_dir: profileDir },
-		);
-	}
-	if (info !== null && info.size > 0) {
-		throw unrepairableError(
-			"profile_login_data_present",
-			"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
-			context,
-			{ profile_dir: profileDir },
-		);
+	for (const credentialStore of PROFILE_CREDENTIAL_STORES) {
+		const storePath = join(profileDir, "Default", credentialStore);
+		const info = await lstatForRepair(storePath, context);
+		if (info?.isSymbolicLink()) {
+			throw unrepairableError(
+				"profile_path_symlink",
+				"Choose a profile path whose existing components are directories, not symbolic links, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+		if (info !== null && info.size > 0) {
+			throw unrepairableError(
+				"profile_login_data_present",
+				"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
 	}
 }
 

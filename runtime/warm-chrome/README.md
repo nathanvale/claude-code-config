@@ -76,10 +76,11 @@ from the `9222` convention.
 | `repair` | JSON/plain | Profile proof repair plus verify | may write profile proof state |
 
 `repair --profile-only` is the browser-free exception. It requires an explicit
-profile path, proves no listener or browser entry, and returns no endpoint
-authority. It writes only policy-clean profile state after filesystem, lock,
-ownership, saved-login, and symlink checks; any unproven or unsafe condition
-fails closed with a typed refusal and manual step.
+profile path, runs without the browser-entry proof chain or a CDP listener, and
+returns no endpoint authority. It checks `SingletonLock` liveness and refuses
+while a live Chrome holds the profile. It writes only policy-clean profile state
+after filesystem, ownership, saved-login, and symlink checks; any unproven or
+unsafe condition fails closed with a typed refusal and manual step.
 
 No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
 help as `--help`.

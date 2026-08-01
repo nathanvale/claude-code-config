@@ -53,6 +53,7 @@ import {
 	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
 	AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS,
 	__authTokenSupervisorForTest,
+	resolveWarmChromeProfilePath,
 } from "./browser-use-runtime";
 
 // Narrowed envelope view for assertions (parseJson returns unknown-valued
@@ -75,6 +76,7 @@ function supervisorRuntime(
 	calls: AuthTokenSupervisorInput[] = [],
 ) {
 	return makeRuntime({
+		removeAuthTokenSource: async () => ({ ok: true }),
 		runAuthTokenSupervisor: async (input) => {
 			calls.push(input);
 			return result;
@@ -870,6 +872,43 @@ describe("auth doctor renderer", () => {
 		expect(result.stdout).not.toContain("not found");
 	});
 
+	test("auth profile owners share absolute, home-relative, and default resolution", async () => {
+		const cases = [
+			{
+				env: { HOME: "/fixture/home", WARM_CHROME_PROFILE_DIR: "/exact/profile" },
+				expected: "/exact/profile",
+			},
+			{
+				env: { HOME: "/fixture/home", WARM_CHROME_PROFILE_DIR: "~/agent/profile" },
+				expected: "/fixture/home/agent/profile",
+			},
+			{
+				env: { HOME: "/fixture/home" },
+				expected: "/fixture/home/.agent-warm-profile",
+			},
+		] as const;
+
+		for (const fixture of cases) {
+			expect(resolveWarmChromeProfilePath(fixture.env)).toBe(fixture.expected);
+			const ownerCalls: string[][] = [];
+			await runForTest(
+				["auth", "doctor", "--fix", "profile"],
+				makeRuntime({
+					env: fixture.env,
+					runAuthTokenSupervisor: async () => profilePolicyBlockedStatus,
+				}),
+				{
+					warmChromeEntrypoint: "/fixture/warm-chrome.ts",
+					spawnOwner: async (input) => {
+						ownerCalls.push([...input.argv]);
+						return { exitCode: 1, stdout: "", stderr: "", timedOut: false };
+					},
+				},
+			);
+			expect(ownerCalls[0]).toContain(fixture.expected);
+		}
+	});
+
 	test("--fix JSON re-check keeps repair commands in human output only", async () => {
 		const vaultRed = blockedStatus("invalid-vault-scope", {
 			...greenChecks,
@@ -1150,6 +1189,64 @@ describe("ADR 0030 token lifecycle commands", () => {
 		expect(result.stdout + result.stderr).not.toContain(sourceRef);
 	});
 
+	test("plain replacement clears a prior source so reload cannot fetch it", async () => {
+		const scratch = makeTempXdgEnv();
+		disposables.push(scratch);
+		const custodyDir = join(
+			scratch.env.XDG_CONFIG_HOME ?? "",
+			"browser-use",
+			"auth.nosync",
+		);
+		await mkdir(custodyDir, { recursive: true, mode: 0o700 });
+		const sourcePath = join(custodyDir, "token-source.json");
+		const sourceRef = "op://Browser Automation/Service Account/credential";
+		const calls: AuthTokenSupervisorInput[] = [];
+		const runtime = makeRuntime({
+			env: scratch.env,
+			stdinIsTTY: () => false,
+			runAuthTokenSupervisor: async (input) => {
+				calls.push(input);
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({
+						schema_version: 1,
+						ok: true,
+						state:
+							input.mode === "install" && input.replace
+								? "replaced"
+								: "installed",
+						next_action: "auth-status",
+					}),
+					stderr: "",
+				};
+			},
+		});
+
+		const sourced = await runForTest(
+			["auth", "install-token", "--from", sourceRef, "--json"],
+			runtime,
+		);
+		expect(sourced.exitCode).toBe(0);
+		expect((await lstat(sourcePath)).isFile()).toBe(true);
+
+		const replaced = await runForTest(
+			["auth", "install-token", "--stdin", "--replace", "--json"],
+			runtime,
+		);
+		expect(replaced.exitCode).toBe(0);
+		await expect(lstat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+
+		const reloaded = await runForTest(["auth", "reload", "--json"], runtime);
+		expect(reloaded.exitCode).toBe(20);
+		expect((parseJson(reloaded.stdout).error as { code: string }).code).toBe(
+			"auth_token_source_missing",
+		);
+		expect(calls).toEqual([
+			{ mode: "install", input: "source", replace: false, sourceRef },
+			{ mode: "install", input: "stdin", replace: true },
+		]);
+	});
+
 	test("AE3: reload uses the validated stored source non-interactively", async () => {
 		const scratch = makeTempXdgEnv();
 		disposables.push(scratch);
@@ -1287,7 +1384,7 @@ describe("ADR 0030 token lifecycle commands", () => {
 		expect(envelopeOf(result.stdout).data.evaluation.blocked_cause).toBe(
 			"invalid-service-account",
 		);
-		expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
+		await expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
 			code: "ENOENT",
 		});
 		expect(result.stdout + result.stderr).not.toContain(sourceRef);
@@ -1668,7 +1765,7 @@ describe("ADR 0030 token lifecycle commands", () => {
 		expect(envelopeOf(result.stdout).data.evaluation.blocked_cause).toBe(
 			"op-session-unavailable",
 		);
-		expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
+		await expect(lstat(join(custodyDir, "token-source.json"))).rejects.toMatchObject({
 			code: "ENOENT",
 		});
 		expect(result.stdout + result.stderr).not.toContain(
