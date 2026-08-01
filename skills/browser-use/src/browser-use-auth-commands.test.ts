@@ -85,6 +85,63 @@ const healthyStatus = {
 	stderr: "",
 } as const satisfies AuthTokenSupervisorResult;
 
+const profilePolicyBlockedStatus = {
+	exitCode: 20,
+	stdout: JSON.stringify({
+		schema_version: 1,
+		ok: false,
+		state: "blocked",
+		cause: "profile-policy-unproven",
+		lane: { selected: "environment-injected-op", status: "blocked" },
+		checks: {
+			token_file: { status: "ready" },
+			op: { status: "ready" },
+			token: { status: "ready" },
+			vault_scope: { status: "ready", visible_count: 1 },
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unproven",
+			},
+		},
+		next_action: "create-credential-clean-profile",
+	}),
+	stderr: "",
+} as const satisfies AuthTokenSupervisorResult;
+
+const allRedStatus = {
+	exitCode: 20,
+	stdout: JSON.stringify({
+		schema_version: 1,
+		ok: false,
+		state: "blocked",
+		cause: "profile-policy-unproven",
+		lane: { selected: "environment-injected-op", status: "blocked" },
+		checks: {
+			token_file: { status: "blocked", cause: "unsafe-ancestry" },
+			op: { status: "blocked", cause: "process-failed" },
+			token: { status: "blocked", cause: "token-missing" },
+			vault_scope: { status: "blocked", cause: "invalid-vault-scope" },
+			profile_policy: {
+				status: "blocked",
+				cause: "profile-policy-unproven",
+			},
+		},
+		next_action: "create-credential-clean-profile",
+	}),
+	stderr: "",
+} as const satisfies AuthTokenSupervisorResult;
+
+function stringLeaves(value: unknown): string[] {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value)) return value.flatMap(stringLeaves);
+	if (typeof value !== "object" || value === null) return [];
+	return Object.values(value).flatMap(stringLeaves);
+}
+
+function stableEnvelopeBytes(stdout: string): string {
+	return stdout.replace(/("duration_ms": )-?\d+/, "$1<duration>");
+}
+
 describe("token doctor repair groundwork", () => {
 	test("the repair map covers every supervisor cause with the Repair Path rubric", () => {
 		expect(AUTH_TOKEN_GATE_ORDER).toEqual([
@@ -150,7 +207,7 @@ describe("token doctor repair groundwork", () => {
 		).toEqual([]);
 	});
 
-	test("U1 keeps doctor on the status projection and reload on a typed pending surface", async () => {
+	test("setup commands keep doctor on the status envelope and reload pending", async () => {
 		const calls: AuthTokenSupervisorInput[] = [];
 		const doctor = await runForTest(
 			["auth", "doctor", "--json"],
@@ -158,7 +215,7 @@ describe("token doctor repair groundwork", () => {
 		);
 		expect(doctor.exitCode).toBe(0);
 		expect(calls).toEqual([{ mode: "status" }]);
-		expect(envelopeOf(doctor.stdout).data.action).toBe("doctor");
+		expect(envelopeOf(doctor.stdout).data.action).toBe("status");
 
 		const reload = await runForTest(
 			["auth", "reload", "--json"],
@@ -172,6 +229,202 @@ describe("token doctor repair groundwork", () => {
 		expect((parseJson(reload.stdout).error as { code: string }).code).toBe(
 			"browser_use_not_implemented",
 		);
+	});
+});
+
+describe("auth doctor renderer", () => {
+	test("AE1: bare doctor renders four green gates and one repairable red gate read-only", async () => {
+		const calls: AuthTokenSupervisorInput[] = [];
+		const result = await runForTest(
+			["auth", "doctor"],
+			supervisorRuntime(profilePolicyBlockedStatus, calls),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(calls).toEqual([{ mode: "status" }]);
+		expect(result.stdout).toBe(
+			[
+				"browser-use auth doctor",
+				"lane: environment-injected-op",
+				"gate            verdict  state",
+				"token_file      green    ready",
+				"op              green    ready",
+				"token           green    ready",
+				"vault_scope     green    ready visible_count=1",
+				"profile_policy  red      blocked cause=profile-policy-unproven",
+				"  repair: browser-use auth doctor --fix profile",
+				"summary: 4 green, 1 red",
+				"",
+			].join("\n"),
+		);
+	});
+
+	test("all-red supervisor state renders one repair command per custody gate", async () => {
+		const result = await runForTest(
+			["auth", "doctor", "--plain"],
+			supervisorRuntime(allRedStatus),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toBe(
+			[
+				"browser-use auth doctor",
+				"lane: environment-injected-op",
+				"gate            verdict  state",
+				"token_file      red      blocked cause=unsafe-ancestry",
+				"  repair: browser-use auth install-token --replace",
+				"op              red      blocked cause=process-failed",
+				"  repair: browser-use auth reload",
+				"token           red      blocked cause=token-missing",
+				"  repair: browser-use auth reload",
+				"vault_scope     red      blocked cause=invalid-vault-scope",
+				"  repair: browser-use auth repair-vault-grant",
+				"profile_policy  red      blocked cause=profile-policy-unproven",
+				"  repair: browser-use auth doctor --fix profile",
+				"summary: 0 green, 5 red",
+				"",
+			].join("\n"),
+		);
+		expect(
+			result.stdout.split("\n").filter((line) => line.startsWith("  repair:")),
+		).toHaveLength(5);
+	});
+
+	test("missing and unproven custody states remain repairable red gates", async () => {
+		const result = await runForTest(
+			["auth", "doctor"],
+			supervisorRuntime({
+				exitCode: 20,
+				stdout: JSON.stringify({
+					schema_version: 1,
+					ok: false,
+					state: "blocked",
+					cause: "token-unsafe",
+					lane: { selected: "environment-injected-op", status: "blocked" },
+					checks: {
+						token_file: { status: "missing", cause: "token-missing" },
+						op: { status: "unproven" },
+						token: { status: "blocked", cause: "token-invalid" },
+						vault_scope: { status: "ready", visible_count: 1 },
+						profile_policy: { status: "ready" },
+					},
+					next_action: "repair-token-custody",
+				}),
+				stderr: "",
+			}),
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain(
+			"token_file      red      missing cause=token-missing\n" +
+				"  repair: browser-use auth reload",
+		);
+		expect(result.stdout).toContain(
+			"op              red      unproven\n" +
+				"  repair: browser-use auth status --json",
+		);
+		expect(result.stdout).toContain("summary: 2 green, 3 red");
+		expect(result.stdout).not.toContain("unknown");
+		expect(
+			result.stdout.split("\n").filter((line) => line.startsWith("  repair:")),
+		).toHaveLength(3);
+	});
+
+	test("AE5: degraded runtime causes render a red runtime gate and five unknowns", async () => {
+		for (const [cause, nextAction, repairCommand] of [
+			[
+				"token-supervisor-unavailable",
+				"build-token-supervisor",
+				"bun --cwd runtime/browser-use-environment-auth run build:release",
+			],
+			[
+				"op-path-unavailable",
+				"install-op-cli",
+				'brew bundle --file "$HOME/code/dotfiles/config/brew/Brewfile"',
+			],
+			[
+				"unsafe-config-root",
+				"repair-config-root",
+				"browser-use auth install-token",
+			],
+		] as const) {
+			const result = await runForTest(
+				["auth", "doctor"],
+				supervisorRuntime({
+					exitCode: 20,
+					stdout: JSON.stringify({
+						schema_version: 1,
+						ok: false,
+						state: "blocked",
+						cause,
+						next_action: nextAction,
+					}),
+					stderr: "",
+				}),
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).toBe(
+				[
+					"browser-use auth doctor",
+					"lane: unknown",
+					"gate            verdict  state",
+					`runtime         red      blocked cause=${cause}`,
+					`  repair: ${repairCommand}`,
+					"token_file      unknown  unknown",
+					"op              unknown  unknown",
+					"token           unknown  unknown",
+					"vault_scope     unknown  unknown",
+					"profile_policy  unknown  unknown",
+					"summary: 1 red, 5 unknown",
+					"",
+				].join("\n"),
+			);
+			expect(
+				result.stdout.split("\n").filter((line) => line.startsWith("  repair:")),
+			).toHaveLength(1);
+		}
+	});
+
+	test("doctor --json matches status --json bytes apart from invocation duration", async () => {
+		for (const fixture of [healthyStatus, profilePolicyBlockedStatus]) {
+			const status = await runForTest(
+				["auth", "status", "--run-id", "doctor-parity", "--json"],
+				supervisorRuntime(fixture),
+			);
+			const doctor = await runForTest(
+				["auth", "doctor", "--run-id", "doctor-parity", "--json"],
+				supervisorRuntime(fixture),
+			);
+
+			expect(doctor.exitCode).toBe(status.exitCode);
+			expect(stableEnvelopeBytes(doctor.stdout)).toBe(
+				stableEnvelopeBytes(status.stdout),
+			);
+			expect(doctor.stderr).toBe(status.stderr);
+		}
+	});
+
+	test("doctor envelopes carry typed action ids without repair command text", async () => {
+		const result = await runForTest(
+			["auth", "doctor", "--json"],
+			supervisorRuntime(allRedStatus),
+		);
+		const envelope = envelopeOf(result.stdout);
+		const projectedText = stringLeaves(envelope);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.continuation.next_action_id).toBe(
+			"create-credential-clean-profile",
+		);
+		for (const repair of Object.values(AUTH_TOKEN_REPAIR_PATHS)) {
+			expect(
+				projectedText.some((text) => text.includes(repair.repairCommand)),
+			).toBe(false);
+		}
 	});
 });
 

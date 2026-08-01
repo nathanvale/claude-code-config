@@ -5433,12 +5433,78 @@ function parseAuthTokenSupervisorResult(
 	};
 }
 
+function renderAuthTokenDoctor(
+	projection: AuthTokenSupervisorProjection,
+): string {
+	const lane = recordField(projection.detail?.lane);
+	const checks = recordField(projection.detail?.checks);
+	const lines = [
+		"browser-use auth doctor",
+		`lane: ${stringField(lane?.selected) ?? "unknown"}`,
+		`${"gate".padEnd(16)}${"verdict".padEnd(9)}state`,
+	];
+	let green = 0;
+	let red = 0;
+	let unknown = 0;
+
+	if (checks === undefined) {
+		const cause = projection.cause ?? "unknown";
+		lines.push(
+			`${"runtime".padEnd(16)}${"red".padEnd(9)}${projection.state} cause=${cause}`,
+			`  repair: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+		red += 1;
+		for (const gate of AUTH_TOKEN_GATE_ORDER) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+		}
+		lines.push(`summary: ${red} red, ${unknown} unknown`);
+		return `${lines.join("\n")}\n`;
+	}
+
+	for (const gate of AUTH_TOKEN_GATE_ORDER) {
+		const check = recordField(checks[gate]);
+		const status = stringField(check?.status);
+		if (status === undefined) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+			continue;
+		}
+		const verdict = status === "ready" ? "green" : "red";
+		if (verdict === "green") green += 1;
+		else red += 1;
+		const cause = stringField(check?.cause);
+		const visibleCount = check?.visible_count;
+		lines.push(
+			`${gate.padEnd(16)}${verdict.padEnd(9)}${status}${
+				visibleCount === undefined ? "" : ` visible_count=${visibleCount}`
+			}${cause === undefined ? "" : ` cause=${cause}`}`,
+		);
+		if (verdict === "red") {
+			lines.push(
+				`  repair: ${authTokenRepairPathFor(cause ?? "unknown", gate).repairCommand}`,
+			);
+		}
+	}
+
+	lines.push(
+		unknown === 0
+			? `summary: ${green} green, ${red} red`
+			: `summary: ${green} green, ${red} red, ${unknown} unknown`,
+	);
+	return `${lines.join("\n")}\n`;
+}
+
 function emitAuthTokenLifecycleResult(
 	input: PlatformCommandInput,
 	projection: AuthTokenSupervisorProjection,
 	errorCode: "auth_token_input_rejected" | "auth_token_supervisor_failed",
 ): number {
 	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	if (subcommand === "doctor" && input.parsed.outputMode === "plain") {
+		input.stdout.write(renderAuthTokenDoctor(projection));
+		return 0;
+	}
 	const evaluation = {
 		status: projection.state,
 		...(projection.cause === undefined
@@ -5466,7 +5532,7 @@ function emitAuthTokenLifecycleResult(
 		data: {
 			contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 			schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
-			action: subcommand,
+			action: subcommand === "doctor" ? "status" : subcommand,
 			evaluation,
 			caller: input.caller,
 		},
