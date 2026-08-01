@@ -89,6 +89,8 @@ export type WarmChromeExecuteInvocation = {
 	endpoint: string;
 	port: string;
 	profileInput?: string;
+	/** Run the repair writer against only the explicitly passed profile path. */
+	profileOnly: boolean;
 	chromeBin: string;
 };
 
@@ -108,8 +110,8 @@ export type WarmChromeCommandSuccess = {
 	data: Record<string, unknown>;
 	/** Stable plain rendering; the chassis appends run correlation tokens. */
 	plain: string;
-	runtimeActions: readonly RuntimeActionGuidance[];
-	continuation: RuntimeContinuationGuidance & { next_action_id: string };
+	runtimeActions?: readonly RuntimeActionGuidance[];
+	continuation?: RuntimeContinuationGuidance & { next_action_id: string };
 };
 
 /**
@@ -355,6 +357,8 @@ function parseWarmChromeArgv(
 	let outputMode: OutputMode = displayCommand === "status" ? "plain" : "json";
 	let port = "";
 	let endpoint = "";
+	let profileOnly = false;
+	let profileFlagProvided = false;
 	// An explicitly-empty env value must not defeat the documented
 	// ~/.agent-warm-profile fallback downstream (`??` treats "" as supplied).
 	let profileInput =
@@ -383,7 +387,11 @@ function parseWarmChromeArgv(
 				break;
 			case "--profile":
 				profileInput = requireNext(args, index, "--profile");
+				profileFlagProvided = true;
 				index += 1;
+				break;
+			case "--profile-only":
+				profileOnly = true;
 				break;
 			case "--chrome":
 				chromeBin = requireNext(args, index, "--chrome");
@@ -396,6 +404,7 @@ function parseWarmChromeArgv(
 					endpoint = requireInlineValue(arg, "--endpoint");
 				} else if (arg.startsWith("--profile=")) {
 					profileInput = requireInlineValue(arg, "--profile");
+					profileFlagProvided = true;
 				} else if (arg.startsWith("--chrome=")) {
 					chromeBin = requireInlineValue(arg, "--chrome");
 				} else if (arg.startsWith("-")) {
@@ -408,6 +417,15 @@ function parseWarmChromeArgv(
 
 	if (command !== "launch" && hasChromeFlag(args)) {
 		throw usageError("--chrome is only valid with launch");
+	}
+	if (profileOnly && command !== "repair") {
+		throw usageError("--profile-only is only valid with repair");
+	}
+	if (profileOnly && !profileFlagProvided) {
+		throw usageError("--profile-only requires an explicit --profile value");
+	}
+	if (profileOnly && (port !== "" || endpoint !== "")) {
+		throw usageError("--profile-only cannot be combined with --port or --endpoint");
 	}
 	// The contract declares --port and --endpoint mutually exclusive in every
 	// usage line; the parser enforces it here with exit 2 (plan U2/U4).
@@ -430,6 +448,7 @@ function parseWarmChromeArgv(
 		outputMode,
 		...normalized,
 		...(profileInput === undefined ? {} : { profileInput }),
+		profileOnly,
 		chromeBin: expandHome(chromeBin, runtime.env),
 	};
 }
@@ -588,8 +607,12 @@ function writeSuccess(
 		createCliRuntimeSuccessEnvelope({
 			run_id: run.runId,
 			data: success.data,
-			runtime_actions: [...success.runtimeActions],
-			continuation: success.continuation,
+			...(success.runtimeActions === undefined
+				? {}
+				: { runtime_actions: [...success.runtimeActions] }),
+			...(success.continuation === undefined
+				? {}
+				: { continuation: success.continuation }),
 		}),
 		run,
 	);

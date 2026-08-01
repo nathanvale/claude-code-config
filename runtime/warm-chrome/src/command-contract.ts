@@ -89,6 +89,11 @@ const repairFlags = {
 		description:
 			"Dedicated profile directory; repair may create, chmod, or rewrite local profile proof state.",
 	},
+	"--profile-only": {
+		type: "boolean",
+		description:
+			"Repair only profile policy files; requires explicit --profile and skips browser entry.",
+	},
 } as const satisfies WarmChromeCommandContract["flags"];
 
 /**
@@ -241,9 +246,11 @@ export const warmChromeContracts = defineCommandFacadeContract(
 		},
 		repair: {
 			script: WARM_CHROME_CLI_NAME,
-			summary: "Repair safe Warm Chrome profile proof, then verify.",
+			summary:
+				"Repair safe Warm Chrome profile proof; normal mode then verifies browser entry.",
 			usage: [
 				"warm-chrome repair [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
+				"warm-chrome repair --profile-only --profile <dir> [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",
@@ -252,7 +259,7 @@ export const warmChromeContracts = defineCommandFacadeContract(
 			executionModes: ["normal"],
 			previewExemption: {
 				reason:
-					"Repair changes local Warm Chrome profile proof state; warm-chrome check is the read-only preview surface.",
+					"Repair changes local Warm Chrome profile proof state; warm-chrome check previews browser entry, while profile-only repair is rechecked by its caller's read-only profile-policy gate.",
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
@@ -286,7 +293,7 @@ export const WARM_CHROME_PREVIEW_NOTES = {
 	launch:
 		"Preview with warm-chrome check; launch-only input (--chrome) is validated by launch itself and cannot be previewed.",
 	repair:
-		"Preview with warm-chrome check; repair writes local Warm Chrome profile proof state.",
+		"Preview browser entry with warm-chrome check; profile-only repair requires the caller's read-only profile-policy check.",
 } as const satisfies Partial<Record<WarmChromeCommand, string>>;
 
 type WarmChromePreviewNoteAugment = {

@@ -9,11 +9,22 @@
 // mutation — refusal, never termination, is the only response to unverified
 // state.
 
-import { lstat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	open,
+	readFile,
+	rename,
+	rmdir,
+	unlink,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 
 import {
 	type WarmChromeCommandHandler,
+	type WarmChromeCommandSuccess,
 	warmChromeRuntimeAction,
 } from "./cli.ts";
 import {
@@ -24,7 +35,11 @@ import {
 	type WarmChromeVerifiedProof,
 } from "./proof.ts";
 import {
+	WARM_CHROME_CONTRACT_ID,
 	WARM_CHROME_DEFAULT_PROFILE_DIR,
+	WARM_CHROME_SCHEMA_VERSION,
+	type WarmChromeRepairActionId,
+	type WarmChromeRepairReason,
 } from "./model.ts";
 import {
 	expandHome,
@@ -39,46 +54,6 @@ import {
 	type WarmChromeRuntime,
 	WarmChromeRuntimeError,
 } from "./runtime.ts";
-
-/**
- * Closed repair-owned reason union for the `unrepairable` station (plan U7).
- *
- * Owned locally: these reasons never overlap the check reason union, and the
- * catalog's `repair.unrepairable` station is the only consumer. A new reason
- * lands here first and a station test pins it before the runtime may emit it.
- */
-export const WARM_CHROME_REPAIR_REASONS = {
-	unrepairable: [
-		"foreign_listener_on_port",
-		"profile_not_owned",
-		"profile_mismatch",
-		"profile_dir_uncreatable",
-		"profile_permissions_unrepairable",
-		"devtools_active_port_symlink",
-		"devtools_active_port_unwritable",
-	],
-} as const;
-
-/**
- * Repair-owned reason-detail union.
- */
-export type WarmChromeRepairReason =
-	(typeof WARM_CHROME_REPAIR_REASONS.unrepairable)[number];
-
-/**
- * Cross-tool-visible repair mutation ids (the mutation-pin vocabulary).
- */
-export const WARM_CHROME_REPAIR_ACTION_IDS = [
-	"profile_dir_created",
-	"profile_permissions",
-	"devtools_active_port",
-] as const;
-
-/**
- * Repair mutation id union.
- */
-export type WarmChromeRepairActionId =
-	(typeof WARM_CHROME_REPAIR_ACTION_IDS)[number];
 
 /**
  * One enumerated cross-tool-visible mutation: what changed and exactly where,
@@ -130,6 +105,8 @@ type RepairErrorContext = {
 	port: string;
 };
 
+const PROFILE_PREFERENCES_MAX_BYTES = 1_048_576;
+
 // Every unrepairable verdict fails closed on exit 20 with plain diagnostics.
 // The runtime_diagnostics failure domain routes the chassis primary action to
 // inspect_diagnostics (the repair.unrepairable catalog pin); the chassis
@@ -175,6 +152,9 @@ export function createRepairCommandHandler(
 			endpoint: invocation.endpoint,
 			port: invocation.port,
 		};
+		if (invocation.profileOnly) {
+			return repairProfilePolicyOnly(invocation, runtime, context);
+		}
 
 		// 1. R11 gate before ANY action: inspect the port owner. A listener whose
 		// binary path is not real Google Chrome is unverified — refuse to repair
@@ -454,6 +434,551 @@ export function createRepairCommandHandler(
 			continuation: { next_action_id: "use_verified_endpoint" },
 		};
 	};
+}
+
+type JsonObject = Record<string, unknown>;
+
+type ProfilePolicyInspection = {
+	preferences: JsonObject;
+	preferencesPath: string;
+	serializedPreferences: string;
+	writePreferences: boolean;
+};
+
+// Profile-only mode owns no browser-entry authority. It accepts one explicit
+// path, writes only that path, and returns a policy-clean signal without an
+// endpoint action or continuation.
+async function repairProfilePolicyOnly(
+	invocation: Parameters<WarmChromeCommandHandler>[0],
+	runtime: WarmChromeRuntime,
+	context: RepairErrorContext,
+): Promise<WarmChromeCommandSuccess> {
+	const profileDir = invocation.profileInput;
+	if (profileDir === undefined || !isCanonicalProfilePath(profileDir)) {
+		throw unrepairableError(
+			"profile_path_noncanonical",
+			"Choose an absolute canonical profile path with no trailing slash or dot segments, then rerun profile-only repair.",
+			context,
+			profileDir === undefined ? {} : { profile_dir: profileDir },
+		);
+	}
+	const homeDir = runtime.env.HOME?.replace(/\/+$/, "");
+	if (
+		profileDir === homeDir ||
+		isDefaultChromeProfilePath(profileDir, runtime.env)
+	) {
+		throw unrepairableError(
+			"profile_path_invalid",
+			"Choose a dedicated profile directory, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+
+	await assertProfilePathNotSymlink(profileDir, context);
+	let profileInfo = await lstatForRepair(profileDir, context);
+	if (profileInfo !== null && !profileInfo.isDirectory()) {
+		throw unrepairableError(
+			"profile_path_invalid",
+			"Choose an empty dedicated profile directory, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	if (
+		profileInfo !== null &&
+		String(profileInfo.uid) !== (await runtime.currentUser())
+	) {
+		throw unrepairableError(
+			"profile_not_owned",
+			"Choose a profile owned by the current user or correct its ownership manually, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	await assertProfileUnlocked(runtime, profileDir, context);
+
+	const mutations: WarmChromeRepairMutation[] = [];
+	let originalMode: number | null = null;
+	let restoreModeOnFailure = false;
+	let defaultDirCreated = false;
+	try {
+		if (profileInfo === null) {
+			let profileCreated = false;
+			try {
+				await mkdir(profileDir, { mode: 0o700 });
+				profileCreated = true;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+					throw unrepairableError(
+						"profile_dir_uncreatable",
+						"Create the parent directory or correct filesystem access, then rerun profile-only repair.",
+						context,
+						{ profile_dir: profileDir },
+					);
+				}
+			}
+			await assertProfilePathNotSymlink(profileDir, context);
+			profileInfo = await lstatForRepair(profileDir, context);
+			if (profileInfo === null || !profileInfo.isDirectory()) {
+				throw unrepairableError(
+					"profile_path_invalid",
+					"Choose an empty dedicated profile directory, then rerun profile-only repair.",
+					context,
+					{ profile_dir: profileDir },
+				);
+			}
+			if (String(profileInfo.uid) !== (await runtime.currentUser())) {
+				throw unrepairableError(
+					"profile_not_owned",
+					"Choose a profile owned by the current user or correct its ownership manually, then rerun profile-only repair.",
+					context,
+					{ profile_dir: profileDir },
+				);
+			}
+			if (profileCreated) {
+				mutations.push({ id: "profile_dir_created", path: profileDir });
+			}
+		}
+
+		const observedMode = Number(profileInfo.mode) & 0o777;
+		if (observedMode !== 0o700) {
+			originalMode = observedMode;
+			try {
+				await assertProfileUnlocked(runtime, profileDir, context);
+				await chmod(profileDir, 0o700);
+				profileInfo = await lstatForRepair(profileDir, context);
+			} catch (error) {
+				if (error instanceof WarmChromeRuntimeError) throw error;
+				throw unrepairableError(
+					"profile_permissions_unrepairable",
+					"Correct the profile directory mode to owner-only, then rerun profile-only repair.",
+					context,
+					{ profile_dir: profileDir },
+				);
+			}
+			if (
+				profileInfo === null ||
+				(Number(profileInfo.mode) & 0o777) !== 0o700 ||
+				String(profileInfo.uid) !== (await runtime.currentUser())
+			) {
+				throw unrepairableError(
+					"profile_permissions_unrepairable",
+					"Correct the profile directory mode to owner-only, then rerun profile-only repair.",
+					context,
+					{ profile_dir: profileDir },
+				);
+			}
+			restoreModeOnFailure = true;
+			mutations.push({ id: "profile_permissions", path: profileDir });
+		}
+
+		const inspection = await inspectProfilePolicy(profileDir, context);
+		if (inspection.writePreferences) {
+			await assertProfileUnlocked(runtime, profileDir, context);
+			await assertLoginDataEmpty(profileDir, context);
+			const defaultDir = dirname(inspection.preferencesPath);
+			const defaultInfo = await lstatForRepair(defaultDir, context);
+			if (defaultInfo === null) {
+				try {
+					await mkdir(defaultDir, { mode: 0o700 });
+					defaultDirCreated = true;
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+						throw unrepairableError(
+							"profile_preferences_unwritable",
+							"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
+							context,
+							{ profile_dir: profileDir },
+						);
+					}
+				}
+			}
+			await assertRegularDirectory(defaultDir, context, profileDir);
+			await assertPathNotSymlink(inspection.preferencesPath, context, profileDir);
+			await assertProfileUnlocked(runtime, profileDir, context);
+			try {
+				await writeTextFileAtomically(
+					inspection.preferencesPath,
+					inspection.serializedPreferences,
+					async () => {
+						await assertPathNotSymlink(
+							inspection.preferencesPath,
+							context,
+							profileDir,
+						);
+						await assertLoginDataEmpty(profileDir, context);
+						await assertProfileUnlocked(runtime, profileDir, context);
+					},
+				);
+			} catch (error) {
+				if (defaultDirCreated) {
+					await rmdir(defaultDir).catch(() => undefined);
+				}
+				if (error instanceof WarmChromeRuntimeError) throw error;
+				throw unrepairableError(
+					"profile_preferences_unwritable",
+					"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
+					context,
+					{ profile_dir: profileDir },
+				);
+			}
+			mutations.push({
+				id: "profile_preferences",
+				path: inspection.preferencesPath,
+			});
+			restoreModeOnFailure = false;
+		}
+
+		await verifyProfilePolicyClean(profileDir, runtime, context);
+	} catch (error) {
+		if (restoreModeOnFailure && originalMode !== null) {
+			await chmod(profileDir, originalMode).catch(() => undefined);
+		}
+		throw error;
+	}
+
+	const actionIds = mutations.map((mutation) => mutation.id);
+	return {
+		data: {
+			contract_id: WARM_CHROME_CONTRACT_ID,
+			schema_version: WARM_CHROME_SCHEMA_VERSION,
+			profile_policy: "clean",
+			profile_dir: profileDir,
+			...repairMutationData(mutations),
+		},
+		plain: [
+			"profile_policy_clean",
+			`command=${invocation.displayCommand}`,
+			`profile=${profileDir}`,
+			"credentials_enable_service=false",
+			"profile.password_manager_enabled=false",
+			"autofill.profile_enabled=false",
+			"autofill.credit_card_enabled=false",
+			"sync.requested=false",
+			"saved_logins=absent",
+			`repaired=${actionIds.length > 0 ? actionIds.join(",") : "none"}`,
+		].join(" "),
+	};
+}
+
+function isCanonicalProfilePath(path: string): boolean {
+	return (
+		isAbsolute(path) &&
+		!path.includes("\0") &&
+		!path.endsWith("/") &&
+		normalize(path) === path &&
+		dirname(path) !== path
+	);
+}
+
+async function assertProfilePathNotSymlink(
+	profileDir: string,
+	context: RepairErrorContext,
+): Promise<void> {
+	const info = await lstatForRepair(profileDir, context);
+	if (info?.isSymbolicLink()) {
+		throw unrepairableError(
+			"profile_path_symlink",
+			"Choose a profile path that is a directory, not a symbolic link, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	if (info !== null && !info.isDirectory()) {
+		throw unrepairableError(
+			"profile_path_invalid",
+			"Choose an empty dedicated profile directory, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+}
+
+async function lstatForRepair(
+	path: string,
+	context: RepairErrorContext,
+): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+	try {
+		return await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw unrepairableError(
+			"profile_path_uninspectable",
+			"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
+			context,
+		);
+	}
+}
+
+async function assertProfileUnlocked(
+	runtime: WarmChromeRuntime,
+	profileDir: string,
+	context: RepairErrorContext,
+): Promise<void> {
+	let lock: Awaited<ReturnType<WarmChromeRuntime["readSingletonLock"]>>;
+	try {
+		lock = await runtime.readSingletonLock(profileDir);
+	} catch {
+		throw unrepairableError(
+			"profile_locked",
+			"Stop Warm Chrome, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	if (lock === null || !lock.local) return;
+	let alive = true;
+	if (lock.pid !== null) {
+		try {
+			alive = await runtime.isProcessAlive(lock.pid);
+		} catch {
+			alive = true;
+		}
+	}
+	if (alive) {
+		throw unrepairableError(
+			"profile_locked",
+			"Stop Warm Chrome, then rerun profile-only repair.",
+			context,
+			{
+				profile_dir: profileDir,
+				...(lock.pid === null ? {} : { lock_pid: lock.pid }),
+			},
+		);
+	}
+}
+
+async function inspectProfilePolicy(
+	profileDir: string,
+	context: RepairErrorContext,
+): Promise<ProfilePolicyInspection> {
+	const defaultDir = join(profileDir, "Default");
+	const preferencesPath = join(defaultDir, "Preferences");
+	await assertRegularDirectory(defaultDir, context, profileDir, true);
+	await assertLoginDataEmpty(profileDir, context);
+	await assertPathNotSymlink(preferencesPath, context, profileDir);
+	const preferencesInfo = await lstatForRepair(preferencesPath, context);
+	let source: string | null = null;
+	let preferences: JsonObject = {};
+	if (preferencesInfo !== null) {
+		if (!preferencesInfo.isFile()) {
+			throw unrepairableError(
+				"profile_preferences_unreadable",
+				"Move the unreadable Preferences entry aside only after manual review, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+		if (preferencesInfo.size > PROFILE_PREFERENCES_MAX_BYTES) {
+			throw unrepairableError(
+				"profile_preferences_too_large",
+				"Review and reduce the Preferences file below the policy limit, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+		try {
+			source = await readFile(preferencesPath, "utf8");
+			const parsed: unknown = JSON.parse(source);
+			if (!isJsonObject(parsed)) throw new Error("not an object");
+			preferences = parsed;
+		} catch {
+			throw unrepairableError(
+				"profile_preferences_unreadable",
+				"Move the unreadable Preferences file aside only after manual review, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+	}
+	const writePreferences = !profilePolicyFlagsAreClean(preferences);
+	const merged = mergeProfilePolicyPreferences(preferences);
+	const serializedPreferences = serializePreferences(merged, source);
+	if (Buffer.byteLength(serializedPreferences) > PROFILE_PREFERENCES_MAX_BYTES) {
+		throw unrepairableError(
+			"profile_preferences_too_large",
+			"Review and reduce the Preferences file below the policy limit, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	return {
+		preferences: merged,
+		preferencesPath,
+		serializedPreferences,
+		writePreferences: preferencesInfo === null || writePreferences,
+	};
+}
+
+async function assertRegularDirectory(
+	path: string,
+	context: RepairErrorContext,
+	profileDir: string,
+	allowMissing = false,
+): Promise<void> {
+	const info = await lstatForRepair(path, context);
+	if (info === null && allowMissing) return;
+	if (info?.isSymbolicLink()) {
+		throw unrepairableError(
+			"profile_path_symlink",
+			"Choose a profile path whose existing components are directories, not symbolic links, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	if (info === null || !info.isDirectory()) {
+		throw unrepairableError(
+			"profile_path_invalid",
+			"Choose an empty dedicated profile directory, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+}
+
+async function assertPathNotSymlink(
+	path: string,
+	context: RepairErrorContext,
+	profileDir: string,
+): Promise<void> {
+	if ((await lstatForRepair(path, context))?.isSymbolicLink()) {
+		throw unrepairableError(
+			"profile_path_symlink",
+			"Choose a profile path whose existing components are directories, not symbolic links, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+}
+
+async function assertLoginDataEmpty(
+	profileDir: string,
+	context: RepairErrorContext,
+): Promise<void> {
+	const loginDataPath = join(profileDir, "Default", "Login Data");
+	const info = await lstatForRepair(loginDataPath, context);
+	if (info?.isSymbolicLink()) {
+		throw unrepairableError(
+			"profile_path_symlink",
+			"Choose a profile path whose existing components are directories, not symbolic links, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	if (info !== null && info.size > 0) {
+		throw unrepairableError(
+			"profile_login_data_present",
+			"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nestedObject(value: unknown): JsonObject {
+	return isJsonObject(value) ? value : {};
+}
+
+function mergeProfilePolicyPreferences(preferences: JsonObject): JsonObject {
+	return {
+		...preferences,
+		credentials_enable_service: false,
+		profile: {
+			...nestedObject(preferences.profile),
+			password_manager_enabled: false,
+		},
+		autofill: {
+			...nestedObject(preferences.autofill),
+			profile_enabled: false,
+			credit_card_enabled: false,
+		},
+		sync: {
+			...nestedObject(preferences.sync),
+			requested: false,
+		},
+	};
+}
+
+function profilePolicyFlagsAreClean(preferences: JsonObject): boolean {
+	const profile = nestedObject(preferences.profile);
+	const autofill = nestedObject(preferences.autofill);
+	const sync = nestedObject(preferences.sync);
+	return (
+		preferences.credentials_enable_service === false &&
+		profile.password_manager_enabled === false &&
+		autofill.profile_enabled === false &&
+		autofill.credit_card_enabled === false &&
+		sync.requested === false
+	);
+}
+
+function serializePreferences(
+	preferences: JsonObject,
+	source: string | null,
+): string {
+	if (source === null) return `${JSON.stringify(preferences)}\n`;
+	const indent = source.match(/\n([\t ]+)"/)?.[1] ?? "";
+	const trailingNewline = source.endsWith("\n") ? "\n" : "";
+	return `${JSON.stringify(preferences, null, indent)}${trailingNewline}`;
+}
+
+async function writeTextFileAtomically(
+	path: string,
+	content: string,
+	assertTargetSafe: () => Promise<void>,
+): Promise<void> {
+	const tempPath = join(
+		dirname(path),
+		`.Preferences.${process.pid}.${randomUUID()}.tmp`,
+	);
+	let handle: Awaited<ReturnType<typeof open>> | null = null;
+	try {
+		handle = await open(tempPath, "wx", 0o600);
+		await handle.writeFile(content, "utf8");
+		await handle.sync();
+		await handle.close();
+		handle = null;
+		await assertTargetSafe();
+		await rename(tempPath, path);
+	} finally {
+		await handle?.close().catch(() => undefined);
+		await unlink(tempPath).catch(() => undefined);
+	}
+}
+
+async function verifyProfilePolicyClean(
+	profileDir: string,
+	runtime: WarmChromeRuntime,
+	context: RepairErrorContext,
+): Promise<void> {
+	const profileInfo = await lstatForRepair(profileDir, context);
+	if (
+		profileInfo === null ||
+		!profileInfo.isDirectory() ||
+		(Number(profileInfo.mode) & 0o777) !== 0o700 ||
+		String(profileInfo.uid) !== (await runtime.currentUser())
+	) {
+		throw unrepairableError(
+			"profile_permissions_unrepairable",
+			"Correct the profile directory mode and ownership, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
+	const inspection = await inspectProfilePolicy(profileDir, context);
+	if (inspection.writePreferences || !profilePolicyFlagsAreClean(inspection.preferences)) {
+		throw unrepairableError(
+			"profile_preferences_unwritable",
+			"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
 }
 
 function repairMutationData(
