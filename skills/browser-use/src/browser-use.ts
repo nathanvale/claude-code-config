@@ -127,6 +127,7 @@ import {
 } from "./browser-use-core";
 import {
 	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
+	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
 	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
@@ -5433,7 +5434,8 @@ type AuthDoctorOrchestrationDeps = {
 	warmChromeEntrypoint?: string | null;
 };
 
-const AUTH_DOCTOR_OWNER_TIMEOUT_MS = 10_000;
+const AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS = 10_000;
+const AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS = 10_000;
 
 async function spawnAuthDoctorOwner(
 	input: AuthDoctorOwnerSpawnInput,
@@ -5470,12 +5472,18 @@ function authDoctorOwnerEnv(
 		"TMPDIR",
 		"XDG_CONFIG_HOME",
 		"WARM_CHROME_PROFILE_DIR",
+		"OP_ACCOUNT",
 	] as const;
 	const childEnv: Record<string, string | undefined> = {
 		PATH: env.PATH ?? "/usr/bin:/bin",
 	};
 	for (const key of allowed) {
 		if (env[key] !== undefined) childEnv[key] = env[key];
+	}
+	for (const [key, value] of Object.entries(env)) {
+		if (key.startsWith("OP_SESSION_") && value !== undefined) {
+			childEnv[key] = value;
+		}
 	}
 	for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) delete childEnv[key];
 	return childEnv;
@@ -5538,6 +5546,23 @@ function authDoctorOwnerFailure(result: AuthDoctorOwnerResult): string {
 		// Owner output is only interpreted when it is a structured envelope.
 	}
 	return `owner_exit_${result.exitCode}`;
+}
+
+function authDoctorOwnerManualStep(
+	result: AuthDoctorOwnerResult,
+	fallback: string,
+): string {
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const reason = stringField(recordField(envelope?.data)?.reason);
+		const message = stringField(recordField(envelope?.error)?.message);
+		if (reason !== undefined && message !== undefined) {
+			return `reason=${reason}; ${message.replaceAll(/\s+/g, " ").trim()}`;
+		}
+	} catch {
+		// Only a typed owner refusal may replace the fallback repair command.
+	}
+	return fallback;
 }
 
 async function runBoundedAuthDoctorOwner(
@@ -5621,7 +5646,7 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 						"--quiet",
 					],
 					env: ownerEnv,
-					timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+					timeoutMs: AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
 				});
 				if (result.exitCode === 0 && !result.timedOut) {
 					notes.push(`fix ${gate}: delegated`);
@@ -5654,7 +5679,7 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 							"--quiet",
 						],
 						env: ownerEnv,
-						timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+						timeoutMs: AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS,
 					});
 					notes.push(
 						result.exitCode === 0 && !result.timedOut
@@ -5675,11 +5700,10 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 					? undefined
 					: configuredEntrypoint ?? defaultWarmChromeEntrypoint();
 			const manualCommand =
-				repair.posture === "manual-only" || profilePath === undefined
+				profilePath === undefined
 					? repair.repairCommand
 					: `warm-chrome repair --profile-only --profile ${JSON.stringify(profilePath)}`;
 			if (
-				repair.posture === "manual-only" ||
 				profilePath === undefined ||
 				warmChromeEntrypoint === undefined
 			) {
@@ -5697,13 +5721,16 @@ async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
 						"--quiet",
 					],
 					env: ownerEnv,
-					timeoutMs: AUTH_DOCTOR_OWNER_TIMEOUT_MS,
+					timeoutMs: AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS,
 				});
-				notes.push(
-					result.exitCode === 0 && !result.timedOut
-						? "fix profile_policy: delegated"
-						: `fix profile_policy: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${manualCommand}`,
-				);
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push("fix profile_policy: delegated");
+				} else {
+					const manualStep = authDoctorOwnerManualStep(result, manualCommand);
+					notes.push(
+						`fix profile_policy: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${manualStep}`,
+					);
+				}
 			}
 		}
 	}

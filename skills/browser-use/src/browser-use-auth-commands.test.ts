@@ -33,6 +33,7 @@ import {
 	BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
 	BROWSER_USE_AUTH_SETUP_SUBCOMMANDS,
 	BROWSER_USE_AUTH_SUBCOMMANDS,
+	browserUseAuthRepairActions,
 	browserUseContracts,
 } from "./command-contract";
 import {
@@ -49,6 +50,7 @@ import type {
 	AuthTokenSupervisorResult,
 } from "./browser-use-runtime";
 import {
+	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
 	AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS,
 	__authTokenSupervisorForTest,
 } from "./browser-use-runtime";
@@ -255,6 +257,14 @@ describe("token doctor repair groundwork", () => {
 				path: "skills/browser-use/src/command-contract.ts",
 			}),
 		).toEqual([]);
+	});
+
+	test("the clean-profile action declares its profile write", () => {
+		expect(
+			browserUseAuthRepairActions.find(
+				(action) => action.id === "create-credential-clean-profile",
+			)?.sideEffects,
+		).toEqual(["check", "write"]);
 	});
 
 	test("doctor --fix stays aligned across contract, help, and parser", async () => {
@@ -544,11 +554,13 @@ describe("auth doctor renderer", () => {
 		const result = await runForTest(
 			["auth", "doctor", "--fix"],
 			makeRuntime({
-				env: {
-					HOME: "/fixture/home",
-					PATH: "/fixture/bin",
-					WARM_CHROME_PROFILE_DIR: profilePath,
-				},
+					env: {
+						HOME: "/fixture/home",
+						PATH: "/fixture/bin",
+						WARM_CHROME_PROFILE_DIR: profilePath,
+						OP_ACCOUNT: "operator-account",
+						OP_SESSION_operator: "operator-session",
+					},
 				runAuthTokenSupervisor: async (input) => {
 					statusCalls.push(input);
 					return statusResults.shift() ?? healthyStatus;
@@ -582,12 +594,19 @@ describe("auth doctor renderer", () => {
 			"--json",
 			"--quiet",
 		]);
-		expect(ownerCalls.every((call) => call.timeoutMs > 0)).toBe(true);
-		expect(
-			ownerCalls.every(
-				(call) => call.env.OP_SERVICE_ACCOUNT_TOKEN === undefined,
-			),
-		).toBe(true);
+		const reloadCall = ownerCalls.find((call) => call.argv.includes("reload"));
+		const profileCall = ownerCalls.find((call) =>
+			call.argv.includes("--profile-only"),
+		);
+		expect(reloadCall?.timeoutMs).toBeGreaterThanOrEqual(70_000);
+		expect(profileCall?.timeoutMs).toBeLessThan(reloadCall?.timeoutMs ?? 0);
+		for (const call of ownerCalls) {
+			expect(call.env.OP_ACCOUNT).toBe("operator-account");
+			expect(call.env.OP_SESSION_operator).toBe("operator-session");
+			for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) {
+				expect(call.env[key]).toBeUndefined();
+			}
+		}
 		expect(result.stdout).toContain("summary: 5 green, 0 red");
 	});
 
@@ -620,26 +639,42 @@ describe("auth doctor renderer", () => {
 				warmChromeEntrypoint: "/fixture/warm-chrome.ts",
 				spawnOwner: async (input) => {
 					mutableOwnerCalls.push([...input.argv]);
-					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+					return input.argv.includes("--profile-only")
+						? {
+								exitCode: 20,
+								stdout: JSON.stringify({
+									error: {
+										code: "unrepairable",
+										message:
+											"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
+									},
+									data: { reason: "profile_login_data_present" },
+								}),
+								stderr: "",
+								timedOut: false,
+							}
+						: { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
 				},
 			},
 		);
 
 		expect(result.exitCode).toBe(20);
-		expect(ownerCalls).toHaveLength(1);
+		expect(ownerCalls).toHaveLength(2);
 		expect(ownerCalls[0]?.slice(-4)).toEqual([
 			"auth",
 			"reload",
 			"--json",
 			"--quiet",
 		]);
+		expect(ownerCalls[1]).toContain("--profile-only");
+		expect(result.stdout).toContain("reason=profile_login_data_present");
 		expect(result.stdout).toContain(
-			"fix profile_policy: refused; manual: browser-use auth doctor --fix profile",
+			"Move the existing profile aside and rerun profile-only repair against a new empty directory.",
 		);
 		expect(result.stdout).toContain("summary: 4 green, 1 red");
 	});
 
-	test("all-manual reds spawn no owner and render every manual continuation", async () => {
+	test("manual reds only spawn the fail-closed unsafe-profile inspector", async () => {
 		const manual = blockedStatus("unsafe-ancestry", {
 			token_file: { status: "blocked", cause: "unsafe-ancestry" },
 			op: { status: "blocked", cause: "op-session-unavailable" },
@@ -660,13 +695,24 @@ describe("auth doctor renderer", () => {
 			{
 				spawnOwner: async () => {
 					ownerCalls += 1;
-					return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+					return {
+						exitCode: 20,
+						stdout: JSON.stringify({
+							error: {
+								code: "unrepairable",
+								message: "Choose a dedicated canonical profile path.",
+							},
+							data: { reason: "profile_path_noncanonical" },
+						}),
+						stderr: "",
+						timedOut: false,
+					};
 				},
 			},
 		);
 
 		expect(result.exitCode).toBe(20);
-		expect(ownerCalls).toBe(0);
+		expect(ownerCalls).toBe(1);
 		for (const command of [
 			"browser-use auth install-token --replace",
 			"op signin",
@@ -674,7 +720,8 @@ describe("auth doctor renderer", () => {
 		]) {
 			expect(result.stdout).toContain(command);
 		}
-		expect(result.stdout).toContain("browser-use auth doctor --fix profile");
+		expect(result.stdout).toContain("reason=profile_path_noncanonical");
+		expect(result.stdout).toContain("Choose a dedicated canonical profile path.");
 	});
 
 	test("an owner failure skips token dependents but still runs independent profile repair", async () => {
@@ -1474,10 +1521,16 @@ describe("ADR 0030 token lifecycle commands", () => {
 			};
 		};
 		const sourceRef = "op://Browser Automation/Service Account/credential";
+		const forbiddenSentinels = Object.fromEntries(
+			AUTH_TOKEN_FORBIDDEN_ENV_KEYS.map((key) => [
+				key,
+				`AUTH_SENTINEL_${key}_must_not_spawn`,
+			]),
+		);
 		const result = await __authTokenSupervisorForTest.run(
 			{
 				HOME: "/fixture/home",
-				OP_SERVICE_ACCOUNT_TOKEN: "AUTH_SENTINEL_must_not_spawn",
+				...forbiddenSentinels,
 				OP_SESSION_operator: "operator-session",
 			},
 			{ mode: "install", input: "source", replace: false, sourceRef },
@@ -1503,12 +1556,14 @@ describe("ADR 0030 token lifecycle commands", () => {
 		]);
 		expect(spawns[2]?.stdin).toBe(sourcePipe);
 		expect(spawns.every((call) => call.timeoutMs > 0)).toBe(true);
-		expect(
-			spawns.every(
-				(call) => call.env.OP_SERVICE_ACCOUNT_TOKEN === undefined,
-			),
-		).toBe(true);
-		expect(JSON.stringify(spawns)).not.toContain("AUTH_SENTINEL_must_not_spawn");
+		for (const call of spawns) {
+			for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) {
+				expect(call.env[key]).toBeUndefined();
+			}
+		}
+		for (const sentinel of Object.values(forbiddenSentinels)) {
+			expect(JSON.stringify(spawns)).not.toContain(sentinel);
+		}
 	});
 
 	test("the Bun process adapter hands child stdout directly to child stdin", async () => {

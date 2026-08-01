@@ -1693,7 +1693,7 @@ export const browserUseAuthRepairActions = [
 		id: "create-credential-clean-profile",
 		summary:
 			"Ask the operator to create a fresh dedicated Agent Chrome profile using the documented clean policy.",
-		sideEffects: ["check"],
+		sideEffects: ["check", "write"],
 	},
 	{
 		id: "revoke-service-account-token-remotely",

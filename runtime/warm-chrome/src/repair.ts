@@ -16,6 +16,7 @@ import {
 	mkdir,
 	open,
 	readFile,
+	realpath,
 	rename,
 	rmdir,
 	unlink,
@@ -474,6 +475,7 @@ async function repairProfilePolicyOnly(
 			{ profile_dir: profileDir },
 		);
 	}
+	await assertProfilePathCanonicalOnDisk(profileDir, context);
 	await assertProfilePathNotSymlink(profileDir, context);
 	let profileInfo = await lstatForRepair(profileDir, context);
 	if (profileInfo !== null && !profileInfo.isDirectory()) {
@@ -505,6 +507,7 @@ async function repairProfilePolicyOnly(
 		if (profileInfo === null) {
 			let profileCreated = false;
 			try {
+				await assertProfilePathCanonicalOnDisk(profileDir, context);
 				await mkdir(profileDir, { mode: 0o700 });
 				profileCreated = true;
 			} catch (error) {
@@ -545,6 +548,7 @@ async function repairProfilePolicyOnly(
 			originalMode = observedMode;
 			try {
 				await assertProfileUnlocked(runtime, profileDir, context);
+				await assertProfilePathCanonicalOnDisk(profileDir, context);
 				await chmod(profileDir, 0o700);
 				profileInfo = await lstatForRepair(profileDir, context);
 			} catch (error) {
@@ -580,6 +584,7 @@ async function repairProfilePolicyOnly(
 			const defaultInfo = await lstatForRepair(defaultDir, context);
 			if (defaultInfo === null) {
 				try {
+					await assertProfilePathCanonicalOnDisk(profileDir, context);
 					await mkdir(defaultDir, { mode: 0o700 });
 					defaultDirCreated = true;
 				} catch (error) {
@@ -601,6 +606,7 @@ async function repairProfilePolicyOnly(
 					inspection.preferencesPath,
 					inspection.serializedPreferences,
 					async () => {
+						await assertProfilePathCanonicalOnDisk(profileDir, context);
 						await assertPathNotSymlink(
 							inspection.preferencesPath,
 							context,
@@ -632,7 +638,10 @@ async function repairProfilePolicyOnly(
 		await verifyProfilePolicyClean(profileDir, runtime, context);
 	} catch (error) {
 		if (restoreModeOnFailure && originalMode !== null) {
-			await chmod(profileDir, originalMode).catch(() => undefined);
+			const modeToRestore = originalMode;
+			await assertProfilePathCanonicalOnDisk(profileDir, context)
+				.then(() => chmod(profileDir, modeToRestore))
+				.catch(() => undefined);
 		}
 		throw error;
 	}
@@ -669,6 +678,45 @@ function isCanonicalProfilePath(path: string): boolean {
 		normalize(path) === path &&
 		dirname(path) !== path
 	);
+}
+
+async function assertProfilePathCanonicalOnDisk(
+	profileDir: string,
+	context: RepairErrorContext,
+): Promise<void> {
+	let inspectedPath = profileDir;
+	let resolvedPath: string;
+	try {
+		resolvedPath = await realpath(inspectedPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw unrepairableError(
+				"profile_path_uninspectable",
+				"Correct filesystem access for the dedicated profile, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+		inspectedPath = dirname(profileDir);
+		try {
+			resolvedPath = await realpath(inspectedPath);
+		} catch {
+			throw unrepairableError(
+				"profile_path_uninspectable",
+				"Create the parent directory or correct filesystem access, then rerun profile-only repair.",
+				context,
+				{ profile_dir: profileDir },
+			);
+		}
+	}
+	if (resolvedPath !== inspectedPath) {
+		throw unrepairableError(
+			"profile_path_symlink",
+			"Choose a profile path whose parent chain contains no symbolic links, then rerun profile-only repair.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
 }
 
 async function assertProfilePathNotSymlink(

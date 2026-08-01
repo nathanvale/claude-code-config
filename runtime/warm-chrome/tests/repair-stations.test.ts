@@ -10,6 +10,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	realpath,
 	readdir,
 	rm,
 	stat,
@@ -316,7 +317,7 @@ async function runRepair(
 }
 
 async function makeScratchProfileRoot(): Promise<string> {
-	return mkdtemp(join(tmpdir(), "warm-chrome-profile-only-"));
+	return realpath(await mkdtemp(join(tmpdir(), "warm-chrome-profile-only-")));
 }
 
 async function scratchProfileFixture(root: string): Promise<RepairFixture> {
@@ -517,6 +518,32 @@ describe("warm-chrome repair --profile-only: credential-clean profile policy", (
 				'{"outside":"unchanged"}\n',
 			);
 			expect(await readdir(defaultDir)).toEqual(["Preferences"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("symlinked profile ancestor refuses before writing through it", async () => {
+		const root = await makeScratchProfileRoot();
+		try {
+			const external = join(root, "external-parent");
+			const linkedParent = join(root, "linked-parent");
+			const profile = join(linkedParent, "explicit-profile");
+			await mkdir(external, { mode: 0o700 });
+			await writeFile(join(external, "marker"), "unchanged");
+			await symlink(external, linkedParent, "dir");
+			const fixture = await scratchProfileFixture(root);
+			const run = await runRepair(
+				["repair", "--profile-only", "--profile", profile],
+				fixture,
+				{},
+			);
+
+			expectUnrepairable(run, "profile_path_symlink");
+			expect(await readdir(external)).toEqual(["marker"]);
+			expect(await readFile(join(external, "marker"), "utf8")).toBe(
+				"unchanged",
+			);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

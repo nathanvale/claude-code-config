@@ -75,6 +75,12 @@ from the `9222` convention.
 | `launch` | JSON/plain | Spawn plus verify | may write browser state |
 | `repair` | JSON/plain | Profile proof repair plus verify | may write profile proof state |
 
+`repair --profile-only` is the browser-free exception. It requires an explicit
+profile path, proves no listener or browser entry, and returns no endpoint
+authority. It writes only policy-clean profile state after filesystem, lock,
+ownership, saved-login, and symlink checks; any unproven or unsafe condition
+fails closed with a typed refusal and manual step.
+
 No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
 help as `--help`.
 
@@ -88,6 +94,7 @@ bun run runtime/warm-chrome/src/cli.ts status
 # Lifecycle
 bun run runtime/warm-chrome/src/cli.ts launch --json
 bun run runtime/warm-chrome/src/cli.ts repair --json
+bun run runtime/warm-chrome/src/cli.ts repair --profile-only --profile /absolute/dedicated-profile --json
 
 # Discovery
 bun run runtime/warm-chrome/src/cli.ts help check
