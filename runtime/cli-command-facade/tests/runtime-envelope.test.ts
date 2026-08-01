@@ -697,6 +697,53 @@ describe("CLI command facade runtime envelope", () => {
 		).toContain("hint.summary includes unsafe runtime-contract text: scope");
 	});
 
+	// Action ids are controlled enum identifiers, not agent-facing prose: they
+	// are gated by SHAPE (lowercase token), never by the free-text vocabulary
+	// scan. Regression for the browser-use `auth status` crash, where the legal
+	// id create-credential-clean-profile tripped the `credential` pattern and
+	// the blocked envelope could not be built at all.
+	test("action id fields accept legal ids that contain banned prose vocabulary", () => {
+		const envelope = createCliRuntimeSuccessEnvelope({
+			run_id: "run-test-1",
+			data: { ok: true },
+			runtime_actions: [
+				{
+					id: "create-credential-clean-profile",
+					summary: "Ask the operator to create a fresh dedicated profile.",
+					side_effects: ["check"],
+				},
+			],
+			continuation: { next_action_id: "create-credential-clean-profile" },
+		});
+		expect(envelope.continuation?.next_action_id).toBe(
+			"create-credential-clean-profile",
+		);
+	});
+
+	test("action id fields reject non-identifier shapes", () => {
+		expect(
+			captureRuntimeContractIssues(() =>
+				createCliRuntimeSuccessEnvelope({
+					run_id: "run-test-1",
+					data: { ok: true },
+					runtime_actions: [
+						{
+							id: "Bearer abc",
+							summary: "Inspect the result.",
+							side_effects: ["check"],
+						},
+					],
+					continuation: { next_action_id: "Bearer abc" },
+				}),
+			),
+		).toEqual(
+			expect.arrayContaining([
+				"runtime_actions.0.id must be a lowercase identifier token",
+				"continuation.next_action_id must be a lowercase identifier token",
+			]),
+		);
+	});
+
 	// U1 — Runtime Continuation Guidance (ADR-0010 amendment). `continuation`
 	// expresses this invocation's continuation decision; it is required whenever
 	// runtime_actions are emitted, and must carry exactly one posture.
