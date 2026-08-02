@@ -1018,6 +1018,13 @@ describe("runbook discovery over the XDG data root", () => {
 					flow_id: "timesheet-snapshot-verify",
 					health: "healthy",
 				}),
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login-screen-verify",
+					step_count: 2,
+					effect_class: "read-only",
+					health: "healthy",
+				}),
 			]);
 		}),
 	);
@@ -1161,7 +1168,7 @@ describe("runbook discovery over the XDG data root", () => {
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the four daily-driver runbooks", async () => {
+	test("ships exactly the five daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1172,6 +1179,7 @@ describe("shipped runbooks root resolution", () => {
 				"fasttrack/login",
 				"matest/development-snapshot-verify",
 				"oncore/timesheet-snapshot-verify",
+				"unifi/login-screen-verify",
 			]);
 		} finally {
 			rmSync(dataRoot, { recursive: true, force: true });
