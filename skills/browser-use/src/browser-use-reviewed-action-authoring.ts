@@ -14,7 +14,9 @@ import {
 import {
 	type BrowserUseReviewedActionApprovalFacts,
 	type BrowserUseReviewedActionApprovalVerifier,
+	type BrowserUseReviewedActionPromotionRouter,
 	type BrowserUseReviewedActionPromotionReceipt,
+	reviewedActionPromotionReceiptIsValid,
 	verifyReviewedActionApproval,
 } from "./browser-use-reviewed-action-approval";
 import { findRedactionViolations } from "./browser-use-schemas";
@@ -23,6 +25,7 @@ const CONTRACT = "browser-use.reviewed-action-candidate";
 const SCHEMA_VERSION = "1";
 const SAFE_ACTION_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
+const SAFE_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const ACTIONS_RELATIVE_ROOT = "skills/browser-use/actions";
 const REGISTRY_FILE = "registry.json";
 const LOCK_FILE = ".reviewed-action-authoring.lock";
@@ -275,7 +278,15 @@ export function reviewedActionApprovalFactsFromRecord(input: { commit: string; r
 export function verifyAuthoredReviewedActionPromotion(input: { commit: string; record: BrowserUseAuthoredReviewedActionRecord; assetBytes: string; promotionHistory?: readonly unknown[]; verifier: BrowserUseReviewedActionApprovalVerifier }):
 	| { ok: true; receipt_id: string; approval_reference: string }
 	| { ok: false; code: string } {
-	const derived = reviewedActionApprovalFactsFromRecord(input);
+	const receiptCommit = reviewedActionPromotionReceiptIsValid(
+		input.record.promotion_receipt,
+	)
+		? input.record.promotion_receipt.source_commit
+		: input.commit;
+	const derived = reviewedActionApprovalFactsFromRecord({
+		...input,
+		commit: receiptCommit,
+	});
 	if (!derived.ok) return derived;
 	return verifyReviewedActionApproval({ facts: derived.facts, receipts: [...(input.promotionHistory ?? []), ...(input.record.promotion_receipt === null ? [] : [input.record.promotion_receipt])], verifier: input.verifier });
 }
@@ -375,4 +386,237 @@ export async function applyReviewedActionCandidate(input: { sourceRoot: string; 
 	} catch {
 		return { ok: false, code: "action_source_write_failed", message: "the private Reviewed Action source mutation failed." };
 	} finally { await lock.close(); await rm(lockPath, { force: true }); }
+}
+
+type PromotionGitResult = { exitCode: number; stdout: string };
+
+async function runPromotionGit(
+	repoRoot: string,
+	args: readonly string[],
+): Promise<PromotionGitResult> {
+	const child = Bun.spawn(["git", ...args], {
+		cwd: repoRoot,
+		env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	return { exitCode, stdout };
+}
+
+/**
+ * Review and promote one committed candidate through the external-human broker.
+ *
+ * This operator surface is intentionally absent from the agent CLI command
+ * catalog. It reads exact bytes from one Git commit, refuses working-tree
+ * drift, and persists only a receipt that passes the offline verifier.
+ */
+export async function promoteReviewedActionCandidate(input: {
+	sourceRoot: string;
+	actionId: string;
+	approvalReference: string;
+	router: BrowserUseReviewedActionPromotionRouter;
+	verifier: BrowserUseReviewedActionApprovalVerifier;
+}): Promise<
+	| {
+			ok: true;
+			source_commit: string;
+			receipt_id: string;
+			approved_digest: string;
+	  }
+	| { ok: false; code: string; message: string }
+> {
+	const actionsRoot = await admittedActionsRoot(input.sourceRoot);
+	if (actionsRoot === undefined) {
+		return {
+			ok: false,
+			code: "action_source_checkout_required",
+			message: "promotion requires the setup-owned source checkout.",
+		};
+	}
+	if (!SAFE_ACTION_ID.test(input.actionId)) {
+		return {
+			ok: false,
+			code: "action_id_invalid",
+			message: "action id must be a safe slug.",
+		};
+	}
+	const lockPath = join(actionsRoot, LOCK_FILE);
+	let lock: Awaited<ReturnType<typeof open>>;
+	try {
+		lock = await open(lockPath, "wx", 0o600);
+	} catch {
+		return {
+			ok: false,
+			code: "action_source_lock_contended",
+			message: "another Reviewed Action source mutation holds the catalog lock.",
+		};
+	}
+	try {
+		const top = await runPromotionGit(input.sourceRoot, [
+			"rev-parse",
+			"--show-toplevel",
+		]);
+		const commitResult = await runPromotionGit(input.sourceRoot, [
+			"rev-parse",
+			"--verify",
+			"HEAD^{commit}",
+		]);
+		const sourceRoot = await realpath(input.sourceRoot);
+		const commit = commitResult.stdout.trim();
+		if (
+			top.exitCode !== 0 ||
+			commitResult.exitCode !== 0 ||
+			(await realpath(top.stdout.trim()).catch(() => "")) !== sourceRoot ||
+			!SAFE_COMMIT.test(commit)
+		) {
+			return {
+				ok: false,
+				code: "action_promotion_commit_unavailable",
+				message: "promotion could not resolve one owning source commit.",
+			};
+		}
+		const registryRelative = `${ACTIONS_RELATIVE_ROOT}/${REGISTRY_FILE}`;
+		const committedRegistry = await runPromotionGit(input.sourceRoot, [
+			"show",
+			`${commit}:${registryRelative}`,
+		]);
+		if (committedRegistry.exitCode !== 0) {
+			return {
+				ok: false,
+				code: "action_registry_invalid",
+				message: "the committed Reviewed Action registry is unavailable.",
+			};
+		}
+		const registry = parseRegistry(committedRegistry.stdout);
+		const matches = registry?.actions.filter(
+			(entry) => entry.record.action_id === input.actionId,
+		);
+		if (registry === undefined || matches?.length !== 1) {
+			return {
+				ok: false,
+				code: "action_promotion_candidate_unavailable",
+				message: "the committed registry does not contain one candidate with that id.",
+			};
+		}
+		const entry = matches[0] as RegistryEntry;
+		if (entry.record.promotion_receipt !== null) {
+			return {
+				ok: false,
+				code: "action_already_promoted",
+				message: "the committed candidate already carries promotion authority.",
+			};
+		}
+		if (
+			typeof entry.record.expected_digest !== "string" ||
+			entry.asset_path !== `assets/${entry.record.expected_digest}.js`
+		) {
+			return {
+				ok: false,
+				code: "action_registry_invalid",
+				message: "the committed action asset path does not match its content address.",
+			};
+		}
+		const assetRelative = `${ACTIONS_RELATIVE_ROOT}/${entry.asset_path}`;
+		const committedAsset = await runPromotionGit(input.sourceRoot, [
+			"show",
+			`${commit}:${assetRelative}`,
+		]);
+		if (committedAsset.exitCode !== 0) {
+			return {
+				ok: false,
+				code: "action_asset_unavailable",
+				message: "the committed Reviewed Action bytes are unavailable.",
+			};
+		}
+		const derived = reviewedActionApprovalFactsFromRecord({
+			commit,
+			record: entry.record as BrowserUseAuthoredReviewedActionRecord,
+			assetBytes: committedAsset.stdout,
+		});
+		if (!derived.ok) {
+			return {
+				ok: false,
+				code: derived.code,
+				message: "the committed candidate failed its mechanical audit.",
+			};
+		}
+		const status = await runPromotionGit(input.sourceRoot, [
+			"status",
+			"--porcelain=v1",
+			"--",
+			registryRelative,
+			assetRelative,
+		]);
+		if (status.exitCode !== 0 || status.stdout.trim() !== "") {
+			return {
+				ok: false,
+				code: "action_promotion_source_drift",
+				message: "the candidate registry or exact asset bytes differ from the reviewed commit.",
+			};
+		}
+		const issued = await input.router.requestPromotion({
+			facts: derived.facts,
+			candidate_bytes: committedAsset.stdout,
+			approval_reference: input.approvalReference,
+		});
+		if (!issued.ok) return issued;
+		const verified = verifyReviewedActionApproval({
+			facts: derived.facts,
+			receipts: [issued.receipt],
+			verifier: input.verifier,
+		});
+		if (!verified.ok) {
+			return {
+				ok: false,
+				code: verified.code,
+				message: "the issued promotion receipt failed offline verification.",
+			};
+		}
+		const registryPath = join(actionsRoot, REGISTRY_FILE);
+		const assetPath = join(actionsRoot, entry.asset_path);
+		if (
+			(await readFile(registryPath, "utf8")) !== committedRegistry.stdout ||
+			(await readFile(assetPath, "utf8")) !== committedAsset.stdout
+		) {
+			return {
+				ok: false,
+				code: "action_promotion_source_drift",
+				message: "the candidate changed during human review; no receipt was persisted.",
+			};
+		}
+		entry.record = {
+			...(entry.record as BrowserUseAuthoredReviewedActionRecord),
+			promotion_receipt: issued.receipt,
+		};
+		const bytes = `${JSON.stringify(registry, null, 2)}\n`;
+		const temporary = join(actionsRoot, `.registry.promotion.${process.pid}.tmp`);
+		const handle = await open(temporary, "wx", 0o600);
+		try {
+			await handle.writeFile(bytes, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await rename(temporary, registryPath);
+		return {
+			ok: true,
+			source_commit: commit,
+			receipt_id: verified.receipt_id,
+			approved_digest: derived.facts.approved_digest,
+		};
+	} catch {
+		return {
+			ok: false,
+			code: "action_promotion_failed",
+			message: "the Reviewed Action promotion transaction failed closed.",
+		};
+	} finally {
+		await lock.close();
+		await rm(lockPath, { force: true });
+	}
 }

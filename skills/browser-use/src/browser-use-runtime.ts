@@ -22,7 +22,11 @@ import {
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
-import type { BrowserUseReviewedActionApprovalVerifier } from "./browser-use-reviewed-action-approval";
+import {
+	type BrowserUseReviewedActionApprovalVerifier,
+	createP256ReviewedActionApprovalVerifier,
+	reviewedActionVerifierIdentityIsValid,
+} from "./browser-use-reviewed-action-approval";
 import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
 import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
 import {
@@ -133,6 +137,57 @@ function environmentTokenRetrievalOf(
 		opPath: deps.opPath,
 		configRoot: deps.configRoot,
 	});
+}
+
+const REVIEWED_ACTION_VERIFIER_FILE = "reviewed-action-verifier.json";
+
+async function productionReviewedActionApprovalVerifierOf(
+	runtime: BrowserUseRuntime,
+): Promise<BrowserUseReviewedActionApprovalVerifier | undefined> {
+	const resolved = resolveBrowserUsePaths(runtime.env);
+	if (!resolved.ok) return undefined;
+	const path = join(
+		resolved.resolution.roots.config,
+		REVIEWED_ACTION_VERIFIER_FILE,
+	);
+	try {
+		const stat = await runtime.platformFs.lstat(path);
+		const processUid = process.getuid?.();
+		if (
+			stat?.kind !== "file" ||
+			(stat.mode & 0o077) !== 0 ||
+			(processUid !== undefined && stat.uid !== processUid)
+		) {
+			return undefined;
+		}
+		const parsed = JSON.parse(
+			await runtime.platformFs.readTextFile(path),
+		) as Record<string, unknown>;
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed) ||
+			Object.keys(parsed).sort().join("\0") !==
+				["contract", "key_id", "public_key", "schema_version"]
+					.sort()
+					.join("\0") ||
+			parsed.contract !== "browser-use.reviewed-action-verifier" ||
+			parsed.schema_version !== "1" ||
+			typeof parsed.key_id !== "string" ||
+			typeof parsed.public_key !== "string"
+		) {
+			return undefined;
+		}
+		const identity = {
+			key_id: parsed.key_id,
+			public_key: parsed.public_key,
+		};
+		return reviewedActionVerifierIdentityIsValid(identity)
+			? createP256ReviewedActionApprovalVerifier(identity)
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 type EnvironmentTokenSupervisorDeps = {
@@ -405,6 +460,10 @@ export async function createProductionBrowserUseRuntime(
 	}
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
+	}
+	if (runtime.reviewedActionApprovalVerifier === undefined) {
+		runtime.reviewedActionApprovalVerifier =
+			await productionReviewedActionApprovalVerifierOf(runtime);
 	}
 	return runtime;
 }

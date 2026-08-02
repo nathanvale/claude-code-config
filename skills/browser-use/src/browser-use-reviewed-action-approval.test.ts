@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
 	type BrowserUseReviewedActionApprovalFacts,
+	type BrowserUseReviewedActionPromotionBrokerPort,
+	type BrowserUseReviewedActionPromotionReceipt,
+	createP256ReviewedActionApprovalVerifier,
+	createReviewedActionPromotionRouter,
 	createReviewedActionApprovalVerifier,
 	reviewedActionApprovalFactsDigest,
 	verifyReviewedActionApproval,
@@ -19,14 +24,15 @@ const FACTS: BrowserUseReviewedActionApprovalFacts = {
 	postcondition_digest: null,
 };
 
-function receipt(overrides: Record<string, unknown> = {}) {
+function receipt(overrides: Record<string, unknown> = {}): BrowserUseReviewedActionPromotionReceipt {
 	const facts = { ...FACTS, ...(overrides.facts as object | undefined) };
+	const { facts: _facts, ...receiptOverrides } = overrides;
 	return {
 		contract: "browser-use.reviewed-action-promotion", schema_version: "1", receipt_id: "receipt-1", disposition: "approved", ...facts,
 		approval_reference: "review-1", presence_backed: true, issued_at_epoch_ms: 1_000, verifier_key_id: "test-key",
 		signature: `TEST:${reviewedActionApprovalFactsDigest({ ...facts, approval_reference: "review-1", receipt_id: "receipt-1", issued_at_epoch_ms: 1_000, verifier_key_id: "test-key" })}`,
-		...overrides,
-	};
+		...receiptOverrides,
+	} as BrowserUseReviewedActionPromotionReceipt;
 }
 
 function verifier() {
@@ -34,6 +40,58 @@ function verifier() {
 }
 
 describe("Reviewed Action external-human approval boundary", () => {
+	test("production P-256 verifier accepts the broker signature and rejects a forgery", () => {
+		const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+		const jwk = publicKey.export({ format: "jwk" });
+		if (jwk.x === undefined || jwk.y === undefined) throw new Error("P-256 fixture key is incomplete");
+		const rawPublicKey = Buffer.concat([
+			Buffer.from([4]),
+			Buffer.from(jwk.x, "base64url"),
+			Buffer.from(jwk.y, "base64url"),
+		]).toString("base64");
+		const keyId = createHash("sha256").update(Buffer.from(rawPublicKey, "base64")).digest("hex");
+		const unsigned = {
+			...FACTS,
+			receipt_id: "receipt-p256",
+			approval_reference: "review-1",
+			issued_at_epoch_ms: 1_000,
+			verifier_key_id: keyId,
+		};
+		const signature = sign("sha256", Buffer.from(reviewedActionApprovalFactsDigest(unsigned), "hex"), privateKey).toString("base64");
+		const signedReceipt = receipt({ ...unsigned, signature });
+		const productionVerifier = createP256ReviewedActionApprovalVerifier({ key_id: keyId, public_key: rawPublicKey });
+		expect(productionVerifier.verify(signedReceipt)).toEqual({ ok: true });
+		expect(productionVerifier.verify({ ...signedReceipt, signature: Buffer.from("forged").toString("base64") })).toEqual({ ok: false, code: "action_promotion_signature_invalid" });
+	});
+
+	test("presence-backed broker reviews exact bytes and issues an offline-verifiable receipt", async () => {
+		const candidateBytes = "async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length })";
+		let reviewedBytes = "";
+		const broker: BrowserUseReviewedActionPromotionBrokerPort = {
+			async issueReviewedActionPromotion(input) {
+				reviewedBytes = input.candidate_bytes;
+				return { ok: true, receipt: receipt({ facts: input.facts }) };
+			},
+		};
+		const router = createReviewedActionPromotionRouter({ broker, verifier: verifier() });
+		const result = await router.requestPromotion({
+			facts: FACTS,
+			candidate_bytes: candidateBytes,
+			approval_reference: "review-1",
+		});
+		expect(result).toMatchObject({ ok: true, receipt: { approved_digest: FACTS.approved_digest } });
+		expect(reviewedBytes).toBe(candidateBytes);
+	});
+
+	test("agent lane cannot issue when the OS-isolated broker is absent", async () => {
+		const router = createReviewedActionPromotionRouter({ broker: null, verifier: verifier() });
+		expect(Object.keys(router).sort()).toEqual(["requestPromotion"]);
+		expect(await router.requestPromotion({ facts: FACTS, candidate_bytes: "candidate", approval_reference: "review-1" })).toMatchObject({
+			ok: false,
+			code: "action_promotion_broker_unavailable",
+		});
+	});
+
 	test("presence-backed approval binds exact source commit, bytes, origin, audit, schemas, and postcondition", () => {
 		expect(verifyReviewedActionApproval({ facts: FACTS, receipts: [receipt()], verifier: verifier() })).toMatchObject({ ok: true, receipt_id: "receipt-1" });
 	});

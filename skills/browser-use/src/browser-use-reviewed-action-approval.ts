@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import type {
 	BrowserUseActionContainmentPolicy,
 	BrowserUseActionEffectClass,
@@ -42,11 +42,63 @@ export type BrowserUseReviewedActionVerifierIdentity = {
 	public_key: string;
 };
 
+/** Validate the pinned P-256 verifier identity emitted by the native broker. */
+export function reviewedActionVerifierIdentityIsValid(
+	identity: BrowserUseReviewedActionVerifierIdentity,
+): boolean {
+	if (!SAFE_ID.test(identity.key_id)) return false;
+	let raw: Buffer;
+	try {
+		raw = Buffer.from(identity.public_key, "base64");
+	} catch {
+		return false;
+	}
+	return (
+		raw.length === 65 &&
+		raw[0] === 4 &&
+		createHash("sha256").update(raw).digest("hex") === identity.key_id
+	);
+}
+
 /** Offline verifier result with no signing or promotion capability. */
 export type BrowserUseReviewedActionApprovalVerifier = {
 	verify(
 		receipt: BrowserUseReviewedActionPromotionReceipt,
 	): { ok: true } | { ok: false; code: string };
+};
+
+/** Presence-gated authority implemented outside the ordinary agent process. */
+export type BrowserUseReviewedActionPromotionBrokerPort = {
+	issueReviewedActionPromotion(input: {
+		facts: BrowserUseReviewedActionApprovalFacts;
+		candidate_bytes: string;
+		approval_reference: string;
+	}): Promise<
+		| { ok: true; receipt: BrowserUseReviewedActionPromotionReceipt }
+		| {
+				ok: false;
+				rejection: {
+					code:
+						| "biometric-capability-missing"
+						| "presence-cancelled"
+						| "headless-environment"
+						| "broker-failed";
+					message: string;
+				};
+		  }
+	>;
+};
+
+/** Agent-visible promotion request surface with no signing capability. */
+export type BrowserUseReviewedActionPromotionRouter = {
+	requestPromotion(input: {
+		facts: BrowserUseReviewedActionApprovalFacts;
+		candidate_bytes: string;
+		approval_reference: string;
+	}): Promise<
+		| { ok: true; receipt: BrowserUseReviewedActionPromotionReceipt }
+		| { ok: false; code: string; message: string }
+	>;
 };
 
 /** Dependencies available to the agent process for offline verification only. */
@@ -221,6 +273,104 @@ export function createReviewedActionApprovalVerifier(
 			})
 				? { ok: true }
 				: { ok: false, code: "action_promotion_signature_invalid" };
+		},
+	};
+}
+
+/** Build the production offline verifier for Secure Enclave P-256 receipts. */
+export function createP256ReviewedActionApprovalVerifier(
+	identity: BrowserUseReviewedActionVerifierIdentity,
+): BrowserUseReviewedActionApprovalVerifier {
+	if (!reviewedActionVerifierIdentityIsValid(identity)) {
+		return {
+			verify: () => ({
+				ok: false,
+				code: "action_promotion_verifier_identity_invalid",
+			}),
+		};
+	}
+	const raw = Buffer.from(identity.public_key, "base64");
+	const publicKey = createPublicKey({
+		key: {
+			kty: "EC",
+			crv: "P-256",
+			x: raw.subarray(1, 33).toString("base64url"),
+			y: raw.subarray(33, 65).toString("base64url"),
+		},
+		format: "jwk",
+	});
+	return createReviewedActionApprovalVerifier({
+		verifier: identity,
+		verifySignature: ({ digest, signature }) => {
+			try {
+				return verify(
+					"sha256",
+					Buffer.from(digest, "hex"),
+					publicKey,
+					Buffer.from(signature, "base64"),
+				);
+			} catch {
+				return false;
+			}
+		},
+	});
+}
+
+/**
+ * Route an exact-byte promotion request to the presence-backed broker.
+ *
+ * The returned object exposes no broker or signing method. Broker absence is a
+ * legal refusal, and every emitted receipt is verified offline before the
+ * caller may persist it.
+ */
+export function createReviewedActionPromotionRouter(input: {
+	broker: BrowserUseReviewedActionPromotionBrokerPort | null;
+	verifier: BrowserUseReviewedActionApprovalVerifier;
+}): BrowserUseReviewedActionPromotionRouter {
+	return {
+		async requestPromotion(request) {
+			if (!SAFE_ID.test(request.approval_reference)) {
+				return {
+					ok: false,
+					code: "action_promotion_approval_reference_invalid",
+					message: "the human review reference is not a safe identifier.",
+				};
+			}
+			if (input.broker === null) {
+				return {
+					ok: false,
+					code: "action_promotion_broker_unavailable",
+					message: "the OS-isolated Reviewed Action approval broker is unavailable.",
+				};
+			}
+			const issued = await input.broker.issueReviewedActionPromotion(request);
+			if (!issued.ok) {
+				return {
+					ok: false,
+					code: `action_promotion_${issued.rejection.code.replaceAll("-", "_")}`,
+					message: issued.rejection.message,
+				};
+			}
+			const verified = verifyReviewedActionApproval({
+				facts: request.facts,
+				receipts: [issued.receipt],
+				verifier: input.verifier,
+			});
+			if (!verified.ok) {
+				return {
+					ok: false,
+					code: verified.code,
+					message: "the broker response did not verify against the exact reviewed facts.",
+				};
+			}
+			if (issued.receipt.approval_reference !== request.approval_reference) {
+				return {
+					ok: false,
+					code: "action_promotion_approval_reference_mismatch",
+					message: "the broker response changed the human review reference.",
+				};
+			}
+			return { ok: true, receipt: issued.receipt };
 		},
 	};
 }

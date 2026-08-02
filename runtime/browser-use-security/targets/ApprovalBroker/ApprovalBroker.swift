@@ -18,6 +18,8 @@
 import CryptoKit
 import Foundation
 import LocalAuthentication
+import AppKit
+import Security
 
 /// The three human-authorization mutations that require Touch ID presence.
 ///
@@ -176,5 +178,169 @@ struct ApprovalBroker {
     }
 }
 
-// On-demand lifetime: the broker performs one mutation and exits. No run loop,
+private enum PromotionCommandError: Error {
+    case invalidInput
+    case candidateDigestMismatch
+    case reviewCancelled
+}
+
+private enum ApprovalBrokerCommandSupport {
+    private static let signingKeyHandleDefaultsKey = "reviewed-action-signing-key-handle-v1"
+
+    static func loadOrCreateSigningKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
+        let context = LAContext()
+        context.localizedReason = "Sign the Reviewed Action promotion receipt"
+        if let representation = UserDefaults.standard.data(forKey: signingKeyHandleDefaultsKey) {
+            return try SecureEnclave.P256.Signing.PrivateKey(
+                dataRepresentation: representation,
+                authenticationContext: context
+            )
+        }
+        let key = try ApprovalBroker.createDeviceBoundSigningKey()
+        UserDefaults.standard.set(key.dataRepresentation, forKey: signingKeyHandleDefaultsKey)
+        return key
+    }
+
+    static func hex<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+        bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> [String: Any] {
+        let raw = ApprovalBroker.pinnedPublicVerifier(for: key)
+        return [
+            "key_id": hex(SHA256.hash(data: raw)),
+            "public_key": raw.base64EncodedString(),
+        ]
+    }
+
+    static func canonicalData(_ value: Any) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+    }
+
+    static func reviewExactCandidate(facts: [String: Any], candidateBytes: String) throws {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.activate(ignoringOtherApps: true)
+
+        let factsData = try canonicalData(facts)
+        guard let factsText = String(data: factsData, encoding: .utf8) else {
+            throw PromotionCommandError.invalidInput
+        }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.string = "MECHANICALLY AUDITED FACTS\n\(factsText)\n\nEXACT CANDIDATE BYTES\n\(candidateBytes)"
+        let scrollView = NSScrollView(frame: textView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = textView
+
+        let alert = NSAlert()
+        alert.messageText = "Review exact Reviewed Action bytes"
+        alert.informativeText = "Approve only if the exact bytes and every bound fact below are correct. Touch ID signs this one receipt."
+        alert.alertStyle = .warning
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: "Approve and Sign")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            throw PromotionCommandError.reviewCancelled
+        }
+    }
+
+    static func promotionReceipt(
+        request: [String: Any],
+        key: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        guard
+            let facts = request["facts"] as? [String: Any],
+            let candidateBytes = request["candidate_bytes"] as? String,
+            let approvalReference = request["approval_reference"] as? String,
+            let approvedDigest = facts["approved_digest"] as? String,
+            approvalReference.range(of: "^[a-z0-9][a-z0-9-]{0,127}$", options: .regularExpression) != nil
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        let observedDigest = hex(SHA256.hash(data: Data(candidateBytes.utf8)))
+        guard observedDigest == approvedDigest else {
+            throw PromotionCommandError.candidateDigestMismatch
+        }
+        try reviewExactCandidate(facts: facts, candidateBytes: candidateBytes)
+
+        let verifier = verifierIdentity(for: key)
+        let receiptID = "receipt-\(UUID().uuidString.lowercased())"
+        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        var unsigned = facts
+        unsigned["receipt_id"] = receiptID
+        unsigned["approval_reference"] = approvalReference
+        unsigned["issued_at_epoch_ms"] = issuedAt
+        unsigned["verifier_key_id"] = verifier["key_id"]
+        let factsDigest = SHA256.hash(data: try canonicalData(unsigned))
+        let signature = try key.signature(for: Data(factsDigest))
+
+        var receipt = unsigned
+        receipt["contract"] = "browser-use.reviewed-action-promotion"
+        receipt["schema_version"] = "1"
+        receipt["disposition"] = "approved"
+        receipt["presence_backed"] = true
+        receipt["signature"] = signature.derRepresentation.base64EncodedString()
+        return receipt
+    }
+
+    static func write(_ value: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes]) else {
+            exit(20)
+        }
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+}
+
+@main
+enum ApprovalBrokerCommand {
+    static func main() {
+        guard CommandLine.arguments.count == 2 else {
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected verifier or promote mode"])
+            exit(20)
+        }
+        do {
+            let key = try ApprovalBrokerCommandSupport.loadOrCreateSigningKey()
+            switch CommandLine.arguments[1] {
+            case "verifier":
+                ApprovalBrokerCommandSupport.write([
+                    "ok": true,
+                    "verifier": ApprovalBrokerCommandSupport.verifierIdentity(for: key),
+                ])
+            case "promote":
+                let input = FileHandle.standardInput.readDataToEndOfFile()
+                guard
+                    input.count <= 1_048_576,
+                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
+                else {
+                    throw PromotionCommandError.invalidInput
+                }
+                let receipt = try ApprovalBrokerCommandSupport.promotionReceipt(request: request, key: key)
+                ApprovalBrokerCommandSupport.write(["ok": true, "receipt": receipt])
+            default:
+                throw PromotionCommandError.invalidInput
+            }
+        } catch PromotionCommandError.reviewCancelled {
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "the human reviewer cancelled promotion"])
+            exit(20)
+        } catch BrokerError.userPresenceUnavailable {
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "biometric-capability-missing", "message": "Touch ID user presence is unavailable"])
+            exit(20)
+        } catch BrokerError.userPresenceCancelled {
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "Touch ID user presence was cancelled"])
+            exit(20)
+        } catch {
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "broker-failed", "message": "the approval broker failed closed"])
+            exit(20)
+        }
+    }
+}
+
+// On-demand lifetime: the broker performs one command and exits. No run loop,
 // no LaunchAgent, no daemon (ADR 0027).

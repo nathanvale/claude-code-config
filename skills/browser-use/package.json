@@ -26,6 +26,7 @@
 	"scripts": {
 		"build": "bun run src/build-dist.ts",
 		"browser-use": "./src/browser-use.ts",
+		"acceptance:live": "bun run src/browser-use-live-acceptance.ts",
 		"pack:dry-run": "bun pm pack --dry-run",
 		"prepack": "bun run build",
 		"prototype:agent-browser-vertical-slice": "bun run src/prototype-agent-browser-vertical-slice/prototype.ts",

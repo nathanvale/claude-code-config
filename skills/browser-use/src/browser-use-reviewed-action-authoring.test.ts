@@ -5,9 +5,15 @@ import { join } from "node:path";
 import {
 	applyReviewedActionCandidate,
 	parseReviewedActionCandidate,
+	promoteReviewedActionCandidate,
 	reviewedActionAuthoringSchema,
 	validateReviewedActionCandidate,
 } from "./browser-use-reviewed-action-authoring";
+import {
+	createReviewedActionApprovalVerifier,
+	createReviewedActionPromotionRouter,
+	reviewedActionApprovalFactsDigest,
+} from "./browser-use-reviewed-action-approval";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -40,6 +46,18 @@ async function sourceFixture(): Promise<string> {
 	await mkdir(join(root, "skills/browser-use/actions"), { recursive: true });
 	await writeFile(join(root, "skills/browser-use/actions/registry.json"), `${JSON.stringify({ actions: [] }, null, 2)}\n`);
 	return root;
+}
+
+async function git(root: string, ...args: string[]): Promise<string> {
+	const child = Bun.spawn(["git", ...args], {
+		cwd: root,
+		env: { ...process.env, GIT_AUTHOR_NAME: "Promotion Test", GIT_AUTHOR_EMAIL: "promotion@example.invalid", GIT_COMMITTER_NAME: "Promotion Test", GIT_COMMITTER_EMAIL: "promotion@example.invalid" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+	if (exitCode !== 0) throw new Error(stderr);
+	return stdout.trim();
 }
 
 describe("Reviewed Action schema and mechanical capability audit", () => {
@@ -97,6 +115,55 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 });
 
 describe("Reviewed Action candidate lifecycle", () => {
+	test("operator promotion reads committed exact bytes and persists a verified receipt", async () => {
+		const sourceRoot = await sourceFixture();
+		const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate() as never });
+		if (!applied.ok) throw new Error(applied.message);
+		await git(sourceRoot, "init", "-q");
+		await git(sourceRoot, "add", "skills/browser-use/actions/registry.json", `skills/browser-use/actions/assets/${applied.digest}.js`);
+		await git(sourceRoot, "commit", "-qm", "candidate");
+		const commit = await git(sourceRoot, "rev-parse", "HEAD");
+		const verifier = createReviewedActionApprovalVerifier({
+			verifier: { key_id: "test-key", public_key: "TEST-ONLY-PUBLIC-KEY" },
+			verifySignature: ({ digest, signature }) => signature === `TEST:${digest}`,
+		});
+		const router = createReviewedActionPromotionRouter({
+			verifier,
+			broker: {
+				async issueReviewedActionPromotion(input) {
+					const unsigned = {
+						...input.facts,
+						receipt_id: "receipt-committed-candidate",
+						approval_reference: input.approval_reference,
+						issued_at_epoch_ms: 1_000,
+						verifier_key_id: "test-key",
+					};
+					return {
+						ok: true as const,
+						receipt: {
+							contract: "browser-use.reviewed-action-promotion" as const,
+							schema_version: "1" as const,
+							disposition: "approved" as const,
+							presence_backed: true as const,
+							...unsigned,
+							signature: `TEST:${reviewedActionApprovalFactsDigest(unsigned)}`,
+						},
+					};
+				},
+			},
+		});
+		const promoted = await promoteReviewedActionCandidate({
+			sourceRoot,
+			actionId: "count-rows",
+			approvalReference: "review-1",
+			router,
+			verifier,
+		});
+		expect(promoted).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-committed-candidate" });
+		const registry = JSON.parse(await readFile(join(sourceRoot, "skills/browser-use/actions/registry.json"), "utf8"));
+		expect(registry.actions[0].record.promotion_receipt).toMatchObject({ source_commit: commit, approved_digest: applied.digest });
+	});
+
 	test("apply creates one unpromoted digest and complete identical apply is a no-op", async () => {
 		const sourceRoot = await sourceFixture();
 		const first = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate() as never });

@@ -182,7 +182,7 @@ async function validateGeneration(deps: BrowserUseGenerationDeps, generationId: 
 	const manifest = parseManifest(value);
 	if (manifest === undefined || manifest.generation_id !== generationId || `gen-${manifest.catalog_digest}` !== generationId || catalogDigest(manifest.files.map((file) => ({ ...file, bytes: "" }))) !== manifest.catalog_digest) return fail("activation_generation_corrupt", "the selected generation manifest is invalid.");
 	const expected = [...manifest.files.map((file) => file.relative_path), "manifest.json"].sort();
-	if (JSON.stringify(files) !== JSON.stringify(expected)) return fail("activation_generation_corrupt", "the selected generation contains missing or unmanifested files.");
+	if (JSON.stringify([...files].sort()) !== JSON.stringify(expected)) return fail("activation_generation_corrupt", "the selected generation contains missing or unmanifested files.");
 	for (const file of manifest.files) try { if ((await deps.fs.hashFile(join(root, ...file.relative_path.split("/")))) !== file.digest) return fail("activation_generation_corrupt", "a selected generation component digest drifted."); } catch { return fail("activation_generation_corrupt", "a selected generation component is unreadable."); }
 	return { ok: true, manifest, manifestDigest };
 }
