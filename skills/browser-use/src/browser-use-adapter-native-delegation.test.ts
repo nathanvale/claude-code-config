@@ -47,7 +47,7 @@ function importSpecifiers(source: string): string[] {
 		.replace(/\/\*[\s\S]*?\*\//g, "")
 		.replace(/\/\/.*$/gm, "");
 	const staticImports = [
-		...code.matchAll(/\bimport\s+(?:type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/g),
+		...code.matchAll(/\b(?:import|export)\s+(?:type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/g),
 	];
 	const dynamicImports = [
 		...code.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g),
@@ -61,7 +61,8 @@ function mechanicsImporters(): string[] {
 		.filter((path) =>
 			importSpecifiers(readFileSync(path, "utf8")).some((specifier) => {
 				if (!specifier.startsWith(".")) return false;
-				return MECHANICS_MODULES.has(resolve(dirname(path), specifier));
+				const resolved = resolve(dirname(path), specifier).replace(/\.(?:tsx?|jsx?)$/, "");
+				return MECHANICS_MODULES.has(resolved);
 			}),
 		)
 		.map((path) => relative(SOURCE_ROOT, path))

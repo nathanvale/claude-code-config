@@ -7,8 +7,9 @@ role: tool-workflow
 # Browser Use
 
 One public workflow for browser tasks through warm Agent Chrome. Code owns
-intent, authority, routing, runbooks, recovery, and outcomes. The LLM drives
-the selected adapter through its native tool surface after verified attachment.
+intent, authority, routing, runbooks, workflow recovery, and outcomes. The LLM
+drives the selected adapter through its native tool surface after verified
+attachment.
 
 ## Start
 

@@ -12,6 +12,10 @@ if (!executable || !endpoint || !url || !marker || !out || !requestedOrigin) {
 const child = spawn(executable, ["--browser-url", endpoint], {
 	stdio: ["pipe", "pipe", "pipe"],
 });
+child.on("error", (error) => {
+	console.error(`failed to spawn ${executable}: ${error.message}`);
+	process.exit(1);
+});
 const pending = new Map();
 let nextId = 0;
 let stdoutBuffer = "";
@@ -24,7 +28,12 @@ child.stdout.on("data", chunk => {
 		const line = stdoutBuffer.slice(0, newline).trim();
 		stdoutBuffer = stdoutBuffer.slice(newline + 1);
 		if (!line) continue;
-		const message = JSON.parse(line);
+		let message;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			continue;
+		}
 		if (message.id === undefined || !pending.has(message.id)) continue;
 		const { resolve, reject, timeout } = pending.get(message.id);
 		pending.delete(message.id);

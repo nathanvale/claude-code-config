@@ -5,8 +5,9 @@ date: 2026-08-01
 
 # Browser Use delegates browser mechanics to adapters
 
-Browser Use owns intent, routing policy, authority, connection admission, and
-the bounded run outcome. It does not implement or translate browser mechanics.
+Browser Use owns intent, routing policy, authority, connection-admission
+policy, and the bounded run outcome. It does not implement or translate
+browser mechanics.
 
 After `browser-connect connect <adapter> --json` returns a Verified Handoff
 Envelope, the LLM discovers and invokes the selected adapter's native tool
@@ -14,8 +15,8 @@ surface. The selected adapter owns target discovery, tab and session
 continuity, navigation, click and fill actions, snapshots, screenshots,
 evaluation, debug output, and adapter-specific recovery.
 
-`browser-connect` owns verified attachment and endpoint injection only. It does
-not grow a universal browser action interface.
+`browser-connect` owns verified attachment, endpoint injection, and attachment
+repair paths. It does not grow a universal browser action interface.
 
 Browser Use must not encode adapter command names, argv, output schemas,
 response parsers, selector or ref formats, page IDs, tab indexes, session
