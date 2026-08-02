@@ -18,6 +18,8 @@ read them at runtime instead of prose here.
 - Connection attaches automatically on `task run` / `runbook run`. Envelopes and
   repair paths stay owned by `runtime/browser-connect`; driving its CLI directly
   is advanced, never the everyday path.
+- For Runbook or Reviewed Action authoring and activation, read
+  `../../docs/runbooks/authoring-runbooks.md` before mutation.
 - For browser-use project work, read `references/coding-task-tracker.md` before
   choosing or updating a tracker task.
 
