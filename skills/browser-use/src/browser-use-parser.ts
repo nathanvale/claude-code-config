@@ -255,6 +255,34 @@ export function parseBrowserUseArgv(
 			}
 		}
 	}
+	if (command === "runbook-validate" || command === "runbook-apply") {
+		const file = stringField(flagValues["--file"]);
+		if (file === undefined || file.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --file <path>.`);
+		}
+	}
+	if (command === "runbook-apply") {
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"runbook apply --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
+	if (command === "runbook-delete") {
+		for (const flag of ["--service", "--flow"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (value === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) {
+				throw usageError(`runbook delete requires ${flag} <id> as a safe slug.`);
+			}
+		}
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"runbook delete --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
 	if (command === "runbook-activate") {
 		const digest = stringField(flagValues["--catalog-digest"]);
 		if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest)) {

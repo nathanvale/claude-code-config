@@ -155,6 +155,23 @@ function parse(stdout: string): Record<string, unknown> {
 }
 
 describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE15)", () => {
+	test("Runbook authoring schema is discoverable from a neutral process", async () => {
+		const result = await spawnBrowserUse(["runbook", "schema", "--json"]);
+		expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(parse(result.stdout)).toMatchObject({
+			status: "ok",
+			data: {
+				contract_id: "browser-use.runbook-authoring",
+				schema_version: "1",
+				command: "runbook-schema",
+				result: {
+					model_owner: "parseRunbookRecord + validateRunbook",
+					document_contract: "browser-use.runbook",
+				},
+			},
+		});
+	}, TEST_TIMEOUT_MS);
+
 	test("Reviewed Action schema is discoverable from a neutral process", async () => {
 		const result = await spawnBrowserUse(["action", "schema", "--json"]);
 		expect(result).toMatchObject({ exitCode: 0, stderr: "" });

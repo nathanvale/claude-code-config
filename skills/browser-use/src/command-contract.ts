@@ -307,6 +307,9 @@ export const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID =
 	"browser-use.runbook-definition" as const;
 export const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "2" as const;
+export const BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID =
+	"browser-use.runbook-authoring" as const;
+export const BROWSER_USE_RUNBOOK_AUTHORING_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID =
 	"browser-use.runbook-activation" as const;
 export const BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION = "1" as const;
@@ -418,7 +421,16 @@ const BROWSER_USE_RUN_SUBCOMMANDS = [
 export type BrowserUseRunSubcommand =
 	(typeof BROWSER_USE_RUN_SUBCOMMANDS)[number];
 
-const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "activate", "run"] as const;
+const BROWSER_USE_RUNBOOK_SUBCOMMANDS = [
+	"schema",
+	"validate",
+	"apply",
+	"delete",
+	"list",
+	"show",
+	"activate",
+	"run",
+] as const;
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
@@ -566,6 +578,10 @@ export type BrowserUseCommand =
 	| "run-cancel"
 	| "runbook-list"
 	| "runbook-show"
+	| "runbook-schema"
+	| "runbook-validate"
+	| "runbook-apply"
+	| "runbook-delete"
 	| "runbook-activate"
 	| "runbook-run"
 	| "action-schema"
@@ -1577,6 +1593,12 @@ const browserUseRunbookDefinitionResultContract = {
 	schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseRunbookAuthoringResultContract = {
+	id: BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+	kind: "Complete-document Private Runbook authoring result.",
+	schema_version: BROWSER_USE_RUNBOOK_AUTHORING_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
 const browserUseRunbookActivationResultContract = {
 	id: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 	kind: "Immutable Runbook Generation activation result.",
@@ -1601,6 +1623,23 @@ const browserUseActionApplyFlags = {
 
 const browserUseActionStatusFlags = {
 	"--id": { type: "string", description: "Exact Reviewed Action id whose promotion state is projected." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookFileFlags = {
+	"--file": { type: "path", description: "Complete Browser Runbook JSON document." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookApplyFlags = {
+	...browserUseRunbookFileFlags,
+	"--expected-record-digest": { type: "string", description: "Observed Runbook record sha256 required when replacing different bytes." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookDeleteFlags = {
+	"--service": { type: "string", description: "Exact Runbook service id." },
+	"--flow": { type: "string", description: "Exact Runbook flow id." },
+	"--expected-record-digest": { type: "string", description: "Exact observed Runbook record sha256 required when the record exists." },
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
@@ -2220,6 +2259,40 @@ export const browserUseContracts = defineCommandFacadeContract(
 			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
 			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
 			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-schema": {
+			script: "browser-use",
+			summary: "Show the complete model-derived Runbook authoring schema and one validating example.",
+			usage: ["runbook schema [--caller <label>] --json"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseRunbookAuthoringResultContract,
+			flags: browserUsePlatformFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-validate": {
+			script: "browser-use",
+			summary: "Validate one complete Runbook document and its exact Reviewed Action closure without writing source.",
+			usage: ["runbook validate --file <path> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseRunbookAuthoringResultContract,
+			flags: browserUseRunbookFileFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-apply": {
+			script: "browser-use",
+			summary: "Apply one complete validated Runbook to private source with record-digest concurrency.",
+			usage: ["runbook apply --file <path> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Apply is complete-document and record-digest guarded; identical bytes are an idempotent no-op." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseRunbookAuthoringResultContract, flags: browserUseRunbookApplyFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-delete": {
+			script: "browser-use",
+			summary: "Delete one private-source Runbook only when its exact observed record digest still matches.",
+			usage: ["runbook delete --service <id> --flow <id> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Delete is exact-record-digest guarded and an absent record is an idempotent no-op." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseRunbookAuthoringResultContract, flags: browserUseRunbookDeleteFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-list": {
 			script: "browser-use",

@@ -35,6 +35,10 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"run-status",
 	"run-resume",
 	"run-cancel",
+	"runbook-schema",
+	"runbook-validate",
+	"runbook-apply",
+	"runbook-delete",
 	"runbook-list",
 	"runbook-activate",
 	// Runbook show/run (platform plan 2026-07-21-002 U4).

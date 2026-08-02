@@ -28,6 +28,17 @@ type GitTreeEntry = { mode: string; type: string; oid: string; path: string };
 type RegistryEntry = { asset_path: string; record: Record<string, unknown>; promotion_history: readonly unknown[] };
 
 function sha256(bytes: string | Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
+
+/** Hash one ordered private-catalog closure through the catalog owner. */
+export function privateRunbookCatalogDigest(
+	files: readonly { relative_path: string; digest: string }[],
+): string {
+	const digestInput = [...files]
+		.sort((left, right) => left.relative_path.localeCompare(right.relative_path))
+		.map((file) => `${file.relative_path}\0${file.digest}\0`)
+		.join("");
+	return sha256(digestInput);
+}
 function failure(code: BrowserUsePrivateCatalogFailure["code"], message: string): BrowserUsePrivateCatalogFailure { return { ok: false, code, message: redactUnsafeText(message) }; }
 function decoder(bytes: Uint8Array): string { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
 function sourcePathToGenerationPath(path: string, runbooksPath: string, actionsPath: string): string {
@@ -55,11 +66,11 @@ function parseTree(bytes: Uint8Array): readonly GitTreeEntry[] | undefined {
 	}
 	return entries;
 }
-function actionRefs(runbook: BrowserUseRunbook): readonly { actionId: string; expectedDigest: string }[] {
-	const refs: Array<{ actionId: string; expectedDigest: string }> = [];
+function actionRefs(runbook: BrowserUseRunbook): readonly { actionId: string; expectedDigest: string; allowedOrigins: readonly string[] }[] {
+	const refs: Array<{ actionId: string; expectedDigest: string; allowedOrigins: readonly string[] }> = [];
 	for (const step of runbook.steps) {
-		if (step.kind === "action") refs.push({ actionId: step.action_id, expectedDigest: step.expected_digest });
-		else if (step.kind === "iterate") refs.push({ actionId: step.step.action_id, expectedDigest: step.step.expected_digest });
+		if (step.kind === "action") refs.push({ actionId: step.action_id, expectedDigest: step.expected_digest, allowedOrigins: runbook.allowed_origins });
+		else if (step.kind === "iterate") refs.push({ actionId: step.step.action_id, expectedDigest: step.step.expected_digest, allowedOrigins: runbook.allowed_origins });
 	}
 	return refs;
 }
@@ -118,7 +129,7 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		try { blobBytes.set(entry.path, decoder(blob.stdout)); } catch { return failure("catalog_record_invalid", "a catalog record is not valid UTF-8."); }
 	}
 	const runbooks: BrowserUsePrivateCatalogRunbook[] = [];
-	const refs: Array<{ actionId: string; expectedDigest: string }> = [];
+	const refs: Array<{ actionId: string; expectedDigest: string; allowedOrigins: readonly string[] }> = [];
 	for (const entry of runbookEntries) {
 		const raw = blobBytes.get(entry.path) as string; let parsedJson: unknown;
 		try { parsedJson = JSON.parse(raw); } catch { return failure("catalog_record_invalid", "a source Runbook is not valid JSON."); }
@@ -146,6 +157,7 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		if (!actionDigestIsValid(ref.expectedDigest)) return failure("catalog_action_closure_incomplete", "a Runbook action reference does not carry an exact digest.");
 		const registryEntry = registryById.get(ref.actionId);
 		if (registryEntry === undefined) return failure("catalog_action_closure_incomplete", "a referenced action is absent from the committed registry.");
+		if (typeof registryEntry.record.allowed_origin !== "string" || !ref.allowedOrigins.includes(registryEntry.record.allowed_origin)) return failure("catalog_action_closure_incomplete", "a referenced action origin is outside its Runbook origin boundary.");
 		const sourcePath = posix.join(actionsPath, registryEntry.asset_path);
 		const treeEntry = tree.find((entry) => entry.path === sourcePath);
 		if (treeEntry === undefined || treeEntry.type !== "blob" || treeEntry.mode !== "100644") return failure("catalog_action_closure_incomplete", "a referenced action asset is absent or unsupported in the commit tree.");
@@ -176,6 +188,5 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 	}
 	if (registryTreeEntry === undefined) files.push({ relative_path: "actions/registry.json", source_path: registryPath, bytes: registryBytes, digest: sha256(registryBytes) });
 	files.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
-	const digestInput = files.map((file) => `${file.relative_path}\0${file.digest}\0`).join("");
-	return { ok: true, catalog: { commit, catalog_digest: sha256(digestInput), action_registry_digest: sha256(registryBytes), files, runbooks: runbooks.sort((left, right) => left.id.localeCompare(right.id)), working_tree_drift: drift } };
+	return { ok: true, catalog: { commit, catalog_digest: privateRunbookCatalogDigest(files), action_registry_digest: sha256(registryBytes), files, runbooks: runbooks.sort((left, right) => left.id.localeCompare(right.id)), working_tree_drift: drift } };
 }

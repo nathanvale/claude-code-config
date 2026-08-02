@@ -547,6 +547,54 @@ describe("runbook total parsing (drop-v1)", () => {
 		if (result.ok) return;
 		expect(result.issue.code).toBe("runbook_shape_invalid");
 	});
+
+	test("rejects unknown fields at every parsed Runbook layer", () => {
+		const fixtures = [
+			{ ...JSON.parse(JSON.stringify(baseRunbook())), approval: true },
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				inputs: [
+					{
+						id: "v",
+						summary: "s",
+						required: true,
+						schema: { kind: "array", items: { kind: "string", script: true } },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "click",
+						target: { role: "button", name: "Continue", selector: "#hidden" },
+						postcondition: { kind: "element-visible", selector: ".done" },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "open",
+						url: "https://portal.example.com/",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://portal.example.com/",
+							script: true,
+						},
+					},
+				],
+			},
+		];
+		for (const fixture of fixtures) {
+			const result = parseRunbookRecord(fixture);
+			expect(result).toMatchObject({
+				ok: false,
+				issue: { code: "runbook_shape_invalid" },
+			});
+		}
+	});
 });
 
 // --- Model: plan (F7 continuation) -------------------------------------------

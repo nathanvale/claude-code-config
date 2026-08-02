@@ -280,6 +280,8 @@ async function runAuthTokenSupervisor(
 export type BrowserUseRuntime = {
 	env: Record<string, string | undefined>;
 	now: () => number;
+	/** Explicit setup-owned source root; null models packaged invocation in tests. */
+	sourceCheckoutRoot?: string | null;
 	// Structured, shell-free command runner the shared mcporter transport drives
 	// (plan U4). Same shape Browser Adapter Proof uses, so both surfaces run the
 	// command vector identically.

@@ -160,6 +160,48 @@ describe("U3 parser", () => {
 		).toThrow("runbook activate requires --catalog-digest");
 	});
 
+	test("runbook authoring commands accept only their complete-document guards", () => {
+		expect(parseBrowserUseArgv(["runbook", "schema", "--json"])).toMatchObject({
+			kind: "command",
+			command: "runbook-schema",
+		});
+		expect(
+			parseBrowserUseArgv([
+				"runbook",
+				"apply",
+				"--file",
+				"draft.json",
+				"--expected-record-digest",
+				"a".repeat(64),
+				"--json",
+			]),
+		).toMatchObject({ kind: "command", command: "runbook-apply" });
+		expect(() => parseBrowserUseArgv(["runbook", "validate", "--json"])).toThrow(
+			"runbook validate requires --file",
+		);
+		expect(() =>
+			parseBrowserUseArgv([
+				"runbook",
+				"delete",
+				"--service",
+				"demo",
+				"--json",
+			]),
+		).toThrow("runbook delete requires --flow");
+		expect(() =>
+			parseBrowserUseArgv([
+				"runbook",
+				"delete",
+				"--service",
+				"demo",
+				"--flow",
+				"read",
+				"--expected-record-digest",
+				"stale",
+			]),
+		).toThrow("runbook delete --expected-record-digest must be 64 lowercase hex");
+	});
+
 	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
 	// door smoke tests). A PRESENT but unregistered family token stays a usage
 	// error naming the invalid value (D6).

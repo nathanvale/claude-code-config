@@ -142,6 +142,43 @@ describe("private runbook catalog Git closure", () => {
 		});
 	});
 
+	test("refuses unknown fields and auth contexts from the activation source", async () => {
+		for (const change of [
+			(record: Record<string, unknown>) => ({ ...record, approval: true }),
+			(record: Record<string, unknown>) => ({
+				...record,
+				auth_context_ref: "unknown-context",
+			}),
+		]) {
+			const root = await fixture();
+			const path = join(root, "skills/browser-use/runbooks/demo/read/runbook.json");
+			const record = JSON.parse(await Bun.file(path).text()) as Record<string, unknown>;
+			await writeFile(path, `${JSON.stringify(change(record))}\n`);
+			await git(root, "add", "skills/browser-use/runbooks/demo/read/runbook.json");
+			await git(root, "commit", "-qm", "invalid authoring field");
+			expect(await loadPrivateRunbookCatalogFromGit({ repoRoot: root })).toMatchObject({
+				ok: false,
+				code: "catalog_record_invalid",
+			});
+		}
+	});
+
+	test("refuses a promoted action outside its Runbook origin boundary", async () => {
+		const root = await fixture({ action: true });
+		const path = join(root, "skills/browser-use/runbooks/demo/read/runbook.json");
+		const record = JSON.parse(await Bun.file(path).text()) as Record<string, unknown>;
+		record.allowed_origins = ["https://other.example.test"];
+		await writeFile(path, `${JSON.stringify(record)}\n`);
+		await git(root, "add", "skills/browser-use/runbooks/demo/read/runbook.json");
+		await git(root, "commit", "-qm", "wrong action origin");
+		expect(
+			await loadPrivateRunbookCatalogFromGit({
+				repoRoot: root,
+				promotionVerifier: { verify: async () => ({ ok: true }) },
+			}),
+		).toMatchObject({ ok: false, code: "catalog_action_closure_incomplete" });
+	});
+
 	test("refuses symlink objects from the resolved commit tree", async () => {
 		const root = await fixture();
 		const path = join(
