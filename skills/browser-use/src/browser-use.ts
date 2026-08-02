@@ -21,6 +21,7 @@ import {
 	CliUsageError,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCommandResultData,
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
@@ -42,6 +43,7 @@ import {
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
 	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
@@ -59,6 +61,7 @@ import {
 	type BrowserUseFamily,
 	type BrowserUseGuideTopic,
 	browserUseAdapterLanesFailureActions,
+	browserUseContracts,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
 	browserUsePlatformStoreFailureActions,
@@ -233,6 +236,15 @@ import {
 import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
 import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import {
+	applyReviewedActionCandidate,
+	type BrowserUseAuthoredReviewedActionRecord,
+	parseReviewedActionCandidate,
+	readReviewedActionSourceState,
+	reviewedActionAuthoringSchema,
+	validateReviewedActionCandidate,
+	verifyAuthoredReviewedActionPromotion,
+} from "./browser-use-reviewed-action-authoring";
+import {
 	activateRunbookGeneration,
 	createSelectedGenerationActionSeam,
 	createSelectedGenerationRunbookSeam,
@@ -242,7 +254,6 @@ import {
 	withRunbookGenerationSelectionBarrier,
 } from "./browser-use-runbook-generation";
 import { itemKeySequenceDigest, normalizedInputDigest } from "./browser-use-runbook-actions";
-import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import {
 	type BrowserUseRunbook,
 	type BrowserUseRunbookCatalogRow,
@@ -423,6 +434,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	lanes: "adapter_lanes",
 	run: "shared_run",
 	runbook: "runbook_catalog",
+	action: "reviewed_action",
 	migration: "migration_status",
 	artifact: "artifact_manifest",
 	repair: "repair_status",
@@ -580,6 +592,18 @@ async function executeCommand(input: {
 			caller,
 			requestedAdapterId: stringField(parsed.flagValues["--adapter"]) ?? "",
 			atEpochMs: runtime.now(),
+			durationMs: input.durationMs,
+		});
+	}
+
+	if (parsed.family === "action" && !parsed.dryRun) {
+		return runReviewedActionCommand({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
 			durationMs: input.durationMs,
 		});
 	}
@@ -3391,6 +3415,68 @@ async function nonterminalMutationRunIds(
 	return blockers.sort();
 }
 
+type ReviewedActionCommandPayload = { command: string; result: unknown; caller: BrowserUseCallerMetadata };
+
+function emitReviewedActionSuccess(input: PlatformCommandInput, result: unknown): number {
+	const payload: ReviewedActionCommandPayload = { command: input.parsed.command, result, caller: input.caller };
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(platformPlainHeader(BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID, input.caller, [`command=${input.parsed.command}`]));
+		input.stdout.write(`${JSON.stringify(result)}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeSuccessEnvelope({ run_id: input.runId, data: createCommandResultData(browserUseContracts[input.parsed.command], payload) }), { runId: input.runId, durationMs: input.durationMs() });
+	return 0;
+}
+
+function emitReviewedActionFailure(input: PlatformCommandInput, code: string, message: string, exitCode = BINDING_FAIL_CLOSED_EXIT_CODE): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(`browser_use ${code}: ${safeMessage} (run_id=${input.runId})\n`);
+		return exitCode;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeErrorEnvelope({
+		run_id: input.runId, process_exit_code: exitCode,
+		data: { command: input.parsed.command, result_kind: "reviewed_action", caller: input.caller },
+		error: createCliRuntimeError({ run_id: input.runId, code, message: safeMessage, exit_code: exitCode, severity: "error", ...retryabilityForRecoverability(code === "action_replacement_digest_stale" ? "change_input" : "repair_state"), failure_domain: "browser_use" }),
+	}), { runId: input.runId, durationMs: input.durationMs() });
+	return exitCode;
+}
+
+async function readActionCandidateFile(input: PlatformCommandInput): Promise<
+	| { ok: true; candidate: ReturnType<typeof parseReviewedActionCandidate> & { ok: true } }
+	| { ok: false; exitCode: number }
+> {
+	const file = stringField(input.parsed.flagValues["--file"]) ?? "";
+	let raw: string;
+	try { raw = await input.runtime.readTextFile(file); } catch {
+		return { ok: false, exitCode: emitReviewedActionFailure(input, "action_document_unreadable", "the Reviewed Action candidate file could not be read.") };
+	}
+	const parsed = parseReviewedActionCandidate(raw);
+	if (!parsed.ok) return { ok: false, exitCode: emitReviewedActionFailure(input, parsed.code, parsed.message) };
+	return { ok: true, candidate: parsed };
+}
+
+async function runReviewedActionCommand(input: PlatformCommandInput): Promise<number> {
+	if (input.parsed.command === "action-schema") return emitReviewedActionSuccess(input, reviewedActionAuthoringSchema());
+	if (input.parsed.command === "action-status") {
+		const sourceRoot = owningSourceCheckoutRoot();
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot read private source promotion state; use the setup-owned source checkout front door.");
+		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
+		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
+	}
+	const loaded = await readActionCandidateFile(input);
+	if (!loaded.ok) return loaded.exitCode;
+	if (input.parsed.command === "action-validate") {
+		const validated = validateReviewedActionCandidate(loaded.candidate.candidate);
+		return validated.ok ? emitReviewedActionSuccess(input, validated) : emitReviewedActionFailure(input, validated.issues[0]?.code ?? "action_candidate_invalid", validated.repair);
+	}
+	const sourceRoot = owningSourceCheckoutRoot();
+	if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+	const expectedRecordDigest = stringField(input.parsed.flagValues["--expected-record-digest"]);
+	const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: loaded.candidate.candidate, ...(expectedRecordDigest === undefined ? {} : { expectedRecordDigest }) });
+	return applied.ok ? emitReviewedActionSuccess(input, applied) : emitReviewedActionFailure(input, applied.code, applied.message);
+}
+
 async function runRunbookActivate(input: PlatformCommandInput): Promise<number> {
 	const repoRoot = owningSourceCheckoutRoot();
 	if (repoRoot === undefined) {
@@ -3403,7 +3489,13 @@ async function runRunbookActivate(input: PlatformCommandInput): Promise<number> 
 			recoverability: "repair_state",
 		});
 	}
-	const catalog = await loadPrivateRunbookCatalogFromGit({ repoRoot });
+	const catalog = await loadPrivateRunbookCatalogFromGit({
+		repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined ? {} : { promotionVerifier: { verify: async (verification) => {
+			const result = verifyAuthoredReviewedActionPromotion({ commit: verification.commit, record: verification.record as BrowserUseAuthoredReviewedActionRecord, assetBytes: verification.assetBytes, promotionHistory: verification.promotionHistory, verifier: input.runtime.reviewedActionApprovalVerifier as NonNullable<BrowserUseRuntime["reviewedActionApprovalVerifier"]> });
+			return result.ok ? { ok: true as const } : result;
+		} } }),
+	});
 	if (!catalog.ok) {
 		return emitPlatformStoreFailure(input, {
 			code: catalog.code,
@@ -4412,9 +4504,13 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			flowId,
 			inputs: runbookInputs,
 			resumeFromStep,
-			actionSeam: selectedGeneration === undefined
-				? createBrowserUseShippedActionSeam(store.deps.fs)
-				: createSelectedGenerationActionSeam(store.deps, selectedGeneration),
+			...(selectedGeneration !== undefined ? {
+				actionSeam: createSelectedGenerationActionSeam(
+					store.deps,
+					selectedGeneration,
+					input.runtime.reviewedActionApprovalVerifier,
+				),
+			} : {}),
 			...(selectedGeneration !== undefined ? { runbookSeam: createSelectedGenerationRunbookSeam(store.deps, selectedGeneration) } : {}),
 		},
 	);

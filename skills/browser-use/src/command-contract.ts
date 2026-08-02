@@ -310,6 +310,9 @@ export const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID =
 	"browser-use.runbook-activation" as const;
 export const BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID =
+	"browser-use.reviewed-action-authoring" as const;
+export const BROWSER_USE_REVIEWED_ACTION_AUTHORING_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
 	"browser-use.migration-status" as const;
 const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
@@ -419,6 +422,9 @@ const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "activate", "run"] as c
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
+export const BROWSER_USE_ACTION_SUBCOMMANDS = ["schema", "validate", "apply", "status"] as const;
+export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
+
 const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
 	"status",
 	"inventory",
@@ -491,6 +497,7 @@ export const BROWSER_USE_FAMILIES = [
 	"lanes",
 	"run",
 	"runbook",
+	"action",
 	"migration",
 	"artifact",
 	"repair",
@@ -508,6 +515,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 	lanes: BROWSER_USE_LANES_SUBCOMMANDS,
 	run: BROWSER_USE_RUN_SUBCOMMANDS,
 	runbook: BROWSER_USE_RUNBOOK_SUBCOMMANDS,
+	action: BROWSER_USE_ACTION_SUBCOMMANDS,
 	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
 	artifact: BROWSER_USE_ARTIFACT_SUBCOMMANDS,
 	repair: BROWSER_USE_REPAIR_SUBCOMMANDS,
@@ -523,6 +531,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	lanes: "Browser Use Adapter Lane Registry discovery.",
 	run: "Shared Browser Use run status, resume, and cancel.",
 	runbook: "Browser Runbook catalog.",
+	action: "Reviewed Action authoring, validation, and promotion state.",
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
@@ -559,6 +568,10 @@ export type BrowserUseCommand =
 	| "runbook-show"
 	| "runbook-activate"
 	| "runbook-run"
+	| "action-schema"
+	| "action-validate"
+	| "action-apply"
+	| "action-status"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -1570,6 +1583,27 @@ const browserUseRunbookActivationResultContract = {
 	schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseReviewedActionAuthoringResultContract = {
+	id: BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+	kind: "Reviewed Action authoring and promotion-state result.",
+	schema_version: BROWSER_USE_REVIEWED_ACTION_AUTHORING_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseActionFileFlags = {
+	"--file": { type: "path", description: "Complete Reviewed Action candidate JSON document." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionApplyFlags = {
+	...browserUseActionFileFlags,
+	"--expected-record-digest": { type: "string", description: "Observed action record sha256 required when replacing an existing candidate." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionStatusFlags = {
+	"--id": { type: "string", description: "Exact Reviewed Action id whose promotion state is projected." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 // `runbook show <service>/<flow>` is a targeted read of one exact runbook
 // (never a scan), so both coordinates are hard-required at the parser.
 const browserUseRunbookShowFlags = {
@@ -2153,6 +2187,39 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-schema": {
+			script: "browser-use",
+			summary: "Show the model-derived Reviewed Action authoring schema and a minimal validating example.",
+			usage: ["action schema [--caller <label>] --json"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUsePlatformFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-validate": {
+			script: "browser-use",
+			summary: "Validate one complete Reviewed Action candidate and derive its exact digest, effect, and closed capabilities.",
+			usage: ["action validate --file <path> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUseActionFileFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-apply": {
+			script: "browser-use",
+			summary: "Apply one validated candidate as unpromoted private source with record-digest concurrency.",
+			usage: ["action apply --file <path> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Apply is record-digest-gated, content-addressed, and never writes promotion authority." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionApplyFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-status": {
+			script: "browser-use",
+			summary: "Read one candidate's exact source digest and external-human promotion claim without granting authority.",
+			usage: ["action status --id <action-id> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-list": {
 			script: "browser-use",

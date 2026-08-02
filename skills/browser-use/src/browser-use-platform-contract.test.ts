@@ -8,6 +8,7 @@ import {
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
@@ -64,7 +65,7 @@ describe("platform family help and discovery", () => {
 		expect(renderHelp("operate")).toContain("Verified Handoff Envelope");
 		expect(renderHelp("task")).toContain("Verified Handoff Envelope");
 		expect(renderHelp("runbook")).toContain("Verified Handoff Envelope");
-		for (const family of ["run", "migration", "artifact", "repair"] as const) {
+		for (const family of ["run", "action", "migration", "artifact", "repair"] as const) {
 			expect(renderHelp(family)).not.toContain("Verified Handoff Envelope");
 		}
 	});
@@ -97,6 +98,10 @@ describe("platform family help and discovery", () => {
 			"runbook-show": BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 			"runbook-activate": BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 			"runbook-run": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+			"action-schema": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-validate": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-apply": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-status": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,

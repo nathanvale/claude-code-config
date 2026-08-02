@@ -22,6 +22,7 @@ import {
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import type { BrowserUseReviewedActionApprovalVerifier } from "./browser-use-reviewed-action-approval";
 import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
 import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
 import {
@@ -313,6 +314,8 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
+	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
 	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
 	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */

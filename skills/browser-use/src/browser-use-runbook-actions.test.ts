@@ -107,6 +107,29 @@ const READ_BYTES_STORE = { [READ_DIGEST]: READ_ASSET_BYTES };
 // --- Happy paths -------------------------------------------------------------
 
 describe("resolveReviewedAction — approved happy paths", () => {
+	test("a signed exact receipt resolves only through the generation verifier", async () => {
+		const signedRecord = readRecord({
+			audited_capabilities: ["dom-query", "dom-read"],
+			promotion_receipt: {
+				contract: "browser-use.reviewed-action-promotion", schema_version: "1", receipt_id: "receipt-1",
+				disposition: "approved", source_commit: "1".repeat(40), action_id: "diagnose-grid",
+				approved_digest: READ_DIGEST, approved_origin: ORIGIN, approved_effect: "read",
+				audited_capabilities: ["dom-query", "dom-read"], containment: "read-only-observation",
+				input_schema_digest: "2".repeat(64), result_schema_digest: "3".repeat(64), postcondition_digest: null,
+				approval_reference: "review-1", presence_backed: true, issued_at_epoch_ms: 1,
+				verifier_key_id: "test-key", signature: "TEST-SIGNATURE",
+			},
+		});
+		let verificationCalls = 0;
+		const seam = seamFor(signedRecord, READ_BYTES_STORE);
+		seam.verifyPromotion = async () => { verificationCalls += 1; return { ok: true }; };
+		const result = await resolveReviewedAction({ actionId: "diagnose-grid", expectedDigest: READ_DIGEST, requestedOrigin: ORIGIN, inputs: {}, seam });
+		expect(result.ok).toBe(true);
+		expect(verificationCalls).toBe(1);
+		const unavailable = await resolveReviewedAction({ actionId: "diagnose-grid", expectedDigest: READ_DIGEST, requestedOrigin: ORIGIN, inputs: {}, seam: seamFor(signedRecord, READ_BYTES_STORE) });
+		expect(unavailable).toMatchObject({ ok: false, refusal: { code: "action_promotion_verifier_unavailable" } });
+	});
+
 	test("an approved exact read action resolves to an approved evaluate step", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
@@ -143,6 +166,20 @@ describe("resolveReviewedAction — approved happy paths", () => {
 // --- Refusal paths (RED FIRST; each proves fail-closed before dispatch) ------
 
 describe("resolveReviewedAction — every refusal fails closed before dispatch", () => {
+	test("an unpromoted authored candidate refuses before dispatch", async () => {
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: seamFor(readRecord({ promotion_receipt: null }), READ_BYTES_STORE),
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			refusal: { code: "action_receipt_not_approved" },
+		});
+	});
+
 	test("candidate/non-approved receipt refuses (rejected)", async () => {
 		const record = readRecord({
 			promotion_receipt: {

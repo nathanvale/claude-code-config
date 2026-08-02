@@ -21,11 +21,11 @@ const SAFE_RELATIVE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\0)[^\\]+$/;
 export type BrowserUsePrivateCatalogFile = { relative_path: string; source_path: string; bytes: string; digest: string };
 export type BrowserUsePrivateCatalogRunbook = { id: string; record_digest: string; relative_path: string; runbook: BrowserUseRunbook };
 export type BrowserUsePrivateRunbookCatalog = { commit: string; catalog_digest: string; action_registry_digest: string; files: readonly BrowserUsePrivateCatalogFile[]; runbooks: readonly BrowserUsePrivateCatalogRunbook[]; working_tree_drift: readonly string[] };
-export type BrowserUsePromotionVerifier = { verify(input: { commit: string; actionId: string; expectedDigest: string; assetBytes: string; record: unknown }): Promise<{ ok: true } | { ok: false; code: string }> };
+export type BrowserUsePromotionVerifier = { verify(input: { commit: string; actionId: string; expectedDigest: string; assetBytes: string; record: unknown; promotionHistory: readonly unknown[] }): Promise<{ ok: true } | { ok: false; code: string }> };
 export type BrowserUsePrivateCatalogFailure = { ok: false; code: "catalog_source_unavailable" | "catalog_git_unavailable" | "catalog_git_provenance_invalid" | "catalog_git_object_unsupported" | "catalog_git_filter_unsupported" | "catalog_git_drift" | "catalog_record_invalid" | "catalog_action_closure_incomplete" | "promotion_verifier_unavailable" | "promotion_verification_failed"; message: string };
 export type BrowserUseGitCommand = (args: readonly string[]) => Promise<{ exitCode: number; stdout: Uint8Array; stderr: string }>;
 type GitTreeEntry = { mode: string; type: string; oid: string; path: string };
-type RegistryEntry = { asset_path: string; record: Record<string, unknown> };
+type RegistryEntry = { asset_path: string; record: Record<string, unknown>; promotion_history: readonly unknown[] };
 
 function sha256(bytes: string | Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function failure(code: BrowserUsePrivateCatalogFailure["code"], message: string): BrowserUsePrivateCatalogFailure { return { ok: false, code, message: redactUnsafeText(message) }; }
@@ -72,8 +72,10 @@ function parseRegistry(raw: string): readonly RegistryEntry[] | undefined {
 		if (typeof action !== "object" || action === null || Array.isArray(action)) return undefined;
 		const assetPath = (action as { asset_path?: unknown }).asset_path;
 		const record = (action as { record?: unknown }).record;
+		const promotionHistory = (action as { promotion_history?: unknown }).promotion_history;
 		if (typeof assetPath !== "string" || !SAFE_RELATIVE_PATH.test(assetPath) || !reviewedActionRecordIsValid(record)) return undefined;
-		entries.push({ asset_path: assetPath, record: record as Record<string, unknown> });
+		if (promotionHistory !== undefined && !Array.isArray(promotionHistory)) return undefined;
+		entries.push({ asset_path: assetPath, record: record as Record<string, unknown>, promotion_history: promotionHistory ?? [] });
 	}
 	return entries;
 }
@@ -157,7 +159,7 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		}
 		if (actionAssetDigest(assetBytes) !== ref.expectedDigest || registryEntry.record.expected_digest !== ref.expectedDigest) return failure("catalog_action_closure_incomplete", "a referenced action digest does not match the committed asset and registry.");
 		if (input.promotionVerifier === undefined && input.requirePromotionVerification !== false) return failure("promotion_verifier_unavailable", "action-bearing activation requires verifier-backed promotion authority.");
-		const verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record });
+		const verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record, promotionHistory: registryEntry.promotion_history });
 		if (verified !== undefined && !verified.ok) return failure("promotion_verification_failed", "a referenced action lacks valid external-human promotion authority.");
 		closureEntries.set(sourcePath, treeEntry);
 	}

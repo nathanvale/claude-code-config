@@ -269,6 +269,26 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
+	if (command === "action-validate" || command === "action-apply") {
+		const file = stringField(flagValues["--file"]);
+		if (file === undefined || file.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --file <path>.`);
+		}
+	}
+	if (command === "action-apply") {
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"action apply --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
+	if (command === "action-status") {
+		const actionId = stringField(flagValues["--id"]);
+		if (actionId === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(actionId)) {
+			throw usageError("action status requires --id <action-id> as a safe slug.");
+		}
+	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the
 	// advanced caller-managed override, minted internally when absent (D4).
 	// A resume stays bound to its original attachment (R3/R11) exactly like
@@ -585,7 +605,10 @@ const ROOT_HELP_GROUPS: ReadonlyArray<{
 	heading: string;
 	families: readonly BrowserUseFamily[];
 }> = [
-	{ heading: "Everyday work:", families: ["task", "run", "runbook", "artifact"] },
+	{
+		heading: "Everyday work:",
+		families: ["task", "run", "runbook", "action", "artifact"],
+	},
 	{ heading: "Recovery:", families: ["repair", "auth"] },
 	{
 		heading: "Advanced (platform internals):",

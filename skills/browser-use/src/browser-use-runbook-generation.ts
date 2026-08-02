@@ -9,6 +9,11 @@ import type {
 	BrowserUseRunExecutionBinding,
 } from "./browser-use-runbook-actions";
 import { reviewedActionRecordIsValid } from "./browser-use-runbook-actions";
+import type { BrowserUseReviewedActionApprovalVerifier } from "./browser-use-reviewed-action-approval";
+import {
+	type BrowserUseAuthoredReviewedActionRecord,
+	verifyAuthoredReviewedActionPromotion,
+} from "./browser-use-reviewed-action-authoring";
 import { parseRunbookRecord, projectRunbookCatalogRow, validateRunbook } from "./browser-use-runbook-model";
 import { withExclusiveFileLock } from "./browser-use-store";
 
@@ -97,15 +102,18 @@ export function runbookGenerationDirectory(paths: BrowserUseAdmittedPaths, gener
 function catalogDigest(files: BrowserUseGenerationCatalog["files"]): string {
 	return sha256([...files].sort((a, b) => a.relative_path.localeCompare(b.relative_path)).map((file) => `${file.relative_path}\0${file.digest}\0`).join(""));
 }
-function registryEntries(value: unknown): readonly { asset_path: string; record: BrowserUseReviewedActionRecord }[] | undefined {
+type GenerationRegistryEntry = { asset_path: string; record: BrowserUseReviewedActionRecord; promotion_history: readonly unknown[] };
+function registryEntries(value: unknown): readonly GenerationRegistryEntry[] | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value) || !Array.isArray((value as { actions?: unknown }).actions)) return undefined;
-	const result: Array<{ asset_path: string; record: BrowserUseReviewedActionRecord }> = [];
+	const result: GenerationRegistryEntry[] = [];
 	for (const entry of (value as { actions: unknown[] }).actions) {
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
 		const assetPath = (entry as { asset_path?: unknown }).asset_path;
 		const record = (entry as { record?: unknown }).record;
+		const promotionHistory = (entry as { promotion_history?: unknown }).promotion_history;
 		if (typeof assetPath !== "string" || !SAFE_RELATIVE.test(assetPath) || !reviewedActionRecordIsValid(record)) return undefined;
-		result.push({ asset_path: assetPath, record });
+		if (promotionHistory !== undefined && !Array.isArray(promotionHistory)) return undefined;
+		result.push({ asset_path: assetPath, record, promotion_history: promotionHistory ?? [] });
 	}
 	return result;
 }
@@ -283,10 +291,10 @@ export function createSelectedGenerationRunbookSeam(deps: BrowserUseGenerationDe
 		try { const raw = await deps.fs.readTextFile(join(root, ...record.relative_path.split("/"))); if (sha256(raw) !== record.record_digest) return { ok: false, absent: false, failure: { code: "runbook_record_corrupt", message: "active generation Runbook digest drifted." } }; const parsed = parseRunbookRecord(JSON.parse(raw)); if (!parsed.ok || validateRunbook(parsed.runbook).length > 0) return { ok: false, absent: false, failure: { code: "runbook_record_invalid", message: "active generation Runbook is invalid." } }; return { ok: true, runbook: parsed.runbook, health: projectRunbookCatalogRow(parsed.runbook, "healthy").health }; } catch { return { ok: false, absent: false, failure: { code: "runbook_record_corrupt", message: "active generation Runbook is unreadable." } }; }
 	} };
 }
-export function createSelectedGenerationActionSeam(deps: BrowserUseGenerationDeps, selected: BrowserUseSelectedGeneration): BrowserUseActionGenerationSeam {
-	const root = runbookGenerationDirectory(deps.paths, selected.generation_id); let registry: Promise<readonly { asset_path: string; record: BrowserUseReviewedActionRecord }[] | undefined> | undefined;
+export function createSelectedGenerationActionSeam(deps: BrowserUseGenerationDeps, selected: BrowserUseSelectedGeneration, approvalVerifier?: BrowserUseReviewedActionApprovalVerifier): BrowserUseActionGenerationSeam {
+	const root = runbookGenerationDirectory(deps.paths, selected.generation_id); let registry: Promise<readonly GenerationRegistryEntry[] | undefined> | undefined;
 	const load = () => registry ??= (async () => { try { const raw = await deps.fs.readTextFile(join(root, "actions", "registry.json")); return sha256(raw) === selected.action_registry_digest ? registryEntries(JSON.parse(raw)) : undefined; } catch { return undefined; } })();
-	return { async loadActionRecord(actionId) { const entry = (await load())?.find((candidate) => candidate.record.action_id === actionId); return entry === undefined ? { ok: false, absent: true } : { ok: true, record: entry.record }; }, async loadActionAssetBytes(assetId) { const entry = (await load())?.find((candidate) => candidate.record.asset_id === assetId); if (entry === undefined) return { ok: false, reason: "bytes_unavailable" }; try { const relative = posix.join("actions", entry.asset_path); const file = selected.manifest.files.find((candidate) => candidate.relative_path === relative); if (file === undefined) return { ok: false, reason: "bytes_unavailable" }; const bytes = await deps.fs.readTextFile(join(root, ...relative.split("/"))); return sha256(bytes) === file.digest ? { ok: true, bytes } : { ok: false, reason: "bytes_unavailable" }; } catch { return { ok: false, reason: "bytes_unavailable" }; } } };
+	return { async loadActionRecord(actionId) { const entry = (await load())?.find((candidate) => candidate.record.action_id === actionId); return entry === undefined ? { ok: false, absent: true } : { ok: true, record: entry.record }; }, async loadActionAssetBytes(assetId) { const entry = (await load())?.find((candidate) => candidate.record.asset_id === assetId); if (entry === undefined) return { ok: false, reason: "bytes_unavailable" }; try { const relative = posix.join("actions", entry.asset_path); const file = selected.manifest.files.find((candidate) => candidate.relative_path === relative); if (file === undefined) return { ok: false, reason: "bytes_unavailable" }; const bytes = await deps.fs.readTextFile(join(root, ...relative.split("/"))); return sha256(bytes) === file.digest ? { ok: true, bytes } : { ok: false, reason: "bytes_unavailable" }; } catch { return { ok: false, reason: "bytes_unavailable" }; } }, ...(approvalVerifier === undefined ? {} : { async verifyPromotion(input: { actionId: string; record: BrowserUseReviewedActionRecord; assetBytes: string }) { const entry = (await load())?.find((candidate) => candidate.record.action_id === input.actionId); if (entry === undefined) return { ok: false as const, code: "action_registry_record_missing" }; const verified = verifyAuthoredReviewedActionPromotion({ commit: selected.manifest.source_commit, record: input.record as BrowserUseAuthoredReviewedActionRecord, assetBytes: input.assetBytes, promotionHistory: entry.promotion_history, verifier: approvalVerifier }); return verified.ok ? { ok: true as const } : verified; } }) };
 }
 export type BrowserUseCatalogSynchronization = "in-sync" | "activation-required" | "source-unavailable";
 export type BrowserUseRecordSynchronization = "in-sync" | "new-pending-activation" | "deletion-pending-activation";

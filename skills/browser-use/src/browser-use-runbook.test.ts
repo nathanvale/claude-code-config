@@ -2938,8 +2938,11 @@ describe("engine reviewed-action step resolution (U3)", () => {
 						{
 							...record,
 							promotion_receipt: {
-								...record.promotion_receipt,
+								approved_digest: record.expected_digest,
 								disposition: "rejected",
+								approved_origin: record.allowed_origin,
+								approved_effect: record.effect_class,
+								approver_ref: "operator-1",
 							},
 						},
 						{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },

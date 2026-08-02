@@ -43,6 +43,7 @@ export type ResultKind =
 	| "adapter_lanes"
 	| "shared_run"
 	| "runbook_catalog"
+	| "reviewed_action"
 	| "migration_status"
 	| "artifact_manifest"
 	| "repair_status"
