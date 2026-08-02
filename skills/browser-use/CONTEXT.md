@@ -114,6 +114,18 @@ _Avoid_: recording, trace, tape, replay file, raw history, durable instruction
 Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. Shipped: Item Bindings (surviving legacy Auth Pointers are Import Candidates) and Browser Runbooks. Planned (unbuilt): Browser Gotchas, optional Recorder JSON for deterministic-ready flows, and other model-readable notes.
 _Avoid_: scratch, trace archive, replay library, browser automation store
 
+**Private Runbook Catalog**:
+The private, Git-versioned authoring source for all Browser Runbooks. It follows the operator across machines through repository sync; runtime execution uses an activated immutable projection rather than mutable catalog files.
+_Avoid_: shipped runbook catalog, user runbook catalog, public runbook defaults, XDG authoring store
+
+**Runbook Draft**:
+A complete candidate Browser Runbook document supplied to validation and apply. It has no runtime authority until apply writes it to the Private Runbook Catalog and a later activation includes it in a Runbook Generation.
+_Avoid_: steps file, partial runbook, runbook patch, active runbook
+
+**Runbook Generation**:
+A validated immutable XDG projection of the complete Private Runbook Catalog and its referenced Reviewed Actions. A generation may be staged, active, or previous; runtime execution uses the selected active generation, and replacing it requires explicit catalog activation.
+_Avoid_: Corpus Generation, Active Runbook Generation, mutable XDG override, XDG runbook source, live repo read, build-dist activation
+
 **Storage key**:
 Durable Browser Knowledge is keyed by `service_id`/`flow_id`; a Browser Runbook and its Item Bindings share that key. Scope is carried by each binding's exact `allowed_origins`, not by a hostname. (There is no hostname-derived storage key.)
 _Avoid_: Browser Domain Key, canonical hostname key, display name key, tenant key, account key
@@ -135,11 +147,19 @@ A legacy-derived proposal handed to the candidate-import Interface during platfo
 _Avoid_: trusted import, binding transplant, legacy authority, bulk bind, migrated credential
 
 **Browser Runbook**:
-The one active durable path for a known browser flow, keyed by `service_id`/`flow_id`. The shipped v2 form is declarative: typed inputs and runtime-resolved semantic targets (role + name, resolved to exactly one match against a fresh page snapshot) — no stored CSS selectors and no paired Recorder JSON. It may reference an Item Binding for confidential fills and a non-secret auth-context ref, but never secret values or 1Password item details. It may retain prior versions for rollback; only one current runbook is active.
-_Avoid_: automation script, CI fixture, raw trace, stored selectors, Recorder JSON pairing
+The one active durable path for a known browser flow, keyed by `service_id`/`flow_id`. The current v2 form is declarative: typed inputs and runtime-resolved semantic targets (role + name, resolved to exactly one match against a fresh page snapshot) — no stored CSS selectors, inline JavaScript, or login choreography. It may declare a non-secret auth-context ref, reference separately promoted Reviewed Actions, and reference Item Bindings for non-login confidential fields, but never secret values or 1Password item details. It may retain prior versions for rollback; only one current runbook is active.
+_Avoid_: automation script, login runbook, CI fixture, raw trace, stored selectors, inline JavaScript, Recorder JSON pairing
+
+**Browser Authentication Transaction**:
+The per-run authentication path entered when a Browser Runbook declares an auth-context ref. It resolves the approved Item Binding and lets the generic login engine observe and complete the current username, password, multi-step, or OTP shape; Browser Runbooks and Reviewed Actions never own login steps or receive credential values.
+_Avoid_: login runbook, auth action, stored login choreography, portal-specific login script
+
+**Reviewed Action**:
+A content-addressed JavaScript business capability promoted independently of a Browser Runbook. Its registry record binds exact bytes to one origin, effect class, input and result schemas, postcondition, and human approval; a runbook may reference only its action id and expected digest.
+_Avoid_: inline runbook script, self-approved action, auth script, unreviewed fast path
 
 **Recorder JSON** (planned, unbuilt):
-A deterministic replay artifact intended to pair with a Browser Runbook once deterministic replay ships. It would contain replayable browser steps and may include login selectors or login choreography, but never secret values or 1Password item details. No type, parser, or pairing exists in code yet (v2 dropped v1 record/replay).
+A deterministic replay artifact intended to pair with a Browser Runbook once deterministic replay ships. It would contain replayable business-workflow steps, but never login selectors, login choreography, secret values, or 1Password item details. No type, parser, or pairing exists in code yet (v2 dropped v1 record/replay).
 _Avoid_: recording, raw trace, transcript, secret replay file
 
 ### Playback modes (planned, unbuilt)
@@ -215,7 +235,7 @@ Dev: "Where does the 1Password item path for a portal live?"
 Domain expert: "As an Item Binding in Durable Browser Knowledge; a surviving legacy Auth Pointer only proposes as an Import Candidate. `one-password` owns safe access mechanics, not the domain-specific item choice."
 
 Dev: "Should a Browser Runbook repeat the login steps?"
-Domain expert: "It may include login choreography. Secret source details stay in the Item Binding; secret values come only from live 1Password resolution."
+Domain expert: "No. It declares an auth-context ref; the Browser Authentication Transaction resolves the Item Binding and the generic login engine owns the current page shape."
 
 Dev: "Can a runbook click through the site next time?"
 Domain expert: "Today a v2 Browser Runbook drives the flow declaratively through the agent-browser lane, resolving semantic targets against a fresh snapshot. Faster playback modes (Runbook, Deterministic) are planned, not yet shipped."

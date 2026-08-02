@@ -29,6 +29,12 @@
 		"pack:dry-run": "bun pm pack --dry-run",
 		"prepack": "bun run build",
 		"prototype:agent-browser-vertical-slice": "bun run src/prototype-agent-browser-vertical-slice/prototype.ts",
+		"prototype:generic-login-engine": "bun run src/prototypes/2026-08-02-generic-login-engine-acceptance/spike.ts",
+		"prototype:auth-context-generic-login-route": "bun run src/prototypes/2026-08-02-auth-context-generic-login-route/spike.ts",
+		"prototype:runbook-crud-contract": "bun run src/prototypes/2026-08-02-runbook-crud-cli-contract/prototype.ts",
+		"prototype:runbook-document-authoring": "bun run src/prototypes/2026-08-02-runbook-document-authoring-contract/prototype.ts",
+		"prototype:runbook-generation-activation": "bun run src/prototypes/2026-08-02-runbook-generation-activation-contract/prototype.ts",
+		"prototype:reviewed-action-authoring": "bun run src/prototypes/2026-08-02-reviewed-action-authoring-contract/prototype.ts",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
