@@ -300,13 +300,16 @@ export const BROWSER_USE_SHARED_RUN_CONTRACT_ID =
 export const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID =
 	"browser-use.runbook-catalog" as const;
-const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "2" as const;
 // `runbook show` returns one validated runbook definition plus its health
 // (platform plan U4, R30/R31). `runbook run` returns the shared-run projection
 // exactly like `task run`, so it reuses browserUseSharedRunResultContract.
 export const BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID =
 	"browser-use.runbook-definition" as const;
-const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "2" as const;
+export const BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID =
+	"browser-use.runbook-activation" as const;
+export const BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
 	"browser-use.migration-status" as const;
 const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
@@ -412,7 +415,7 @@ const BROWSER_USE_RUN_SUBCOMMANDS = [
 export type BrowserUseRunSubcommand =
 	(typeof BROWSER_USE_RUN_SUBCOMMANDS)[number];
 
-const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "run"] as const;
+const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "activate", "run"] as const;
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
@@ -554,6 +557,7 @@ export type BrowserUseCommand =
 	| "run-cancel"
 	| "runbook-list"
 	| "runbook-show"
+	| "runbook-activate"
 	| "runbook-run"
 	| "migration-status"
 	| "migration-inventory"
@@ -668,6 +672,25 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"export_destination_unsafe",
 	"export_verify_failed",
 	"epoch_conflict",
+	"catalog_source_unavailable",
+	"catalog_git_unavailable",
+	"catalog_git_provenance_invalid",
+	"catalog_git_object_unsupported",
+	"catalog_git_filter_unsupported",
+	"catalog_git_drift",
+	"catalog_record_invalid",
+	"catalog_action_closure_incomplete",
+	"promotion_verifier_unavailable",
+	"promotion_verification_failed",
+	"catalog_drift",
+	"activation_epoch_conflict",
+	"activation_blocked_by_run",
+	"activation_store_unsafe",
+	"activation_generation_corrupt",
+	"activation_authority_corrupt",
+	"activation_interrupted",
+	"activation_required",
+	"pre_cutover_unavailable",
 	// Clean-break migration engine refusals (platform plan U3). Each phase
 	// (inventory/plan/apply/verify) fails closed with its own typed code so an
 	// invalid source, drift after the frozen snapshot, a duplicate YAML key, an
@@ -968,6 +991,12 @@ export const browserUsePlatformStoreFailureActions = [
 		summary:
 			"Pass an absolute export destination outside every browser-use root.",
 		sideEffects: ["check"],
+	},
+	{
+		id: "activate_runbook_catalog",
+		summary:
+			"Use the setup-owned source checkout to inspect, review, and activate the complete private catalog.",
+		sideEffects: ["check", "write"],
 	},
 ] as const;
 
@@ -1535,6 +1564,12 @@ const browserUseRunbookDefinitionResultContract = {
 	schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseRunbookActivationResultContract = {
+	id: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+	kind: "Immutable Runbook Generation activation result.",
+	schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
 // `runbook show <service>/<flow>` is a targeted read of one exact runbook
 // (never a scan), so both coordinates are hard-required at the parser.
 const browserUseRunbookShowFlags = {
@@ -1545,6 +1580,20 @@ const browserUseRunbookShowFlags = {
 	"--flow": {
 		type: "string",
 		description: "Exact runbook flow id (a safe lowercase slug).",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookActivateFlags = {
+	"--catalog-digest": {
+		type: "string",
+		description:
+			"Reviewed sha256 digest of the complete commit-scoped catalog closure.",
+	},
+	"--expected-epoch": {
+		type: "string",
+		description:
+			"Observed active generation epoch used as the compare-and-swap gate; use 0 before first selection.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -2139,6 +2188,30 @@ export const browserUseContracts = defineCommandFacadeContract(
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseRunbookDefinitionResultContract,
 			flags: browserUseRunbookShowFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-activate": {
+			script: "browser-use",
+			summary:
+				"Verify one complete private catalog closure, stage an immutable XDG Runbook Generation, and atomically select it.",
+			usage: [
+				"runbook activate --catalog-digest <sha256> --expected-epoch <n> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Activation is digest- and epoch-gated, stages immutable content, and is idempotent for the selected digest.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRunbookActivationResultContract,
+			actionAffordances: { failure: browserUsePlatformStoreFailureActions },
+			flags: browserUseRunbookActivateFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-run": {

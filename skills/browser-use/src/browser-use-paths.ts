@@ -740,7 +740,15 @@ export type BrowserUseAdmittedPaths = {
 	/** Under the runtime root OR the warned fallback (R11). */
 	runtime: { locksDir: string; socketsDir: string };
 	config: { root: string };
-	data: { root: string };
+	data: {
+		root: string;
+		/** Immutable Runbook Generation store. */
+		runbookGenerationsDir: string;
+		/** Atomic generation plus epoch authority. */
+		runbookGenerationAuthorityFile: string;
+		/** Post-bootstrap marker that disables every retired resolver root. */
+		runbookGenerationCutoverFile: string;
+	};
 };
 
 // Ids become single path segments under the state root; a separator or dot
@@ -813,7 +821,24 @@ function deriveAdmittedPaths(
 			socketsDir: join(roots.runtime, "sockets"),
 		},
 		config: { root: roots.config },
-		data: { root: roots.data },
+		data: {
+			root: roots.data,
+			runbookGenerationsDir: join(
+				roots.data,
+				"runbook-generations",
+				"generations",
+			),
+			runbookGenerationAuthorityFile: join(
+				roots.data,
+				"runbook-generations",
+				"active.json",
+			),
+			runbookGenerationCutoverFile: join(
+				roots.data,
+				"runbook-generations",
+				"cutover.json",
+			),
+		},
 	};
 }
 

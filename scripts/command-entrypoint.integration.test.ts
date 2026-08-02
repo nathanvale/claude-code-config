@@ -1566,7 +1566,7 @@ describe("command entrypoint integration: help contracts", () => {
 					runbookList,
 					"browser-use.runbook-catalog",
 				);
-				expect(runbookData.runbook_count, describeRun(runbookList)).toBe(3);
+				expect(runbookData.runbook_count, describeRun(runbookList)).toBe(4);
 
 				const invalid = await runBrowserUseSource(
 					["not-a-family", "--json", "--quiet"],

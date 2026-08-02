@@ -8,6 +8,7 @@ import {
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
@@ -94,6 +95,7 @@ describe("platform family help and discovery", () => {
 			"run-cancel": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"runbook-list": BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 			"runbook-show": BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+			"runbook-activate": BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 			"runbook-run": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
@@ -133,6 +135,7 @@ describe("platform family help and discovery", () => {
 			// durable shared run.
 			"runbook-list",
 			"runbook-show",
+			"runbook-activate",
 			"runbook-run",
 			// R27 auth repair commands read the run store when --run binds the
 			// evaluation to a blocked run (auth plan U3a).
@@ -148,7 +151,11 @@ describe("platform family help and discovery", () => {
 			const discovered = tree.commands[command];
 			expect(discovered?.result_contract?.id).toBe(contractId);
 			expect(discovered?.result_contract?.schema_version).toBe(
-				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ? "2" : "1",
+				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ||
+				contractId === BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID ||
+				contractId === BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID
+					? "2"
+					: "1",
 			);
 			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
 				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,

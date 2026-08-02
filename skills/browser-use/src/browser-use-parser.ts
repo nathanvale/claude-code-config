@@ -255,6 +255,20 @@ export function parseBrowserUseArgv(
 			}
 		}
 	}
+	if (command === "runbook-activate") {
+		const digest = stringField(flagValues["--catalog-digest"]);
+		if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest)) {
+			throw usageError(
+				"runbook activate requires --catalog-digest <sha256> as 64 lowercase hex characters.",
+			);
+		}
+		const epoch = stringField(flagValues["--expected-epoch"]);
+		if (epoch === undefined || !/^(?:0|[1-9]\d*)$/.test(epoch)) {
+			throw usageError(
+				"runbook activate requires --expected-epoch <n> as a non-negative integer.",
+			);
+		}
+	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the
 	// advanced caller-managed override, minted internally when absent (D4).
 	// A resume stays bound to its original attachment (R3/R11) exactly like
@@ -605,6 +619,7 @@ function renderRootHelp(): string {
 		"  browser-use guide                Core workflow, copy-paste loop (version-matched)",
 		"  browser-use task list --json     Discover code-owned Task Intents",
 		"  browser-use runbook list --json  Discover service runbooks",
+		"  browser-use runbook activate --catalog-digest <sha256> --expected-epoch <n> --json  Select a reviewed immutable generation",
 		"",
 		...groupLines,
 		"Global flags:",

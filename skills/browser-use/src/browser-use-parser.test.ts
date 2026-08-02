@@ -132,6 +132,26 @@ describe("U3 parser", () => {
 		]);
 	});
 
+	test("runbook activate requires reviewed digest and CAS epoch", () => {
+		expect(
+			parseBrowserUseArgv([
+				"runbook",
+				"activate",
+				"--catalog-digest",
+				"a".repeat(64),
+				"--expected-epoch",
+				"0",
+				"--json",
+			]),
+		).toMatchObject({
+			kind: "command",
+			command: "runbook-activate",
+		});
+		expect(() =>
+			parseBrowserUseArgv(["runbook", "activate", "--json"]),
+		).toThrow("runbook activate requires --catalog-digest");
+	});
+
 	// No-arg is the launcher (exit 0, design brief D1; asserted in the front-
 	// door smoke tests). A PRESENT but unregistered family token stays a usage
 	// error naming the invalid value (D6).

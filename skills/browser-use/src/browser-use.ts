@@ -11,7 +11,8 @@
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import { createHash } from "node:crypto";
-import { dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -42,7 +43,11 @@ import {
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
+	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
@@ -218,10 +223,24 @@ import {
 	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
+import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
+import {
+	activateRunbookGeneration,
+	createSelectedGenerationActionSeam,
+	createSelectedGenerationRunbookSeam,
+	projectRunbookGenerationSynchronization,
+	resolveRetainedRunbookGeneration,
+	resolveSelectedRunbookGeneration,
+	withRunbookGenerationSelectionBarrier,
+} from "./browser-use-runbook-generation";
+import { itemKeySequenceDigest, normalizedInputDigest } from "./browser-use-runbook-actions";
 import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import {
+	type BrowserUseRunbook,
+	type BrowserUseRunbookCatalogRow,
 	type BrowserUseRunbookInputs,
 	nextRunbookStepAfterExecution,
+	projectRunbookCatalogRow,
 } from "./browser-use-runbook-model";
 import {
 	type BrowserUseGovernedSurface,
@@ -574,6 +593,7 @@ async function executeCommand(input: {
 		};
 		if (parsed.command === "runbook-list") return runRunbookList(runbookInput);
 		if (parsed.command === "runbook-show") return runRunbookShow(runbookInput);
+		if (parsed.command === "runbook-activate") return runRunbookActivate(runbookInput);
 		return runRunbookRun(runbookInput);
 	}
 
@@ -3321,6 +3341,126 @@ async function recordTaskRunOutcome(
 // plan; this driver seam owns store I/O, handoff reads, and envelope emission.
 // ---------------------------------------------------------------------------
 
+function owningSourceCheckoutRoot(): string | undefined {
+	const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+	if (basename(moduleDirectory) !== "src") return undefined;
+	return normalize(join(moduleDirectory, "..", "..", ".."));
+}
+
+async function nonterminalMutationRunIds(
+	deps: RunStoreDeps,
+	_activeGenerationId: string | null,
+): Promise<readonly string[]> {
+	const stat = await deps.fs.lstat(deps.paths.state.runsDir);
+	if (stat === undefined || stat.kind !== "directory") return [];
+	const blockers: string[] = [];
+	for (const runId of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
+		const loaded = await loadSharedRun(deps, runId);
+		if (!loaded.ok || isTerminalRunState(loaded.run.state)) continue;
+		if (loaded.run.mutation_dispatched) {
+			blockers.push(runId);
+			continue;
+		}
+		const binding = loaded.run.run_execution_binding;
+		if (binding !== undefined) {
+			const retained = await resolveRetainedRunbookGeneration(deps, binding);
+			if (!retained.ok) {
+				blockers.push(runId);
+				continue;
+			}
+			const shown = await createSelectedGenerationRunbookSeam(deps, retained).loadRunbook({
+				serviceId: binding.service_id,
+				flowId: binding.flow_id,
+			});
+			if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+			continue;
+		}
+		const progress = loaded.run.runbook_progress;
+		if (progress === undefined) continue;
+		const shown = await showRunbook(deps.fs, deps.paths.data.root, { serviceId: progress.service_id, flowId: progress.flow_id });
+		if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+	}
+	return blockers.sort();
+}
+
+async function runRunbookActivate(input: PlatformCommandInput): Promise<number> {
+	const repoRoot = owningSourceCheckoutRoot();
+	if (repoRoot === undefined) {
+		return emitPlatformStoreFailure(input, {
+			code: "catalog_source_unavailable",
+			message:
+				"packaged runtime cannot mutate or activate the private source catalog; use the setup-owned source checkout front door.",
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const catalog = await loadPrivateRunbookCatalogFromGit({ repoRoot });
+	if (!catalog.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: catalog.code,
+			message: catalog.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const activated = await activateRunbookGeneration({
+		...store.deps,
+		nonterminalMutationRuns: (activeGenerationId) =>
+			nonterminalMutationRunIds(store.deps, activeGenerationId),
+	}, {
+		catalog: catalog.catalog,
+		reviewedCatalogDigest:
+			stringField(input.parsed.flagValues["--catalog-digest"]) ?? "",
+		expectedEpoch: Number.parseInt(
+			stringField(input.parsed.flagValues["--expected-epoch"]) ?? "-1",
+			10,
+		),
+	});
+	if (!activated.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: activated.code,
+			message: activated.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID, input.caller, [
+				`changed=${activated.changed}`,
+				`generation=${activated.generation_id}`,
+				`catalog_digest=${activated.catalog_digest}`,
+				`epoch=${activated.epoch}`,
+				`previous=${activated.previous_generation_id ?? "none"}`,
+			]),
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+				schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
+				changed: activated.changed,
+				generation_id: activated.generation_id,
+				previous_generation_id: activated.previous_generation_id,
+				catalog_digest: activated.catalog_digest,
+				epoch: activated.epoch,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
 /**
  * `runbook list` (R35). Projects every discovered valid runbook as a redacted
  * catalog row under the runbook-catalog contract. Discovery is read-only, so
@@ -3332,7 +3472,37 @@ async function recordTaskRunOutcome(
 async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 	const store = await openPlatformStore(input);
 	if (!store.ok) return store.exitCode;
-	const rows = await listRunbooks(store.deps.fs, store.deps.paths.data.root);
+	const repoRoot = owningSourceCheckoutRoot();
+	const source = repoRoot === undefined ? undefined : await loadPrivateRunbookCatalogFromGit({ repoRoot, requirePromotionVerification: false });
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const legacyRows = !activeResult.ok && activeResult.code === "pre_cutover_unavailable" ? await listRunbooks(store.deps.fs, store.deps.paths.data.root) : [];
+	const sourceRecords = source?.ok === true ? Object.fromEntries(source.catalog.runbooks.map((record) => [record.id, record.record_digest])) : {};
+	const activeRecords = active === undefined ? {} : Object.fromEntries(active.manifest.runbooks.map((record) => [`${record.service_id}/${record.flow_id}`, record.record_digest]));
+	const synchronization = projectRunbookGenerationSynchronization(
+		source?.ok === true ? { available: true, catalog_digest: source.catalog.catalog_digest, records: sourceRecords } : { available: false },
+		active === undefined ? { available: false } : { available: true, catalog_digest: active.catalog_digest, generation_id: active.generation_id, epoch: active.epoch, records: activeRecords },
+	);
+	const rowById = new Map<string, BrowserUseRunbookCatalogRow & { record_digest: string }>();
+	if (source?.ok === true) for (const record of source.catalog.runbooks) rowById.set(record.id, { ...projectRunbookCatalogRow(record.runbook, "healthy"), record_digest: record.record_digest });
+	if (active !== undefined) {
+		const seam = createSelectedGenerationRunbookSeam(store.deps, active);
+		for (const record of active.manifest.runbooks) {
+			const id = `${record.service_id}/${record.flow_id}`;
+			if (rowById.has(id)) continue;
+			const loaded = await seam.loadRunbook({ serviceId: record.service_id, flowId: record.flow_id });
+			if (!loaded.ok) return emitPlatformStoreFailure(input, runbookFailureOf("failure" in loaded ? loaded.failure.code : "runbook_record_corrupt", "failure" in loaded ? loaded.failure.message : "active generation Runbook is missing."));
+			rowById.set(id, { ...projectRunbookCatalogRow(loaded.runbook, loaded.health), record_digest: record.record_digest });
+		}
+	}
+	for (const row of legacyRows) {
+		const id = `${row.service_id}/${row.flow_id}`;
+		if (!rowById.has(id)) rowById.set(id, { ...row, record_digest: createHash("sha256").update(JSON.stringify(row)).digest("hex") });
+	}
+	const statusById = new Map(synchronization.records.map((record) => [record.id, record.status]));
+	const rows = [...rowById.entries()].map(([id, row]) => ({ ...row, synchronization_status: statusById.get(id) ?? "new-pending-activation" })).sort((left, right) => `${left.service_id}/${left.flow_id}`.localeCompare(`${right.service_id}/${right.flow_id}`));
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID, input.caller, [
@@ -3341,7 +3511,7 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 		);
 		for (const row of rows) {
 			input.stdout.write(
-				`service=${row.service_id} flow=${row.flow_id} health=${row.health} ${row.summary}\n`,
+				`service=${row.service_id} flow=${row.flow_id} health=${row.health} sync=${row.synchronization_status} ${row.summary}\n`,
 			);
 		}
 		return 0;
@@ -3352,9 +3522,11 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
 				runbook_count: rows.length,
 				runbooks: rows,
+				...synchronization,
+				source_view: source?.ok === true ? "available" : "source_unavailable",
 				caller: input.caller,
 			},
 		}),
@@ -3426,16 +3598,28 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 	const serviceId = stringField(input.parsed.flagValues["--service"]) ?? "";
 	const flowId = stringField(input.parsed.flagValues["--flow"]) ?? "";
-	const shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, {
-		serviceId,
-		flowId,
-	});
+	const id = `${serviceId}/${flowId}`;
+	const repoRoot = owningSourceCheckoutRoot();
+	const source = repoRoot === undefined ? undefined : await loadPrivateRunbookCatalogFromGit({ repoRoot, requirePromotionVerification: false });
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const sourceRecord = source?.ok === true ? source.catalog.runbooks.find((record) => record.id === id) : undefined;
+	const activeRecord = active?.manifest.runbooks.find((record) => record.service_id === serviceId && record.flow_id === flowId);
+	let shown: { ok: true; runbook: BrowserUseRunbook; health: "healthy" | "degrading" | "stale" } | { ok: false; failure: { code: string; message: string } };
+	if (sourceRecord !== undefined) shown = { ok: true, runbook: sourceRecord.runbook, health: "healthy" };
+	else if (active !== undefined && activeRecord !== undefined) {
+		const loaded = await createSelectedGenerationRunbookSeam(store.deps, active).loadRunbook({ serviceId, flowId });
+		shown = loaded.ok ? loaded : { ok: false, failure: "failure" in loaded ? loaded.failure : { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
+	} else if (active === undefined && !activeResult.ok && activeResult.code === "pre_cutover_unavailable") shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, { serviceId, flowId });
+	else shown = { ok: false, failure: { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
 	if (!shown.ok) {
-		return emitPlatformStoreFailure(
-			input,
-			runbookFailureOf(shown.failure.code, shown.failure.message),
-		);
+		return emitPlatformStoreFailure(input, runbookFailureOf(shown.failure.code, shown.failure.message));
 	}
+	const sourceDigest = source?.ok === true ? source.catalog.catalog_digest : null;
+	const recordStatus = sourceRecord !== undefined && activeRecord?.record_digest === sourceRecord.record_digest ? "in-sync" : sourceRecord !== undefined ? "new-pending-activation" : activeRecord !== undefined ? "deletion-pending-activation" : "new-pending-activation";
+	const catalogStatus = source === undefined ? "source-unavailable" : active?.catalog_digest === sourceDigest ? "in-sync" : "activation-required";
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(
@@ -3445,6 +3629,8 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 					`service=${shown.runbook.service_id}`,
 					`flow=${shown.runbook.flow_id}`,
 					`health=${shown.health}`,
+					`catalog_sync=${catalogStatus}`,
+					`record_sync=${recordStatus}`,
 				],
 			),
 		);
@@ -3459,9 +3645,17 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 				runbook: shown.runbook,
 				health: shown.health,
+				record_digest: sourceRecord?.record_digest ?? activeRecord?.record_digest ?? null,
+				synchronization_status: recordStatus,
+				catalog_status: catalogStatus,
+				source_catalog_digest: sourceDigest,
+				active_catalog_digest: active?.catalog_digest ?? null,
+				active_generation_id: active?.generation_id ?? null,
+				active_epoch: active?.epoch ?? null,
+				source_view: source === undefined ? "source_unavailable" : "available",
 				caller: input.caller,
 			},
 		}),
@@ -4137,6 +4331,14 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		resumeFromStep = runbookResumeCursorOf(loaded.run);
 	}
 
+	const generationResolution = run?.run_execution_binding !== undefined
+		? await resolveRetainedRunbookGeneration(store.deps, run.run_execution_binding)
+		: await resolveSelectedRunbookGeneration(store.deps);
+	const selectedGeneration = generationResolution.ok ? generationResolution : undefined;
+	if (!generationResolution.ok && generationResolution.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: generationResolution.code, message: generationResolution.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	if (run !== undefined && run.run_execution_binding === undefined && selectedGeneration !== undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the retained run has no immutable generation binding and cannot acquire current authority during resume.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	if (run?.run_execution_binding?.normalized_input_digest !== undefined && run.run_execution_binding.normalized_input_digest !== normalizedInputDigest(runbookInputs)) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the resumed input does not match the immutable run execution binding.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+
 	const prepared = await prepareRunbookExecution(
 		store.deps.fs,
 		store.deps.paths.data.root,
@@ -4145,7 +4347,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			flowId,
 			inputs: runbookInputs,
 			resumeFromStep,
-			actionSeam: createBrowserUseShippedActionSeam(store.deps.fs),
+			actionSeam: selectedGeneration === undefined
+				? createBrowserUseShippedActionSeam(store.deps.fs)
+				: createSelectedGenerationActionSeam(store.deps, selectedGeneration),
+			...(selectedGeneration !== undefined ? { runbookSeam: createSelectedGenerationRunbookSeam(store.deps, selectedGeneration) } : {}),
 		},
 	);
 	if (!prepared.ok) {
@@ -4318,7 +4523,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		binding_id: targetResolution.binding.target_candidate_id,
 	} as const;
 	if (run === undefined) {
-		const created = await createSharedRun(store.deps, {
+		const create = async () => await createSharedRun(store.deps, {
 			run_id: handoff.runId,
 			state: "running",
 			task_intent: "runbook-execution",
@@ -4330,9 +4535,26 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff_evidence_id: handoff.handoffEvidenceId,
 			runbook_target_binding: durableTargetBinding,
 			runbook_progress: progress,
+			...(selectedGeneration !== undefined ? {
+				run_execution_binding: {
+					schema_version: "1" as const,
+					generation_id: selectedGeneration.generation_id,
+					activation_epoch: selectedGeneration.epoch,
+					service_id: plan.service_id,
+					flow_id: plan.flow_id,
+					runbook_version: plan.version,
+					runbook_digest: selectedGeneration.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest ?? "",
+					action_registry_digest: selectedGeneration.action_registry_digest,
+					normalized_input_digest: normalizedInputDigest(runbookInputs),
+					item_key_digest: itemKeySequenceDigest([]),
+					target_scope: plan.allowed_origins[0] ?? "",
+					postcondition: { id: `${plan.service_id}/${plan.flow_id}`, summary: "Runbook completion postcondition." },
+				},
+			} : {}),
 			mutation_dispatched: false,
 			artifacts: [],
 		});
+		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
 			return emitPlatformStoreFailure(
 				input,

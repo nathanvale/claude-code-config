@@ -813,15 +813,20 @@ export async function prepareRunbookExecution(
 		inputs: BrowserUseRunbookInputs;
 		resumeFromStep: number;
 		actionSeam?: BrowserUseActionGenerationSeam;
+		runbookSeam?: BrowserUseActiveGenerationSeam;
 		/** Durable per-item truth keyed by absolute iterate step index. */
 		itemBatchStates?: ReadonlyMap<number, BrowserUseItemBatchState>;
 	},
 ): Promise<BrowserUsePreparedRunbookExecution> {
-	const shown = await showRunbook(fs, dataRoot, {
-		serviceId: input.serviceId,
-		flowId: input.flowId,
-	});
-	if (!shown.ok) return { ok: false, refusal: shown.failure };
+	const shown = input.runbookSeam === undefined
+		? await showRunbook(fs, dataRoot, { serviceId: input.serviceId, flowId: input.flowId })
+		: await input.runbookSeam.loadRunbook({ serviceId: input.serviceId, flowId: input.flowId });
+	if (!shown.ok) {
+		const refusal = "absent" in shown
+			? failure("runbook_not_found", `no runbook is defined for ${input.serviceId}/${input.flowId}.`)
+			: shown.failure;
+		return { ok: false, refusal };
+	}
 	const normalizedInputs = materializeRunbookInputs(
 		shown.runbook,
 		input.inputs,
@@ -1340,6 +1345,8 @@ export type BrowserUseRunbookEffectiveSource =
  * descend to the next layer only when this layer holds NO record for the id.
  */
 export type BrowserUseActiveGenerationSeam = {
+	/** Active-only runtime forbids absence from descending into retired roots. */
+	fallback?: "allow" | "forbid";
 	/**
 	 * @returns the layer's outcome for one id: a valid runbook, a typed
 	 * fail-closed failure, or clean absence (descend to the next layer).
@@ -1414,6 +1421,7 @@ export async function resolveEffectiveRunbook(
 				failure: fromGeneration.failure,
 			};
 		}
+		if (seam.fallback === "forbid") return undefined;
 	}
 	const fromStore = await loadRunbookFromRoot(fs, runbooksRoot(dataRoot), id);
 	if (fromStore.ok) {
@@ -1497,8 +1505,10 @@ export async function verifyEffectiveCatalog(
 			ids.set(`${id.serviceId}/${id.flowId}`, id);
 		}
 	}
-	await collect(runbooksRoot(dataRoot));
-	await collect(shippedRunbooksRoot());
+	if (seam?.fallback !== "forbid") {
+		await collect(runbooksRoot(dataRoot));
+		await collect(shippedRunbooksRoot());
+	}
 	const entries: BrowserUseEffectiveCatalogEntry[] = [];
 	for (const id of ids.values()) {
 		const resolved = await resolveEffectiveRunbook(fs, dataRoot, id, seam);

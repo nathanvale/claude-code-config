@@ -65,9 +65,12 @@ import {
 import {
 	actionAssetDigest,
 	actionValueMatchesSchema,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	recordItemCheckpoint,
 } from "./browser-use-runbook-actions";
+import {
+	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+	ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE,
+} from "./fixtures/oncore-draft-verification-action-fixture";
 import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import type {
 	BrowserUseActionGenerationSeam,
@@ -3658,7 +3661,7 @@ async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
 	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
 	const action = new Function(
 		"document",
-		`return (${ONCORE_DRAFT_VERIFICATION_ACTION_BYTES});`,
+		`return (${ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE});`,
 	)({
 		querySelector: (selector: string) =>
 			selector === "#draft-proof" ? { textContent: rawProof } : null,

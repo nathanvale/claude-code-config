@@ -6,7 +6,6 @@ import {
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
 	ACTION_ASSET_MAX_BYTES,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
 	captureStructuredResult,
@@ -18,6 +17,7 @@ import {
 	resolveResumeAgainstBinding,
 	resolveReviewedAction,
 } from "./browser-use-runbook-actions";
+import { ONCORE_DRAFT_VERIFICATION_ACTION_BYTES } from "./fixtures/oncore-draft-verification-action-fixture";
 
 // --- Fixtures (hermetic, synthetic; no real domains or secrets) --------------
 

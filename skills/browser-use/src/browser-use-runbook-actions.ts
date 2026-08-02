@@ -140,36 +140,6 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
  * conservative mutation audit until reviewed and represented here again. The
  * action emits only a schema-pinned sentinel after exact draft semantics pass.
  */
-export const ONCORE_DRAFT_VERIFICATION_ACTION_BYTES =
-	`async ({ inputs }) => {
-		const raw = document.querySelector('#draft-proof')?.textContent;
-		let proof;
-		try {
-			proof = JSON.parse(raw ?? '');
-		} catch {
-			throw new Error('draft verification failed');
-		}
-		const expectedKeys = inputs.item_keys;
-		const expectedTotal = inputs.entries.reduce((total, entry) => total + entry.units, 0);
-		const exactShape =
-			proof !== null &&
-			typeof proof === 'object' &&
-			!Array.isArray(proof) &&
-			Object.keys(proof).sort().join(',') === 'editable,persisted_entries,submitted,total_units';
-		const orderedKeysMatch =
-			Array.isArray(proof?.persisted_entries) &&
-			proof.persisted_entries.length === expectedKeys.length &&
-			proof.persisted_entries.every((key, index) => key === expectedKeys[index]);
-		const valid =
-			exactShape &&
-			orderedKeysMatch &&
-			proof.total_units === expectedTotal &&
-			proof.editable === true &&
-			proof.submitted === false;
-		if (!valid) throw new Error('draft verification failed');
-		return { verification: 'oncore-draft-preserved-v1' };
-	}`;
-
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
  * effect class the bytes MECHANICALLY prove: `read` only when the complete
@@ -184,8 +154,7 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
-		OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
+	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
 		? "read"
 		: "mutation";
 }
@@ -685,11 +654,46 @@ function exactOriginValid(value: string): boolean {
 }
 
 function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
-	if (postcondition.kind === "url-equals") return postcondition.url.length > 0;
-	return (
+	if (postcondition.kind === "url-equals") {
+		return typeof postcondition.url === "string" && postcondition.url.length > 0;
+	}
+	if (postcondition.kind !== "element-visible") return false;
+	return typeof postcondition.selector === "string" &&
 		!postcondition.selector.startsWith("@") &&
-		postcondition.selector.trim().length > 0
-	);
+		postcondition.selector.trim().length > 0;
+}
+
+export function reviewedActionRecordIsValid(value: unknown): value is BrowserUseReviewedActionRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	const receipt = record.promotion_receipt;
+	if (
+		!SAFE_ACTION_ID.test(String(record.action_id ?? "")) ||
+		typeof record.asset_id !== "string" ||
+		typeof record.expected_digest !== "string" ||
+		!actionDigestIsValid(record.asset_id) ||
+		record.asset_id !== record.expected_digest ||
+		typeof record.allowed_origin !== "string" ||
+		!exactOriginValid(record.allowed_origin) ||
+		!(BROWSER_USE_ACTION_EFFECT_CLASSES as readonly unknown[]).includes(record.effect_class) ||
+		!(BROWSER_USE_ACTION_CONTAINMENT_POLICIES as readonly unknown[]).includes(record.containment) ||
+		!isValueSchema(record.input_schema) ||
+		!isValueSchema(record.result_schema) ||
+		(record.result_sensitivity !== "low" && record.result_sensitivity !== "high") ||
+		typeof record.source_provenance !== "string" || record.source_provenance === "" ||
+		typeof receipt !== "object" || receipt === null || Array.isArray(receipt)
+	) return false;
+	const promotion = receipt as Record<string, unknown>;
+	if (
+		promotion.approved_digest !== record.expected_digest ||
+		!(BROWSER_USE_PROMOTION_DISPOSITIONS as readonly unknown[]).includes(promotion.disposition) ||
+		promotion.approved_origin !== record.allowed_origin ||
+		promotion.approved_effect !== record.effect_class ||
+		typeof promotion.approver_ref !== "string" || promotion.approver_ref === ""
+	) return false;
+	return record.effect_class !== "mutation" ||
+		(typeof record.required_postcondition === "object" && record.required_postcondition !== null &&
+			postconditionValid(record.required_postcondition as BrowserUseRunbookPostcondition));
 }
 
 /**

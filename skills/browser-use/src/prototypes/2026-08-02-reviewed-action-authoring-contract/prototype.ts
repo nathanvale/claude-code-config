@@ -17,9 +17,9 @@ import {
 	actionDigestIsValid,
 	auditActionEffectClass,
 	BROWSER_USE_ACTION_EFFECT_CLASSES,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	type BrowserUseActionEffectClass,
 } from "../../browser-use-runbook-actions";
+import { ONCORE_DRAFT_VERIFICATION_ACTION_BYTES } from "../../fixtures/oncore-draft-verification-action-fixture";
 
 // ---------------------------------------------------------------------------
 // Machine-readable action authoring schema (`action schema --json`).

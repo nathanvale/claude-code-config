@@ -383,6 +383,28 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 	});
 
+	test("runbook activate refuses action-bearing source until promotion authority exists", async () => {
+		const store = await makeStore();
+		const result = await runForTest(
+			[
+				"runbook",
+				"activate",
+				"--catalog-digest",
+				"a".repeat(64),
+				"--expected-epoch",
+				"0",
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(20);
+		const envelope = parseJson(result.stdout);
+		expect(envelope.error).toMatchObject({ code: "promotion_verifier_unavailable" });
+		expect(envelope.runtime_actions).toEqual([
+			expect.objectContaining({ id: "activate_runbook_catalog" }),
+		]);
+	});
+
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
