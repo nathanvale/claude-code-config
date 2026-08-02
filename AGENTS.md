@@ -78,7 +78,7 @@
 - Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
 - Homebrew additions/removals: edit `$HOME/code/dotfiles/config/brew/Brewfile` first; install with `brew bundle` and remove with previewed `brew bundle cleanup`; never run direct `brew install`, `brew uninstall`, or `brew tap`, because they create untracked machine drift; verify with `brew bundle check`. Homebrew 6.0+ refuses non-official taps until `brew trust <tap>` is run once for a newly added tap. Full workflow: `$HOME/code/dotfiles/AGENTS.md`.
 - Mac Mini server SSH (connect, flaky/dropped SSH, dedicated key, durable cmux/tmux): use the `mac-mini-ssh` skill.
-- Long unattended local runs (ce-work, lfg, workflows, ce-doc-review, ce-code-review, long suites) on a sleep-capable laptop: launch under `caffeinate -dimsu <command>` (or `caffeinate -dimsu -w <pid> &` in-flight), else idle sleep SIGTERMs the group mid-transaction and loses work; `caffeinate` blocks idle sleep only, not clamshell/battery lid-close, so keep the lid open or on AC. Check: run survives an idle period.
+- Long unattended local runs (ce-work, lfg, workflows, ce-doc-review, ce-code-review, long suites) on a sleep-capable laptop: launch under `caffeinate -dimsu <command>` (or `caffeinate -dimsu -w <pid> &` in-flight), else idle sleep suspends the run mid-transaction and loses work (timeouts, interrupted output). `caffeinate` blocks idle sleep only, not clamshell/battery lid-close, so keep the lid open or on AC. Check: still running after a >=15-min idle span and finishes with complete output.
 
 ## External Data
 
