@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -14,6 +14,7 @@ import { createSharedRun, loadSharedRun } from "./browser-use-runs";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import { runbooksRoot } from "./browser-use-runbook";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
+import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
@@ -36,7 +37,14 @@ afterAll(() => {
 
 // --- Handoff fixtures --------------------------------------------------------
 
-function handoffEnvelope(adapterId: string, runId: string) {
+function handoffEnvelope(
+	adapterId: string,
+	runId: string,
+	endpoint = {
+		http: "http://127.0.0.1:9222",
+		ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
+	},
+) {
 	return {
 		status: "ok",
 		run_id: runId,
@@ -49,10 +57,7 @@ function handoffEnvelope(adapterId: string, runId: string) {
 				route: "explicit-cdp",
 				probe_executable: "/opt/browser-connect/probe",
 			},
-			endpoint: {
-				http: "http://127.0.0.1:9222",
-				ws: "ws://127.0.0.1:9222/devtools/browser/fixture",
-			},
+			endpoint,
 			launch: { launched: false },
 			proof: {
 				environment_contract_id: "warm-chrome.browser-entry",
@@ -113,9 +118,74 @@ async function makeStore(): Promise<{
 	};
 }
 
-function writeHandoff(base: string, adapterId: string, runId: string): string {
+async function gitFixtureCommand(
+	input: {
+		cwd: string;
+		gitDir?: string;
+		workTree?: string;
+	},
+	...args: string[]
+): Promise<void> {
+	const child = Bun.spawn(["git", ...args], {
+		cwd: input.cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		env: {
+			...process.env,
+			...(input.gitDir === undefined ? {} : { GIT_DIR: input.gitDir }),
+			...(input.workTree === undefined
+				? {}
+				: { GIT_WORK_TREE: input.workTree }),
+		},
+	});
+	if ((await child.exited) !== 0) {
+		throw new Error(await new Response(child.stderr).text());
+	}
+}
+
+async function withCommittedCatalogSource<T>(
+	base: string,
+	run: () => Promise<T>,
+): Promise<T> {
+	const repoRoot = resolve(import.meta.dir, "../../..");
+	const gitDir = join(base, "catalog-source.git");
+	await gitFixtureCommand({ cwd: base }, "init", "--bare", "-q", gitDir);
+	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "config", "user.email", "test@example.invalid");
+	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "config", "user.name", "Catalog Test");
+	await gitFixtureCommand(
+		{ cwd: repoRoot, gitDir, workTree: repoRoot },
+		"add",
+		"skills/browser-use/runbooks",
+		"skills/browser-use/actions",
+	);
+	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "commit", "-qm", "test catalog fixture");
+
+	const previousGitDir = process.env.GIT_DIR;
+	const previousWorkTree = process.env.GIT_WORK_TREE;
+	process.env.GIT_DIR = gitDir;
+	process.env.GIT_WORK_TREE = repoRoot;
+	try {
+		return await run();
+	} finally {
+		if (previousGitDir === undefined) delete process.env.GIT_DIR;
+		else process.env.GIT_DIR = previousGitDir;
+		if (previousWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+		else process.env.GIT_WORK_TREE = previousWorkTree;
+	}
+}
+
+function writeHandoff(
+	base: string,
+	adapterId: string,
+	runId: string,
+	endpoint?: { http: string; ws: string },
+): string {
 	const path = join(base, `handoff-${adapterId}.json`);
-	writeFileSync(path, JSON.stringify(handoffEnvelope(adapterId, runId)), "utf-8");
+	writeFileSync(
+		path,
+		JSON.stringify(handoffEnvelope(adapterId, runId, endpoint)),
+		"utf-8",
+	);
 	return path;
 }
 
@@ -172,6 +242,103 @@ function confidentialRunbook(): BrowserUseRunbook {
 				},
 			},
 		],
+	};
+}
+
+function authContextRunbook(origin: string): BrowserUseRunbook {
+	return {
+		contract: "browser-use.runbook",
+		schema_version: "2",
+		service_id: "fixture-auth",
+		flow_id: "business-after-login",
+		flow_name: "business-after-login",
+		version: "1",
+		summary: "Authenticate generically, then capture one business snapshot.",
+		allowed_origins: [origin],
+		auth_context_ref: "interactive-login",
+		inputs: [],
+		steps: [{ kind: "snapshot", interactive: true }],
+	};
+}
+
+function startAuthCdpFixture(input: { initial: "login" | "ambiguous" }) {
+	let screen = input.initial;
+	const methods: string[] = [];
+	const origin = "http://127.0.0.1:45123";
+	const transport = {
+		transport: {
+			async request(message: {
+				method: string;
+				params?: Record<string, unknown>;
+			}): Promise<unknown> {
+				methods.push(message.method);
+				switch (message.method) {
+					case "Target.getTargets":
+						return {
+							targetInfos: [
+								{ targetId: "t1", type: "page", url: `${origin}/login` },
+							],
+						};
+					case "Target.attachToTarget":
+						return { sessionId: "auth-session" };
+					case "Page.getFrameTree":
+						return {
+							frameTree: { frame: { id: "frame-auth", url: `${origin}/login` } },
+						};
+					case "Accessibility.getFullAXTree":
+						return {
+							nodes:
+								screen === "login"
+									? [
+											{ nodeId: "form", role: { value: "form" }, name: { value: "Sign in" }, ignored: false, childIds: ["username", "password", "submit"] },
+											{ nodeId: "username", parentId: "form", frameId: "frame-auth", role: { value: "textbox" }, name: { value: "Username" }, ignored: false, backendDOMNodeId: 11 },
+											{ nodeId: "password", parentId: "form", frameId: "frame-auth", role: { value: "textbox" }, name: { value: "Password" }, ignored: false, backendDOMNodeId: 12 },
+											{ nodeId: "submit", parentId: "form", frameId: "frame-auth", role: { value: "button" }, name: { value: "Sign in" }, ignored: false, backendDOMNodeId: 13 },
+										]
+									: [
+											{ nodeId: "welcome", frameId: "frame-auth", role: { value: "heading" }, name: { value: "Welcome to Dashboard" }, ignored: false },
+										],
+						};
+					case "DOM.resolveNode":
+						return { object: { objectId: "field-object" } };
+					case "DOM.getContentQuads":
+						return { quads: [[0, 0, 20, 0, 20, 10, 0, 10]] };
+					case "Input.dispatchMouseEvent":
+						if (message.params?.type === "mouseReleased") screen = "ambiguous";
+				}
+				return {};
+			},
+		},
+		close() {},
+	};
+	return {
+		origin,
+		transport,
+		methods,
+	};
+}
+
+function authTokenPort(origin: string): BrowserUseEnvironmentTokenRetrievalPort {
+	const item = {
+		item_id: "item-fixture",
+		vault_id: "vault-fixture",
+		origins: [origin],
+		login_paths: ["/login"],
+		supported_methods: ["password" as const],
+		state: "active" as const,
+	};
+	return {
+		listVaults: async () => ({ ok: true, vaults: [{ vault_id: "vault-fixture" }] }),
+		listLoginItems: async () => ({ ok: true, items: [item] }),
+		getLoginItem: async () => ({ ok: true, item }),
+		fetchCredentialField: async ({ field }) => ({
+			ok: true,
+			handle: { handle_id: `fixture-${field}`, field, expires_at_epoch_ms: 60_000 },
+		}),
+		redeemCredentialField: async () => ({
+			ok: true,
+			shape: { field: "password", byte_length: 12 },
+		}),
 	};
 }
 
@@ -385,17 +552,19 @@ describe("runbook family — live (U4 wiring)", () => {
 
 	test("runbook activate refuses action-bearing source until promotion authority exists", async () => {
 		const store = await makeStore();
-		const result = await runForTest(
-			[
-				"runbook",
-				"activate",
-				"--catalog-digest",
-				"a".repeat(64),
-				"--expected-epoch",
-				"0",
-				"--json",
-			],
-			makeRuntime({ env: store.env }),
+		const result = await withCommittedCatalogSource(store.base, async () =>
+			await runForTest(
+				[
+					"runbook",
+					"activate",
+					"--catalog-digest",
+					"a".repeat(64),
+					"--expected-epoch",
+					"0",
+					"--json",
+				],
+				makeRuntime({ env: store.env }),
+			),
 		);
 		expect(result.exitCode).toBe(20);
 		const envelope = parseJson(result.stdout);
@@ -408,9 +577,11 @@ describe("runbook family — live (U4 wiring)", () => {
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
-		const result = await runForTest(
-			["runbook", "list", "--json"],
-			makeRuntime({ env: store.env }),
+		const result = await withCommittedCatalogSource(store.base, async () =>
+			await runForTest(
+				["runbook", "list", "--json"],
+				makeRuntime({ env: store.env }),
+			),
 		);
 		expect(result.exitCode).toBe(0);
 		const json = parseJson(result.stdout);
@@ -430,9 +601,11 @@ describe("runbook family — live (U4 wiring)", () => {
 	test("runbook show returns one validated definition and health", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
-		const result = await runForTest(
-			["runbook", "show", "--service", "oncore", "--flow", "snapshot-verify", "--json"],
-			makeRuntime({ env: store.env }),
+		const result = await withCommittedCatalogSource(store.base, async () =>
+			await runForTest(
+				["runbook", "show", "--service", "oncore", "--flow", "snapshot-verify", "--json"],
+				makeRuntime({ env: store.env }),
+			),
 		);
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
@@ -444,9 +617,11 @@ describe("runbook family — live (U4 wiring)", () => {
 
 	test("runbook show for a missing runbook fails closed with a typed refusal", async () => {
 		const store = await makeStore();
-		const result = await runForTest(
-			["runbook", "show", "--service", "oncore", "--flow", "absent", "--json"],
-			makeRuntime({ env: store.env }),
+		const result = await withCommittedCatalogSource(store.base, async () =>
+			await runForTest(
+				["runbook", "show", "--service", "oncore", "--flow", "absent", "--json"],
+				makeRuntime({ env: store.env }),
+			),
 		);
 		expect(result.exitCode).toBe(20);
 		expect(parseJson(result.stdout).error).toMatchObject({
@@ -499,6 +674,110 @@ describe("runbook family — live (U4 wiring)", () => {
 		const loaded = await loadSharedRun(store.deps, "run-runbook-1");
 		expect(loaded.ok).toBe(true);
 		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+	});
+
+	test("auth_context_ref keeps one shared run and dispatches the first business step once after proof", async () => {
+		const cdp = startAuthCdpFixture({ initial: "login" });
+		try {
+			const store = await makeStore();
+			seedRunbook(store.dataRoot, authContextRunbook(cdp.origin));
+			const runId = "run-runbook-auth-success";
+			const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+				{ stdout: agentSuccess({ selected: true }) },
+				{ stdout: agentSuccess({ url: `${cdp.origin}/login` }) },
+				{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
+			]);
+			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+			runtime.runbookAuthTransport = () => cdp.transport;
+			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
+				proven: true,
+				proof: {
+					target_id,
+					page_id: "page-authenticated",
+					frame_id: "frame-auth",
+					origin: cdp.origin,
+					subject_reference: "subject-fixture",
+					account_reference: "account-fixture",
+					tenant_reference: "tenant-fixture",
+					identity_basis_digest: "identity-basis-fixture",
+				},
+			});
+
+			const result = await runForTest(
+				[
+					"runbook", "run",
+					"--service", "fixture-auth",
+					"--flow", "business-after-login",
+					"--handoff", handoffPath,
+					"--tab", "t1",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(0);
+			const data = parseJson(result.stdout).data as Record<string, unknown>;
+			const run = data.run as Record<string, unknown>;
+			expect(run.run_id).toBe(runId);
+			expect(run.handoff_evidence_id).toBeDefined();
+			expect(run.state).toBe("confirmed");
+			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			const durable = await loadSharedRun(store.deps, runId);
+			expect(durable.ok).toBe(true);
+			if (durable.ok) {
+				expect(durable.run.run_id).toBe(runId);
+				expect(durable.run.state).toBe("confirmed");
+			}
+		} finally {
+			cdp.transport.close();
+		}
+	});
+
+	test("ambiguous signed-in words yield one attestation continuation and zero business dispatch", async () => {
+		const cdp = startAuthCdpFixture({ initial: "ambiguous" });
+		try {
+			const store = await makeStore();
+			seedRunbook(store.dataRoot, authContextRunbook(cdp.origin));
+			const runId = "run-runbook-auth-ambiguous";
+			const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+				{ stdout: agentSuccess({ selected: true }) },
+			]);
+			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+			runtime.runbookAuthTransport = () => cdp.transport;
+			runtime.runbookAuthenticatedStateProof = async () => ({
+				proven: false,
+				cause: "human-identity-attestation-required",
+			});
+
+			const result = await runForTest(
+				[
+					"runbook", "run",
+					"--service", "fixture-auth",
+					"--flow", "business-after-login",
+					"--handoff", handoffPath,
+					"--tab", "t1",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(0);
+			const parsed = parseJson(result.stdout);
+			expect(parsed.continuation).toMatchObject({
+				next_action_id: "complete-human-identity-attestation",
+			});
+			const run = (parsed.data as Record<string, unknown>).run as Record<string, unknown>;
+			expect(run.run_id).toBe(runId);
+			expect(run.state).toBe("awaiting-user-presence");
+			expect(calls.some((call) => call.includes("snapshot"))).toBe(false);
+		} finally {
+			cdp.transport.close();
+		}
 	});
 
 	test("unenrolled confidential runbook refusal chains through install-token and status", async () => {

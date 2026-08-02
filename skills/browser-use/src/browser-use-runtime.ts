@@ -21,6 +21,9 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
+import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
@@ -310,6 +313,17 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
+	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Endpoint-bound auth transport override for hermetic process-route tests. */
+	runbookAuthTransport?: () => {
+		transport: {
+			request(
+				request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+			): Promise<unknown>;
+		};
+		close(): void;
+	};
 	/**
 	 * Native token lifecycle boundary. The default child inherits stdin
 	 * directly for install, so token bytes never enter the TypeScript process.

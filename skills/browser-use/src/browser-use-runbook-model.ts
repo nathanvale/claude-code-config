@@ -39,6 +39,7 @@ import type {
 	AgentBrowserTaskStep,
 } from "./browser-use-agent-browser";
 import type { BrowserUseActionValueSchema } from "./browser-use-runbook-actions";
+import { isBrowserUseAuthContext } from "./browser-use-auth-bindings";
 
 /** The ONE supported runbook schema version. v1 is retired. */
 export const BROWSER_USE_RUNBOOK_SCHEMA_VERSION = "2" as const;
@@ -340,6 +341,7 @@ export type BrowserUseRunbookIssueCode =
 	| "runbook_schema_unsupported"
 	| "runbook_id_invalid"
 	| "runbook_origin_invalid"
+	| "runbook_auth_context_invalid"
 	| "runbook_no_steps"
 	| "runbook_input_invalid"
 	| "runbook_input_schema_invalid"
@@ -803,6 +805,16 @@ export function validateRunbook(
 		} else {
 			allowed.add(origin);
 		}
+	}
+	if (
+		runbook.auth_context_ref !== undefined &&
+		!isBrowserUseAuthContext(runbook.auth_context_ref)
+	) {
+		issues.push({
+			code: "runbook_auth_context_invalid",
+			message:
+				"auth_context_ref must name an auth-owned context vocabulary member.",
+		});
 	}
 	const inputIds = new Set<string>();
 	for (const input of runbook.inputs) {

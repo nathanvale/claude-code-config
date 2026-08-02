@@ -109,7 +109,9 @@ import {
 	type BrowserUseSharedRun,
 	type BrowserUseTaskIntent,
 	classifyCancellation,
+	revalidateAuthAttestation,
 } from "./browser-use-run-model";
+import { createBrowserUseAuthContract } from "./browser-use-auth";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -180,6 +182,11 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
+import type { BrowserUseAuthContext } from "./browser-use-auth-bindings";
+import {
+	type BrowserUseCdpObserverRequest,
+	createBrowserUseCdpObserver,
+} from "./browser-use-cdp-observer";
 import {
 	listOrphanTempFiles,
 	readDurableFile,
@@ -223,6 +230,7 @@ import {
 	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
+import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
 import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import {
 	activateRunbookGeneration,
@@ -3756,7 +3764,11 @@ function sanitizeInputPairForError(pair: string): string {
 }
 
 type CloseableTargetTransport = {
-	transport: BrowserUseDevToolsTransport;
+	transport: {
+		request(
+			request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+		): Promise<unknown>;
+	};
 	close(): void;
 };
 
@@ -3870,6 +3882,46 @@ function environmentDeliveryHook(input: {
 	};
 }
 
+function environmentLoginDeliveryHook(input: {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	expectedTargetUrl: string;
+}): BrowserUseDeliveryHook | undefined {
+	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
+	if (typeof port.redeemCredentialField !== "function") return undefined;
+	return async ({ handle, target }) => {
+		const field = (target as Partial<BrowserUseMintedVerifiedTarget>).field;
+		if (field === undefined) {
+			return { ok: false, reason: "target-drift", field_cleared: false };
+		}
+		const delivered = await port.redeemCredentialField?.({
+			handle,
+			target_digest: target.target_proof_digest,
+			ws_url: input.handoff.endpoint.ws,
+			target_url: input.expectedTargetUrl,
+			target_origin: target.frame_origin,
+			field: {
+				role: field.role,
+				accessible_name: field.accessible_name,
+			},
+		});
+		if (delivered?.ok) return delivered;
+		const rejection = delivered?.rejection.code;
+		return {
+			ok: false,
+			reason:
+				rejection === "target-digest-mismatch" ||
+				rejection === "origin-mismatch" ||
+				rejection === "target-proof-invalid"
+					? "target-drift"
+					: delivered?.external_effect_possible === true
+						? "helper-crash"
+						: "helper-unavailable",
+			field_cleared: delivered?.field_cleared ?? false,
+		};
+	};
+}
+
 function createWebSocketTargetTransport(
 	handoff: AgentBrowserVerifiedHandoff,
 ): CloseableTargetTransport {
@@ -3943,7 +3995,9 @@ function createWebSocketTargetTransport(
 	socket.addEventListener("close", rejectPending);
 	return {
 		transport: {
-			async request(request: BrowserUseDevToolsRequest): Promise<unknown> {
+			async request(
+				request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+			): Promise<unknown> {
 				await opened;
 				if (closed) throw new Error("DevTools transport is closed.");
 				const id = nextId;
@@ -4305,6 +4359,17 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				recoverability: "none",
 			});
 		}
+		if (loaded.run.mutation_dispatched) {
+			return emitTaskRunFailure(input, loaded.run.run_id, {
+				code: "task_run_effect_unknown",
+				message:
+					"the prior process ended after business write-ahead; inspect outcome before any redispatch.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { external_effect: "unknown" },
+			});
+		}
 		const check = checkSameLaneResumeForTaskRun(
 			loaded.run,
 			"agent-browser",
@@ -4632,6 +4697,121 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					attestationByDigest: attestationByDigestFrom(store.deps),
 				})
 			: undefined;
+
+	if (plan.auth_context_ref !== undefined) {
+		if (authProvider === undefined || tokenRetrieval === undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
+				{
+					kind: "blocked",
+					state: "awaiting-auth",
+					continuation: {
+						next_action_id: "enroll-browser-automation-token",
+						summary: "Enroll or repair the Browser Automation service-account token.",
+					},
+					mutationDispatched: false,
+					failure: {
+						code: "runbook_auth_capability_absent",
+						message: "runbook authentication requires the native Token Retrieval capability.",
+						actionId: "inspect_task_run_result",
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "repair_state",
+					},
+				},
+				{ runbookNextStep: resumeFromStep, heldClaim: dispatchClaim },
+			);
+		}
+		const authTransport =
+			input.runtime.runbookAuthTransport?.() ??
+			createWebSocketTargetTransport(
+				rawHandoffData as AgentBrowserVerifiedHandoff,
+			);
+		try {
+			const deliver = environmentLoginDeliveryHook({
+				tokenRetrieval,
+				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+				expectedTargetUrl: targetResolution.target_url,
+			});
+			if (deliver === undefined) {
+				return emitPlatformStoreFailure(input, {
+					code: "runbook_auth_delivery_unavailable",
+					message: "the native credential lane cannot redeem a generic login field.",
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			const authenticated = await runBrowserUseRunbookAuth(
+				{
+					store: store.deps,
+					provider: authProvider,
+					implementation_integrity_key: "agent-browser:verified-handoff-v2",
+					login: {
+						observer: createBrowserUseCdpObserver(authTransport.transport),
+						proveTarget: async (proofInput) =>
+							await mintBrowserUseVerifiedTarget(authTransport.transport, proofInput),
+						tokenRetrieval,
+						deliver,
+						...(input.runtime.runbookAuthenticatedStateProof !== undefined
+							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
+							: {}),
+					},
+				},
+				{
+					run,
+					dispatch_claim: dispatchClaim,
+					service_id: plan.service_id,
+					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
+					allowed_origins: plan.allowed_origins,
+					expected_url: targetResolution.target_url,
+					target_id: targetResolution.target_tab_id,
+				},
+			);
+			if (!authenticated.ok) {
+				if ("blocked" in authenticated) {
+					return emitSharedRunSuccess({
+						command: input,
+						run: authenticated.run,
+						continuationId: authenticated.blocked.continuation.next_action_id,
+						dataExtra: { selected_lane: "agent-browser", external_effect: "none" },
+					});
+				}
+				return emitPlatformStoreFailure(
+					input,
+					platformStoreFailureOf(
+						authenticated.failure.code,
+						authenticated.failure.message,
+					),
+				);
+			}
+			run = authenticated.run;
+			const attestation = await revalidateAuthAttestation(
+				run,
+				{
+					at_epoch_ms: input.runtime.now(),
+					adapter_id: "agent-browser",
+					handoff_evidence_id: handoff.handoffEvidenceId,
+				},
+				createBrowserUseAuthContract({
+					attestationByDigest: attestationByDigestFrom(store.deps),
+				}),
+			);
+			if (!attestation.valid) {
+				return emitPlatformStoreFailure(input, {
+					code: attestation.code,
+					message: attestation.message,
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+		} finally {
+			authTransport.close();
+		}
+	}
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;

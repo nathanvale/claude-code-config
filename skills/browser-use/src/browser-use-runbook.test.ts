@@ -212,6 +212,17 @@ describe("runbook model validation (v2)", () => {
 		expect(issues.map((i) => i.code)).toContain("runbook_origin_invalid");
 	});
 
+	test("rejects an auth_context_ref outside the auth-owned vocabulary", () => {
+		const issues = validateRunbook(
+			baseRunbook({ auth_context_ref: "portal-specific-login" }),
+		);
+		expect(issues).toContainEqual({
+			code: "runbook_auth_context_invalid",
+			message:
+				"auth_context_ref must name an auth-owned context vocabulary member.",
+		});
+	});
+
 	test("rejects an open step outside the allowed origins", () => {
 		const issues = validateRunbook(
 			baseRunbook({
@@ -882,7 +893,7 @@ describe("runbook catalog projection (R13/R35)", () => {
 
 	test("flags requires_auth for a confidential runbook", () => {
 		const row = projectRunbookCatalogRow(
-			baseRunbook({ auth_context_ref: "oncore-session" }),
+			baseRunbook({ auth_context_ref: "interactive-login" }),
 			"healthy",
 		);
 		expect(row.requires_auth).toBe(true);
@@ -1206,7 +1217,7 @@ describe("shipped runbooks root resolution", () => {
 		expect(parsedMatest.flow_id).toBe("development-snapshot-verify");
 		expect(parsedMatest).toMatchObject({
 			allowed_origins: ["https://experience-test.elluciancloud.com.au"],
-			auth_context_ref: "matest-experience-session",
+			auth_context_ref: "interactive-login",
 			inputs: [],
 			steps: [
 				{

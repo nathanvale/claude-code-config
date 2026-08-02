@@ -14,6 +14,7 @@ import type {
 import {
 	classifyBrowserUseLoginStep,
 	runBrowserUseLoginEngine,
+	type BrowserUseAuthenticatedStateProof,
 	type BrowserUseLoginTargetProof,
 } from "./browser-use-login-engine";
 import type {
@@ -259,6 +260,30 @@ function deliveryHook(
 	};
 }
 
+function authenticatedStateProof(
+	proven = true,
+): BrowserUseAuthenticatedStateProof {
+	return async ({ target_id }) =>
+		proven
+			? {
+					proven: true,
+					proof: {
+						target_id,
+						page_id: "page-authenticated",
+						frame_id: "frame-authenticated",
+						origin: fixtureOrigin,
+						subject_reference: "subject-ref-fixture",
+						account_reference: "account-ref-fixture",
+						tenant_reference: "tenant-ref-fixture",
+						identity_basis_digest: "identity-proof-fixture",
+					},
+				}
+			: {
+					proven: false,
+					cause: "human-identity-attestation-required",
+				};
+}
+
 describe("generic browser-use login engine", () => {
 	test("fills six served structural shapes by role and accessible name", async () => {
 		for (const [shape, fixture] of Object.entries(SHAPE_FIXTURES)) {
@@ -282,6 +307,7 @@ describe("generic browser-use login engine", () => {
 					proveTarget: targetProof(() => form, proofInputs),
 					tokenRetrieval: tokenPort(fetched),
 					deliver: deliveryHook(delivered),
+					proveAuthenticatedState: authenticatedStateProof(),
 				},
 				{
 					lane_id: "agent-browser",
@@ -350,6 +376,7 @@ describe("generic browser-use login engine", () => {
 				proveTarget: targetProof(state.current, proofInputs),
 				tokenRetrieval: tokenPort(),
 				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(),
 			},
 			{
 				lane_id: "agent-browser",
@@ -419,6 +446,36 @@ describe("generic browser-use login engine", () => {
 		});
 		expect(fetched).toEqual([]);
 		expect(delivered).toEqual([]);
+	});
+
+	test("generic signed-in words never authorize without fresh authenticated-state proof", async () => {
+		const welcome = signedInSnapshot();
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([welcome]),
+				proveTarget: async () => {
+					throw new Error("a signed-in screen has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: authenticatedStateProof(false),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-welcome-near-miss",
+				target_id: welcome.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: {
+				blocked_cause: "human-identity-attestation-required",
+			},
+		});
 	});
 
 	test("routes a human challenge to a resumable continuation without delivery", async () => {

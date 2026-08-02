@@ -57,6 +57,51 @@ export type BrowserUseLoginTargetProof = (
 	input: BrowserUseTargetProofInput,
 ) => Promise<BrowserUseTargetProofResult>;
 
+export type BrowserUseAuthenticatedStateProofRecord = {
+	target_id: string;
+	page_id: string;
+	frame_id: string;
+	origin: string;
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+	identity_basis_digest: string;
+};
+
+export type BrowserUseAuthenticatedStateProof = (input: {
+	lane_id: string;
+	run_id: string;
+	target_id: string;
+	expected_url: string;
+	allowed_origins: readonly string[];
+	binding: BrowserUseItemBinding;
+	snapshot: BrowserUseAccessibilitySnapshot;
+	transition: "pre-existing-session" | "post-submit";
+}) => Promise<
+	| { proven: true; proof: BrowserUseAuthenticatedStateProofRecord }
+	| {
+			proven: false;
+			cause:
+				| "human-identity-attestation-required"
+				| "session-identity-proof-unavailable"
+				| "origin-mismatch"
+				| "target-proof-invalid";
+	  }
+>;
+
+export type BrowserUseLoginLifecycleEvent =
+	| { type: "credential-delivered"; field: BrowserUseOpCredentialField }
+	| { type: "username-advance-dispatching" }
+	| { type: "credential-submit-dispatching" }
+	| { type: "submit-outcome-observed"; outcome: "success" | "otp-required" };
+
+export type BrowserUseLoginLifecycleJournal = (
+	event: BrowserUseLoginLifecycleEvent,
+) => Promise<
+	| { ok: true }
+	| { ok: false; cause: BrowserUseAuthBlockedCause }
+>;
+
 /**
  * Secret-free and custody boundaries required by the generic loop.
  */
@@ -69,6 +114,10 @@ export type BrowserUseLoginEngineDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	/** One-shot disposable delivery-child boundary. */
 	deliver: BrowserUseDeliveryHook;
+	/** Fresh auth-owned proof. Signed-in words alone never authorize `ready`. */
+	proveAuthenticatedState?: BrowserUseAuthenticatedStateProof;
+	/** Durable auth journal. Dispatching events run before control activation. */
+	journal?: BrowserUseLoginLifecycleJournal;
 };
 
 /**
@@ -103,6 +152,8 @@ export type BrowserUseLoginEngineResult =
 	| {
 			ok: true;
 			signed_in: true;
+			authenticated_state: "pre-existing-session" | "post-submit";
+			proof: BrowserUseAuthenticatedStateProofRecord;
 			trace: readonly BrowserUseLoginTraceEntry[];
 	  }
 	| {
@@ -408,6 +459,9 @@ export async function runBrowserUseLoginEngine(
 	}
 	const deliveredBackendNodeIds = new Set<number>();
 	let activationFingerprint: string | undefined;
+	let submitted = false;
+	let awaitingSubmitOutcome = false;
+	const deliveredSinceActivation = new Set<BrowserUseOpCredentialField>();
 	const maxIterations = input.max_iterations ?? 16;
 
 	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
@@ -424,7 +478,39 @@ export async function runBrowserUseLoginEngine(
 				? undefined
 				: fingerprint(observed.snapshot);
 		if (signedIn(observed.snapshot)) {
-			return { ok: true, signed_in: true, trace };
+			if (awaitingSubmitOutcome) {
+				const journaled = await deps.journal?.({
+					type: "submit-outcome-observed",
+					outcome: "success",
+				});
+				if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+				awaitingSubmitOutcome = false;
+			}
+			const transition = submitted ? "post-submit" : "pre-existing-session";
+			const proof = await deps.proveAuthenticatedState?.({
+				lane_id: input.lane_id,
+				run_id: input.run_id,
+				target_id: input.target_id,
+				expected_url: input.expected_url,
+				allowed_origins: input.allowed_origins,
+				binding: input.binding,
+				snapshot: observed.snapshot,
+				transition,
+			});
+			if (proof?.proven !== true) {
+				return failed(
+					"human-challenge",
+					proof?.cause ?? "human-identity-attestation-required",
+					trace,
+				);
+			}
+			return {
+				ok: true,
+				signed_in: true,
+				authenticated_state: transition,
+				proof: proof.proof,
+				trace,
+			};
 		}
 		if (
 			activationFingerprint !== undefined &&
@@ -442,6 +528,17 @@ export async function runBrowserUseLoginEngine(
 			observed.snapshot,
 			deliveredBackendNodeIds,
 		);
+		if (
+			awaitingSubmitOutcome &&
+			classification.step === "otp"
+		) {
+			const journaled = await deps.journal?.({
+				type: "submit-outcome-observed",
+				outcome: "otp-required",
+			});
+			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+			awaitingSubmitOutcome = false;
+		}
 		if (classification.step === "challenge") {
 			return failed("human-challenge", "user-presence-required", trace);
 		}
@@ -453,6 +550,15 @@ export async function runBrowserUseLoginEngine(
 			);
 		}
 		if (classification.step === "submit") {
+			const credentialSubmit =
+				deliveredSinceActivation.has("password") ||
+				deliveredSinceActivation.has("otp-current");
+			const journaled = await deps.journal?.({
+				type: credentialSubmit
+					? "credential-submit-dispatching"
+					: "username-advance-dispatching",
+			});
+			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
 			const activated = await deps.observer.activateControl({
 				target_id: input.target_id,
 				backend_node_id: classification.control_node.backend_node_id,
@@ -464,6 +570,9 @@ export async function runBrowserUseLoginEngine(
 				step: "submit",
 				backend_node_id: classification.control_node.backend_node_id,
 			});
+			submitted ||= credentialSubmit;
+			awaitingSubmitOutcome = credentialSubmit;
+			deliveredSinceActivation.clear();
 			deliveredBackendNodeIds.clear();
 			activationFingerprint =
 				currentFingerprint ?? fingerprint(observed.snapshot);
@@ -511,6 +620,12 @@ export async function runBrowserUseLoginEngine(
 		deliveredBackendNodeIds.add(
 			classification.field_node.backend_node_id,
 		);
+		deliveredSinceActivation.add(classification.field);
+		const journaled = await deps.journal?.({
+			type: "credential-delivered",
+			field: classification.field,
+		});
+		if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
 		trace.push({
 			step: classification.step,
 			field: classification.field,

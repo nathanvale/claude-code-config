@@ -106,6 +106,7 @@ const EVENTS_BY_PHASE: Readonly<
 	"secret-free-preparation": ["preparation-complete", "blocked"],
 	"lease-request": ["lease-granted", "lease-unavailable", "blocked"],
 	"sensitive-interval": [
+		"session-already-authenticated",
 		"method-step-complete",
 		"submission-dispatched",
 		"blocked",
@@ -152,6 +153,7 @@ const BLOCK_CAUSES_BY_PHASE: Readonly<
 		"origin-mismatch",
 		"target-proof-invalid",
 		"user-presence-required",
+		"human-identity-attestation-required",
 		"challenge-escalation",
 		"capability-loss",
 		"adapter-crash",
@@ -159,6 +161,7 @@ const BLOCK_CAUSES_BY_PHASE: Readonly<
 	"write-ahead-submission": ["adapter-crash", "capability-loss"],
 	cleanup: ["adapter-crash"],
 	"post-auth-proof": [
+		"origin-mismatch",
 		"session-identity-proof-unavailable",
 		"human-identity-attestation-required",
 		"user-presence-required",

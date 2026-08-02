@@ -26,6 +26,15 @@ export const BROWSER_USE_AUTH_CONTEXTS = ["interactive-login"] as const;
 /** Auth context union. */
 export type BrowserUseAuthContext = (typeof BROWSER_USE_AUTH_CONTEXTS)[number];
 
+export function isBrowserUseAuthContext(
+	value: unknown,
+): value is BrowserUseAuthContext {
+	return (
+		typeof value === "string" &&
+		(BROWSER_USE_AUTH_CONTEXTS as readonly string[]).includes(value)
+	);
+}
+
 /**
  * CLI-retrievable binding auth methods only; passkey/user-presence is
  * unrepresentable here by construction (R13).
