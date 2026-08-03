@@ -221,6 +221,62 @@ export async function runBrowserUseRunbookAuth(
 		});
 	};
 
+	const restartAuthenticatedReuse = async (
+		readyBinding: BrowserUseItemBinding,
+	): Promise<
+		| { ok: true }
+		| {
+				ok: false;
+				result: Extract<BrowserUseRunbookAuthResult, { ok: false }>;
+		  }
+	> => {
+		const origin = originOf(input.expected_url);
+		if (origin === undefined) {
+			return {
+				ok: false,
+				result: { ok: false, run, blocked: blockedOf("origin-mismatch") },
+			};
+		}
+		const renewed = beginAuthTransaction({
+			binding: {
+				run_id: run.run_id,
+				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+				lane_id: "agent-browser",
+				environment: run.environment_profile.environment,
+				profile: run.environment_profile.profile,
+				service_id: input.service_id,
+				auth_context: input.auth_context_ref,
+				origin,
+				target_id: input.target_id,
+				page_id: input.target_id,
+				frame_id: input.target_id,
+			},
+			method: readyBinding.allowed_auth_methods.includes("otp")
+				? "otp"
+				: "password",
+			attempt_limit: 3,
+			attempts_already_consumed: 0,
+		});
+		if (!renewed.ok) {
+			return {
+				ok: false,
+				result: { ok: false, run, failure: renewed.rejection },
+			};
+		}
+		fragment = renewed.fragment;
+		const persisted = await commit();
+		if (!persisted.ok) {
+			return {
+				ok: false,
+				result: { ok: false, run, failure: persisted },
+			};
+		}
+		const reused = await transition({ type: "session-already-authenticated" });
+		return reused.ok
+			? { ok: true }
+			: { ok: false, result: { ok: false, run, failure: reused } };
+	};
+
 	const completeHumanIdentityAttestation = async (): Promise<
 		BrowserUseRunbookAuthResult | undefined
 	> => {
@@ -442,15 +498,29 @@ export async function runBrowserUseRunbookAuth(
 					attestationByDigest: attestationByDigestFrom(deps.store),
 				}),
 			);
-			return revalidated.valid
-				? { ok: true, run, binding }
-				: {
-						ok: false,
-						run,
-						blocked: blockedOf(
-							"human-identity-attestation-required",
-						),
-					};
+			if (revalidated.valid) return { ok: true, run, binding };
+			if (revalidated.code !== "attestation_expired") {
+				return {
+					ok: false,
+					run,
+					blocked: blockedOf("human-identity-attestation-required"),
+				};
+			}
+			const restarted = await restartAuthenticatedReuse(binding);
+			if (!restarted.ok) return restarted.result;
+			const blocked = await transition({
+				type: "blocked",
+				cause: "human-identity-attestation-required",
+			});
+			if (!blocked.ok) return { ok: false, run, failure: blocked };
+			const completed = await completeHumanIdentityAttestation();
+			return (
+				completed ?? {
+					ok: false,
+					run,
+					blocked: blockedOf("human-identity-attestation-required"),
+				}
+			);
 		}
 		const observed = await deps.login.observer.snapshot({ target_id: input.target_id });
 		if (!observed.ok || deps.login.proveAuthenticatedState === undefined) {
@@ -491,34 +561,8 @@ export async function runBrowserUseRunbookAuth(
 			};
 		}
 
-		const origin = originOf(input.expected_url);
-		if (origin === undefined) {
-			return { ok: false, run, blocked: blockedOf("origin-mismatch") };
-		}
-		const renewed = beginAuthTransaction({
-			binding: {
-				run_id: run.run_id,
-				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
-				lane_id: "agent-browser",
-				environment: run.environment_profile.environment,
-				profile: run.environment_profile.profile,
-				service_id: input.service_id,
-				auth_context: input.auth_context_ref,
-				origin,
-				target_id: input.target_id,
-				page_id: input.target_id,
-				frame_id: input.target_id,
-			},
-			method: binding.allowed_auth_methods.includes("otp") ? "otp" : "password",
-			attempt_limit: 3,
-			attempts_already_consumed: 0,
-		});
-		if (!renewed.ok) return { ok: false, run, failure: renewed.rejection };
-		fragment = renewed.fragment;
-		const persisted = await commit();
-		if (!persisted.ok) return { ok: false, run, failure: persisted };
-		const reused = await transition({ type: "session-already-authenticated" });
-		if (!reused.ok) return { ok: false, run, failure: reused };
+		const restarted = await restartAuthenticatedReuse(binding);
+		if (!restarted.ok) return restarted.result;
 		const issued = await issueFreshSessionAttestation(fresh.proof);
 		return issued.ok
 			? { ok: true, run, binding }

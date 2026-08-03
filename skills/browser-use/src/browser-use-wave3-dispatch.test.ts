@@ -1013,8 +1013,17 @@ describe("runbook family — live (U4 wiring)", () => {
 	});
 
 	for (const scenario of [
-		{ name: "confirms", submitFails: false },
-		{ name: "records unknown when submit dispatch fails", submitFails: true },
+		{ name: "confirms", submitFails: false, identityBasis: "session" },
+		{
+			name: "confirms after renewing human identity",
+			submitFails: false,
+			identityBasis: "human",
+		},
+		{
+			name: "records unknown when submit dispatch fails",
+			submitFails: true,
+			identityBasis: "session",
+		},
 	] as const) {
 		test(`approved FastTrack submit resume after auth expiry ${scenario.name} without redispatch`, async () => {
 			const origin = "https://manpowergroup.fasttrack360.com.au";
@@ -1026,9 +1035,7 @@ describe("runbook family — live (U4 wiring)", () => {
 			});
 			try {
 				const store = await makeStore();
-				const runId = scenario.submitFails
-					? "run-fasttrack-submit-failure"
-					: "run-fasttrack-submit-confirmed";
+				const runId = `run-fasttrack-submit-${scenario.identityBasis}-${scenario.submitFails ? "failure" : "confirmed"}`;
 				const handoffPath = writeHandoff(
 					store.base,
 					"agent-browser",
@@ -1060,6 +1067,8 @@ describe("runbook family — live (U4 wiring)", () => {
 				chmodSync(inputPath, 0o600);
 				let now = 1_000;
 				let evalCalls = 0;
+				let humanAttestationCalls = 0;
+				let submitObservedDispatchMarker = false;
 				const calls: Array<readonly string[]> = [];
 				const runtime = makeRuntime({
 					env: store.env,
@@ -1094,7 +1103,14 @@ describe("runbook family — live (U4 wiring)", () => {
 						}
 						if (input.args.includes("eval")) {
 							evalCalls += 1;
-							if (scenario.submitFails && evalCalls === 2) {
+							if (evalCalls === 3) {
+								const beforeSubmit = await loadSharedRun(store.deps, runId);
+								submitObservedDispatchMarker =
+									beforeSubmit.ok &&
+									beforeSubmit.run.approvals?.at(-1)
+										?.dispatch_started_at_epoch_ms !== undefined;
+							}
+							if (scenario.submitFails && evalCalls === 3) {
 								return { exitCode: 1, stdout: "", stderr: "submit failed" };
 							}
 							const result =
@@ -1103,18 +1119,28 @@ describe("runbook family — live (U4 wiring)", () => {
 											ok: true,
 											period_start: "2026-07-27",
 											period_end: "2026-08-02",
-											results: [
-												{
-													dayIndex: 0,
-													startMatches: true,
-													endMatches: true,
-													attendanceMatches: true,
-													selectedText: "Standard",
-												},
-											],
+											mode: "opened_from_available",
+											target_start: "2026-07-27",
+											target_end: "2026-08-02",
+											row_count: 5,
 										}
 									: evalCalls === 2
 										? {
+												ok: true,
+												period_start: "2026-07-27",
+												period_end: "2026-08-02",
+												results: [
+													{
+														dayIndex: 0,
+														startMatches: true,
+														endMatches: true,
+														attendanceMatches: true,
+														selectedText: "Standard",
+													},
+												],
+											}
+										: evalCalls === 3
+											? {
 												ok: true,
 												mode: "exact-submit",
 												controlText: "Submit",
@@ -1178,19 +1204,36 @@ describe("runbook family — live (U4 wiring)", () => {
 					"/RecruitmentManager/CandidatePortal",
 				);
 				runtime.runbookAuthTransport = () => cdp.transport;
-				runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
-					proven: true,
-					proof: {
-						target_id,
-						page_id: "page-authenticated",
-						frame_id: "frame-auth",
-						origin,
-						subject_reference: "subject-fixture",
-						account_reference: "account-fixture",
-						tenant_reference: "tenant-fixture",
-						identity_basis_digest: "identity-basis-fixture",
-					},
-				});
+				if (scenario.identityBasis === "human") {
+					runtime.runbookAuthenticatedStateProof = async () => ({
+						proven: false,
+						cause: "human-identity-attestation-required",
+					});
+					runtime.runbookHumanIdentityAttestation = async (input) => {
+						humanAttestationCalls += 1;
+						return {
+							ok: true,
+							attestation: humanIdentityAttestationFor(input, {
+								observed_at_epoch_ms: now,
+								fresh_until_epoch_ms: now + 30_000,
+							}),
+						};
+					};
+				} else {
+					runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
+						proven: true,
+						proof: {
+							target_id,
+							page_id: "page-authenticated",
+							frame_id: "frame-auth",
+							origin,
+							subject_reference: "subject-fixture",
+							account_reference: "account-fixture",
+							tenant_reference: "tenant-fixture",
+							identity_basis_digest: "identity-basis-fixture",
+						},
+					});
+				}
 
 				await withCommittedCatalogSource(store.base, async (gitEnv) => {
 					Object.assign(runtime.env, gitEnv);
@@ -1237,7 +1280,19 @@ describe("runbook family — live (U4 wiring)", () => {
 						}
 					).run;
 					expect(awaitingRun.state).toBe("awaiting-approval");
-					expect(evalCalls).toBe(1);
+					expect(evalCalls).toBe(2);
+					expect(awaitingRun.mutation_dispatched).toBe(true);
+					expect(humanAttestationCalls).toBe(
+						scenario.identityBasis === "human" ? 1 : 0,
+					);
+
+					const evalsBeforeUnapprovedResume = evalCalls;
+					const stillAwaiting = await runForTest(
+						[...runArgs.slice(0, -1), "--run", runId, "--json"],
+						runtime,
+					);
+					expect(stillAwaiting.exitCode).toBe(0);
+					expect(evalCalls).toBe(evalsBeforeUnapprovedResume);
 
 					now = 40_000;
 					const approved = await runForTest(
@@ -1249,18 +1304,30 @@ describe("runbook family — live (U4 wiring)", () => {
 							"--continuation",
 							"complete-submit-approval",
 							"--artifact",
-							"submit-approval-3.png",
+							"submit-approval-5.png",
 							"--json",
 						],
 						runtime,
 					);
 					expect(approved.exitCode).toBe(0);
+					const approvedRun = await loadSharedRun(store.deps, runId);
+					expect(approvedRun.ok).toBe(true);
+					if (approvedRun.ok) {
+						expect(
+							approvedRun.run.approvals?.at(-1)
+								?.dispatch_started_at_epoch_ms,
+						).toBeUndefined();
+					}
 
 					const resumed = await runForTest(
 						[...runArgs.slice(0, -1), "--run", runId, "--json"],
 						runtime,
 					);
 					expect(resumed.exitCode).toBe(scenario.submitFails ? 20 : 0);
+					expect(humanAttestationCalls).toBe(
+						scenario.identityBasis === "human" ? 2 : 0,
+					);
+					expect(submitObservedDispatchMarker).toBe(true);
 					const durable = await loadSharedRun(store.deps, runId);
 					expect(durable.ok).toBe(true);
 					if (!durable.ok) return;
@@ -1269,8 +1336,8 @@ describe("runbook family — live (U4 wiring)", () => {
 						dispatch_started_at_epoch_ms: 40_000,
 					});
 					expect(durable.run.auth_attestation?.fresh_until_epoch_ms).toBe(
-					70_000,
-				);
+						70_000,
+					);
 					if (scenario.submitFails) {
 						expect(parseJson(resumed.stdout).error).toMatchObject({
 							code: "task_run_effect_unknown",
@@ -1279,11 +1346,11 @@ describe("runbook family — live (U4 wiring)", () => {
 							),
 						});
 						expect(durable.run.state).toBe("unknown");
-						expect(evalCalls).toBe(2);
+						expect(evalCalls).toBe(3);
 					} else {
 						expect(durable.run.state).toBe("confirmed");
-						expect(durable.run.runbook_progress?.next_step).toBe(8);
-						expect(evalCalls).toBe(3);
+						expect(durable.run.runbook_progress?.next_step).toBe(10);
+						expect(evalCalls).toBe(4);
 					}
 
 					const evalsBeforeSecondResume = evalCalls;
