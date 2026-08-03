@@ -498,7 +498,34 @@
           "selector": "tr[ng-repeat]"
         },
         "source_provenance": "authored:fasttrack-open-week",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "fasttrack-open-week",
+          "approval_reference": "open-week-20260804",
+          "approved_digest": "13c4169500c7522c45e78f039ca10c3a4f7c7973957cbf3f8388a1c02f5604a9",
+          "approved_effect": "mutation",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "framework-runtime",
+            "same-origin-navigation"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "12ddde93041239c691cf569b55c2ec72bb6c6a1aadb54d810a55f365668406c1",
+          "issued_at_epoch_ms": 1785791403525,
+          "postcondition_digest": "c0ac1baf40564ec3a62dc5f91dd9dd499c68e6679ab3c632a2f45475d6bf534b",
+          "presence_backed": true,
+          "receipt_id": "receipt-abbfdb93-0f68-4adb-ba1a-aa861a954430",
+          "result_schema_digest": "f81ae88406ade71496795a959b5687b26bc22306a40cc2c2fab37e0257d82f81",
+          "schema_version": "1",
+          "signature": "MEUCIHby2EeafAaCez5b++z6CAm6brM+KxJLJXUHZhd/b4sUAiEAtB+9YgOf3DJS6kxIwgx34KMNCZbEmVb8UopgqsqeR3U=",
+          "source_commit": "2c78d52cb70eebe79dfd3690e2802b03204682c0",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       }
     },
     {
