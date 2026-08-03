@@ -208,10 +208,10 @@
   "steps": [
     {
       "kind": "open",
-      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00",
       "postcondition": {
         "kind": "url-starts-with",
-        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00"
       }
     },
     {
