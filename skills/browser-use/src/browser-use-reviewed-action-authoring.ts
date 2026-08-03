@@ -136,7 +136,7 @@ export function reviewedActionAuthoringSchema() {
 
 function postconditionValid(value: unknown): value is BrowserUseRunbookPostcondition {
 	if (!isPlainObject(value)) return false;
-	if (value.kind === "url-equals") return typeof value.url === "string" && value.url.length > 0;
+	if (value.kind === "url-equals" || value.kind === "url-starts-with") return typeof value.url === "string" && value.url.length > 0;
 	return value.kind === "element-visible" && typeof value.selector === "string" && value.selector.trim().length > 0 && !value.selector.startsWith("@");
 }
 
@@ -175,7 +175,7 @@ function staticNavigationTarget(
 	if (identifier === undefined) return undefined;
 	const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return source.match(
-		new RegExp(`\\bconst\\s+${escaped}\\s*=\\s*(['\"])(https?:\\/\\/[^'\"]+)\\1\\s*;`),
+		new RegExp(`\\bconst\\s+${escaped}\\s*=\\s*(['"])(https?:\\/\\/[^'"]+)\\1\\s*;`),
 	)?.[2];
 }
 
@@ -253,7 +253,7 @@ export function validateReviewedActionCandidate(candidate: BrowserUseReviewedAct
 	}
 	if (issues.length > 0) return { ok: false, issues, repair: "Fix the named mechanical issue. Keep authentication in generic login and use only direct reviewed business-action DOM operations." };
 	const effect = auditActionEffectClass(candidate.source);
-	if (effect === "mutation" && !postconditionValid(candidate.required_postcondition)) return { ok: false, issues: [issue("action_postcondition_required", "required_postcondition", "a mutation requires one mechanically checkable postcondition")], repair: "Add an element-visible or url-equals postcondition for the mutation." };
+	if (effect === "mutation" && !postconditionValid(candidate.required_postcondition)) return { ok: false, issues: [issue("action_postcondition_required", "required_postcondition", "a mutation requires one mechanically checkable postcondition")], repair: "Add an element-visible, url-equals, or url-starts-with postcondition for the mutation." };
 	if (effect === "mutation" && candidate.containment === "read-only-observation") return { ok: false, issues: [issue("action_containment_effect_mismatch", "containment", "read-only containment cannot authorize a mutation")], repair: "Declare containment none and provide a mutation postcondition, or remove the mutation." };
 	return { ok: true, digest: actionAssetDigest(candidate.source), effect_class: effect, audited_capabilities: auditedCapabilities(candidate.source, effect) };
 }

@@ -210,7 +210,7 @@
       "kind": "open",
       "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
       "postcondition": {
-        "kind": "url-equals",
+        "kind": "url-starts-with",
         "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
       }
     },

@@ -677,7 +677,10 @@ export function exactOriginValid(value: string): boolean {
 }
 
 function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		return typeof postcondition.url === "string" && postcondition.url.length > 0;
 	}
 	if (postcondition.kind !== "element-visible") return false;

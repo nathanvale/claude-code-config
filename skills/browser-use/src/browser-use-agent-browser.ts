@@ -74,6 +74,7 @@ export type AgentBrowserVerifiedHandoff = BrowserConnectHandoffPayload & {
  */
 export type AgentBrowserPostcondition =
 	| { kind: "url-equals"; url: string }
+	| { kind: "url-starts-with"; url: string }
 	| { kind: "value-equals"; selector: string; value: string }
 	| { kind: "element-visible"; selector: string };
 
@@ -88,7 +89,10 @@ export type AgentBrowserTaskStep =
 	| {
 			kind: "open";
 			url: string;
-			postcondition: Extract<AgentBrowserPostcondition, { kind: "url-equals" }>;
+			postcondition: Extract<
+				AgentBrowserPostcondition,
+				{ kind: "url-equals" | "url-starts-with" }
+			>;
 	  }
 	| {
 			kind: "click";

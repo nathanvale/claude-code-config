@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
 	type AgentBrowserExecutionRuntime,
+	type AgentBrowserPostcondition,
 	executeAgentBrowserTask,
 	resolveAgentBrowserTaskTarget,
 } from "./browser-use-agent-browser";
+import { verifyAgentBrowserPostcondition } from "./browser-use-agent-browser-target";
 import { candidateIdOf } from "./browser-use-core";
 import type { McporterCommandInput } from "./mcporter-transport";
 import {
@@ -43,6 +45,46 @@ const HANDOFF = {
 function json(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
 }
+
+async function verifyUrlPostcondition(
+	postcondition: AgentBrowserPostcondition,
+	observedUrl: string,
+) {
+	return verifyAgentBrowserPostcondition(
+		async () => ({
+			exitCode: 0,
+			stdout: json({ url: observedUrl }),
+			stderr: "",
+		}),
+		postcondition,
+		new Set(["https://example.test"]),
+	);
+}
+
+describe("Agent Browser URL postconditions", () => {
+	test("url-starts-with accepts SPA and subpath redirects, then rejects a different prefix", async () => {
+		const prefix = "https://example.test/CandidatePortal";
+		const postcondition = { kind: "url-starts-with", url: prefix } as const;
+
+		expect(await verifyUrlPostcondition(postcondition, `${prefix}#/route`)).toBe("confirmed");
+		expect(await verifyUrlPostcondition(postcondition, `${prefix}/sub`)).toBe("confirmed");
+		expect(await verifyUrlPostcondition(postcondition, "https://example.test/OtherPortal")).toBe("not-achieved");
+	});
+
+	test("url-equals remains exact", async () => {
+		const url = "https://example.test/CandidatePortal";
+		const postcondition = { kind: "url-equals", url } as const;
+
+		expect(await verifyUrlPostcondition(postcondition, url)).toBe("confirmed");
+		expect(await verifyUrlPostcondition(postcondition, `${url}#/route`)).toBe("not-achieved");
+	});
+
+	test("an unhandled runtime discriminator fails closed", async () => {
+		const postcondition = { kind: "unknown" } as unknown as AgentBrowserPostcondition;
+
+		expect(await verifyUrlPostcondition(postcondition, "https://example.test/")).toBe("not-achieved");
+	});
+});
 
 // Real agent-browser CDP failure envelope shape captured from a live probe
 // against a dead endpoint: exit code 0, `success:false`, connection signal in

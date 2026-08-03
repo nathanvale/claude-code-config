@@ -249,7 +249,7 @@ export type BrowserUseRunbookStep =
 			url: string;
 			postcondition: Extract<
 				BrowserUseRunbookPostcondition,
-				{ kind: "url-equals" }
+				{ kind: "url-equals" | "url-starts-with" }
 			>;
 	  }
 	| {
@@ -408,9 +408,16 @@ function referencedInputs(value: string): string[] {
 function validatePostcondition(
 	postcondition: BrowserUseRunbookPostcondition,
 ): boolean {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		return postcondition.url.length > 0;
 	}
+	if (
+		postcondition.kind !== "value-equals" &&
+		postcondition.kind !== "element-visible"
+	) return false;
 	// value-equals / element-visible: a `@`-ref is not a valid CSS selector for
 	// a postcondition (the executor refuses those), and an empty selector is a
 	// bug, not a probe.
@@ -864,12 +871,13 @@ function validateStep(
 			});
 		}
 		if (
-			step.postcondition.kind !== "url-equals" ||
+			(step.postcondition.kind !== "url-equals" &&
+				step.postcondition.kind !== "url-starts-with") ||
 			!validatePostcondition(step.postcondition)
 		) {
 			issues.push({
 				code: "runbook_step_invalid",
-				message: `${at}: open requires a valid url-equals postcondition.`,
+				message: `${at}: open requires a valid url-equals or url-starts-with postcondition.`,
 			});
 		}
 		return;
@@ -1000,7 +1008,16 @@ export function runbookDocumentAuthoringSchema() {
 		summary: "Read the current service status.",
 		allowed_origins: ["https://portal.example.test"],
 		inputs: [],
-		steps: [{ kind: "snapshot", interactive: false }],
+		steps: [
+			{
+				kind: "open",
+				url: "https://portal.example.test/status",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/status",
+				},
+			},
+		],
 	} as const satisfies BrowserUseRunbook;
 	return {
 		document_contract: "browser-use.runbook",
@@ -1021,6 +1038,10 @@ export function runbookDocumentAuthoringSchema() {
 			steps: {
 				type: "non-empty-array",
 				variants: ["snapshot", "open", "click", "fill", "action", "iterate"],
+				postconditions: {
+					variants: ["url-equals", "url-starts-with", "value-equals", "element-visible"],
+					open_variants: ["url-equals", "url-starts-with"],
+				},
 				item_owner: "BrowserUseRunbookStep + parseRunbookRecord",
 			},
 		},
@@ -1045,7 +1066,7 @@ function inspectExactKeys(
 
 function inspectPostconditionKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
 	if (!isPlainObject(value)) return;
-	const allowed = value.kind === "url-equals" ? ["kind", "url"] : value.kind === "value-equals" ? ["kind", "selector", "value"] : ["kind", "selector"];
+	const allowed = value.kind === "url-equals" || value.kind === "url-starts-with" ? ["kind", "url"] : value.kind === "value-equals" ? ["kind", "selector", "value"] : ["kind", "selector"];
 	inspectExactKeys(value, path, allowed, allowed, issues);
 }
 
@@ -1276,6 +1297,10 @@ function parsePostcondition(
 		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
 		return { kind: "url-equals", url: raw.url };
 	}
+	if (raw.kind === "url-starts-with" && typeof raw.url === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
+		return { kind: "url-starts-with", url: raw.url };
+	}
 	if (raw.kind === "value-equals" && typeof raw.selector === "string" && typeof raw.value === "string") {
 		if (!hasOnlyKeys(raw, ["kind", "selector", "value"])) return undefined;
 		return { kind: "value-equals", selector: raw.selector, value: raw.value };
@@ -1350,7 +1375,11 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 		case "open": {
 			if (!hasOnlyKeys(raw, ["kind", "url", "postcondition"])) return undefined;
 			const post = parsePostcondition(raw.postcondition);
-			if (typeof raw.url !== "string" || post === undefined || post.kind !== "url-equals") {
+			if (
+				typeof raw.url !== "string" ||
+				post === undefined ||
+				(post.kind !== "url-equals" && post.kind !== "url-starts-with")
+			) {
 				return undefined;
 			}
 			return { kind: "open", url: raw.url, postcondition: post };

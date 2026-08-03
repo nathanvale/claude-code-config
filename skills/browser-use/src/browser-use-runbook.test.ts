@@ -191,6 +191,26 @@ describe("runbook model validation (v2)", () => {
 		expect(validateRunbook(baseRunbook())).toEqual([]);
 	});
 
+	test("an open url-starts-with postcondition validates and round-trips", () => {
+		const raw = JSON.parse(JSON.stringify(baseRunbook())) as Record<string, unknown>;
+		raw.steps = [
+			{
+				kind: "open",
+				url: "https://portal.example.com/timesheets",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.com/timesheets",
+				},
+			},
+		];
+
+		const parsed = parseRunbookRecord(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(validateRunbook(parsed.runbook)).toEqual([]);
+		expect(JSON.parse(JSON.stringify(parsed.runbook))).toEqual(raw);
+	});
+
 	test("rejects a non-v2 schema version", () => {
 		const issues = validateRunbook(
 			baseRunbook({ schema_version: "1" as unknown as "2" }),

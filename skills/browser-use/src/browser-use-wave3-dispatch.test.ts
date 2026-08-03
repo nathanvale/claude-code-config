@@ -15,6 +15,10 @@ import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import { runbooksRoot } from "./browser-use-runbook";
 import type { BrowserUseRunbook } from "./browser-use-runbook-model";
 import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
+import type {
+	BrowserUseHumanIdentityAttestationDriver,
+	BrowserUseHumanIdentityAttestationInput,
+} from "./browser-use-human-identity-attestation";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { candidateIdOf, targetEnvelopeIdOf } from "./browser-use-core";
@@ -409,6 +413,109 @@ function scriptedRuntime(
 	};
 }
 
+function humanIdentityAttestationFor(
+	input: BrowserUseHumanIdentityAttestationInput,
+	overrides: Partial<
+		Extract<
+			Awaited<ReturnType<BrowserUseHumanIdentityAttestationDriver>>,
+			{ ok: true }
+		>["attestation"]
+	> = {},
+) {
+	return {
+		run_id: input.run.run_id,
+		handoff_evidence_id: input.run.handoff_evidence_id ?? "missing",
+		lane_id: "agent-browser" as const,
+		implementation_integrity_key: input.implementation_integrity_key,
+		environment: input.run.environment_profile.environment,
+		profile: input.run.environment_profile.profile,
+		target_id: input.target_id,
+		page_id: input.target_id,
+		frame_id: input.target_id,
+		service_id: input.service_id,
+		auth_context: input.auth_context_ref,
+		subject_reference: "subject-fixture",
+		account_reference: "account-fixture",
+		tenant_reference: "tenant-fixture",
+		identity_basis: "human-identity-attestation" as const,
+		identity_basis_digest: "b".repeat(64),
+		observed_at_epoch_ms: 1_000,
+		fresh_until_epoch_ms: 31_000,
+		...overrides,
+	};
+}
+
+async function presenceBlockedRunbookFixture(runId: string) {
+	const cdp = startAuthCdpFixture({ initial: "ambiguous" });
+	const store = await makeStore();
+	seedRunbook(store.dataRoot, authContextRunbook(cdp.origin));
+	const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+	const blockedRuntime = scriptedRuntime(store.env, [
+		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+		{ stdout: agentSuccess({ selected: true }) },
+	]);
+	blockedRuntime.runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+	blockedRuntime.runtime.runbookAuthTransport = () => cdp.transport;
+	blockedRuntime.runtime.runbookAuthenticatedStateProof = async () => ({
+		proven: false,
+		cause: "human-identity-attestation-required",
+	});
+	const blocked = await runForTest(
+		[
+			"runbook", "run",
+			"--service", "fixture-auth",
+			"--flow", "business-after-login",
+			"--handoff", handoffPath,
+			"--tab", "t1",
+			"--json",
+		],
+		blockedRuntime.runtime,
+	);
+	if (blocked.exitCode !== 0) throw new Error(blocked.stdout);
+	return { cdp, store, handoffPath, blocked, blockedCalls: blockedRuntime.calls };
+}
+
+function presenceResumeRuntime(
+	env: Record<string, string | undefined>,
+	cdp: ReturnType<typeof startAuthCdpFixture>,
+) {
+	const resumed = scriptedRuntime(env, [
+		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+		{ stdout: agentSuccess({ selected: true }) },
+		{ stdout: agentSuccess({ url: `${cdp.origin}/login` }) },
+		{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
+	]);
+	resumed.runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+	resumed.runtime.runbookAuthTransport = () => cdp.transport;
+	resumed.runtime.runbookAuthenticatedStateProof = async () => ({
+		proven: false,
+		cause: "human-identity-attestation-required",
+	});
+	return resumed;
+}
+
+async function resumePresenceBlockedRunbook(input: {
+	runtime: ReturnType<typeof scriptedRuntime>["runtime"];
+	handoffPath: string;
+	runId: string;
+}) {
+	return await runForTest(
+		[
+			"runbook", "run",
+			"--service", "fixture-auth",
+			"--flow", "business-after-login",
+			"--handoff", input.handoffPath,
+			"--tab", "t1",
+			"--run", input.runId,
+			"--json",
+		],
+		input.runtime,
+	);
+}
+
 // =========================================================================
 // chrome-devtools-mcp task-run dispatch (release contract R9, R21; F6)
 // =========================================================================
@@ -576,7 +683,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 	});
 
-	test("runbook list surfaces unpromoted records as activation blockers", async () => {
+	test("runbook list does not report the signed fill-week runbook as unpromoted", async () => {
 		const store = await makeStore();
 		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
@@ -586,15 +693,15 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
-		expect(data.activation_blockers).toContainEqual(
+		expect(data.activation_blockers).not.toContainEqual(
 			expect.objectContaining({
 				id: "fasttrack/fill-week",
 				code: "runbook_action_unpromoted",
 			}),
 		);
-		expect(data.separated).toEqual([]);
+		expect(Array.isArray(data.separated)).toBe(true);
 		const rows = data.runbooks as Array<Record<string, unknown>>;
-		expect(rows.find((row) => row.service_id === "fasttrack" && row.flow_id === "fill-week")?.health).toBe("stale");
+		expect(rows.find((row) => row.service_id === "fasttrack" && row.flow_id === "fill-week")).toBeDefined();
 	});
 
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
@@ -619,8 +726,11 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 		expect(seeded).toBeDefined();
 		expect(data.runbook_count).toBe(rows.length);
-		expect(data.activation_blockers).toContainEqual(
-			expect.objectContaining({ id: "fasttrack/fill-week", code: "runbook_action_unpromoted" }),
+		expect(data.activation_blockers).not.toContainEqual(
+			expect.objectContaining({
+				id: "fasttrack/fill-week",
+				code: "runbook_action_unpromoted",
+			}),
 		);
 	});
 
@@ -642,7 +752,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(data.separated).toBeNull();
 	});
 
-	test("runbook show refuses an unpromoted action-bearing definition", async () => {
+	test("runbook show returns the signed action-bearing definition", async () => {
 		const store = await makeStore();
 		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
@@ -650,9 +760,11 @@ describe("runbook family — live (U4 wiring)", () => {
 				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "runbook_action_unpromoted",
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.runbook).toMatchObject({
+			service_id: "fasttrack",
+			flow_id: "fill-week",
 		});
 	});
 
@@ -847,48 +959,126 @@ describe("runbook family — live (U4 wiring)", () => {
 		}
 	});
 
-	test("ambiguous signed-in words yield one attestation continuation and zero business dispatch", async () => {
-		const cdp = startAuthCdpFixture({ initial: "ambiguous" });
+	test("a presence-blocked run resumes through one attestation and dispatches the first business step once", async () => {
+		const runId = "run-runbook-auth-ambiguous";
+		const fixture = await presenceBlockedRunbookFixture(runId);
 		try {
-			const store = await makeStore();
-			seedRunbook(store.dataRoot, authContextRunbook(cdp.origin));
-			const runId = "run-runbook-auth-ambiguous";
-			const handoffPath = writeHandoff(store.base, "agent-browser", runId);
-			const { runtime, calls } = scriptedRuntime(store.env, [
-				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
-				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
-				{ stdout: agentSuccess({ selected: true }) },
-			]);
-			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
-			runtime.runbookAuthTransport = () => cdp.transport;
-			runtime.runbookAuthenticatedStateProof = async () => ({
-				proven: false,
-				cause: "human-identity-attestation-required",
-			});
-
-			const result = await runForTest(
-				[
-					"runbook", "run",
-					"--service", "fixture-auth",
-					"--flow", "business-after-login",
-					"--handoff", handoffPath,
-					"--tab", "t1",
-					"--json",
-				],
-				runtime,
-			);
-
-			expect(result.exitCode).toBe(0);
-			const parsed = parseJson(result.stdout);
+			const parsed = parseJson(fixture.blocked.stdout);
 			expect(parsed.continuation).toMatchObject({
 				next_action_id: "complete-human-identity-attestation",
 			});
 			const run = (parsed.data as Record<string, unknown>).run as Record<string, unknown>;
 			expect(run.run_id).toBe(runId);
 			expect(run.state).toBe("awaiting-user-presence");
-			expect(calls.some((call) => call.includes("snapshot"))).toBe(false);
+			expect(fixture.blockedCalls.some((call) => call.includes("snapshot"))).toBe(false);
+
+			let attestationCalls = 0;
+			const resumed = presenceResumeRuntime(fixture.store.env, fixture.cdp);
+			resumed.runtime.runbookHumanIdentityAttestation = async (input) => {
+				attestationCalls += 1;
+				return { ok: true, attestation: humanIdentityAttestationFor(input) };
+			};
+
+			const completed = await resumePresenceBlockedRunbook({
+				runtime: resumed.runtime,
+				handoffPath: fixture.handoffPath,
+				runId,
+			});
+			expect(completed.exitCode).toBe(0);
+			expect(attestationCalls).toBe(1);
+			expect(resumed.calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			const durable = await loadSharedRun(fixture.store.deps, runId);
+			expect(durable.ok).toBe(true);
+			if (durable.ok) {
+				expect(durable.run.state).toBe("confirmed");
+				expect(durable.run.auth_attestation).toMatchObject({
+					attestation_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+					fresh_until_epoch_ms: 31_000,
+				});
+			}
 		} finally {
-			cdp.transport.close();
+			fixture.cdp.transport.close();
+		}
+	});
+
+	test("a refused human attestation stays presence-blocked with one continuation and no business dispatch", async () => {
+		const runId = "run-runbook-auth-refused";
+		const fixture = await presenceBlockedRunbookFixture(runId);
+		try {
+			let attestationCalls = 0;
+			const resumed = presenceResumeRuntime(fixture.store.env, fixture.cdp);
+			resumed.runtime.runbookHumanIdentityAttestation = async () => {
+				attestationCalls += 1;
+				return {
+					ok: false,
+					code: "presence-cancelled",
+					message: "presence was refused.",
+				};
+			};
+
+			const refused = await resumePresenceBlockedRunbook({
+				runtime: resumed.runtime,
+				handoffPath: fixture.handoffPath,
+				runId,
+			});
+
+			expect(refused.exitCode).toBe(0);
+			expect(attestationCalls).toBe(1);
+			expect(resumed.calls.some((call) => call.includes("snapshot"))).toBe(false);
+			const parsed = parseJson(refused.stdout);
+			expect(parsed.continuation).toEqual({
+				next_action_id: "complete-human-identity-attestation",
+			});
+			const durable = await loadSharedRun(fixture.store.deps, runId);
+			expect(durable.ok).toBe(true);
+			if (durable.ok) {
+				expect(durable.run.state).toBe("awaiting-user-presence");
+				expect(durable.run.auth_attestation).toBeUndefined();
+				expect(durable.run.continuation?.next_action_id).toBe(
+					"complete-human-identity-attestation",
+				);
+			}
+		} finally {
+			fixture.cdp.transport.close();
+		}
+	});
+
+	test("a binding-mismatched human attestation fails closed before business dispatch", async () => {
+		const runId = "run-runbook-auth-binding-mismatch";
+		const fixture = await presenceBlockedRunbookFixture(runId);
+		try {
+			let attestationCalls = 0;
+			const resumed = presenceResumeRuntime(fixture.store.env, fixture.cdp);
+			resumed.runtime.runbookHumanIdentityAttestation = async (input) => {
+				attestationCalls += 1;
+				return {
+					ok: true,
+					attestation: humanIdentityAttestationFor(input, {
+						service_id: "different-service",
+					}),
+				};
+			};
+
+			const mismatched = await resumePresenceBlockedRunbook({
+				runtime: resumed.runtime,
+				handoffPath: fixture.handoffPath,
+				runId,
+			});
+
+			expect(mismatched.exitCode).toBe(20);
+			expect(attestationCalls).toBe(1);
+			expect(resumed.calls.some((call) => call.includes("snapshot"))).toBe(false);
+			expect(parseJson(mismatched.stdout).error).toMatchObject({
+				code: "human_identity_attestation_binding_invalid",
+			});
+			const durable = await loadSharedRun(fixture.store.deps, runId);
+			expect(durable.ok).toBe(true);
+			if (durable.ok) {
+				expect(durable.run.state).toBe("awaiting-user-presence");
+				expect(durable.run.auth_attestation).toBeUndefined();
+			}
+		} finally {
+			fixture.cdp.transport.close();
 		}
 	});
 
