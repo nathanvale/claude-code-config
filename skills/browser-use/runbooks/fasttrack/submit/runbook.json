@@ -178,7 +178,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-verify-submitted",
-      "expected_digest": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
+      "expected_digest": "d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150",
       "inputs": {
         "week_start": "{{timesheet_submission.period_start}}",
         "week_end": "{{timesheet_submission.period_end}}"

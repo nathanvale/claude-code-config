@@ -144,7 +144,7 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
  * conservative mutation audit until reviewed and represented here again.
  */
 const FASTTRACK_VERIFY_SUBMITTED_DIGEST =
-	"892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916";
+	"d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150";
 
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the

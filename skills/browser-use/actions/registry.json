@@ -1334,11 +1334,11 @@
       ]
     },
     {
-      "asset_path": "assets/892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916.js",
+      "asset_path": "assets/d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150.js",
       "record": {
         "action_id": "fasttrack-verify-submitted",
-        "asset_id": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
-        "expected_digest": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
+        "asset_id": "d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150",
+        "expected_digest": "d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150",
         "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
         "effect_class": "read",
         "audited_capabilities": [
@@ -1440,7 +1440,10 @@
         },
         "result_sensitivity": "low",
         "source_provenance": "authored:fasttrack-verify-submitted",
-        "promotion_receipt": {
+        "promotion_receipt": null
+      },
+      "promotion_history": [
+        {
           "action_id": "fasttrack-verify-submitted",
           "approval_reference": "fasttrack-verify-submitted-20260804",
           "approved_digest": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
@@ -1464,7 +1467,7 @@
           "source_commit": "22253b00925407668f7d9a54b87150accedd6afc",
           "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
         }
-      }
+      ]
     }
   ]
 }

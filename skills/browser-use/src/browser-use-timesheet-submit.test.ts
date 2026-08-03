@@ -8,9 +8,17 @@ import {
 } from "./browser-use-runbook-actions";
 
 const DIGEST = "8399adac343c38ef70738370781330137e1405320091fcf374210ff6b51f9174";
-const VERIFY_DIGEST = "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916";
+const VERIFY_DIGEST = "d95770ac822c103de6791f22c026edf79143c4830a1fb1c7c165eed102228150";
 const ACTION_PATH = join(import.meta.dir, "..", "actions", "assets", `${DIGEST}.js`);
 const REGISTRY_PATH = join(import.meta.dir, "..", "actions", "registry.json");
+const SUBMIT_RUNBOOK_PATH = join(
+	import.meta.dir,
+	"..",
+	"runbooks",
+	"fasttrack",
+	"submit",
+	"runbook.json",
+);
 
 let actionSource = "";
 
@@ -264,9 +272,13 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		});
 	});
 
-	test("verify-submitted is exact, promoted, and mechanically read-only", async () => {
+	test("verify-submitted is exact, unpromoted, and mechanically read-only", async () => {
 		const bytes = await readFile(
 			join(import.meta.dir, "..", "actions", "assets", `${VERIFY_DIGEST}.js`),
+			"utf8",
+		);
+		const authoredBytes = await readFile(
+			join(import.meta.dir, "..", "actions", "fasttrack", "verify-submitted.js"),
 			"utf8",
 		);
 		const registry = JSON.parse(await readFile(REGISTRY_PATH, "utf8")) as {
@@ -284,14 +296,20 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		)?.record;
 
 		expect(actionAssetDigest(bytes)).toBe(VERIFY_DIGEST);
+		expect(bytes).toBe(authoredBytes);
 		expect(auditActionEffectClass(bytes)).toBe("read");
 		expect(record).toMatchObject({
 			expected_digest: VERIFY_DIGEST,
 			effect_class: "read",
-			promotion_receipt: {
-				disposition: "approved",
-				approved_digest: VERIFY_DIGEST,
-			},
+			promotion_receipt: null,
 		});
+		const runbook = JSON.parse(await readFile(SUBMIT_RUNBOOK_PATH, "utf8")) as {
+			steps: Array<{ action_id?: string; expected_digest?: string }>;
+		};
+		expect(
+			runbook.steps.find(
+				(step) => step.action_id === "fasttrack-verify-submitted",
+			)?.expected_digest,
+		).toBe(VERIFY_DIGEST);
 	});
 });
