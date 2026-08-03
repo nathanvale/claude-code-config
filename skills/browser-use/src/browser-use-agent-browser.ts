@@ -495,10 +495,12 @@ function actionIntegrityIsValid(
 function reviewedActionPayload(
 	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>,
 ): string {
-	return [
-		`const action = (${step.script});`,
-		`await action({ inputs: ${JSON.stringify(step.inputs)} });`,
-	].join("\n");
+	// Emit a single async-IIFE EXPRESSION, not a top-level `await` statement: the
+	// native `eval` harness evaluates the payload as one expression and awaits the
+	// returned promise. A bare `await action(...)` is top-level await, which the
+	// evaluation context rejects with `SyntaxError: await is only valid in async
+	// functions`, failing every async reviewed action before it runs.
+	return `(async () => { const action = (${step.script}); return await action({ inputs: ${JSON.stringify(step.inputs)} }); })()`;
 }
 
 type AgentBrowserCommandContext = Pick<
