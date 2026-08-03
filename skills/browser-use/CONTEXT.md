@@ -75,28 +75,24 @@ A code-owned name for the outcome class a browser request wants (owner: `skills/
 _Avoid_: task type guess, adapter name, freeform intent string, capability claim
 
 **Browser Adapter**:
-Within `browser-use`, a consumer of a verified attachment: a mechanism `browser-use` operates against a proven browser once browser-connect has attached it — `chrome-devtools-mcp`, `agent-browser`, or `playwright-cdp` (keyed on the envelope's `attachment.adapter_id` verbatim; every live invocation derives its binary and endpoint from the Verified Handoff Envelope, never from user-level mcporter config). Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge, and they never find Chrome themselves. `puppeteer-core` is deterministic replay detail, not public adapter name. The canonical environment-agnostic definition (a tool that attaches to a proven browser environment via a declared route) is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
-_Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter
+Within `browser-use`, the native tool surface selected after browser-connect returns a Verified Handoff Envelope. The Browser Adapter owns target discovery, tab and session continuity, navigation, actions, snapshots, screenshots, evaluation, debug output, and adapter-specific recovery. The LLM reads and invokes that native surface; Browser Use does not translate it. Browser Adapters do not own authenticated browser state, browser entry, policy, authority, or durable browser knowledge, and they never find Chrome themselves. The canonical environment-agnostic definition is owned by `runtime/browser-connect/CONTEXT.md`; this entry is the `browser-use` consumer view of it.
+_Avoid_: Browser Use executor, command mapping, cold adapter, isolated adapter, playback mode, front door, browser entry point, browser owner, memory owner, self-discovering adapter
 
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure. It is the failure-direction mirror of browser-connect's success-direction **Verified Handoff Envelope** (a proven connection handed forward to a consumer): the Browser Entry Handoff hands an *unready* state back; the Verified Handoff Envelope hands a *proven* connection forward. Both names live; do not conflate them.
 _Avoid_: Verified Handoff Envelope, connection success, CLI runtime failure, self-repair, direct browser launch, adapter fallback, operator stop
 
-### Architecture patterns (pressure-earned)
+### Architecture boundary
 
-Pattern names refereed against prototype + decision evidence; see `docs/decisions/2026-06-13-001-gof-pattern-naming-decision-log.md` for the verdicts. `operate` is a live command family and Adapter has live footing; the full Browser Facade action surface and the Differential Oracle are refereed-but-unbuilt target vocabulary (proven only in `src/prototype-playwright-vocab-map/`).
+ADR 0031 owns this boundary. Earlier Browser Facade and per-lane GoF Adapter vocabulary is retired.
 
-**Browser Facade**:
-The `operate` action surface that hides which Browser Adapter ran. It is a GoF Facade for the action path only — callers never name an engine. It does NOT name the divergence-surfacing layer; the Differential Oracle is its deliberate opposite. A wider `observe` / `verify` surface is target vocabulary, unbuilt: `observe` has no command surface and `verify` lives only as `migration verify`, never a Facade verb.
-_Avoid_: facade-as-whole-product, universal browser API, the facade hides divergence
+**Adapter-Native Delegation**:
+The Browser Use execution boundary: prose interprets Task Intent and the LLM drives the selected Browser Adapter through its native help or tool schema after verified attachment. Browser Use owns intent, routing policy, authority, and the bounded outcome. Browser-connect owns verified attachment. The adapter owns every browser mechanic, including finding and switching tabs, navigation, clicks and fills, snapshots, screenshots, evaluation, findings, session continuity, and adapter-specific recovery. Browser Use never copies command names, argv, response parsing, refs, page IDs, tab indexes, session rules, action postconditions, or retries.
+_Avoid_: Browser Facade, universal browser API, per-lane native executor, adapter command map, normalized action vocabulary
 
 **Differential Oracle** (target vocabulary, unbuilt):
 A mechanical Set-diff over N independent Browser Adapters observing one Warm Chrome, producing consensus / confidence / quorum. It is **N-version programming** (independent re-derivations voted in code), not a Facade — its value is to SURFACE per-engine divergence, never hide it. The LLM consumes its verdict; it does not produce it. Proven in `src/prototype-playwright-vocab-map/` only; live adapters run single-engine per lane, no N-adapter fan-out.
 _Avoid_: facade, LLM oracle, model judgment, single-engine check, consensus engine
-
-**Adapter (pattern sense)**:
-Each Browser Adapter is a GoF Adapter — the per-lane native executors (`browser-use-chrome-task.ts`, `browser-use-agent-browser.ts`, `browser-use-playwright-task.ts`) plus the `browser-use-adapter-model.ts` lane table convert each engine's native vocabulary and dispatch to the Browser Facade contract. Fully pressure-earned: delete the mapping and N collapses to 1.
-_Avoid_: thin wrapper, passthrough, shim
 
 ### Durable browser knowledge
 

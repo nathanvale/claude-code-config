@@ -86,7 +86,7 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   facade contract.
 - `src/model.ts`: contract id, schema version, command ids, exit code `20`,
   runtime-action ids, the `no_adapter_fallback` constraint id, and the closed
-  check reason-detail union.
+  check and repair reason-detail unions plus repair mutation ids.
 - `src/command-contract.ts`: facade contract entries per command, flags,
   exit-code meanings, result contract, action affordances, preview notes,
   Command Discovery Tree projection.
@@ -108,7 +108,8 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   refusal, bounded readiness poll, and the own-child race policy.
 - `src/repair.ts`: repair lifecycle — foreign-listener refusal (R11), profile
   dir creation, ownership-gated chmod, diagnosed DevToolsActivePort hygiene
-  with the never-follow-symlink guard, and the mutation pin.
+  with the never-follow-symlink guard, profile-policy inspection and mutation,
+  and emission of model-owned repair reasons and mutation ids.
 - `src/cli.ts`: argv parsing, dispatch, diagnostics configuration and the
   R13 redaction chokepoints, station envelope emission, error normalization,
   and runtime-action guidance.

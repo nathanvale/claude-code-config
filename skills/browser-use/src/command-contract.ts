@@ -472,6 +472,8 @@ export const BROWSER_USE_AUTH_SETUP_SUBCOMMANDS = [
 	"install-token",
 	"remove-token",
 	"status",
+	"doctor",
+	"reload",
 ] as const;
 export const BROWSER_USE_AUTH_SUBCOMMANDS = [
 	...BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
@@ -602,7 +604,9 @@ export type BrowserUseCommand =
 	| "auth-request-binding-selection-grant"
 	| "auth-install-token"
 	| "auth-remove-token"
-	| "auth-status";
+	| "auth-status"
+	| "auth-doctor"
+	| "auth-reload";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -1786,10 +1790,32 @@ export const browserUseAuthRepairActions = [
 		sideEffects: ["check"],
 	},
 	{
+		id: "build-token-supervisor",
+		summary:
+			"Build the local auth supervisor from this worktree, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "install-op-cli",
+		summary: "Install the supported OP CLI, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "authenticate-op-session",
+		summary: "Unlock the operator OP session, then retry the reload.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-config-root",
+		summary:
+			"Repair the browser-use configuration root, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
 		id: "create-credential-clean-profile",
 		summary:
 			"Ask the operator to create a fresh dedicated Agent Chrome profile using the documented clean policy.",
-		sideEffects: ["check"],
+		sideEffects: ["check", "write"],
 	},
 	{
 		id: "revoke-service-account-token-remotely",
@@ -1842,6 +1868,11 @@ const browserUseAuthFlags = {
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseAuthInstallFlags = {
+	"--from": {
+		type: "string",
+		description:
+			"Fetch from one OP item field reference and record that source only after installation succeeds.",
+	},
 	"--stdin": {
 		type: "boolean",
 		description:
@@ -1851,6 +1882,15 @@ const browserUseAuthInstallFlags = {
 		type: "boolean",
 		description:
 			"Validate a staged token, then atomically replace the existing token only on success.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthDoctorFlags = {
+	"--fix": {
+		type: "boolean",
+		description:
+			"Attempt owner-delegated repairs for red gates, then re-check every gate; add profile to limit repair to profile policy.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -2654,7 +2694,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"Install or replace the environment-lane service-account token through native hidden input or standard input; token argv and environment values are rejected.",
 			usage: [
-				"auth install-token [--stdin] [--replace] [--caller <label>] [--json|--plain]",
+				"auth install-token [--from <reference>|--stdin] [--replace] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",
@@ -2715,6 +2755,54 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-doctor": {
+			script: "browser-use",
+			summary:
+				"Render the five environment-lane admission gates and their operator repair ownership.",
+			usage: [
+				"auth doctor [--fix [profile]] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["check", "normal"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthDoctorFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-reload": {
+			script: "browser-use",
+			summary:
+				"Refresh the installed environment-lane token from its admitted source without exposing token bytes.",
+			usage: ["auth reload [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Replacement validates before atomically changing the fixed custody file; failed validation preserves the prior value.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
 			envVars: browserUsePlatformStoreEnvVars,
 			resultContract: browserUseAuthReadinessResultContract,
 			actionAffordances: {

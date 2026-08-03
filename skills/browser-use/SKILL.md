@@ -6,18 +6,28 @@ role: tool-workflow
 
 # Browser Use
 
-One public front door: the `browser-use` CLI orchestrates browser tasks through
-warm Agent Chrome — task routing, automatic connection attach, runs, runbooks,
-recovery. Its help and bundled guide are version-matched and self-sufficient:
-read them at runtime instead of prose here.
+One public workflow for browser tasks through warm Agent Chrome. Code owns
+intent, authority, routing, runbooks, workflow recovery, and outcomes. The LLM
+drives the selected adapter through its native tool surface after verified
+attachment.
 
 ## Start
 
-- `browser-use guide` — copy-paste core loop (`task list` → `task run --intent <id>` → `run status`).
+- Code-owned task: `browser-use guide` — copy-paste core loop (`task list` →
+  `task run --intent <id>` → `run status`).
+- Open-ended task: read `browser-connect dashboard --json`, select a
+  connectable adapter from its evidence, then run
+  `browser-connect connect <adapter> --json`.
+- Read the selected adapter's native help or tool schema. Use that surface to
+  perform and prove the requested outcome. Return only bounded outcome and
+  artifact references through Browser Use.
+- Never copy adapter commands, response parsing, tab or page mechanics,
+  navigation, actions, snapshots, screenshots, findings, or retries into this
+  skill or Browser Use runtime. Owner: `docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md`.
 - `browser-use --help` — all command families; every leaf has `--help`.
-- Connection attaches automatically on `task run` / `runbook run`. Envelopes and
-  repair paths stay owned by `runtime/browser-connect`; driving its CLI directly
-  is advanced, never the everyday path.
+- Connection attaches automatically on `task run` / `runbook run`. Open-ended
+  native delegation uses browser-connect directly because it owns attachment.
+  Envelopes and repair paths stay owned by `runtime/browser-connect`.
 - For Runbook or Reviewed Action authoring and activation, read
   `../../docs/runbooks/authoring-runbooks.md` before mutation.
 - For browser-use project work, read `references/coding-task-tracker.md` before

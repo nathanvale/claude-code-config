@@ -11,6 +11,7 @@
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -135,9 +136,15 @@ import {
 	truncateText,
 } from "./browser-use-core";
 import {
+	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
+	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
+	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
 	createDefaultBrowserUseRuntime,
 	createProductionBrowserUseRuntime,
+	isAuthTokenSourceReference,
+	readBoundedAuthChildOutput,
+	resolveWarmChromeProfilePath,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
@@ -310,6 +317,7 @@ export async function runBrowserUseCli(
 		runtime?: BrowserUseRuntime;
 		stdout?: CliWriter;
 		stderr?: CliWriter;
+		authDoctor?: AuthDoctorOrchestrationDeps;
 	} = {},
 ): Promise<number> {
 	const runtime =
@@ -345,8 +353,20 @@ export async function runBrowserUseCli(
 
 	const outputMode = errorOutputMode(diagnosticArgv.argv);
 	let parsed: ParsedBrowserUseCommand;
+	let fixScope: AuthDoctorFixScope;
 	try {
-		parsed = parseBrowserUseArgv(diagnosticArgv.argv);
+		const fixRequest = extractAuthDoctorFixRequest(diagnosticArgv.argv);
+		fixScope = fixRequest.fixScope;
+		parsed = parseBrowserUseArgv(fixRequest.argv);
+		if (fixRequest.fixScope !== undefined && parsed.kind === "command") {
+			parsed = {
+				...parsed,
+				flagValues: {
+					...parsed.flagValues,
+					"--fix": "",
+				},
+			};
+		}
 	} catch (error) {
 		return emitWithDiagnostics({
 			categoryRoot: "browser-use.cli",
@@ -415,6 +435,10 @@ export async function runBrowserUseCli(
 					runIdExplicit,
 					diagnosticVerbose: diagnosticArgv.options.verbose,
 					durationMs,
+					...(fixScope === undefined ? {} : { fixScope }),
+					...(options.authDoctor === undefined
+						? {}
+						: { authDoctor: options.authDoctor }),
 				});
 			} catch (error) {
 				return emitCliError({
@@ -430,6 +454,40 @@ export async function runBrowserUseCli(
 	} finally {
 		resetCliDiagnostics();
 	}
+}
+
+type AuthDoctorFixScope = "all" | "profile" | undefined;
+
+function extractAuthDoctorFixRequest(argv: readonly string[]): {
+	argv: readonly string[];
+	fixScope: AuthDoctorFixScope;
+} {
+	if (argv[0] !== "auth" || argv[1] !== "doctor") {
+		return { argv, fixScope: undefined };
+	}
+	const stripped = [...argv];
+	const fixIndexes: number[] = [];
+	let inlineFix = false;
+	for (let index = 2; index < stripped.length; index += 1) {
+		if (stripped[index] === "--caller") {
+			index += 1;
+			continue;
+		}
+		if (stripped[index] === "--fix") fixIndexes.push(index);
+		if (stripped[index]?.startsWith("--fix=") === true) inlineFix = true;
+	}
+	if (fixIndexes.length === 0) {
+		if (inlineFix) {
+			throw usageError("--fix does not take a value; use optional profile after it.");
+		}
+		return { argv, fixScope: undefined };
+	}
+	if (fixIndexes.length !== 1) throw usageError("--fix may be supplied once.");
+	const index = fixIndexes[0] ?? -1;
+	stripped.splice(index, 1);
+	const profileOnly = stripped[index] === "profile";
+	if (profileOnly) stripped.splice(index, 1);
+	return { argv: stripped, fixScope: profileOnly ? "profile" : "all" };
 }
 
 // One family -> result kind mapping for the mock/not-implemented envelopes.
@@ -478,6 +536,8 @@ async function executeCommand(input: {
 	runIdExplicit: boolean;
 	diagnosticVerbose: boolean;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	// Version-matched bundled guidance (D3): a pure render of the guide content
@@ -692,11 +752,16 @@ async function executeCommand(input: {
 	}
 
 	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
-	if (parsed.family === "auth" && !parsed.dryRun) {
+	if (
+		parsed.family === "auth" &&
+		!parsed.dryRun
+	) {
 		if (
 			parsed.subcommand === "install-token" ||
 			parsed.subcommand === "remove-token" ||
-			parsed.subcommand === "status"
+			parsed.subcommand === "status" ||
+			parsed.subcommand === "doctor" ||
+			parsed.subcommand === "reload"
 		) {
 			return runAuthTokenLifecycle({
 				parsed,
@@ -706,6 +771,12 @@ async function executeCommand(input: {
 				runId: input.runId,
 				caller,
 				durationMs: input.durationMs,
+				...(input.fixScope === undefined
+					? {}
+					: { fixScope: input.fixScope }),
+				...(input.authDoctor === undefined
+					? {}
+					: { authDoctor: input.authDoctor }),
 			});
 		}
 		return runAuthReadiness({
@@ -1233,6 +1304,8 @@ type PlatformCommandInput = {
 	runId: string;
 	caller: BrowserUseCallerMetadata;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 };
 
 const platformStoreActions = [
@@ -5838,14 +5911,6 @@ type AuthReadinessEvaluation = {
 	continuationId: AuthActionId;
 };
 
-const AUTH_TOKEN_FORBIDDEN_ENV_KEYS = [
-	"OP_SERVICE_ACCOUNT_TOKEN",
-	"OP_CONNECT_HOST",
-	"OP_CONNECT_TOKEN",
-	"BROWSER_USE_TOKEN",
-	"BROWSER_USE_OP_TOKEN",
-] as const;
-
 const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
 	"ready",
 	"installed",
@@ -5856,7 +5921,7 @@ const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
 	"cleanup-required",
 	"blocked",
 ]);
-const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
+export const AUTH_TOKEN_SUPERVISOR_CAUSES = [
 	"invalid-arguments",
 	"unsafe-ancestry",
 	"unsafe-config-root",
@@ -5890,6 +5955,7 @@ const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
 	"op-staging-failed",
 	"op-version-invalid",
 	"op-version-unsupported",
+	"op-session-unavailable",
 	"token-invalid",
 	"timeout",
 	"output-too-large",
@@ -5901,14 +5967,237 @@ const AUTH_TOKEN_SUPERVISOR_CAUSES = new Set([
 	"validator-protocol-invalid",
 	"profile-policy-unproven",
 	"profile-policy-unsafe",
+	"source-file-unsafe",
+	"source-fetch-failed",
+	"source-missing",
+	"source-reference-invalid",
+	"source-write-failed",
 	"token-supervisor-unavailable",
 	"token-supervisor-output-too-large",
-]);
+] as const;
+export type AuthTokenSupervisorCause =
+	(typeof AUTH_TOKEN_SUPERVISOR_CAUSES)[number];
+const AUTH_TOKEN_SUPERVISOR_CAUSE_SET = new Set<string>(
+	AUTH_TOKEN_SUPERVISOR_CAUSES,
+);
+
+export const AUTH_TOKEN_GATE_ORDER = [
+	"token_file",
+	"op",
+	"token",
+	"vault_scope",
+	"profile_policy",
+] as const;
+export type AuthTokenCustodyGate = (typeof AUTH_TOKEN_GATE_ORDER)[number];
+export type AuthTokenDoctorGate = "runtime" | AuthTokenCustodyGate;
+export type AuthTokenRepairPosture = "auto-fixable" | "manual-only";
+export type AuthTokenRepairPath = {
+	repairCommand: string;
+	posture: AuthTokenRepairPosture;
+	successSignal: string;
+	stopCondition: string;
+};
+
+const BUILD_TOKEN_SUPERVISOR_REPAIR = {
+	repairCommand:
+		"bun --cwd runtime/browser-use-environment-auth run build:release",
+	posture: "manual-only",
+	successSignal:
+		"The runtime gate can start the supervisor built from this worktree.",
+	stopCondition:
+		"Stop if the build fails or the release artifact does not belong to this worktree.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSTALL_OP_CLI_REPAIR = {
+	repairCommand:
+		'brew bundle --file "$HOME/code/dotfiles/config/brew/Brewfile"',
+	posture: "manual-only",
+	successSignal: "The runtime gate resolves an approved executable OP CLI path.",
+	stopCondition:
+		"Stop if the resolved OP CLI path remains missing, unsafe, or untrusted.",
+} as const satisfies AuthTokenRepairPath;
+
+const AUTHENTICATE_OP_SESSION = {
+	repairCommand: "op signin",
+	posture: "manual-only",
+	successSignal: "The operator OP session passes the bounded identity check.",
+	stopCondition: "Stop if the operator session remains locked or unavailable.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_CONFIG_ROOT = {
+	repairCommand: "browser-use auth install-token",
+	posture: "manual-only",
+	successSignal:
+		"The browser-use configuration root resolves as an owner-only real directory.",
+	stopCondition:
+		"Stop if the configuration root ancestry remains missing, linked, or unsafe.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSPECT_AUTH_STATUS = {
+	repairCommand: "browser-use auth status --json",
+	posture: "manual-only",
+	successSignal: "The status envelope reports a known cause and typed action.",
+	stopCondition:
+		"Stop if status remains invalid or does not report a code-owned cause.",
+} as const satisfies AuthTokenRepairPath;
+
+const REINSTALL_TOKEN = {
+	repairCommand: "browser-use auth install-token --replace",
+	posture: "manual-only",
+	successSignal: "The token file gate reports ready after atomic replacement.",
+	stopCondition:
+		"Stop if native validation fails or the prior admitted token cannot be preserved.",
+} as const satisfies AuthTokenRepairPath;
+
+const RELOAD_TOKEN = {
+	repairCommand: "browser-use auth reload",
+	posture: "auto-fixable",
+	successSignal: "The token and token file gates both report ready.",
+	stopCondition:
+		"Stop if the admitted source is absent, invalid, interactive, or still rejected.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_VAULT_GRANT = {
+	repairCommand: "browser-use auth repair-vault-grant",
+	posture: "manual-only",
+	successSignal: "The vault scope gate reports exactly one visible vault.",
+	stopCondition:
+		"Stop if the grant still exposes zero or multiple vaults after re-proof.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_PROFILE_POLICY = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "auto-fixable",
+	successSignal: "The profile policy gate reports ready after owner verification.",
+	stopCondition:
+		"Stop if the profile owner refuses the path, live state, or saved-login state.",
+} as const satisfies AuthTokenRepairPath;
+
+const RECREATE_UNSAFE_PROFILE = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "manual-only",
+	successSignal: "A fresh dedicated profile passes the profile policy gate.",
+	stopCondition:
+		"Stop before deleting, scrubbing, or rewriting an unsafe existing profile.",
+} as const satisfies AuthTokenRepairPath;
+
+export const AUTH_TOKEN_REPAIR_PATHS = {
+	"invalid-arguments": INSPECT_AUTH_STATUS,
+	"unsafe-ancestry": REINSTALL_TOKEN,
+	"unsafe-config-root": REPAIR_CONFIG_ROOT,
+	"unsafe-custody-directory": REINSTALL_TOKEN,
+	"backup-exclusion-unproven": REINSTALL_TOKEN,
+	"sync-exclusion-unproven": REINSTALL_TOKEN,
+	"token-missing": RELOAD_TOKEN,
+	"token-already-installed": INSPECT_AUTH_STATUS,
+	"token-unsafe": REINSTALL_TOKEN,
+	"staging-residue": REINSTALL_TOKEN,
+	"removal-residue": REINSTALL_TOKEN,
+	"input-cancelled": REINSTALL_TOKEN,
+	"input-invalid": REINSTALL_TOKEN,
+	"write-failed": REINSTALL_TOKEN,
+	"invalid-service-account": RELOAD_TOKEN,
+	"invalid-vault-scope": REPAIR_VAULT_GRANT,
+	"validation-failed": RELOAD_TOKEN,
+	"validation-timeout": RELOAD_TOKEN,
+	"validation-unavailable": INSTALL_OP_CLI_REPAIR,
+	"path-identity-changed": REINSTALL_TOKEN,
+	"atomic-replace-failed": REINSTALL_TOKEN,
+	"cleanup-failed": REINSTALL_TOKEN,
+	"parent-sync-failed": REINSTALL_TOKEN,
+	"core-dump-disable-failed": REINSTALL_TOKEN,
+	"op-path-not-absolute": INSTALL_OP_CLI_REPAIR,
+	"op-path-unapproved": INSTALL_OP_CLI_REPAIR,
+	"op-path-unavailable": INSTALL_OP_CLI_REPAIR,
+	"op-path-unsafe": INSTALL_OP_CLI_REPAIR,
+	"op-path-not-executable": INSTALL_OP_CLI_REPAIR,
+	"op-binary-untrusted": INSTALL_OP_CLI_REPAIR,
+	"op-staging-failed": INSTALL_OP_CLI_REPAIR,
+	"op-version-invalid": INSTALL_OP_CLI_REPAIR,
+	"op-version-unsupported": INSTALL_OP_CLI_REPAIR,
+	"op-session-unavailable": AUTHENTICATE_OP_SESSION,
+	"token-invalid": RELOAD_TOKEN,
+	timeout: RELOAD_TOKEN,
+	"output-too-large": RELOAD_TOKEN,
+	"process-failed": RELOAD_TOKEN,
+	"process-signalled": RELOAD_TOKEN,
+	"io-failure": RELOAD_TOKEN,
+	"output-shape-invalid": INSTALL_OP_CLI_REPAIR,
+	"item-missing": REINSTALL_TOKEN,
+	"validator-protocol-invalid": INSTALL_OP_CLI_REPAIR,
+	"profile-policy-unproven": REPAIR_PROFILE_POLICY,
+	"profile-policy-unsafe": RECREATE_UNSAFE_PROFILE,
+	"source-file-unsafe": REINSTALL_TOKEN,
+	"source-fetch-failed": REINSTALL_TOKEN,
+	"source-missing": REINSTALL_TOKEN,
+	"source-reference-invalid": REINSTALL_TOKEN,
+	"source-write-failed": REINSTALL_TOKEN,
+	"token-supervisor-unavailable": BUILD_TOKEN_SUPERVISOR_REPAIR,
+	"token-supervisor-output-too-large": BUILD_TOKEN_SUPERVISOR_REPAIR,
+} as const satisfies Record<AuthTokenSupervisorCause, AuthTokenRepairPath>;
+
+const AUTH_TOKEN_EXPLAIN_PATHS = {
+	runtime: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The runtime gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped runtime cause before attempting repair.",
+	},
+	token_file: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token file gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token file cause before attempting repair.",
+	},
+	op: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The OP gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped OP cause before attempting repair.",
+	},
+	token: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token cause before attempting repair.",
+	},
+	vault_scope: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The vault scope gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped vault scope cause before attempting repair.",
+	},
+	profile_policy: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The profile policy gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped profile policy cause before attempting repair.",
+	},
+} as const satisfies Record<AuthTokenDoctorGate, AuthTokenRepairPath>;
+
+export function authTokenRepairPathFor(
+	cause: string,
+	gate: AuthTokenDoctorGate,
+): AuthTokenRepairPath {
+	return Object.hasOwn(AUTH_TOKEN_REPAIR_PATHS, cause)
+		? AUTH_TOKEN_REPAIR_PATHS[cause as AuthTokenSupervisorCause]
+		: AUTH_TOKEN_EXPLAIN_PATHS[gate];
+}
 const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
 	"auth-status",
 	"rerun-confidential-command",
 	"repair-token-custody",
 	"repair-op-admission",
+	"build-token-supervisor",
+	"install-op-cli",
+	"authenticate-op-session",
+	"repair-config-root",
 	"repair-vault-grant",
 	"create-credential-clean-profile",
 	"revoke-service-account-token-remotely",
@@ -5929,6 +6218,351 @@ type AuthTokenSupervisorProjection = {
 	detail?: Record<string, unknown>;
 };
 
+type AuthDoctorOwnerSpawnInput = {
+	argv: readonly string[];
+	env: Record<string, string | undefined>;
+	timeoutMs: number;
+};
+
+type AuthDoctorOwnerResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	timedOut: boolean;
+	failureReason?: "owner_output_too_large" | "owner_spawn_failed";
+};
+
+type AuthDoctorOrchestrationDeps = {
+	spawnOwner?: (
+		input: AuthDoctorOwnerSpawnInput,
+	) => Promise<AuthDoctorOwnerResult>;
+	warmChromeEntrypoint?: string | null;
+};
+
+const AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS = 10_000;
+const AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS = 10_000;
+
+async function spawnAuthDoctorOwner(
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	const child = Bun.spawn([...input.argv], {
+		env: input.env,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: input.timeoutMs,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		readBoundedAuthChildOutput(child.stdout, child),
+		readBoundedAuthChildOutput(child.stderr, child),
+		child.exited,
+	]);
+	if (!stdout.ok || !stderr.ok) {
+		return {
+			exitCode,
+			stdout: "",
+			stderr: "",
+			timedOut: child.signalCode !== null,
+			failureReason: "owner_output_too_large",
+		};
+	}
+	return {
+		exitCode,
+		stdout: stdout.text,
+		stderr: stderr.text,
+		// SIGTERM from timeout or external kill; both surface as owner_timeout.
+		timedOut: child.signalCode !== null,
+	};
+}
+
+export const __authDoctorOwnerForTest = {
+	spawn: spawnAuthDoctorOwner,
+} as const;
+
+function authDoctorOwnerEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const allowed = [
+		"HOME",
+		"PATH",
+		"LANG",
+		"LC_ALL",
+		"TMPDIR",
+		"XDG_CONFIG_HOME",
+		"WARM_CHROME_PROFILE_DIR",
+		"OP_ACCOUNT",
+	] as const;
+	const childEnv: Record<string, string | undefined> = {
+		PATH: env.PATH ?? "/usr/bin:/bin",
+	};
+	for (const key of allowed) {
+		if (env[key] !== undefined) childEnv[key] = env[key];
+	}
+	for (const [key, value] of Object.entries(env)) {
+		if (key.startsWith("OP_SESSION_") && value !== undefined) {
+			childEnv[key] = value;
+		}
+	}
+	for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) delete childEnv[key];
+	return childEnv;
+}
+
+function defaultWarmChromeEntrypoint(): string | undefined {
+	const entrypoint = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+		"..",
+		"runtime",
+		"warm-chrome",
+		"src",
+		"cli.ts",
+	);
+	return existsSync(entrypoint) ? entrypoint : undefined;
+}
+
+function authDoctorCheck(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): Record<string, unknown> | undefined {
+	return recordField(recordField(projection.detail?.checks)?.[gate]);
+}
+
+function authDoctorGateIsRed(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): boolean {
+	return stringField(authDoctorCheck(projection, gate)?.status) !== "ready";
+}
+
+function authDoctorGateCause(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): string {
+	return stringField(authDoctorCheck(projection, gate)?.cause) ?? "unknown";
+}
+
+function authDoctorOwnerFailure(result: AuthDoctorOwnerResult): string {
+	if (result.failureReason !== undefined) return result.failureReason;
+	if (result.timedOut) return "owner_timeout";
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const code = stringField(recordField(envelope?.error)?.code);
+		if (code !== undefined) return code;
+	} catch {
+		// Owner output is only interpreted when it is a structured envelope.
+	}
+	return `owner_exit_${result.exitCode}`;
+}
+
+function authDoctorOwnerManualStep(
+	result: AuthDoctorOwnerResult,
+	fallback: string,
+): string {
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const reason = stringField(recordField(envelope?.data)?.reason);
+		const message = stringField(recordField(envelope?.error)?.message);
+		if (reason !== undefined && message !== undefined) {
+			return `reason=${reason}; ${message.replaceAll(/\s+/g, " ").trim()}`;
+		}
+	} catch {
+		// Only a typed owner refusal may replace the fallback repair command.
+	}
+	return fallback;
+}
+
+async function runBoundedAuthDoctorOwner(
+	spawnOwner: NonNullable<AuthDoctorOrchestrationDeps["spawnOwner"]>,
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	try {
+		return await spawnOwner(input);
+	} catch {
+		return {
+			exitCode: RUNTIME_FAILURE_EXIT_CODE,
+			stdout: "",
+			stderr: "",
+			timedOut: false,
+			failureReason: "owner_spawn_failed",
+		};
+	}
+}
+
+async function readAuthDoctorProjection(
+	input: PlatformCommandInput,
+): Promise<AuthTokenSupervisorProjection> {
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? { exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, stdout: "", stderr: "" }
+			: await input.runtime.runAuthTokenSupervisor({ mode: "status" });
+	return (
+		parseAuthTokenSupervisorResult(result.stdout, result.exitCode) ?? {
+			ok: false,
+			state: "blocked",
+			cause: "token-supervisor-unavailable",
+			nextAction: "repair-op-admission",
+		}
+	);
+}
+
+async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
+	const initial = await readAuthDoctorProjection(input);
+	const notes: string[] = [];
+	const spawnOwner = input.authDoctor?.spawnOwner ?? spawnAuthDoctorOwner;
+	const ownerEnv = authDoctorOwnerEnv(input.runtime.env);
+	const browserUseEntrypoint = fileURLToPath(import.meta.url);
+	const profileOnly = input.fixScope === "profile";
+	let vaultReproofAttempted = false;
+
+	if (recordField(initial.detail?.checks) === undefined) {
+		const cause = initial.cause ?? "unknown";
+		notes.push(
+			`fix runtime: refused; manual: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+	} else {
+		let tokenDependencyBlocked = false;
+		const delegatedCommands = new Set<string>();
+		if (!profileOnly) {
+			for (const gate of ["token_file", "op", "token"] as const) {
+				if (!authDoctorGateIsRed(initial, gate)) continue;
+				const cause = authDoctorGateCause(initial, gate);
+				const repair = authTokenRepairPathFor(cause, gate);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix ${gate}: skipped; manual: ${repair.repairCommand}`,
+					);
+					continue;
+				}
+				if (repair.posture === "manual-only") {
+					notes.push(
+						`fix ${gate}: refused; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+					continue;
+				}
+				if (delegatedCommands.has(repair.repairCommand)) continue;
+				delegatedCommands.add(repair.repairCommand);
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						browserUseEntrypoint,
+						"auth",
+						"reload",
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
+				});
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push(`fix ${gate}: delegated`);
+				} else {
+					notes.push(
+						`fix ${gate}: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+				}
+			}
+
+			if (authDoctorGateIsRed(initial, "vault_scope")) {
+				const repair = authTokenRepairPathFor(
+					authDoctorGateCause(initial, "vault_scope"),
+					"vault_scope",
+				);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix vault_scope: skipped; manual: ${repair.repairCommand}`,
+					);
+				} else {
+					vaultReproofAttempted = true;
+					const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+						argv: [
+							process.execPath,
+							browserUseEntrypoint,
+							"auth",
+							"repair-vault-grant",
+							"--json",
+							"--quiet",
+						],
+						env: ownerEnv,
+						timeoutMs: AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS,
+					});
+					notes.push(
+						result.exitCode === 0 && !result.timedOut
+							? "fix vault_scope: re-proved"
+							: `fix vault_scope: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+				}
+			}
+		}
+
+		if (authDoctorGateIsRed(initial, "profile_policy")) {
+			const cause = authDoctorGateCause(initial, "profile_policy");
+			const repair = authTokenRepairPathFor(cause, "profile_policy");
+			const profilePath = resolveWarmChromeProfilePath(input.runtime.env);
+			const configuredEntrypoint = input.authDoctor?.warmChromeEntrypoint;
+			const warmChromeEntrypoint =
+				configuredEntrypoint === null
+					? undefined
+					: configuredEntrypoint ?? defaultWarmChromeEntrypoint();
+			const manualCommand =
+				profilePath === undefined
+					? repair.repairCommand
+					: `warm-chrome repair --profile-only --profile ${JSON.stringify(profilePath)}`;
+			if (
+				profilePath === undefined ||
+				warmChromeEntrypoint === undefined
+			) {
+				notes.push(`fix profile_policy: refused; manual: ${manualCommand}`);
+			} else {
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						warmChromeEntrypoint,
+						"repair",
+						"--profile-only",
+						"--profile",
+						profilePath,
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS,
+				});
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push("fix profile_policy: delegated");
+				} else {
+					const manualStep = authDoctorOwnerManualStep(result, manualCommand);
+					notes.push(
+						`fix profile_policy: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${manualStep}`,
+					);
+				}
+			}
+		}
+	}
+
+	const finalProjection = await readAuthDoctorProjection(input);
+	if (
+		vaultReproofAttempted &&
+		authDoctorGateIsRed(finalProjection, "vault_scope")
+	) {
+		notes.push(
+			"fix vault_scope: refused; manual: Grant the service account access to exactly one vault in 1Password, then rerun browser-use auth repair-vault-grant",
+		);
+	}
+	if (input.parsed.outputMode === "plain") {
+		if (notes.length > 0) input.stdout.write(`${notes.join("\n")}\n`);
+		input.stdout.write(renderAuthTokenDoctor(finalProjection));
+		return finalProjection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	return emitAuthTokenLifecycleResult(
+		input,
+		finalProjection,
+		"auth_token_supervisor_failed",
+	);
+}
+
 function recordField(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -5936,7 +6570,7 @@ function recordField(value: unknown): Record<string, unknown> | undefined {
 }
 
 function safeAuthTokenCause(value: unknown): string | undefined {
-	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSES.has(value)
+	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSE_SET.has(value)
 		? value
 		: undefined;
 }
@@ -6028,12 +6662,86 @@ function parseAuthTokenSupervisorResult(
 	};
 }
 
+function renderAuthTokenDoctor(
+	projection: AuthTokenSupervisorProjection,
+): string {
+	const lane = recordField(projection.detail?.lane);
+	const checks = recordField(projection.detail?.checks);
+	const lines = [
+		"browser-use auth doctor",
+		`lane: ${stringField(lane?.selected) ?? "unknown"}`,
+		`${"gate".padEnd(16)}${"verdict".padEnd(9)}state`,
+	];
+	let green = 0;
+	let red = 0;
+	let unknown = 0;
+
+	if (checks === undefined) {
+		const cause = projection.cause ?? "unknown";
+		lines.push(
+			`${"runtime".padEnd(16)}${"red".padEnd(9)}${projection.state} cause=${cause}`,
+			`  repair: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+		red += 1;
+		for (const gate of AUTH_TOKEN_GATE_ORDER) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+		}
+		lines.push(`summary: ${red} red, ${unknown} unknown`);
+		return `${lines.join("\n")}\n`;
+	}
+
+	for (const gate of AUTH_TOKEN_GATE_ORDER) {
+		const check = recordField(checks[gate]);
+		const status = stringField(check?.status);
+		if (status === undefined) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+			continue;
+		}
+		const verdict = status === "ready" ? "green" : "red";
+		if (verdict === "green") green += 1;
+		else red += 1;
+		const cause = stringField(check?.cause);
+		const visibleCount = check?.visible_count;
+		lines.push(
+			`${gate.padEnd(16)}${verdict.padEnd(9)}${status}${
+				visibleCount === undefined ? "" : ` visible_count=${visibleCount}`
+			}${cause === undefined ? "" : ` cause=${cause}`}`,
+		);
+		if (verdict === "red") {
+			lines.push(
+				`  repair: ${authTokenRepairPathFor(cause ?? "unknown", gate).repairCommand}`,
+			);
+		}
+	}
+
+	lines.push(
+		unknown === 0
+			? `summary: ${green} green, ${red} red`
+			: `summary: ${green} green, ${red} red, ${unknown} unknown`,
+	);
+	return `${lines.join("\n")}\n`;
+}
+
 function emitAuthTokenLifecycleResult(
 	input: PlatformCommandInput,
 	projection: AuthTokenSupervisorProjection,
-	errorCode: "auth_token_input_rejected" | "auth_token_supervisor_failed",
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
 ): number {
 	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	if (subcommand === "doctor" && input.parsed.outputMode === "plain") {
+		input.stdout.write(renderAuthTokenDoctor(projection));
+		return 0;
+	}
 	const evaluation = {
 		status: projection.state,
 		...(projection.cause === undefined
@@ -6061,7 +6769,7 @@ function emitAuthTokenLifecycleResult(
 		data: {
 			contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 			schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
-			action: subcommand,
+			action: subcommand === "doctor" ? "status" : subcommand,
 			evaluation,
 			caller: input.caller,
 		},
@@ -6084,10 +6792,7 @@ function emitAuthTokenLifecycleResult(
 			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: errorCode,
-				message:
-					errorCode === "auth_token_input_rejected"
-						? "token input through process environment is forbidden; use native hidden input or --stdin."
-						: "native token custody operation was blocked; follow the typed continuation.",
+				message: authTokenLifecycleErrorMessage(errorCode),
 				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
 				...retryabilityForRecoverability("repair_state"),
@@ -6099,9 +6804,119 @@ function emitAuthTokenLifecycleResult(
 	return BINDING_FAIL_CLOSED_EXIT_CODE;
 }
 
+function authTokenLifecycleErrorMessage(
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
+): string {
+	switch (errorCode) {
+		case "auth_token_input_rejected":
+			return "token input through process environment is forbidden; use native hidden input or --stdin.";
+		case "auth_token_source_invalid":
+			return "the source reference is invalid or conflicts with standard input; use one OP item field reference.";
+		case "auth_token_source_auth_required":
+			return "the operator OP session is unavailable; follow the typed continuation before retrying.";
+		case "auth_token_source_missing":
+			return "no recorded source is available and standard input is not interactive; use the manual install step.";
+		case "auth_token_source_unavailable":
+			return "the recorded source could not be fetched; use the manual install step before retrying.";
+		case "auth_token_source_unsafe":
+			return "the recorded source failed owner-only file validation; use the manual install step.";
+		case "auth_token_source_write_failed":
+			return "the token changed but its reload source could not be recorded; repeat the source install after inspecting custody.";
+		case "auth_token_supervisor_failed":
+			return "native token custody operation was blocked; follow the typed continuation.";
+	}
+}
+
+function authProjectionWithSourcePresence(
+	projection: AuthTokenSupervisorProjection,
+	sourcePresent: boolean,
+): AuthTokenSupervisorProjection {
+	return {
+		...projection,
+		detail: {
+			...(projection.detail ?? {}),
+			source_present: sourcePresent,
+		},
+	};
+}
+
+function authTokenLifecycleErrorForProjection(
+	projection: AuthTokenSupervisorProjection | undefined,
+):
+	| "auth_token_source_auth_required"
+	| "auth_token_source_unavailable"
+	| "auth_token_supervisor_failed" {
+	if (projection?.cause === "op-session-unavailable") {
+		return "auth_token_source_auth_required";
+	}
+	if (projection?.cause === "source-fetch-failed") {
+		return "auth_token_source_unavailable";
+	}
+	return "auth_token_supervisor_failed";
+}
+
+function buildNativeSupervisorInput(
+	input: PlatformCommandInput,
+	sourceRef: string | undefined,
+): AuthTokenSupervisorInput {
+	const subcommand = input.parsed.subcommand;
+	if (subcommand === "install-token" || subcommand === "reload") {
+		if (sourceRef !== undefined) {
+			return {
+				mode: "install",
+				input: "source",
+				replace:
+					subcommand === "reload" ||
+					input.parsed.flagValues["--replace"] !== undefined,
+				sourceRef,
+			};
+		}
+		return {
+			mode: "install",
+			input:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--stdin"] === undefined
+					? "prompt"
+					: "stdin",
+			replace:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--replace"] !== undefined,
+		};
+	}
+	if (subcommand === "remove-token") return { mode: "remove" };
+	return { mode: "status" };
+}
+
 async function runAuthTokenLifecycle(
 	input: PlatformCommandInput,
 ): Promise<number> {
+	let sourceRef = stringField(input.parsed.flagValues["--from"]);
+	let sourcePresence: boolean | undefined;
+	if (
+		input.parsed.subcommand === "install-token" &&
+		sourceRef !== undefined &&
+		(!isAuthTokenSourceReference(sourceRef) ||
+			input.parsed.flagValues["--stdin"] !== undefined)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_source_invalid",
+		);
+	}
 	if (
 		AUTH_TOKEN_FORBIDDEN_ENV_KEYS.some(
 			(key) => input.runtime.env[key] !== undefined,
@@ -6118,20 +6933,54 @@ async function runAuthTokenLifecycle(
 			"auth_token_input_rejected",
 		);
 	}
+	if (
+		input.parsed.subcommand === "doctor" &&
+		input.parsed.flagValues["--fix"] !== undefined
+	) {
+		return runAuthDoctorFix(input);
+	}
+	if (input.parsed.subcommand === "reload") {
+		const stored =
+			input.runtime.readAuthTokenSource === undefined
+				? ({ status: "blocked", cause: "source-file-unsafe" } as const)
+				: await input.runtime.readAuthTokenSource();
+		if (stored.status === "blocked") {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: stored.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				stored.cause === "source-reference-invalid"
+					? "auth_token_source_invalid"
+					: "auth_token_source_unsafe",
+			);
+		}
+		if (stored.status === "missing") {
+			sourcePresence = false;
+			if (input.runtime.stdinIsTTY?.() !== true) {
+				return emitAuthTokenLifecycleResult(
+					input,
+					{
+						ok: false,
+						state: "blocked",
+						cause: "source-missing",
+						nextAction: "install-token",
+						detail: { source_present: false },
+					},
+					"auth_token_source_missing",
+				);
+			}
+		} else {
+			sourceRef = stored.sourceRef;
+			sourcePresence = true;
+		}
+	}
 	const subcommand = input.parsed.subcommand;
-	const nativeInput =
-		subcommand === "install-token"
-			? ({
-					mode: "install",
-					input:
-						input.parsed.flagValues["--stdin"] === undefined
-							? "prompt"
-							: "stdin",
-					replace: input.parsed.flagValues["--replace"] !== undefined,
-				} as const)
-			: subcommand === "remove-token"
-				? ({ mode: "remove" } as const)
-				: ({ mode: "status" } as const);
+	const nativeInput = buildNativeSupervisorInput(input, sourceRef);
 	const result =
 		input.runtime.runAuthTokenSupervisor === undefined
 			? {
@@ -6144,15 +6993,71 @@ async function runAuthTokenLifecycle(
 		result.stdout,
 		result.exitCode,
 	);
+	if (subcommand === "install-token" && sourceRef !== undefined && projection?.ok) {
+		const persisted =
+			input.runtime.writeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.writeAuthTokenSource(sourceRef);
+		if (!persisted.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: persisted.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				persisted.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			authProjectionWithSourcePresence(projection, true),
+			"auth_token_supervisor_failed",
+		);
+	}
+	if (subcommand === "install-token" && sourceRef === undefined && projection?.ok) {
+		const removed =
+			input.runtime.removeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.removeAuthTokenSource();
+		if (!removed.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: removed.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				removed.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			projection,
+			"auth_token_supervisor_failed",
+		);
+	}
 	return emitAuthTokenLifecycleResult(
 		input,
-		projection ?? {
-			ok: false,
-			state: "blocked",
-			cause: "token-supervisor-unavailable",
-			nextAction: "repair-op-admission",
-		},
-		"auth_token_supervisor_failed",
+		projection === undefined
+			? {
+					ok: false,
+					state: "blocked",
+					cause: "token-supervisor-unavailable",
+					nextAction: "repair-op-admission",
+				}
+			: sourcePresence === undefined
+				? projection
+				: authProjectionWithSourcePresence(projection, sourcePresence),
+		authTokenLifecycleErrorForProjection(projection),
 	);
 }
 
@@ -6506,10 +7411,16 @@ class BufferWriter implements CliWriter {
 export async function runForTest(
 	argv: readonly string[],
 	runtime: BrowserUseRuntime,
+	authDoctor?: AuthDoctorOrchestrationDeps,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const stdout = new BufferWriter();
 	const stderr = new BufferWriter();
-	const exitCode = await runBrowserUseCli(argv, { runtime, stdout, stderr });
+	const exitCode = await runBrowserUseCli(argv, {
+		runtime,
+		stdout,
+		stderr,
+		...(authDoctor === undefined ? {} : { authDoctor }),
+	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
 

@@ -106,6 +106,18 @@ const ALLOWED_SHIPPING_MUTATIONS: readonly AllowedMutation[] = [
 		firstArgument: "activePortPath",
 	},
 	{
+		file: "repair.ts",
+		api: "writeFile",
+		callee: "handle.writeFile",
+		firstArgument: "content",
+	},
+	{
+		file: "repair.ts",
+		api: "rename",
+		callee: "rename",
+		firstArgument: "tempPath",
+	},
+	{
 		file: "runtime.ts",
 		api: "writeFile",
 		callee: "writeFile",
@@ -324,7 +336,7 @@ describe("DDA-F26 default-profile safety: the persistent remote-debugging settin
 		expect(offenders).toEqual([]);
 	});
 
-	test("Local State / Preferences writes are absent from warm-chrome shipping source (mutation-shape proof; warm-chrome-scoped by design)", async () => {
+	test("Local State / Preferences writes are closed to the warm-chrome allowlist (mutation-shape proof; warm-chrome-scoped by design)", async () => {
 		// COVERAGE TIER 1 (see SHIPPING_SOURCE_DIRS note): mutation-shape analysis is
 		// applied to WARM_CHROME_SRC_DIR ONLY. warm-chrome owns the launch/repair
 		// code that touches Chrome's profile, so it gets the hard proof: every write
