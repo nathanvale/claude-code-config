@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+	configureCliDiagnostics,
+	parseCliDiagnosticArgv,
+	resetCliDiagnostics,
+} from "@side-quest/cli-command-facade";
 import type { BrowserUseAuthProvider } from "./browser-use-auth-provider";
 import { authCommitSummaryOf } from "./browser-use-auth";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
@@ -12,6 +17,7 @@ import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
 
 const disposables: Array<{ dispose(): void }> = [];
 afterEach(() => {
+	resetCliDiagnostics();
 	for (const disposable of disposables.splice(0)) disposable.dispose();
 });
 
@@ -26,13 +32,16 @@ const binding: BrowserUseItemBinding = {
 	binding_revision: 1,
 };
 
-function form(): BrowserUseAccessibilitySnapshot {
+function form(passwordFirst = false): BrowserUseAccessibilitySnapshot {
+	const credentialNodes = [
+		{ node_id: "username", parent_id: "form", role: "textbox", accessible_name: "Username", ignored: false, backend_node_id: 11, properties: {} },
+		{ node_id: "password", parent_id: "form", role: "textbox", accessible_name: "Password", ignored: false, backend_node_id: 12, properties: {} },
+	];
 	return {
 		target_id: "target-fixture",
 		nodes: [
 			{ node_id: "form", role: "form", accessible_name: "Sign in", ignored: false, child_ids: ["username", "password", "submit"], properties: {} },
-			{ node_id: "username", parent_id: "form", role: "textbox", accessible_name: "Username", ignored: false, backend_node_id: 11, properties: {} },
-			{ node_id: "password", parent_id: "form", role: "textbox", accessible_name: "Password", ignored: false, backend_node_id: 12, properties: {} },
+			...(passwordFirst ? credentialNodes.toReversed() : credentialNodes),
 			{ node_id: "submit", parent_id: "form", role: "button", accessible_name: "Sign in", ignored: false, backend_node_id: 13, properties: {} },
 		],
 	};
@@ -50,6 +59,7 @@ async function fixture(
 	proofOrigin = "https://fixture.test",
 	expectedUrl = "https://fixture.test/login",
 	observedUrl?: string,
+	passwordFirst = false,
 ) {
 	const xdg = makeTempXdgEnv();
 	disposables.push(xdg);
@@ -117,7 +127,7 @@ async function fixture(
 		delivered.push(field);
 		return { ok: true, shape: { field, byte_length: 8 } };
 	};
-	let screen = form();
+	let screen = form(passwordFirst);
 	const navigations: Array<{ target_id: string; url: string }> = [];
 	const result = await runBrowserUseRunbookAuth(
 		{
@@ -204,6 +214,46 @@ describe("runbook auth route", () => {
 		// the delivered order proves the full username->password flow ran once.
 		expect(result.run.state).toBe("ready");
 		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("combined form authenticates when accessibility order exposes password before username", async () => {
+		const { result, delivered } = await fixture(
+			true,
+			"https://fixture.test",
+			"https://fixture.test/login",
+			undefined,
+			true,
+		);
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("debug diagnostics record ordered secret-free lifecycle mappings", async () => {
+		const lines: string[] = [];
+		configureCliDiagnostics({
+			categoryRoot: "browser-use.cli",
+			options: parseCliDiagnosticArgv(["--debug"]).options,
+			diagnosticWriter: {
+				write: (chunk) => {
+					lines.push(chunk);
+					return true;
+				},
+			},
+		});
+
+		const { result } = await fixture(true);
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		const trail = lines.join("");
+		expect(trail).toContain("auth-lifecycle-transition");
+		for (const sequence of [1, 2, 3, 4, 5, 6, 7]) {
+			expect(trail).toContain(`sequence=${sequence}`);
+		}
+		expect(trail).toContain("login_step=username");
+		expect(trail).toContain("login_step=password");
+		expect(trail).not.toContain("auth-lifecycle-transition-rejected");
+		expect(trail).not.toContain(binding.vault_id);
+		expect(trail).not.toContain(binding.item_id);
+		expect(trail).not.toContain("https://fixture.test/login");
 	});
 
 	test("ambiguous authenticated state returns one continuation and zero business dispatch", async () => {

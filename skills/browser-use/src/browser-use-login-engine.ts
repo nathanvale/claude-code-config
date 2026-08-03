@@ -306,13 +306,14 @@ export function classifyBrowserUseLoginStep(
 		} => item.credential !== undefined,
 	);
 	if (named.length > 0) {
-		const first = named.at(0);
+		const first =
+			named.find((candidate) => candidate.credential === "username") ??
+			named.find((candidate) => candidate.credential === "password") ??
+			named.find((candidate) => candidate.credential === "otp-current");
 		if (first === undefined) return { step: "unknown" };
 		if (
-			named.some(
-				(candidate, index) =>
-					index > 0 && candidate.credential === first.credential,
-			)
+			named.filter((candidate) => candidate.credential === first.credential)
+				.length > 1
 		) {
 			return { step: "unknown" };
 		}

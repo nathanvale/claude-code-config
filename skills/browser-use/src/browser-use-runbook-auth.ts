@@ -1,3 +1,4 @@
+import { emitCliDiagnostic } from "@side-quest/cli-command-facade";
 import type { BrowserUseAuthContext, BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import {
 	type BrowserUseAuthAttestation,
@@ -266,6 +267,11 @@ export async function runBrowserUseRunbookAuth(
 	}
 	if (binding === undefined) {
 		const cause = "capability-loss" as const;
+		emitCliDiagnostic("browser-use.cli", "debug", "auth-binding-unavailable", {
+			phase: fragment.phase,
+			status: fragment.status,
+			method_step: fragment.method_step,
+		});
 		const blocked = await transition({ type: "blocked", cause });
 		if (!blocked.ok) return { ok: false, run, failure: blocked };
 		return { ok: false, run, blocked: blockedOf(cause) };
@@ -328,11 +334,40 @@ export async function runBrowserUseRunbookAuth(
 		return { ok: false, run, blocked: blockedOf(acquired.blocked_cause) };
 	}
 
+	let lifecycleSequence = 0;
 	const lifecycle = async (
 		event: BrowserUseLoginLifecycleEvent,
 	): Promise<{ ok: true } | { ok: false; cause: BrowserUseAuthBlockedCause }> => {
 		const apply = async (authEvent: BrowserUseAuthTransactionEvent) => {
+			lifecycleSequence += 1;
+			const before = fragment;
+			emitCliDiagnostic("browser-use.cli", "debug", "auth-lifecycle-transition", {
+				sequence: lifecycleSequence,
+				login_event_type: event.type,
+				login_step:
+					event.type === "credential-delivered" ? event.field : null,
+				auth_event_type: authEvent.type,
+				auth_method_step:
+					authEvent.type === "method-step-complete" ? authEvent.step : null,
+				phase_before: before?.phase ?? null,
+				method_step_before: before?.method_step ?? null,
+			});
 			const result = await transition(authEvent);
+			if (!result.ok) {
+				emitCliDiagnostic("browser-use.cli", "debug", "auth-lifecycle-transition-rejected", {
+					sequence: lifecycleSequence,
+					login_event_type: event.type,
+					login_step:
+						event.type === "credential-delivered" ? event.field : null,
+					auth_event_type: authEvent.type,
+					auth_method_step:
+						authEvent.type === "method-step-complete" ? authEvent.step : null,
+					phase_before: before?.phase ?? null,
+					method_step_before: before?.method_step ?? null,
+					rejection_code: result.code,
+					rejection_message: result.message,
+				});
+			}
 			return result.ok ? { ok: true as const } : { ok: false as const, cause: "capability-loss" as const };
 		};
 		if (event.type === "credential-delivered") {
