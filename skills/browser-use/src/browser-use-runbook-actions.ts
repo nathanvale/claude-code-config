@@ -691,7 +691,8 @@ export function reviewedActionRecordIsValid(value: unknown): value is BrowserUse
 	const record = value as Record<string, unknown>;
 	const receipt = record.promotion_receipt;
 	if (
-		!SAFE_ACTION_ID.test(String(record.action_id ?? "")) ||
+		typeof record.action_id !== "string" ||
+		!SAFE_ACTION_ID.test(record.action_id) ||
 		typeof record.asset_id !== "string" ||
 		typeof record.expected_digest !== "string" ||
 		!actionDigestIsValid(record.asset_id) ||

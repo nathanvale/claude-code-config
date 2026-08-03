@@ -34,6 +34,7 @@ import {
 	readFile as fsReadFile,
 	realpath as fsRealpath,
 	rename as fsRename,
+	rm as fsRm,
 	unlink as fsUnlink,
 	writeFile as fsWriteFile,
 	open,
@@ -205,6 +206,8 @@ export type BrowserUsePlatformFs = {
 	linkFileNoReplace(existingPath: string, newPath: string): Promise<void>;
 	/** ENOENT tolerated by callers. */
 	unlink(path: string): Promise<void>;
+	/** Recursively remove a directory tree; missing path is a no-op. */
+	removeDirectoryRecursive(path: string): Promise<void>;
 	/** fsync the directory fd (open + fsync + close). */
 	syncDirectory(path: string): Promise<void>;
 	/** O_CREAT|O_EXCL create; throws `{ code: "EEXIST" }` when present. */
@@ -290,6 +293,9 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 		},
 		async unlink(path) {
 			await fsUnlink(path);
+		},
+		async removeDirectoryRecursive(path) {
+			await fsRm(path, { recursive: true, force: true });
 		},
 		async syncDirectory(path) {
 			const handle = await open(path, "r");

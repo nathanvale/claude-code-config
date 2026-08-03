@@ -19,6 +19,9 @@ const VERIFIER_CONTRACT = REVIEWED_ACTION_VERIFIER_CONTRACT;
 const VERIFIER_SCHEMA_VERSION = REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION;
 const VERIFIER_FILE = REVIEWED_ACTION_VERIFIER_FILE;
 const MAXIMUM_BROKER_OUTPUT_BYTES = 1_048_576;
+// promote blocks on a human Touch ID prompt (generous); verifier is a fast read.
+const BROKER_PROMOTE_TIMEOUT_MS = 5 * 60_000;
+const BROKER_VERIFIER_TIMEOUT_MS = 30_000;
 
 /** Operator broker surface: public identity discovery plus presence-backed issuance. */
 export type BrowserUseReviewedActionOperatorBroker =
@@ -48,6 +51,11 @@ async function invokeNativeBroker(
 			stdout: "pipe",
 			stderr: "pipe",
 			env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+			// Bound execution: a runaway or hung broker is killed rather than
+			// blocking forever. The promote path waits on a human Touch ID prompt,
+			// so the window is generous; verifier is fast. maxBuffer caps runaway output.
+			timeout: command === "promote" ? BROKER_PROMOTE_TIMEOUT_MS : BROKER_VERIFIER_TIMEOUT_MS,
+			maxBuffer: MAXIMUM_BROKER_OUTPUT_BYTES,
 		});
 		if (input !== undefined) {
 			if (child.stdin === undefined) {
@@ -67,8 +75,11 @@ async function invokeNativeBroker(
 		) {
 			return { ok: false, code: "broker-failed", message: "the native approval broker failed closed." };
 		}
-		const parsed = JSON.parse(stdout) as NativeBrokerEnvelope;
-		return parsed;
+		const parsed: unknown = JSON.parse(stdout);
+		if (typeof parsed !== "object" || parsed === null || typeof (parsed as { ok?: unknown }).ok !== "boolean") {
+			return { ok: false, code: "broker-failed", message: "the native approval broker returned a malformed envelope." };
+		}
+		return parsed as NativeBrokerEnvelope;
 	} catch {
 		return { ok: false, code: "broker-failed", message: "the native approval broker could not be invoked." };
 	}

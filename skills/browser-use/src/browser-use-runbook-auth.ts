@@ -284,7 +284,12 @@ export async function runBrowserUseRunbookAuth(
 		key_family: "sensitive-interval",
 	});
 	const leaseTransition = await transition(acquired.event);
-	if (!leaseTransition.ok) return { ok: false, run, failure: leaseTransition };
+	if (!leaseTransition.ok) {
+		// The try/finally that releases the granted lease starts below, so a
+		// failed lease transition here would strand a granted lease until its TTL.
+		if (acquired.granted) await deps.provider.releaseSensitiveIntervalLease({ lease: acquired.lease });
+		return { ok: false, run, failure: leaseTransition };
+	}
 	if (!acquired.granted) {
 		return { ok: false, run, blocked: blockedOf(acquired.blocked_cause) };
 	}

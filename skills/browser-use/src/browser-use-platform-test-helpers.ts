@@ -309,6 +309,20 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 				(pending) => pending.from !== key && pending.to !== key,
 			);
 		},
+		async removeDirectoryRecursive(path) {
+			await real.removeDirectoryRecursive(live(path));
+			const prefix = `${logical(path)}/`;
+			for (const key of [...durableFiles.keys(), ...volatileFiles.keys()]) {
+				if (key === logical(path) || key.startsWith(prefix)) {
+					durableFiles.delete(key);
+					volatileFiles.delete(key);
+				}
+			}
+			pendingRenames = pendingRenames.filter(
+				(pending) =>
+					!(pending.from === logical(path) || pending.from.startsWith(prefix) || pending.to === logical(path) || pending.to.startsWith(prefix)),
+			);
+		},
 		async syncDirectory(path) {
 			await real.syncDirectory(live(path));
 			const dir = logical(path);

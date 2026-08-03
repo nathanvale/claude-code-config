@@ -203,26 +203,36 @@ async function stageGeneration(deps: BrowserUseGenerationDeps, catalog: BrowserU
 	if ((await deps.fs.lstat(destination)) !== undefined) { const verified = await validateGeneration(deps, generationId); return verified.ok ? { ok: true, generationId, manifestDigest: verified.manifestDigest } : verified; }
 	const stageRoot = join(pathsOf(deps.paths).generations, `.stage-${catalog.catalog_digest}-${process.pid}`);
 	if ((await deps.fs.lstat(stageRoot)) !== undefined) return fail("activation_store_unsafe", "the generation staging path already exists; repair the orphan before retrying.");
+	// Every failure exit removes the staging tree; otherwise an orphan blocks
+	// line-205's existence guard and deadlocks every later retry for this
+	// catalog digest + PID with activation_store_unsafe until manual cleanup.
+	const abandonStaging = async (failure: BrowserUseGenerationFailure): Promise<BrowserUseGenerationFailure> => {
+		try { await deps.fs.removeDirectoryRecursive(stageRoot); } catch {}
+		return failure;
+	};
 	try {
 		await deps.fs.mkdir(stageRoot, { recursive: false, mode: PRIVATE_DIR_MODE }); const directories = new Set([stageRoot]);
 		for (const file of [...catalog.files].sort((a, b) => a.relative_path.localeCompare(b.relative_path))) {
-			if (!SAFE_RELATIVE.test(file.relative_path) || sha256(file.bytes) !== file.digest) return fail("activation_generation_corrupt", "the proved catalog closure changed before staging.");
+			if (!SAFE_RELATIVE.test(file.relative_path) || sha256(file.bytes) !== file.digest) return await abandonStaging(fail("activation_generation_corrupt", "the proved catalog closure changed before staging."));
 			const path = join(stageRoot, ...file.relative_path.split("/")); const directory = dirname(path);
 			if (!directories.has(directory)) { await deps.fs.mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE }); directories.add(directory); }
 			await deps.fs.createExclusive(path, file.bytes, PRIVATE_FILE_MODE);
 		}
 		const manifest = manifestFor(catalog);
-		if (manifest.runbooks.length !== catalog.files.filter((file) => file.relative_path.startsWith("runbooks/") && file.relative_path.endsWith("/runbook.json")).length) return fail("activation_generation_corrupt", "a source Runbook became invalid before generation staging.");
+		if (manifest.runbooks.length !== catalog.files.filter((file) => file.relative_path.startsWith("runbooks/") && file.relative_path.endsWith("/runbook.json")).length) return await abandonStaging(fail("activation_generation_corrupt", "a source Runbook became invalid before generation staging."));
 		const manifestBytes = canonical(manifest); await deps.fs.createExclusive(join(stageRoot, "manifest.json"), manifestBytes, PRIVATE_FILE_MODE);
 		for (const directory of [...directories].sort((a, b) => b.length - a.length)) await deps.fs.syncDirectory(directory);
 		await deps.fs.rename(stageRoot, destination); await deps.fs.syncDirectory(pathsOf(deps.paths).generations);
 		return { ok: true, generationId, manifestDigest: sha256(manifestBytes) };
-	} catch { return fail("activation_store_unsafe", "generation staging failed before selection."); }
+	} catch { return await abandonStaging(fail("activation_store_unsafe", "generation staging failed before selection.")); }
 }
 async function readAuthority(deps: BrowserUseGenerationDeps): Promise<{ status: "missing" } | { status: "corrupt" } | { status: "present"; authority: BrowserUseRunbookGenerationAuthority }> {
-	const path = pathsOf(deps.paths).authority; const stat = await deps.fs.lstat(path);
+	const path = pathsOf(deps.paths).authority; const stat = await deps.fs.lstat(path); const uid = process.getuid?.();
 	if (stat === undefined) return { status: "missing" };
-	if (stat.kind !== "file" || (stat.mode & 0o077) !== 0) return { status: "corrupt" };
+	// The authority file selects the active generation, so match the ownership
+	// gate ensurePrivateDirectory/walkFiles apply: a 0600 file owned by another
+	// user must not be trusted.
+	if (stat.kind !== "file" || (stat.mode & 0o077) !== 0 || (uid !== undefined && stat.uid !== uid)) return { status: "corrupt" };
 	const authority = parseAuthority(await readJson(deps.fs, path)); return authority === undefined ? { status: "corrupt" } : { status: "present", authority };
 }
 async function commitAuthority(deps: BrowserUseGenerationDeps, authority: BrowserUseRunbookGenerationAuthority): Promise<boolean> {

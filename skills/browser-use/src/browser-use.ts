@@ -3790,6 +3790,17 @@ async function runRunbookActivate(input: PlatformCommandInput): Promise<number> 
 			recoverability: "repair_state",
 		});
 	}
+	// Validate caller-correctable flags up front so a malformed epoch/digest is a
+	// change_input usage error, not an activation repair_state failure that points
+	// the operator at catalog repair.
+	const rawCatalogDigest = stringField(input.parsed.flagValues["--catalog-digest"]) ?? "";
+	const rawExpectedEpoch = stringField(input.parsed.flagValues["--expected-epoch"]);
+	if (!/^[0-9a-f]{64}$/.test(rawCatalogDigest)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--catalog-digest must be 64 lowercase hex characters (the reviewed whole-catalog digest).", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
+	if (rawExpectedEpoch === undefined || !/^(0|[1-9][0-9]*)$/.test(rawExpectedEpoch)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--expected-epoch must be a non-negative integer.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
 	const catalog = await loadPrivateRunbookCatalogFromGit({
 		repoRoot,
 		...(input.runtime.reviewedActionApprovalVerifier === undefined ? {} : { promotionVerifier: { verify: async (verification) => {
@@ -3814,12 +3825,8 @@ async function runRunbookActivate(input: PlatformCommandInput): Promise<number> 
 			nonterminalMutationRunIds(store.deps, activeGenerationId),
 	}, {
 		catalog: catalog.catalog,
-		reviewedCatalogDigest:
-			stringField(input.parsed.flagValues["--catalog-digest"]) ?? "",
-		expectedEpoch: Number.parseInt(
-			stringField(input.parsed.flagValues["--expected-epoch"]) ?? "-1",
-			10,
-		),
+		reviewedCatalogDigest: rawCatalogDigest,
+		expectedEpoch: Number.parseInt(rawExpectedEpoch, 10),
 	});
 	if (!activated.ok) {
 		return emitPlatformStoreFailure(input, {
@@ -4825,6 +4832,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	const selectedGeneration = generationResolution.ok ? generationResolution : undefined;
 	if (!generationResolution.ok && generationResolution.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: generationResolution.code, message: generationResolution.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (run !== undefined && run.run_execution_binding === undefined && selectedGeneration !== undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the retained run has no immutable generation binding and cannot acquire current authority during resume.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	// generation manifest holds no record for this plan, generation and plan
+	// disagree (already inconsistent); fail closed rather than persist an empty,
+	// unverifiable digest.
+	const boundRunbookDigest = selectedGeneration?.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest;
+	if (selectedGeneration !== undefined && boundRunbookDigest === undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the selected generation has no record for this Runbook; the generation and plan disagree.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (run?.run_execution_binding?.normalized_input_digest !== undefined && run.run_execution_binding.normalized_input_digest !== normalizedInputDigest(runbookInputs)) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the resumed input does not match the immutable run execution binding.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 
 	const prepared = await prepareRunbookExecution(
@@ -5035,7 +5048,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					service_id: plan.service_id,
 					flow_id: plan.flow_id,
 					runbook_version: plan.version,
-					runbook_digest: selectedGeneration.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest ?? "",
+					runbook_digest: boundRunbookDigest ?? "",
 					action_registry_digest: selectedGeneration.action_registry_digest,
 					normalized_input_digest: normalizedInputDigest(runbookInputs),
 					item_key_digest: itemKeySequenceDigest([]),

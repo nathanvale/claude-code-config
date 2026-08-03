@@ -143,9 +143,14 @@ async function gitFixtureCommand(
 	}
 }
 
+/**
+ * Build a disposable committed catalog source and pass its GIT_DIR/GIT_WORK_TREE
+ * to `run` explicitly. The env stays local to each spawned git/runtime call, so
+ * no process-wide `process.env` mutation leaks across parallel tests.
+ */
 async function withCommittedCatalogSource<T>(
 	base: string,
-	run: () => Promise<T>,
+	run: (gitEnv: { GIT_DIR: string; GIT_WORK_TREE: string }) => Promise<T>,
 ): Promise<T> {
 	const repoRoot = resolve(import.meta.dir, "../../..");
 	const gitDir = join(base, "catalog-source.git");
@@ -159,19 +164,7 @@ async function withCommittedCatalogSource<T>(
 		"skills/browser-use/actions",
 	);
 	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "commit", "-qm", "test catalog fixture");
-
-	const previousGitDir = process.env.GIT_DIR;
-	const previousWorkTree = process.env.GIT_WORK_TREE;
-	process.env.GIT_DIR = gitDir;
-	process.env.GIT_WORK_TREE = repoRoot;
-	try {
-		return await run();
-	} finally {
-		if (previousGitDir === undefined) delete process.env.GIT_DIR;
-		else process.env.GIT_DIR = previousGitDir;
-		if (previousWorkTree === undefined) delete process.env.GIT_WORK_TREE;
-		else process.env.GIT_WORK_TREE = previousWorkTree;
-	}
+	return await run({ GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot });
 }
 
 function writeHandoff(
@@ -552,7 +545,7 @@ describe("runbook family — live (U4 wiring)", () => {
 
 	test("runbook activate refuses action-bearing source until promotion authority exists", async () => {
 		const store = await makeStore();
-		const result = await withCommittedCatalogSource(store.base, async () =>
+		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
 				[
 					"runbook",
@@ -563,7 +556,7 @@ describe("runbook family — live (U4 wiring)", () => {
 					"0",
 					"--json",
 				],
-				makeRuntime({ env: store.env }),
+				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
 		expect(result.exitCode).toBe(20);
@@ -577,10 +570,10 @@ describe("runbook family — live (U4 wiring)", () => {
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
-		const result = await withCommittedCatalogSource(store.base, async () =>
+		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
 				["runbook", "list", "--json"],
-				makeRuntime({ env: store.env }),
+				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
 		expect(result.exitCode).toBe(0);
@@ -601,10 +594,10 @@ describe("runbook family — live (U4 wiring)", () => {
 	test("runbook show returns one validated definition and health", async () => {
 		const store = await makeStore();
 		seedRunbook(store.dataRoot, readOnlyRunbook());
-		const result = await withCommittedCatalogSource(store.base, async () =>
+		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
 				["runbook", "show", "--service", "oncore", "--flow", "snapshot-verify", "--json"],
-				makeRuntime({ env: store.env }),
+				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
 		expect(result.exitCode).toBe(0);
@@ -617,10 +610,10 @@ describe("runbook family — live (U4 wiring)", () => {
 
 	test("runbook show for a missing runbook fails closed with a typed refusal", async () => {
 		const store = await makeStore();
-		const result = await withCommittedCatalogSource(store.base, async () =>
+		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
 				["runbook", "show", "--service", "oncore", "--flow", "absent", "--json"],
-				makeRuntime({ env: store.env }),
+				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
 		expect(result.exitCode).toBe(20);

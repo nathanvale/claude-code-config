@@ -10,7 +10,7 @@ import {
 	rm,
 	rmdir,
 } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { isJsonObject as isObject, redactUnsafeText } from "./browser-use-core";
 import {
 	type BrowserUseRunbook,
@@ -39,7 +39,9 @@ const REGISTRY_FILE = "registry.json";
 const LOCK_FILE = ".runbook-authoring.lock";
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
-const SAFE_RELATIVE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\0)[^\\]+$/;
+// `[\s\S]` in the traversal/NUL lookaheads (not `.`) so an embedded newline
+// cannot hide a `..` segment or NUL from the guard; the body forbids newlines.
+const SAFE_RELATIVE = /^(?!\/)(?![\s\S]*(?:^|\/)\.\.(?:\/|$))(?![\s\S]*\0)[^\\\n\r]+$/;
 const CREDENTIAL_TARGET = /(?:password|passcode|credential|username|user[-_ ]?name|otp|one[-_ ]?time|login|log[-_ ]?in|sign[-_ ]?in)/i;
 
 /** One precise complete-document refusal with no offending bytes. */
@@ -300,19 +302,45 @@ async function sourceCommit(sourceRoot: string): Promise<string | undefined> {
 	return exitCode === 0 && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(stdout.trim()) ? stdout.trim() : undefined;
 }
 
+/** Registry + source-commit resolved once per catalog read and shared across records. */
+type ActionClosureContext = {
+	entries: SourceRegistryEntry[] | { ok: false; code: string; message: string };
+	commit: () => Promise<string | undefined>;
+};
+
+async function loadActionClosureContext(sourceRoot: string, actionsRoot: string): Promise<ActionClosureContext> {
+	let entries: ActionClosureContext["entries"];
+	try {
+		const registryValue: unknown = JSON.parse(await readFile(join(actionsRoot, REGISTRY_FILE), "utf8"));
+		entries = !isObject(registryValue) || !Array.isArray(registryValue.actions)
+			? { ok: false as const, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is invalid." }
+			: registryValue.actions.filter((entry): entry is SourceRegistryEntry => isObject(entry) && typeof entry.asset_path === "string" && SAFE_RELATIVE.test(entry.asset_path) && reviewedActionRecordIsValid(entry.record));
+	} catch {
+		entries = { ok: false as const, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is unreadable or invalid." };
+	}
+	// Resolve HEAD at most once across every record on the read path (was one
+	// git rev-parse subprocess per record before this cache).
+	let resolved: string | undefined | null = null;
+	const commit = async () => {
+		if (resolved === null) resolved = await sourceCommit(sourceRoot);
+		return resolved;
+	};
+	return { entries, commit };
+}
+
 async function validateActionClosure(input: {
 	sourceRoot: string;
 	actionsRoot: string;
 	runbook: BrowserUseRunbook;
 	approvalVerifier?: BrowserUseReviewedActionApprovalVerifier;
+	context?: ActionClosureContext;
 }): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
 	const refs = input.runbook.steps.flatMap((step) => step.kind === "action" ? [step] : step.kind === "iterate" ? [step.step] : []);
 	if (refs.length === 0) return { ok: true };
-	let registryValue: unknown;
-	try { registryValue = JSON.parse(await readFile(join(input.actionsRoot, REGISTRY_FILE), "utf8")); } catch { return { ok: false, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is unreadable or invalid." }; }
-	if (!isObject(registryValue) || !Array.isArray(registryValue.actions)) return { ok: false, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is invalid." };
-	const entries = registryValue.actions.filter((entry): entry is SourceRegistryEntry => isObject(entry) && typeof entry.asset_path === "string" && SAFE_RELATIVE.test(entry.asset_path) && reviewedActionRecordIsValid(entry.record));
-	let resolvedCommit: string | undefined | null = null;
+	const context = input.context ?? await loadActionClosureContext(input.sourceRoot, input.actionsRoot);
+	const resolvedEntries = context.entries;
+	if (!Array.isArray(resolvedEntries)) return resolvedEntries;
+	const entries: readonly SourceRegistryEntry[] = resolvedEntries;
 	for (const ref of refs) {
 		const matches = entries.filter((entry) => entry.record.action_id === ref.action_id);
 		if (matches.length === 0) return { ok: false, code: "runbook_action_absent", message: "a referenced Reviewed Action is absent from the private registry." };
@@ -345,8 +373,7 @@ async function validateActionClosure(input: {
 		}
 		if (entry.record.promotion_receipt === null) return { ok: false, code: "runbook_action_unpromoted", message: "a referenced Reviewed Action has not been externally promoted." };
 		if (input.approvalVerifier === undefined) return { ok: false, code: "runbook_action_promotion_verifier_unavailable", message: "a referenced Reviewed Action requires offline promotion verification." };
-		if (resolvedCommit === null) resolvedCommit = await sourceCommit(input.sourceRoot);
-		const commit = resolvedCommit;
+		const commit = await context.commit();
 		if (commit === undefined) return { ok: false, code: "runbook_action_source_commit_unavailable", message: "the source commit for Reviewed Action promotion cannot be resolved." };
 		const verified = verifyAuthoredReviewedActionPromotion({ commit, record: entry.record, assetBytes, promotionHistory: entry.promotion_history, verifier: input.approvalVerifier });
 		if (!verified.ok) return { ok: false, code: verified.code === "action_capability_credential_field" ? "runbook_action_auth_capable" : "runbook_action_promotion_invalid", message: "a referenced Reviewed Action lacks exact current promotion authority." };
@@ -371,20 +398,27 @@ export async function validateRunbookDraftForSource(input: {
 	return closure.ok ? parsed : closure;
 }
 
+type SourceActionFilesResult =
+	| { ok: true; files: readonly { relative_path: string; digest: string }[] }
+	| { ok: false; code: string; message: string };
+
 async function sourceActionFiles(
 	actionsRoot: string,
 	runbooks: readonly BrowserUseRunbook[],
-): Promise<readonly { relative_path: string; digest: string }[]> {
-	let registryBytes = '{"actions":[]}';
-	let registry: unknown = { actions: [] };
+): Promise<SourceActionFilesResult> {
+	let registryBytes: string;
+	let registry: unknown;
 	try {
 		registryBytes = await readFile(join(actionsRoot, REGISTRY_FILE), "utf8");
 		registry = JSON.parse(registryBytes);
 	} catch {
-		return [{ relative_path: "actions/registry.json", digest: actionAssetDigest(registryBytes) }];
+		// A missing/unreadable registry must not digest as an empty registry:
+		// that would make a corrupt source claim an empty action set and stay
+		// invisible through activation.
+		return { ok: false, code: "runbook_action_registry_unreadable", message: "the private Reviewed Action registry is absent, unreadable, or not valid JSON." };
 	}
 	const files = [{ relative_path: "actions/registry.json", digest: actionAssetDigest(registryBytes) }];
-	if (!isObject(registry) || !Array.isArray(registry.actions)) return files;
+	if (!isObject(registry) || !Array.isArray(registry.actions)) return { ok: false, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry shape is invalid." };
 	const refs = new Set(
 		runbooks.flatMap((runbook) =>
 			runbook.steps.flatMap((step) =>
@@ -396,6 +430,7 @@ async function sourceActionFiles(
 			),
 		),
 	);
+	const actionsRootReal = await realpath(actionsRoot).catch(() => undefined);
 	for (const entry of registry.actions) {
 		if (
 			!isObject(entry) ||
@@ -405,13 +440,23 @@ async function sourceActionFiles(
 			typeof entry.record.action_id !== "string" ||
 			!refs.has(entry.record.action_id)
 		) continue;
-		try {
-			const bytes = await readFile(join(actionsRoot, ...entry.asset_path.split("/")), "utf8");
-			files.push({ relative_path: `actions/${entry.asset_path}`, digest: actionAssetDigest(bytes) });
-		} catch {
+		const assetPath = join(actionsRoot, ...entry.asset_path.split("/"));
+		// Containment: prove the resolved asset stays under the actions root, matching
+		// the sibling check in validateActionClosure. SAFE_RELATIVE plus this realpath
+		// guard close the traversal gap on a symlinked or crafted asset_path.
+		const assetReal = await realpath(assetPath).catch(() => undefined);
+		if (actionsRootReal === undefined || assetReal === undefined || (assetReal !== actionsRootReal && !assetReal.startsWith(`${actionsRootReal}${sep}`))) {
+			return { ok: false, code: "runbook_action_asset_unreadable", message: "a referenced Reviewed Action asset is absent, unreadable, or escapes the actions root." };
 		}
+		let bytes: string;
+		try {
+			bytes = await readFile(assetReal, "utf8");
+		} catch {
+			return { ok: false, code: "runbook_action_asset_unreadable", message: "a referenced Reviewed Action asset is absent or unreadable." };
+		}
+		files.push({ relative_path: `actions/${entry.asset_path}`, digest: actionAssetDigest(bytes) });
 	}
-	return files.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
+	return { ok: true, files: files.sort((left, right) => left.relative_path.localeCompare(right.relative_path)) };
 }
 
 /** Read working source without dropping invalid entries or consulting CWD. */
@@ -426,6 +471,9 @@ export async function readRunbookSourceCatalog(input: {
 	if (roots === undefined) return { ok: false, code: "runbook_source_checkout_required", message: "Runbook source reads require the setup-owned source checkout." };
 	const records: BrowserUseRunbookSourceRecord[] = [];
 	const fileDigests: Array<{ relative_path: string; digest: string }> = [];
+	// Resolve the registry and source commit once, shared across every record's
+	// closure check, instead of one registry read + git rev-parse per record.
+	const closureContext = await loadActionClosureContext(input.sourceRoot, roots.actions);
 	let services: Dirent<string>[];
 	try {
 		services = await readdir(roots.runbooks, { withFileTypes: true });
@@ -477,20 +525,63 @@ export async function readRunbookSourceCatalog(input: {
 				records.push({ id, service_id: service.name, flow_id: flow.name, record_digest: recordDigest, activation_blocker: { code: parsed.ok ? "catalog_record_identity_mismatch" : parsed.code, message: parsed.ok ? "the source Runbook identity does not match its path." : parsed.message } });
 				continue;
 			}
-			const closure = await validateActionClosure({ sourceRoot: input.sourceRoot, actionsRoot: roots.actions, runbook: parsed.runbook, ...(input.approvalVerifier === undefined ? {} : { approvalVerifier: input.approvalVerifier }) });
+			const closure = await validateActionClosure({ sourceRoot: input.sourceRoot, actionsRoot: roots.actions, runbook: parsed.runbook, context: closureContext, ...(input.approvalVerifier === undefined ? {} : { approvalVerifier: input.approvalVerifier }) });
 			records.push({ id, service_id: service.name, flow_id: flow.name, record_digest: recordDigest, runbook: parsed.runbook, ...(!closure.ok ? { activation_blocker: { code: closure.code, message: closure.message } } : {}) });
 		}
 	}
-	fileDigests.push(...await sourceActionFiles(roots.actions, records.flatMap((record) => record.runbook === undefined ? [] : [record.runbook])));
+	const actionFiles = await sourceActionFiles(roots.actions, records.flatMap((record) => record.runbook === undefined ? [] : [record.runbook]));
+	const registryBlocker = actionFiles.ok ? undefined : { id: "actions/registry.json", code: actionFiles.code, message: actionFiles.message };
+	if (actionFiles.ok) fileDigests.push(...actionFiles.files);
 	fileDigests.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
-	const activationBlockers = records.flatMap((record) => record.activation_blocker === undefined ? [] : [{ id: record.id, ...record.activation_blocker }]);
+	const activationBlockers = [
+		...records.flatMap((record) => record.activation_blocker === undefined ? [] : [{ id: record.id, ...record.activation_blocker }]),
+		...(registryBlocker === undefined ? [] : [registryBlocker]),
+	];
 	return { ok: true, catalog: { catalog_digest: privateRunbookCatalogDigest(fileDigests), records, activation_blockers: activationBlockers } };
+}
+
+const LOCK_STALE_MS = 5 * 60_000;
+
+/** True when the pid is not a live process this user can signal. */
+function pidIsDead(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return true;
+	try { process.kill(pid, 0); return false; } catch (error) {
+		// EPERM means the process exists but is owned by another user (alive).
+		return (error as NodeJS.ErrnoException).code !== "EPERM";
+	}
+}
+
+/** A lock is reclaimable when its owner pid is dead or it has outlived the bound. */
+async function catalogLockIsStale(lockPath: string): Promise<boolean> {
+	try {
+		const parsed = JSON.parse(await readFile(lockPath, "utf8")) as { pid?: unknown; acquired_at?: unknown };
+		const pid = typeof parsed.pid === "number" ? parsed.pid : Number.NaN;
+		const acquiredAt = typeof parsed.acquired_at === "string" ? Date.parse(parsed.acquired_at) : Number.NaN;
+		if (pidIsDead(pid)) return true;
+		return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > LOCK_STALE_MS;
+	} catch {
+		// Unreadable or malformed lock content cannot prove a live holder.
+		return true;
+	}
 }
 
 async function withCatalogLock<T>(runbooksRoot: string, body: () => Promise<T>): Promise<T | undefined> {
 	const lockPath = join(runbooksRoot, LOCK_FILE);
+	const lockBody = JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() });
 	let lock: Awaited<ReturnType<typeof open>>;
-	try { lock = await open(lockPath, "wx", 0o600); } catch { return undefined; }
+	try {
+		lock = await open(lockPath, "wx", 0o600);
+	} catch {
+		// A crashed holder leaves the lock behind and would deadlock every future
+		// mutation; reclaim it once when its pid is dead or it has gone stale.
+		if (await catalogLockIsStale(lockPath)) {
+			await rm(lockPath, { force: true });
+			try { lock = await open(lockPath, "wx", 0o600); } catch { return undefined; }
+		} else {
+			return undefined;
+		}
+	}
+	try { await lock.write(lockBody); } catch {}
 	try { return await body(); } finally { await lock.close(); await rm(lockPath, { force: true }); }
 }
 
@@ -545,7 +636,7 @@ export async function applyRunbookDraft(input: {
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock." };
+	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock; a stale lock (dead owner pid or older than 5 minutes) is reclaimed automatically on the next attempt." };
 }
 
 /** Delete one source Runbook only when its exact observed digest still matches. */
@@ -589,5 +680,5 @@ export async function deleteRunbookDraft(input: {
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock." };
+	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock; a stale lock (dead owner pid or older than 5 minutes) is reclaimed automatically on the next attempt." };
 }

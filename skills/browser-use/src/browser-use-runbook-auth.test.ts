@@ -164,15 +164,16 @@ describe("runbook auth route", () => {
 		if (!result.ok) return;
 		expect(result.run.run_id).toBe("shared-run-fixture");
 		expect(result.run.handoff_evidence_id).toBe("handoff-fixture");
+		// `ready` is the observable gate the caller keys business dispatch on, and
+		// the delivered order proves the full username->password flow ran once.
 		expect(result.run.state).toBe("ready");
 		expect(delivered).toEqual(["username", "password"]);
-		let businessDispatches = 0;
-		businessDispatches += 1;
-		expect(businessDispatches).toBe(1);
 	});
 
 	test("ambiguous authenticated state returns one continuation and zero business dispatch", async () => {
 		const { result } = await fixture(false);
+		// The blocked envelope (not a ready run) is what withholds business dispatch;
+		// asserting it is the real "zero dispatch" proof.
 		expect(result).toMatchObject({
 			ok: false,
 			blocked: {
@@ -180,8 +181,7 @@ describe("runbook auth route", () => {
 				continuation: { next_action_id: "complete-human-identity-attestation" },
 			},
 		});
-		const businessDispatches = 0;
-		expect(businessDispatches).toBe(0);
+		expect(result.ok === false && "run" in result && result.run.state === "ready").toBe(false);
 	});
 
 	test("authenticated-state proof on a moved origin refuses before business dispatch", async () => {

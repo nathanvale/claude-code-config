@@ -93,7 +93,7 @@ export type BrowserUseLoginLifecycleEvent =
 	| { type: "credential-delivered"; field: BrowserUseOpCredentialField }
 	| { type: "username-advance-dispatching" }
 	| { type: "credential-submit-dispatching" }
-	| { type: "submit-outcome-observed"; outcome: "success" | "otp-required" };
+	| { type: "submit-outcome-observed"; outcome: "success" | "otp-required" | "timeout-unknown" };
 
 export type BrowserUseLoginLifecycleJournal = (
 	event: BrowserUseLoginLifecycleEvent,
@@ -538,6 +538,24 @@ export async function runBrowserUseLoginEngine(
 			});
 			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
 			awaitingSubmitOutcome = false;
+		}
+		if (
+			awaitingSubmitOutcome &&
+			classification.step === "submit" &&
+			!(deliveredSinceActivation.has("password") || deliveredSinceActivation.has("otp-current"))
+		) {
+			// A username advance while still awaiting the submit outcome would map to
+			// submit-username, an illegal transition in write-ahead-submission that the
+			// journal rejects while awaitingSubmitOutcome never clears. Record the
+			// unknown post-submit effect first, then block for inspection instead of
+			// dispatching the illegal advance.
+			const journaled = await deps.journal?.({
+				type: "submit-outcome-observed",
+				outcome: "timeout-unknown",
+			});
+			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+			awaitingSubmitOutcome = false;
+			return failed("human-challenge", "human-identity-attestation-required", trace);
 		}
 		if (classification.step === "challenge") {
 			return failed("human-challenge", "user-presence-required", trace);
