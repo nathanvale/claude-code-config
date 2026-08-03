@@ -706,6 +706,7 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"run_record_corrupt",
 	"run_resume_execution_unavailable",
 	"run_terminal_truth",
+	"run_cancel_mutation_dispatched",
 	"retention_collision",
 	"artifact_missing",
 	"artifact_corrupt",
@@ -1039,6 +1040,12 @@ export const browserUsePlatformStoreFailureActions = [
 	},
 ] as const;
 
+const browserUseInspectSharedRunAction = {
+	id: "inspect_shared_run",
+	summary: "Read the shared run projection and follow its continuation.",
+	sideEffects: ["check"],
+} as const;
+
 export const browserUsePlatformStoreSuccessActions = [
 	{
 		id: "apply_repair",
@@ -1046,11 +1053,7 @@ export const browserUsePlatformStoreSuccessActions = [
 			"Apply the bounded repair plan with browser-use repair apply, then inspect repair status again.",
 		sideEffects: ["write"],
 	},
-	{
-		id: "inspect_shared_run",
-		summary: "Read the shared run projection and follow its continuation.",
-		sideEffects: ["check"],
-	},
+	browserUseInspectSharedRunAction,
 	{
 		id: "resume_shared_run",
 		summary:
@@ -2267,7 +2270,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"run-cancel": {
 			script: "browser-use",
 			summary:
-				"Cancel a shared Browser Use run and report the last proven external-effect classification; never claims rollback after dispatch.",
+				"Cancel a pre-dispatch shared Browser Use run; refuses after mutation dispatch because external write truth may be unresolved.",
 			usage: ["run cancel --run <id> [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
@@ -2283,7 +2286,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,
-				failure: browserUsePlatformStoreFailureActions,
+				failure: [
+					...browserUsePlatformStoreFailureActions,
+					browserUseInspectSharedRunAction,
+				],
 			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,

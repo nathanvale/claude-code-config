@@ -1361,25 +1361,40 @@ export function checkSameLaneResume(
  * after a mutation may have reached the site (R37).
  */
 export type BrowserUseCancellationReport = {
-	external_effect: "none" | "unknown";
+	external_effect: "none";
 	rolled_back: false;
 };
 
+/** Cancellation admission: pre-dispatch truth or a fail-closed write refusal. */
+export type BrowserUseCancellationClassification =
+	| { ok: true; report: BrowserUseCancellationReport }
+	| {
+			ok: false;
+			code: "run_cancel_mutation_dispatched";
+			message: string;
+	  };
+
 /**
- * Classify a cancellation truthfully (R26/R37). Once a mutation was
- * dispatched and the run holds no confirmed terminal truth, the external
- * effect is `unknown` — same-lane inspection is the only continuation, never
- * retry, adapter switch, or a rollback claim.
+ * Classify cancellation admission truthfully (R26/R37). Once a mutation was
+ * dispatched, cancellation refuses because terminalising the run would hide
+ * a possible in-flight or applied external write.
  *
  * @param run - Shared run being cancelled
- * @returns External-effect truth with rollback structurally denied
+ * @returns Pre-dispatch external-effect truth, or the typed dispatch refusal
  */
 export function classifyCancellation(
 	run: BrowserUseSharedRun,
-): BrowserUseCancellationReport {
-	const effectKnownNone = !run.mutation_dispatched;
+): BrowserUseCancellationClassification {
+	if (run.mutation_dispatched) {
+		return {
+			ok: false,
+			code: "run_cancel_mutation_dispatched",
+			message:
+				"the run dispatched a mutation; inspect its external effect instead of cancelling it.",
+		};
+	}
 	return {
-		external_effect: effectKnownNone ? "none" : "unknown",
-		rolled_back: false,
+		ok: true,
+		report: { external_effect: "none", rolled_back: false },
 	};
 }

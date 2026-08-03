@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import type {
+	BrowserUseAuthFragmentSlot,
 	BrowserUseAuthCommitResult,
 	BrowserUseAuthCommitSummary,
 	BrowserUseAuthContractPort,
@@ -27,6 +28,7 @@ import {
 	authAttestationDigestOf,
 	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
+import { applyAuthTransition } from "./browser-use-auth-transaction";
 
 // --- The auth contract Port implementation (R6, R30) ------------------------------
 
@@ -107,6 +109,62 @@ export type BrowserUseAuthSummaryRejection = {
 export type BrowserUseAuthSummaryResult =
 	| { ok: true; summary: BrowserUseAuthCommitSummary }
 	| { ok: false; rejection: BrowserUseAuthSummaryRejection };
+
+/** Auth-owned result for closing the platform's opaque fragment on cancellation. */
+export type BrowserUseAuthFragmentCancellationResult =
+	| { ok: true; fragment: BrowserUseAuthFragmentSlot }
+	| {
+			ok: false;
+			code: "auth_fragment_invalid" | "auth_fragment_cancel_refused";
+			message: string;
+	  };
+
+/**
+ * Close an opaque auth fragment through the auth transaction reducer.
+ *
+ * The run store calls this owner seam during its atomic terminal write. It
+ * never parses auth vocabulary itself.
+ *
+ * @param slot - Opaque fragment slot held by the shared run
+ * @returns A terminal cancelled slot, or a typed owner refusal
+ *
+ * @example
+ * ```typescript
+ * const result = cancelAuthFragmentSlot(run.auth_fragment)
+ * ```
+ */
+export function cancelAuthFragmentSlot(
+	slot: BrowserUseAuthFragmentSlot,
+): BrowserUseAuthFragmentCancellationResult {
+	if (slot.schema_version !== BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION) {
+		return {
+			ok: false,
+			code: "auth_fragment_invalid",
+			message: "the stored auth fragment schema is unsupported; cancellation was not persisted.",
+		};
+	}
+	const transitioned = applyAuthTransition(
+		slot.fragment as BrowserUseAuthTransactionFragment,
+		{ type: "cancel" },
+	);
+	if (!transitioned.ok) {
+		return {
+			ok: false,
+			code:
+				transitioned.rejection.code === "auth_fragment_invalid"
+					? "auth_fragment_invalid"
+					: "auth_fragment_cancel_refused",
+			message: transitioned.rejection.message,
+		};
+	}
+	return {
+		ok: true,
+		fragment: {
+			schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+			fragment: transitioned.fragment,
+		},
+	};
+}
 
 // The active-fragment progress continuation: an in-progress transaction
 // keeps its run in `awaiting-auth` with exactly one next safe action —

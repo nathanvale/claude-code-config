@@ -18,7 +18,7 @@ import {
 	browserUseContracts,
 } from "./command-contract";
 import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
-import { renderHelp } from "./browser-use-parser";
+import { parseBrowserUseArgv, renderHelp } from "./browser-use-parser";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -32,6 +32,31 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 // =========================================================================
 
 describe("platform family help and discovery", () => {
+	test("run cancel discovery, help, parser, and repair affordance stay aligned", () => {
+		const contract = browserUseContracts["run-cancel"];
+		expect(contract.usage).toEqual([
+			"run cancel --run <id> [--caller <label>] [--json|--plain]",
+		]);
+		expect(contract.summary).toContain("refuses after mutation dispatch");
+		expect(
+			contract.actionAffordances?.failure?.map((action) => action.id),
+		).toContain("inspect_shared_run");
+		const help = renderHelp("run", "run-cancel");
+		expect(help).toContain("Usage: browser-use run cancel --run <id>");
+		expect(help).toContain("refuses after mutation dispatch");
+		expect(
+			parseBrowserUseArgv([
+				"run",
+				"cancel",
+				"--run",
+				"run-1",
+				"--caller",
+				"operator",
+				"--json",
+			]),
+		).toMatchObject({ kind: "command", command: "run-cancel" });
+	});
+
 	test("root help lists every command family", () => {
 		const help = renderHelp();
 		for (const family of BROWSER_USE_FAMILIES) {

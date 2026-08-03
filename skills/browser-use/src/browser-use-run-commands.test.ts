@@ -1,7 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { acquireLease, releaseLease } from "./browser-use-locks";
+import { BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION } from "./browser-use-auth-model";
+import {
+	applyAuthTransition,
+	beginAuthTransaction,
+} from "./browser-use-auth-transaction";
 import {
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
@@ -16,6 +23,8 @@ import {
 	artifactTombstonePath,
 	writeArtifactManifest,
 } from "./browser-use-retention";
+import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
+import { resolveSelectedRunbookGeneration } from "./browser-use-runbook-generation";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
 import {
 	type RunStoreDeps,
@@ -120,6 +129,64 @@ async function createOk(
 
 function sha256(contents: string): string {
 	return createHash("sha256").update(contents).digest("hex");
+}
+
+function git(root: string, ...args: string[]): void {
+	const result = Bun.spawnSync(["git", ...args], {
+		cwd: root,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+}
+
+function mutationCatalogFixture(): string {
+	const root = mkdtempSync(`${tmpdir()}/browser-use-cancel-activation-`);
+	disposables.push({
+		dispose: () => rmSync(root, { recursive: true, force: true }),
+	});
+	const runbookRoot = `${root}/skills/browser-use/runbooks/demo/mutate`;
+	const actionsRoot = `${root}/skills/browser-use/actions`;
+	mkdirSync(runbookRoot, { recursive: true });
+	mkdirSync(actionsRoot, { recursive: true });
+	writeFileSync(`${actionsRoot}/registry.json`, '{"actions":[]}\n');
+	writeFileSync(
+		`${runbookRoot}/runbook.json`,
+		`${JSON.stringify({
+			contract: "browser-use.runbook",
+			schema_version: "2",
+			service_id: "demo",
+			flow_id: "mutate",
+			flow_name: "demo-mutate",
+			version: "1",
+			summary: "Mutate demo state.",
+			allowed_origins: ["https://example.test"],
+			inputs: [],
+			steps: [
+				{
+					kind: "click",
+					target: { role: "button", name: "Save" },
+					postcondition: {
+						kind: "element-visible",
+						selector: ".saved",
+					},
+				},
+			],
+		})}\n`,
+	);
+	git(root, "init", "-q");
+	git(root, "add", "skills/browser-use/runbooks", "skills/browser-use/actions");
+	git(
+		root,
+		"-c",
+		"user.email=test@example.invalid",
+		"-c",
+		"user.name=Cancel Test",
+		"commit",
+		"-qm",
+		"mutation catalog fixture",
+	);
+	return root;
 }
 
 // Seed one present artifact: durable bytes plus a manifest whose content
@@ -354,12 +421,31 @@ describe("run status over the durable store (R24/R35, AE15)", () => {
 				holderId: held.lease.holder_id,
 			},
 		);
+		const auth = beginAuthTransaction({
+			binding: {
+				run_id: runInput.run_id,
+				handoff_evidence_id: "evidence-opaque",
+				lane_id: "agent-browser",
+				environment: runInput.environment_profile.environment,
+				profile: runInput.environment_profile.profile,
+				service_id: "demo",
+				auth_context: "redaction",
+				origin: "https://example.test",
+				target_id: "opaque-binding-ref-1",
+				page_id: "page-opaque",
+				frame_id: "frame-opaque",
+			},
+			method: "password",
+			attempt_limit: 1,
+			attempts_already_consumed: 0,
+		});
+		if (!auth.ok) throw new Error("unreachable");
 		const committed = await port.commitAuthOutcome({
 			run_id: runInput.run_id,
 			expected_revision: loadedBeforeAuth.run.revision,
 			fragment: {
-				schema_version: "1",
-				fragment: { binding_ref: "opaque-binding-ref-1" },
+				schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+				fragment: auth.fragment,
 			},
 			summary: { state: "awaiting-auth", continuation: CONTINUATION },
 		});
@@ -489,6 +575,125 @@ describe("run resume over durable state (R28/R36, AE7/AE15)", () => {
 });
 
 describe("run cancel terminal-truth mapping (R37, AE15)", () => {
+	test("a cancelled mutation-class run drops out of activation blockers", async () => {
+		const store = await makeStore();
+		const sourceRoot = mutationCatalogFixture();
+		const catalog = await loadPrivateRunbookCatalogFromGit({
+			repoRoot: sourceRoot,
+		});
+		expect(catalog.ok).toBe(true);
+		if (!catalog.ok) return;
+		const runtime = makeRuntime({ env: store.env, sourceCheckoutRoot: sourceRoot });
+		const activationArgs = [
+			"runbook",
+			"activate",
+			"--catalog-digest",
+			catalog.catalog.catalog_digest,
+			"--expected-epoch",
+			"0",
+			"--json",
+		];
+		const firstActivation = await runForTest(activationArgs, runtime);
+		expect(firstActivation.exitCode).toBe(0);
+		const selected = await resolveSelectedRunbookGeneration(store.deps);
+		expect(selected.ok).toBe(true);
+		if (!selected.ok) return;
+		const record = selected.manifest.runbooks.find(
+			(runbook) =>
+				runbook.service_id === "demo" && runbook.flow_id === "mutate",
+		);
+		if (record === undefined) throw new Error("mutation runbook missing");
+		await createOk(
+			store.deps,
+			blockedRun("run-cancel-activation", {
+				state: "awaiting-user-presence",
+				adapter_id: "agent-browser",
+				handoff_evidence_id: "cancel-activation-evidence",
+				runbook_target_binding: {
+					schema_version: "1",
+					mode: "automatic",
+					binding_id: "cancel-activation-target",
+				},
+				runbook_progress: {
+					schema_version: "1",
+					service_id: "demo",
+					flow_id: "mutate",
+					runbook_version: "1",
+					next_step: 0,
+					total_steps: 1,
+				},
+				run_execution_binding: {
+					schema_version: "1",
+					generation_id: selected.generation_id,
+					activation_epoch: selected.epoch,
+					service_id: "demo",
+					flow_id: "mutate",
+					runbook_version: "1",
+					runbook_digest: record.record_digest,
+					action_registry_digest: selected.action_registry_digest,
+					normalized_input_digest: sha256("{}"),
+					item_key_digest: sha256("[]"),
+					target_scope: "https://example.test",
+					postcondition: { id: "saved", summary: "Save is visible." },
+				},
+			}),
+		);
+		const runbookPath = `${sourceRoot}/skills/browser-use/runbooks/demo/mutate/runbook.json`;
+		const changedRunbook = JSON.parse(
+			await Bun.file(runbookPath).text(),
+		) as Record<string, unknown>;
+		changedRunbook.summary = "Mutate changed demo state.";
+		writeFileSync(runbookPath, `${JSON.stringify(changedRunbook)}\n`);
+		git(sourceRoot, "add", "skills/browser-use/runbooks/demo/mutate/runbook.json");
+		git(
+			sourceRoot,
+			"-c",
+			"user.email=test@example.invalid",
+			"-c",
+			"user.name=Cancel Test",
+			"commit",
+			"-qm",
+			"changed mutation catalog fixture",
+		);
+		const changedCatalog = await loadPrivateRunbookCatalogFromGit({
+			repoRoot: sourceRoot,
+		});
+		expect(changedCatalog.ok).toBe(true);
+		if (!changedCatalog.ok) return;
+		const nextActivationArgs = [
+			"runbook",
+			"activate",
+			"--catalog-digest",
+			changedCatalog.catalog.catalog_digest,
+			"--expected-epoch",
+			"1",
+			"--json",
+		];
+		const blockedActivation = await runForTest(
+			nextActivationArgs,
+			runtime,
+		);
+		expect(blockedActivation.exitCode).toBe(20);
+		expect(parseJson(blockedActivation.stdout)).toMatchObject({
+			error: { code: "activation_blocked_by_run" },
+		});
+
+		const cancelled = await runForTest(
+			["run", "cancel", "--run", "run-cancel-activation", "--json"],
+			runtime,
+		);
+		expect(cancelled.exitCode).toBe(0);
+		const activated = await runForTest(
+			nextActivationArgs,
+			runtime,
+		);
+		expect(activated.exitCode).toBe(0);
+		expect(parseJson(activated.stdout)).toMatchObject({
+			status: "ok",
+			data: { changed: true, epoch: 2 },
+		});
+	});
+
 	test("cancel before dispatch records terminal not-achieved with external_effect none", async () => {
 		const store = await makeStore();
 		await createOk(store.deps, blockedRun("run-cancel-none"));
@@ -504,12 +709,95 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 		// Terminal truth carries no blocked-state continuation.
 		expect(run.continuation).toBeUndefined();
 		expect(data.cancellation).toEqual({
+			outcome: "cancelled",
 			external_effect: "none",
 			rolled_back: false,
 		});
 	});
 
-	test("cancel after dispatch records terminal unknown and NEVER claims rollback", async () => {
+	test("cancel closes a blocked auth fragment in the same terminal write", async () => {
+		const store = await makeStore();
+		const run = blockedRun("run-cancel-auth");
+		await createOk(store.deps, run);
+		const begun = beginAuthTransaction({
+			binding: {
+				run_id: run.run_id,
+				handoff_evidence_id: "evidence-1",
+				lane_id: "agent-browser",
+				environment: run.environment_profile.environment,
+				profile: run.environment_profile.profile,
+				service_id: "fasttrack",
+				auth_context: "timesheet",
+				origin: "https://portal.example.test",
+				target_id: "target-1",
+				page_id: "page-1",
+				frame_id: "frame-1",
+			},
+			method: "password",
+			attempt_limit: 3,
+			attempts_already_consumed: 0,
+		});
+		expect(begun.ok).toBe(true);
+		if (!begun.ok) return;
+		const blocked = applyAuthTransition(begun.fragment, {
+			type: "blocked",
+			cause: "user-presence-required",
+		});
+		expect(blocked.ok).toBe(true);
+		if (!blocked.ok) return;
+		const loaded = await loadSharedRun(store.deps, run.run_id);
+		if (!loaded.ok) throw new Error("unreachable");
+		const held = await acquireLease(store.deps, {
+			key: leaseKeyForRun(loaded.run),
+			holderId: "auth-transaction",
+			ttlMs: 5_000,
+		});
+		if (!held.ok) throw new Error("unreachable");
+		const port = createRunIntegrationPort(
+			store.deps,
+			{
+				validateSecretFreeFragment: () => true,
+				verifyAttestation: async () => true,
+			},
+			{
+				fencing_token: held.lease.fencing_token,
+				activation_epoch: held.lease.activation_epoch,
+				holderId: held.lease.holder_id,
+			},
+		);
+		const committed = await port.commitAuthOutcome({
+			run_id: run.run_id,
+			expected_revision: loaded.run.revision,
+			fragment: {
+				schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+				fragment: blocked.fragment,
+			},
+			summary: {
+				state: "awaiting-user-presence",
+				continuation: blocked.fragment.continuation ?? CONTINUATION,
+			},
+		});
+		expect(committed.ok).toBe(true);
+		await releaseLease(store.deps, held.lease);
+
+		const result = await runForTest(
+			["run", "cancel", "--run", run.run_id, "--json"],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(0);
+		const cancelled = await loadSharedRun(store.deps, run.run_id);
+		if (!cancelled.ok) throw new Error("unreachable");
+		expect(cancelled.run.state).toBe("not-achieved");
+		expect(cancelled.run.revision).toBe(3);
+		expect(cancelled.run.auth_fragment?.fragment).toMatchObject({
+			status: "terminal",
+			phase: "terminal",
+			terminal_outcome: "cancelled",
+			continuation: null,
+		});
+	});
+
+	test("cancel after dispatch refuses and preserves the nonterminal run", async () => {
 		const store = await makeStore();
 		await createOk(
 			store.deps,
@@ -519,13 +807,17 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 			["run", "cancel", "--run", "run-cancel-unknown", "--json"],
 			makeRuntime({ env: store.env }),
 		);
-		expect(result.exitCode).toBe(0);
-		const data = parseJson(result.stdout).data as Record<string, unknown>;
-		expect((data.run as Record<string, unknown>).state).toBe("unknown");
-		expect(data.cancellation).toEqual({
-			external_effect: "unknown",
-			rolled_back: false,
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "run_cancel_mutation_dispatched" },
+			continuation: { next_action_id: "inspect_shared_run" },
 		});
+		const loaded = await loadSharedRun(store.deps, "run-cancel-unknown");
+		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.run.state).toBe("running");
+		expect(loaded.run.revision).toBe(1);
 	});
 
 	test("cancel is idempotent on a terminal run: no write, no revision bump", async () => {
@@ -547,6 +839,41 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 			.run as Record<string, unknown>;
 		expect(secondRun).toEqual(firstRun);
 		expect(secondRun.revision).toBe(2);
+		expect(
+			(parseJson(second.stdout).data as Record<string, unknown>).cancellation,
+		).toEqual({
+			outcome: "already-terminal",
+			external_effect: "none",
+			rolled_back: false,
+		});
+	});
+
+	test("an already-terminal dispatched run remains an idempotent no-op", async () => {
+		const store = await makeStore();
+		await createOk(
+			store.deps,
+			runningRun("run-cancel-terminal-dispatched", {
+				state: "confirmed",
+				mutation_dispatched: true,
+			}),
+		);
+		const result = await runForTest(
+			[
+				"run",
+				"cancel",
+				"--run",
+				"run-cancel-terminal-dispatched",
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout)).toMatchObject({
+			data: {
+				run: { state: "confirmed", revision: 1 },
+				cancellation: { outcome: "already-terminal" },
+			},
+		});
 	});
 
 	test("plain cancel projects the same cancellation facts (R35 parity)", async () => {
@@ -558,6 +885,7 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("external_effect=none");
+		expect(result.stdout).toContain("cancellation=cancelled");
 		expect(result.stdout).toContain("rolled_back=false");
 		expect(result.stdout).toContain("state=not-achieved");
 	});

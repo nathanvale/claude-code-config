@@ -109,6 +109,7 @@ import {
 import {
 	BROWSER_USE_TASK_INTENT_DEFINITIONS,
 	BROWSER_USE_TERMINAL_RUN_STATES,
+	type BrowserUseCancellationReport,
 	type BrowserUseCallerMetadata,
 	type BrowserUseRunState,
 	type BrowserUseRunStructuredResult,
@@ -1872,10 +1873,10 @@ async function runRunResume(input: PlatformCommandInput): Promise<number> {
 }
 
 /**
- * `run cancel` (R37, AE15). Terminal-truth mapping through the U1 classifier:
- * external effect `none` -> terminal `not-achieved`, `unknown` -> terminal
- * `unknown`; `rolled_back` is ALWAYS the literal false. Cancelling an
- * already-terminal run is an idempotent projection of the standing truth —
+ * `run cancel` (R37, AE15). A pre-dispatch run becomes terminal
+ * `not-achieved`; a dispatched run refuses because external write truth may
+ * be unresolved. `rolled_back` is ALWAYS the literal false. Cancelling an
+ * already-terminal run is an idempotent projection of the standing truth:
  * no write, no revision bump.
  *
  * @param input - Store-backed command input
@@ -1892,24 +1893,40 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 			platformStoreFailureOf(loaded.code, loaded.message),
 		);
 	}
-	const report = classifyCancellation(loaded.run);
-	const cancellationExtra = {
-		dataExtra: { cancellation: report },
+	const cancellationExtra = (
+		outcome: "cancelled" | "already-terminal",
+		report: BrowserUseCancellationReport,
+	) => ({
+		dataExtra: { cancellation: { outcome, ...report } },
 		plainExtra: [
+			`cancellation=${outcome}`,
 			`external_effect=${report.external_effect}`,
 			`rolled_back=${report.rolled_back}`,
 		],
-	};
+	});
 	if (isTerminalRunState(loaded.run.state)) {
 		return emitSharedRunSuccess({
 			command: input,
 			run: loaded.run,
 			continuationId: "inspect_shared_run",
-			...cancellationExtra,
+			...cancellationExtra("already-terminal", {
+				external_effect: "none",
+				rolled_back: false,
+			}),
 		});
 	}
-	const targetState: BrowserUseRunState =
-		report.external_effect === "none" ? "not-achieved" : "unknown";
+	const classification = classifyCancellation(loaded.run);
+	if (!classification.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: classification.code,
+			message: `run ${loaded.run.run_id}: ${classification.message}`,
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const { report } = classification;
+	const targetState: BrowserUseRunState = "not-achieved";
 	const acquired = await acquireLease(store.deps, {
 		key: leaseKeyForRun(loaded.run),
 		holderId: `cancel-${runFlag}`,
@@ -1936,6 +1953,7 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 			runId: runFlag,
 			expectedRevision: loaded.run.revision,
 			lease: claim,
+			authFragmentAction: "cancel",
 			mutate: (run) => {
 				// Terminal truth carries no blocked-state continuation; everything
 				// else (artifacts, attestation reference, dispatch truth) survives.
@@ -1956,7 +1974,7 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 		command: input,
 		run: updated.run,
 		continuationId: "inspect_shared_run",
-		...cancellationExtra,
+		...cancellationExtra("cancelled", report),
 	});
 }
 
