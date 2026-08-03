@@ -1,0 +1,186 @@
+{
+ "schema": "artifact-policy.repo.v1",
+ "precious_roots": [],
+ "regenerable_roots": [
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/agent-worktree/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/browser-connect/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/browser-use-security/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/cli-command-facade/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/cli-test-fixtures/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/mcporter-transport/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/setup/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "runtime/warm-chrome/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/bft-booking/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/browser-use/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/ce-work-inspect/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/classic-cinema/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/cli-author/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/cli-execution-auditor/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/fallow/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/record-decision/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/skill-feedback/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/skills-sync/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/test-runner/node_modules"
+  },
+  {
+   "owner": "bun",
+   "repair_argv": [
+    "bun",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "root": "skills/worktree/node_modules"
+  }
+ ]
+}
