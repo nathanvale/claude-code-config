@@ -46,7 +46,7 @@ import {
 	type BrowserUseRunbookPlan,
 	type BrowserUseRunbookReadActionMeta,
 	type BrowserUseRunbookStep,
-	materializeRunbookInputs,
+	admitRunbookInputs,
 	nextRunbookStepAfterExecution,
 	parseRunbookRecord,
 	projectRunbookCatalogRow,
@@ -829,10 +829,9 @@ export async function prepareRunbookExecution(
 			: failure("runbook_not_found", `no runbook is defined for ${input.serviceId}/${input.flowId}.`);
 		return { ok: false, refusal };
 	}
-	const normalizedInputs = materializeRunbookInputs(
-		shown.runbook,
-		input.inputs,
-	);
+	const admittedInputs = admitRunbookInputs(shown.runbook, input.inputs);
+	if (!admittedInputs.ok) return admittedInputs;
+	const normalizedInputs = admittedInputs.inputs;
 	let resolvedActionSteps:
 		| ReadonlyMap<number, BrowserUseRunbookActionResolution>
 		| undefined;

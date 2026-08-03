@@ -61,6 +61,29 @@ async function git(root: string, ...args: string[]): Promise<string> {
 }
 
 describe("Reviewed Action schema and mechanical capability audit", () => {
+	test("the four FastTrack legacy assets validate unchanged through the current candidate schema", async () => {
+		const registry = JSON.parse(await readFile(join(import.meta.dir, "../actions/registry.json"), "utf8")) as {
+			actions: Array<{ asset_path: string; record: Record<string, unknown> }>;
+		};
+		for (const entry of registry.actions) {
+			const record = entry.record;
+			const source = await readFile(join(import.meta.dir, "../actions", entry.asset_path), "utf8");
+			const result = validateReviewedActionCandidate({
+				contract: "browser-use.reviewed-action-candidate",
+				schema_version: "1",
+				action_id: record.action_id,
+				origin: record.allowed_origin,
+				source,
+				containment: record.containment,
+				input_schema: record.input_schema,
+				result_schema: record.result_schema,
+				result_sensitivity: record.result_sensitivity,
+				required_postcondition: record.required_postcondition,
+			} as never);
+			expect(result.ok, String(record.action_id)).toBe(true);
+		}
+	});
+
 	test("public schema and validate commands emit the facade-owned result contract", async () => {
 		const schemaResult = await runForTest(["action", "schema", "--json"], makeRuntime());
 		expect(schemaResult.exitCode).toBe(0);
@@ -115,10 +138,12 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 });
 
 describe("Reviewed Action candidate lifecycle", () => {
-	test("operator promotion reads committed exact bytes and persists a verified receipt", async () => {
+	test("operator promotion reads committed exact bytes and admits only verified receipt drift for a same-commit batch", async () => {
 		const sourceRoot = await sourceFixture();
 		const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate() as never });
 		if (!applied.ok) throw new Error(applied.message);
+		const second = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate({ action_id: "count-more-rows" }) as never });
+		if (!second.ok) throw new Error(second.message);
 		await git(sourceRoot, "init", "-q");
 		await git(sourceRoot, "add", "skills/browser-use/actions/registry.json", `skills/browser-use/actions/assets/${applied.digest}.js`);
 		await git(sourceRoot, "commit", "-qm", "candidate");
@@ -133,7 +158,7 @@ describe("Reviewed Action candidate lifecycle", () => {
 				async issueReviewedActionPromotion(input) {
 					const unsigned = {
 						...input.facts,
-						receipt_id: "receipt-committed-candidate",
+						receipt_id: `receipt-${input.facts.action_id}`,
 						approval_reference: input.approval_reference,
 						issued_at_epoch_ms: 1_000,
 						verifier_key_id: "test-key",
@@ -159,9 +184,20 @@ describe("Reviewed Action candidate lifecycle", () => {
 			router,
 			verifier,
 		});
-		expect(promoted).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-committed-candidate" });
+		expect(promoted).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-count-rows" });
+		const promotedSecond = await promoteReviewedActionCandidate({
+			sourceRoot,
+			actionId: "count-more-rows",
+			approvalReference: "review-2",
+			router,
+			verifier,
+		});
+		expect(promotedSecond).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-count-more-rows" });
 		const registry = JSON.parse(await readFile(join(sourceRoot, "skills/browser-use/actions/registry.json"), "utf8"));
-		expect(registry.actions[0].record.promotion_receipt).toMatchObject({ source_commit: commit, approved_digest: applied.digest });
+		expect(registry.actions.map((entry: { record: { promotion_receipt: unknown } }) => entry.record.promotion_receipt)).toEqual([
+			expect.objectContaining({ source_commit: commit, approved_digest: applied.digest }),
+			expect.objectContaining({ source_commit: commit, approved_digest: second.digest }),
+		]);
 	});
 
 	test("apply creates one unpromoted digest and complete identical apply is a no-op", async () => {

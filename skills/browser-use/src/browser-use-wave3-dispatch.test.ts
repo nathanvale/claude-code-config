@@ -576,7 +576,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 	});
 
-	test("runbook list surfaces verifier-separated records outside activation blockers", async () => {
+	test("runbook list surfaces unpromoted records as activation blockers", async () => {
 		const store = await makeStore();
 		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
@@ -586,17 +586,15 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		const data = parseJson(result.stdout).data as Record<string, unknown>;
-		expect(data.separated).toContainEqual(
+		expect(data.activation_blockers).toContainEqual(
 			expect.objectContaining({
-				record_id: "fasttrack/fill-week",
-				code: "promotion_verifier_unavailable",
+				id: "fasttrack/fill-week",
+				code: "runbook_action_unpromoted",
 			}),
 		);
-		expect(data.activation_blockers).not.toContainEqual(
-			expect.objectContaining({ id: "fasttrack/fill-week" }),
-		);
+		expect(data.separated).toEqual([]);
 		const rows = data.runbooks as Array<Record<string, unknown>>;
-		expect(rows.find((row) => row.service_id === "fasttrack" && row.flow_id === "fill-week")?.synchronization_status).toBe("separated");
+		expect(rows.find((row) => row.service_id === "fasttrack" && row.flow_id === "fill-week")?.health).toBe("stale");
 	});
 
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
@@ -621,8 +619,8 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 		expect(seeded).toBeDefined();
 		expect(data.runbook_count).toBe(rows.length);
-		expect(data.separated).toContainEqual(
-			expect.objectContaining({ record_id: "fasttrack/fill-week" }),
+		expect(data.activation_blockers).toContainEqual(
+			expect.objectContaining({ id: "fasttrack/fill-week", code: "runbook_action_unpromoted" }),
 		);
 	});
 
@@ -644,7 +642,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(data.separated).toBeNull();
 	});
 
-	test("runbook show surfaces a verifier-separated definition without making it executable", async () => {
+	test("runbook show refuses an unpromoted action-bearing definition", async () => {
 		const store = await makeStore();
 		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
@@ -652,12 +650,9 @@ describe("runbook family — live (U4 wiring)", () => {
 				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
-		expect(result.exitCode).toBe(0);
-		const data = parseJson(result.stdout).data as Record<string, unknown>;
-		expect(data.synchronization_status).toBe("separated");
-		expect(data.separated).toMatchObject({
-			record_id: "fasttrack/fill-week",
-			code: "promotion_verifier_unavailable",
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "runbook_action_unpromoted",
 		});
 	});
 

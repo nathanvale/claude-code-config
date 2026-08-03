@@ -434,7 +434,13 @@ const BROWSER_USE_RUNBOOK_SUBCOMMANDS = [
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
-export const BROWSER_USE_ACTION_SUBCOMMANDS = ["schema", "validate", "apply", "status"] as const;
+export const BROWSER_USE_ACTION_SUBCOMMANDS = [
+	"schema",
+	"validate",
+	"apply",
+	"status",
+	"promote",
+] as const;
 export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
 
 const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
@@ -590,6 +596,7 @@ export type BrowserUseCommand =
 	| "action-validate"
 	| "action-apply"
 	| "action-status"
+	| "action-promote"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -1317,6 +1324,15 @@ const browserUsePlatformEnvVars = [
 	browserUseCallerEnvVar,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
+export const BROWSER_USE_APPROVAL_BROKER_ENV =
+	"BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER";
+
+const browserUseApprovalBrokerEnvVar = {
+	name: BROWSER_USE_APPROVAL_BROKER_ENV,
+	description:
+		"Absolute signed ApprovalBroker executable used for presence-backed action promotion and one-run identity attestation.",
+} as const;
+
 // XDG env vars the store-backed platform commands consume (platform plan U2,
 // R7/R11). Declared once; browser-use-paths.ts is the one resolution owner —
 // this table only names the consumed vars for discovery/help.
@@ -1626,6 +1642,12 @@ const browserUseActionApplyFlags = {
 
 const browserUseActionStatusFlags = {
 	"--id": { type: "string", description: "Exact Reviewed Action id whose promotion state is projected." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionPromoteFlags = {
+	"--id": { type: "string", description: "Exact committed Reviewed Action id to promote." },
+	"--approval-reference": { type: "string", description: "Opaque external-human review reference bound into the signed promotion receipt." },
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
@@ -2299,6 +2321,16 @@ export const browserUseContracts = defineCommandFacadeContract(
 			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
 			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
 		},
+		"action-promote": {
+			script: "browser-use",
+			summary: "Promote one exact committed Reviewed Action through the signed, presence-backed ApprovalBroker.",
+			usage: ["action promote --id <action-id> --approval-reference <reference> [--caller <label>] [--json|--plain]"],
+			json: true, audience: "operator", mutation: "write", sideEffects: ["check", "auth", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Promotion is exact-commit bound and requires live operator presence at the signed broker." },
+			outputModes: ["json", "plain"], interactivity: "required",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionPromoteFlags, exitCodes: browserUsePlatformExitCodes,
+		},
 		"runbook-schema": {
 			script: "browser-use",
 			summary: "Show the complete model-derived Runbook authoring schema and one validating example.",
@@ -2403,15 +2435,15 @@ export const browserUseContracts = defineCommandFacadeContract(
 			json: true,
 			audience: "agent",
 			mutation: "browser",
-			sideEffects: ["check", "browser", "write"],
+			sideEffects: ["check", "auth", "browser", "write"],
 			executionModes: ["normal"],
 			previewExemption: {
 				reason:
 					"Runbook run creates or resumes a durable shared run and dispatches live agent-browser execution against the verified handoff.",
 			},
 			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: browserUsePlatformStoreEnvVars,
+			interactivity: "optional",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,

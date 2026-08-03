@@ -1,13 +1,21 @@
 {
   "actions": [
     {
-      "asset_path": "fasttrack/fill-week.js",
+      "asset_path": "assets/52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76.js",
       "record": {
         "action_id": "fasttrack-fill-week",
         "asset_id": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
         "expected_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
         "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
         "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "framework-runtime",
+          "same-origin-navigation"
+        ],
         "containment": "none",
         "input_schema": {
           "kind": "object",
@@ -241,24 +249,156 @@
           "kind": "element-visible",
           "selector": "tr[ng-repeat]"
         },
-        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/fill-week.js",
-        "promotion_receipt": {
+        "source_provenance": "authored:fasttrack-fill-week",
+        "promotion_receipt": null
+      },
+      "promotion_history": [
+        {
           "approved_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
           "disposition": "approved",
           "approved_origin": "https://manpowergroup.fasttrack360.com.au",
           "approved_effect": "mutation",
           "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
         }
-      }
+      ]
     },
     {
-      "asset_path": "fasttrack/verify-filled-week.js",
+      "asset_path": "assets/da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387.js",
+      "record": {
+        "action_id": "fasttrack-save-draft",
+        "asset_id": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+        "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "framework-runtime"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "week_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "week_end": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "source": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 128
+              }
+            },
+            "resultType": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "promiseLike": {
+              "required": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "buttonText": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "beforeUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "afterUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "title": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 512
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": ".nav-tabs, table"
+        },
+        "source_provenance": "authored:fasttrack-save-draft",
+        "promotion_receipt": null
+      },
+      "promotion_history": [
+        {
+          "approved_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+          "disposition": "approved",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "approved_effect": "mutation",
+          "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
+        }
+      ]
+    },
+    {
+      "asset_path": "assets/e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61.js",
       "record": {
         "action_id": "fasttrack-verify-filled-week",
         "asset_id": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
         "expected_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
         "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
         "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "framework-runtime",
+          "same-origin-navigation"
+        ],
         "containment": "none",
         "input_schema": {
           "kind": "object",
@@ -442,135 +582,33 @@
           "kind": "element-visible",
           "selector": "tr[ng-repeat]"
         },
-        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/verify-filled-week.js",
-        "promotion_receipt": {
+        "source_provenance": "authored:fasttrack-verify-filled-week",
+        "promotion_receipt": null
+      },
+      "promotion_history": [
+        {
           "approved_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
           "disposition": "approved",
           "approved_origin": "https://manpowergroup.fasttrack360.com.au",
           "approved_effect": "mutation",
           "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
         }
-      }
+      ]
     },
     {
-      "asset_path": "fasttrack/save-draft.js",
-      "record": {
-        "action_id": "fasttrack-save-draft",
-        "asset_id": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-        "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
-        "effect_class": "mutation",
-        "containment": "none",
-        "input_schema": {
-          "kind": "object",
-          "fields": {
-            "week_start": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 10,
-                "pattern": "\\d{4}-\\d{2}-\\d{2}"
-              }
-            },
-            "week_end": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 10,
-                "pattern": "\\d{4}-\\d{2}-\\d{2}"
-              }
-            }
-          }
-        },
-        "result_schema": {
-          "kind": "object",
-          "fields": {
-            "ok": {
-              "required": true,
-              "schema": {
-                "kind": "boolean"
-              }
-            },
-            "mode": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 64
-              }
-            },
-            "source": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 128
-              }
-            },
-            "resultType": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 32
-              }
-            },
-            "promiseLike": {
-              "required": false,
-              "schema": {
-                "kind": "boolean"
-              }
-            },
-            "buttonText": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 64
-              }
-            },
-            "beforeUrl": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 2048
-              }
-            },
-            "afterUrl": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 2048
-              }
-            },
-            "title": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 512
-              }
-            }
-          }
-        },
-        "result_sensitivity": "low",
-        "required_postcondition": {
-          "kind": "element-visible",
-          "selector": ".nav-tabs, table"
-        },
-        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/save-draft.js",
-        "promotion_receipt": {
-          "approved_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-          "disposition": "approved",
-          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
-          "approved_effect": "mutation",
-          "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
-        }
-      }
-    },
-    {
-      "asset_path": "fasttrack/verify-saved-draft.js",
+      "asset_path": "assets/4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020.js",
       "record": {
         "action_id": "fasttrack-verify-saved-draft",
         "asset_id": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
         "expected_digest": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
         "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
         "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events"
+        ],
         "containment": "none",
         "input_schema": {
           "kind": "object",
@@ -753,15 +791,18 @@
           "kind": "element-visible",
           "selector": "table tbody tr"
         },
-        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/verify-saved-draft.js",
-        "promotion_receipt": {
+        "source_provenance": "authored:fasttrack-verify-saved-draft",
+        "promotion_receipt": null
+      },
+      "promotion_history": [
+        {
           "approved_digest": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
           "disposition": "approved",
           "approved_origin": "https://manpowergroup.fasttrack360.com.au",
           "approved_effect": "mutation",
           "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30"
         }
-      }
+      ]
     }
   ]
 }

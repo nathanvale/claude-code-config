@@ -470,19 +470,23 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 			actions: Array<{
 				asset_path: string;
 				record: {
+					action_id: string;
 					asset_id: string;
 					expected_digest: string;
-					promotion_receipt: { approved_digest: string };
+					promotion_receipt: null;
 				};
+				promotion_history: Array<{ approved_digest: string }>;
 			}>;
 		};
 		const entry = registry.actions.find(
-			(candidate) => candidate.asset_path === "fasttrack/fill-week.js",
+			(candidate) => candidate.record.action_id === "fasttrack-fill-week",
 		);
 
 		expect(entry).toBeDefined();
+		expect(await readFile(join(import.meta.dir, "..", "actions", entry?.asset_path ?? ""))).toEqual(actionBytes);
 		expect(entry?.record.asset_id).toBe(digest);
 		expect(entry?.record.expected_digest).toBe(digest);
-		expect(entry?.record.promotion_receipt.approved_digest).toBe(digest);
+		expect(entry?.record.promotion_receipt).toBeNull();
+		expect(entry?.promotion_history.at(-1)?.approved_digest).toBe(digest);
 	});
 });

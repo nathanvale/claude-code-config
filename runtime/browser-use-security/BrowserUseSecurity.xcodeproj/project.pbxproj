@@ -240,7 +240,7 @@
 				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.approval-broker";
 				PRODUCT_NAME = ApprovalBroker;
 			};
 			name = Debug;
@@ -255,7 +255,7 @@
 				INFOPLIST_FILE = "targets/ApprovalBroker/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.approval-broker";
 				PRODUCT_NAME = ApprovalBroker;
 			};
 			name = Release;
@@ -270,7 +270,7 @@
 				INFOPLIST_FILE = "targets/TokenRetrievalLauncher/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.token-retrieval-launcher";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.token-retrieval-launcher";
 				PRODUCT_NAME = TokenRetrievalLauncher;
 			};
 			name = Debug;
@@ -285,7 +285,7 @@
 				INFOPLIST_FILE = "targets/TokenRetrievalLauncher/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.token-retrieval-launcher";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.token-retrieval-launcher";
 				PRODUCT_NAME = TokenRetrievalLauncher;
 			};
 			name = Release;
@@ -300,7 +300,7 @@
 				INFOPLIST_FILE = "targets/ConfidentialFieldDeliveryXPC/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", "@loader_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.confidential-field-delivery";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.confidential-field-delivery";
 				PRODUCT_NAME = ConfidentialFieldDeliveryXPC;
 			};
 			name = Debug;
@@ -315,7 +315,7 @@
 				INFOPLIST_FILE = "targets/ConfidentialFieldDeliveryXPC/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = ( "@executable_path/../Frameworks", "@loader_path/../Frameworks", );
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.confidential-field-delivery";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nathanvow.browser-use-security.confidential-field-delivery";
 				PRODUCT_NAME = ConfidentialFieldDeliveryXPC;
 			};
 			name = Release;

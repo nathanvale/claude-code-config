@@ -1018,6 +1018,11 @@ describe("runbook discovery over the XDG data root", () => {
 				}),
 				expect.objectContaining({
 					service_id: "unifi",
+					flow_id: "login",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
 					flow_id: "login-screen-verify",
 					step_count: 2,
 					effect_class: "read-only",
@@ -1165,8 +1170,71 @@ describe("runbook discovery over the XDG data root", () => {
 
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
+const FASTTRACK_TIMESHEET_RUN = {
+	envelope: {
+		target_account: "self",
+		period_start: "2026-08-03",
+		period_end: "2026-08-09",
+		selected_work_dates: [
+			"2026-08-03",
+			"2026-08-04",
+			"2026-08-05",
+			"2026-08-06",
+			"2026-08-07",
+		],
+		expected_aggregate: { unit: "hours", value: 35 },
+		mutation_mode: "prepare-draft",
+		final_action: "human-submit",
+	},
+	payload: {
+		portal: "fasttrack",
+		rows: [
+			{
+				date: "2026-08-03",
+				day: "Mon",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-04",
+				day: "Tue",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-05",
+				day: "Wed",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-06",
+				day: "Thu",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-07",
+				day: "Fri",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+		],
+	},
+};
+
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the five daily-driver runbooks", async () => {
+	test("ships exactly the six daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1177,6 +1245,7 @@ describe("shipped runbooks root resolution", () => {
 				"fasttrack/login",
 				"matest/development-snapshot-verify",
 				"oncore/timesheet-snapshot-verify",
+				"unifi/login",
 				"unifi/login-screen-verify",
 			]);
 		} finally {
@@ -1184,38 +1253,14 @@ describe("shipped runbooks root resolution", () => {
 		}
 	});
 
-	test("prepares FastTrack from shipped reviewed actions without Submit", async () => {
+	test("refuses the unpromoted FastTrack shipped-action snapshot", async () => {
 		const prepared = await prepareRunbookExecution(
 			createDefaultPlatformFs(),
 			mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
 			{
 				serviceId: "fasttrack",
 				flowId: "fill-week",
-				inputs: {
-					timesheet_run: {
-						envelope: {
-							target_account: "primary",
-							period_start: "2026-07-27",
-							period_end: "2026-08-02",
-							selected_work_dates: ["2026-07-27"],
-							expected_aggregate: { unit: "hours", value: 8 },
-							mutation_mode: "prepare-draft",
-							final_action: "human-submit",
-						},
-						payload: {
-							portal: "fasttrack",
-							rows: [
-								{
-									date: "2026-07-27",
-									day: "Mon",
-									start_time: "09:00",
-									end_time: "17:00",
-									attendance_type: "Standard",
-								},
-							],
-						},
-					},
-				},
+				inputs: { timesheet_run: FASTTRACK_TIMESHEET_RUN },
 				resumeFromStep: 0,
 				actionSeam: createBrowserUseShippedActionSeam(
 					createDefaultPlatformFs(),
@@ -1223,19 +1268,45 @@ describe("shipped runbooks root resolution", () => {
 			},
 		);
 
-		expect(prepared.ok).toBe(true);
-		if (!prepared.ok) return;
-		expect(prepared.plan.steps).toHaveLength(7);
-		expect(
-			prepared.plan.steps.filter((step) => step.kind === "evaluate"),
-		).toHaveLength(4);
-		expect(
-			prepared.plan.steps.some(
-				(step) =>
-					step.kind === "evaluate" &&
-					step.action_id.toLowerCase().includes("submit"),
-			),
-		).toBe(false);
+		expect(prepared).toMatchObject({
+			ok: false,
+			refusal: { code: "runbook_action_refused" },
+		});
+	});
+
+	test("rejects malformed FastTrack input before Reviewed Action resolution", async () => {
+		const malformedInputs = [
+			{ timesheet_run: { timesheet_run: FASTTRACK_TIMESHEET_RUN } },
+			{
+				timesheet_run: {
+					...FASTTRACK_TIMESHEET_RUN,
+					envelope: {
+						...FASTTRACK_TIMESHEET_RUN.envelope,
+						period_start: "2026-02-30",
+					},
+				},
+			},
+		];
+
+		for (const inputs of malformedInputs) {
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
+				{
+					serviceId: "fasttrack",
+					flowId: "fill-week",
+					inputs,
+					resumeFromStep: 0,
+					actionSeam: createBrowserUseShippedActionSeam(
+						createDefaultPlatformFs(),
+					),
+				},
+			);
+
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) continue;
+			expect(prepared.refusal.code).toBe("runbook_input_rejected");
+		}
 	});
 
 	test("resolves to an existing directory containing the shipped runbooks", () => {
@@ -3087,15 +3158,21 @@ describe("engine reviewed-action step resolution (U3)", () => {
 		"iterate validates a non-empty bounded unique stable-key sequence before action resolution",
 		withDataRoot(async (dataRoot) => {
 			writeRunbook(dataRoot, iterateRunbook());
-			const invalidInputs: readonly unknown[] = [
-				undefined,
-				"item-1",
-				[],
-				[""],
-				[1],
-				["bad key"],
-				["item-1", "item-1"],
-				Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+			const invalidInputs: readonly (readonly [
+				unknown,
+				"runbook_input_missing" | "runbook_input_rejected" | "runbook_action_refused",
+			])[] = [
+				[undefined, "runbook_input_missing"],
+				["item-1", "runbook_input_rejected"],
+				[[], "runbook_input_rejected"],
+				[[""], "runbook_input_rejected"],
+				[[1], "runbook_input_rejected"],
+				[["bad key"], "runbook_action_refused"],
+				[["item-1", "item-1"], "runbook_action_refused"],
+				[
+					Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+					"runbook_input_rejected",
+				],
 			];
 			const mustNotResolve: BrowserUseActionGenerationSeam = {
 				async loadActionRecord() {
@@ -3105,7 +3182,7 @@ describe("engine reviewed-action step resolution (U3)", () => {
 					throw new Error("invalid iteration reached asset resolution");
 				},
 			};
-			for (const items of invalidInputs) {
+			for (const [items, expectedCode] of invalidInputs) {
 				const prepared = await prepareRunbookExecution(
 					createDefaultPlatformFs(),
 					dataRoot,
@@ -3119,8 +3196,10 @@ describe("engine reviewed-action step resolution (U3)", () => {
 				);
 				expect(prepared.ok).toBe(false);
 				if (prepared.ok) continue;
-				expect(prepared.refusal.code).toBe("runbook_action_refused");
-				expect(prepared.refusal.message).toContain("action_input_rejected");
+				expect(prepared.refusal.code).toBe(expectedCode);
+				if (expectedCode === "runbook_action_refused") {
+					expect(prepared.refusal.message).toContain("action_input_rejected");
+				}
 			}
 		}),
 	);

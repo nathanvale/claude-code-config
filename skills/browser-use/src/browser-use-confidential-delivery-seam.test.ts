@@ -357,7 +357,7 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 }
 
 describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
-	test("live seam composes deterministic binding, target proof, sensitive lease, and binding-keyed context", async () => {
+	test("live seam delivers to the observed target URL after a same-origin redirect", async () => {
 		const store = await makeStore();
 		let deliveryCalls = 0;
 		const port = {
@@ -422,7 +422,10 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			}),
 			createDeliveryHook: environmentDeliveryHook,
 		});
-		const outcome = await seam(liveSeamInput("run-live-seam"));
+		const outcome = await seam({
+			...liveSeamInput("run-live-seam"),
+			expectedTargetUrl: "https://oncore.test/candidate",
+		});
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		expect(outcome.context.in_sensitive_interval).toBe(true);

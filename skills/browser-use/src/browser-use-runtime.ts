@@ -38,7 +38,14 @@ import {
 } from "./browser-use-op";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import {
+	BROWSER_USE_APPROVAL_BROKER_ENV,
+	type BrowserUseHumanIdentityAttestationDriver,
+	createNativeHumanIdentityAttestationDriver,
+} from "./browser-use-human-identity-attestation";
+import type { BrowserUseReviewedActionOperatorBroker } from "./browser-use-reviewed-action-promotion";
+import {
 	type BrowserUseReviewedActionApprovalVerifier,
+	type BrowserUseReviewedActionVerifierIdentity,
 	REVIEWED_ACTION_VERIFIER_CONTRACT,
 	REVIEWED_ACTION_VERIFIER_FILE,
 	REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION,
@@ -578,9 +585,9 @@ function environmentTokenRetrievalOf(
 }
 
 
-async function productionReviewedActionApprovalVerifierOf(
+async function productionReviewedActionVerifierIdentityOf(
 	runtime: BrowserUseRuntime,
-): Promise<BrowserUseReviewedActionApprovalVerifier | undefined> {
+): Promise<BrowserUseReviewedActionVerifierIdentity | undefined> {
 	const resolved = resolveBrowserUsePaths(runtime.env);
 	if (!resolved.ok) return undefined;
 	const path = join(
@@ -620,11 +627,20 @@ async function productionReviewedActionApprovalVerifierOf(
 			public_key: parsed.public_key,
 		};
 		return reviewedActionVerifierIdentityIsValid(identity)
-			? createP256ReviewedActionApprovalVerifier(identity)
+			? identity
 			: undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+async function productionReviewedActionApprovalVerifierOf(
+	runtime: BrowserUseRuntime,
+): Promise<BrowserUseReviewedActionApprovalVerifier | undefined> {
+	const identity = await productionReviewedActionVerifierIdentityOf(runtime);
+	return identity === undefined
+		? undefined
+		: createP256ReviewedActionApprovalVerifier(identity);
 }
 
 type EnvironmentTokenSupervisorDeps = {
@@ -1146,8 +1162,12 @@ export type BrowserUseRuntime = {
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
+	/** Operator-only presence-backed promotion broker; tests inject a hermetic fake. */
+	reviewedActionPromotionBroker?: BrowserUseReviewedActionOperatorBroker;
 	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
 	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
+	runbookHumanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */
 	runbookAuthTransport?: () => {
 		transport: {
@@ -1261,6 +1281,18 @@ export async function createProductionBrowserUseRuntime(
 	if (runtime.reviewedActionApprovalVerifier === undefined) {
 		runtime.reviewedActionApprovalVerifier =
 			await productionReviewedActionApprovalVerifierOf(runtime);
+	}
+	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
+	if (
+		runtime.runbookHumanIdentityAttestation === undefined &&
+		brokerPath !== undefined &&
+		brokerPath !== ""
+	) {
+		const identity = await productionReviewedActionVerifierIdentityOf(runtime);
+		if (identity !== undefined) {
+			runtime.runbookHumanIdentityAttestation =
+				createNativeHumanIdentityAttestationDriver(brokerPath, identity);
+		}
 	}
 	return runtime;
 }

@@ -47,6 +47,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"action-schema",
 	"action-validate",
 	"action-apply",
+	"action-promote",
 	"action-status",
 	"migration-status",
 	"migration-inventory",

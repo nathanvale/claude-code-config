@@ -105,6 +105,14 @@ struct EnvironmentOpDeliveryTests {
     }
 
     @Test
+    func deliveryChildPreservesRemappedDestinationDescriptors() {
+        #expect(
+            testingDeliverySourceDescriptorsToClose([3, 4, 5, 6])
+                == [4, 5, 6]
+        )
+    }
+
+    @Test
     func identityBoundPrivateFieldComposesOpAndConsumer() throws {
         let executable = try temporaryExecutable(
             """

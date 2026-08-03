@@ -7,7 +7,6 @@ import {
 	type BrowserUseAuthoredReviewedActionRecord,
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
-import { runReviewedActionPromotionFrontDoor } from "./browser-use-reviewed-action-promotion";
 import { readRunbookSourceCatalog } from "./browser-use-runbook-authoring";
 import {
 	activateRunbookGeneration,
@@ -130,19 +129,29 @@ describe("authoring-to-active-generation composed acceptance", () => {
 			env: xdg.env,
 			sourceCheckoutRoot: sourceRoot,
 			reviewedActionApprovalVerifier: authority.verifier,
+			reviewedActionPromotionBroker: authority.operatorBroker,
 		});
 		const actionApplied = await runForTest(["action", "apply", "--file", actionFile, "--json"], authoringRuntime);
 		expect(actionApplied.exitCode).toBe(0);
 		const actionResult = (parseJson(actionApplied.stdout).data as { result: { digest: string } }).result;
 		await git(sourceRoot, "add", "skills/browser-use/actions/registry.json", `skills/browser-use/actions/assets/${actionResult.digest}.js`);
 		await git(sourceRoot, "commit", "-qm", "candidate");
-		expect(await runReviewedActionPromotionFrontDoor({
-			sourceRoot,
-			actionId: "count-visible-rows",
-			approvalReference: "test-only-review",
-			env: xdg.env,
-			broker: authority.operatorBroker,
-		})).toMatchObject({ ok: true, approved_digest: actionResult.digest });
+		const promoted = await runForTest(
+			[
+				"action",
+				"promote",
+				"--id",
+				"count-visible-rows",
+				"--approval-reference",
+				"test-only-review",
+				"--json",
+			],
+			authoringRuntime,
+		);
+		expect(promoted.exitCode).toBe(0);
+		expect(parseJson(promoted.stdout).data).toMatchObject({
+			result: { ok: true, approved_digest: actionResult.digest },
+		});
 		await git(sourceRoot, "add", "skills/browser-use/actions/registry.json");
 		await git(sourceRoot, "commit", "-qm", "promotion receipt");
 

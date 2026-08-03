@@ -9,6 +9,7 @@ import { authCommitSummaryOf } from "./browser-use-auth";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import type { BrowserUseAccessibilitySnapshot } from "./browser-use-cdp-observer";
 import type { BrowserUseDeliveryHook } from "./browser-use-confidential-field-delivery";
+import type { BrowserUseHumanIdentityAttestationDriver } from "./browser-use-human-identity-attestation";
 import type { BrowserUseTokenRetrievalPort } from "./browser-use-op";
 import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import { fixedClock, makeTempXdgEnv } from "./browser-use-platform-test-helpers";
@@ -50,7 +51,7 @@ function form(passwordFirst = false): BrowserUseAccessibilitySnapshot {
 function welcome(): BrowserUseAccessibilitySnapshot {
 	return {
 		target_id: "target-fixture",
-		nodes: [{ node_id: "welcome", role: "heading", accessible_name: "Welcome to Dashboard", ignored: false, properties: {} }],
+		nodes: [{ node_id: "workspace", role: "heading", accessible_name: "Candidate workspace", ignored: false, properties: {} }],
 	};
 }
 
@@ -60,6 +61,8 @@ async function fixture(
 	expectedUrl = "https://fixture.test/login",
 	observedUrl?: string,
 	passwordFirst = false,
+	loginFormPersists = false,
+	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver,
 ) {
 	const xdg = makeTempXdgEnv();
 	disposables.push(xdg);
@@ -134,20 +137,23 @@ async function fixture(
 			store,
 			provider,
 			implementation_integrity_key: "fixture-integrity",
+			...(humanIdentityAttestation === undefined
+				? {}
+				: { humanIdentityAttestation }),
 			login: {
 				observer: {
 					snapshot: async () => ({ ok: true, snapshot: screen }),
 					probeNode: async () => ({ ok: true, probe: { visible: true, operable: true } }),
 					activateControl: async () => {
 						expect(latestSubmissionStarted).toBe(true);
-						screen = welcome();
+						screen = loginFormPersists ? form(passwordFirst) : welcome();
 						return { ok: true };
 					},
 				},
 				proveTarget: async (input) => {
 					const node = screen.nodes.find((candidate) => candidate.accessible_name === input.field.accessible_name);
 					if (node?.backend_node_id === undefined) return { ok: false, cause: "target-proof-invalid" };
-					const target = { lane_id: input.lane_id, run_id: input.run_id, top_level_origin: "https://fixture.test", frame_origin: "https://fixture.test", target_id: "target-fixture", page_id: "page-fixture", frame_id: "frame-fixture", account_ref: "account-ref-fixture", target_proof_digest: `proof-${node.backend_node_id}`, field: { role: node.role, accessible_name: node.accessible_name, backend_node_id: node.backend_node_id } };
+					const target = { lane_id: input.lane_id, run_id: input.run_id, top_level_url: input.expected_url, top_level_origin: "https://fixture.test", frame_origin: "https://fixture.test", target_id: "target-fixture", page_id: "page-fixture", frame_id: "frame-fixture", account_ref: "account-ref-fixture", target_proof_digest: `proof-${node.backend_node_id}`, field: { role: node.role, accessible_name: node.accessible_name, backend_node_id: node.backend_node_id } };
 					return { ok: true, target, reproveTarget: async () => ({ proven: true, observed_digest: target.target_proof_digest }) };
 				},
 				tokenRetrieval,
@@ -165,6 +171,8 @@ async function fixture(
 			run,
 			dispatch_claim: { fencing_token: 1, activation_epoch: 1, holderId: "dispatch" },
 			service_id: "fixture",
+			flow_id: "business",
+			action_policy_hash: "a".repeat(64),
 			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://fixture.test"],
 			expected_url: expectedUrl,
@@ -228,6 +236,26 @@ describe("runbook auth route", () => {
 		expect(delivered).toEqual(["username", "password"]);
 	});
 
+	test("keeps business dispatch blocked when the post-submit login form remains", async () => {
+		const { result } = await fixture(
+			true,
+			"https://fixture.test",
+			"https://fixture.test/login",
+			undefined,
+			false,
+			true,
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(result.ok === false && "run" in result && result.run.state === "ready").toBe(false);
+	});
+
 	test("debug diagnostics record ordered secret-free lifecycle mappings", async () => {
 		const lines: string[] = [];
 		configureCliDiagnostics({
@@ -268,6 +296,60 @@ describe("runbook auth route", () => {
 			},
 		});
 		expect(result.ok === false && "run" in result && result.run.state === "ready").toBe(false);
+	});
+
+	test("persists the presence gate, consumes one human attestation, and resumes the same run to ready", async () => {
+		const observedStates: string[] = [];
+		const { result } = await fixture(
+			false,
+			"https://fixture.test",
+			"https://fixture.test/login",
+			undefined,
+			false,
+			false,
+			async (input) => {
+				observedStates.push(input.run.state);
+				expect(input.run.continuation?.next_action_id).toBe(
+					"complete-human-identity-attestation",
+				);
+				return {
+					ok: true,
+					attestation: {
+						run_id: input.run.run_id,
+						handoff_evidence_id: "handoff-fixture",
+						lane_id: "agent-browser",
+						implementation_integrity_key: "fixture-integrity",
+						environment: "agent-chrome",
+						profile: "default",
+						target_id: "target-fixture",
+						page_id: "target-fixture",
+						frame_id: "target-fixture",
+						service_id: "fixture",
+						auth_context: "interactive-login",
+						subject_reference: "subject-ref",
+						account_reference: "account-ref",
+						tenant_reference: "tenant-ref",
+						identity_basis: "human-identity-attestation",
+						identity_basis_digest: "b".repeat(64),
+						observed_at_epoch_ms: 10_000,
+						fresh_until_epoch_ms: 40_000,
+					},
+				};
+			},
+		);
+
+		expect(observedStates).toEqual(["awaiting-user-presence"]);
+		expect(result).toMatchObject({
+			ok: true,
+			run: {
+				run_id: "shared-run-fixture",
+				state: "ready",
+				auth_attestation: {
+					attestation_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+					fresh_until_epoch_ms: 40_000,
+				},
+			},
+		});
 	});
 
 	test("authenticated-state proof on a moved origin refuses before business dispatch", async () => {

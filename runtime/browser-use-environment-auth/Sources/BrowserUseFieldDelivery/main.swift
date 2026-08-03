@@ -259,7 +259,7 @@ private final class CDPClient: @unchecked Sendable {
             request["sessionId"] = sessionID
         }
         let data = try JSONSerialization.data(withJSONObject: request)
-        try await task.send(.data(data))
+        try await task.send(.string(String(decoding: data, as: UTF8.self)))
         while true {
             let message = try await task.receive()
             let responseData: Data

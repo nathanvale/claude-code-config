@@ -33,7 +33,13 @@ const REGISTRY_FILE = "registry.json";
 const LOCK_FILE = ".reviewed-action-authoring.lock";
 
 /** Closed capabilities emitted by the mechanical action audit. */
-export type BrowserUseReviewedActionCapability = "dom-query" | "dom-read" | "dom-write";
+export type BrowserUseReviewedActionCapability =
+	| "dom-query"
+	| "dom-read"
+	| "dom-write"
+	| "dom-events"
+	| "framework-runtime"
+	| "same-origin-navigation";
 
 /** Complete agent-authored Reviewed Action document. */
 export type BrowserUseReviewedActionCandidate = {
@@ -159,29 +165,71 @@ function sourceWithoutStringsAndComments(source: string): string {
 	return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n\r]*/g, " ").replace(/'(?:\\.|[^'\\])*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
 
-function capabilityIssue(source: string): BrowserUseReviewedActionValidationIssue | undefined {
+function staticNavigationTarget(
+	source: string,
+	rightHandSide: string,
+): string | undefined {
+	const literal = rightHandSide.match(/^(['"])(https?:\/\/[^'"]+)\1$/);
+	if (literal) return literal[2];
+	const identifier = rightHandSide.match(/^([A-Za-z_$][\w$]*)$/)?.[1];
+	if (identifier === undefined) return undefined;
+	const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return source.match(
+		new RegExp(`\\bconst\\s+${escaped}\\s*=\\s*(['\"])(https?:\\/\\/[^'\"]+)\\1\\s*;`),
+	)?.[2];
+}
+
+function capabilityIssue(candidate: BrowserUseReviewedActionCandidate): BrowserUseReviewedActionValidationIssue | undefined {
+	const { source } = candidate;
 	const code = sourceWithoutStringsAndComments(source);
 	const rules: readonly [string, RegExp, string][] = [
 		["action_capability_credential_field", /\b(?:password|passcode|credential|username|user_name|otp|one[-_ ]?time|1password|op\.read|login|sign[-_ ]?in)\b/i, "credential and login behavior belongs to generic login"],
 		["action_capability_dynamic_code", /\b(?:eval|Function|constructor|import|require|WebAssembly|Worker|SharedWorker)\b/, "dynamic code construction is outside the Reviewed Action vocabulary"],
-		["action_capability_computed_property", /[[\]]/, "computed property access is not mechanically containable"],
+		["action_capability_computed_property", /\b(?:document|window|globalThis|self|navigator|location)\s*\[[^\]]+\]|\bReflect\s*\./, "computed browser-authority access is not mechanically containable"],
 		["action_capability_cookie_storage", /\b(?:cookie|localStorage|sessionStorage|indexedDB|caches)\b/i, "cookie and browser storage access is prohibited"],
 		["action_capability_network", /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|RTCPeerConnection)\b/, "network access is prohibited"],
-		["action_capability_navigation", /\b(?:location|history|window\.open|open\s*\()\b/, "navigation is prohibited"],
-		["action_capability_form_submission", /\b(?:submit|requestSubmit|dispatchEvent)\b/i, "form submission is prohibited"],
-		["action_capability_alias", /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:document|window|globalThis|self|navigator)\b/, "aliases of browser authority are prohibited"],
-		["action_capability_global_escape", /\b(?:window|globalThis|self|navigator|parent|top|frames)\b/, "global browser authority is outside the Reviewed Action vocabulary"],
+		["action_capability_navigation", /\b(?:history|window\.open)\b|\bopen\s*\(/, "unbounded navigation is prohibited"],
+		["action_capability_form_submission", /\.(?:submit|requestSubmit)\s*\(/i, "form submission is prohibited"],
+		["action_capability_alias", /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:document|window(?!\s*\.)|globalThis|self|navigator)\b/, "aliases of browser authority are prohibited"],
+		["action_capability_global_escape", /(?<![.$])\b(?:globalThis|self|navigator|parent|top|frames)\s*\./, "global browser authority is outside the Reviewed Action vocabulary"],
 	];
 	for (const [ruleCode, pattern, message] of rules) {
-		if (pattern.test(code) || (ruleCode === "action_capability_credential_field" && pattern.test(source))) return issue(ruleCode, "source", message);
+		if (pattern.test(code)) return issue(ruleCode, "source", message);
+	}
+	if (/\.dispatchEvent\s*\(\s*new\s+(?:Custom)?Event\s*\(\s*(['"])submit\1/i.test(source)) return issue("action_capability_form_submission", "source", "form submission is prohibited");
+	if (/querySelector(?:All)?\s*\(\s*(['"])[^'"]*(?:password|passcode|username|otp)[^'"]*\1\s*\)\s*(?:\?\.|\.)\s*(?:value|textContent|innerText|getAttribute)\b/i.test(source)) return issue("action_capability_credential_field", "source", "credential field values belong to generic login");
+	const unsupportedWindow = code
+		.replace(/\bwindow\s*\.\s*(?:angular|location)\b/g, "")
+		.replace(/\bview\s*:\s*window\b/g, "");
+	if (/\bwindow\b/.test(unsupportedWindow)) return issue("action_capability_global_escape", "source", "window access is outside the reviewed framework, location, and event vocabulary");
+	for (const match of source.matchAll(/(?:window\s*\.\s*)?location\s*\.\s*href\s*=\s*([^;]+);/g)) {
+		const target = staticNavigationTarget(source, match[1]?.trim() ?? "");
+		try {
+			if (target === undefined || new URL(target).origin !== candidate.origin) return issue("action_capability_navigation", "source", "navigation must resolve statically to the candidate origin");
+		} catch {
+			return issue("action_capability_navigation", "source", "navigation must resolve statically to the candidate origin");
+		}
+	}
+	for (const match of source.matchAll(/(['"])(https?:\/\/[^'"]+)\1/g)) {
+		try {
+			if (new URL(match[2] ?? "").origin !== candidate.origin) return issue("action_capability_navigation", "source", "absolute URLs must remain inside the candidate origin");
+		} catch {
+			return issue("action_capability_navigation", "source", "absolute URLs must be valid and same-origin");
+		}
 	}
 	if (!/\bdocument\s*\.\s*querySelector(?:All)?\s*\(/.test(code)) return issue("action_capability_vocabulary_escape", "source", "source does not use the closed direct DOM query vocabulary");
 	const documentMembers = [...code.matchAll(/\bdocument\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((match) => match[1]);
-	if (documentMembers.some((member) => member !== "querySelector" && member !== "querySelectorAll")) return issue("action_capability_vocabulary_escape", "source", "document access is outside the closed direct DOM query vocabulary");
-	for (const selector of source.matchAll(/\bdocument\s*\.\s*querySelector(?:All)?\s*\(\s*(['"])(.*?)\1\s*\)/g)) {
-		if (/\b(?:password|login|signin|submit|form)\b/i.test(selector[2] ?? "")) return issue("action_capability_credential_field", "source", "credential, login, and submit targets are prohibited; generic login owns authentication");
-	}
+	if (documentMembers.some((member) => !["querySelector", "querySelectorAll", "body", "title"].includes(member))) return issue("action_capability_vocabulary_escape", "source", "document access is outside the closed reviewed DOM vocabulary");
 	return undefined;
+}
+
+function auditedCapabilities(source: string, effect: BrowserUseActionEffectClass): readonly BrowserUseReviewedActionCapability[] {
+	const capabilities: BrowserUseReviewedActionCapability[] = ["dom-query", "dom-read"];
+	if (effect === "mutation") capabilities.push("dom-write");
+	if (/\.(?:dispatchEvent|click)\s*\(/.test(source)) capabilities.push("dom-events");
+	if (/\bwindow\s*\.\s*angular\b|\bsaveTimesheet\b|\bObject\s*\.\s*getOwnPropertyDescriptor\b/.test(source)) capabilities.push("framework-runtime");
+	if (/(?:window\s*\.\s*)?location\s*\.\s*href\s*=/.test(source)) capabilities.push("same-origin-navigation");
+	return capabilities;
 }
 
 /** Validate source mechanics before any persistence or approval check. */
@@ -194,19 +242,20 @@ export function validateReviewedActionCandidate(candidate: BrowserUseReviewedAct
 		if (typeof candidate.origin !== "string" || !exactOrigin(candidate.origin)) issues.push(issue("action_origin_invalid", "origin", "origin must be one exact HTTP(S) origin"));
 		if (typeof candidate.source !== "string" || candidate.source.trim().length === 0 || Buffer.byteLength(candidate.source, "utf8") > ACTION_ASSET_MAX_BYTES) issues.push(issue("action_source_invalid", "source", "source must be non-empty and within the action byte ceiling"));
 		else if (!/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>/.test(candidate.source)) issues.push(issue("action_wrapper_invalid", "source", "source must use the async ({ inputs }) wrapper"));
-		else { const prohibited = capabilityIssue(candidate.source); if (prohibited !== undefined) issues.push(prohibited); }
+		else { const prohibited = capabilityIssue(candidate); if (prohibited !== undefined) issues.push(prohibited); }
 		if (candidate.containment !== "none" && candidate.containment !== "read-only-observation") issues.push(issue("action_containment_invalid", "containment", "containment is not enforceable"));
 		if (!actionValueSchemaIsValid(candidate.input_schema)) issues.push(issue("action_input_schema_invalid", "input_schema", "input schema is not in the model-owned vocabulary"));
 		if (!actionValueSchemaIsValid(candidate.result_schema)) issues.push(issue("action_result_schema_invalid", "result_schema", "result schema is not in the model-owned vocabulary"));
 		if (candidate.result_sensitivity !== "low" && candidate.result_sensitivity !== "high") issues.push(issue("action_result_sensitivity_invalid", "result_sensitivity", "result sensitivity is invalid"));
 		if (candidate.required_postcondition !== undefined && !postconditionValid(candidate.required_postcondition)) issues.push(issue("action_postcondition_invalid", "required_postcondition", "postcondition is not mechanically checkable"));
-		if (findRedactionViolations(candidate).length > 0) issues.push(issue("action_secret_shaped_material", "$", "candidate carries secret-shaped material and cannot be persisted"));
+		const { source: _reviewedSourceBytes, ...persistedMetadata } = candidate;
+		if (findRedactionViolations(persistedMetadata).length > 0) issues.push(issue("action_secret_shaped_material", "$", "candidate metadata carries secret-shaped material and cannot be persisted"));
 	}
 	if (issues.length > 0) return { ok: false, issues, repair: "Fix the named mechanical issue. Keep authentication in generic login and use only direct reviewed business-action DOM operations." };
 	const effect = auditActionEffectClass(candidate.source);
 	if (effect === "mutation" && !postconditionValid(candidate.required_postcondition)) return { ok: false, issues: [issue("action_postcondition_required", "required_postcondition", "a mutation requires one mechanically checkable postcondition")], repair: "Add an element-visible or url-equals postcondition for the mutation." };
 	if (effect === "mutation" && candidate.containment === "read-only-observation") return { ok: false, issues: [issue("action_containment_effect_mismatch", "containment", "read-only containment cannot authorize a mutation")], repair: "Declare containment none and provide a mutation postcondition, or remove the mutation." };
-	return { ok: true, digest: actionAssetDigest(candidate.source), effect_class: effect, audited_capabilities: effect === "read" ? ["dom-query", "dom-read"] : ["dom-query", "dom-read", "dom-write"] };
+	return { ok: true, digest: actionAssetDigest(candidate.source), effect_class: effect, audited_capabilities: auditedCapabilities(candidate.source, effect) };
 }
 
 
@@ -393,12 +442,86 @@ async function runPromotionGit(
 	return { exitCode, stdout, stderr };
 }
 
+async function admitPromotionOnlyRegistryDrift(input: {
+	sourceRoot: string;
+	actionsRoot: string;
+	commit: string;
+	targetActionId: string;
+	committed: Registry;
+	verifier: BrowserUseReviewedActionApprovalVerifier;
+}): Promise<
+	| { ok: true; registry: Registry; bytes: string }
+	| { ok: false; code: string; message: string }
+> {
+	const path = join(input.actionsRoot, REGISTRY_FILE);
+	const bytes = await readFile(path, "utf8").catch(() => undefined);
+	const current = bytes === undefined ? undefined : parseRegistry(bytes);
+	if (
+		current === undefined ||
+		bytes !== `${JSON.stringify(current, null, 2)}\n` ||
+		current.actions.length !== input.committed.actions.length
+	) {
+		return { ok: false, code: "action_promotion_source_drift", message: "the candidate registry differs from the reviewed commit." };
+	}
+	for (const committedEntry of input.committed.actions) {
+		const actionId = committedEntry.record.action_id;
+		const matches = current.actions.filter((entry) => entry.record.action_id === actionId);
+		if (typeof actionId !== "string" || matches.length !== 1) {
+			return { ok: false, code: "action_promotion_source_drift", message: "the candidate registry changed action identity after review." };
+		}
+		const currentEntry = matches[0] as RegistryEntry;
+		if (
+			currentEntry.asset_path !== committedEntry.asset_path ||
+			canonical(currentEntry.promotion_history ?? []) !== canonical(committedEntry.promotion_history ?? [])
+		) {
+			return { ok: false, code: "action_promotion_source_drift", message: "the candidate registry changed outside signed promotion authority." };
+		}
+		if (actionId === input.targetActionId || committedEntry.record.promotion_receipt !== null) {
+			if (canonical(currentEntry.record) !== canonical(committedEntry.record)) {
+				return { ok: false, code: "action_promotion_source_drift", message: "the target candidate differs from the reviewed commit." };
+			}
+			continue;
+		}
+		const currentRecord = currentEntry.record as BrowserUseAuthoredReviewedActionRecord;
+		const currentReceipt = currentRecord.promotion_receipt;
+		if (canonical({ ...currentRecord, promotion_receipt: null }) !== canonical(committedEntry.record)) {
+			return { ok: false, code: "action_promotion_source_drift", message: "the candidate metadata changed outside signed promotion authority." };
+		}
+		if (currentReceipt === null) continue;
+		if (
+			!reviewedActionPromotionReceiptIsValid(currentReceipt) ||
+			currentReceipt.source_commit !== input.commit ||
+			!/^assets\/[0-9a-f]{64}\.js$/.test(currentEntry.asset_path)
+		) {
+			return { ok: false, code: "action_promotion_source_drift", message: "the intervening promotion receipt is not bound to the reviewed commit." };
+		}
+		const relativeAsset = `${ACTIONS_RELATIVE_ROOT}/${currentEntry.asset_path}`;
+		const committedAsset = await runPromotionGit(input.sourceRoot, ["show", `${input.commit}:${relativeAsset}`]);
+		const currentAsset = await readFile(join(input.actionsRoot, currentEntry.asset_path), "utf8").catch(() => undefined);
+		if (committedAsset.exitCode !== 0 || currentAsset !== committedAsset.stdout) {
+			return { ok: false, code: "action_promotion_source_drift", message: "an intervening promoted asset differs from the reviewed commit." };
+		}
+		const derived = reviewedActionApprovalFactsFromRecord({
+			commit: input.commit,
+			record: currentRecord,
+			assetBytes: currentAsset,
+		});
+		if (
+			!derived.ok ||
+			!verifyReviewedActionApproval({ facts: derived.facts, receipts: [currentReceipt], verifier: input.verifier }).ok
+		) {
+			return { ok: false, code: "action_promotion_source_drift", message: "an intervening promotion receipt failed offline verification." };
+		}
+	}
+	return { ok: true, registry: current, bytes };
+}
+
 /**
  * Review and promote one committed candidate through the external-human broker.
  *
- * This operator surface is intentionally absent from the agent CLI command
- * catalog. It reads exact bytes from one Git commit, refuses working-tree
- * drift, and persists only a receipt that passes the offline verifier.
+ * The operator CLI delegates here. This owner reads exact bytes from one Git
+ * commit, refuses working-tree drift, and persists only a receipt that passes
+ * the offline verifier.
  */
 export async function promoteReviewedActionCandidate(input: {
 	sourceRoot: string;
@@ -533,11 +656,19 @@ export async function promoteReviewedActionCandidate(input: {
 				message: "the committed candidate failed its mechanical audit.",
 			};
 		}
+		const currentRegistry = await admitPromotionOnlyRegistryDrift({
+			sourceRoot: input.sourceRoot,
+			actionsRoot,
+			commit,
+			targetActionId: input.actionId,
+			committed: registry,
+			verifier: input.verifier,
+		});
+		if (!currentRegistry.ok) return currentRegistry;
 		const status = await runPromotionGit(input.sourceRoot, [
 			"status",
 			"--porcelain=v1",
 			"--",
-			registryRelative,
 			assetRelative,
 		]);
 		if (status.exitCode !== 0 || status.stdout.trim() !== "") {
@@ -568,7 +699,7 @@ export async function promoteReviewedActionCandidate(input: {
 		const registryPath = join(actionsRoot, REGISTRY_FILE);
 		const assetPath = join(actionsRoot, entry.asset_path);
 		if (
-			(await readFile(registryPath, "utf8")) !== committedRegistry.stdout ||
+			(await readFile(registryPath, "utf8")) !== currentRegistry.bytes ||
 			(await readFile(assetPath, "utf8")) !== committedAsset.stdout
 		) {
 			return {
@@ -577,11 +708,14 @@ export async function promoteReviewedActionCandidate(input: {
 				message: "the candidate changed during human review; no receipt was persisted.",
 			};
 		}
-		entry.record = {
-			...(entry.record as BrowserUseAuthoredReviewedActionRecord),
+		const currentEntry = currentRegistry.registry.actions.find(
+			(candidate) => candidate.record.action_id === input.actionId,
+		) as RegistryEntry;
+		currentEntry.record = {
+			...(currentEntry.record as BrowserUseAuthoredReviewedActionRecord),
 			promotion_receipt: issued.receipt,
 		};
-		const bytes = `${JSON.stringify(registry, null, 2)}\n`;
+		const bytes = `${JSON.stringify(currentRegistry.registry, null, 2)}\n`;
 		const temporary = join(actionsRoot, `.registry.promotion.${process.pid}.tmp`);
 		const handle = await open(temporary, "wx", 0o600);
 		try {

@@ -113,8 +113,22 @@ describe("U3 parser", () => {
 	test("action commands require their model-owned file and identity inputs", () => {
 		expect(parseBrowserUseArgv(["action", "schema", "--json"])).toMatchObject({ kind: "command", command: "action-schema" });
 		expect(parseBrowserUseArgv(["action", "apply", "--file", "candidate.json", "--expected-record-digest", "a".repeat(64), "--json"])).toMatchObject({ kind: "command", command: "action-apply" });
+		expect(
+			parseBrowserUseArgv([
+				"action",
+				"promote",
+				"--id",
+				"candidate",
+				"--approval-reference",
+				"review-1",
+				"--json",
+			]),
+		).toMatchObject({ kind: "command", command: "action-promote" });
 		expect(() => parseBrowserUseArgv(["action", "validate", "--json"])).toThrow("action validate requires --file");
 		expect(() => parseBrowserUseArgv(["action", "status", "--json"])).toThrow("action status requires --id");
+		expect(() => parseBrowserUseArgv(["action", "promote", "--id", "candidate", "--json"])).toThrow(
+			"action promote requires --approval-reference",
+		);
 		expect(() => parseBrowserUseArgv(["action", "apply", "--file", "candidate.json", "--expected-record-digest", "stale"])).toThrow("--expected-record-digest must be 64 lowercase hex");
 	});
 

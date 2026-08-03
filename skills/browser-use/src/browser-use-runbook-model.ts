@@ -1540,6 +1540,54 @@ export type BrowserUseRunbookPlanRefusal = {
 	message: string;
 };
 
+/** Result of admitting runbook inputs before any downstream action resolution. */
+export type BrowserUseRunbookInputAdmissionResult =
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; refusal: BrowserUseRunbookPlanRefusal };
+
+/**
+ * Materialize defaults and enforce every declared runbook input schema.
+ *
+ * The engine calls this before resolving Reviewed Actions so malformed input
+ * cannot escape its owning schema gate and surface as a downstream action error.
+ *
+ * @param runbook - Validated runbook whose declared inputs own admission
+ * @param inputs - Caller-supplied input bindings
+ * @returns Normalized admitted inputs, or the first typed input refusal
+ * @internal
+ */
+export function admitRunbookInputs(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): BrowserUseRunbookInputAdmissionResult {
+	const normalizedInputs = materializeRunbookInputs(runbook, inputs);
+	for (const declared of runbook.inputs) {
+		const value = normalizedInputs[declared.id];
+		if (value === undefined) {
+			if (declared.required) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_input_missing",
+						message: `required input ${declared.id} was not supplied.`,
+					},
+				};
+			}
+			continue;
+		}
+		if (!valueMatchesSchema(value, declared.schema)) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_input_rejected",
+					message: `input ${declared.id} does not satisfy its declared value schema.`,
+				},
+			};
+		}
+	}
+	return { ok: true, inputs: normalizedInputs };
+}
+
 /**
  * A planned execution: the compiled bounded Agent Browser steps (from
  * `resume_from_step` onward) plus the resolved allowed origins, ready to hand
@@ -1745,7 +1793,9 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	const normalizedInputs = materializeRunbookInputs(runbook, input.inputs);
+	const admittedInputs = admitRunbookInputs(runbook, input.inputs);
+	if (!admittedInputs.ok) return admittedInputs;
+	const normalizedInputs = admittedInputs.inputs;
 	// Reviewed-action and iteration steps require an engine-resolved executor
 	// step (U3): the pure model NEVER resolves an asset. When the engine supplies
 	// no resolution for an action/iterate step, refuse with a typed pointer
@@ -1771,30 +1821,6 @@ export function planRunbookExecution(
 					"this runbook declares a reviewed-action or iteration step with no resolved action asset; resolve it through a staged or active generation before execution.",
 			},
 		};
-	}
-	for (const declared of runbook.inputs) {
-		const value = normalizedInputs[declared.id];
-		if (value === undefined) {
-			if (declared.required) {
-				return {
-					ok: false,
-					refusal: {
-						code: "runbook_input_missing",
-						message: `required input ${declared.id} was not supplied.`,
-					},
-				};
-			}
-			continue;
-		}
-		if (!valueMatchesSchema(value, declared.schema)) {
-			return {
-				ok: false,
-				refusal: {
-					code: "runbook_input_rejected",
-					message: `input ${declared.id} does not satisfy its declared value schema.`,
-				},
-			};
-		}
 	}
 	if (
 		!Number.isInteger(input.resumeFromStep) ||

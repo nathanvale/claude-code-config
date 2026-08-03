@@ -262,6 +262,11 @@ import {
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import {
+	createNativeReviewedActionOperatorBroker,
+	runReviewedActionPromotionFrontDoor,
+} from "./browser-use-reviewed-action-promotion";
+import { BROWSER_USE_APPROVAL_BROKER_ENV } from "./command-contract";
+import {
 	activateRunbookGeneration,
 	createSelectedGenerationActionSeam,
 	createSelectedGenerationRunbookSeam,
@@ -3766,6 +3771,21 @@ async function runReviewedActionCommand(input: PlatformCommandInput): Promise<nu
 		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
 		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
 	}
+	if (input.parsed.command === "action-promote") {
+		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+		const brokerPath = stringField(input.runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV]);
+		const broker = input.runtime.reviewedActionPromotionBroker ?? (brokerPath === undefined ? undefined : createNativeReviewedActionOperatorBroker(brokerPath));
+		if (broker === undefined) return emitReviewedActionFailure(input, "action_promotion_broker_unavailable", `${BROWSER_USE_APPROVAL_BROKER_ENV} must name the absolute signed ApprovalBroker executable.`);
+		const promoted = await runReviewedActionPromotionFrontDoor({
+			sourceRoot,
+			actionId: stringField(input.parsed.flagValues["--id"]) ?? "",
+			approvalReference: stringField(input.parsed.flagValues["--approval-reference"]) ?? "",
+			env: input.runtime.env,
+			broker,
+		});
+		return promoted.ok ? emitReviewedActionSuccess(input, promoted) : emitReviewedActionFailure(input, promoted.code, promoted.message);
+	}
 	const loaded = await readActionCandidateFile(input);
 	if (!loaded.ok) return loaded.exitCode;
 	if (input.parsed.command === "action-validate") {
@@ -4344,7 +4364,7 @@ function environmentDeliveryHook(input: {
 			handle,
 			target_digest: target.target_proof_digest,
 			ws_url: input.handoff.endpoint.ws,
-			target_url: input.expectedTargetUrl,
+			target_url: input.target.top_level_url,
 			target_origin: target.frame_origin,
 			field: {
 				role: descriptor.role,
@@ -4372,20 +4392,20 @@ function environmentDeliveryHook(input: {
 function environmentLoginDeliveryHook(input: {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	handoff: AgentBrowserVerifiedHandoff;
-	expectedTargetUrl: string;
 }): BrowserUseDeliveryHook | undefined {
 	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
 	if (typeof port.redeemCredentialField !== "function") return undefined;
 	return async ({ handle, target }) => {
-		const field = (target as Partial<BrowserUseMintedVerifiedTarget>).field;
-		if (field === undefined) {
+		const mintedTarget = target as Partial<BrowserUseMintedVerifiedTarget>;
+		const field = mintedTarget.field;
+		if (field === undefined || typeof mintedTarget.top_level_url !== "string") {
 			return { ok: false, reason: "target-drift", field_cleared: false };
 		}
 		const delivered = await port.redeemCredentialField?.({
 			handle,
 			target_digest: target.target_proof_digest,
 			ws_url: input.handoff.endpoint.ws,
-			target_url: input.expectedTargetUrl,
+			target_url: mintedTarget.top_level_url,
 			target_origin: target.frame_origin,
 			field: {
 				role: field.role,
@@ -5254,7 +5274,6 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			const deliver = environmentLoginDeliveryHook({
 				tokenRetrieval,
 				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
-				expectedTargetUrl: authExpectedTargetUrl,
 			});
 			if (deliver === undefined) {
 				return emitPlatformStoreFailure(input, {
@@ -5270,12 +5289,20 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					store: store.deps,
 					provider: authProvider,
 					implementation_integrity_key: "agent-browser:verified-handoff-v2",
+					...(input.runtime.runbookHumanIdentityAttestation === undefined
+						? {}
+						: {
+								humanIdentityAttestation:
+									input.runtime.runbookHumanIdentityAttestation,
+							}),
 					login: {
 						observer: createBrowserUseCdpObserver(authTransport.transport),
 						proveTarget: async (proofInput) =>
 							await mintBrowserUseVerifiedTarget(authTransport.transport, proofInput),
 						tokenRetrieval,
 						deliver,
+						waitForPostActivation: async () =>
+							await new Promise<void>((resolve) => setTimeout(resolve, 50)),
 						...(input.runtime.runbookAuthenticatedStateProof !== undefined
 							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
 							: {}),
@@ -5290,6 +5317,11 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					run,
 					dispatch_claim: dispatchClaim,
 					service_id: plan.service_id,
+					flow_id: plan.flow_id,
+					action_policy_hash:
+						run.run_execution_binding?.action_registry_digest ??
+						run.run_execution_binding?.runbook_digest ??
+						normalizedInputDigest(runbookInputs),
 					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
 					allowed_origins: plan.allowed_origins,
 					expected_url: authExpectedTargetUrl,
