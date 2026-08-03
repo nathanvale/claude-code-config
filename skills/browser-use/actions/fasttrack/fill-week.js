@@ -83,12 +83,10 @@ async ({ inputs }) => {
     return false;
   };
   const navigateToTimeAttendance = async () => {
-    // Base64 of "TimeAndAttendance" (unpadded, matching the portal's own route
-    // encoding, e.g. CandidatePortal -> Q2FuZGlkYXRlUG9ydGFs). A prior corrupted
-    // literal appended "00", yielding an invalid route that the SPA silently
-    // bounced back to the portal home.
-    const targetPath = "/VGltZUFuZEF0dGVuZGFuY2U";
-    const targetUrl = "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U";
+    // The portal's real Time And Attendance route (confirmed live). The trailing
+    // "00" is part of the actual SPA route the portal ships, not base64 padding.
+    const targetPath = "/VGltZUFuZEF0dGVuZGFuY2U00";
+    const targetUrl = "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00";
     if (document.title.includes("Time - Search Timesheet") || editRows().length >= 5) return { ok: true, mode: "already_on_time_attendance" };
     if (location.href.includes("CandidateLogin") || document.querySelector("input[type='password']")) {
       fail("login_required", { title: document.title, url: location.href });
