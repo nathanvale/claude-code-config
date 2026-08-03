@@ -12,6 +12,33 @@ action's thrown message. To see the real reason, instrument the swallow point
 with a temporary `process.stderr.write` of `evaluated.stdout/stderr`, run once,
 read, REVERT. Do this FIRST when a run ends `unknown` — do not guess.
 
+## Testing strategy — what hermetic tests can and cannot catch
+
+Test owners: `skills/test-runner/` (the runner) and the `tdd` skill (red-green
+discipline). This section only names WHICH layer catches WHAT — it does not teach
+test authoring.
+
+- **Framework changes** (`src/*.ts`: dispatch, resume, gates, model): fully
+  hermetic-testable, and should be. Fake the run state, count evals, assert the
+  terminal state. This is where hermetic tests are load-bearing.
+- **Reviewed-action pure logic** (date parsing, wrong-week guard, selector
+  matching, fill/click sequencing): hermetic-testable against a SYNTHETIC DOM
+  fixture (a hand-built element tree resembling the target page). Worth it for the
+  logic — but it CANNOT tell you the real portal's DOM shape.
+- **The real DOM contract** (what selectors/routes/field-models the portal ACTUALLY
+  uses): NOT hermetic. Discover it via CDP against the live portal FIRST
+  (gotchas G4/G7/G9), then encode it. Tonight's worst bugs (rxg.workDate1 vs
+  startDateTime, the SPA route, window.open nav) were real-DOM mismatches a
+  hermetic test with a wrong fixture would have PASSED while the live run failed.
+- **Runbook structure** (step order, postconditions): `runbook validate` + a live
+  run; little hermetic surface.
+
+Order that actually works: **CDP-discover the real DOM → author the action →
+hermetic-test its pure logic against a fixture that MATCHES the discovered DOM →
+promote → activate → prove LIVE.** A green hermetic suite is necessary but never
+sufficient for a runbook/action — only a `confirmed` live run proves it
+(gotcha G19).
+
 ## Reviewed-action authoring (the .js bytes + candidate)
 
 ### G1. Async actions must not become top-level await (framework-level)
