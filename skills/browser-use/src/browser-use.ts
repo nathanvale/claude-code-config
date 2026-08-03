@@ -3448,7 +3448,7 @@ function emitRunbookAuthoringFailure(
 			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 			data: {
 				command: input.parsed.command,
-				result_kind: "runbook_authoring",
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
 				caller: input.caller,
 				...data,
 			},

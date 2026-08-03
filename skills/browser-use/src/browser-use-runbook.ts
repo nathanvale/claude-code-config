@@ -824,9 +824,9 @@ export async function prepareRunbookExecution(
 		? await showRunbook(fs, dataRoot, { serviceId: input.serviceId, flowId: input.flowId })
 		: await input.runbookSeam.loadRunbook({ serviceId: input.serviceId, flowId: input.flowId });
 	if (!shown.ok) {
-		const refusal = "absent" in shown
-			? failure("runbook_not_found", `no runbook is defined for ${input.serviceId}/${input.flowId}.`)
-			: shown.failure;
+		const refusal = "failure" in shown
+			? shown.failure
+			: failure("runbook_not_found", `no runbook is defined for ${input.serviceId}/${input.flowId}.`);
 		return { ok: false, refusal };
 	}
 	const normalizedInputs = materializeRunbookInputs(

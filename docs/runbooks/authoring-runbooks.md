@@ -28,15 +28,10 @@ browser-use runbook show --service <service-id> --flow <flow-id> --json
 Use the returned source-catalog digest, active-generation digest and epoch, and
 record digest as observed concurrency facts. Never reconstruct them.
 
-Interpret synchronization at two levels:
-
-- Catalog `in-sync`: current source catalog equals the selected generation.
-- Catalog `activation-required`: source differs from the selected generation or
-  contains an activation blocker.
-- Record `in-sync`: source and selected-generation bytes match.
-- Record `new-pending-activation`: a source record is new or changed.
-- Record `deletion-pending-activation`: the selected generation still contains
-  a source-deleted record.
+Synchronization is reported at two levels: a catalog-level status and a
+per-record status. Read the exact status vocabulary and its meaning from the
+`runbook list --json` / `runbook show --json` output and its owner type below;
+this doc does not restate the state machine.
 
 Keep invalid or unreadable source entries visible. Resolve their typed
 activation blockers; never treat omission as deletion.

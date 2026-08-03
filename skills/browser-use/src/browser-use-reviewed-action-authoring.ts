@@ -373,7 +373,7 @@ export async function applyReviewedActionCandidate(input: { sourceRoot: string; 
 	} finally { await lock.close(); await rm(lockPath, { force: true }); }
 }
 
-type PromotionGitResult = { exitCode: number; stdout: string };
+type PromotionGitResult = { exitCode: number; stdout: string; stderr: string };
 
 async function runPromotionGit(
 	repoRoot: string,
@@ -385,12 +385,12 @@ async function runPromotionGit(
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const [exitCode, stdout] = await Promise.all([
+	const [exitCode, stdout, stderr] = await Promise.all([
 		child.exited,
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 	]);
-	return { exitCode, stdout };
+	return { exitCode, stdout, stderr };
 }
 
 /**
@@ -459,10 +459,13 @@ export async function promoteReviewedActionCandidate(input: {
 			(await realpath(top.stdout.trim()).catch(() => "")) !== sourceRoot ||
 			!SAFE_COMMIT.test(commit)
 		) {
+			const gitDiagnostic = [top.stderr, commitResult.stderr].map((text) => text.trim()).filter(Boolean).join("; ");
 			return {
 				ok: false,
 				code: "action_promotion_commit_unavailable",
-				message: "promotion could not resolve one owning source commit.",
+				message: gitDiagnostic
+					? `promotion could not resolve one owning source commit: ${gitDiagnostic}`
+					: "promotion could not resolve one owning source commit.",
 			};
 		}
 		const registryRelative = `${ACTIONS_RELATIVE_ROOT}/${REGISTRY_FILE}`;
