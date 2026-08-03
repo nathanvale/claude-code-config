@@ -166,11 +166,19 @@ async ({ inputs }) => {
   // shapes FastTrack renders it in (a date cell, or the date half of the
   // rxg.startDateTime input). Returns a dmy string or "" when undeterminable.
   const rowDate = (row) => {
-    // The row's own rxg.startDateTime input is authoritative: a generic
-    // date-shaped cell can be a shared period/processed-date column repeated
-    // on every row, which would collapse all rows onto one date. Read the
-    // input's date half first; fall back to a date-shaped cell only when the
-    // input carries no date.
+    // The row's own per-day work-date model is authoritative and is present even
+    // on an empty grid (rxg.workDate1). Read it first: on a fresh timesheet the
+    // rxg.startDateTime time input is blank, so relying on it alone made every
+    // row unreadable and refused the whole fill.
+    const workDateEl = row.querySelector("[ng-model='rxg.workDate1']") || row.querySelector("[ng-model*='workDate']") || row.querySelector("[ng-model*='itemDate']");
+    if (workDateEl) {
+      const wdRaw = normalize(workDateEl.value || workDateEl.getAttribute?.("value") || workDateEl.innerText || workDateEl.textContent || "");
+      const wdMatch = wdRaw && wdRaw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const wdParsed = wdMatch && parseDate(wdMatch[0]);
+      if (wdParsed) return dmy(wdParsed);
+    }
+    // Fall back to the start-time input's date half (a populated grid may carry
+    // the date there), then a generic date-shaped cell.
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
     const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
     const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
