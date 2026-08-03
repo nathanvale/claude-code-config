@@ -1018,6 +1018,13 @@ describe("runbook discovery over the XDG data root", () => {
 				}),
 				expect.objectContaining({
 					service_id: "unifi",
+					flow_id: "login",
+					step_count: 2,
+					effect_class: "read-only",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
 					flow_id: "login-screen-verify",
 					step_count: 2,
 					effect_class: "read-only",
@@ -1166,7 +1173,7 @@ describe("runbook discovery over the XDG data root", () => {
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the five daily-driver runbooks", async () => {
+	test("ships exactly the six daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1177,6 +1184,7 @@ describe("shipped runbooks root resolution", () => {
 				"fasttrack/login",
 				"matest/development-snapshot-verify",
 				"oncore/timesheet-snapshot-verify",
+				"unifi/login",
 				"unifi/login-screen-verify",
 			]);
 		} finally {
@@ -1225,7 +1233,7 @@ describe("shipped runbooks root resolution", () => {
 
 		expect(prepared.ok).toBe(true);
 		if (!prepared.ok) return;
-		expect(prepared.plan.steps).toHaveLength(7);
+		expect(prepared.plan.steps).toHaveLength(8);
 		expect(
 			prepared.plan.steps.filter((step) => step.kind === "evaluate"),
 		).toHaveLength(4);
