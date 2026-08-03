@@ -71,7 +71,6 @@ import {
 	blockOfRetrievalRejection,
 	proveVaultScope,
 } from "./browser-use-op";
-import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
 import type {
 	BrowserUseRunIntegrationPort,
 	BrowserUseSharedRun,
@@ -711,13 +710,7 @@ export function createBrowserUseAuthProvider(
 					getLoginItem: (request) =>
 						deps.tokenRetrieval.getLoginItem(request),
 					fetchCredentialField: (request) =>
-						(
-							deps.tokenRetrieval as BrowserUseEnvironmentTokenRetrievalPort
-						).fetchCredentialField({
-							...request,
-							target_digest: input.target.target_proof_digest,
-							observed_origin: input.target.frame_origin,
-						}),
+						deps.tokenRetrieval.fetchCredentialField(request),
 				},
 				deliver: input.deliver,
 				reproveTarget: input.reproveTarget,
