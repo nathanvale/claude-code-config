@@ -214,13 +214,39 @@ class CorpusWriter:
                 "skipped": self.skipped}
 
 
+QMD_COLLECTION = "teams"
+
+
+def _qmd_collection_registered(name: str = QMD_COLLECTION) -> bool | None:
+    """Is ``name`` a collection QMD knows about?
+
+    ``None`` means "could not tell" (qmd missing or the probe failed), which
+    callers must not treat as "absent" — registering blindly would create a
+    duplicate collection rooted wherever cwd happens to be.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(["qmd", "collection", "show", name],
+                              capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return proc.returncode == 0
+
+
 def reindex(corpus_dir: Path, *, update: bool = True, embed: bool = True) -> dict:
     """Refresh the QMD index over the corpus so new notes become searchable.
 
     Run from inside the corpus directory: ``qmd collection add`` resolves paths
     relative to cwd, and ``qmd update`` scopes its work the same way.
 
-    Two independent steps, so callers can order them by cost:
+    Three steps, ordered by cost, each independently skippable:
+      - ``register`` ensures the ``teams`` collection exists. ``qmd update`` only
+        re-scans collections QMD is *already* tracking, so without this a corpus
+        that was never registered (or whose registration was lost) is silently
+        skipped: ``update`` still exits 0, and the caller reports success while
+        nothing was indexed. That failure is invisible at the call site and shows
+        up much later as ``Collection not found`` on every query.
       - ``update`` (BM25 index) is cheap and makes ``qmd search`` live immediately.
       - ``embed`` (vector embeddings) is the slow step; defer it so it never blocks
         a sync. ``reindex(embed=False)`` runs BM25 only; ``reindex(update=False)``
@@ -239,11 +265,22 @@ def reindex(corpus_dir: Path, *, update: bool = True, embed: bool = True) -> dic
     if not corpus_dir.is_dir():
         return {"ok": False, "reason": f"corpus directory not found: {corpus_dir}"}
 
+    plan: list[tuple[str, list[str]]] = []
+    # Only register when the probe is confident the collection is absent. An
+    # indeterminate probe leaves registration alone: update/embed still run, and
+    # the caller is told the state is unverified rather than being handed a
+    # registration guessed at the wrong root.
+    registered = _qmd_collection_registered() if update else True
+    if registered is False:
+        plan.append(("register",
+                     ["qmd", "collection", "add", ".", "--name", QMD_COLLECTION]))
+    if update:
+        plan.append(("update", ["qmd", "update"]))
+    if embed:
+        plan.append(("embed", ["qmd", "embed"]))
+
     steps: list[dict] = []
-    for name, argv in (("update", ["qmd", "update"]) if update else (None, None),
-                       ("embed", ["qmd", "embed"]) if embed else (None, None)):
-        if name is None:
-            continue
+    for name, argv in plan:
         try:
             proc = subprocess.run(argv, cwd=corpus_dir, capture_output=True,
                                   text=True, timeout=1800)
@@ -255,7 +292,22 @@ def reindex(corpus_dir: Path, *, update: bool = True, embed: bool = True) -> dic
         if proc.returncode != 0:
             break
 
-    return {"ok": all(s["ok"] for s in steps) if steps else False, "steps": steps}
+    result = {"ok": all(s["ok"] for s in steps) if steps else False,
+              "steps": steps, "collection": QMD_COLLECTION}
+    # An indexing pass that never reached the corpus is not a success, whatever
+    # `qmd update` returned. Say so, so the caller cannot report "indexed: yes".
+    if registered is None:
+        result["collection_state"] = "unknown"
+    elif registered is False:
+        result["collection_state"] = "registered" if result["ok"] else "missing"
+        if not result["ok"]:
+            result["ok"] = False
+            result.setdefault("reason", "collection was not registered with qmd")
+            result["hint"] = (f"run: cd {corpus_dir} && qmd collection add . "
+                              f"--name {QMD_COLLECTION}")
+    else:
+        result["collection_state"] = "present"
+    return result
 
 
 class Cursor:

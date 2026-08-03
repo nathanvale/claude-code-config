@@ -673,7 +673,21 @@ def cmd_sync(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
         print(f"  newest  : {fmt_time(newest)}")
         print(f"  cursor  : {cursor.path}")
         if index:
-            print(f"  indexed : {'yes' if index['ok'] else 'FAILED'}")
+            # Name the collection state alongside the verdict: "yes" on its own
+            # once hid a pass that indexed nothing because the collection was
+            # never registered, and `qmd update` exits 0 when it skips it.
+            state = index.get("collection_state")
+            if not index["ok"]:
+                detail = "FAILED"
+            elif state == "registered":
+                detail = f"yes (registered '{index.get('collection')}')"
+            elif state == "unknown":
+                detail = "yes (collection state unverified)"
+            else:
+                detail = "yes"
+            print(f"  indexed : {detail}")
+            if hint := index.get("hint"):
+                print(f"            {hint}")
         elif writer.written:
             print("  indexed : skipped (--no-index)")
     return data
