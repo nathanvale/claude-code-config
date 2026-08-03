@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join, posix } from "node:path";
-import { redactUnsafeText } from "./browser-use-core";
+import { canonicalJsonStable as canonical, redactUnsafeText } from "./browser-use-core";
 import type { BrowserUseAdmittedPaths, BrowserUsePlatformFs } from "./browser-use-paths";
 import type { BrowserUseActiveGenerationSeam } from "./browser-use-runbook";
 import type {
@@ -24,6 +24,7 @@ const SCHEMA_VERSION = "1";
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
+const SAFE_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const SAFE_RELATIVE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\0)[a-zA-Z0-9._/-]+$/;
 
 export type BrowserUseGenerationCatalog = {
@@ -79,11 +80,6 @@ export type BrowserUseSelectedGeneration = {
 };
 
 function sha256(bytes: string): string { return createHash("sha256").update(bytes).digest("hex"); }
-function canonical(value: unknown): string {
-	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-	if (typeof value === "object" && value !== null) return `{${Object.entries(value as Record<string, unknown>).filter(([, entry]) => entry !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`;
-	return JSON.stringify(value);
-}
 function fail(code: BrowserUseGenerationFailure["code"], message: string): BrowserUseGenerationFailure { return { ok: false, code, message: redactUnsafeText(message) }; }
 function pathsOf(paths: BrowserUseAdmittedPaths) {
 	return {
@@ -118,7 +114,7 @@ function registryEntries(value: unknown): readonly GenerationRegistryEntry[] | u
 	return result;
 }
 function catalogIsComplete(catalog: BrowserUseGenerationCatalog): boolean {
-	if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(catalog.commit) || !SAFE_DIGEST.test(catalog.catalog_digest) || !SAFE_DIGEST.test(catalog.action_registry_digest)) return false;
+	if (!SAFE_COMMIT.test(catalog.commit) || !SAFE_DIGEST.test(catalog.catalog_digest) || !SAFE_DIGEST.test(catalog.action_registry_digest)) return false;
 	const paths = new Set<string>();
 	for (const file of catalog.files) {
 		if (!SAFE_RELATIVE.test(file.relative_path) || paths.has(file.relative_path) || sha256(file.bytes) !== file.digest) return false;
@@ -151,7 +147,7 @@ function parseAuthority(value: unknown): BrowserUseRunbookGenerationAuthority | 
 function parseManifest(value: unknown): BrowserUseRunbookGenerationManifest | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 	const r = value as Record<string, unknown>;
-	if (r.contract !== GENERATION_CONTRACT || r.schema_version !== SCHEMA_VERSION || typeof r.generation_id !== "string" || !/^gen-[0-9a-f]{64}$/.test(r.generation_id) || typeof r.source_commit !== "string" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(r.source_commit) || typeof r.catalog_digest !== "string" || !SAFE_DIGEST.test(r.catalog_digest) || typeof r.action_registry_digest !== "string" || !SAFE_DIGEST.test(r.action_registry_digest) || !Array.isArray(r.files) || !Array.isArray(r.runbooks)) return undefined;
+	if (r.contract !== GENERATION_CONTRACT || r.schema_version !== SCHEMA_VERSION || typeof r.generation_id !== "string" || !/^gen-[0-9a-f]{64}$/.test(r.generation_id) || typeof r.source_commit !== "string" || !SAFE_COMMIT.test(r.source_commit) || typeof r.catalog_digest !== "string" || !SAFE_DIGEST.test(r.catalog_digest) || typeof r.action_registry_digest !== "string" || !SAFE_DIGEST.test(r.action_registry_digest) || !Array.isArray(r.files) || !Array.isArray(r.runbooks)) return undefined;
 	for (const file of r.files) if (typeof file !== "object" || file === null || Array.isArray(file) || typeof (file as { relative_path?: unknown }).relative_path !== "string" || !SAFE_RELATIVE.test((file as { relative_path: string }).relative_path) || typeof (file as { digest?: unknown }).digest !== "string" || !SAFE_DIGEST.test((file as { digest: string }).digest)) return undefined;
 	for (const runbook of r.runbooks) if (typeof runbook !== "object" || runbook === null || Array.isArray(runbook) || typeof (runbook as { service_id?: unknown }).service_id !== "string" || typeof (runbook as { flow_id?: unknown }).flow_id !== "string" || typeof (runbook as { relative_path?: unknown }).relative_path !== "string" || !SAFE_RELATIVE.test((runbook as { relative_path: string }).relative_path) || typeof (runbook as { record_digest?: unknown }).record_digest !== "string" || !SAFE_DIGEST.test((runbook as { record_digest: string }).record_digest)) return undefined;
 	return r as BrowserUseRunbookGenerationManifest;
@@ -183,7 +179,11 @@ async function validateGeneration(deps: BrowserUseGenerationDeps, generationId: 
 	if (manifest === undefined || manifest.generation_id !== generationId || `gen-${manifest.catalog_digest}` !== generationId || catalogDigest(manifest.files.map((file) => ({ ...file, bytes: "" }))) !== manifest.catalog_digest) return fail("activation_generation_corrupt", "the selected generation manifest is invalid.");
 	const expected = [...manifest.files.map((file) => file.relative_path), "manifest.json"].sort();
 	if (JSON.stringify([...files].sort()) !== JSON.stringify(expected)) return fail("activation_generation_corrupt", "the selected generation contains missing or unmanifested files.");
-	for (const file of manifest.files) try { if ((await deps.fs.hashFile(join(root, ...file.relative_path.split("/")))) !== file.digest) return fail("activation_generation_corrupt", "a selected generation component digest drifted."); } catch { return fail("activation_generation_corrupt", "a selected generation component is unreadable."); }
+	const observedDigests = await Promise.all(manifest.files.map((file) => deps.fs.hashFile(join(root, ...file.relative_path.split("/"))).catch(() => undefined)));
+	for (const [index, file] of manifest.files.entries()) {
+		if (observedDigests[index] === undefined) return fail("activation_generation_corrupt", "a selected generation component is unreadable.");
+		if (observedDigests[index] !== file.digest) return fail("activation_generation_corrupt", "a selected generation component digest drifted.");
+	}
 	return { ok: true, manifest, manifestDigest };
 }
 function manifestFor(catalog: BrowserUseGenerationCatalog): BrowserUseRunbookGenerationManifest {

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import {
 	lstat,
@@ -12,7 +11,7 @@ import {
 	rmdir,
 } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
-import { redactUnsafeText } from "./browser-use-core";
+import { isJsonObject as isObject, redactUnsafeText } from "./browser-use-core";
 import {
 	type BrowserUseRunbook,
 	type BrowserUseRunbookIssue,
@@ -212,9 +211,6 @@ class ExactJsonParser {
 	}
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function documentIssue(code: string, path: string, message: string): BrowserUseRunbookDocumentIssue {
 	return { code, path: redactUnsafeText(path), message: redactUnsafeText(message) };
@@ -239,9 +235,6 @@ function modelIssue(issue: BrowserUseRunbookIssue): BrowserUseRunbookDocumentIss
 	return documentIssue(issue.code, "$", redactUnsafeText(issue.message));
 }
 
-function digest(bytes: string): string {
-	return createHash("sha256").update(bytes, "utf8").digest("hex");
-}
 
 /** Project the complete model-derived authoring shape and one validating example. */
 export function runbookAuthoringSchema() {
@@ -277,7 +270,7 @@ export function parseRunbookDraftDocument(bytes: string): BrowserUseParsedRunboo
 	}
 	const validationIssues = validateRunbook(parsed.runbook).map(modelIssue);
 	if (validationIssues.length > 0) return { ok: false, code: validationIssues[0]?.code ?? "runbook_invalid", message: validationIssues[0]?.message ?? "the Runbook Draft is invalid.", issues: validationIssues, repair: "Fix every model-owned validation issue, then validate the complete document again." };
-	return { ok: true, bytes, runbook: parsed.runbook, record_digest: digest(bytes) };
+	return { ok: true, bytes, runbook: parsed.runbook, record_digest: actionAssetDigest(bytes) };
 }
 
 async function admittedRoots(sourceRoot: string): Promise<{ runbooks: string; actions: string } | undefined> {
@@ -302,7 +295,7 @@ type SourceRegistryEntry = {
 };
 
 async function sourceCommit(sourceRoot: string): Promise<string | undefined> {
-	const child = Bun.spawn(["git", "rev-parse", "--verify", "HEAD^{commit}"], { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" });
+	const child = Bun.spawn(["git", "rev-parse", "--verify", "HEAD^{commit}"], { cwd: sourceRoot, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
 	const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
 	return exitCode === 0 && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(stdout.trim()) ? stdout.trim() : undefined;
 }
@@ -319,6 +312,7 @@ async function validateActionClosure(input: {
 	try { registryValue = JSON.parse(await readFile(join(input.actionsRoot, REGISTRY_FILE), "utf8")); } catch { return { ok: false, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is unreadable or invalid." }; }
 	if (!isObject(registryValue) || !Array.isArray(registryValue.actions)) return { ok: false, code: "runbook_action_registry_invalid", message: "the private Reviewed Action registry is invalid." };
 	const entries = registryValue.actions.filter((entry): entry is SourceRegistryEntry => isObject(entry) && typeof entry.asset_path === "string" && SAFE_RELATIVE.test(entry.asset_path) && reviewedActionRecordIsValid(entry.record));
+	let resolvedCommit: string | undefined | null = null;
 	for (const ref of refs) {
 		const matches = entries.filter((entry) => entry.record.action_id === ref.action_id);
 		if (matches.length === 0) return { ok: false, code: "runbook_action_absent", message: "a referenced Reviewed Action is absent from the private registry." };
@@ -351,7 +345,8 @@ async function validateActionClosure(input: {
 		}
 		if (entry.record.promotion_receipt === null) return { ok: false, code: "runbook_action_unpromoted", message: "a referenced Reviewed Action has not been externally promoted." };
 		if (input.approvalVerifier === undefined) return { ok: false, code: "runbook_action_promotion_verifier_unavailable", message: "a referenced Reviewed Action requires offline promotion verification." };
-		const commit = await sourceCommit(input.sourceRoot);
+		if (resolvedCommit === null) resolvedCommit = await sourceCommit(input.sourceRoot);
+		const commit = resolvedCommit;
 		if (commit === undefined) return { ok: false, code: "runbook_action_source_commit_unavailable", message: "the source commit for Reviewed Action promotion cannot be resolved." };
 		const verified = verifyAuthoredReviewedActionPromotion({ commit, record: entry.record, assetBytes, promotionHistory: entry.promotion_history, verifier: input.approvalVerifier });
 		if (!verified.ok) return { ok: false, code: verified.code === "action_capability_credential_field" ? "runbook_action_auth_capable" : "runbook_action_promotion_invalid", message: "a referenced Reviewed Action lacks exact current promotion authority." };
@@ -386,9 +381,9 @@ async function sourceActionFiles(
 		registryBytes = await readFile(join(actionsRoot, REGISTRY_FILE), "utf8");
 		registry = JSON.parse(registryBytes);
 	} catch {
-		return [{ relative_path: "actions/registry.json", digest: digest(registryBytes) }];
+		return [{ relative_path: "actions/registry.json", digest: actionAssetDigest(registryBytes) }];
 	}
-	const files = [{ relative_path: "actions/registry.json", digest: digest(registryBytes) }];
+	const files = [{ relative_path: "actions/registry.json", digest: actionAssetDigest(registryBytes) }];
 	if (!isObject(registry) || !Array.isArray(registry.actions)) return files;
 	const refs = new Set(
 		runbooks.flatMap((runbook) =>
@@ -412,9 +407,8 @@ async function sourceActionFiles(
 		) continue;
 		try {
 			const bytes = await readFile(join(actionsRoot, ...entry.asset_path.split("/")), "utf8");
-			files.push({ relative_path: `actions/${entry.asset_path}`, digest: digest(bytes) });
+			files.push({ relative_path: `actions/${entry.asset_path}`, digest: actionAssetDigest(bytes) });
 		} catch {
-			// The owning closure validator reports the typed blocker.
 		}
 	}
 	return files.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
@@ -476,7 +470,7 @@ export async function readRunbookSourceCatalog(input: {
 				records.push({ id, service_id: service.name, flow_id: flow.name, record_digest: null, activation_blocker: { code: "catalog_record_unreadable", message: "the source Runbook record is absent, unreadable, or unsafe." } });
 				continue;
 			}
-			const recordDigest = digest(bytes);
+			const recordDigest = actionAssetDigest(bytes);
 			fileDigests.push({ relative_path: `runbooks/${service.name}/${flow.name}/runbook.json`, digest: recordDigest });
 			const parsed = parseRunbookDraftDocument(bytes);
 			if (!parsed.ok || parsed.runbook.service_id !== service.name || parsed.runbook.flow_id !== flow.name) {
@@ -534,7 +528,7 @@ export async function applyRunbookDraft(input: {
 		const stat = await lstat(path).catch(() => undefined);
 		if (stat !== undefined && (!stat.isFile() || stat.isSymbolicLink())) return { ok: false, code: "runbook_source_path_unsafe", message: "the Runbook source target is not a regular file." };
 		const existingBytes = stat === undefined ? undefined : await readFile(path, "utf8");
-		const currentDigest = existingBytes === undefined ? undefined : digest(existingBytes);
+		const currentDigest = existingBytes === undefined ? undefined : actionAssetDigest(existingBytes);
 		if (existingBytes === input.bytes) return { ok: true, changed: false, service_id: parsed.runbook.service_id, flow_id: parsed.runbook.flow_id, record_digest: parsed.record_digest, synchronization_status: "new-pending-activation" };
 		if (currentDigest !== undefined && input.expectedRecordDigest === undefined) return { ok: false, code: "runbook_replacement_digest_required", message: "replacement requires the currently observed Runbook record digest.", current_record_digest: currentDigest };
 		if (currentDigest !== undefined && input.expectedRecordDigest !== currentDigest) return { ok: false, code: "runbook_replacement_digest_stale", message: "the Runbook record changed after observation; refresh before replacing it.", current_record_digest: currentDigest };
@@ -585,7 +579,7 @@ export async function deleteRunbookDraft(input: {
 		const stat = await lstat(path).catch(() => undefined);
 		if (stat === undefined) return absent();
 		if (!stat.isFile() || stat.isSymbolicLink()) return { ok: false, code: "runbook_source_path_unsafe", message: "the Runbook source target is not a regular file." };
-		const currentDigest = digest(await readFile(path, "utf8"));
+		const currentDigest = actionAssetDigest(await readFile(path, "utf8"));
 		if (input.expectedRecordDigest !== currentDigest) return { ok: false, code: "runbook_delete_digest_stale", message: "delete requires the currently observed Runbook record digest.", current_record_digest: currentDigest };
 		await rm(path);
 		await rmdir(canonicalFlowDirectory).catch(() => undefined);

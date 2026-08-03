@@ -3643,10 +3643,10 @@ async function nonterminalMutationRunIds(
 	return blockers.sort();
 }
 
-type ReviewedActionCommandPayload = { command: string; result: unknown; caller: BrowserUseCallerMetadata };
+
 
 function emitReviewedActionSuccess(input: PlatformCommandInput, result: unknown): number {
-	const payload: ReviewedActionCommandPayload = { command: input.parsed.command, result, caller: input.caller };
+	const payload: RunbookAuthoringCommandPayload = { command: input.parsed.command, result, caller: input.caller };
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(platformPlainHeader(BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID, input.caller, [`command=${input.parsed.command}`]));
 		input.stdout.write(`${JSON.stringify(result)}\n`);

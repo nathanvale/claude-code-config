@@ -10,7 +10,9 @@ import {
 	actionAssetDigest,
 	actionValueSchemaIsValid,
 	auditActionEffectClass,
+	exactOriginValid as exactOrigin,
 } from "./browser-use-runbook-actions";
+import { canonicalJsonStable as canonical, isJsonObject as isPlainObject } from "./browser-use-core";
 import {
 	type BrowserUseReviewedActionApprovalFacts,
 	type BrowserUseReviewedActionApprovalVerifier,
@@ -125,18 +127,6 @@ export function reviewedActionAuthoringSchema() {
 	} as const;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactOrigin(value: string): boolean {
-	try {
-		const parsed = new URL(value);
-		return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.origin === value;
-	} catch {
-		return false;
-	}
-}
 
 function postconditionValid(value: unknown): value is BrowserUseRunbookPostcondition {
 	if (!isPlainObject(value)) return false;
@@ -219,11 +209,6 @@ export function validateReviewedActionCandidate(candidate: BrowserUseReviewedAct
 	return { ok: true, digest: actionAssetDigest(candidate.source), effect_class: effect, audited_capabilities: effect === "read" ? ["dom-query", "dom-read"] : ["dom-query", "dom-read", "dom-write"] };
 }
 
-function canonical(value: unknown): string {
-	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-	if (typeof value === "object" && value !== null) return `{${Object.entries(value as Record<string, unknown>).filter(([, entry]) => entry !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`;
-	return JSON.stringify(value);
-}
 
 function recordDigest(record: unknown): string { return createHash("sha256").update(JSON.stringify(record)).digest("hex"); }
 

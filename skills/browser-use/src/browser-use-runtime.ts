@@ -24,6 +24,9 @@ import {
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import {
 	type BrowserUseReviewedActionApprovalVerifier,
+	REVIEWED_ACTION_VERIFIER_CONTRACT,
+	REVIEWED_ACTION_VERIFIER_FILE,
+	REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION,
 	createP256ReviewedActionApprovalVerifier,
 	reviewedActionVerifierIdentityIsValid,
 } from "./browser-use-reviewed-action-approval";
@@ -139,7 +142,6 @@ function environmentTokenRetrievalOf(
 	});
 }
 
-const REVIEWED_ACTION_VERIFIER_FILE = "reviewed-action-verifier.json";
 
 async function productionReviewedActionApprovalVerifierOf(
 	runtime: BrowserUseRuntime,
@@ -171,8 +173,8 @@ async function productionReviewedActionApprovalVerifierOf(
 				["contract", "key_id", "public_key", "schema_version"]
 					.sort()
 					.join("\0") ||
-			parsed.contract !== "browser-use.reviewed-action-verifier" ||
-			parsed.schema_version !== "1" ||
+			parsed.contract !== REVIEWED_ACTION_VERIFIER_CONTRACT ||
+			parsed.schema_version !== REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION ||
 			typeof parsed.key_id !== "string" ||
 			typeof parsed.public_key !== "string"
 		) {

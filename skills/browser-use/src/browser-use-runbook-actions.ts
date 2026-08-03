@@ -664,7 +664,7 @@ function refuse(
 	return { ok: false, refusal: { code, message: redactUnsafeText(message) } };
 }
 
-function exactOriginValid(value: string): boolean {
+export function exactOriginValid(value: string): boolean {
 	try {
 		const url = new URL(value);
 		return (

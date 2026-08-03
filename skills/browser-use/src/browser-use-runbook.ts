@@ -337,8 +337,10 @@ export async function listRunbooks(
 	if (shippedStat === undefined || shippedStat.kind !== "directory") {
 		throw new BrowserUseShippedRunbooksMissingError(shippedRoot);
 	}
-	const shipped = await scanRunbooksRoot(fs, shippedRoot);
-	const store = await scanRunbooksRoot(fs, runbooksRoot(dataRoot));
+	const [shipped, store] = await Promise.all([
+		scanRunbooksRoot(fs, shippedRoot),
+		scanRunbooksRoot(fs, runbooksRoot(dataRoot)),
+	]);
 	// Store overrides shipped on id collision.
 	const merged = new Map(shipped);
 	for (const [id, row] of store) merged.set(id, row);

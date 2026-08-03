@@ -1,12 +1,20 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
-import type {
-	BrowserUseActionContainmentPolicy,
-	BrowserUseActionEffectClass,
+import {
+	type BrowserUseActionContainmentPolicy,
+	type BrowserUseActionEffectClass,
+	exactOriginValid as exactOrigin,
 } from "./browser-use-runbook-actions";
+import { isJsonObject as isPlainObject } from "./browser-use-core";
 
 const SAFE_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const SAFE_DIGEST = /^[0-9a-f]{64}$/;
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
+// Verifier identity contract: owned here beside receipt verification so the
+// promotion front door and runtime reader cannot drift from it.
+export const REVIEWED_ACTION_VERIFIER_CONTRACT = "browser-use.reviewed-action-verifier";
+export const REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION = "1";
+export const REVIEWED_ACTION_VERIFIER_FILE = "reviewed-action-verifier.json";
 
 /** Exact mechanically-derived facts the external broker approves. */
 export type BrowserUseReviewedActionApprovalFacts = {
@@ -141,6 +149,8 @@ const RECEIPT_KEYS = [
 	"signature",
 ] as const;
 
+// Signs fully-typed receipt facts: must NOT drop undefined-valued entries
+// (unlike canonicalJsonStable) — absent-vs-undefined is part of the signed bytes.
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
 	if (typeof value === "object" && value !== null) {
@@ -152,21 +162,6 @@ function canonical(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-function exactOrigin(value: string): boolean {
-	try {
-		const parsed = new URL(value);
-		return (
-			(parsed.protocol === "https:" || parsed.protocol === "http:") &&
-			parsed.origin === value
-		);
-	} catch {
-		return false;
-	}
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Hash the exact receipt facts signed by the isolated approval broker. */
 export function reviewedActionApprovalFactsDigest(

@@ -85,6 +85,20 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Key-sorted canonical JSON that drops undefined-valued entries so optional
+// fields never shift a digest. Receipt signing over fully-typed facts must NOT
+// use this: absent-vs-undefined distinctions there are part of the signed bytes.
+export function canonicalJsonStable(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJsonStable).join(",")}]`;
+	if (typeof value === "object" && value !== null)
+		return `{${Object.entries(value as Record<string, unknown>)
+			.filter(([, entry]) => entry !== undefined)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonStable(entry)}`)
+			.join(",")}}`;
+	return JSON.stringify(value);
+}
+
 // --- Privacy redaction gate (R32) ------------------------------------------
 
 export function sanitizeUsageValue(value: string): string {

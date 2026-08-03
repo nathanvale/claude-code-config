@@ -4,6 +4,9 @@ import {
 	type BrowserUseReviewedActionPromotionBrokerPort,
 	type BrowserUseReviewedActionPromotionReceipt,
 	type BrowserUseReviewedActionVerifierIdentity,
+	REVIEWED_ACTION_VERIFIER_CONTRACT,
+	REVIEWED_ACTION_VERIFIER_FILE,
+	REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION,
 	createP256ReviewedActionApprovalVerifier,
 	createReviewedActionPromotionRouter,
 	reviewedActionPromotionReceiptIsValid,
@@ -12,9 +15,9 @@ import {
 import { promoteReviewedActionCandidate } from "./browser-use-reviewed-action-authoring";
 import { resolveBrowserUsePaths } from "./browser-use-paths";
 
-const VERIFIER_CONTRACT = "browser-use.reviewed-action-verifier";
-const VERIFIER_SCHEMA_VERSION = "1";
-const VERIFIER_FILE = "reviewed-action-verifier.json";
+const VERIFIER_CONTRACT = REVIEWED_ACTION_VERIFIER_CONTRACT;
+const VERIFIER_SCHEMA_VERSION = REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION;
+const VERIFIER_FILE = REVIEWED_ACTION_VERIFIER_FILE;
 const MAXIMUM_BROKER_OUTPUT_BYTES = 1_048_576;
 
 /** Operator broker surface: public identity discovery plus presence-backed issuance. */
