@@ -1,8 +1,18 @@
-# Browser Use runbook + reviewed-action authoring gotchas
+# Runbook + reviewed-action authoring gotchas
 
-Hard-won failures from authoring the FastTrack timesheet fill/submit runbooks
-(2026-08-03/04). Read this before authoring or debugging a runbook or reviewed
-action. Every entry is a real bug that cost a full promote/activate/live-run cycle.
+Read this before authoring or debugging ANY Browser Use runbook or reviewed action,
+for ANY portal. These are general authoring hazards; each is stated as a portable
+principle first. Where a concrete illustration helps, the example is drawn from the
+FastTrack timesheet build (2026-08-03/04) — chosen because FastTrack is an Angular
+single-page app, which is the trickiest common case (client-side routing, dynamic
+DOM, server-control ids). Portal-specific DOM facts are quarantined in the
+"Worked example: FastTrack (Angular SPA)" section at the end — treat those as one
+portal's evidence, not universal rules.
+
+How to read a gotcha: the **principle** is portable; any FastTrack detail is just
+the case that taught it. When you author for a new portal, apply the principle and
+DISCOVER that portal's own specifics via CDP (G7) — do not copy FastTrack's
+selectors/routes.
 
 The single most important lesson: **almost every failure surfaces as the generic
 `task_run_effect_unknown` at the action step, with the real reason SWALLOWED.**
@@ -92,31 +102,34 @@ FAILS if the action ends on the edit route, even though the action succeeded
 (`task_run_not_achieved`). Use `element-visible` on a stable element of the final
 page, or match the URL the action actually ends on.
 
-## SPA navigation (portal-specific findings, generalize the method)
+## Single-page-app (SPA) navigation
 
-### G7. Confirm the real route via CDP, do not hand-encode
-FastTrack routes are base64 segments (e.g. CandidatePortal = `Q2FuZGlkYXRlUG9ydGFs`).
-Do NOT assume a route encoding — read the live URL via CDP (`/json` for tabs,
-`ws://.../devtools/page/<id>` + `Runtime.evaluate`) after the human navigates
-there once. A hand-"corrected" hash (stripping what looked like base64 padding)
-was WRONG — the real route had a genuine trailing suffix.
+Client-rendered apps (Angular/React/etc.) make navigation the hardest part of
+authoring. These principles are general; the FastTrack (Angular) specifics that
+prove them live in the worked-example section.
 
-### G8. In-place hash change is intercepted by the Angular router and bounces to home
-Setting `window.location.href = "...#/route"` from an already-loaded SPA is caught
-by the SPA router and redirected back to home. A FULL navigation loads the target
-fresh. Two robust options: (a) point the runbook's `open` step directly at the
-target URL (the `open` step does a real navigation that boots the SPA on the
-target), or (b) `location.reload()` after setting the hash (but that kills the
-action's execution context — prefer the open-step approach). Verified via CDP:
-opening the target URL in a fresh tab loads the timesheet; an in-place hash change
-does not.
+### G7. Discover the real route/DOM via CDP — never assume or hand-encode
+Whatever the app's URL scheme (hash routes, base64 segments, opaque ids), read the
+ACTUAL live values via CDP (`/json` for tabs, `ws://.../devtools/page/<id>` +
+`Runtime.evaluate`) after a human navigates there once. Do not infer a route
+encoding or "clean up" a URL — assumptions about the encoding are how you build an
+action that navigates to a route the app rejects. (FastTrack example: a route that
+looked like padded base64 had a genuine trailing suffix; stripping it broke nav.)
 
-### G9. Portal "menu link" clicks may be ng-click handlers with href=null, or window.open
-The Quick Access "Time And Attendance" link is `<a ng-click="openLinkFunction(...)"
-href=null>`, and `openLinkFunction` does `window.open("CandidatePortal#/"+page)`
-(a NEW tab / fresh load). A `.click()`, scope `$eval`, or even a trusted CDP mouse
-click did NOT navigate the current tab. Do not rely on clicking the portal's own
-nav control from an action; drive navigation via the runbook `open` step (G8).
+### G8. In-place URL/hash mutation is often intercepted by the SPA router
+Setting `window.location.href = "...#/route"` from an already-loaded SPA is
+frequently caught by the client router and bounced (to home, or nowhere). A FULL
+document navigation boots the app fresh on the target. Robust options: (a) point
+the runbook's `open` STEP directly at the target URL (a real navigation), or
+(b) force a reload — but a reload kills the action's execution context, so prefer
+the open-step. Verify which behavior the app has via CDP before relying on either.
+
+### G9. The portal's own nav controls may not be programmatically clickable
+A visible "link" may be a framework click-handler with `href=null` (e.g. Angular
+`ng-click`) that internally does `window.open(...)` (a new tab / fresh load), so
+`.click()`, scope `$eval`, and even a trusted CDP mouse click may NOT navigate the
+current tab. Don't depend on driving the app's own menu from an action; drive
+navigation via the runbook `open` step (G8) to the discovered target URL (G7).
 
 ## Operator / promotion / activation cycle
 
