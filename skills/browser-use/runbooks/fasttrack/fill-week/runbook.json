@@ -229,6 +229,10 @@
       }
     },
     {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
       "kind": "action",
       "action_id": "fasttrack-verify-filled-week",
       "expected_digest": "222b054ab8ed925d4736ff9e8835850f21fbbd0a1ff0edc406296f098419a962",
