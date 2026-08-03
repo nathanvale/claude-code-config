@@ -48,7 +48,7 @@
 - For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
-- For plans and terminology, use `grill-with-docs`.
+- For plans and terminology, use `grilling` with `domain-modeling`.
 - After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
 
 ## Skill Authoring
