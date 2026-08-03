@@ -231,7 +231,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-verify-filled-week",
-      "expected_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
+      "expected_digest": "222b054ab8ed925d4736ff9e8835850f21fbbd0a1ff0edc406296f098419a962",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",
@@ -245,7 +245,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-save-draft",
-      "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+      "expected_digest": "c2dcba17260bd3be6e4af42712203d3d0515ee3186f6f95cbbc6deb8e411df4e",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}"
