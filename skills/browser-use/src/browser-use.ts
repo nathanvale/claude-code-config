@@ -3892,7 +3892,8 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	const active = activeResult.ok ? activeResult : undefined;
 	const legacyRows = !activeResult.ok && activeResult.code === "pre_cutover_unavailable" ? await listRunbooks(store.deps.fs, store.deps.paths.data.root) : [];
-	const sourceRecords = source?.ok === true ? Object.fromEntries(source.catalog.records.flatMap((record) => record.record_digest === null ? [] : [[record.id, record.record_digest]])) : {};
+	const separatedIds = new Set(source?.ok === true ? source.catalog.separated.map((entry) => entry.record_id) : []);
+	const sourceRecords = source?.ok === true ? Object.fromEntries(source.catalog.records.flatMap((record) => record.record_digest === null || separatedIds.has(record.id) ? [] : [[record.id, record.record_digest]])) : {};
 	const activeRecords = active === undefined ? {} : Object.fromEntries(active.manifest.runbooks.map((record) => [`${record.service_id}/${record.flow_id}`, record.record_digest]));
 	const synchronizationBase = projectRunbookGenerationSynchronization(
 		source?.ok === true ? { available: true, catalog_digest: source.catalog.catalog_digest, records: sourceRecords } : { available: false },
@@ -3921,7 +3922,7 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 		if (!rowById.has(id)) rowById.set(id, { ...row, record_digest: createHash("sha256").update(JSON.stringify(row)).digest("hex") });
 	}
 	const statusById = new Map(synchronization.records.map((record) => [record.id, record.status]));
-	const rows = [...rowById.entries()].map(([id, row]) => ({ ...row, synchronization_status: statusById.get(id) ?? "new-pending-activation" })).sort((left, right) => `${left.service_id}/${left.flow_id}`.localeCompare(`${right.service_id}/${right.flow_id}`));
+	const rows = [...rowById.entries()].map(([id, row]) => ({ ...row, synchronization_status: separatedIds.has(id) ? "separated" : statusById.get(id) ?? "new-pending-activation" })).sort((left, right) => `${left.service_id}/${left.flow_id}`.localeCompare(`${right.service_id}/${right.flow_id}`));
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID, input.caller, [
@@ -3936,6 +3937,9 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 		if (source?.ok === true) for (const blocker of source.catalog.activation_blockers) {
 			input.stdout.write(`blocker=${blocker.id} code=${blocker.code}\n`);
 		}
+		if (source?.ok === true) for (const separated of source.catalog.separated) {
+			input.stdout.write(`separated=${separated.record_id} code=${separated.code}\n`);
+		}
 		return 0;
 	}
 	writeJsonEnvelope(
@@ -3949,6 +3953,7 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 				runbooks: rows,
 				activation_blockers:
 					source?.ok === true ? source.catalog.activation_blockers : [],
+				separated: source?.ok === true ? source.catalog.separated : [],
 				...synchronization,
 				source_view: source?.ok === true ? "available" : "source_unavailable",
 				caller: input.caller,
@@ -4035,8 +4040,9 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	const active = activeResult.ok ? activeResult : undefined;
 	const sourceRecord = source?.ok === true ? source.catalog.records.find((record) => record.id === id) : undefined;
+	const sourceSeparation = source?.ok === true ? source.catalog.separated.find((entry) => entry.record_id === id) : undefined;
 	const activeRecord = active?.manifest.runbooks.find((record) => record.service_id === serviceId && record.flow_id === flowId);
-	if (sourceRecord?.activation_blocker !== undefined) {
+	if (sourceRecord?.activation_blocker !== undefined && sourceSeparation === undefined) {
 		return emitPlatformStoreFailure(input, {
 			code: sourceRecord.activation_blocker.code,
 			message: sourceRecord.activation_blocker.message,
@@ -4046,7 +4052,7 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 		});
 	}
 	let shown: { ok: true; runbook: BrowserUseRunbook; health: "healthy" | "degrading" | "stale" } | { ok: false; failure: { code: string; message: string } };
-	if (sourceRecord?.runbook !== undefined) shown = { ok: true, runbook: sourceRecord.runbook, health: "healthy" };
+	if (sourceRecord?.runbook !== undefined) shown = { ok: true, runbook: sourceRecord.runbook, health: sourceSeparation === undefined ? "healthy" : "stale" };
 	else if (active !== undefined && activeRecord !== undefined) {
 		const loaded = await createSelectedGenerationRunbookSeam(store.deps, active).loadRunbook({ serviceId, flowId });
 		shown = loaded.ok ? loaded : { ok: false, failure: "failure" in loaded ? loaded.failure : { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
@@ -4056,7 +4062,7 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 		return emitPlatformStoreFailure(input, runbookFailureOf(shown.failure.code, shown.failure.message));
 	}
 	const sourceDigest = source?.ok === true ? source.catalog.catalog_digest : null;
-	const recordStatus = sourceRecord !== undefined && activeRecord?.record_digest === sourceRecord.record_digest ? "in-sync" : sourceRecord !== undefined ? "new-pending-activation" : activeRecord !== undefined ? "deletion-pending-activation" : "new-pending-activation";
+	const recordStatus = sourceSeparation !== undefined ? "separated" : sourceRecord !== undefined && activeRecord?.record_digest === sourceRecord.record_digest ? "in-sync" : sourceRecord !== undefined ? "new-pending-activation" : activeRecord !== undefined ? "deletion-pending-activation" : "new-pending-activation";
 	const catalogStatus = source === undefined ? "source-unavailable" : active?.catalog_digest === sourceDigest ? "in-sync" : "activation-required";
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
@@ -4073,7 +4079,7 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 			),
 		);
 		input.stdout.write(
-			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}\n`,
+			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}${sourceSeparation === undefined ? "" : ` separated=${sourceSeparation.code}`}\n`,
 		);
 		return 0;
 	}
@@ -4088,6 +4094,7 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 				health: shown.health,
 				record_digest: sourceRecord?.record_digest ?? activeRecord?.record_digest ?? null,
 				synchronization_status: recordStatus,
+				separated: sourceSeparation ?? null,
 				catalog_status: catalogStatus,
 				source_catalog_digest: sourceDigest,
 				active_catalog_digest: active?.catalog_digest ?? null,
@@ -4196,11 +4203,60 @@ function sanitizeInputPairForError(pair: string): string {
 type CloseableTargetTransport = {
 	transport: {
 		request(
-			request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+			request:
+				| BrowserUseDevToolsRequest
+				| BrowserUseCdpObserverRequest
+				| {
+						method: "Page.navigate";
+						sessionId: string;
+						params: { url: string };
+					  },
 		): Promise<unknown>;
 	};
 	close(): void;
 };
+
+async function navigateRunbookAuthTarget(
+	transport: CloseableTargetTransport["transport"],
+	input: { target_id: string; url: string },
+): Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }> {
+	let sessionId: string | undefined;
+	try {
+		const attached = await transport.request({
+			method: "Target.attachToTarget",
+			params: { targetId: input.target_id, flatten: true },
+		});
+		sessionId =
+			typeof attached === "object" &&
+			attached !== null &&
+			"sessionId" in attached &&
+			typeof attached.sessionId === "string"
+				? attached.sessionId
+				: undefined;
+		if (sessionId === undefined) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		await transport.request({
+			method: "Page.navigate",
+			sessionId,
+			params: { url: input.url },
+		});
+		return { ok: true };
+	} catch {
+		return { ok: false, cause: "target-proof-invalid" };
+	} finally {
+		if (sessionId !== undefined) {
+			try {
+				await transport.request({
+					method: "Target.detachFromTarget",
+					params: { sessionId },
+				});
+			} catch {
+				// Navigation already dispatched once. Later proof fails closed on drift.
+			}
+		}
+	}
+}
 
 type RunbookAuthDeliveryBuilderDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
@@ -5138,6 +5194,13 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					attestationByDigest: attestationByDigestFrom(store.deps),
 				})
 			: undefined;
+	const authExpectedTargetUrl =
+		plan.auth_context_ref !== undefined &&
+		targetResolution.target_url === "about:blank" &&
+		plan.steps[0]?.kind === "open"
+			? plan.steps[0].url
+			: targetResolution.target_url;
+	let executionExpectedTargetUrl = targetResolution.target_url;
 
 	if (plan.auth_context_ref !== undefined) {
 		if (authProvider === undefined || tokenRetrieval === undefined) {
@@ -5174,7 +5237,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			const deliver = environmentLoginDeliveryHook({
 				tokenRetrieval,
 				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
-				expectedTargetUrl: targetResolution.target_url,
+				expectedTargetUrl: authExpectedTargetUrl,
 			});
 			if (deliver === undefined) {
 				return emitPlatformStoreFailure(input, {
@@ -5200,6 +5263,11 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
 							: {}),
 					},
+					navigateToDeclaredTarget: async (navigation) =>
+						await navigateRunbookAuthTarget(
+							authTransport.transport,
+							navigation,
+						),
 				},
 				{
 					run,
@@ -5207,7 +5275,8 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					service_id: plan.service_id,
 					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
 					allowed_origins: plan.allowed_origins,
-					expected_url: targetResolution.target_url,
+					expected_url: authExpectedTargetUrl,
+					observed_url: targetResolution.target_url,
 					target_id: targetResolution.target_tab_id,
 				},
 			);
@@ -5249,6 +5318,39 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					recoverability: "repair_state",
 				});
 			}
+			const postAuthTarget = await resolveAgentBrowserTaskTarget(
+				{ runCommand: input.runtime.runCommand },
+				{
+					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+					run_id: run.run_id,
+					allowed_origins: plan.allowed_origins,
+					steps: plan.steps,
+					target: {
+						kind: "exact",
+						tab_id: targetResolution.target_tab_id,
+						target_envelope_id: targetEnvelopeId,
+					},
+				},
+			);
+			if (!postAuthTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(postAuthTarget.code, postAuthTarget.message),
+				);
+			}
+			if (
+				postAuthTarget.binding.target_candidate_id !==
+				targetResolution.binding.target_candidate_id
+			) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						"agent_browser_target_moved",
+						"the authenticated target no longer matches the runbook target binding.",
+					),
+				);
+			}
+			executionExpectedTargetUrl = postAuthTarget.target_url;
 		} finally {
 			authTransport.close();
 		}
@@ -5310,7 +5412,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
 			runId: run.run_id,
 			targetTabId: targetResolution.target_tab_id,
-			expectedTargetUrl: targetResolution.target_url,
+			expectedTargetUrl: executionExpectedTargetUrl,
 		},
 	);
 	if (mutationMarkerFailure !== undefined) {

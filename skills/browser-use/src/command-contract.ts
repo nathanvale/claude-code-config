@@ -713,7 +713,6 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"catalog_git_drift",
 	"catalog_record_invalid",
 	"catalog_action_closure_incomplete",
-	"promotion_verifier_unavailable",
 	"promotion_verification_failed",
 	"catalog_drift",
 	"activation_epoch_conflict",

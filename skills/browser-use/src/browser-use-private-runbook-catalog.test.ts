@@ -6,6 +6,15 @@ import {
 	loadPrivateRunbookCatalogFromGit,
 	type BrowserUsePromotionVerifier,
 } from "./browser-use-private-runbook-catalog";
+import {
+	activateRunbookGeneration,
+	resolveSelectedRunbookGeneration,
+} from "./browser-use-runbook-generation";
+import {
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 
 const cleanup = new Set<string>();
 
@@ -46,6 +55,25 @@ async function fixture(input?: { action?: boolean }): Promise<string> {
 				: [{ kind: "snapshot", interactive: false }],
 		}),
 	);
+	if (input?.action) {
+		const snapshotRoot = join(root, "skills/browser-use/runbooks/demo/snapshot");
+		await mkdir(snapshotRoot, { recursive: true });
+		await writeFile(
+			join(snapshotRoot, "runbook.json"),
+			JSON.stringify({
+				contract: "browser-use.runbook",
+				schema_version: "2",
+				service_id: "demo",
+				flow_id: "snapshot",
+				flow_name: "demo-snapshot",
+				version: "1",
+				summary: "Read one demo snapshot.",
+				allowed_origins: ["https://example.test"],
+				inputs: [],
+				steps: [{ kind: "snapshot", interactive: false }],
+			}),
+		);
+	}
 	if (input?.action) {
 		const actionsRoot = join(root, "skills/browser-use/actions");
 		await mkdir(join(actionsRoot, "demo"), { recursive: true });
@@ -106,10 +134,67 @@ describe("private runbook catalog Git closure", () => {
 		expect(loaded.catalog.working_tree_drift).toEqual([]);
 	});
 
-	test("refuses action-bearing source without verifier-backed promotion", async () => {
+	test("separates action-bearing records without a verifier from the activatable closure", async () => {
 		const root = await fixture({ action: true });
 		const loaded = await loadPrivateRunbookCatalogFromGit({ repoRoot: root });
-		expect(loaded).toMatchObject({ ok: false, code: "promotion_verifier_unavailable" });
+		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.catalog.runbooks.map((runbook) => runbook.id)).toEqual([
+			"demo/snapshot",
+		]);
+		expect(loaded.catalog.separated).toEqual([
+			{
+				path: "runbooks/demo/read/runbook.json",
+				record_id: "demo/read",
+				code: "promotion_verifier_unavailable",
+				message:
+					"action-bearing activation requires verifier-backed promotion authority.",
+			},
+		]);
+		expect(
+			loaded.catalog.files.map((file) => file.relative_path),
+		).toEqual([
+			"actions/registry.json",
+			"runbooks/demo/snapshot/runbook.json",
+		]);
+		expect(loaded.catalog.catalog_digest).toBe(
+			new Bun.CryptoHasher("sha256")
+				.update(
+					loaded.catalog.files
+						.map((file) => `${file.relative_path}\0${file.digest}\0`)
+						.join(""),
+				)
+				.digest("hex"),
+		);
+		const xdg = makeTempXdgEnv();
+		try {
+			const fs = createDefaultPlatformFs();
+			const opened = await openBrowserUsePaths(fs, xdg.env);
+			if (!opened.ok) throw new Error(opened.refusal.code);
+			const deps = { fs, paths: opened.paths, clock: () => 1_000 };
+			expect(
+				await activateRunbookGeneration(deps, {
+					catalog: loaded.catalog,
+					reviewedCatalogDigest: loaded.catalog.catalog_digest,
+					expectedEpoch: 0,
+				}),
+			).toMatchObject({ ok: true, changed: true, epoch: 1 });
+			const selected = await resolveSelectedRunbookGeneration(deps);
+			expect(selected.ok).toBe(true);
+			if (!selected.ok) return;
+			expect(selected.manifest.runbooks).toEqual([
+				expect.objectContaining({
+					service_id: "demo",
+					flow_id: "snapshot",
+				}),
+			]);
+			expect(selected.manifest.files.map((file) => file.relative_path)).toEqual([
+				"actions/registry.json",
+				"runbooks/demo/snapshot/runbook.json",
+			]);
+		} finally {
+			xdg.dispose();
+		}
 	});
 
 	test("refuses closure-path worktree drift but not unrelated dirt", async () => {
@@ -126,6 +211,23 @@ describe("private runbook catalog Git closure", () => {
 		};
 		const loaded = await loadPrivateRunbookCatalogFromGit({ repoRoot: root, promotionVerifier: verifier });
 		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.catalog.separated).toEqual([]);
+		expect(loaded.catalog.files.map((file) => file.relative_path)).toContain(
+			"actions/demo/read.js",
+		);
+	});
+
+	test("hard-fails the whole catalog when a present verifier rejects promotion", async () => {
+		const root = await fixture({ action: true });
+		expect(
+			await loadPrivateRunbookCatalogFromGit({
+				repoRoot: root,
+				promotionVerifier: {
+					verify: async () => ({ ok: false, code: "approval_invalid" }),
+				},
+			}),
+		).toMatchObject({ ok: false, code: "promotion_verification_failed" });
 	});
 
 	test("refuses invalid committed Runbooks rather than dropping them", async () => {

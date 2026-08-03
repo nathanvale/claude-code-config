@@ -31,7 +31,10 @@ import {
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import { findRedactionViolations } from "./browser-use-schemas";
-import { privateRunbookCatalogDigest } from "./browser-use-private-runbook-catalog";
+import {
+	type BrowserUsePrivateCatalogSeparated,
+	privateRunbookCatalogDigest,
+} from "./browser-use-private-runbook-catalog";
 
 const RUNBOOKS_RELATIVE_ROOT = "skills/browser-use/runbooks";
 const ACTIONS_RELATIVE_ROOT = "skills/browser-use/actions";
@@ -95,6 +98,7 @@ export type BrowserUseRunbookSourceRecord = {
 export type BrowserUseRunbookSourceCatalog = {
 	catalog_digest: string;
 	records: readonly BrowserUseRunbookSourceRecord[];
+	separated: readonly BrowserUsePrivateCatalogSeparated[];
 	activation_blockers: readonly {
 		id: string;
 		code: string;
@@ -334,6 +338,7 @@ async function validateActionClosure(input: {
 	runbook: BrowserUseRunbook;
 	approvalVerifier?: BrowserUseReviewedActionApprovalVerifier;
 	context?: ActionClosureContext;
+	lifecycleSeparateVerifierAbsence?: boolean;
 }): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
 	const refs = input.runbook.steps.flatMap((step) => step.kind === "action" ? [step] : step.kind === "iterate" ? [step.step] : []);
 	if (refs.length === 0) return { ok: true };
@@ -341,6 +346,7 @@ async function validateActionClosure(input: {
 	const resolvedEntries = context.entries;
 	if (!Array.isArray(resolvedEntries)) return resolvedEntries;
 	const entries: readonly SourceRegistryEntry[] = resolvedEntries;
+	const verifiedClosure: Array<{ entry: SourceRegistryEntry; assetBytes: string }> = [];
 	for (const ref of refs) {
 		const matches = entries.filter((entry) => entry.record.action_id === ref.action_id);
 		if (matches.length === 0) return { ok: false, code: "runbook_action_absent", message: "a referenced Reviewed Action is absent from the private registry." };
@@ -358,6 +364,13 @@ async function validateActionClosure(input: {
 			assetBytes = await readFile(assetPath, "utf8");
 		} catch { return { ok: false, code: "runbook_action_asset_unreadable", message: "a referenced Reviewed Action asset is absent or unreadable." }; }
 		if (actionAssetDigest(assetBytes) !== ref.expected_digest) return { ok: false, code: "runbook_action_digest_stale", message: "a referenced Reviewed Action digest does not match its source bytes." };
+		verifiedClosure.push({ entry, assetBytes });
+	}
+	if (input.lifecycleSeparateVerifierAbsence === true && input.approvalVerifier === undefined) {
+		if (verifiedClosure.some(({ entry }) => entry.record.promotion_receipt === null)) return { ok: false, code: "runbook_action_unpromoted", message: "a referenced Reviewed Action has not been externally promoted." };
+		return { ok: false, code: "runbook_action_promotion_verifier_unavailable", message: "a referenced Reviewed Action requires offline promotion verification." };
+	}
+	for (const { entry, assetBytes } of verifiedClosure) {
 		const mechanical = reviewedActionApprovalFactsFromRecord({
 			commit: "0".repeat(40),
 			record: entry.record,
@@ -522,25 +535,29 @@ export async function readRunbookSourceCatalog(input: {
 				continue;
 			}
 			const recordDigest = actionAssetDigest(bytes);
-			fileDigests.push({ relative_path: `runbooks/${service.name}/${flow.name}/runbook.json`, digest: recordDigest });
+			const relativePath = `runbooks/${service.name}/${flow.name}/runbook.json`;
 			const parsed = parseRunbookDraftDocument(bytes);
 			if (!parsed.ok || parsed.runbook.service_id !== service.name || parsed.runbook.flow_id !== flow.name) {
+				fileDigests.push({ relative_path: relativePath, digest: recordDigest });
 				records.push({ id, service_id: service.name, flow_id: flow.name, record_digest: recordDigest, activation_blocker: { code: parsed.ok ? "catalog_record_identity_mismatch" : parsed.code, message: parsed.ok ? "the source Runbook identity does not match its path." : parsed.message } });
 				continue;
 			}
-			const closure = await validateActionClosure({ sourceRoot: input.sourceRoot, actionsRoot: roots.actions, runbook: parsed.runbook, context: closureContext, ...(input.approvalVerifier === undefined ? {} : { approvalVerifier: input.approvalVerifier }) });
+			const closure = await validateActionClosure({ sourceRoot: input.sourceRoot, actionsRoot: roots.actions, runbook: parsed.runbook, context: closureContext, lifecycleSeparateVerifierAbsence: true, ...(input.approvalVerifier === undefined ? {} : { approvalVerifier: input.approvalVerifier }) });
+			if (closure.ok || closure.code !== "runbook_action_promotion_verifier_unavailable") fileDigests.push({ relative_path: relativePath, digest: recordDigest });
 			records.push({ id, service_id: service.name, flow_id: flow.name, record_digest: recordDigest, runbook: parsed.runbook, ...(!closure.ok ? { activation_blocker: { code: closure.code, message: closure.message } } : {}) });
 		}
 	}
-	const actionFiles = await sourceActionFiles(roots.actions, records.flatMap((record) => record.runbook === undefined ? [] : [record.runbook]));
+	const separated = records.flatMap((record): BrowserUsePrivateCatalogSeparated[] => record.activation_blocker?.code === "runbook_action_promotion_verifier_unavailable" ? [{ path: `runbooks/${record.service_id}/${record.flow_id}/runbook.json`, record_id: record.id, code: "promotion_verifier_unavailable", message: "action-bearing activation requires verifier-backed promotion authority." }] : []);
+	const separatedIds = new Set(separated.map((entry) => entry.record_id));
+	const actionFiles = await sourceActionFiles(roots.actions, records.flatMap((record) => record.runbook === undefined || separatedIds.has(record.id) ? [] : [record.runbook]));
 	const registryBlocker = actionFiles.ok ? undefined : { id: "actions/registry.json", code: actionFiles.code, message: actionFiles.message };
 	if (actionFiles.ok) fileDigests.push(...actionFiles.files);
 	fileDigests.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
 	const activationBlockers = [
-		...records.flatMap((record) => record.activation_blocker === undefined ? [] : [{ id: record.id, ...record.activation_blocker }]),
+		...records.flatMap((record) => record.activation_blocker === undefined || separatedIds.has(record.id) ? [] : [{ id: record.id, ...record.activation_blocker }]),
 		...(registryBlocker === undefined ? [] : [registryBlocker]),
 	];
-	return { ok: true, catalog: { catalog_digest: privateRunbookCatalogDigest(fileDigests), records, activation_blockers: activationBlockers } };
+	return { ok: true, catalog: { catalog_digest: privateRunbookCatalogDigest(fileDigests), records, separated, activation_blockers: activationBlockers } };
 }
 
 const LOCK_STALE_MS = 5 * 60_000;

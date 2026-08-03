@@ -20,9 +20,11 @@ const SAFE_RELATIVE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\0)[^\\]+$/;
 
 export type BrowserUsePrivateCatalogFile = { relative_path: string; source_path: string; bytes: string; digest: string };
 export type BrowserUsePrivateCatalogRunbook = { id: string; record_digest: string; relative_path: string; runbook: BrowserUseRunbook };
-export type BrowserUsePrivateRunbookCatalog = { commit: string; catalog_digest: string; action_registry_digest: string; files: readonly BrowserUsePrivateCatalogFile[]; runbooks: readonly BrowserUsePrivateCatalogRunbook[]; working_tree_drift: readonly string[] };
+/** Action-bearing source record withheld from activation until promotion authority is available. */
+export type BrowserUsePrivateCatalogSeparated = { path: string; record_id: string; code: "promotion_verifier_unavailable"; message: string };
+export type BrowserUsePrivateRunbookCatalog = { commit: string; catalog_digest: string; action_registry_digest: string; files: readonly BrowserUsePrivateCatalogFile[]; runbooks: readonly BrowserUsePrivateCatalogRunbook[]; separated: readonly BrowserUsePrivateCatalogSeparated[]; working_tree_drift: readonly string[] };
 export type BrowserUsePromotionVerifier = { verify(input: { commit: string; actionId: string; expectedDigest: string; assetBytes: string; record: unknown; promotionHistory: readonly unknown[] }): Promise<{ ok: true } | { ok: false; code: string }> };
-export type BrowserUsePrivateCatalogFailure = { ok: false; code: "catalog_source_unavailable" | "catalog_git_unavailable" | "catalog_git_provenance_invalid" | "catalog_git_object_unsupported" | "catalog_git_filter_unsupported" | "catalog_git_drift" | "catalog_record_invalid" | "catalog_action_closure_incomplete" | "promotion_verifier_unavailable" | "promotion_verification_failed"; message: string };
+export type BrowserUsePrivateCatalogFailure = { ok: false; code: "catalog_source_unavailable" | "catalog_git_unavailable" | "catalog_git_provenance_invalid" | "catalog_git_object_unsupported" | "catalog_git_filter_unsupported" | "catalog_git_drift" | "catalog_record_invalid" | "catalog_action_closure_incomplete" | "promotion_verification_failed"; message: string };
 export type BrowserUseGitCommand = (args: readonly string[]) => Promise<{ exitCode: number; stdout: Uint8Array; stderr: string }>;
 type GitTreeEntry = { mode: string; type: string; oid: string; path: string };
 type RegistryEntry = { asset_path: string; record: Record<string, unknown>; promotion_history: readonly unknown[] };
@@ -129,7 +131,6 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		try { blobBytes.set(entry.path, decoder(blob.stdout)); } catch { return failure("catalog_record_invalid", "a catalog record is not valid UTF-8."); }
 	}
 	const runbooks: BrowserUsePrivateCatalogRunbook[] = [];
-	const refs: Array<{ actionId: string; expectedDigest: string; allowedOrigins: readonly string[] }> = [];
 	for (const entry of runbookEntries) {
 		const raw = blobBytes.get(entry.path) as string; let parsedJson: unknown;
 		try { parsedJson = JSON.parse(raw); } catch { return failure("catalog_record_invalid", "a source Runbook is not valid JSON."); }
@@ -139,8 +140,8 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		const expectedPath = `${parsed.runbook.service_id}/${parsed.runbook.flow_id}/runbook.json`;
 		if (suffix !== expectedPath) return failure("catalog_record_invalid", "a source Runbook identity does not match its commit-tree path.");
 		runbooks.push({ id: `${parsed.runbook.service_id}/${parsed.runbook.flow_id}`, record_digest: sha256(raw), relative_path: `runbooks/${suffix}`, runbook: parsed.runbook });
-		refs.push(...actionRefs(parsed.runbook));
 	}
+	const refs = runbooks.flatMap((runbook) => actionRefs(runbook.runbook));
 	if (registryTreeEntry === undefined && refs.length > 0) return failure("catalog_action_closure_incomplete", "an action-bearing catalog has no committed action registry.");
 	const registryBytes = registryTreeEntry === undefined ? "{\"actions\":[]}" : (blobBytes.get(registryPath) as string);
 	const registry = parseRegistry(registryBytes); if (registry === undefined) return failure("catalog_action_closure_incomplete", "the committed action registry is invalid.");
@@ -151,33 +152,54 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 		registryById.set(actionId, entry);
 	}
 	const closureEntries = new Map<string, GitTreeEntry>();
-	for (const entry of runbookEntries) closureEntries.set(entry.path, entry);
-	if (registryTreeEntry !== undefined) closureEntries.set(registryTreeEntry.path, registryTreeEntry);
-	for (const ref of refs) {
-		if (!actionDigestIsValid(ref.expectedDigest)) return failure("catalog_action_closure_incomplete", "a Runbook action reference does not carry an exact digest.");
-		const registryEntry = registryById.get(ref.actionId);
-		if (registryEntry === undefined) return failure("catalog_action_closure_incomplete", "a referenced action is absent from the committed registry.");
-		if (typeof registryEntry.record.allowed_origin !== "string" || !ref.allowedOrigins.includes(registryEntry.record.allowed_origin)) return failure("catalog_action_closure_incomplete", "a referenced action origin is outside its Runbook origin boundary.");
-		const sourcePath = posix.join(actionsPath, registryEntry.asset_path);
-		const treeEntry = tree.find((entry) => entry.path === sourcePath);
-		if (treeEntry === undefined || treeEntry.type !== "blob" || treeEntry.mode !== "100644") return failure("catalog_action_closure_incomplete", "a referenced action asset is absent or unsupported in the commit tree.");
-		let assetBytes: string; const existing = blobBytes.get(sourcePath);
-		if (existing !== undefined) assetBytes = existing;
-		else {
-			const blob = await git(["cat-file", "blob", treeEntry.oid]);
-			if (blob.exitCode !== 0) return failure("catalog_git_provenance_invalid", "a referenced action blob could not be read.");
-			try { assetBytes = decoder(blob.stdout); } catch { return failure("catalog_action_closure_incomplete", "a referenced action asset is not valid UTF-8."); }
-			blobBytes.set(sourcePath, assetBytes);
+	const proofEntries = new Map<string, GitTreeEntry>();
+	const activatableRunbooks: BrowserUsePrivateCatalogRunbook[] = [];
+	const separated: BrowserUsePrivateCatalogSeparated[] = [];
+	if (registryTreeEntry !== undefined) {
+		closureEntries.set(registryTreeEntry.path, registryTreeEntry);
+		proofEntries.set(registryTreeEntry.path, registryTreeEntry);
+	}
+	for (const runbook of runbooks) {
+		const sourceRunbookPath = posix.join(runbooksPath, runbook.relative_path.slice("runbooks/".length));
+		const runbookTreeEntry = runbookEntries.find((entry) => entry.path === sourceRunbookPath);
+		if (runbookTreeEntry === undefined) return failure("catalog_git_provenance_invalid", "a source Runbook vanished before closure assembly.");
+		proofEntries.set(sourceRunbookPath, runbookTreeEntry);
+		const runbookActionEntries: Array<{ sourcePath: string; treeEntry: GitTreeEntry }> = [];
+		const runbookRefs = actionRefs(runbook.runbook);
+		for (const ref of runbookRefs) {
+			if (!actionDigestIsValid(ref.expectedDigest)) return failure("catalog_action_closure_incomplete", "a Runbook action reference does not carry an exact digest.");
+			const registryEntry = registryById.get(ref.actionId);
+			if (registryEntry === undefined) return failure("catalog_action_closure_incomplete", "a referenced action is absent from the committed registry.");
+			if (typeof registryEntry.record.allowed_origin !== "string" || !ref.allowedOrigins.includes(registryEntry.record.allowed_origin)) return failure("catalog_action_closure_incomplete", "a referenced action origin is outside its Runbook origin boundary.");
+			const sourcePath = posix.join(actionsPath, registryEntry.asset_path);
+			const treeEntry = tree.find((entry) => entry.path === sourcePath);
+			if (treeEntry === undefined || treeEntry.type !== "blob" || treeEntry.mode !== "100644") return failure("catalog_action_closure_incomplete", "a referenced action asset is absent or unsupported in the commit tree.");
+			let assetBytes: string; const existing = blobBytes.get(sourcePath);
+			if (existing !== undefined) assetBytes = existing;
+			else {
+				const blob = await git(["cat-file", "blob", treeEntry.oid]);
+				if (blob.exitCode !== 0) return failure("catalog_git_provenance_invalid", "a referenced action blob could not be read.");
+				try { assetBytes = decoder(blob.stdout); } catch { return failure("catalog_action_closure_incomplete", "a referenced action asset is not valid UTF-8."); }
+				blobBytes.set(sourcePath, assetBytes);
+			}
+			if (actionAssetDigest(assetBytes) !== ref.expectedDigest || registryEntry.record.expected_digest !== ref.expectedDigest) return failure("catalog_action_closure_incomplete", "a referenced action digest does not match the committed asset and registry.");
+			const verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record, promotionHistory: registryEntry.promotion_history });
+			if (verified !== undefined && !verified.ok) return failure("promotion_verification_failed", "a referenced action lacks valid external-human promotion authority.");
+			proofEntries.set(sourcePath, treeEntry);
+			runbookActionEntries.push({ sourcePath, treeEntry });
 		}
-		if (actionAssetDigest(assetBytes) !== ref.expectedDigest || registryEntry.record.expected_digest !== ref.expectedDigest) return failure("catalog_action_closure_incomplete", "a referenced action digest does not match the committed asset and registry.");
-		if (input.promotionVerifier === undefined && input.requirePromotionVerification !== false) return failure("promotion_verifier_unavailable", "action-bearing activation requires verifier-backed promotion authority.");
-		const verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record, promotionHistory: registryEntry.promotion_history });
-		if (verified !== undefined && !verified.ok) return failure("promotion_verification_failed", "a referenced action lacks valid external-human promotion authority.");
-		closureEntries.set(sourcePath, treeEntry);
+		if (runbookRefs.length > 0 && input.promotionVerifier === undefined && input.requirePromotionVerification !== false) {
+			separated.push({ path: runbook.relative_path, record_id: runbook.id, code: "promotion_verifier_unavailable", message: "action-bearing activation requires verifier-backed promotion authority." });
+			continue;
+		}
+		activatableRunbooks.push(runbook);
+		closureEntries.set(sourceRunbookPath, runbookTreeEntry);
+		for (const action of runbookActionEntries) closureEntries.set(action.sourcePath, action.treeEntry);
 	}
 	const closurePaths = [...closureEntries.keys()].sort();
-	if (!(await filtersAreAbsent(git, commit, closurePaths))) return failure("catalog_git_filter_unsupported", "the catalog closure uses a Git content filter or its filter state cannot be proven absent.");
-	const status = await gitText(git, ["status", "--porcelain=v1", "--untracked-files=all", "--", ...closurePaths]);
+	const proofPaths = [...proofEntries.keys()].sort();
+	if (!(await filtersAreAbsent(git, commit, proofPaths))) return failure("catalog_git_filter_unsupported", "the catalog closure uses a Git content filter or its filter state cannot be proven absent.");
+	const status = await gitText(git, ["status", "--porcelain=v1", "--untracked-files=all", "--", ...proofPaths]);
 	if (!status.ok) return failure("catalog_git_unavailable", "closure-local working-tree drift could not be inspected.");
 	const drift = status.text.split("\n").filter(Boolean).sort();
 	if (drift.length > 0) return failure("catalog_git_drift", "catalog closure paths differ from the resolved commit; review the source closure again.");
@@ -188,5 +210,5 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 	}
 	if (registryTreeEntry === undefined) files.push({ relative_path: "actions/registry.json", source_path: registryPath, bytes: registryBytes, digest: sha256(registryBytes) });
 	files.sort((left, right) => left.relative_path.localeCompare(right.relative_path));
-	return { ok: true, catalog: { commit, catalog_digest: privateRunbookCatalogDigest(files), action_registry_digest: sha256(registryBytes), files, runbooks: runbooks.sort((left, right) => left.id.localeCompare(right.id)), working_tree_drift: drift } };
+	return { ok: true, catalog: { commit, catalog_digest: privateRunbookCatalogDigest(files), action_registry_digest: sha256(registryBytes), files, runbooks: activatableRunbooks.sort((left, right) => left.id.localeCompare(right.id)), separated: separated.sort((left, right) => left.record_id.localeCompare(right.record_id)), working_tree_drift: drift } };
 }

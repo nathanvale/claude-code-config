@@ -48,6 +48,8 @@ function welcome(): BrowserUseAccessibilitySnapshot {
 async function fixture(
 	proof: boolean,
 	proofOrigin = "https://fixture.test",
+	expectedUrl = "https://fixture.test/login",
+	observedUrl?: string,
 ) {
 	const xdg = makeTempXdgEnv();
 	disposables.push(xdg);
@@ -116,6 +118,7 @@ async function fixture(
 		return { ok: true, shape: { field, byte_length: 8 } };
 	};
 	let screen = form();
+	const navigations: Array<{ target_id: string; url: string }> = [];
 	const result = await runBrowserUseRunbookAuth(
 		{
 			store,
@@ -143,6 +146,10 @@ async function fixture(
 					? { proven: true, proof: { target_id, page_id: "page-authenticated", frame_id: "frame-authenticated", origin: proofOrigin, subject_reference: "subject-ref", account_reference: "account-ref", tenant_reference: "tenant-ref", identity_basis_digest: "basis-digest" } }
 					: { proven: false, cause: "human-identity-attestation-required" },
 			},
+			navigateToDeclaredTarget: async (input) => {
+				navigations.push(input);
+				return { ok: true };
+			},
 		},
 		{
 			run,
@@ -150,14 +157,43 @@ async function fixture(
 			service_id: "fixture",
 			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://fixture.test"],
-			expected_url: "https://fixture.test/login",
+			expected_url: expectedUrl,
+			...(observedUrl !== undefined ? { observed_url: observedUrl } : {}),
 			target_id: "target-fixture",
 		},
 	);
-	return { result, delivered };
+	return { result, delivered, navigations };
 }
 
 describe("runbook auth route", () => {
+	test("bootstraps one neutral target to the declared login URL before authentication", async () => {
+		const { result, navigations } = await fixture(
+			true,
+			"https://fixture.test",
+			"https://fixture.test/login",
+			"about:blank",
+		);
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		expect(navigations).toEqual([
+			{ target_id: "target-fixture", url: "https://fixture.test/login" },
+		]);
+	});
+
+	test("refuses a cross-origin neutral bootstrap before navigation or authentication", async () => {
+		const { result, navigations, delivered } = await fixture(
+			true,
+			"https://fixture.test",
+			"https://near-miss.fixture.test/login",
+			"about:blank",
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: { blocked_cause: "origin-mismatch" },
+		});
+		expect(navigations).toEqual([]);
+		expect(delivered).toEqual([]);
+	});
+
 	test("keeps run identity and gates one business dispatch behind authenticated ready", async () => {
 		const { result, delivered } = await fixture(true);
 		expect(result.ok).toBe(true);

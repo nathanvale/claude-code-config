@@ -1,6 +1,7 @@
 @_spi(Executor) @_spi(Testing) import BrowserUseEnvironmentAuth
 import Darwin
 import Foundation
+import SQLite3
 
 @_silgen_name("fork")
 private func supervisorFork() -> pid_t
@@ -663,7 +664,74 @@ private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
         .appendingPathComponent("Login Data")
         .path
     var loginMetadata = stat()
-    if lstat(loginDataPath, &loginMetadata) == 0, loginMetadata.st_size > 0 {
+    guard lstat(loginDataPath, &loginMetadata) == 0 else {
+        return errno == ENOENT
+            ? ["status": "ready"]
+            : ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    guard loginMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(
+              loginDataPath,
+              &database,
+              SQLITE_OPEN_READONLY,
+              nil
+          ) == SQLITE_OK,
+          let database
+    else {
+        if let database { sqlite3_close(database) }
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    defer { sqlite3_close(database) }
+
+    var schemaStatement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+              database,
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'logins' COLLATE NOCASE LIMIT 1",
+              -1,
+              &schemaStatement,
+              nil
+          ) == SQLITE_OK,
+          let schemaStatement
+    else {
+        if let schemaStatement { sqlite3_finalize(schemaStatement) }
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    let schemaStep = sqlite3_step(schemaStatement)
+    let schemaFinalized = sqlite3_finalize(schemaStatement)
+    if schemaStep == SQLITE_DONE, schemaFinalized == SQLITE_OK {
+        return ["status": "ready"]
+    }
+    guard schemaStep == SQLITE_ROW, schemaFinalized == SQLITE_OK else {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+
+    var countStatement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+              database,
+              "SELECT count(*) FROM logins",
+              -1,
+              &countStatement,
+              nil
+          ) == SQLITE_OK,
+          let countStatement
+    else {
+        if let countStatement { sqlite3_finalize(countStatement) }
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    let countStep = sqlite3_step(countStatement)
+    let loginCount = countStep == SQLITE_ROW
+        ? sqlite3_column_int64(countStatement, 0)
+        : -1
+    let countComplete = sqlite3_step(countStatement)
+    let countFinalized = sqlite3_finalize(countStatement)
+    guard countStep == SQLITE_ROW,
+          countComplete == SQLITE_DONE,
+          countFinalized == SQLITE_OK,
+          loginCount == 0
+    else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
     return ["status": "ready"]

@@ -1151,7 +1151,14 @@ export type BrowserUseRuntime = {
 	runbookAuthTransport?: () => {
 		transport: {
 			request(
-				request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+				request:
+					| BrowserUseDevToolsRequest
+					| BrowserUseCdpObserverRequest
+					| {
+							method: "Page.navigate";
+							sessionId: string;
+							params: { url: string };
+						  },
 			): Promise<unknown>;
 		};
 		close(): void;

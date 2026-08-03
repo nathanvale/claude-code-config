@@ -6,8 +6,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readdirSync,
-	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -4128,46 +4126,12 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 	);
 });
 
-// --- (U6) FastTrack login runbook — shipped catalog + hermetic end-to-end ----
+// --- (U6) FastTrack login runbook — generic auth entry -----------------------
 //
-// The shipped `fasttrack/login` flow exercises the WHOLE confidential-delivery
-// path hermetically through the real engine with fixture transports (R11): the
-// runbook file carries only binding slugs + allowed origins (KTD4), the seam is
-// consulted with the plan's pending slugs, the sensitive interval spans exactly
-// two bounded writes (username then password), the sign-in postcondition is a
-// fresh structural observation, and the on-disk run record sweeps clean for the
-// derived conformance sentinels. See fixtures/fasttrack-login-runbook-fixture.ts.
-
-const LOGIN_FIXTURE = join(
-	import.meta.dir,
-	"fixtures",
-	"fasttrack-login-runbook-fixture.ts",
-);
-const LOGIN_NONCE = "u6ftlogin01";
-
-async function waitForLoginJournal(path: string, event: string): Promise<void> {
-	const deadline = Date.now() + 15_000;
-	while (Date.now() < deadline) {
-		try {
-			const parsed = JSON.parse(readFileSync(path, "utf8")) as string[];
-			if (parsed.includes(event)) return;
-		} catch {
-			// journal not written yet
-		}
-		await Bun.sleep(25);
-	}
-	throw new Error(`login fixture journal never reached event: ${event}`);
-}
-
-function loginFilesUnder(root: string): string[] {
-	if (!existsSync(root)) return [];
-	return readdirSync(root, { recursive: true, encoding: "utf8" })
-		.map((entry) => join(root, entry))
-		.filter((path) => statSync(path).isFile());
-}
-
+// The shipped document owns portal entry only. The Browser Authentication
+// Transaction owns username, password, and submit choreography.
 describe("(U6) FastTrack login runbook", () => {
-	test("ships fasttrack/login and lists it healthy with confidential auth", async () => {
+	test("ships fasttrack/login as a healthy read-only entry into generic auth", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -4178,7 +4142,7 @@ describe("(U6) FastTrack login runbook", () => {
 			if (login === undefined) return;
 			expect(login.health).toBe("healthy");
 			expect(login.requires_auth).toBe(true);
-			expect(login.effect_class).toBe("mutation");
+			expect(login.effect_class).toBe("read-only");
 		} finally {
 			rmSync(dataRoot, { recursive: true, force: true });
 		}
@@ -4200,111 +4164,17 @@ describe("(U6) FastTrack login runbook", () => {
 		expect(parsed.allowed_origins).toEqual([
 			"https://manpowergroup.fasttrack360.com.au",
 		]);
-		const bindings = parsed.steps.flatMap((step) =>
-			step.kind === "fill" && step.sensitivity === "confidential"
-				? [step.item_binding]
-				: [],
-		);
-		expect(bindings).toEqual(["fasttrack_username", "fasttrack_password"]);
+		expect(parsed.auth_context_ref).toBe("interactive-login");
+		expect(parsed.steps).toEqual([
+			expect.objectContaining({
+				kind: "open",
+				url: "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+			}),
+			{ kind: "snapshot", interactive: true },
+		]);
+		expect(parsed.steps.some((step) => step.kind === "fill")).toBe(false);
+		expect(parsed.steps.some((step) => step.kind === "click")).toBe(false);
 	});
-
-	test(
-		"hermetic end-to-end: the real engine drives binding mint, sensitive interval, two bounded writes, postcondition, and a clean run-record sweep",
-		async () => {
-			// realpath the temp base: macOS tmpdirs sit behind /var -> /private/var
-			// and the XDG root guard refuses a symlinked ancestor.
-			const root = realpathSync(
-				mkdtempSync(join(tmpdir(), "browser-use-ft-login-")),
-			);
-			const dataRoot = join(root, "data");
-			const stateRoot = join(root, "state");
-			const journalPath = join(root, "journal.json");
-
-			const usernameSentinel = deriveConformanceSentinel(
-				"username",
-				LOGIN_NONCE,
-			);
-			const passwordSentinel = deriveConformanceSentinel(
-				"password",
-				LOGIN_NONCE,
-			);
-			expect(usernameSentinel.ok).toBe(true);
-			expect(passwordSentinel.ok).toBe(true);
-			if (!usernameSentinel.ok || !passwordSentinel.ok) return;
-
-			try {
-				const child = Bun.spawn(
-					[
-						process.execPath,
-						LOGIN_FIXTURE,
-						dataRoot,
-						stateRoot,
-						journalPath,
-						LOGIN_NONCE,
-					],
-					{ cwd: root, stdout: "pipe", stderr: "pipe" },
-				);
-				await waitForLoginJournal(journalPath, "cleanup:released");
-				const [exitCode, stdout, stderr] = await Promise.all([
-					child.exited,
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-				]);
-
-				// The real run confirmed and released.
-				expect(stderr).toBe("");
-				expect(exitCode).toBe(0);
-				expect(stdout).toContain("fasttrack-login-delivery-complete");
-
-				// The journal proves the phase ORDER: quarantine raised BEFORE any
-				// secret acquisition; the seam consulted with BOTH pending slugs;
-				// username delivered before password; postcondition confirmed; release.
-				const journal = JSON.parse(
-					readFileSync(journalPath, "utf8"),
-				) as string[];
-				expect(journal[0]).toBe("quarantine:raised");
-				expect(journal).toContain(
-					"lease:acquired:fasttrack_username,fasttrack_password",
-				);
-				expect(journal.indexOf("quarantine:raised")).toBeLessThan(
-					journal.indexOf("op-execute:secret-acquired:username"),
-				);
-				expect(
-					journal.indexOf("delivery:bounded-write:username"),
-				).toBeLessThan(journal.indexOf("delivery:bounded-write:password"));
-				// Exactly TWO bounded writes — one per credential field.
-				expect(
-					journal.filter((event) =>
-						event.startsWith("delivery:bounded-write:"),
-					),
-				).toEqual([
-					"delivery:bounded-write:username",
-					"delivery:bounded-write:password",
-				]);
-				expect(journal).toContain("postcondition:confirmed");
-				expect(journal[journal.length - 1]).toBe("cleanup:released");
-
-				// Zero-sentinel sweep over every real governed surface the process
-				// produced: run-store bytes (and every state file), stdout, stderr.
-				const stateFiles = loginFilesUnder(stateRoot);
-				expect(
-					stateFiles.filter((file) => file.endsWith("run.json")).length,
-				).toBeGreaterThan(0);
-				const surfaces = [
-					stdout,
-					stderr,
-					...stateFiles.map((file) => readFileSync(file, "utf8")),
-				];
-				for (const surface of surfaces) {
-					expect(surface).not.toContain(usernameSentinel.value);
-					expect(surface).not.toContain(passwordSentinel.value);
-				}
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
-		},
-		20_000,
-	);
 
 	test(
 		"a confidential step with an unknown binding slug refuses typed before the seam or any browser effect",

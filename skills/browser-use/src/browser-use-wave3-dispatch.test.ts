@@ -254,9 +254,25 @@ function authContextRunbook(origin: string): BrowserUseRunbook {
 	};
 }
 
-function startAuthCdpFixture(input: { initial: "login" | "ambiguous" }) {
+function authContextOpenRunbook(origin: string): BrowserUseRunbook {
+	return {
+		...authContextRunbook(origin),
+		steps: [
+			{
+				kind: "open",
+				url: `${origin}/login`,
+				postcondition: { kind: "url-equals", url: `${origin}/login` },
+			},
+			{ kind: "snapshot", interactive: true },
+		],
+	};
+}
+
+function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous" }) {
 	let screen = input.initial;
+	let targetUrl = input.initial === "neutral" ? "about:blank" : "http://127.0.0.1:45123/login";
 	const methods: string[] = [];
+	const navigations: string[] = [];
 	const origin = "http://127.0.0.1:45123";
 	const transport = {
 		transport: {
@@ -269,15 +285,23 @@ function startAuthCdpFixture(input: { initial: "login" | "ambiguous" }) {
 					case "Target.getTargets":
 						return {
 							targetInfos: [
-								{ targetId: "t1", type: "page", url: `${origin}/login` },
+								{ targetId: "t1", type: "page", url: targetUrl },
 							],
 						};
 					case "Target.attachToTarget":
 						return { sessionId: "auth-session" };
 					case "Page.getFrameTree":
 						return {
-							frameTree: { frame: { id: "frame-auth", url: `${origin}/login` } },
+							frameTree: { frame: { id: "frame-auth", url: targetUrl } },
 						};
+					case "Page.navigate": {
+						const url = message.params?.url;
+						if (typeof url !== "string") throw new Error("missing navigation URL");
+						navigations.push(url);
+						targetUrl = url;
+						screen = "login";
+						return { frameId: "frame-auth" };
+					}
 					case "Accessibility.getFullAXTree":
 						return {
 							nodes:
@@ -308,6 +332,7 @@ function startAuthCdpFixture(input: { initial: "login" | "ambiguous" }) {
 		origin,
 		transport,
 		methods,
+		navigations,
 	};
 }
 
@@ -543,28 +568,27 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 	});
 
-	test("runbook activate refuses action-bearing source until promotion authority exists", async () => {
+	test("runbook list surfaces verifier-separated records outside activation blockers", async () => {
 		const store = await makeStore();
 		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
 			await runForTest(
-				[
-					"runbook",
-					"activate",
-					"--catalog-digest",
-					"a".repeat(64),
-					"--expected-epoch",
-					"0",
-					"--json",
-				],
+				["runbook", "list", "--json"],
 				makeRuntime({ env: { ...store.env, ...gitEnv } }),
 			),
 		);
-		expect(result.exitCode).toBe(20);
-		const envelope = parseJson(result.stdout);
-		expect(envelope.error).toMatchObject({ code: "promotion_verifier_unavailable" });
-		expect(envelope.runtime_actions).toEqual([
-			expect.objectContaining({ id: "activate_runbook_catalog" }),
-		]);
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.separated).toContainEqual(
+			expect.objectContaining({
+				record_id: "fasttrack/fill-week",
+				code: "promotion_verifier_unavailable",
+			}),
+		);
+		expect(data.activation_blockers).not.toContainEqual(
+			expect.objectContaining({ id: "fasttrack/fill-week" }),
+		);
+		const rows = data.runbooks as Array<Record<string, unknown>>;
+		expect(rows.find((row) => row.service_id === "fasttrack" && row.flow_id === "fill-week")?.synchronization_status).toBe("separated");
 	});
 
 	test("runbook list projects the discovered catalog (no not-implemented)", async () => {
@@ -589,6 +613,9 @@ describe("runbook family — live (U4 wiring)", () => {
 		);
 		expect(seeded).toBeDefined();
 		expect(data.runbook_count).toBe(rows.length);
+		expect(data.separated).toContainEqual(
+			expect.objectContaining({ record_id: "fasttrack/fill-week" }),
+		);
 	});
 
 	test("runbook show returns one validated definition and health", async () => {
@@ -606,6 +633,24 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(data.health).toBe("healthy");
 		const runbook = data.runbook as Record<string, unknown>;
 		expect(runbook.service_id).toBe("oncore");
+		expect(data.separated).toBeNull();
+	});
+
+	test("runbook show surfaces a verifier-separated definition without making it executable", async () => {
+		const store = await makeStore();
+		const result = await withCommittedCatalogSource(store.base, async (gitEnv) =>
+			await runForTest(
+				["runbook", "show", "--service", "fasttrack", "--flow", "fill-week", "--json"],
+				makeRuntime({ env: { ...store.env, ...gitEnv } }),
+			),
+		);
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.synchronization_status).toBe("separated");
+		expect(data.separated).toMatchObject({
+			record_id: "fasttrack/fill-week",
+			code: "promotion_verifier_unavailable",
+		});
 	});
 
 	test("runbook show for a missing runbook fails closed with a typed refusal", async () => {
@@ -679,6 +724,7 @@ describe("runbook family — live (U4 wiring)", () => {
 			const { runtime, calls } = scriptedRuntime(store.env, [
 				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
 				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
 				{ stdout: agentSuccess({ selected: true }) },
 				{ stdout: agentSuccess({ url: `${cdp.origin}/login` }) },
 				{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
@@ -723,6 +769,74 @@ describe("runbook family — live (U4 wiring)", () => {
 				expect(durable.run.run_id).toBe(runId);
 				expect(durable.run.state).toBe("confirmed");
 			}
+		} finally {
+			cdp.transport.close();
+		}
+	});
+
+	test("neutral auth target bootstraps once before proof, then retains the business open", async () => {
+		const cdp = startAuthCdpFixture({ initial: "neutral" });
+		try {
+			const store = await makeStore();
+			seedRunbook(store.dataRoot, authContextOpenRunbook(cdp.origin));
+			const runId = "run-runbook-auth-neutral";
+			const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+			const loginUrl = `${cdp.origin}/login`;
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: "about:blank" }] }) },
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: loginUrl }] }) },
+				{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: loginUrl }] }) },
+				{ stdout: agentSuccess({ selected: true }) },
+				{ stdout: agentSuccess({ url: loginUrl }) },
+				{ stdout: agentSuccess({ opened: true }) },
+				{ stdout: agentSuccess({ url: loginUrl }) },
+				{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
+			]);
+			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+			runtime.runbookAuthTransport = () => cdp.transport;
+			let authenticatedStateProven = false;
+			const runCommand = runtime.runCommand;
+			runtime.runCommand = async (input) => {
+				if (input.args.includes("open") || input.args.includes("snapshot")) {
+					expect(authenticatedStateProven).toBe(true);
+				}
+				return await runCommand(input);
+			};
+			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => {
+				authenticatedStateProven = true;
+				return {
+					proven: true,
+					proof: {
+						target_id,
+						page_id: "page-authenticated",
+						frame_id: "frame-auth",
+						origin: cdp.origin,
+						subject_reference: "subject-fixture",
+						account_reference: "account-fixture",
+						tenant_reference: "tenant-fixture",
+						identity_basis_digest: "identity-basis-fixture",
+					},
+				};
+			};
+
+			const result = await runForTest(
+				[
+					"runbook", "run",
+					"--service", "fixture-auth",
+					"--flow", "business-after-login",
+					"--handoff", handoffPath,
+					"--tab", "t1",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(cdp.navigations).toEqual([loginUrl]);
+			expect(calls.filter((call) => call.includes("open"))).toHaveLength(1);
+			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			const run = (parseJson(result.stdout).data as { run: { state: string } }).run;
+			expect(run.state).toBe("confirmed");
 		} finally {
 			cdp.transport.close();
 		}

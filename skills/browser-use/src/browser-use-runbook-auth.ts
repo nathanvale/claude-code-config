@@ -62,6 +62,11 @@ export type BrowserUseRunbookAuthDeps = {
 	provider: BrowserUseAuthProvider;
 	login: Omit<BrowserUseLoginEngineDeps, "journal">;
 	implementation_integrity_key: string;
+	/** Dispatch one exact, auth-owned navigation before any login observation. */
+	navigateToDeclaredTarget?: (input: {
+		target_id: string;
+		url: string;
+	}) => Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }>;
 };
 
 export type BrowserUseRunbookAuthInput = {
@@ -71,6 +76,8 @@ export type BrowserUseRunbookAuthInput = {
 	auth_context_ref: BrowserUseAuthContext;
 	allowed_origins: readonly string[];
 	expected_url: string;
+	/** Fresh URL observed during target resolution. Only exact about:blank may bootstrap. */
+	observed_url?: string;
 	target_id: string;
 };
 
@@ -92,10 +99,24 @@ function fragmentOf(run: BrowserUseSharedRun): BrowserUseAuthTransactionFragment
 
 function originOf(url: string): string | undefined {
 	try {
-		return new URL(url).origin;
+		const parsed = new URL(url);
+		return parsed.protocol === "http:" || parsed.protocol === "https:"
+			? parsed.origin
+			: undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function expectedOriginIsAllowed(input: BrowserUseRunbookAuthInput): boolean {
+	const expectedOrigin = originOf(input.expected_url);
+	return (
+		expectedOrigin !== undefined &&
+		input.allowed_origins.some(
+			(candidate) =>
+				candidate === originOf(candidate) && candidate === expectedOrigin,
+		)
+	);
 }
 
 function authenticatedProofRefusal(
@@ -171,6 +192,19 @@ export async function runBrowserUseRunbookAuth(
 		} else {
 			const persisted = await commit();
 			if (!persisted.ok) return { ok: false, run, failure: persisted };
+		}
+	}
+
+	if (input.observed_url === "about:blank") {
+		if (!expectedOriginIsAllowed(input)) {
+			return { ok: false, run, blocked: blockedOf("origin-mismatch") };
+		}
+		const navigation = await deps.navigateToDeclaredTarget?.({
+			target_id: input.target_id,
+			url: input.expected_url,
+		});
+		if (navigation?.ok !== true) {
+			return { ok: false, run, blocked: blockedOf("target-proof-invalid") };
 		}
 	}
 

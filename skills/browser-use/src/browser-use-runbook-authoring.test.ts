@@ -57,6 +57,54 @@ async function sourceFixture(): Promise<string> {
 }
 
 describe("complete-document Runbook authoring", () => {
+	test("migrated FastTrack login validates and applies through the R7 front door", async () => {
+		const sourceRoot = await sourceFixture();
+		const file = join(import.meta.dir, "../runbooks/fasttrack/login/runbook.json");
+		const runtime = makeRuntime({ sourceCheckoutRoot: sourceRoot });
+		const validated = await runForTest(
+			["runbook", "validate", "--file", file, "--json"],
+			runtime,
+		);
+		expect(validated.exitCode).toBe(0);
+		const validationResult = (parseJson(validated.stdout).data as {
+			result: { record_digest: string };
+		}).result;
+		const applied = await runForTest(
+			["runbook", "apply", "--file", file, "--json"],
+			runtime,
+		);
+		expect(applied.exitCode).toBe(0);
+		const applyResult = (parseJson(applied.stdout).data as {
+			result: {
+				ok: boolean;
+				changed: boolean;
+				service_id: string;
+				flow_id: string;
+				record_digest: string;
+				synchronization_status: string;
+			};
+		}).result;
+		expect(applyResult).toEqual({
+			ok: true,
+			changed: true,
+			service_id: "fasttrack",
+			flow_id: "login",
+			record_digest: validationResult.record_digest,
+			synchronization_status: "new-pending-activation",
+		});
+		const stored = JSON.parse(
+			await readFile(
+				join(sourceRoot, "skills/browser-use/runbooks/fasttrack/login/runbook.json"),
+				"utf8",
+			),
+		) as Record<string, unknown>;
+		expect(stored.auth_context_ref).toBe("interactive-login");
+		expect(stored.steps).toEqual([
+			expect.objectContaining({ kind: "open" }),
+			{ kind: "snapshot", interactive: true },
+		]);
+	});
+
 	test("facade schema and validate commands return the authoring result contract", async () => {
 		const sourceRoot = await sourceFixture();
 		const file = join(sourceRoot, "draft.json");
