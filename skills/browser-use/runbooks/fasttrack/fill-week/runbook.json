@@ -207,6 +207,14 @@
   ],
   "steps": [
     {
+      "kind": "open",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+      }
+    },
+    {
       "kind": "snapshot",
       "interactive": false
     },
