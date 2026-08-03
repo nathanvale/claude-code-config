@@ -573,6 +573,7 @@ function environmentTokenRetrievalOf(
 		supervisorPath: deps.supervisorPath,
 		opPath: deps.opPath,
 		configRoot: deps.configRoot,
+		realpath: (path) => runtime.platformFs.realpath(path),
 	});
 }
 

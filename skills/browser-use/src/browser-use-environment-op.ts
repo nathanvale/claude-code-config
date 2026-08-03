@@ -39,6 +39,7 @@ type EnvironmentOpDeps = {
 	supervisorPath: string;
 	opPath: string;
 	configRoot: string;
+	realpath: (path: string) => Promise<string | undefined>;
 	now?: () => number;
 	mintHandleId?: () => string;
 	handleTtlMs?: number;
@@ -329,6 +330,17 @@ type SupervisorRun =
 	| { ok: true; exitCode: number; value: unknown }
 	| { ok: false; failure: "timeout" | "io-failure" };
 
+async function canonicalSupervisorDeps(
+	deps: EnvironmentOpDeps,
+): Promise<EnvironmentOpDeps | undefined> {
+	try {
+		const configRoot = await deps.realpath(deps.configRoot);
+		return configRoot === undefined ? undefined : { ...deps, configRoot };
+	} catch {
+		return undefined;
+	}
+}
+
 async function runSupervisor(
 	deps: EnvironmentOpDeps,
 	argv: string[],
@@ -372,9 +384,11 @@ function createEnvironmentOpExecute(deps: EnvironmentOpDeps): BrowserUseOpExecut
 		if (operation === undefined || operation.kind === "deliver") {
 			return failure("capability-missing");
 		}
+		const supervisorDeps = await canonicalSupervisorDeps(deps);
+		if (supervisorDeps === undefined) return failure("io-failure");
 		const run = await runSupervisor(
-			deps,
-			metadataInvocationFor(deps, operation),
+			supervisorDeps,
+			metadataInvocationFor(supervisorDeps, operation),
 			spec.timeout_ms,
 		);
 		if (!run.ok) return failure(run.failure);
@@ -775,9 +789,13 @@ export function createEnvironmentTokenRetrievalPort(
 				field: reservation.field,
 			};
 			const timeoutMs = input.timeout_ms ?? 10_000;
+			const supervisorDeps = await canonicalSupervisorDeps(deps);
+			if (supervisorDeps === undefined) {
+				return redemptionRejection("capability-loss");
+			}
 			const run = await runSupervisor(
-				deps,
-				deliveryInvocationFor(deps, operation, input),
+				supervisorDeps,
+				deliveryInvocationFor(supervisorDeps, operation, input),
 				timeoutMs,
 			);
 			if (!run.ok) {
