@@ -6,8 +6,10 @@ import {
 	applyReviewedActionCandidate,
 	parseReviewedActionCandidate,
 	promoteReviewedActionCandidate,
+	reviewedActionApprovalFactsFromRecord,
 	reviewedActionAuthoringSchema,
 	validateReviewedActionCandidate,
+	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import {
 	createReviewedActionApprovalVerifier,
@@ -138,6 +140,85 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 });
 
 describe("Reviewed Action candidate lifecycle", () => {
+	test("current signed promotion remains authoritative when audit history contains a legacy claim", () => {
+		const commit = "1".repeat(40);
+		const validation = validateReviewedActionCandidate(candidate() as never);
+		if (!validation.ok) throw new Error("fixture candidate failed validation");
+		const record = {
+			action_id: "count-rows",
+			asset_id: validation.digest,
+			expected_digest: validation.digest,
+			allowed_origin: "https://portal.example.test",
+			effect_class: validation.effect_class,
+			audited_capabilities: validation.audited_capabilities,
+			containment: "read-only-observation",
+			input_schema: { kind: "object", fields: {} },
+			result_schema: {
+				kind: "object",
+				fields: {
+					rows: {
+						required: true,
+						schema: { kind: "number", integer: true },
+					},
+				},
+			},
+			result_sensitivity: "low",
+			source_provenance: "authored:count-rows",
+			promotion_receipt: null,
+		};
+		const derived = reviewedActionApprovalFactsFromRecord({
+			commit,
+			record: record as never,
+			assetBytes: READ_SOURCE,
+		});
+		if (!derived.ok) throw new Error(derived.code);
+		const unsigned = {
+			...derived.facts,
+			receipt_id: "receipt-current",
+			approval_reference: "review-current",
+			issued_at_epoch_ms: 1_000,
+			verifier_key_id: "test-key",
+		};
+		const verifier = createReviewedActionApprovalVerifier({
+			verifier: {
+				key_id: "test-key",
+				public_key: "TEST-ONLY-PUBLIC-KEY",
+			},
+			verifySignature: ({ digest, signature }) =>
+				signature === `TEST:${digest}`,
+		});
+		record.promotion_receipt = {
+			contract: "browser-use.reviewed-action-promotion",
+			schema_version: "1",
+			disposition: "approved",
+			presence_backed: true,
+			...unsigned,
+			signature: `TEST:${reviewedActionApprovalFactsDigest(unsigned)}`,
+		} as never;
+
+		expect(
+			verifyAuthoredReviewedActionPromotion({
+				commit: "2".repeat(40),
+				record: record as never,
+				assetBytes: READ_SOURCE,
+				promotionHistory: [
+					{
+						approved_digest: validation.digest,
+						disposition: "approved",
+						approved_origin: "https://portal.example.test",
+						approved_effect: "read",
+						approver_ref: "legacy-review",
+					},
+				],
+				verifier,
+			}),
+		).toMatchObject({
+			ok: true,
+			receipt_id: "receipt-current",
+			approval_reference: "review-current",
+		});
+	});
+
 	test("operator promotion reads committed exact bytes and admits only verified receipt drift for a same-commit batch", async () => {
 		const sourceRoot = await sourceFixture();
 		const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate() as never });

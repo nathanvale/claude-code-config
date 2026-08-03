@@ -473,7 +473,11 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 					action_id: string;
 					asset_id: string;
 					expected_digest: string;
-					promotion_receipt: null;
+					promotion_receipt: {
+						approved_digest: string;
+						disposition: "approved";
+						presence_backed: true;
+					};
 				};
 				promotion_history: Array<{ approved_digest: string }>;
 			}>;
@@ -486,7 +490,11 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 		expect(await readFile(join(import.meta.dir, "..", "actions", entry?.asset_path ?? ""))).toEqual(actionBytes);
 		expect(entry?.record.asset_id).toBe(digest);
 		expect(entry?.record.expected_digest).toBe(digest);
-		expect(entry?.record.promotion_receipt).toBeNull();
+		expect(entry?.record.promotion_receipt).toMatchObject({
+			approved_digest: digest,
+			disposition: "approved",
+			presence_backed: true,
+		});
 		expect(entry?.promotion_history.at(-1)?.approved_digest).toBe(digest);
 	});
 });

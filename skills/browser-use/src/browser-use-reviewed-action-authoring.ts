@@ -322,7 +322,15 @@ export function verifyAuthoredReviewedActionPromotion(input: { commit: string; r
 		commit: receiptCommit,
 	});
 	if (!derived.ok) return derived;
-	return verifyReviewedActionApproval({ facts: derived.facts, receipts: [...(input.promotionHistory ?? []), ...(input.record.promotion_receipt === null ? [] : [input.record.promotion_receipt])], verifier: input.verifier });
+	// History is audit evidence, never current activation authority.
+	return verifyReviewedActionApproval({
+		facts: derived.facts,
+		receipts:
+			input.record.promotion_receipt === null
+				? []
+				: [input.record.promotion_receipt],
+		verifier: input.verifier,
+	});
 }
 
 async function admittedActionsRoot(sourceRoot: string): Promise<string | undefined> {
