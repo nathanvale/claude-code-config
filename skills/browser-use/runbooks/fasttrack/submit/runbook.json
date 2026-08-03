@@ -5,7 +5,7 @@
   "flow_id": "submit",
   "flow_name": "submit",
   "version": "1",
-  "summary": "Verify an already-filled FastTrack week, capture it for explicit approval, submit it, then verify submitted state.",
+  "summary": "Open and verify an already-filled FastTrack week, capture it for explicit approval, submit it, then verify submitted state.",
   "allowed_origins": [
     "https://manpowergroup.fasttrack360.com.au"
   ],
@@ -125,6 +125,19 @@
       "postcondition": {
         "kind": "url-starts-with",
         "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-open-week",
+      "expected_digest": "13c4169500c7522c45e78f039ca10c3a4f7c7973957cbf3f8388a1c02f5604a9",
+      "inputs": {
+        "week_start": "{{timesheet_submission.period_start}}",
+        "week_end": "{{timesheet_submission.period_end}}"
       }
     },
     {

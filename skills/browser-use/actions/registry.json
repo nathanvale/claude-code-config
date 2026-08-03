@@ -402,6 +402,106 @@
       ]
     },
     {
+      "asset_path": "assets/13c4169500c7522c45e78f039ca10c3a4f7c7973957cbf3f8388a1c02f5604a9.js",
+      "record": {
+        "action_id": "fasttrack-open-week",
+        "asset_id": "13c4169500c7522c45e78f039ca10c3a4f7c7973957cbf3f8388a1c02f5604a9",
+        "expected_digest": "13c4169500c7522c45e78f039ca10c3a4f7c7973957cbf3f8388a1c02f5604a9",
+        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "framework-runtime",
+          "same-origin-navigation"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "week_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "week_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "target_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "target_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "row_count": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "integer": true
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "tr[ng-repeat]"
+        },
+        "source_provenance": "authored:fasttrack-open-week",
+        "promotion_receipt": null
+      }
+    },
+    {
       "asset_path": "assets/c2dcba17260bd3be6e4af42712203d3d0515ee3186f6f95cbbc6deb8e411df4e.js",
       "record": {
         "action_id": "fasttrack-save-draft",
