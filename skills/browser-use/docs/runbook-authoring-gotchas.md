@@ -190,3 +190,58 @@ The `awaiting-approval` gate captures an adapter-agnostic screenshot
 `run approve --run <id> --continuation complete-submit-approval --artifact <id>`
 records approval. Only then does the submit dispatch. Never approve on the user's
 behalf; never bypass the gate for an irreversible action.
+
+## Approval-gated submit — resume + dispatch (learned after G1–G20)
+
+### G21. After `run approve`, the run is `running@N` — resume it, don't re-run fresh
+`run approve` only RECORDS approval (sets state `running`, bumps next_step, adds an
+approvals entry with `approved_at_epoch_ms`). It does NOT dispatch. To execute the
+submit you must RESUME the SAME run: `runbook run --service .. --flow .. --run <id>
+--handoff <fresh handoff> --input-file ..`. Starting a fresh run re-enters at the
+gate. And resume REQUIRES `--handoff` (usage_error otherwise — see G15).
+
+### G22. The post-approval dispatch is a MULTI-STEP resume loop
+The tail (snapshot -> submit action -> snapshot -> verify-submitted) does NOT run
+in one resume call. Each resume advances a bounded number of steps and returns
+`running@N`; call `runbook run --run <id> --handoff <fresh>` AGAIN to advance
+further, until terminal (`confirmed`/`not-achieved`/`unknown`). A `running@N` return
+with no error is "more resumes needed", not a failure — but watch for G23.
+
+### G23. An approved run that never sets `dispatch_started_at_epoch_ms` is WEDGED
+Symptom: repeated resumes return `running@N`, and the approval reads
+`{approved: true, dispatched: false}` (dispatch_started never set). Root cause seen:
+the human-identity attestation expired on the resume and returned a blocked result
+WITHOUT persisting the blocked transaction, so execution never reached
+mark-dispatch. The fix is framework-side (renew + persist the attestation so the
+approved dispatch proceeds). If you see `dispatched:false` stuck across resumes,
+it's this class — a code bug, not an operator error.
+
+### G24. Submit and verify-submit are SEPARATE steps — "submitted but not verified"
+The submit action fires at its own step; `verify-submitted` is a LATER step. The
+submit can SUCCEED (portal shows Submitted) while the run reports `not-achieved`
+because verify-submitted failed to read the result. Always CDP-confirm the portal's
+real state before believing "not-achieved" means "didn't submit". Conversely, never
+claim submitted just because the run advanced — check the portal.
+
+### G25. Post-submit verification runs on the DETAIL page, not the search list
+After Submit, FastTrack navigates to the submitted-timesheet DETAIL view (title
+"Time - Submitted Timesheet", url hash `submittedTimesheet`, a `Status: Submitted`
+field) — NOT back to the search page with a "Submitted" tab. A verify action that
+only checks the search-tab/row fails there. Recognize the detail page (title / url
+route / Status field) as the primary signal; keep the search path as fallback.
+General: a mutation action's verifier must match the page the mutation LANDS on
+(cf. G6 for postconditions).
+
+### G26. A dispatched-but-stuck run can't be cancelled and blocks activation
+Once `mutation_dispatched: true`, `run cancel` refuses ("inspect its external effect
+instead") — by design. If such a run is genuinely wedged (`running@N`, nothing
+submitted, no continuation, no runtime action), it blocks `runbook activate`
+(`activation_blocked_by_run`) with no CLI escape. Last resort, ONLY after
+CDP-confirming nothing was actually submitted: back up its run.json, set
+`payload.state = "not-achieved"` + bump `revision`, then activate. Prefer a fresh
+run over reusing a poisoned run id.
+
+### Operating note (not a runbook gotcha): dispatch codex worker prompts via STDIN
+`codex exec ... < prompt.txt`, never as a giant positional arg `"$(cat prompt)"` —
+the arg form hangs at "Reading additional input from stdin..." doing nothing.
+(Memory: `codex-exec-prompt-via-stdin`.)
