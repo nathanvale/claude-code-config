@@ -178,6 +178,49 @@ export async function runBrowserUseRunbookAuth(
 		return await commit();
 	};
 
+	const issueFreshSessionAttestation = async (
+		proof: BrowserUseAuthenticatedStateProofRecord,
+	): Promise<{ ok: true } | { ok: false; code: string; message: string }> => {
+		const postcondition = await transition({
+			type: "postcondition-proven",
+			identity_basis: "session-identity-proof",
+			identity_basis_digest: proof.identity_basis_digest,
+		});
+		if (!postcondition.ok) return postcondition;
+		const observedAt = deps.store.clock();
+		const attestation: BrowserUseAuthAttestation = {
+			run_id: run.run_id,
+			handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+			lane_id: "agent-browser",
+			implementation_integrity_key: deps.implementation_integrity_key,
+			environment: run.environment_profile.environment,
+			profile: run.environment_profile.profile,
+			target_id: proof.target_id,
+			page_id: proof.page_id,
+			frame_id: proof.frame_id,
+			service_id: input.service_id,
+			auth_context: input.auth_context_ref,
+			subject_reference: proof.subject_reference,
+			account_reference: proof.account_reference,
+			tenant_reference: proof.tenant_reference,
+			identity_basis: "session-identity-proof",
+			identity_basis_digest: proof.identity_basis_digest,
+			observed_at_epoch_ms: observedAt,
+			fresh_until_epoch_ms: observedAt + 30_000,
+		};
+		const digest = authAttestationDigestOf(attestation);
+		const written = await writeAuthAttestationRecord(deps.store, {
+			digest,
+			record: attestation,
+		});
+		if (!written.ok) return written;
+		return await transition({
+			type: "attestation-issued",
+			attestation_digest: digest,
+			fresh_until_epoch_ms: attestation.fresh_until_epoch_ms,
+		});
+	};
+
 	const completeHumanIdentityAttestation = async (): Promise<
 		BrowserUseRunbookAuthResult | undefined
 	> => {
@@ -439,9 +482,47 @@ export async function runBrowserUseRunbookAuth(
 				attestationByDigest: attestationByDigestFrom(deps.store),
 			}),
 		);
-		return attestation.valid
+		if (attestation.valid) return { ok: true, run, binding };
+		if (attestation.code !== "attestation_expired") {
+			return {
+				ok: false,
+				run,
+				blocked: blockedOf("session-identity-proof-unavailable"),
+			};
+		}
+
+		const origin = originOf(input.expected_url);
+		if (origin === undefined) {
+			return { ok: false, run, blocked: blockedOf("origin-mismatch") };
+		}
+		const renewed = beginAuthTransaction({
+			binding: {
+				run_id: run.run_id,
+				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+				lane_id: "agent-browser",
+				environment: run.environment_profile.environment,
+				profile: run.environment_profile.profile,
+				service_id: input.service_id,
+				auth_context: input.auth_context_ref,
+				origin,
+				target_id: input.target_id,
+				page_id: input.target_id,
+				frame_id: input.target_id,
+			},
+			method: binding.allowed_auth_methods.includes("otp") ? "otp" : "password",
+			attempt_limit: 3,
+			attempts_already_consumed: 0,
+		});
+		if (!renewed.ok) return { ok: false, run, failure: renewed.rejection };
+		fragment = renewed.fragment;
+		const persisted = await commit();
+		if (!persisted.ok) return { ok: false, run, failure: persisted };
+		const reused = await transition({ type: "session-already-authenticated" });
+		if (!reused.ok) return { ok: false, run, failure: reused };
+		const issued = await issueFreshSessionAttestation(fresh.proof);
+		return issued.ok
 			? { ok: true, run, binding }
-			: { ok: false, run, blocked: blockedOf("session-identity-proof-unavailable") };
+			: { ok: false, run, failure: issued };
 	}
 	if (fragment.phase === "secret-free-preparation") {
 		const completed = await transition(prepared.event);
@@ -581,41 +662,7 @@ export async function runBrowserUseRunbookAuth(
 			return { ok: false, run, blocked: blockedOf(proofRefusal) };
 		}
 
-		const postcondition = await transition({
-			type: "postcondition-proven",
-			identity_basis: "session-identity-proof",
-			identity_basis_digest: engine.proof.identity_basis_digest,
-		});
-		if (!postcondition.ok) return { ok: false, run, failure: postcondition };
-		const observedAt = deps.store.clock();
-		const attestation: BrowserUseAuthAttestation = {
-			run_id: run.run_id,
-			handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
-			lane_id: "agent-browser",
-			implementation_integrity_key: deps.implementation_integrity_key,
-			environment: run.environment_profile.environment,
-			profile: run.environment_profile.profile,
-			target_id: engine.proof.target_id,
-			page_id: engine.proof.page_id,
-			frame_id: engine.proof.frame_id,
-			service_id: input.service_id,
-			auth_context: input.auth_context_ref,
-			subject_reference: engine.proof.subject_reference,
-			account_reference: engine.proof.account_reference,
-			tenant_reference: engine.proof.tenant_reference,
-			identity_basis: "session-identity-proof",
-			identity_basis_digest: engine.proof.identity_basis_digest,
-			observed_at_epoch_ms: observedAt,
-			fresh_until_epoch_ms: observedAt + 30_000,
-		};
-		const digest = authAttestationDigestOf(attestation);
-		const written = await writeAuthAttestationRecord(deps.store, { digest, record: attestation });
-		if (!written.ok) return { ok: false, run, failure: written };
-		const issued = await transition({
-			type: "attestation-issued",
-			attestation_digest: digest,
-			fresh_until_epoch_ms: attestation.fresh_until_epoch_ms,
-		});
+		const issued = await issueFreshSessionAttestation(engine.proof);
 		if (!issued.ok) return { ok: false, run, failure: issued };
 		return { ok: true, run, binding };
 	} finally {

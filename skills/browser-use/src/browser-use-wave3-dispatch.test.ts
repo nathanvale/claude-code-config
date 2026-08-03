@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	createDefaultPlatformFs,
@@ -311,14 +311,17 @@ function authContextOpenRunbook(origin: string): BrowserUseRunbook {
 	};
 }
 
-function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous" }) {
+function startAuthCdpFixture(input: {
+	initial: "neutral" | "login" | "ambiguous" | "authenticated";
+	origin?: string;
+}) {
 	let screen = input.initial;
-	let targetUrl = input.initial === "neutral" ? "about:blank" : "http://127.0.0.1:45123/login";
+	const origin = input.origin ?? "http://127.0.0.1:45123";
+	let targetUrl = input.initial === "neutral" ? "about:blank" : `${origin}/login`;
 	const cdpTargetId = "cdp-target-auth";
 	const methods: string[] = [];
 	const navigations: string[] = [];
 	const attachedTargetIds: string[] = [];
-	const origin = "http://127.0.0.1:45123";
 	const transport = {
 		transport: {
 			async request(message: {
@@ -387,12 +390,15 @@ function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous"
 	};
 }
 
-function authTokenPort(origin: string): BrowserUseEnvironmentTokenRetrievalPort {
+function authTokenPort(
+	origin: string,
+	loginPath = "/login",
+): BrowserUseEnvironmentTokenRetrievalPort {
 	const item = {
 		item_id: "item-fixture",
 		vault_id: "vault-fixture",
 		origins: [origin],
-		login_paths: ["/login"],
+		login_paths: [loginPath],
 		supported_methods: ["password" as const],
 		state: "active" as const,
 	};
@@ -1005,6 +1011,296 @@ describe("runbook family — live (U4 wiring)", () => {
 			]);
 		}
 	});
+
+	for (const scenario of [
+		{ name: "confirms", submitFails: false },
+		{ name: "records unknown when submit dispatch fails", submitFails: true },
+	] as const) {
+		test(`approved FastTrack submit resume after auth expiry ${scenario.name} without redispatch`, async () => {
+			const origin = "https://manpowergroup.fasttrack360.com.au";
+			const timesheetUrl =
+				`${origin}/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00`;
+			const cdp = startAuthCdpFixture({
+				initial: "authenticated",
+				origin,
+			});
+			try {
+				const store = await makeStore();
+				const runId = scenario.submitFails
+					? "run-fasttrack-submit-failure"
+					: "run-fasttrack-submit-confirmed";
+				const handoffPath = writeHandoff(
+					store.base,
+					"agent-browser",
+					runId,
+				);
+				const privateInputRoot = join(
+					store.deps.paths.resolution.roots.runtime,
+					"private-inputs",
+				);
+				mkdirSync(privateInputRoot, { recursive: true, mode: 0o700 });
+				const inputPath = join(privateInputRoot, "timesheet-submission.json");
+				writeFileSync(
+					inputPath,
+					JSON.stringify({
+						period_start: "2026-07-27",
+						period_end: "2026-08-02",
+						rows: [
+							{
+								date: "2026-07-27",
+								day: "Mon",
+								start_time: "09:00",
+								end_time: "17:00",
+								attendance_type: "Standard",
+							},
+						],
+					}),
+					{ mode: 0o600 },
+				);
+				chmodSync(inputPath, 0o600);
+				let now = 1_000;
+				let evalCalls = 0;
+				const calls: Array<readonly string[]> = [];
+				const runtime = makeRuntime({
+					env: store.env,
+					now: () => now,
+					reviewedActionApprovalVerifier: {
+						verify: () => ({ ok: true }),
+					},
+					platformFs: createDefaultPlatformFs(),
+					readTextFile: (path: string) =>
+						import("node:fs/promises").then((module) =>
+							module.readFile(path, "utf-8"),
+						),
+					ensureDirectory: (path: string) =>
+						import("node:fs/promises").then((module) =>
+							module
+								.mkdir(path, { recursive: true, mode: 0o700 })
+								.then(() => undefined),
+						),
+					writeTextFile: (path: string, contents: string) =>
+						import("node:fs/promises").then((module) =>
+							module.writeFile(path, contents, { mode: 0o600 }),
+						),
+					runCommand: async (input) => {
+						calls.push([input.command, ...input.args]);
+						if (input.args.includes("screenshot")) {
+							const artifactPath = input.args.find((argument) =>
+								argument.endsWith(".png"),
+							);
+							if (artifactPath !== undefined) {
+								writeFileSync(artifactPath, Buffer.from("approval-png"));
+							}
+						}
+						if (input.args.includes("eval")) {
+							evalCalls += 1;
+							if (scenario.submitFails && evalCalls === 2) {
+								return { exitCode: 1, stdout: "", stderr: "submit failed" };
+							}
+							const result =
+								evalCalls === 1
+									? {
+											ok: true,
+											period_start: "2026-07-27",
+											period_end: "2026-08-02",
+											results: [
+												{
+													dayIndex: 0,
+													startMatches: true,
+													endMatches: true,
+													attendanceMatches: true,
+													selectedText: "Standard",
+												},
+											],
+										}
+									: evalCalls === 2
+										? {
+												ok: true,
+												mode: "exact-submit",
+												controlText: "Submit",
+												controlNgClick: "saveAndSubmit()",
+												beforeUrl: timesheetUrl,
+												beforeTitle: "Timesheet",
+												afterUrl: timesheetUrl,
+												afterTitle: "Timesheet",
+											}
+										: {
+												proof_schema: "FastTrack360SubmittedProofV1",
+												period_start: "2026-07-27",
+												period_end: "2026-08-02",
+												submitted: true,
+												submitted_state: "submitted",
+												submitted_state_source: "status-label",
+												tab_text: "Submitted",
+												row_summary: "Submitted timesheet",
+												proof_observed_at: "2026-08-04T00:00:00.000Z",
+											};
+							return {
+								exitCode: 0,
+								stdout: agentSuccess({ result }),
+								stderr: "",
+							};
+						}
+						const data =
+							input.args.includes("tab") && input.args.includes("list")
+								? {
+									tabs: [
+										{
+											tabId: "t1",
+											active: true,
+											type: "page",
+											url: timesheetUrl,
+										},
+									],
+								}
+								: input.args.includes("get") && input.args.includes("url")
+									? { url: timesheetUrl }
+									: input.args.includes("is") &&
+										input.args.includes("visible")
+										? { visible: true }
+									: input.args.includes("snapshot")
+										? {
+												snapshot: "@submit button Submit",
+												refs: {
+													submit: { role: "button", name: "Submit" },
+												},
+											}
+										: {};
+						return {
+							exitCode: 0,
+							stdout: agentSuccess(data),
+							stderr: "",
+						};
+					},
+				});
+				runtime.authTokenRetrieval = authTokenPort(
+					origin,
+					"/RecruitmentManager/CandidatePortal",
+				);
+				runtime.runbookAuthTransport = () => cdp.transport;
+				runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
+					proven: true,
+					proof: {
+						target_id,
+						page_id: "page-authenticated",
+						frame_id: "frame-auth",
+						origin,
+						subject_reference: "subject-fixture",
+						account_reference: "account-fixture",
+						tenant_reference: "tenant-fixture",
+						identity_basis_digest: "identity-basis-fixture",
+					},
+				});
+
+				await withCommittedCatalogSource(store.base, async (gitEnv) => {
+					Object.assign(runtime.env, gitEnv);
+					const listed = await runForTest(["runbook", "list", "--json"], runtime);
+					expect(listed.exitCode).toBe(0);
+					const catalogDigest = (
+						parseJson(listed.stdout).data as {
+							source_catalog_digest: string;
+						}
+					).source_catalog_digest;
+					const activated = await runForTest(
+						[
+							"runbook",
+							"activate",
+							"--catalog-digest",
+							catalogDigest,
+							"--expected-epoch",
+							"0",
+							"--json",
+						],
+						runtime,
+					);
+					expect(activated.exitCode).toBe(0);
+					const runArgs = [
+						"runbook",
+						"run",
+						"--service",
+						"fasttrack",
+						"--flow",
+						"submit",
+						"--input-file",
+						`timesheet_submission=${inputPath}`,
+						"--handoff",
+						handoffPath,
+						"--tab",
+						"t1",
+						"--json",
+					] as const;
+					const awaitingApproval = await runForTest(runArgs, runtime);
+					expect(awaitingApproval.exitCode).toBe(0);
+					const awaitingRun = (
+						parseJson(awaitingApproval.stdout).data as {
+							run: BrowserUseSharedRun;
+						}
+					).run;
+					expect(awaitingRun.state).toBe("awaiting-approval");
+					expect(evalCalls).toBe(1);
+
+					now = 40_000;
+					const approved = await runForTest(
+						[
+							"run",
+							"approve",
+							"--run",
+							runId,
+							"--continuation",
+							"complete-submit-approval",
+							"--artifact",
+							"submit-approval-3.png",
+							"--json",
+						],
+						runtime,
+					);
+					expect(approved.exitCode).toBe(0);
+
+					const resumed = await runForTest(
+						[...runArgs.slice(0, -1), "--run", runId, "--json"],
+						runtime,
+					);
+					expect(resumed.exitCode).toBe(scenario.submitFails ? 20 : 0);
+					const durable = await loadSharedRun(store.deps, runId);
+					expect(durable.ok).toBe(true);
+					if (!durable.ok) return;
+					expect(durable.run.approvals?.at(-1)).toMatchObject({
+						continuation_id: "complete-submit-approval",
+						dispatch_started_at_epoch_ms: 40_000,
+					});
+					expect(durable.run.auth_attestation?.fresh_until_epoch_ms).toBe(
+					70_000,
+				);
+					if (scenario.submitFails) {
+						expect(parseJson(resumed.stdout).error).toMatchObject({
+							code: "task_run_effect_unknown",
+							message: expect.stringContaining(
+								"may have dispatched browser effects",
+							),
+						});
+						expect(durable.run.state).toBe("unknown");
+						expect(evalCalls).toBe(2);
+					} else {
+						expect(durable.run.state).toBe("confirmed");
+						expect(durable.run.runbook_progress?.next_step).toBe(8);
+						expect(evalCalls).toBe(3);
+					}
+
+					const evalsBeforeSecondResume = evalCalls;
+					const secondResume = await runForTest(
+						[...runArgs.slice(0, -1), "--run", runId, "--json"],
+						runtime,
+					);
+					expect(secondResume.exitCode).toBe(
+						scenario.submitFails ? 20 : 0,
+					);
+					expect(evalCalls).toBe(evalsBeforeSecondResume);
+				});
+			} finally {
+				cdp.transport.close();
+			}
+		});
+	}
 
 	test("auth_context_ref keeps one shared run and dispatches the first business step once after proof", async () => {
 		const cdp = startAuthCdpFixture({ initial: "login" });

@@ -163,7 +163,7 @@ async function runSubmitAction(input: {
 		},
 	});
 	try {
-		// biome-ignore lint/security/noGlobalEval: hermetic execution of the exact authored Reviewed Action bytes.
+		// biome-ignore lint/security/noGlobalEval lint/complexity/noCommaOperator: hermetic indirect execution of exact authored Reviewed Action bytes.
 		const action = (0, eval)(`(${actionSource})`) as (input: {
 			inputs: Record<string, unknown>;
 		}) => Promise<Record<string, unknown>>;
@@ -239,7 +239,7 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		expect(state.clicks).toEqual([]);
 	});
 
-	test("registry pins the exact unpromoted authored bytes", async () => {
+	test("registry pins the exact promoted authored bytes", async () => {
 		const bytes = await readFile(ACTION_PATH);
 		const registry = JSON.parse(await readFile(REGISTRY_PATH, "utf8")) as {
 			actions: Array<{
@@ -257,11 +257,14 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		expect(createHash("sha256").update(bytes).digest("hex")).toBe(DIGEST);
 		expect(record).toMatchObject({
 			expected_digest: DIGEST,
-			promotion_receipt: null,
+			promotion_receipt: {
+				disposition: "approved",
+				approved_digest: DIGEST,
+			},
 		});
 	});
 
-	test("verify-submitted is exact, unpromoted, and mechanically read-only", async () => {
+	test("verify-submitted is exact, promoted, and mechanically read-only", async () => {
 		const bytes = await readFile(
 			join(import.meta.dir, "..", "actions", "assets", `${VERIFY_DIGEST}.js`),
 			"utf8",
@@ -285,7 +288,10 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		expect(record).toMatchObject({
 			expected_digest: VERIFY_DIGEST,
 			effect_class: "read",
-			promotion_receipt: null,
+			promotion_receipt: {
+				disposition: "approved",
+				approved_digest: VERIFY_DIGEST,
+			},
 		});
 	});
 });
