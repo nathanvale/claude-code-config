@@ -1,0 +1,165 @@
+# Browser Use runbook + reviewed-action authoring gotchas
+
+Hard-won failures from authoring the FastTrack timesheet fill/submit runbooks
+(2026-08-03/04). Read this before authoring or debugging a runbook or reviewed
+action. Every entry is a real bug that cost a full promote/activate/live-run cycle.
+
+The single most important lesson: **almost every failure surfaces as the generic
+`task_run_effect_unknown` at the action step, with the real reason SWALLOWED.**
+The lane maps any failed mutation-action evaluation to `unknown` and discards the
+action's thrown message. To see the real reason, instrument the swallow point
+(`browser-use-agent-browser.ts`, the `if (!commandSucceeded(evaluated))` block)
+with a temporary `process.stderr.write` of `evaluated.stdout/stderr`, run once,
+read, REVERT. Do this FIRST when a run ends `unknown` — do not guess.
+
+## Reviewed-action authoring (the .js bytes + candidate)
+
+### G1. Async actions must not become top-level await (framework-level)
+The action wrapper is `async ({ inputs }) => <result>`. The runtime invokes it via
+`reviewedActionPayload` which must emit a single async-IIFE EXPRESSION, e.g.
+`(async () => { const action = (<script>); return await action({inputs}); })()`.
+A bare `const action = (...); await action({...});` is TOP-LEVEL await, which the
+native eval harness rejects with `SyntaxError: await is only valid in async
+functions and the top level bodies of modules` — every async action dies before
+its body runs, surfacing as `task_run_effect_unknown`. If you write a new
+async-capable evaluation seam, wrap invocation in an async IIFE.
+
+### G2. Navigation URLs in action source must be STATIC literals
+The capability auditor (`browser-use-reviewed-action-authoring.ts`, rule
+`action_capability_navigation`) requires any navigation target to resolve
+statically to the candidate origin. `window.location.href = base + path` (string
+concatenation) FAILS the audit ("navigation must resolve statically to the
+candidate origin"). Use one complete literal string:
+`window.location.href = "https://host/full#/route"`. Also: `open(` / `window.open`
+/ `history` are flagged as unbounded navigation — avoid them in action bytes.
+
+### G3. A mutation action REQUIRES a postcondition, field is `required_postcondition`
+Candidate field is `required_postcondition` (NOT `postcondition`). A mutation-class
+action without one is refused (`action_postcondition_required`). Valid kinds:
+`url-equals`, `url-starts-with`, `element-visible` (selector). Prefer
+`element-visible` on a stable element over `url-equals`/`url-starts-with` when the
+action navigates within an SPA — the URL can change after the action acts (see G6).
+
+### G4. Read grid dates from the authoritative per-row field, not a shared input
+FastTrack timesheet rows expose their date in `rxg.workDate1`, present whether the
+grid is empty OR filled. `rxg.startDateTime` holds a TIME-of-day ("09:00") once
+filled — reading the date from it returns "" on a filled grid, making every row's
+date unreadable (`row_dates_unreadable` / date mismatch). Read the dedicated date
+model first, then fall back. General lesson: read each row's own authoritative
+value model, never infer a date from a value input that changes shape when filled.
+
+## Runbook step structure
+
+### G5. Every ref-mutating action step needs a `snapshot` immediately before it
+The agent-browser lane refuses (`task_run_lane_refused`: "A fresh task-local
+snapshot is required immediately before ref mutation") if a mutation-class action
+runs without a fresh snapshot right before it. Note: actions can be `effect_class:
+mutation` even when they look read-only (verify actions that click/read refs are
+mutation-class). Pattern: `... snapshot, action, snapshot, action, ...` — one
+snapshot per action step. Missing a snapshot before ANY action step breaks it.
+
+### G6. An action's postcondition is checked AFTER the action runs — on the page it LANDS on
+If the action navigates (e.g. opens a row into an edit view), the post-action URL
+differs from the pre-action URL. A `url-starts-with <search route>` postcondition
+FAILS if the action ends on the edit route, even though the action succeeded
+(`task_run_not_achieved`). Use `element-visible` on a stable element of the final
+page, or match the URL the action actually ends on.
+
+## SPA navigation (portal-specific findings, generalize the method)
+
+### G7. Confirm the real route via CDP, do not hand-encode
+FastTrack routes are base64 segments (e.g. CandidatePortal = `Q2FuZGlkYXRlUG9ydGFs`).
+Do NOT assume a route encoding — read the live URL via CDP (`/json` for tabs,
+`ws://.../devtools/page/<id>` + `Runtime.evaluate`) after the human navigates
+there once. A hand-"corrected" hash (stripping what looked like base64 padding)
+was WRONG — the real route had a genuine trailing suffix.
+
+### G8. In-place hash change is intercepted by the Angular router and bounces to home
+Setting `window.location.href = "...#/route"` from an already-loaded SPA is caught
+by the SPA router and redirected back to home. A FULL navigation loads the target
+fresh. Two robust options: (a) point the runbook's `open` step directly at the
+target URL (the `open` step does a real navigation that boots the SPA on the
+target), or (b) `location.reload()` after setting the hash (but that kills the
+action's execution context — prefer the open-step approach). Verified via CDP:
+opening the target URL in a fresh tab loads the timesheet; an in-place hash change
+does not.
+
+### G9. Portal "menu link" clicks may be ng-click handlers with href=null, or window.open
+The Quick Access "Time And Attendance" link is `<a ng-click="openLinkFunction(...)"
+href=null>`, and `openLinkFunction` does `window.open("CandidatePortal#/"+page)`
+(a NEW tab / fresh load). A `.click()`, scope `$eval`, or even a trusted CDP mouse
+click did NOT navigate the current tab. Do not rely on clicking the portal's own
+nav control from an action; drive navigation via the runbook `open` step (G8).
+
+## Operator / promotion / activation cycle
+
+### G10. Promotion binds to the COMMITTED git tree — commit source before promoting
+`action promote` reads the committed tree. If you `action apply` a changed source
+but do not commit, promote fails `action_already_promoted` (it sees the old
+committed receipt) or binds to stale bytes. Order: edit source -> rebuild candidate
+-> `action validate` -> `action apply --expected-record-digest <sha>` -> COMMIT ->
+`action promote` (Touch ID) -> commit the receipt -> `runbook activate`.
+
+### G11. `action apply` on an existing action needs `--expected-record-digest`
+Replacing a promoted action requires the concurrency guard: compute
+`record_digest = sha256(JSON.stringify(record))` (use `jq -c` on the exact registry
+`.record` object) and pass `--expected-record-digest`. Without it:
+`action_replacement_digest_required`.
+
+### G12. Changing ONLY the postcondition still clears the promotion receipt
+The promotion binds to the whole record, not just the byte digest. Even if the
+action `.js` byte digest is unchanged, changing `required_postcondition` marks the
+record unpromoted -> re-promote (Touch ID). (The runbook step's `expected_digest`
+does NOT change, since it references the byte digest.)
+
+### G13. `promotion_history` is AUDIT evidence, not activation authority
+Only `record.promotion_receipt` grants activation authority. `promotion_history`
+is append-only audit (it retains superseded digests, legacy `approver_ref`
+entries). Do not treat history entries as current authority — a fix earlier this
+session made the activation verifier stop reading history as authority
+(`runbook_action_promotion_invalid` otherwise).
+
+### G14. A `src/*.ts` change does NOT change the catalog digest; a runbook/action change does
+The catalog digest is computed over the runbook/action SOURCE tree. Fixing engine
+code (`src/*.ts`) needs NO re-activation (the active generation picks it up). Only
+changing `runbooks/**` or `actions/**` requires a fresh `runbook activate`.
+
+## Run lifecycle operations
+
+### G15. Resuming a run needs `--handoff <fresh path>`
+`runbook run --run <id>` alone errors `usage_error: requires --handoff`. Mint a
+fresh handoff: `browser-connect connect agent-browser --json --run-id <id> > <path>`
+(check `.data.outcome == "verified"`), then
+`runbook run --run <id> --handoff <path>`.
+
+### G16. A timed-out foreground run holds a dispatch LEASE
+Killing a foreground `runbook run` at a tool timeout leaves a dispatch lease held
+(~2.8 min TTL) -> next attempt errors `lease_held`. Run live browser sessions in
+the BACKGROUND (they can take minutes) and do not kill them; if you hit
+`lease_held`, wait for the TTL, re-mint the handoff, resume.
+
+### G17. Exactly ONE admissible FastTrack tab, or `agent_browser_target_ambiguous`
+Multiple portal tabs -> the run cannot pick one. Close extras via
+`curl http://127.0.0.1:9242/json/close/<tab-id>`, keep one. (CDP diagnosis opening
+tabs is a common cause of leaving two.)
+
+### G18. `run cancel` clears stale nonterminal runs blocking `activate`
+`runbook activate` refuses while any prior-generation mutation-capable run is
+nonterminal (`activation_blocked_by_run`). `run cancel --run <id>` moves a
+non-dispatched run to terminal `not-achieved` (refuses if `mutation_dispatched`).
+Cancel stale `awaiting-*`/`needs-human` fasttrack runs before re-activating.
+
+## Method / discipline
+
+### G19. Prove through the RUNBOOK, never by hand-filling via CDP
+CDP is for DIAGNOSIS ONLY (read the live DOM, find the real selector/route/reason).
+A clean `runbook run` reaching a confirmed terminal state is the only "proven".
+Hand-filling the form via CDP produces a filled page but proves nothing about the
+action/runbook and hides the real bug.
+
+### G20. The submit flow gates on explicit human approval + a screenshot
+The `awaiting-approval` gate captures an adapter-agnostic screenshot
+(`screenshot_media`) attached to the run; the human reviews it, then
+`run approve --run <id> --continuation complete-submit-approval --artifact <id>`
+records approval. Only then does the submit dispatch. Never approve on the user's
+behalf; never bypass the gate for an irreversible action.
