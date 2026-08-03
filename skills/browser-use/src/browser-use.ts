@@ -85,6 +85,7 @@ import {
 	type BrowserUseDevToolsTransport,
 	type BrowserUseMintedVerifiedTarget,
 	mintBrowserUseVerifiedTarget,
+	resolveBrowserUseCdpTargetIdentity,
 } from "./browser-use-target-proof";
 import {
 	type BrowserUseAdapterLaneView,
@@ -5234,6 +5235,22 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				rawHandoffData as AgentBrowserVerifiedHandoff,
 			);
 		try {
+			const authTarget = await resolveBrowserUseCdpTargetIdentity(
+				authTransport.transport,
+				{
+					expected_url: targetResolution.target_url,
+					allowed_origins: plan.allowed_origins,
+				},
+			);
+			if (!authTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						authTarget.cause,
+						"the adapter-selected page could not be resolved to one browser-level CDP target.",
+					),
+				);
+			}
 			const deliver = environmentLoginDeliveryHook({
 				tokenRetrieval,
 				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
@@ -5277,7 +5294,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					allowed_origins: plan.allowed_origins,
 					expected_url: authExpectedTargetUrl,
 					observed_url: targetResolution.target_url,
-					target_id: targetResolution.target_tab_id,
+					target_id: authTarget.target.target_id,
 				},
 			);
 			if (!authenticated.ok) {

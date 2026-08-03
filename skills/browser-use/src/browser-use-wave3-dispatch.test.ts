@@ -271,8 +271,10 @@ function authContextOpenRunbook(origin: string): BrowserUseRunbook {
 function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous" }) {
 	let screen = input.initial;
 	let targetUrl = input.initial === "neutral" ? "about:blank" : "http://127.0.0.1:45123/login";
+	const cdpTargetId = "cdp-target-auth";
 	const methods: string[] = [];
 	const navigations: string[] = [];
+	const attachedTargetIds: string[] = [];
 	const origin = "http://127.0.0.1:45123";
 	const transport = {
 		transport: {
@@ -285,10 +287,14 @@ function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous"
 					case "Target.getTargets":
 						return {
 							targetInfos: [
-								{ targetId: "t1", type: "page", url: targetUrl },
+								{ targetId: cdpTargetId, type: "page", url: targetUrl },
 							],
 						};
 					case "Target.attachToTarget":
+						attachedTargetIds.push(String(message.params?.targetId));
+						if (message.params?.targetId !== cdpTargetId) {
+							throw new Error("adapter tab id is not a CDP target id");
+						}
 						return { sessionId: "auth-session" };
 					case "Page.getFrameTree":
 						return {
@@ -333,6 +339,8 @@ function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous"
 		transport,
 		methods,
 		navigations,
+		attachedTargetIds,
+		cdpTargetId,
 	};
 }
 
@@ -833,6 +841,8 @@ describe("runbook family — live (U4 wiring)", () => {
 
 			expect(result.exitCode).toBe(0);
 			expect(cdp.navigations).toEqual([loginUrl]);
+			expect(cdp.attachedTargetIds).not.toContain("t1");
+			expect(cdp.attachedTargetIds).toContain(cdp.cdpTargetId);
 			expect(calls.filter((call) => call.includes("open"))).toHaveLength(1);
 			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
 			const run = (parseJson(result.stdout).data as { run: { state: string } }).run;
