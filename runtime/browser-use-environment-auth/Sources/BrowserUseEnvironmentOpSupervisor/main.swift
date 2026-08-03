@@ -672,11 +672,30 @@ private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
     guard loginMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
+    let loginDataWALPath = loginDataPath + "-wal"
+    var loginDataWALMetadata = stat()
+    if lstat(loginDataWALPath, &loginDataWALMetadata) == 0 {
+        guard loginDataWALMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              loginDataWALMetadata.st_size == 0
+        else {
+            return ["status": "blocked", "cause": "profile-policy-unsafe"]
+        }
+    } else if errno != ENOENT {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    var loginDataComponents = URLComponents(
+        url: URL(fileURLWithPath: loginDataPath),
+        resolvingAgainstBaseURL: false
+    )
+    loginDataComponents?.queryItems = [URLQueryItem(name: "immutable", value: "1")]
+    guard let loginDataURI = loginDataComponents?.string else {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
     var database: OpaquePointer?
     guard sqlite3_open_v2(
-              loginDataPath,
+              loginDataURI,
               &database,
-              SQLITE_OPEN_READONLY,
+              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
               nil
           ) == SQLITE_OK,
           let database

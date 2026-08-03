@@ -44,7 +44,9 @@ struct ProfilePolicyLoginDataTests {
     }
 
     private func makeProfile() throws -> (profile: URL, root: URL) {
-        let root = FileManager.default.temporaryDirectory
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build", isDirectory: true)
+            .appendingPathComponent("profile-policy-fixtures", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let profile = root.appendingPathComponent("profile", isDirectory: true)
         let defaultDirectory = profile.appendingPathComponent("Default", isDirectory: true)
@@ -99,6 +101,23 @@ struct ProfilePolicyLoginDataTests {
                 throw FixtureError.sqlite("insert failed")
             }
         }
+    }
+
+    private func lockLoginDataExclusively(at url: URL) throws -> OpaquePointer {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(
+            url.path,
+            &database,
+            SQLITE_OPEN_READWRITE,
+            nil
+        ) == SQLITE_OK, let database else {
+            throw FixtureError.sqlite("lock open failed")
+        }
+        guard sqlite3_exec(database, "BEGIN EXCLUSIVE", nil, nil, nil) == SQLITE_OK else {
+            sqlite3_close(database)
+            throw FixtureError.sqlite("exclusive lock failed")
+        }
+        return database
     }
 
     private func checkProfile(_ profile: URL, root: URL) throws -> [String: String] {
@@ -182,6 +201,56 @@ struct ProfilePolicyLoginDataTests {
         try Data("not a SQLite database".utf8).write(
             to: fixture.profile.appendingPathComponent("Default/Login Data")
         )
+
+        let result = try checkProfile(fixture.profile, root: fixture.root)
+
+        #expect(result["status"] == "blocked")
+        #expect(result["cause"] == "profile-policy-unsafe")
+    }
+
+    @Test
+    func lockedEmptyLoginDataIsReady() throws {
+        let fixture = try makeProfile()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let loginData = fixture.profile.appendingPathComponent("Default/Login Data")
+        try createLoginData(at: loginData, withSavedLogin: false)
+        let lock = try lockLoginDataExclusively(at: loginData)
+        defer {
+            sqlite3_exec(lock, "ROLLBACK", nil, nil, nil)
+            sqlite3_close(lock)
+        }
+
+        let result = try checkProfile(fixture.profile, root: fixture.root)
+
+        #expect(result["status"] == "ready")
+        #expect(result["cause"] == nil)
+    }
+
+    @Test
+    func lockedLoginDataWithSavedLoginIsBlocked() throws {
+        let fixture = try makeProfile()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let loginData = fixture.profile.appendingPathComponent("Default/Login Data")
+        try createLoginData(at: loginData, withSavedLogin: true)
+        let lock = try lockLoginDataExclusively(at: loginData)
+        defer {
+            sqlite3_exec(lock, "ROLLBACK", nil, nil, nil)
+            sqlite3_close(lock)
+        }
+
+        let result = try checkProfile(fixture.profile, root: fixture.root)
+
+        #expect(result["status"] == "blocked")
+        #expect(result["cause"] == "profile-policy-unsafe")
+    }
+
+    @Test
+    func nonemptyWALSidecarIsBlockedAsInconclusive() throws {
+        let fixture = try makeProfile()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let loginData = fixture.profile.appendingPathComponent("Default/Login Data")
+        try createLoginData(at: loginData, withSavedLogin: false)
+        try Data([0x01]).write(to: URL(fileURLWithPath: loginData.path + "-wal"))
 
         let result = try checkProfile(fixture.profile, root: fixture.root)
 
