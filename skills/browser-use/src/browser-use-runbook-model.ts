@@ -245,6 +245,10 @@ export type BrowserUseRunbookSemanticTarget = {
 export type BrowserUseRunbookStep =
 	| { kind: "snapshot"; interactive: boolean }
 	| {
+			kind: "approval-gate";
+			blocked_cause: "submit-approval-required";
+	  }
+	| {
 			kind: "open";
 			url: string;
 			postcondition: Extract<
@@ -862,7 +866,7 @@ function validateStep(
 	issues: BrowserUseRunbookIssue[],
 ): void {
 	const at = `step ${index}`;
-	if (step.kind === "snapshot") return;
+	if (step.kind === "snapshot" || step.kind === "approval-gate") return;
 	if (step.kind === "open") {
 		if (!originAllowed(step.url, allowed)) {
 			issues.push({
@@ -1037,7 +1041,15 @@ export function runbookDocumentAuthoringSchema() {
 			inputs: { type: "array", item_owner: "BrowserUseRunbookInput + parseRunbookRecord" },
 			steps: {
 				type: "non-empty-array",
-				variants: ["snapshot", "open", "click", "fill", "action", "iterate"],
+				variants: [
+					"snapshot",
+					"approval-gate",
+					"open",
+					"click",
+					"fill",
+					"action",
+					"iterate",
+				],
 				postconditions: {
 					variants: ["url-equals", "url-starts-with", "value-equals", "element-visible"],
 					open_variants: ["url-equals", "url-starts-with"],
@@ -1111,6 +1123,15 @@ function inspectStepKeys(value: unknown, path: string, issues: BrowserUseRunbook
 	switch (value.kind) {
 		case "snapshot":
 			inspectExactKeys(value, path, ["kind", "interactive"], ["kind", "interactive"], issues);
+			break;
+		case "approval-gate":
+			inspectExactKeys(
+				value,
+				path,
+				["kind", "blocked_cause"],
+				["kind", "blocked_cause"],
+				issues,
+			);
 			break;
 		case "open":
 			inspectExactKeys(value, path, ["kind", "url", "postcondition"], ["kind", "url", "postcondition"], issues);
@@ -1371,6 +1392,14 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 			if (!hasOnlyKeys(raw, ["kind", "interactive"])) return undefined;
 			if (typeof raw.interactive !== "boolean") return undefined;
 			return { kind: "snapshot", interactive: raw.interactive };
+		}
+		case "approval-gate": {
+			if (!hasOnlyKeys(raw, ["kind", "blocked_cause"])) return undefined;
+			if (raw.blocked_cause !== "submit-approval-required") return undefined;
+			return {
+				kind: "approval-gate",
+				blocked_cause: "submit-approval-required",
+			};
 		}
 		case "open": {
 			if (!hasOnlyKeys(raw, ["kind", "url", "postcondition"])) return undefined;
@@ -1653,6 +1682,11 @@ export type BrowserUseRunbookPlan = {
 	resume_from_step: number;
 	total_steps: number;
 	steps: readonly AgentBrowserTaskStep[];
+	/** First generic approval boundary; adapter steps after it are not compiled. */
+	approval_gate?: {
+		runbook_step_index: number;
+		blocked_cause: "submit-approval-required";
+	};
 	/**
 	 * Absolute runbook step index for each compiled executor step. Expanded
 	 * iterations repeat their source index so partial execution resumes the
@@ -1679,11 +1713,14 @@ export function nextRunbookStepAfterExecution(
 		| "resume_from_step"
 		| "total_steps"
 		| "compiled_step_runbook_indices"
+		| "approval_gate"
 	>,
 	executedSteps: number,
 ): number {
 	if (executedSteps >= plan.compiled_step_runbook_indices.length) {
-		return plan.total_steps;
+		return plan.approval_gate !== undefined
+			? plan.approval_gate.runbook_step_index
+			: plan.total_steps;
 	}
 	return (
 		plan.compiled_step_runbook_indices[executedSteps] ??
@@ -1865,12 +1902,19 @@ export function planRunbookExecution(
 		};
 	}
 	const remaining = runbook.steps.slice(input.resumeFromStep);
+	const approvalGateOffset = remaining.findIndex(
+		(step) => step.kind === "approval-gate",
+	);
+	const executableRemaining =
+		approvalGateOffset === -1
+			? remaining
+			: remaining.slice(0, approvalGateOffset);
 	// Compile each remaining step. An `action`/`iterate` step expands into its
 	// engine-resolved executor steps (U3, keyed by ABSOLUTE step index); every
 	// other kind compiles through the pure `compileStep`.
 	const compiled: AgentBrowserTaskStep[] = [];
 	const compiledStepRunbookIndices: number[] = [];
-	for (const [offset, step] of remaining.entries()) {
+	for (const [offset, step] of executableRemaining.entries()) {
 		const absoluteIndex = input.resumeFromStep + offset;
 		if (step.kind === "action" || step.kind === "iterate") {
 			const resolution = resolvedActionSteps.get(absoluteIndex);
@@ -1884,7 +1928,7 @@ export function planRunbookExecution(
 		compiled.push(compileStep(step, normalizedInputs));
 		compiledStepRunbookIndices.push(absoluteIndex);
 	}
-	const pendingBindings = remaining
+	const pendingBindings = executableRemaining
 		.filter(
 			(
 				step,
@@ -1907,6 +1951,15 @@ export function planRunbookExecution(
 			resume_from_step: input.resumeFromStep,
 			total_steps: runbook.steps.length,
 			steps: compiled,
+			...(approvalGateOffset === -1
+				? {}
+				: {
+						approval_gate: {
+							runbook_step_index:
+								input.resumeFromStep + approvalGateOffset,
+							blocked_cause: "submit-approval-required" as const,
+						},
+					}),
 			compiled_step_runbook_indices: compiledStepRunbookIndices,
 			pending_item_bindings: [...new Set(pendingBindings)],
 			read_action_meta: input.readActionMeta ?? {},

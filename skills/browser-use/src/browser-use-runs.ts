@@ -364,6 +364,8 @@ export async function casUpdateSharedRun(
 		mutate: (run: BrowserUseSharedRun) => BrowserUseSharedRun;
 		/** Close an existing auth fragment through its owner during terminal cancel. */
 		authFragmentAction?: "cancel";
+		/** Approval-owner transition; absent generic mutations cannot mint approval. */
+		approvalAction?: "record" | "mark-dispatch";
 	},
 ): Promise<{ ok: true; run: BrowserUseSharedRun } | RunFailure> {
 	const path = deps.paths.state.runFile(input.runId);
@@ -473,6 +475,56 @@ export async function casUpdateSharedRun(
 					return runFailure(
 						itemBatchTransition.code,
 						itemBatchTransition.message,
+					);
+				}
+				const priorApprovals = loaded.run.approvals ?? [];
+				const nextApprovals = mutated.approvals ?? [];
+				const approvalsChanged = !isDeepStrictEqual(
+					priorApprovals,
+					nextApprovals,
+				);
+				if (approvalsChanged && input.approvalAction === undefined) {
+					return runFailure(
+						"run_approval_owner_required",
+						"generic run mutation cannot record approval or start its dispatch; use the explicit approval owner.",
+					);
+				}
+				if (
+					input.approvalAction === "record" &&
+					(nextApprovals.length !== priorApprovals.length + 1 ||
+						priorApprovals.some(
+							(approval, index) =>
+								!isDeepStrictEqual(approval, nextApprovals[index]),
+						))
+				) {
+					return runFailure(
+						"run_approval_record_invalid",
+						"explicit approval must append exactly one record without changing standing approvals.",
+					);
+				}
+				if (
+					input.approvalAction === "mark-dispatch" &&
+					(nextApprovals.length === 0 ||
+						nextApprovals.length !== priorApprovals.length ||
+						priorApprovals.some((approval, index) => {
+							const nextApproval = nextApprovals[index];
+							if (nextApproval === undefined) return true;
+							if (isDeepStrictEqual(approval, nextApproval)) return false;
+							const {
+								dispatch_started_at_epoch_ms: _dispatchStarted,
+								...nextApprovalBeforeDispatch
+							} = nextApproval;
+							return !(
+								index === priorApprovals.length - 1 &&
+								approval.dispatch_started_at_epoch_ms === undefined &&
+								nextApproval.dispatch_started_at_epoch_ms !== undefined &&
+								isDeepStrictEqual(approval, nextApprovalBeforeDispatch)
+							);
+						}))
+				) {
+					return runFailure(
+						"run_approval_dispatch_marker_invalid",
+						"approval dispatch may add one write-ahead marker to the latest standing approval only.",
 					);
 				}
 				const priorBinding = loaded.run.runbook_target_binding;

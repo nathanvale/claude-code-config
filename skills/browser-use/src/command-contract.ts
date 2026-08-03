@@ -416,6 +416,7 @@ export type BrowserUseLanesSubcommand =
 const BROWSER_USE_RUN_SUBCOMMANDS = [
 	"status",
 	"resume",
+	"approve",
 	"cancel",
 ] as const;
 export type BrowserUseRunSubcommand =
@@ -583,6 +584,7 @@ export type BrowserUseCommand =
 	| "lanes-show"
 	| "run-status"
 	| "run-resume"
+	| "run-approve"
 	| "run-cancel"
 	| "runbook-list"
 	| "runbook-show"
@@ -1060,6 +1062,12 @@ export const browserUsePlatformStoreSuccessActions = [
 			"Resume the blocked shared run with browser-use run resume --run <id>.",
 		sideEffects: ["check"],
 	},
+	{
+		id: "resume_runbook_execution",
+		summary:
+			"Rerun the original browser-use runbook run command with --run <id> after explicit approval.",
+		sideEffects: ["browser", "write"],
+	},
 ] as const;
 
 // Runbook target repair ids are shared by task-run and runbook-run discovery.
@@ -1452,6 +1460,22 @@ const browserUseRunFlags = {
 	"--run": {
 		type: "string",
 		description: "Shared Browser Use run id to inspect, resume, or cancel.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunApproveFlags = {
+	"--run": {
+		type: "string",
+		description: "Shared Browser Use run id at an awaiting-approval gate.",
+	},
+	"--continuation": {
+		type: "string",
+		description: "Exact persisted approval continuation being satisfied.",
+	},
+	"--artifact": {
+		type: "string",
+		description: "Exact attached screenshot artifact reviewed by the operator.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -2265,6 +2289,33 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUsePlatformStoreFailureActions,
 			},
 			flags: browserUseRunFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"run-approve": {
+			script: "browser-use",
+			summary:
+				"Record one explicit approval for the run's exact continuation and attached review screenshot.",
+			usage: [
+				"run approve --run <id> --continuation <id> --artifact <id> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Approval records explicit operator intent but does not dispatch the browser mutation.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunApproveFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"run-cancel": {

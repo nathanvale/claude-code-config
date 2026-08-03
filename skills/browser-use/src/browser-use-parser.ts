@@ -207,10 +207,24 @@ export function parseBrowserUseArgv(
 	// flag check and the dry-run/live split — so an unregistered enum value fails
 	// closed for dry-run and live alike (R27, api-contract parity).
 	validateEnumFlagValues(flagValues, flags);
-	if (command === "run-resume" || command === "run-cancel") {
+	if (
+		command === "run-resume" ||
+		command === "run-approve" ||
+		command === "run-cancel"
+	) {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
 			throw usageError(`${command.replace("-", " ")} requires --run <id>.`);
+		}
+	}
+	if (command === "run-approve") {
+		const continuation = stringField(flagValues["--continuation"]);
+		const artifact = stringField(flagValues["--artifact"]);
+		if (!continuation || continuation.startsWith("--")) {
+			throw usageError("run approve requires --continuation <id>.");
+		}
+		if (!artifact || artifact.startsWith("--")) {
+			throw usageError("run approve requires --artifact <id>.");
 		}
 	}
 	if (command === "lanes-show") {

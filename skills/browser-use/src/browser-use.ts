@@ -119,6 +119,7 @@ import {
 	revalidateAuthAttestation,
 } from "./browser-use-run-model";
 import { createBrowserUseAuthContract } from "./browser-use-auth";
+import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -162,11 +163,16 @@ import {
 	releaseLease,
 	withActivationEpochBarrier,
 } from "./browser-use-locks";
-import type { BrowserUseLeasePayload } from "./browser-use-schemas";
+import type {
+	BrowserUseArtifactManifestPayload,
+	BrowserUseLeasePayload,
+} from "./browser-use-schemas";
 import {
+	artifactBytesPath,
 	deleteArtifact,
 	listPendingTombstones,
 	readArtifactStatus,
+	writeArtifactManifest,
 } from "./browser-use-retention";
 import type {
 	BrowserUseMigrationFailure,
@@ -301,7 +307,10 @@ import {
 	runTargetsSelect,
 	runTargetsStatus,
 } from "./browser-use-selection";
-import { runOperate } from "./browser-use-operations";
+import {
+	captureBrowserUseScreenshotMedia,
+	runOperate,
+} from "./browser-use-operations";
 import {
 	type ParsedBrowserUseCommand,
 	applyEnvRunId,
@@ -719,6 +728,7 @@ async function executeCommand(input: {
 	if (
 		(parsed.command === "run-status" ||
 			parsed.command === "run-resume" ||
+			parsed.command === "run-approve" ||
 			parsed.command === "run-cancel" ||
 			parsed.command === "artifact-list" ||
 			parsed.command === "repair-status" ||
@@ -736,6 +746,7 @@ async function executeCommand(input: {
 		};
 		if (parsed.command === "run-status") return runRunStatus(platformInput);
 		if (parsed.command === "run-resume") return runRunResume(platformInput);
+		if (parsed.command === "run-approve") return runRunApprove(platformInput);
 		if (parsed.command === "run-cancel") return runRunCancel(platformInput);
 		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
 		if (parsed.command === "repair-status") return runRepairStatus(platformInput);
@@ -1643,6 +1654,11 @@ function writeRunPlain(
 			`artifact=${artifact.artifact_id} sensitivity=${artifact.sensitivity} retention=${artifact.retention}\n`,
 		);
 	}
+	for (const approval of run.approvals ?? []) {
+		stdout.write(
+			`approval=${approval.continuation_id} artifact=${approval.artifact_id} approved_at=${approval.approved_at_epoch_ms}\n`,
+		);
+	}
 	for (const result of run.structured_results ?? []) {
 		stdout.write(
 			result.ok
@@ -1870,6 +1886,92 @@ async function runRunResume(input: PlatformCommandInput): Promise<number> {
 				),
 			);
 	}
+}
+
+/** Record explicit operator approval without dispatching any browser action. */
+async function runRunApprove(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const runId = stringField(input.parsed.flagValues["--run"]) ?? "";
+	const continuationId =
+		stringField(input.parsed.flagValues["--continuation"]) ?? "";
+	const artifactId = stringField(input.parsed.flagValues["--artifact"]) ?? "";
+	const loaded = await loadSharedRun(store.deps, runId);
+	if (!loaded.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(loaded.code, loaded.message),
+		);
+	}
+	if (
+		loaded.run.state !== "awaiting-approval" ||
+		loaded.run.continuation?.next_action_id !== "complete-submit-approval" ||
+		continuationId !== loaded.run.continuation.next_action_id
+	) {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_continuation_mismatch",
+			message:
+				"the run is not waiting on the exact submit-approval continuation supplied by the operator.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	if (!loaded.run.artifacts.some((artifact) => artifact.artifact_id === artifactId)) {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_artifact_mismatch",
+			message:
+				"the supplied review artifact is not attached to this awaiting-approval run.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const approvedAt = input.runtime.now();
+	const updated = await persistRunbookPrivateState(
+		store.deps,
+		loaded.run,
+		(current) => {
+			const { continuation: _continuation, ...rest } = current;
+			const progress = current.runbook_progress;
+			return {
+				...rest,
+				state: "running",
+				...(progress === undefined
+					? {}
+					: {
+							runbook_progress: {
+								...progress,
+								next_step: progress.next_step + 1,
+							},
+						}),
+				approvals: [
+					...(current.approvals ?? []),
+					{
+						continuation_id: continuationId,
+						artifact_id: artifactId,
+						approved_at_epoch_ms: approvedAt,
+					},
+				],
+			};
+		},
+		undefined,
+		"record",
+	);
+	if (!updated.ok) return emitPlatformStoreFailure(input, updated.failure);
+	return emitSharedRunSuccess({
+		command: input,
+		run: updated.run,
+		continuationId: "resume_runbook_execution",
+		dataExtra: {
+			approval: {
+				continuation_id: continuationId,
+				artifact_id: artifactId,
+				approved_at_epoch_ms: approvedAt,
+			},
+		},
+		plainExtra: ["approval=recorded", `artifact=${artifactId}`],
+	});
 }
 
 /**
@@ -3211,12 +3313,57 @@ async function persistTaskRunMutationDispatch(
 	);
 }
 
+async function persistRunbookMutationDispatch(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	atEpochMs: number,
+	heldClaim: LeaseWriteClaim,
+): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	const approvals = run.approvals ?? [];
+	const latestApproval = approvals.at(-1);
+	if (latestApproval === undefined) {
+		return await persistTaskRunMutationDispatch(deps, run, heldClaim);
+	}
+	if (latestApproval.dispatch_started_at_epoch_ms !== undefined) {
+		return {
+			ok: false,
+			failure: {
+				code: "run_approved_dispatch_already_started",
+				message:
+					"the approved submit dispatch already crossed write-ahead; inspect its outcome before any redispatch.",
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			},
+		};
+	}
+	return await persistRunbookPrivateState(
+		deps,
+		run,
+		(current) => ({
+			...current,
+			mutation_dispatched: true,
+			approvals: (current.approvals ?? []).map((approval, index, currentApprovals) =>
+				index === currentApprovals.length - 1
+					? { ...approval, dispatch_started_at_epoch_ms: atEpochMs }
+					: approval,
+			),
+		}),
+		heldClaim,
+		"mark-dispatch",
+	);
+}
+
 async function persistFencedSharedRun(
 	deps: RunStoreDeps,
 	run: BrowserUseSharedRun,
 	holderId: string,
 	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
 	heldClaim?: LeaseWriteClaim,
+	approvalAction?: "record" | "mark-dispatch",
 ): Promise<
 	| { ok: true; run: BrowserUseSharedRun }
 	| { ok: false; failure: PlatformStoreFailure }
@@ -3227,6 +3374,7 @@ async function persistFencedSharedRun(
 			expectedRevision: run.revision,
 			lease: heldClaim,
 			mutate,
+			...(approvalAction === undefined ? {} : { approvalAction }),
 		});
 		return updated.ok
 			? { ok: true, run: updated.run }
@@ -3263,6 +3411,7 @@ async function persistFencedSharedRun(
 			expectedRevision: run.revision,
 			lease: claim,
 			mutate,
+			...(approvalAction === undefined ? {} : { approvalAction }),
 		});
 	} finally {
 		await releaseLease(deps, acquired.lease);
@@ -3281,6 +3430,7 @@ async function persistRunbookPrivateState(
 	run: BrowserUseSharedRun,
 	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
 	heldClaim?: LeaseWriteClaim,
+	approvalAction?: "record" | "mark-dispatch",
 ): Promise<
 	| { ok: true; run: BrowserUseSharedRun }
 	| { ok: false; failure: PlatformStoreFailure }
@@ -3291,7 +3441,185 @@ async function persistRunbookPrivateState(
 		`runbook-state-${run.run_id}`,
 		mutate,
 		heldClaim,
+		approvalAction,
 	);
+}
+
+async function enterSubmitApprovalGate(input: {
+	command: PlatformCommandInput;
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	handoff: HandoffFacts;
+	targetTabId: string;
+	targetUrl: string;
+	gateStepIndex: number;
+	heldClaim: LeaseWriteClaim;
+	structuredResults?: readonly BrowserUseRunStructuredResult[];
+}): Promise<number> {
+	let checkpointedRun = input.run;
+	if (checkpointedRun.runbook_progress?.next_step !== input.gateStepIndex) {
+		const checkpointed = await persistRunbookPrivateState(
+			input.deps,
+			checkpointedRun,
+			(current) => {
+				const structuredResults = [
+					...(current.structured_results ?? []),
+					...(input.structuredResults ?? []),
+				];
+				return {
+					...current,
+					state: "running",
+					runbook_progress:
+						current.runbook_progress === undefined
+							? undefined
+							: {
+									...current.runbook_progress,
+									next_step: input.gateStepIndex,
+								},
+					...(structuredResults.length === 0
+						? {}
+						: { structured_results: structuredResults }),
+				};
+			},
+			input.heldClaim,
+		);
+		if (!checkpointed.ok) {
+			return emitPlatformStoreFailure(input.command, checkpointed.failure);
+		}
+		checkpointedRun = checkpointed.run;
+	}
+
+	let target: URL;
+	try {
+		target = new URL(input.targetUrl);
+	} catch {
+		return emitPlatformStoreFailure(input.command, {
+			code: "run_approval_target_invalid",
+			message: "the approval screenshot target is not a valid URL.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	if (target.protocol !== "https:" && target.protocol !== "http:") {
+		return emitPlatformStoreFailure(input.command, {
+			code: "run_approval_target_invalid",
+			message: "the approval screenshot target is not an http(s) page.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+
+	const artifactId = `submit-approval-${input.gateStepIndex}.png`;
+	const existing = await readArtifactStatus(input.deps, {
+		runId: checkpointedRun.run_id,
+		artifactId,
+	});
+	if (existing.status === "corrupt" || existing.status === "deleted") {
+		return emitPlatformStoreFailure(
+			input.command,
+			platformStoreFailureOf(
+				"artifact_corrupt",
+				"the approval screenshot artifact is unavailable; inspect retention state before approval.",
+			),
+		);
+	}
+	if (existing.status === "missing") {
+		const artifactRoot = input.deps.paths.state.artifactDir(
+			checkpointedRun.run_id,
+		);
+		const artifactPath = artifactBytesPath(
+			input.deps.paths,
+			checkpointedRun.run_id,
+			artifactId,
+		);
+		const captured = await captureBrowserUseScreenshotMedia({
+			runtime: input.command.runtime,
+			handoff: input.handoff,
+			adapterPageRef: input.targetTabId,
+			artifact: {
+				path: artifactPath,
+				relativePath: artifactId,
+				root: artifactRoot,
+				format: "png",
+				fullPage: true,
+			},
+		});
+		if (!captured.ok) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(captured.code, captured.message),
+			);
+		}
+		const manifest: BrowserUseArtifactManifestPayload = {
+			artifact_id: artifactId,
+			run_id: checkpointedRun.run_id,
+			task_intent: "runbook-execution",
+			adapter_id: input.handoff.adapter,
+			adapter_version: "verified-handoff-v2",
+			sanitized_target: {
+				origin: target.origin,
+				path_shape: target.pathname,
+			},
+			producer_capability: "screenshot_media",
+			content_hash: await input.deps.fs.hashFile(artifactPath),
+			sensitivity: "high",
+			retention: "ephemeral",
+			outcome_ref: `approval:${checkpointedRun.run_id}`,
+			created_at_epoch_ms: input.command.runtime.now(),
+			export_receipt: null,
+		};
+		const written = await writeArtifactManifest(input.deps, manifest);
+		if (!written.ok) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(written.code, written.message),
+			);
+		}
+	}
+
+	const blocked = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["submit-approval-required"];
+	const awaiting = await persistRunbookPrivateState(
+		input.deps,
+		checkpointedRun,
+		(current) => ({
+			...current,
+			state: blocked.run_state,
+			continuation: structuredClone(blocked.continuation),
+			artifacts: current.artifacts.some(
+				(artifact) => artifact.artifact_id === artifactId,
+			)
+				? current.artifacts
+				: [
+						...current.artifacts,
+						{
+							artifact_id: artifactId,
+							sensitivity: "high",
+							retention: "ephemeral",
+						},
+					],
+		}),
+		input.heldClaim,
+	);
+	if (!awaiting.ok) {
+		return emitPlatformStoreFailure(input.command, awaiting.failure);
+	}
+	return emitSharedRunSuccess({
+		command: input.command,
+		run: awaiting.run,
+		continuationId: blocked.continuation.next_action_id,
+		dataExtra: {
+			approval_review: {
+				artifact_id: artifactId,
+				producer_capability: "screenshot_media",
+			},
+		},
+		plainExtra: [
+			`approval_artifact=${artifactId}`,
+			"producer_capability=screenshot_media",
+		],
+	});
 }
 
 // Persist the dispatch outcome onto the shared run (its terminal or blocked
@@ -4884,17 +5212,6 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				recoverability: "none",
 			});
 		}
-		if (loaded.run.mutation_dispatched) {
-			return emitTaskRunFailure(input, loaded.run.run_id, {
-				code: "task_run_effect_unknown",
-				message:
-					"the prior process ended after business write-ahead; inspect outcome before any redispatch.",
-				actionId: "inspect_task_run_result",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "none",
-				dataExtra: { external_effect: "unknown" },
-			});
-		}
 		const check = checkSameLaneResumeForTaskRun(
 			loaded.run,
 			"agent-browser",
@@ -4915,6 +5232,28 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					lane_outcome: "agent_browser_target_moved",
 					external_effect: "none",
 				},
+			});
+		}
+		if (
+			loaded.run.state === "awaiting-approval" &&
+			loaded.run.continuation?.next_action_id ===
+				"complete-submit-approval"
+		) {
+			const approvalArtifact = loaded.run.artifacts.at(-1);
+			return emitSharedRunSuccess({
+				command: input,
+				run: loaded.run,
+				continuationId: "complete-submit-approval",
+				...(approvalArtifact === undefined
+					? {}
+					: {
+							dataExtra: {
+								approval_review: {
+									artifact_id: approvalArtifact.artifact_id,
+									producer_capability: "screenshot_media",
+								},
+							},
+						}),
 			});
 		}
 		run = loaded.run;
@@ -4992,10 +5331,35 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			recoverability: "repair_state",
 		});
 	}
+	if (run?.mutation_dispatched) {
+		const latestApproval = run.approvals?.at(-1);
+		const gateCapturePending =
+			plan.steps.length === 0 &&
+			plan.approval_gate?.runbook_step_index === resumeFromStep;
+		const approvedDispatchPending =
+			run.state === "running" &&
+			latestApproval !== undefined &&
+			latestApproval.dispatch_started_at_epoch_ms === undefined;
+		if (!gateCapturePending && !approvedDispatchPending) {
+			return emitTaskRunFailure(input, run.run_id, {
+				code: "task_run_effect_unknown",
+				message:
+					"the prior process ended after business write-ahead; inspect outcome before any redispatch.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { external_effect: "unknown" },
+			});
+		}
+	}
 
 	// A nonterminal crash residue may already have confirmed every step. Close it
 	// without resolving a browser target or entering auth again.
-	if (run !== undefined && plan.steps.length === 0) {
+	if (
+		run !== undefined &&
+		plan.steps.length === 0 &&
+		plan.approval_gate === undefined
+	) {
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
@@ -5422,6 +5786,18 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			authTransport.close();
 		}
 	}
+	if (plan.steps.length === 0 && plan.approval_gate !== undefined) {
+		return await enterSubmitApprovalGate({
+			command: input,
+			deps: store.deps,
+			run,
+			handoff,
+			targetTabId: targetResolution.target_tab_id,
+			targetUrl: executionExpectedTargetUrl,
+			gateStepIndex: plan.approval_gate.runbook_step_index,
+			heldClaim: dispatchClaim,
+		});
+	}
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;
@@ -5431,9 +5807,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				runCommand: input.runtime.runCommand,
 				beforeMutationDispatch: async ({ run_id }) => {
 					if (run_id !== dispatchRun.run_id) return { ok: false };
-					const marked = await persistTaskRunMutationDispatch(
+					const marked = await persistRunbookMutationDispatch(
 						store.deps,
 						dispatchRun,
+						input.runtime.now(),
 						dispatchClaim,
 					);
 					if (!marked.ok) {
@@ -5516,6 +5893,19 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		outcome.plan,
 		outcome.result.executed_steps,
 	);
+	if (mapping.kind === "confirmed" && outcome.plan.approval_gate !== undefined) {
+		return await enterSubmitApprovalGate({
+			command: input,
+			deps: store.deps,
+			run: dispatchRun,
+			handoff,
+			targetTabId: targetResolution.target_tab_id,
+			targetUrl: executionExpectedTargetUrl,
+			gateStepIndex: outcome.plan.approval_gate.runbook_step_index,
+			heldClaim: dispatchClaim,
+			structuredResults: outcome.structured_results ?? [],
+		});
+	}
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,

@@ -1027,6 +1027,11 @@ describe("runbook discovery over the XDG data root", () => {
 					health: "healthy",
 				}),
 				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "submit",
+					health: "healthy",
+				}),
+				expect.objectContaining({
 					service_id: "matest",
 					flow_id: "development-snapshot-verify",
 					health: "healthy",
@@ -1254,7 +1259,7 @@ const FASTTRACK_TIMESHEET_RUN = {
 };
 
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the six daily-driver runbooks", async () => {
+	test("ships exactly the seven daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1263,6 +1268,7 @@ describe("shipped runbooks root resolution", () => {
 			).toEqual([
 				"fasttrack/fill-week",
 				"fasttrack/login",
+				"fasttrack/submit",
 				"matest/development-snapshot-verify",
 				"oncore/timesheet-snapshot-verify",
 				"unifi/login",

@@ -138,12 +138,14 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 ];
 
 /**
- * Exact reviewed Oncore draft-verification action.
+ * Exact reviewed FastTrack submitted-state verification action.
  *
  * Its byte identity is the mechanical read proof: any edit falls back to the
- * conservative mutation audit until reviewed and represented here again. The
- * action emits only a schema-pinned sentinel after exact draft semantics pass.
+ * conservative mutation audit until reviewed and represented here again.
  */
+const FASTTRACK_VERIFY_SUBMITTED_DIGEST =
+	"892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916";
+
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
  * effect class the bytes MECHANICALLY prove: `read` only when the complete
@@ -158,6 +160,7 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
+	if (actionAssetDigest(bytes) === FASTTRACK_VERIFY_SUBMITTED_DIGEST) return "read";
 	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
 		? "read"
 		: "mutation";

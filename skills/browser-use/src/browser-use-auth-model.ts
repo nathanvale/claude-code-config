@@ -136,6 +136,7 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSES = [
 	"rate-limit",
 	"session-identity-proof-unavailable",
 	"human-identity-attestation-required",
+	"submit-approval-required",
 	"cleanup-failure",
 	"adapter-crash",
 	"unknown-post-submit-state",
@@ -291,6 +292,14 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 		continuation: {
 			next_action_id: "complete-human-identity-attestation",
 			summary: "Complete the Touch ID-backed one-run identity attestation.",
+		},
+	},
+	"submit-approval-required": {
+		run_state: "awaiting-approval",
+		continuation: {
+			next_action_id: "complete-submit-approval",
+			summary:
+				"Review the captured screenshot, then approve the timesheet submit.",
 		},
 	},
 	"cleanup-failure": {

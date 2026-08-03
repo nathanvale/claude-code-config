@@ -118,13 +118,86 @@ type OperationTargetEntry = {
 	adapterPageRef?: string;
 };
 
-type ScreenshotArtifact = {
+/** Run-scoped PNG target owned by the screenshot Browser Operation. */
+export type ScreenshotArtifact = {
 	path: string;
 	relativePath: string;
 	root: string;
 	format: "png";
 	fullPage: boolean;
 };
+
+/** Result of adapter-agnostic screenshot-media capture for a bound target. */
+export type BrowserUseScreenshotMediaCaptureResult =
+	| { ok: true; artifact: ScreenshotArtifact; focus: boolean }
+	| { ok: false; code: string; message: string };
+
+/**
+ * Capture one PNG through the existing screenshot-media Browser Operation lane.
+ *
+ * @param input - Verified handoff, exact adapter page ref, and run-scoped output
+ * @returns Captured artifact metadata or one fail-closed operation refusal
+ * @example
+ * ```ts
+ * await captureBrowserUseScreenshotMedia({
+ *   runtime,
+ *   handoff,
+ *   adapterPageRef: "1",
+ *   artifact: { path, relativePath: "approval.png", root, format: "png", fullPage: true },
+ * })
+ * ```
+ */
+export async function captureBrowserUseScreenshotMedia(input: {
+	runtime: BrowserUseRuntime;
+	handoff: HandoffFacts;
+	adapterPageRef: string;
+	artifact: ScreenshotArtifact;
+}): Promise<BrowserUseScreenshotMediaCaptureResult> {
+	if (
+		!authorizesOperationClass(
+			{ authorized_capabilities: [...input.handoff.authorizedCapabilities] },
+			"screenshot",
+		)
+	) {
+		return {
+			ok: false,
+			code: "browser_operation_capability_unauthorized",
+			message:
+				"the verified handoff does not authorize screenshot_media for this adapter.",
+		};
+	}
+	const directory = await ensureScreenshotArtifactDirectory(
+		input.runtime,
+		input.artifact,
+	);
+	if (!directory.ok) {
+		return {
+			ok: false,
+			code: directory.failure.code,
+			message: directory.failure.message,
+		};
+	}
+	const captured = await runOperationLane({
+		runtime: input.runtime,
+		handoff: input.handoff,
+		adapterPageRef: input.adapterPageRef,
+		operation: "screenshot",
+		screenshot: input.artifact,
+		verbose: false,
+		bringToFront: false,
+	});
+	return captured.ok
+		? {
+				ok: true,
+				artifact: input.artifact,
+				focus: input.handoff.adapter === "agent-browser",
+			}
+		: {
+				ok: false,
+				code: captured.failure.code,
+				message: captured.failure.message,
+			};
+}
 
 type ViewportEmulation = {
 	width: number;
@@ -928,6 +1001,17 @@ async function runAgentBrowserOperation(
 	const activated = await call(["tab", input.adapterPageRef], "tab activation");
 	if (!activated.ok) {
 		return { ok: false, failure: activated.failure, focus: false };
+	}
+	if (input.operation === "screenshot") {
+		const screenshotArgs = [
+			"screenshot",
+			...(input.screenshot?.fullPage ? ["--full"] : []),
+			...(input.screenshot?.path === undefined ? [] : [input.screenshot.path]),
+		];
+		const screenshot = await call(screenshotArgs, "screenshot");
+		return screenshot.ok
+			? { ok: true, result: screenshot.result }
+			: { ok: false, failure: screenshot.failure, focus: true };
 	}
 	const snapshot = await call(["snapshot"], "snapshot");
 	if (!snapshot.ok) {

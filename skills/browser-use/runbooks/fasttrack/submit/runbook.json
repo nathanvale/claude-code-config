@@ -1,0 +1,175 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "fasttrack",
+  "flow_id": "submit",
+  "flow_name": "submit",
+  "version": "1",
+  "summary": "Verify an already-filled FastTrack week, capture it for explicit approval, submit it, then verify submitted state.",
+  "allowed_origins": [
+    "https://manpowergroup.fasttrack360.com.au"
+  ],
+  "auth_context_ref": "interactive-login",
+  "inputs": [
+    {
+      "id": "timesheet_submission",
+      "summary": "The already-filled week and expected FastTrack rows to verify before submit.",
+      "required": true,
+      "schema": {
+        "kind": "object",
+        "fields": {
+          "period_start": {
+            "required": true,
+            "schema": {
+              "kind": "date"
+            }
+          },
+          "period_end": {
+            "required": true,
+            "schema": {
+              "kind": "date"
+            }
+          },
+          "rows": {
+            "required": true,
+            "schema": {
+              "kind": "array",
+              "min_items": 1,
+              "max_items": 7,
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "date": {
+                    "required": true,
+                    "schema": {
+                      "kind": "date"
+                    }
+                  },
+                  "day": {
+                    "required": true,
+                    "schema": {
+                      "kind": "enum",
+                      "values": [
+                        "Mon",
+                        "Tue",
+                        "Wed",
+                        "Thu",
+                        "Fri",
+                        "Sat",
+                        "Sun"
+                      ]
+                    }
+                  },
+                  "start_time": {
+                    "required": true,
+                    "schema": {
+                      "kind": "string",
+                      "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                    }
+                  },
+                  "end_time": {
+                    "required": true,
+                    "schema": {
+                      "kind": "string",
+                      "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                    }
+                  },
+                  "attendance_type": {
+                    "required": true,
+                    "schema": {
+                      "kind": "enum",
+                      "values": [
+                        "Standard",
+                        "Public Holiday Worked"
+                      ]
+                    }
+                  },
+                  "breaks": {
+                    "required": false,
+                    "schema": {
+                      "kind": "array",
+                      "max_items": 4,
+                      "items": {
+                        "kind": "object",
+                        "fields": {
+                          "start_time": {
+                            "required": true,
+                            "schema": {
+                              "kind": "string",
+                              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                            }
+                          },
+                          "end_time": {
+                            "required": true,
+                            "schema": {
+                              "kind": "string",
+                              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00",
+      "postcondition": {
+        "kind": "url-starts-with",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-filled-week",
+      "expected_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
+      "inputs": {
+        "week_start": "{{timesheet_submission.period_start}}",
+        "week_end": "{{timesheet_submission.period_end}}",
+        "rows": "{{timesheet_submission.rows}}"
+      }
+    },
+    {
+      "kind": "approval-gate",
+      "blocked_cause": "submit-approval-required"
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-submit",
+      "expected_digest": "8399adac343c38ef70738370781330137e1405320091fcf374210ff6b51f9174",
+      "inputs": {
+        "week_start": "{{timesheet_submission.period_start}}",
+        "week_end": "{{timesheet_submission.period_end}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-submitted",
+      "expected_digest": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
+      "inputs": {
+        "week_start": "{{timesheet_submission.period_start}}",
+        "week_end": "{{timesheet_submission.period_end}}"
+      }
+    }
+  ]
+}

@@ -216,6 +216,45 @@ function readOnlyRunbook(): BrowserUseRunbook {
 	};
 }
 
+function approvalGatedMutationRunbook(): BrowserUseRunbook {
+	return {
+		contract: "browser-use.runbook",
+		schema_version: "2",
+		service_id: "fixture",
+		flow_id: "approval-gated-submit",
+		flow_name: "approval-gated-submit",
+		version: "1",
+		summary: "Capture approval evidence before one semantic submit mutation.",
+		allowed_origins: ["https://example.test"],
+		inputs: [],
+		steps: [
+			{
+				kind: "open",
+				url: "https://example.test/timesheet",
+				postcondition: {
+					kind: "url-equals",
+					url: "https://example.test/timesheet",
+				},
+			},
+			{ kind: "snapshot", interactive: false },
+			{
+				kind: "approval-gate",
+				blocked_cause: "submit-approval-required",
+			},
+			{ kind: "snapshot", interactive: false },
+			{
+				kind: "click",
+				target: { role: "button", name: "Submit" },
+				postcondition: {
+					kind: "element-visible",
+					selector: ".submitted",
+				},
+			},
+			{ kind: "snapshot", interactive: false },
+		],
+	};
+}
+
 function confidentialRunbook(): BrowserUseRunbook {
 	return {
 		contract: "browser-use.runbook",
@@ -827,6 +866,144 @@ describe("runbook family — live (U4 wiring)", () => {
 		const loaded = await loadSharedRun(store.deps, "run-runbook-1");
 		expect(loaded.ok).toBe(true);
 		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+	});
+
+	test("submit approval gate captures screenshot and blocks dispatch until exact approval", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, approvalGatedMutationRunbook());
+		const runId = "run-approval-gated-submit";
+		const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+		const calls: Array<readonly string[]> = [];
+		const runtime = makeRuntime({
+			env: store.env,
+			now: () => 1_000,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.readFile(path, "utf-8"),
+				),
+			ensureDirectory: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.mkdir(path, { recursive: true, mode: 0o700 }).then(() => undefined),
+				),
+			runCommand: async (input) => {
+				calls.push([input.command, ...input.args]);
+				if (input.args.includes("screenshot")) {
+					const artifactPath = input.args.find((argument) =>
+						argument.endsWith(".png"),
+					);
+					if (artifactPath !== undefined) {
+						writeFileSync(artifactPath, Buffer.from("approval-png"));
+					}
+				}
+				const data = input.args.includes("tab") && input.args.includes("list")
+					? {
+							tabs: [
+								{
+									tabId: "t1",
+									active: true,
+									type: "page",
+									url: "https://example.test/timesheet",
+								},
+							],
+						}
+					: input.args.includes("snapshot")
+						? {
+								snapshot: "@e1 button Submit",
+								refs: { e1: { role: "button", name: "Submit" } },
+							}
+						: input.args.includes("get") && input.args.includes("url")
+							? { url: "https://example.test/timesheet" }
+							: input.args.includes("is") && input.args.includes("visible")
+								? { visible: true }
+								: {};
+				return { exitCode: 0, stdout: agentSuccess(data), stderr: "" };
+			},
+		});
+		const runArgs = [
+			"runbook", "run",
+			"--service", "fixture",
+			"--flow", "approval-gated-submit",
+			"--handoff", handoffPath,
+			"--tab", "t1",
+			"--json",
+		] as const;
+
+		const blocked = await runForTest(runArgs, runtime);
+		expect(blocked.exitCode).toBe(0);
+		const blockedEnvelope = parseJson(blocked.stdout);
+		expect(blockedEnvelope.continuation).toEqual({
+			next_action_id: "complete-submit-approval",
+		});
+		const blockedRun = (blockedEnvelope.data as { run: BrowserUseSharedRun }).run;
+		expect(blockedRun).toMatchObject({
+			state: "awaiting-approval",
+			mutation_dispatched: true,
+			continuation: { next_action_id: "complete-submit-approval" },
+			artifacts: [
+				{
+					artifact_id: "submit-approval-2.png",
+					sensitivity: "high",
+					retention: "ephemeral",
+				},
+			],
+		});
+		expect(calls.some((call) => call.includes("screenshot"))).toBe(true);
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+		expect(
+			readFileSync(
+				join(
+					store.deps.paths.state.artifactDir(runId),
+					"submit-approval-2.png",
+				),
+				"utf-8",
+			),
+		).toBe("approval-png");
+
+		const callsBeforeUnapprovedResume = calls.length;
+		const stillBlocked = await runForTest(
+			[...runArgs.slice(0, -1), "--run", runId, "--json"],
+			runtime,
+		);
+		expect(stillBlocked.exitCode).toBe(0);
+		expect(calls).toHaveLength(callsBeforeUnapprovedResume);
+		expect(calls.some((call) => call.includes("click"))).toBe(false);
+
+		const approved = await runForTest(
+			[
+				"run", "approve",
+				"--run", runId,
+				"--continuation", "complete-submit-approval",
+				"--artifact", "submit-approval-2.png",
+				"--json",
+			],
+			runtime,
+		);
+		expect(approved.exitCode).toBe(0);
+		expect(parseJson(approved.stdout).continuation).toEqual({
+			next_action_id: "resume_runbook_execution",
+		});
+		expect(calls).toHaveLength(callsBeforeUnapprovedResume);
+
+		const completed = await runForTest(
+			[...runArgs.slice(0, -1), "--run", runId, "--json"],
+			runtime,
+		);
+		expect(completed.exitCode).toBe(0);
+		expect(calls.some((call) => call.includes("click"))).toBe(true);
+		const durable = await loadSharedRun(store.deps, runId);
+		expect(durable.ok).toBe(true);
+		if (durable.ok) {
+			expect(durable.run.state).toBe("confirmed");
+			expect(durable.run.approvals).toEqual([
+				{
+					continuation_id: "complete-submit-approval",
+					artifact_id: "submit-approval-2.png",
+					approved_at_epoch_ms: 1_000,
+					dispatch_started_at_epoch_ms: 1_000,
+				},
+			]);
+		}
 	});
 
 	test("auth_context_ref keeps one shared run and dispatches the first business step once after proof", async () => {

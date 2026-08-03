@@ -521,6 +521,111 @@
       ]
     },
     {
+      "asset_path": "assets/8399adac343c38ef70738370781330137e1405320091fcf374210ff6b51f9174.js",
+      "record": {
+        "action_id": "fasttrack-submit",
+        "asset_id": "8399adac343c38ef70738370781330137e1405320091fcf374210ff6b51f9174",
+        "expected_digest": "8399adac343c38ef70738370781330137e1405320091fcf374210ff6b51f9174",
+        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "week_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "week_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "controlText": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "controlNgClick": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 128
+              }
+            },
+            "beforeUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "beforeTitle": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 512
+              }
+            },
+            "afterUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "afterTitle": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 512
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "url-starts-with",
+          "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+        },
+        "source_provenance": "authored:fasttrack-submit",
+        "promotion_receipt": null
+      }
+    },
+    {
       "asset_path": "assets/e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61.js",
       "record": {
         "action_id": "fasttrack-verify-filled-week",
@@ -992,6 +1097,116 @@
           "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30"
         }
       ]
+    },
+    {
+      "asset_path": "assets/892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916.js",
+      "record": {
+        "action_id": "fasttrack-verify-submitted",
+        "asset_id": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
+        "expected_digest": "892fcae3dbd68649628a9ce3e644d599557d3c57c4b0fbce0427d59ad7c09916",
+        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
+        "effect_class": "read",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read"
+        ],
+        "containment": "read-only-observation",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "week_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "week_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "proof_schema": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "FastTrack360SubmittedProofV1"
+                ]
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "submitted": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "submitted_state": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "submitted"
+                ]
+              }
+            },
+            "submitted_state_source": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 128
+              }
+            },
+            "tab_text": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "row_summary": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 512
+              }
+            },
+            "proof_observed_at": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "source_provenance": "authored:fasttrack-verify-submitted",
+        "promotion_receipt": null
+      }
     }
   ]
 }
