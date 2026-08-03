@@ -311,16 +311,20 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 		},
 		async removeDirectoryRecursive(path) {
 			await real.removeDirectoryRecursive(live(path));
-			const prefix = `${logical(path)}/`;
+			const logicalPath = logical(path);
+			const prefix = `${logicalPath}${sep}`;
+			const under = (key: string) => key === logicalPath || key.startsWith(prefix);
 			for (const key of [...durableFiles.keys(), ...volatileFiles.keys()]) {
-				if (key === logical(path) || key.startsWith(prefix)) {
+				if (under(key)) {
 					durableFiles.delete(key);
 					volatileFiles.delete(key);
 				}
 			}
+			// durableDirs must also drop, or crash() re-materializes the removed tree
+			// as empty dirs and a "staging dir is gone after crash" assertion falsely passes.
+			for (const key of [...durableDirs.keys()]) if (under(key)) durableDirs.delete(key);
 			pendingRenames = pendingRenames.filter(
-				(pending) =>
-					!(pending.from === logical(path) || pending.from.startsWith(prefix) || pending.to === logical(path) || pending.to.startsWith(prefix)),
+				(pending) => !(under(pending.from) || under(pending.to)),
 			);
 		},
 		async syncDirectory(path) {

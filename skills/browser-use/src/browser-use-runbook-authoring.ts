@@ -350,8 +350,11 @@ async function validateActionClosure(input: {
 		if (!input.runbook.allowed_origins.includes(entry.record.allowed_origin)) return { ok: false, code: "runbook_action_origin_mismatch", message: "a referenced Reviewed Action origin is outside the Runbook origins." };
 		let assetBytes: string;
 		try {
+			// Resolve both sides so a symlink component in actionsRoot does not make
+			// this containment check disagree with sourceActionFiles.
+			const actionsRootReal = await realpath(input.actionsRoot);
 			const assetPath = await realpath(join(input.actionsRoot, ...entry.asset_path.split("/")));
-			if (relative(input.actionsRoot, assetPath).startsWith("..")) throw new Error("outside action root");
+			if (assetPath !== actionsRootReal && !assetPath.startsWith(`${actionsRootReal}${sep}`)) throw new Error("outside action root");
 			assetBytes = await readFile(assetPath, "utf8");
 		} catch { return { ok: false, code: "runbook_action_asset_unreadable", message: "a referenced Reviewed Action asset is absent or unreadable." }; }
 		if (actionAssetDigest(assetBytes) !== ref.expected_digest) return { ok: false, code: "runbook_action_digest_stale", message: "a referenced Reviewed Action digest does not match its source bytes." };
@@ -565,23 +568,40 @@ async function catalogLockIsStale(lockPath: string): Promise<boolean> {
 	}
 }
 
+/** Create the lock with owner identity already inside it (no empty-file window). */
+async function createOwnedLock(lockPath: string): Promise<Awaited<ReturnType<typeof open>> | undefined> {
+	let handle: Awaited<ReturnType<typeof open>>;
+	try {
+		handle = await open(lockPath, "wx", 0o600);
+	} catch {
+		return undefined;
+	}
+	try {
+		await handle.write(JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }));
+		return handle;
+	} catch {
+		await handle.close();
+		await rm(lockPath, { force: true }).catch(() => undefined);
+		return undefined;
+	}
+}
+
 async function withCatalogLock<T>(runbooksRoot: string, body: () => Promise<T>): Promise<T | undefined> {
 	const lockPath = join(runbooksRoot, LOCK_FILE);
-	const lockBody = JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() });
-	let lock: Awaited<ReturnType<typeof open>>;
-	try {
-		lock = await open(lockPath, "wx", 0o600);
-	} catch {
+	let lock = await createOwnedLock(lockPath);
+	if (lock === undefined) {
 		// A crashed holder leaves the lock behind and would deadlock every future
-		// mutation; reclaim it once when its pid is dead or it has gone stale.
-		if (await catalogLockIsStale(lockPath)) {
-			await rm(lockPath, { force: true });
-			try { lock = await open(lockPath, "wx", 0o600); } catch { return undefined; }
-		} else {
-			return undefined;
-		}
+		// mutation. Steal a stale lock atomically: rename it aside to a per-pid temp
+		// (only one racer's rename of a given inode wins), then recreate. If the
+		// rename fails, another process already reclaimed it — do not delete a live
+		// lock out from under it.
+		if (!(await catalogLockIsStale(lockPath))) return undefined;
+		const stolen = `${lockPath}.stale-${process.pid}`;
+		try { await rename(lockPath, stolen); } catch { return undefined; }
+		await rm(stolen, { force: true }).catch(() => undefined);
+		lock = await createOwnedLock(lockPath);
+		if (lock === undefined) return undefined;
 	}
-	try { await lock.write(lockBody); } catch {}
 	try { return await body(); } finally { await lock.close(); await rm(lockPath, { force: true }); }
 }
 

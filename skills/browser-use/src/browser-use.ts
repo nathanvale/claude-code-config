@@ -4833,11 +4833,6 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 	if (!generationResolution.ok && generationResolution.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: generationResolution.code, message: generationResolution.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (run !== undefined && run.run_execution_binding === undefined && selectedGeneration !== undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the retained run has no immutable generation binding and cannot acquire current authority during resume.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	// A binding needs a real runbook_digest to detect resume drift. If the selected
-	// generation manifest holds no record for this plan, generation and plan
-	// disagree (already inconsistent); fail closed rather than persist an empty,
-	// unverifiable digest.
-	const boundRunbookDigest = selectedGeneration?.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest;
-	if (selectedGeneration !== undefined && boundRunbookDigest === undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the selected generation has no record for this Runbook; the generation and plan disagree.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (run?.run_execution_binding?.normalized_input_digest !== undefined && run.run_execution_binding.normalized_input_digest !== normalizedInputDigest(runbookInputs)) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the resumed input does not match the immutable run execution binding.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 
 	const prepared = await prepareRunbookExecution(
@@ -4880,6 +4875,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		);
 	}
 	const plan = prepared.plan;
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	// generation manifest holds no record for this plan, generation and plan
+	// disagree (already inconsistent); fail closed rather than persist an empty,
+	// unverifiable digest. (Must sit after `plan` is declared.)
+	const boundRunbookDigest = selectedGeneration?.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest;
+	if (selectedGeneration !== undefined && boundRunbookDigest === undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the selected generation has no record for this Runbook; the generation and plan disagree.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (
 		run?.runbook_progress !== undefined &&
 		(run.runbook_progress.service_id !== plan.service_id ||
