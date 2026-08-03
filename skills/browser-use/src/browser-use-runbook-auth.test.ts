@@ -51,7 +51,11 @@ function form(passwordFirst = false): BrowserUseAccessibilitySnapshot {
 function welcome(): BrowserUseAccessibilitySnapshot {
 	return {
 		target_id: "target-fixture",
-		nodes: [{ node_id: "workspace", role: "heading", accessible_name: "Candidate workspace", ignored: false, properties: {} }],
+		nodes: [
+			{ node_id: "profile", role: "heading", accessible_name: "Profile", ignored: false, properties: {} },
+			{ node_id: "documents", role: "heading", accessible_name: "Documents", ignored: false, properties: {} },
+			{ node_id: "edit-profile", role: "button", accessible_name: "Edit profile", ignored: false, backend_node_id: 21, properties: {} },
+		],
 	};
 }
 
@@ -63,6 +67,7 @@ async function fixture(
 	passwordFirst = false,
 	loginFormPersists = false,
 	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver,
+	preExistingSession = false,
 ) {
 	const xdg = makeTempXdgEnv();
 	disposables.push(xdg);
@@ -130,8 +135,9 @@ async function fixture(
 		delivered.push(field);
 		return { ok: true, shape: { field, byte_length: 8 } };
 	};
-	let screen = form(passwordFirst);
+	let screen = preExistingSession ? welcome() : form(passwordFirst);
 	const navigations: Array<{ target_id: string; url: string }> = [];
+	const proofTransitions: string[] = [];
 	const result = await runBrowserUseRunbookAuth(
 		{
 			store,
@@ -158,9 +164,12 @@ async function fixture(
 				},
 				tokenRetrieval,
 				deliver,
-				proveAuthenticatedState: async ({ target_id }) => proof
-					? { proven: true, proof: { target_id, page_id: "page-authenticated", frame_id: "frame-authenticated", origin: proofOrigin, subject_reference: "subject-ref", account_reference: "account-ref", tenant_reference: "tenant-ref", identity_basis_digest: "basis-digest" } }
-					: { proven: false, cause: "human-identity-attestation-required" },
+				proveAuthenticatedState: async ({ target_id, transition }) => {
+					proofTransitions.push(transition);
+					return proof
+						? { proven: true, proof: { target_id, page_id: "page-authenticated", frame_id: "frame-authenticated", origin: proofOrigin, subject_reference: "subject-ref", account_reference: "account-ref", tenant_reference: "tenant-ref", identity_basis_digest: "basis-digest" } }
+						: { proven: false, cause: "human-identity-attestation-required" };
+				},
 			},
 			navigateToDeclaredTarget: async (input) => {
 				navigations.push(input);
@@ -180,7 +189,7 @@ async function fixture(
 			target_id: "target-fixture",
 		},
 	);
-	return { result, delivered, navigations };
+	return { result, delivered, navigations, proofTransitions };
 }
 
 describe("runbook auth route", () => {
@@ -222,6 +231,23 @@ describe("runbook auth route", () => {
 		// the delivered order proves the full username->password flow ran once.
 		expect(result.run.state).toBe("ready");
 		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("reuses a substantive pre-existing session without credential delivery", async () => {
+		const { result, delivered, proofTransitions } = await fixture(
+			true,
+			"https://fixture.test",
+			"https://fixture.test/login",
+			"https://fixture.test/home",
+			false,
+			false,
+			undefined,
+			true,
+		);
+
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		expect(delivered).toEqual([]);
+		expect(proofTransitions).toEqual(["pre-existing-session"]);
 	});
 
 	test("combined form authenticates when accessibility order exposes password before username", async () => {

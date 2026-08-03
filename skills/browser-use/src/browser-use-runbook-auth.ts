@@ -537,6 +537,14 @@ export async function runBrowserUseRunbookAuth(
 				run_id: run.run_id,
 				target_id: input.target_id,
 				expected_url: input.expected_url,
+				...(input.observed_url === undefined
+					? {}
+					: {
+							observed_url:
+								input.observed_url === "about:blank"
+									? input.expected_url
+									: input.observed_url,
+						}),
 				allowed_origins: input.allowed_origins,
 				binding,
 			},

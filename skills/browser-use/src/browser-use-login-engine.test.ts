@@ -125,7 +125,10 @@ function signedInSnapshot(): BrowserUseAccessibilitySnapshot {
 function authenticatedPortalSnapshot(): BrowserUseAccessibilitySnapshot {
 	return screen([
 		node("navigation", "navigation", "Primary", undefined, ""),
-		node("workspace", "heading", "Candidate workspace", undefined, ""),
+		node("profile", "heading", "Profile", undefined, ""),
+		node("documents", "heading", "Documents", undefined, ""),
+		node("edit-profile", "button", "Edit profile", 81, ""),
+		node("activity", "link", "Recent activity", 82, ""),
 	]);
 }
 
@@ -559,6 +562,90 @@ describe("generic browser-use login engine", () => {
 		expect(delivered).toEqual(["username", "password"]);
 		expect(activated).toEqual([43]);
 		expect(transitions).toEqual(["post-submit"]);
+	});
+
+	test("recognizes a substantive markerless portal on the declared target as a pre-existing session", async () => {
+		const portal = authenticatedPortalSnapshot();
+		const transitions: string[] = [];
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([portal]),
+				proveTarget: async () => {
+					throw new Error("an authenticated portal has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					transitions.push(input.transition);
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-pre-existing-portal", portal.target_id),
+				observed_url: `${fixtureOrigin}/home`,
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			authenticated_state: "pre-existing-session",
+		});
+		expect(transitions).toEqual(["pre-existing-session"]);
+	});
+
+	test("does not recognize a login page with credential fields as a pre-existing session", async () => {
+		const login = loginFormSnapshot();
+		let proofCalls = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([login]),
+				proveTarget: targetProof(() => login),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofCalls += 1;
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-login-page-near-miss", login.target_id),
+				observed_url: `${fixtureOrigin}/login`,
+				max_iterations: 1,
+			},
+		);
+
+		expect(result.ok).toBe(false);
+		expect(proofCalls).toBe(0);
+	});
+
+	test("does not recognize an empty page off the declared target", async () => {
+		const empty = screen([]);
+		let proofCalls = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([empty]),
+				proveTarget: async () => {
+					throw new Error("an empty page has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofCalls += 1;
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-off-target-empty", empty.target_id),
+				observed_url: "https://off-target.invalid/",
+				max_iterations: 1,
+			},
+		);
+
+		expect(result.ok).toBe(false);
+		expect(proofCalls).toBe(0);
 	});
 
 	test("keeps a post-submit login form blocked without attempting authenticated-state proof", async () => {

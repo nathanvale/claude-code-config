@@ -131,6 +131,8 @@ export type BrowserUseLoginEngineInput = {
 	run_id: string;
 	target_id: string;
 	expected_url: string;
+	/** Fresh target URL observed before the engine starts. */
+	observed_url?: string;
 	allowed_origins: readonly string[];
 	binding: BrowserUseItemBinding;
 	/** Bounded no-progress guard. @defaultValue 16 */
@@ -360,6 +362,7 @@ export function classifyBrowserUseLoginStep(
 function authenticatedStateCandidate(
 	snapshot: BrowserUseAccessibilitySnapshot,
 	submitted: boolean,
+	input: BrowserUseLoginEngineInput,
 ): boolean {
 	const hasCredentialField = snapshot.nodes.some(
 		(node) =>
@@ -368,21 +371,59 @@ function authenticatedStateCandidate(
 				node.role.toLowerCase() === "searchbox") &&
 			credentialFieldOf(node.accessible_name) !== undefined,
 	);
+	const hasAdvanceAffordance = snapshot.nodes.some(
+		(node) =>
+			!node.ignored &&
+			["button", "link"].includes(node.role.toLowerCase()) &&
+			ADVANCE_NAME.test(node.accessible_name.trim()) &&
+			node.properties.disabled !== true,
+	);
 	if (
 		hasCredentialField ||
-		advanceControls(snapshot).length > 0 ||
+		hasAdvanceAffordance ||
 		challengedBy(snapshot) !== undefined
 	) {
 		return false;
 	}
 	if (submitted) return true;
-	return snapshot.nodes.some(
+	const hasSignedInMarker = snapshot.nodes.some(
 		(node) =>
 			!node.ignored &&
 			["heading", "status", "link", "button"].includes(
 				node.role.toLowerCase(),
 			) &&
 			SIGNED_IN_NAME.test(node.accessible_name),
+	);
+	if (hasSignedInMarker) return true;
+
+	const observedOrigin =
+		input.observed_url === undefined
+			? undefined
+			: normalizedOrigin(input.observed_url);
+	const allowedOrigins = new Set(
+		input.allowed_origins.flatMap((origin) => {
+			const normalized = normalizedOrigin(origin);
+			return normalized === undefined ? [] : [normalized];
+		}),
+	);
+	if (
+		snapshot.target_id !== input.target_id ||
+		observedOrigin === undefined ||
+		!allowedOrigins.has(observedOrigin)
+	) {
+		return false;
+	}
+
+	const appStructure = snapshot.nodes.filter(
+		(node) =>
+			!node.ignored &&
+			node.accessible_name.trim().length > 0 &&
+			["heading", "link", "button"].includes(node.role.toLowerCase()),
+	);
+	return (
+		appStructure.length >= 2 &&
+		appStructure.some((node) => node.role.toLowerCase() === "heading") &&
+		appStructure.some((node) => node.role.toLowerCase() !== "heading")
 	);
 }
 
@@ -517,7 +558,7 @@ export async function runBrowserUseLoginEngine(
 			activationFingerprint === undefined
 				? undefined
 				: fingerprint(observed.snapshot);
-		if (authenticatedStateCandidate(observed.snapshot, submitted)) {
+		if (authenticatedStateCandidate(observed.snapshot, submitted, input)) {
 			if (awaitingSubmitOutcome) {
 				const journaled = await deps.journal?.({
 					type: "submit-outcome-observed",
