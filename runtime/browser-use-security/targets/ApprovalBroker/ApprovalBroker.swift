@@ -195,13 +195,16 @@ struct ApprovalBroker {
         return unsigned
     }
 
-    /// The pinned public verifier identity: the raw public key bytes verifiers
-    /// trust. Rotation changes this identity and revokes every outstanding
-    /// authorization (R20).
+    /// The pinned public verifier identity: the SEC1 uncompressed (x9.63) public
+    /// key bytes verifiers trust — a 65-byte `0x04 || X || Y` point. The
+    /// TypeScript verifier requires this encoding (it reads the `0x04` prefix and
+    /// slices X/Y at offsets 1..33 and 33..65); CryptoKit's `rawRepresentation`
+    /// omits the prefix, so emit `x963Representation`. Rotation changes this
+    /// identity and revokes every outstanding authorization (R20).
     static func pinnedPublicVerifier(
         for signingKey: SecureEnclave.P256.Signing.PrivateKey
     ) -> Data {
-        signingKey.publicKey.rawRepresentation
+        signingKey.publicKey.x963Representation
     }
 }
 

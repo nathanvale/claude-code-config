@@ -250,7 +250,34 @@
           "selector": "tr[ng-repeat]"
         },
         "source_provenance": "authored:fasttrack-fill-week",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "fasttrack-fill-week",
+          "approval_reference": "fasttrack-fill-week-20260803",
+          "approved_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
+          "approved_effect": "mutation",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "framework-runtime",
+            "same-origin-navigation"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "a94bdf2844b989e2d50d4939689791dd825a649b7b7cafe783b823d3c0adbea9",
+          "issued_at_epoch_ms": 1785756223353,
+          "postcondition_digest": "c0ac1baf40564ec3a62dc5f91dd9dd499c68e6679ab3c632a2f45475d6bf534b",
+          "presence_backed": true,
+          "receipt_id": "receipt-b6dcb964-7223-4be9-a5dd-3b06d4338cb7",
+          "result_schema_digest": "7418ca4e3b7cd4902a40bb40c90ad84eea6e179d74c9801949296584e6952ec4",
+          "schema_version": "1",
+          "signature": "MEUCICCFfmSvLym/51CGvu0+OUSgoofIiQJjRQKF8nkTmGqkAiEAtkSLM6zb3RpTdaI3qWTG6uuY9tw30TcinFBLRwdwcb4=",
+          "source_commit": "9fcf74621111cf70991b8dc64480a6cec1284573",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       },
       "promotion_history": [
         {
@@ -371,7 +398,33 @@
           "selector": ".nav-tabs, table"
         },
         "source_provenance": "authored:fasttrack-save-draft",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "fasttrack-save-draft",
+          "approval_reference": "fasttrack-save-draft-20260803",
+          "approved_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+          "approved_effect": "mutation",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "framework-runtime"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "72cd08765907e55c4326271fadba04dd18287930fbb4ac07d11f6742fc3f191a",
+          "issued_at_epoch_ms": 1785756244833,
+          "postcondition_digest": "675fffdaf03220f36f7e0e5037688cc2df99505d8d352c207ba5b0376d7f7ee8",
+          "presence_backed": true,
+          "receipt_id": "receipt-101b6a9a-e5d0-4225-a918-4f800c9b635c",
+          "result_schema_digest": "20373ab1709c388228815d7e43c219d07762ce08c72f070c9af41fd4230f7ab6",
+          "schema_version": "1",
+          "signature": "MEUCIH9Egu2G2SGIjNz9u9C/58hEmYbbzmC3dLY2Nl8i4MrEAiEA+ceA62Ll9DMbqmgxjkrWjNzZ5xKiS7ezPF2SodHlZaY=",
+          "source_commit": "9fcf74621111cf70991b8dc64480a6cec1284573",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       },
       "promotion_history": [
         {
@@ -583,7 +636,34 @@
           "selector": "tr[ng-repeat]"
         },
         "source_provenance": "authored:fasttrack-verify-filled-week",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "fasttrack-verify-filled-week",
+          "approval_reference": "fasttrack-verify-filled-week-20260803",
+          "approved_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
+          "approved_effect": "mutation",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "framework-runtime",
+            "same-origin-navigation"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "6c1fe19797720170d52febcfd5947dd673a102a6b2bd49369046f018d3d78474",
+          "issued_at_epoch_ms": 1785756235711,
+          "postcondition_digest": "c0ac1baf40564ec3a62dc5f91dd9dd499c68e6679ab3c632a2f45475d6bf534b",
+          "presence_backed": true,
+          "receipt_id": "receipt-e720a0a6-087f-49d7-9caf-31dc9f50c97b",
+          "result_schema_digest": "9530556ba67fc0c25f9fd16c6e72e8ba73d251dc4f54ed525a792024460be785",
+          "schema_version": "1",
+          "signature": "MEUCIArlsAL7d7j/cCa1ZZeo8I4u39myntM7cSMU3BOKQBcDAiEA0PjqZGPKazI3c91xI/KdmsXIQ3qs/WiXzz7NS/O0vUU=",
+          "source_commit": "9fcf74621111cf70991b8dc64480a6cec1284573",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       },
       "promotion_history": [
         {
@@ -792,7 +872,32 @@
           "selector": "table tbody tr"
         },
         "source_provenance": "authored:fasttrack-verify-saved-draft",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "fasttrack-verify-saved-draft",
+          "approval_reference": "fasttrack-verify-saved-draft-20260803",
+          "approved_digest": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
+          "approved_effect": "mutation",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "dd39736270aeb49e0b46423c94fab60a5f4d0a82a211293f3d82980b55de6d8e",
+          "issued_at_epoch_ms": 1785756248011,
+          "postcondition_digest": "58c4a80fd6eeadefd72c84522896cc863bac34e397f7e3ec907f8de76c2edbec",
+          "presence_backed": true,
+          "receipt_id": "receipt-61cac3fc-587f-4cbf-8055-7f8f0d42554a",
+          "result_schema_digest": "dde82a92025daa5a928239b07107757fca92e16438f53efc5140d3f811244011",
+          "schema_version": "1",
+          "signature": "MEUCIFXvZgu11KkTxtyjnFEFrzR7es3teed5B/69idpX8GNBAiEA7eoJ16QSqtCGz38saZH1KYIbjwwp0Frn31eYDnF4gF4=",
+          "source_commit": "9fcf74621111cf70991b8dc64480a6cec1284573",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       },
       "promotion_history": [
         {
