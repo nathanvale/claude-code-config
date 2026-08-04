@@ -419,6 +419,7 @@ describe("competing agent and preparation repairs (R21, AE11)", () => {
 		for (const cause of [
 			"missing-token",
 			"invalid-vault-scope",
+			"binding-approval-required",
 			"ambiguous-binding-selection",
 			"revoked-binding",
 		] as const) {

@@ -1103,7 +1103,7 @@ describe("runbook family — live (U4 wiring)", () => {
 		expect(resumed.calls).toEqual([]);
 	});
 
-	test("auth_context_ref keeps one shared run and dispatches the first business step once after proof", async () => {
+	test("missing binding approval keeps one shared run and blocks before proof or business dispatch", async () => {
 		const cdp = startAuthCdpFixture({ initial: "login" });
 		try {
 			const store = await makeStore();
@@ -1158,22 +1158,25 @@ describe("runbook family — live (U4 wiring)", () => {
 			const run = data.run as Record<string, unknown>;
 			expect(run.run_id).toBe(runId);
 			expect(run.handoff_evidence_id).toBeDefined();
-			expect(run.state).toBe("confirmed");
-			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
-			expect(credentialDispatches).toEqual({ fetches: 2, redeems: 2 });
-			expect(proofDispatches).toBe(1);
+			expect(run.state).toBe("awaiting-approval");
+			expect(parseJson(result.stdout).continuation).toMatchObject({
+				next_action_id: "request-binding-selection-grant",
+			});
+			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(0);
+			expect(credentialDispatches).toEqual({ fetches: 0, redeems: 0 });
+			expect(proofDispatches).toBe(0);
 			const durable = await loadSharedRun(store.deps, runId);
 			expect(durable.ok).toBe(true);
 			if (durable.ok) {
 				expect(durable.run.run_id).toBe(runId);
-				expect(durable.run.state).toBe("confirmed");
+				expect(durable.run.state).toBe("awaiting-approval");
 			}
 		} finally {
 			cdp.transport.close();
 		}
 	});
 
-	test("neutral auth target bootstraps once before proof, then retains the business open", async () => {
+	test("neutral auth target bootstraps once, then binding approval blocks before proof or business open", async () => {
 		const cdp = startAuthCdpFixture({ initial: "neutral" });
 		try {
 			const store = await makeStore();
@@ -1234,16 +1237,20 @@ describe("runbook family — live (U4 wiring)", () => {
 			expect(cdp.navigations).toEqual([loginUrl]);
 			expect(cdp.attachedTargetIds).not.toContain("t1");
 			expect(cdp.attachedTargetIds).toContain(cdp.cdpTargetId);
-			expect(calls.filter((call) => call.includes("open"))).toHaveLength(1);
-			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			expect(calls.filter((call) => call.includes("open"))).toHaveLength(0);
+			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(0);
 			const run = (parseJson(result.stdout).data as { run: { state: string } }).run;
-			expect(run.state).toBe("confirmed");
+			expect(run.state).toBe("awaiting-approval");
+			expect(parseJson(result.stdout).continuation).toMatchObject({
+				next_action_id: "request-binding-selection-grant",
+			});
+			expect(authenticatedStateProven).toBe(false);
 		} finally {
 			cdp.transport.close();
 		}
 	});
 
-	test("ambiguous signed-in words yield one attestation continuation and zero business dispatch", async () => {
+	test("binding approval precedes ambiguous signed-in proof and business dispatch", async () => {
 		const cdp = startAuthCdpFixture({ initial: "ambiguous" });
 		try {
 			const store = await makeStore();
@@ -1257,10 +1264,14 @@ describe("runbook family — live (U4 wiring)", () => {
 			]);
 			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
 			runtime.runbookAuthTransport = () => cdp.transport;
-			runtime.runbookAuthenticatedStateProof = async () => ({
-				proven: false,
-				cause: "human-identity-attestation-required",
-			});
+			let proofDispatches = 0;
+			runtime.runbookAuthenticatedStateProof = async () => {
+				proofDispatches += 1;
+				return {
+					proven: false,
+					cause: "human-identity-attestation-required",
+				};
+			};
 
 			const result = await runForTest(
 				[
@@ -1277,12 +1288,13 @@ describe("runbook family — live (U4 wiring)", () => {
 			expect(result.exitCode).toBe(0);
 			const parsed = parseJson(result.stdout);
 			expect(parsed.continuation).toMatchObject({
-				next_action_id: "complete-human-identity-attestation",
+				next_action_id: "request-binding-selection-grant",
 			});
 			const run = (parsed.data as Record<string, unknown>).run as Record<string, unknown>;
 			expect(run.run_id).toBe(runId);
-			expect(run.state).toBe("awaiting-user-presence");
+			expect(run.state).toBe("awaiting-approval");
 			expect(calls.some((call) => call.includes("snapshot"))).toBe(false);
+			expect(proofDispatches).toBe(0);
 		} finally {
 			cdp.transport.close();
 		}

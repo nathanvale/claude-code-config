@@ -142,6 +142,7 @@ const BLOCK_CAUSES_BY_PHASE: Readonly<
 	"secret-free-preparation": [
 		"missing-token",
 		"invalid-vault-scope",
+		"binding-approval-required",
 		"ambiguous-binding-selection",
 		"revoked-binding",
 		"unsupported-method",
@@ -182,6 +183,7 @@ const RESOLUTION_PHASE_BY_CAUSE: Readonly<
 > = {
 	"missing-token": "secret-free-preparation",
 	"invalid-vault-scope": "secret-free-preparation",
+	"binding-approval-required": "secret-free-preparation",
 	"ambiguous-binding-selection": "secret-free-preparation",
 	"revoked-binding": "secret-free-preparation",
 	"lease-unavailable": "lease-request",

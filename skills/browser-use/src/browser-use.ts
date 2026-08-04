@@ -193,7 +193,10 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
-import type { BrowserUseAuthContext } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
 import {
 	type BrowserUseCdpObserverRequest,
 	createBrowserUseCdpObserver,
@@ -4313,6 +4316,13 @@ async function navigateRunbookAuthTarget(
 
 type RunbookAuthDeliveryBuilderDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	resolveApprovedBinding?(input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}): Promise<BrowserUseItemBinding | null>;
 	createTargetTransport(
 		handoff: AgentBrowserVerifiedHandoff,
 	): CloseableTargetTransport;
@@ -4366,6 +4376,44 @@ function fieldMethod(
 	field: BrowserUseOpCredentialField,
 ): "password" | "otp" {
 	return field === "otp-current" ? "otp" : "password";
+}
+
+function runbookLoginPathOf(expectedTargetUrl: string): string | null {
+	try {
+		return new URL(expectedTargetUrl).pathname;
+	} catch {
+		return null;
+	}
+}
+
+async function prepareApprovedRunbookBinding(input: {
+	provider: BrowserUseAuthProvider;
+	deps: RunbookAuthDeliveryBuilderDeps;
+	request: Parameters<BrowserUseRunbookAuthDelivery>[0];
+	bindingRef: string;
+	field: Parameters<BrowserUseRunbookAuthDelivery>[0]["confidentialFields"][number];
+	loginPath: string | null;
+}) {
+	const approvedBinding =
+		(await input.deps.resolveApprovedBinding?.({
+			binding_ref: input.bindingRef,
+			service_id: input.request.serviceId,
+			auth_context: "interactive-login",
+			environment: input.request.handoff.environment.name,
+			profile: input.request.handoff.environment.profile,
+		})) ?? null;
+	return await input.provider.prepareSecretFree({
+		service_id: input.request.serviceId,
+		auth_context: "interactive-login",
+		target_origins: input.request.allowedOrigins,
+		login_path: input.loginPath,
+		method: fieldMethod(input.field.credentialField),
+		binding: approvedBinding,
+		candidate_hint: {
+			hint_item_id: input.bindingRef,
+			legacy_vault_name: null,
+		},
+	});
 }
 
 function environmentDeliveryHook(input: {
@@ -4591,6 +4639,7 @@ function buildRunbookAuthDelivery(
 				]),
 			);
 			const preparedBindings = [];
+			const loginPath = runbookLoginPathOf(input.expectedTargetUrl);
 			for (const slug of input.pendingItemBindings) {
 				const field = fieldBySlug.get(slug);
 				if (field === undefined) {
@@ -4600,24 +4649,13 @@ function buildRunbookAuthDelivery(
 							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: the runbook binding has no confidential field plan.",
 					};
 				}
-				const loginPath = (() => {
-					try {
-						return new URL(input.expectedTargetUrl).pathname;
-					} catch {
-						return null;
-					}
-				})();
-				const prepared = await provider.prepareSecretFree({
-					service_id: input.serviceId,
-					auth_context: "interactive-login",
-					target_origins: input.allowedOrigins,
-					login_path: loginPath,
-					method: fieldMethod(field.credentialField),
-					binding: null,
-					candidate_hint: {
-						hint_item_id: slug,
-						legacy_vault_name: null,
-					},
+				const prepared = await prepareApprovedRunbookBinding({
+					provider,
+					deps,
+					request: input,
+					bindingRef: slug,
+					field,
+					loginPath,
 				});
 				if (!prepared.ok) {
 					return { ok: false, message: preparationRefusalMessage(prepared) };
@@ -7283,6 +7321,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 			return "repair-vault-grant";
 		case "revoked-binding":
 			return "repair-item-binding";
+		case "binding-approval-required":
 		case "ambiguous-binding-selection":
 			return "request-binding-selection-grant";
 		default:

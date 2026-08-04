@@ -123,7 +123,7 @@ A validated immutable XDG projection of the complete Private Runbook Catalog and
 _Avoid_: Corpus Generation, Active Runbook Generation, mutable XDG override, XDG runbook source, live repo read, build-dist activation
 
 **Storage key**:
-Durable Browser Knowledge is keyed by `service_id`/`flow_id`; a Browser Runbook and its Item Bindings share that key. Scope is carried by each binding's exact `allowed_origins`, not by a hostname. (There is no hostname-derived storage key.)
+Browser Runbooks are keyed by `service_id`/`flow_id`. The private Binding Catalog resolves a Binding Reference by service, auth context, environment, and profile; the selected receipt carries exact origin and method authority. There is no hostname-derived storage key.
 _Avoid_: Browser Domain Key, canonical hostname key, display name key, tenant key, account key
 
 **Flow Name**:
@@ -135,19 +135,39 @@ The legacy-era name for what is now the Item Binding: a safe per-domain referenc
 _Avoid_: password note, secret mapping, auth tape, login recording, live binding authority
 
 **Item Binding**:
-The approved live link between one service-and-auth-context pair and exactly one Login item in the token-scoped vault, created by one deterministic discovery match or a signed one-use human selection. It carries the approved origins and method policy for that service only; two services sharing one Login item hold two independent bindings. A moved, revoked, or out-of-scope binding returns typed repair and never rescans for a substitute. Successor to the Auth Pointer.
-_Avoid_: auth pointer (new work), credential mapping, vault allowlist, second permission system, shared binding, auto-rebind
+The Browser Use relationship between one profile-scoped Binding Reference and exactly one Login item. Durable authority comes from a Binding Approval Receipt; runtime use requires a Verified Item Binding, never a request label or discovery match alone. Successor to the Auth Pointer.
+_Avoid_: auth pointer (new work), credential mapping, vault allowlist, unsigned binding cache, shared binding, auto-rebind
+
+**Binding Reference**:
+A portable Runbook role for one credential relationship, resolved within the Runbook's service and auth context plus the selected environment and profile. It never contains a vault item id or encodes a credential field in its name.
+_Avoid_: item binding slug, vault item id, binding id, credential-field suffix
+
+**Binding Approval Receipt**:
+An immutable ApprovalBroker-signed snapshot of one human-approved Binding Reference revision: service, auth context, environment, profile, exact vault item, exact origins, and exact credential methods. A replacement or expansion creates a complete new revision; revocation leaves no active revision.
+_Avoid_: selection hint, one-match approval, mutable binding record, standing auto-selection
+
+**Vault Item Evidence**:
+Current redacted facts observed from the token-scoped vault for one item, including liveness and exact origin or method evidence. It can invalidate or constrain a receipt but never supplies service, auth-context, environment, profile, or human-selection authority.
+_Avoid_: item authority, binding source, trusted discovery match, request context
+
+**Verified Item Binding**:
+The ephemeral runtime projection produced only when the active Binding Approval Receipt verifies and exact live Vault Item Evidence still satisfies it. Replacement, revocation, signature failure, item drift, or scope drift stops further confidential delivery immediately.
+_Avoid_: cached item binding, discovered binding, selected candidate, durable binding record
+
+**Binding Catalog**:
+The private local owner of immutable Binding Approval Receipt revisions and the active revision for each profile-scoped Binding Reference. Runbooks remain portable; run state pins the resolved revision, while use-time verification still honors replacement and revocation.
+_Avoid_: Runbook Catalog, source-controlled vault map, per-run receipt copy, binding event fold
 
 **Import Candidate**:
-A legacy-derived proposal handed to the candidate-import Interface during platform migration. It re-runs the same match/selection policy as fresh discovery: live vault evidence binds, the candidate only proposes. Its item and vault hints rank selection lists and appear as redacted provenance; legacy-only origins require explicit re-approval; a secret-positive candidate is refused per candidate, never salvaged in place.
+A legacy-derived proposal handed to the candidate-import Interface during platform migration. Live vault evidence may rank eligible items, but only a signed Binding Approval Receipt binds one. Item and vault hints remain redacted ranking provenance; legacy-only origins require explicit approval; a secret-positive candidate is refused per candidate, never salvaged in place.
 _Avoid_: trusted import, binding transplant, legacy authority, bulk bind, migrated credential
 
 **Browser Runbook**:
-The one active durable path for a known browser flow, keyed by `service_id`/`flow_id`. The current v2 form is declarative: typed inputs and runtime-resolved semantic targets (role + name, resolved to exactly one match against a fresh page snapshot) — no stored CSS selectors, inline JavaScript, or login choreography. It may declare a non-secret auth-context ref, reference separately promoted Reviewed Actions, and reference Item Bindings for non-login confidential fields, but never secret values or 1Password item details. It may retain prior versions for rollback; only one current runbook is active.
+The one active durable path for a known browser flow, keyed by `service_id`/`flow_id`. The current v2 form is declarative: typed inputs and runtime-resolved semantic targets (role + name, resolved to exactly one match against a fresh page snapshot), with no stored CSS selectors, inline JavaScript, or login choreography. It may declare a non-secret auth-context ref, reference separately promoted Reviewed Actions, and name a portable Binding Reference plus an explicit credential field for confidential fills, but never secret values or 1Password item details. It may retain prior versions for rollback; only one current runbook is active.
 _Avoid_: automation script, login runbook, CI fixture, raw trace, stored selectors, inline JavaScript, Recorder JSON pairing
 
 **Browser Authentication Transaction**:
-The per-run authentication path entered when a Browser Runbook declares an auth-context ref. It resolves the approved Item Binding and lets the generic login engine observe and complete the current username, password, multi-step, or OTP shape; Browser Runbooks and Reviewed Actions never own login steps or receive credential values.
+The per-run authentication path entered when a Browser Runbook declares an auth-context ref. It resolves the active Binding Approval Receipt, combines it with live Vault Item Evidence, and lets the generic login engine use the resulting Verified Item Binding for the approved credential fields; Browser Runbooks and Reviewed Actions never own login steps or receive credential values.
 _Avoid_: login runbook, auth action, stored login choreography, portal-specific login script
 
 **Reviewed Action**:
