@@ -7,8 +7,8 @@
  * suite proves the process boundary those tests cannot reach.
  *
  * Run style is "smoke" (high-signal sentinel flows), but the canonical suite
- * name is Command Entrypoint Integration Test. Kept out of the default `test`
- * gate and portability proof for v1 (see the plan's promotion boundary).
+ * name is Command Entrypoint Integration Test. CI runs it as a dedicated gate;
+ * it stays out of the default `test` gate and portability proof.
  *
  * The harness below is a single-file private harness (KTD2): helpers stay local
  * until repeated implementation pressure proves an extraction.
@@ -97,6 +97,7 @@ interface RunnerCommand {
 	label: string;
 	cmd: string[];
 	cwd: string;
+	env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -188,12 +189,14 @@ const runners = {
 		args: readonly string[];
 		label: string;
 		cwd?: string;
+		env?: NodeJS.ProcessEnv;
 	}): RunnerCommand {
 		return {
 			mode: "source",
 			label: input.label,
 			cwd: input.cwd ?? repoRoot,
 			cmd: ["bun", "run", input.sourcePath, ...input.args],
+			...(input.env === undefined ? {} : { env: input.env }),
 		};
 	},
 } as const;
@@ -206,6 +209,7 @@ async function runCommand(
 		label: command.label,
 		argv: command.cmd,
 		cwd: command.cwd,
+		env: command.env,
 		timeoutMs,
 		killSignal: KILL_SIGNAL,
 	});
@@ -417,6 +421,7 @@ function runBrowserUseSource(
 	args: readonly string[],
 	label: string,
 	cwd?: string,
+	env?: NodeJS.ProcessEnv,
 ): Promise<RunResult> {
 	return runCommand(
 		runners.source({
@@ -424,6 +429,7 @@ function runBrowserUseSource(
 			args,
 			label,
 			cwd,
+			env,
 		}),
 	);
 }
@@ -739,13 +745,14 @@ const browserConnectTopLevelUsageLine =
 describe("command entrypoint integration: mechanical discovery", () => {
 	test("derives the exact WorkTree command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
-			["app", "clean", "color", "commands", "focus", "new", "open", "rm", "status", "sync"],
+			["app", "attach", "clean", "color", "commands", "focus", "new", "open", "rm", "status", "sync"],
 		);
 	});
 
 	test("derives the exact agent-worktree command id set from exported contracts", async () => {
 		expect(discoveredAgentWorktreeCommandIds).toEqual(
 			[
+				"attach",
 				"check",
 				"clean",
 				"commands",
@@ -1486,7 +1493,19 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"browser-use source entry launches and discovers work from an unrelated repository",
 		async () => {
-			await withTempRepo("browser-use-discovery", async (repo) => {
+			const xdgRoot = mkdtempSync(join(repoRoot, ".command-entrypoint-xdg-"));
+			const browserUseEnv: NodeJS.ProcessEnv = {
+				...process.env,
+				XDG_CONFIG_HOME: join(xdgRoot, "config"),
+				XDG_DATA_HOME: join(xdgRoot, "data"),
+				XDG_STATE_HOME: join(xdgRoot, "state"),
+				XDG_CACHE_HOME: join(xdgRoot, "cache"),
+				XDG_RUNTIME_DIR: join(xdgRoot, "runtime"),
+			};
+			try {
+				await withTempRepo("browser-use-discovery", async (repo) => {
+					const runBrowserUse = (args: readonly string[], label: string) =>
+						runBrowserUseSource(args, label, repo, browserUseEnv);
 				const expectBrowserUseData = (
 					result: RunResult,
 					contract: string,
@@ -1498,10 +1517,9 @@ describe("command entrypoint integration: help contracts", () => {
 					return data;
 				};
 
-				const launcher = await runBrowserUseSource(
+				const launcher = await runBrowserUse(
 					[],
 					"browser-use source launcher from unrelated repo",
-					repo,
 				);
 				expect(launcher.exitCode, describeRun(launcher)).toBe(0);
 				expect(launcher.stdout, describeRun(launcher)).toContain(
@@ -1509,10 +1527,9 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				expect(launcher.stderr, describeRun(launcher)).toBe("");
 
-				const help = await runBrowserUseSource(
+				const help = await runBrowserUse(
 					["--help"],
 					"browser-use source help from unrelated repo",
-					repo,
 				);
 				expect(help.exitCode, describeRun(help)).toBe(0);
 				expect(help.stderr, describeRun(help)).toBe("");
@@ -1520,10 +1537,9 @@ describe("command entrypoint integration: help contracts", () => {
 					"Start here (for AI agents)",
 				);
 				for (const topic of ["core", "recovery", "auth", "lanes"]) {
-					const guide = await runBrowserUseSource(
+					const guide = await runBrowserUse(
 						["guide", "--topic", topic, "--json", "--quiet"],
 						`browser-use source ${topic} guide from unrelated repo`,
-						repo,
 					);
 					const guideEnvelope = parseEnvelope(guide);
 					expect(guide.exitCode, describeRun(guide)).toBe(0);
@@ -1535,10 +1551,9 @@ describe("command entrypoint integration: help contracts", () => {
 					).toBe(topic);
 				}
 
-				const taskList = await runBrowserUseSource(
+				const taskList = await runBrowserUse(
 					["task", "list", "--json", "--quiet"],
 					"browser-use source task list from unrelated repo",
-					repo,
 				);
 				const taskData = expectBrowserUseData(
 					taskList,
@@ -1546,10 +1561,9 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				expect(taskData.task_intent_count, describeRun(taskList)).toBe(10);
 
-				const laneList = await runBrowserUseSource(
+				const laneList = await runBrowserUse(
 					["lanes", "list", "--json", "--quiet"],
 					"browser-use source lanes list from unrelated repo",
-					repo,
 				);
 				const laneData = expectBrowserUseData(
 					laneList,
@@ -1557,21 +1571,19 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				expect(laneData.lane_count, describeRun(laneList)).toBe(3);
 
-				const runbookList = await runBrowserUseSource(
+				const runbookList = await runBrowserUse(
 					["runbook", "list", "--json", "--quiet"],
 					"browser-use source runbook list from unrelated repo",
-					repo,
 				);
 				const runbookData = expectBrowserUseData(
 					runbookList,
 					"browser-use.runbook-catalog",
 				);
-				expect(runbookData.runbook_count, describeRun(runbookList)).toBe(4);
+				expect(runbookData.runbook_count, describeRun(runbookList)).toBe(6);
 
-				const invalid = await runBrowserUseSource(
+				const invalid = await runBrowserUse(
 					["not-a-family", "--json", "--quiet"],
 					"browser-use source invalid family from unrelated repo",
-					repo,
 				);
 				expect(invalid.exitCode, describeRun(invalid)).toBe(2);
 				expect(invalid.stderr, describeRun(invalid)).toBe("");
@@ -1588,10 +1600,9 @@ describe("command entrypoint integration: help contracts", () => {
 					describeRun(invalid),
 				).toContain("not-a-family");
 
-				const invalidLeaf = await runBrowserUseSource(
+				const invalidLeaf = await runBrowserUse(
 					["task", "not-a-leaf", "--json", "--quiet"],
 					"browser-use source invalid leaf from unrelated repo",
-					repo,
 				);
 				expect(invalidLeaf.exitCode, describeRun(invalidLeaf)).toBe(2);
 				expect(invalidLeaf.stderr, describeRun(invalidLeaf)).toBe("");
@@ -1604,7 +1615,10 @@ describe("command entrypoint integration: help contracts", () => {
 						?.message,
 					describeRun(invalidLeaf),
 				).toContain("not-a-leaf");
-			});
+				});
+			} finally {
+				rmSync(xdgRoot, { recursive: true, force: true });
+			}
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -2394,10 +2408,14 @@ describe("command entrypoint integration: setup", () => {
 });
 
 describe("command entrypoint integration: promotion boundary", () => {
-	test("root default gates do not run the explicit integration suite", async () => {
+	test("CI runs the suite as a dedicated gate without widening root defaults", async () => {
 		const rootScripts = readPackageScripts(repoRoot);
 		const portabilityProof = readFileSync(
 			join(repoRoot, "scripts/prove-workspace-portability.ts"),
+			"utf8",
+		);
+		const ciWorkflow = readFileSync(
+			join(repoRoot, ".github/workflows/ci.yml"),
 			"utf8",
 		);
 
@@ -2410,5 +2428,7 @@ describe("command entrypoint integration: promotion boundary", () => {
 		);
 		expect(portabilityProof).not.toContain("command-entrypoint:integration");
 		expect(portabilityProof).not.toContain("command-entrypoint.integration.test");
+		expect(ciWorkflow).toContain("name: Test (command entrypoint integration)");
+		expect(ciWorkflow).toContain("run: bun run command-entrypoint:integration");
 	});
 });

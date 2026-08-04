@@ -714,6 +714,13 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"catalog_record_invalid",
 	"catalog_action_closure_incomplete",
 	"promotion_verification_failed",
+	// Runbook and Reviewed Action authoring front doors. These representative
+	// driver-level codes keep handler dispatch and structured diagnostics tied
+	// to the advertised leaves; domain validators own their deeper issue codes.
+	"runbook_document_unreadable",
+	"runbook_source_checkout_required",
+	"action_document_unreadable",
+	"action_source_checkout_required",
 	"catalog_drift",
 	"activation_epoch_conflict",
 	"activation_blocked_by_run",

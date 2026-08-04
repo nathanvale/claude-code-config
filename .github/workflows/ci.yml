@@ -74,3 +74,6 @@ jobs:
       # the immediate value; broader coverage lands incrementally.
       - name: Test (browser-use)
         run: bash skills/test-runner/src/test-runner.sh run -- skills/browser-use/src/
+
+      - name: Test (command entrypoint integration)
+        run: bun run command-entrypoint:integration
