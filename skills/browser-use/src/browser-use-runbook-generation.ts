@@ -245,8 +245,14 @@ export async function activateRunbookGeneration(deps: BrowserUseGenerationDeps, 
 	const outcome = await withExclusiveFileLock<BrowserUseGenerationActivationSuccess | BrowserUseGenerationFailure>(deps.fs, { lockPath: pathsOf(deps.paths).lock, holderId: `runbook-activate-${process.pid}-${input.catalog.catalog_digest.slice(0, 12)}`, staleAfterMs: 30_000, clock: deps.clock }, async () => {
 		const current = await readAuthority(deps); if (current.status === "corrupt") return fail("activation_authority_corrupt", "the active generation authority is corrupt; no selection changed.");
 		const authority = current.status === "present" ? current.authority : undefined; const epoch = authority?.epoch ?? 0;
+		if (authority !== undefined) {
+			if (authority.active_generation_id !== `gen-${authority.catalog_digest}`) return fail("activation_authority_corrupt", "the active generation authority does not select its recorded catalog digest; no selection changed.");
+			const currentGeneration = await validateGeneration(deps, authority.active_generation_id, authority.manifest_digest);
+			if (!currentGeneration.ok) return currentGeneration;
+			if (currentGeneration.manifest.catalog_digest !== authority.catalog_digest) return fail("activation_authority_corrupt", "the active generation provenance does not match its authority; no selection changed.");
+			if (authority.catalog_digest === input.catalog.catalog_digest) return { ok: true, changed: false, generation_id: authority.active_generation_id, previous_generation_id: authority.previous_generation_id, catalog_digest: authority.catalog_digest, epoch: authority.epoch };
+		}
 		if (epoch !== input.expectedEpoch) return fail("activation_epoch_conflict", "the activation epoch changed; inspect active authority and retry from the new epoch.");
-		if (authority?.catalog_digest === input.catalog.catalog_digest) { const verified = await validateGeneration(deps, authority.active_generation_id, authority.manifest_digest); return verified.ok ? { ok: true, changed: false, generation_id: authority.active_generation_id, previous_generation_id: authority.previous_generation_id, catalog_digest: authority.catalog_digest, epoch: authority.epoch } : verified; }
 		const blockers = await deps.nonterminalMutationRuns?.(authority?.active_generation_id ?? null); if (blockers !== undefined && blockers.length > 0) return fail("activation_blocked_by_run", "a prior-generation mutation-capable run is nonterminal; finish or cancel it before activation.");
 		if (deps.crash?.("before_stage")) return fail("activation_interrupted", "activation interrupted before generation staging.");
 		const staged = await stageGeneration(deps, input.catalog); if (!staged.ok) return staged;
@@ -255,6 +261,7 @@ export async function activateRunbookGeneration(deps: BrowserUseGenerationDeps, 
 		if (deps.crash?.("after_verification") || deps.crash?.("before_authority_commit")) return fail("activation_interrupted", "activation interrupted before authority commit; prior authority remains selected.");
 		const next: BrowserUseRunbookGenerationAuthority = { contract: AUTHORITY_CONTRACT, schema_version: SCHEMA_VERSION, active_generation_id: staged.generationId, previous_generation_id: authority?.active_generation_id ?? null, catalog_digest: input.catalog.catalog_digest, manifest_digest: staged.manifestDigest, epoch: epoch + 1, selected_at_epoch_ms: deps.clock() };
 		if (!(await commitAuthority(deps, next))) return fail("activation_store_unsafe", "the active generation authority could not be atomically committed.");
+		if (deps.crash?.("after_authority_commit")) return fail("activation_interrupted", "activation interrupted after authority commit; retry the same request to inspect committed authority.");
 		return { ok: true, changed: true, generation_id: next.active_generation_id, previous_generation_id: next.previous_generation_id, catalog_digest: next.catalog_digest, epoch: next.epoch };
 	});
 	return "failure" in outcome ? fail("activation_store_unsafe", `the activation lock was unavailable (${outcome.failure.code}).`) : outcome;
