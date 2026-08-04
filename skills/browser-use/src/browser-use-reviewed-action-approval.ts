@@ -93,6 +93,7 @@ export type BrowserUseReviewedActionPromotionBrokerPort = {
 						| "signing-key-missing"
 						| "signing-key-already-enrolled"
 						| "signing-key-custody-invalid"
+						| "broker-response-unknown"
 						| "broker-failed";
 					message: string;
 				};

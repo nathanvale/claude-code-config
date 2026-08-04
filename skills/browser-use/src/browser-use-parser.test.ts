@@ -206,6 +206,14 @@ describe("U3 parser", () => {
 				],
 				command: "action-status",
 			},
+			{
+				argv: [
+					"action", "promote", "--id", "action-id",
+					"--approval-reference", "review-1",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "action-promote",
+			},
 		];
 
 		for (const { argv, command } of cases) {
@@ -255,6 +263,14 @@ describe("U3 parser", () => {
 				argv: ["action", "status", "--json"],
 				message: "action status requires --id",
 			},
+			{
+				argv: ["action", "promote", "--json"],
+				message: "action promote requires --id",
+			},
+			{
+				argv: ["action", "promote", "--id", "action-id", "--json"],
+				message: "action promote requires --approval-reference",
+			},
 		];
 
 		for (const { argv, message } of cases) {
@@ -262,10 +278,13 @@ describe("U3 parser", () => {
 		}
 	});
 
-	test("Reviewed Action promotion remains parser-inaccessible", () => {
-		expect(() =>
-			parseBrowserUseArgv(["action", "promote", "--id", "action-id", "--json"]),
-		).toThrow("unknown subcommand for action: promote");
+	test("Reviewed Action promotion is parser-accessible only as its own leaf", () => {
+		expect(
+			parseBrowserUseArgv([
+				"action", "promote", "--id", "action-id",
+				"--approval-reference", "review-1", "--json",
+			]),
+		).toMatchObject({ kind: "command", command: "action-promote" });
 		expect(() =>
 			parseBrowserUseArgv([
 				"action", "apply", "--file", "candidate.json", "--promote", "--json",
@@ -276,8 +295,10 @@ describe("U3 parser", () => {
 	test("action commands require their model-owned file and identity inputs", () => {
 		expect(parseBrowserUseArgv(["action", "schema", "--json"])).toMatchObject({ kind: "command", command: "action-schema" });
 		expect(parseBrowserUseArgv(["action", "apply", "--file", "candidate.json", "--expected-record-digest", "a".repeat(64), "--json"])).toMatchObject({ kind: "command", command: "action-apply" });
+		expect(parseBrowserUseArgv(["action", "promote", "--id", "candidate", "--approval-reference", "review-1", "--json"])).toMatchObject({ kind: "command", command: "action-promote" });
 		expect(() => parseBrowserUseArgv(["action", "validate", "--json"])).toThrow("action validate requires --file");
 		expect(() => parseBrowserUseArgv(["action", "status", "--json"])).toThrow("action status requires --id");
+		expect(() => parseBrowserUseArgv(["action", "promote", "--id", "candidate", "--json"])).toThrow("action promote requires --approval-reference");
 		expect(() => parseBrowserUseArgv(["action", "apply", "--file", "candidate.json", "--expected-record-digest", "stale"])).toThrow("--expected-record-digest must be 64 lowercase hex");
 	});
 

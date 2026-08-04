@@ -440,6 +440,7 @@ export const BROWSER_USE_ACTION_SUBCOMMANDS = [
 	"validate",
 	"apply",
 	"status",
+	"promote",
 ] as const;
 export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
 
@@ -597,6 +598,7 @@ export type BrowserUseCommand =
 	| "action-validate"
 	| "action-apply"
 	| "action-status"
+	| "action-promote"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -1681,6 +1683,12 @@ const browserUseActionStatusFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseActionPromoteFlags = {
+	"--id": { type: "string", description: "Exact committed Reviewed Action id to promote." },
+	"--approval-reference": { type: "string", description: "Opaque external-human review reference bound into the signed promotion receipt." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 const browserUseRunbookFileFlags = {
 	"--file": { type: "path", description: "Complete Browser Runbook JSON document." },
 	...browserUsePlatformFlags,
@@ -2380,6 +2388,16 @@ export const browserUseContracts = defineCommandFacadeContract(
 			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
 			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
 			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-promote": {
+			script: "browser-use",
+			summary: "Promote one exact committed Reviewed Action through the signed, presence-backed ApprovalBroker.",
+			usage: ["action promote --id <action-id> --approval-reference <reference> [--caller <label>] [--json|--plain]"],
+			json: true, audience: "operator", mutation: "write", sideEffects: ["check", "auth", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Promotion is exact-commit bound and requires live operator presence at the signed broker." },
+			outputModes: ["json", "plain"], interactivity: "required",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionPromoteFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-schema": {
 			script: "browser-use",

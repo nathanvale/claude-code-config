@@ -39,6 +39,7 @@ import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
+	BROWSER_USE_APPROVAL_BROKER_ENV,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
@@ -270,6 +271,10 @@ import {
 	validateReviewedActionCandidate,
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
+import {
+	createNativeReviewedActionOperatorBroker,
+	runReviewedActionPromotionFrontDoor,
+} from "./browser-use-reviewed-action-promotion";
 import {
 	activateRunbookGeneration,
 	createSelectedGenerationActionSeam,
@@ -4242,6 +4247,20 @@ async function runReviewedActionCommand(input: PlatformCommandInput): Promise<nu
 		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot read private source promotion state; use the setup-owned source checkout front door.");
 		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
 		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
+	}
+	if (input.parsed.command === "action-promote") {
+		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+		const brokerPath = stringField(input.runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV]);
+		if (brokerPath === undefined) return emitReviewedActionFailure(input, "action_promotion_broker_unavailable", `${BROWSER_USE_APPROVAL_BROKER_ENV} must name the absolute signed ApprovalBroker executable.`);
+		const promoted = await runReviewedActionPromotionFrontDoor({
+			sourceRoot,
+			actionId: stringField(input.parsed.flagValues["--id"]) ?? "",
+			approvalReference: stringField(input.parsed.flagValues["--approval-reference"]) ?? "",
+			env: input.runtime.env,
+			broker: createNativeReviewedActionOperatorBroker(brokerPath),
+		});
+		return promoted.ok ? emitReviewedActionSuccess(input, promoted) : emitReviewedActionFailure(input, promoted.code, promoted.message);
 	}
 	const loaded = await readActionCandidateFile(input);
 	if (!loaded.ok) return loaded.exitCode;
