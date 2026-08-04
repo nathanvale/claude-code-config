@@ -247,12 +247,16 @@ General: a mutation action's verifier must match the page the mutation LANDS on
 
 ### G26. A dispatched-but-stuck run can't be cancelled and blocks activation
 Once `mutation_dispatched: true`, `run cancel` refuses ("inspect its external effect
-instead") — by design. If such a run is genuinely wedged (`running@N`, nothing
-submitted, no continuation, no runtime action), it blocks `runbook activate`
-(`activation_blocked_by_run`) with no CLI escape. Last resort, ONLY after
-CDP-confirming nothing was actually submitted: back up its run.json, set
-`payload.state = "not-achieved"` + bump `revision`, then activate. Prefer a fresh
-run over reusing a poisoned run id.
+instead") — by design: a dispatched submit may have completed server-side even when a
+CDP page read shows nothing, so the write-ahead `mutation_dispatched` guard must hold.
+If such a run is genuinely wedged (`running@N`, nothing submitted, no continuation, no
+runtime action), it blocks `runbook activate` (`activation_blocked_by_run`).
+Do NOT hand-edit `run.json` to clear the state — that bypasses the write-ahead guard and
+can let a new generation proceed while a delayed or server-side submit outcome is still
+uncertain. Prefer a fresh run over reusing a wedged run id. A dispatched-but-uncertain
+run needs an audited reconciliation operation (that proves the remote submit outcome
+before clearing the block), not a manual state edit — tracked as a follow-up; until it
+exists, escalate a wedged dispatched run rather than editing durable run state by hand.
 
 ### Operating note (not a runbook gotcha): dispatch codex worker prompts via STDIN
 `codex exec ... < prompt.txt`, never as a giant positional arg `"$(cat prompt)"` —
