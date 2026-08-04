@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runForTest } from "./browser-use";
 import { createProductionBrowserUseRuntime } from "./browser-use-runtime";
 import { reviewedActionApprovalFactsDigest } from "./browser-use-reviewed-action-approval";
+import { parseJson } from "./browser-use-test-helpers";
 
 const cleanup = new Set<string>();
 afterEach(async () => {
@@ -13,7 +15,7 @@ afterEach(async () => {
 });
 
 async function verifierFixture() {
-	const root = await mkdtemp(join(tmpdir(), "reviewed-action-runtime-"));
+	const root = await mkdtemp(join(await realpath(tmpdir()), "reviewed-action-runtime-"));
 	cleanup.add(root);
 	const configRoot = join(root, "config", "browser-use");
 	await mkdir(configRoot, { recursive: true, mode: 0o700 });
@@ -81,8 +83,55 @@ describe("production Reviewed Action verifier wiring", () => {
 	test("refuses loose or malformed verifier pins and preserves an explicit test verifier", async () => {
 		const fixture = await verifierFixture();
 		await chmod(fixture.verifierPath, 0o644);
-		expect((await createProductionBrowserUseRuntime({ env: fixture.env })).reviewedActionApprovalVerifier).toBeUndefined();
+		const loose = await createProductionBrowserUseRuntime({ env: fixture.env });
+		expect(loose.reviewedActionApprovalVerifier).toBeUndefined();
+		expect(loose.reviewedActionApprovalVerifierIssue).toMatchObject({
+			code: "action_promotion_verifier_store_unsafe",
+		});
+		const command = await runForTest(["action", "schema", "--json"], loose);
+		expect(command.exitCode).toBe(20);
+		expect(parseJson(command.stdout)).toMatchObject({
+			error: { code: "action_promotion_verifier_store_unsafe" },
+		});
 		const explicit = { verify: () => ({ ok: true as const }) };
 		expect((await createProductionBrowserUseRuntime({ env: fixture.env, reviewedActionApprovalVerifier: explicit })).reviewedActionApprovalVerifier).toBe(explicit);
+	});
+
+	test("distinguishes an absent pin from a malformed identity", async () => {
+		const fixture = await verifierFixture();
+		await rm(fixture.verifierPath);
+		const absent = await createProductionBrowserUseRuntime({ env: fixture.env });
+		expect(absent.reviewedActionApprovalVerifier).toBeUndefined();
+		expect(absent.reviewedActionApprovalVerifierIssue).toBeUndefined();
+		await writeFile(fixture.verifierPath, "{}\n", { mode: 0o600 });
+		const malformed = await createProductionBrowserUseRuntime({ env: fixture.env });
+		expect(malformed.reviewedActionApprovalVerifier).toBeUndefined();
+		expect(malformed.reviewedActionApprovalVerifierIssue).toMatchObject({
+			code: "action_promotion_verifier_identity_invalid",
+		});
+	});
+
+	test("canonicalizes an owner-controlled config symlink before loading the pin", async () => {
+		const fixture = await verifierFixture();
+		const configRoot = fixture.env.XDG_CONFIG_HOME;
+		if (configRoot === undefined) throw new Error("config fixture missing");
+		const canonicalRoot = `${configRoot}-canonical`;
+		await rename(configRoot, canonicalRoot);
+		await symlink(canonicalRoot, configRoot, "dir");
+		const runtime = await createProductionBrowserUseRuntime({ env: fixture.env });
+		expect(runtime.reviewedActionApprovalVerifier).toBeDefined();
+		expect(runtime.reviewedActionApprovalVerifierIssue).toBeUndefined();
+	});
+
+	test("rejects a loose canonical config root before reading the pin", async () => {
+		const fixture = await verifierFixture();
+		const configRoot = fixture.env.XDG_CONFIG_HOME;
+		if (configRoot === undefined) throw new Error("config fixture missing");
+		await chmod(join(configRoot, "browser-use"), 0o755);
+		const runtime = await createProductionBrowserUseRuntime({ env: fixture.env });
+		expect(runtime.reviewedActionApprovalVerifier).toBeUndefined();
+		expect(runtime.reviewedActionApprovalVerifierIssue).toMatchObject({
+			code: "action_promotion_verifier_store_unsafe",
+		});
 	});
 });

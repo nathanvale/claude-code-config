@@ -622,7 +622,10 @@ private func installToken(_ request: TokenInstallRequest) -> TokenCustodyResult 
     return result
 }
 
-private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
+private func profilePolicyCheck(
+    _ profilePath: String,
+    afterInitialLoginDataSidecarCheck: () -> Void = {}
+) -> [String: Any] {
     guard profilePath.hasPrefix("/"),
           !profilePath.contains("\0"),
           URL(fileURLWithPath: profilePath).standardizedFileURL.path == profilePath
@@ -672,36 +675,94 @@ private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
     guard loginMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
-    let loginDataWALPath = loginDataPath + "-wal"
-    var loginDataWALMetadata = stat()
-    if lstat(loginDataWALPath, &loginDataWALMetadata) == 0 {
-        guard loginDataWALMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              loginDataWALMetadata.st_size == 0
-        else {
-            return ["status": "blocked", "cause": "profile-policy-unsafe"]
-        }
-    } else if errno != ENOENT {
+    guard loginDataSidecarIsEmptyOrMissing(loginDataPath + "-wal") else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
-    var loginDataComponents = URLComponents(
-        url: URL(fileURLWithPath: loginDataPath),
-        resolvingAgainstBaseURL: false
+    afterInitialLoginDataSidecarCheck()
+
+    let temporaryRoot = FileManager.default.temporaryDirectory.path
+    let template = (temporaryRoot as NSString)
+        .appendingPathComponent("browser-use-profile-policy-XXXXXXXX")
+    var templateBytes = Array(template.utf8CString)
+    guard mkdtemp(&templateBytes) != nil else {
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    let snapshotDirectory = String(
+        decoding: templateBytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+        as: UTF8.self
     )
-    loginDataComponents?.queryItems = [URLQueryItem(name: "immutable", value: "1")]
-    guard let loginDataURI = loginDataComponents?.string else {
+    defer { try? FileManager.default.removeItem(atPath: snapshotDirectory) }
+    var snapshotDirectoryMetadata = stat()
+    guard lstat(snapshotDirectory, &snapshotDirectoryMetadata) == 0,
+          snapshotDirectoryMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+          snapshotDirectoryMetadata.st_uid == geteuid(),
+          snapshotDirectoryMetadata.st_mode & mode_t(0o777) == mode_t(0o700)
+    else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
-    var database: OpaquePointer?
+
+    var liveDatabase: OpaquePointer?
     guard sqlite3_open_v2(
-              loginDataURI,
-              &database,
-              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
+              loginDataPath,
+              &liveDatabase,
+              SQLITE_OPEN_READONLY,
               nil
           ) == SQLITE_OK,
-          let database
+          let liveDatabase
     else {
-        if let database { sqlite3_close(database) }
+        if let liveDatabase { sqlite3_close(liveDatabase) }
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    defer { sqlite3_close(liveDatabase) }
+
+    let backupSnapshotPath = (snapshotDirectory as NSString)
+        .appendingPathComponent("Login Data")
+    var backupDatabase: OpaquePointer?
+    guard sqlite3_open_v2(
+              backupSnapshotPath,
+              &backupDatabase,
+              SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE,
+              nil
+          ) == SQLITE_OK,
+          let backupDatabase
+    else {
+        if let backupDatabase { sqlite3_close(backupDatabase) }
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    guard chmod(backupSnapshotPath, 0o600) == 0 else {
+        sqlite3_close(backupDatabase)
+        return ["status": "blocked", "cause": "profile-policy-unsafe"]
+    }
+    var backupStep = SQLITE_ERROR
+    var backupFinished = SQLITE_ERROR
+    if let backup = sqlite3_backup_init(
+        backupDatabase,
+        "main",
+        liveDatabase,
+        "main"
+    ) {
+        backupStep = sqlite3_backup_step(backup, -1)
+        backupFinished = sqlite3_backup_finish(backup)
+    }
+
+    let database: OpaquePointer
+    if backupStep == SQLITE_DONE,
+       backupFinished == SQLITE_OK,
+       profileSnapshotFileIsOwned(backupSnapshotPath)
+    {
+        database = backupDatabase
+    } else {
+        sqlite3_close(backupDatabase)
+        let lockedSnapshotPath = (snapshotDirectory as NSString)
+            .appendingPathComponent("Locked Login Data")
+        guard let lockedDatabase = openStableLockedLoginDataSnapshot(
+            sourcePath: loginDataPath,
+            expectedMetadata: loginMetadata,
+            snapshotPath: lockedSnapshotPath
+        ) else {
+            return ["status": "blocked", "cause": "profile-policy-unsafe"]
+        }
+        database = lockedDatabase
     }
     defer { sqlite3_close(database) }
 
@@ -754,6 +815,100 @@ private func profilePolicyCheck(_ profilePath: String) -> [String: Any] {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
     return ["status": "ready"]
+}
+
+private func loginDataSidecarIsEmptyOrMissing(_ path: String) -> Bool {
+    var metadata = stat()
+    if lstat(path, &metadata) == 0 {
+        return metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG)
+            && metadata.st_size == 0
+    }
+    return errno == ENOENT
+}
+
+private func profileSnapshotFileIsOwned(_ path: String) -> Bool {
+    var metadata = stat()
+    return lstat(path, &metadata) == 0
+        && metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG)
+        && metadata.st_uid == geteuid()
+        && metadata.st_mode & mode_t(0o077) == 0
+}
+
+private func loginDataMetadataIsStable(_ lhs: stat, _ rhs: stat) -> Bool {
+    lhs.st_dev == rhs.st_dev
+        && lhs.st_ino == rhs.st_ino
+        && lhs.st_mode == rhs.st_mode
+        && lhs.st_uid == rhs.st_uid
+        && lhs.st_size == rhs.st_size
+        && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+        && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+        && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+        && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+}
+
+private func openStableLockedLoginDataSnapshot(
+    sourcePath: String,
+    expectedMetadata: stat,
+    snapshotPath: String
+) -> OpaquePointer? {
+    let sidecarPaths = [sourcePath + "-wal", sourcePath + "-journal"]
+    guard sidecarPaths.allSatisfy(loginDataSidecarIsEmptyOrMissing) else {
+        return nil
+    }
+    let sourceDescriptor = open(sourcePath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    guard sourceDescriptor >= 0 else { return nil }
+    defer { close(sourceDescriptor) }
+    var sourceBefore = stat()
+    guard fstat(sourceDescriptor, &sourceBefore) == 0,
+          loginDataMetadataIsStable(expectedMetadata, sourceBefore)
+    else {
+        return nil
+    }
+    var snapshotDescriptor = open(
+        snapshotPath,
+        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+        mode_t(0o600)
+    )
+    guard snapshotDescriptor >= 0 else { return nil }
+    defer {
+        if snapshotDescriptor >= 0 { close(snapshotDescriptor) }
+    }
+    guard fcopyfile(
+              sourceDescriptor,
+              snapshotDescriptor,
+              nil,
+              copyfile_flags_t(COPYFILE_DATA)
+          ) == 0
+    else {
+        return nil
+    }
+    var sourceAfter = stat()
+    var sourcePathAfter = stat()
+    guard fstat(sourceDescriptor, &sourceAfter) == 0,
+          lstat(sourcePath, &sourcePathAfter) == 0,
+          loginDataMetadataIsStable(sourceBefore, sourceAfter),
+          loginDataMetadataIsStable(sourceBefore, sourcePathAfter),
+          sidecarPaths.allSatisfy(loginDataSidecarIsEmptyOrMissing),
+          close(snapshotDescriptor) == 0
+    else {
+        return nil
+    }
+    snapshotDescriptor = -1
+    guard profileSnapshotFileIsOwned(snapshotPath) else { return nil }
+
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(
+              snapshotPath,
+              &database,
+              SQLITE_OPEN_READONLY,
+              nil
+          ) == SQLITE_OK,
+          let database
+    else {
+        if let database { sqlite3_close(database) }
+        return nil
+    }
+    return database
 }
 
 private func tokenStatusEnvelope(_ request: TokenStatusRequest) -> Data {

@@ -141,9 +141,10 @@ enum ReviewedActionPromotionProtocol {
         request: ReviewedActionPromotionRequest,
         receiptID: String,
         issuedAtEpochMilliseconds: Int64,
-        verifierKeyID: String
+        verifierKeyID: String,
+        presenceBacked: Bool
     ) throws -> ReviewedActionPromotionReceipt {
-        guard factsAreValid(request.facts), safeID(receiptID), safeID(verifierKeyID) else {
+        guard factsAreValid(request.facts), safeID(receiptID), safeID(verifierKeyID), presenceBacked else {
             throw ReviewedActionPromotionProtocolError.invalidReceipt
         }
         return ReviewedActionPromotionReceipt(
@@ -162,7 +163,7 @@ enum ReviewedActionPromotionProtocol {
             result_schema_digest: request.facts.result_schema_digest,
             postcondition_digest: request.facts.postcondition_digest,
             approval_reference: request.approval_reference,
-            presence_backed: true,
+            presence_backed: presenceBacked,
             issued_at_epoch_ms: issuedAtEpochMilliseconds,
             verifier_key_id: verifierKeyID,
             signature: "pending"

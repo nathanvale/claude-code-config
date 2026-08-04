@@ -285,15 +285,25 @@ export function createP256ReviewedActionApprovalVerifier(
 		};
 	}
 	const raw = Buffer.from(identity.public_key, "base64");
-	const publicKey = createPublicKey({
-		key: {
-			kty: "EC",
-			crv: "P-256",
-			x: raw.subarray(1, 33).toString("base64url"),
-			y: raw.subarray(33, 65).toString("base64url"),
-		},
-		format: "jwk",
-	});
+	let publicKey: ReturnType<typeof createPublicKey>;
+	try {
+		publicKey = createPublicKey({
+			key: {
+				kty: "EC",
+				crv: "P-256",
+				x: raw.subarray(1, 33).toString("base64url"),
+				y: raw.subarray(33, 65).toString("base64url"),
+			},
+			format: "jwk",
+		});
+	} catch {
+		return {
+			verify: () => ({
+				ok: false,
+				code: "action_promotion_verifier_identity_invalid",
+			}),
+		};
+	}
 	return createReviewedActionApprovalVerifier({
 		verifier: identity,
 		verifySignature: ({ digest, signature }) => {

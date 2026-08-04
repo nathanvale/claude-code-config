@@ -51,6 +51,7 @@ import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	fullFsyncDurableFile,
+	inspectBrowserUseRoot,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
@@ -578,24 +579,73 @@ function environmentTokenRetrievalOf(
 }
 
 
+type BrowserUseReviewedActionApprovalVerifierIssue = {
+	code:
+		| "action_promotion_verifier_store_unsafe"
+		| "action_promotion_verifier_identity_invalid";
+	message: string;
+};
+
+type BrowserUseReviewedActionApprovalVerifierResolution =
+	| { status: "ready"; verifier: BrowserUseReviewedActionApprovalVerifier }
+	| { status: "absent" }
+	| { status: "rejected"; issue: BrowserUseReviewedActionApprovalVerifierIssue };
+
 async function productionReviewedActionApprovalVerifierOf(
 	runtime: BrowserUseRuntime,
-): Promise<BrowserUseReviewedActionApprovalVerifier | undefined> {
+): Promise<BrowserUseReviewedActionApprovalVerifierResolution> {
 	const resolved = resolveBrowserUsePaths(runtime.env);
-	if (!resolved.ok) return undefined;
-	const path = join(
-		resolved.resolution.roots.config,
-		REVIEWED_ACTION_VERIFIER_FILE,
-	);
+	if (!resolved.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be resolved safely.",
+			},
+		};
+	}
+	const configRoot = resolved.resolution.roots.config;
+	const inspected = await inspectBrowserUseRoot(runtime.platformFs, {
+		kind: "config",
+		path: configRoot,
+	});
+	if (!inspected.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root is not private and owner-controlled.",
+			},
+		};
+	}
+	if (!inspected.exists) return { status: "absent" };
+	const canonicalConfigRoot = await runtime.platformFs.realpath(configRoot);
+	if (canonicalConfigRoot === undefined) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be canonicalized.",
+			},
+		};
+	}
+	const path = join(canonicalConfigRoot, REVIEWED_ACTION_VERIFIER_FILE);
 	try {
 		const stat = await runtime.platformFs.lstat(path);
+		if (stat === undefined) return { status: "absent" };
 		const processUid = process.getuid?.();
 		if (
-			stat?.kind !== "file" ||
+			stat.kind !== "file" ||
 			(stat.mode & 0o077) !== 0 ||
 			(processUid !== undefined && stat.uid !== processUid)
 		) {
-			return undefined;
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_store_unsafe",
+					message: "the Reviewed Action verifier pin is not an owner-only regular file.",
+				},
+			};
 		}
 		const parsed = JSON.parse(
 			await runtime.platformFs.readTextFile(path),
@@ -613,17 +663,38 @@ async function productionReviewedActionApprovalVerifierOf(
 			typeof parsed.key_id !== "string" ||
 			typeof parsed.public_key !== "string"
 		) {
-			return undefined;
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_identity_invalid",
+					message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+				},
+			};
 		}
 		const identity = {
 			key_id: parsed.key_id,
 			public_key: parsed.public_key,
 		};
 		return reviewedActionVerifierIdentityIsValid(identity)
-			? createP256ReviewedActionApprovalVerifier(identity)
-			: undefined;
+			? {
+					status: "ready",
+					verifier: createP256ReviewedActionApprovalVerifier(identity),
+				}
+			: {
+					status: "rejected",
+					issue: {
+						code: "action_promotion_verifier_identity_invalid",
+						message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+					},
+				};
 	} catch {
-		return undefined;
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_identity_invalid",
+				message: "the Reviewed Action verifier pin could not be parsed.",
+			},
+		};
 	}
 }
 
@@ -1146,6 +1217,8 @@ export type BrowserUseRuntime = {
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
+	/** Present but rejected production verifier pin; absent means not provisioned. */
+	reviewedActionApprovalVerifierIssue?: BrowserUseReviewedActionApprovalVerifierIssue;
 	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
 	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */
@@ -1259,8 +1332,12 @@ export async function createProductionBrowserUseRuntime(
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
 	}
 	if (runtime.reviewedActionApprovalVerifier === undefined) {
-		runtime.reviewedActionApprovalVerifier =
-			await productionReviewedActionApprovalVerifierOf(runtime);
+		const resolution = await productionReviewedActionApprovalVerifierOf(runtime);
+		if (resolution.status === "ready") {
+			runtime.reviewedActionApprovalVerifier = resolution.verifier;
+		} else if (resolution.status === "rejected") {
+			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
+		}
 	}
 	return runtime;
 }

@@ -714,6 +714,8 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"catalog_record_invalid",
 	"catalog_action_closure_incomplete",
 	"promotion_verification_failed",
+	"action_promotion_verifier_store_unsafe",
+	"action_promotion_verifier_identity_invalid",
 	// Runbook and Reviewed Action authoring front doors. These representative
 	// driver-level codes keep handler dispatch and structured diagnostics tied
 	// to the advertised leaves; domain validators own their deeper issue codes.
@@ -728,7 +730,9 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"activation_generation_corrupt",
 	"activation_authority_corrupt",
 	"activation_interrupted",
+	"activation_flag_invalid",
 	"activation_required",
+	"human-identity-attestation-required",
 	"pre_cutover_unavailable",
 	// Clean-break migration engine refusals (platform plan U3). Each phase
 	// (inventory/plan/apply/verify) fails closed with its own typed code so an

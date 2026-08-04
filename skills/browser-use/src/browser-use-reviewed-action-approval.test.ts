@@ -119,6 +119,19 @@ describe("Reviewed Action external-human approval boundary", () => {
 		expect(productionVerifier.verify({ ...signedReceipt, signature: Buffer.from("forged").toString("base64") })).toEqual({ ok: false, code: "action_promotion_signature_invalid" });
 	});
 
+	test("production P-256 verifier rejects an off-curve public key without throwing", () => {
+		const rawPublicKey = Buffer.concat([Buffer.from([4]), Buffer.alloc(64)]);
+		const keyId = createHash("sha256").update(rawPublicKey).digest("hex");
+		const productionVerifier = createP256ReviewedActionApprovalVerifier({
+			key_id: keyId,
+			public_key: rawPublicKey.toString("base64"),
+		});
+		expect(productionVerifier.verify(receipt({ verifier_key_id: keyId }))).toEqual({
+			ok: false,
+			code: "action_promotion_verifier_identity_invalid",
+		});
+	});
+
 	test("presence-backed broker reviews exact bytes and issues an offline-verifiable receipt", async () => {
 		const candidateBytes = "async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length })";
 		let reviewedBytes = "";

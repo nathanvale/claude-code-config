@@ -164,6 +164,25 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         }
     }
 
+    func testUnsignedReceiptRequiresCustodyDerivedPresenceEvidence() throws {
+        let unsigned = try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
+            request: request,
+            receiptID: "receipt-custody-derived-presence",
+            issuedAtEpochMilliseconds: 1_754_265_600_000,
+            verifierKeyID: verifier.key_id,
+            presenceBacked: true
+        )
+        XCTAssertTrue(unsigned.presence_backed)
+
+        XCTAssertThrowsError(try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
+            request: request,
+            receiptID: "receipt-untrusted-presence",
+            issuedAtEpochMilliseconds: 1_754_265_600_000,
+            verifierKeyID: verifier.key_id,
+            presenceBacked: false
+        ))
+    }
+
     func testLostBrokerResponseIsUnknownWithoutAutomaticRetry() {
         var calls = 0
         let result = ReviewedActionPromotionProtocol.sendOnce(request) { _ in

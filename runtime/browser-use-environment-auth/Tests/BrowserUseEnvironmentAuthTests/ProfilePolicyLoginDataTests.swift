@@ -26,7 +26,33 @@ struct ProfilePolicyLoginDataTests {
 
         \(functionSource)
 
-        let result = profilePolicyCheck(CommandLine.arguments[1])
+        var raceDatabase: OpaquePointer?
+        defer {
+            if let raceDatabase { sqlite3_close(raceDatabase) }
+        }
+        let result = profilePolicyCheck(CommandLine.arguments[1]) {
+            guard CommandLine.arguments.dropFirst(2).contains("create-saved-login-wal") else {
+                return
+            }
+            let loginDataPath = URL(fileURLWithPath: CommandLine.arguments[1])
+                .appendingPathComponent("Default/Login Data")
+                .path
+            precondition(sqlite3_open_v2(
+                loginDataPath,
+                &raceDatabase,
+                SQLITE_OPEN_READWRITE,
+                nil
+            ) == SQLITE_OK)
+            precondition(sqlite3_exec(
+                raceDatabase,
+                "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; "
+                    + "INSERT INTO logins (origin_url, username_value, password_value) "
+                    + "VALUES ('https://race.example.test', 'race-user', X'02');",
+                nil,
+                nil,
+                nil
+            ) == SQLITE_OK)
+        }
         let output = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
         FileHandle.standardOutput.write(output)
         """
@@ -120,9 +146,16 @@ struct ProfilePolicyLoginDataTests {
         return database
     }
 
-    private func checkProfile(_ profile: URL, root: URL) throws -> [String: String] {
+    private func checkProfile(
+        _ profile: URL,
+        root: URL,
+        arguments: [String] = []
+    ) throws -> [String: String] {
         let harness = try profilePolicyHarness(in: root)
-        let result = try run(executable: harness, arguments: [profile.path])
+        let result = try run(
+            executable: harness,
+            arguments: [profile.path] + arguments
+        )
         guard result.status == 0 else {
             throw FixtureError.commandFailed(result.stderr)
         }
@@ -253,6 +286,23 @@ struct ProfilePolicyLoginDataTests {
         try Data([0x01]).write(to: URL(fileURLWithPath: loginData.path + "-wal"))
 
         let result = try checkProfile(fixture.profile, root: fixture.root)
+
+        #expect(result["status"] == "blocked")
+        #expect(result["cause"] == "profile-policy-unsafe")
+    }
+
+    @Test
+    func savedLoginAddedToWALAfterInitialSidecarCheckIsBlocked() throws {
+        let fixture = try makeProfile()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let loginData = fixture.profile.appendingPathComponent("Default/Login Data")
+        try createLoginData(at: loginData, withSavedLogin: false)
+
+        let result = try checkProfile(
+            fixture.profile,
+            root: fixture.root,
+            arguments: ["create-saved-login-wal"]
+        )
 
         #expect(result["status"] == "blocked")
         #expect(result["cause"] == "profile-policy-unsafe")

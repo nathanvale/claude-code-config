@@ -698,7 +698,7 @@ async function executeCommand(input: {
 	}
 
 	if (parsed.family === "action" && !parsed.dryRun) {
-		return runReviewedActionCommand({
+		const actionInput: PlatformCommandInput = {
 			parsed,
 			runtime,
 			stdout: input.stdout,
@@ -706,7 +706,15 @@ async function executeCommand(input: {
 			runId: input.runId,
 			caller,
 			durationMs: input.durationMs,
-		});
+		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitReviewedActionFailure(
+				actionInput,
+				runtime.reviewedActionApprovalVerifierIssue.code,
+				runtime.reviewedActionApprovalVerifierIssue.message,
+			);
+		}
+		return runReviewedActionCommand(actionInput);
 	}
 
 	// Browser Runbook family (platform plan U4): list/show project the discovered
@@ -724,6 +732,15 @@ async function executeCommand(input: {
 			caller,
 			durationMs: input.durationMs,
 		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitPlatformStoreFailure(runbookInput, {
+				code: runtime.reviewedActionApprovalVerifierIssue.code,
+				message: runtime.reviewedActionApprovalVerifierIssue.message,
+				actionId: "activate_runbook_catalog",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
 		if (
 			parsed.command === "runbook-schema" ||
 			parsed.command === "runbook-validate" ||
@@ -3721,7 +3738,11 @@ async function nonterminalMutationRunIds(
 	const blockers: string[] = [];
 	for (const runId of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
 		const loaded = await loadSharedRun(deps, runId);
-		if (!loaded.ok || isTerminalRunState(loaded.run.state)) continue;
+		if (!loaded.ok) {
+			blockers.push(runId);
+			continue;
+		}
+		if (isTerminalRunState(loaded.run.state)) continue;
 		if (loaded.run.mutation_dispatched) {
 			blockers.push(runId);
 			continue;

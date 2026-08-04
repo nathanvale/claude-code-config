@@ -296,6 +296,28 @@ describe("authoring-to-active-generation composed acceptance", () => {
 			"--expected-epoch", "0",
 			"--json",
 		], runtime)).exitCode).toBe(0);
+		await mkdir(join(deps.paths.state.runsDir, "corrupt-run"), { recursive: true });
+		await writeFile(deps.paths.state.runFile("corrupt-run"), "{\n");
+		const corruptBlockedDigest = await commitRunbook(
+			sourceRoot,
+			{ ...runbook, version: "2" },
+			"catalog blocked by corrupt run",
+		);
+		const corruptBlocked = await runForTest([
+			"runbook", "activate",
+			"--catalog-digest", corruptBlockedDigest,
+			"--expected-epoch", "1",
+			"--json",
+		], runtime);
+		expect(corruptBlocked.exitCode).toBe(20);
+		expect(parseJson(corruptBlocked.stdout)).toMatchObject({
+			error: { code: "activation_blocked_by_run" },
+			continuation: { next_action_id: "activate_runbook_catalog" },
+		});
+		await rm(join(deps.paths.state.runsDir, "corrupt-run"), {
+			recursive: true,
+			force: true,
+		});
 		expect((await createSharedRun(deps, {
 			run_id: "mutation-blocker",
 			state: "running",
@@ -307,7 +329,7 @@ describe("authoring-to-active-generation composed acceptance", () => {
 		})).ok).toBe(true);
 		const secondDigest = await commitRunbook(
 			sourceRoot,
-			{ ...runbook, version: "2" },
+			{ ...runbook, version: "3" },
 			"catalog blocked by mutation run",
 		);
 		const blocked = await runForTest([

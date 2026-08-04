@@ -160,6 +160,7 @@ type FixtureOptions = {
 	initialFragment?: BrowserUseAuthTransactionFragment;
 	initialScreen?: BrowserUseAccessibilitySnapshot;
 	proofOwner?: boolean;
+	handoffEvidenceId?: string | null;
 };
 
 async function fixture(options: FixtureOptions) {
@@ -189,7 +190,9 @@ async function fixture(options: FixtureOptions) {
 		task_intent: "runbook-execution",
 		environment_profile: { environment: "agent-chrome", profile: "default" },
 		adapter_id: "agent-browser",
-		handoff_evidence_id: "handoff-fixture",
+		...(options.handoffEvidenceId === null
+			? {}
+			: { handoff_evidence_id: options.handoffEvidenceId ?? "handoff-fixture" }),
 		runbook_target_binding: { schema_version: "1", mode: "exact", binding_id: "target-fixture" },
 		runbook_progress: { schema_version: "1", service_id: "fixture", flow_id: "business", runbook_version: "1", next_step: 0, total_steps: 1 },
 		mutation_dispatched: false,
@@ -468,6 +471,22 @@ describe("runbook auth route", () => {
 		});
 		expect(delivered).toEqual(["username", "password"]);
 		expect(proofCalls).toBe(1);
+	});
+
+	test("restart preserves the unbound handoff sentinel when the run omits evidence", async () => {
+		const initialFragment = persistedFragmentAt("pre-submit");
+		const { result } = await fixture({
+			proof: true,
+			handoffEvidenceId: null,
+			initialFragment: {
+				...initialFragment,
+				binding: {
+					...initialFragment.binding,
+					handoff_evidence_id: "handoff-unbound",
+				},
+			},
+		});
+		expect(result).toMatchObject({ ok: true });
 	});
 
 	test("authenticated restart requires fresh proof and never replays credentials", async () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { BrowserUseRunbookPostcondition } from "./browser-use-runbook-model";
 import {
@@ -22,6 +22,10 @@ import {
 	verifyReviewedActionApproval,
 } from "./browser-use-reviewed-action-approval";
 import { findRedactionViolations } from "./browser-use-schemas";
+import {
+	withSourceLock,
+	writeSourceFileAtomically,
+} from "./browser-use-source-lock";
 
 const CONTRACT = "browser-use.reviewed-action-candidate";
 const SCHEMA_VERSION = "1";
@@ -335,42 +339,40 @@ export async function applyReviewedActionCandidate(input: { sourceRoot: string; 
 	if (actionsRoot === undefined) return { ok: false, code: "action_source_checkout_required", message: "candidate apply requires the setup-owned source checkout." };
 	const validated = validateReviewedActionCandidate(input.candidate);
 	if (!validated.ok) return { ok: false, code: validated.issues[0]?.code ?? "action_candidate_invalid", message: validated.repair };
-	const lockPath = join(actionsRoot, LOCK_FILE);
-	let lock: Awaited<ReturnType<typeof open>>;
-	try { lock = await open(lockPath, "wx", 0o600); } catch { return { ok: false, code: "action_source_lock_contended", message: "another Reviewed Action source mutation holds the catalog lock." }; }
 	try {
-		const registryPath = join(actionsRoot, REGISTRY_FILE);
-		const registryStat = await lstat(registryPath).catch(() => undefined);
-		if (registryStat === undefined || !registryStat.isFile() || registryStat.isSymbolicLink()) return { ok: false, code: "action_registry_unsafe", message: "the private Reviewed Action registry is missing or unsafe." };
-		const registry = parseRegistry(await readFile(registryPath, "utf8"));
-		if (registry === undefined) return { ok: false, code: "action_registry_invalid", message: "the private Reviewed Action registry is invalid." };
-		const matches = registry.actions.filter((entry) => entry.record.action_id === input.candidate.action_id);
-		if (matches.length > 1) return { ok: false, code: "action_registry_duplicate", message: "the private Reviewed Action registry has a duplicate action id." };
-		const existing = matches[0];
-		const nextRecord = candidateRecord(input.candidate, validated);
-		// Compare the complete authored document while leaving signed history outside agent authority.
-		const existingCandidateRecord = existing === undefined ? undefined : { ...existing.record, promotion_receipt: null };
-		if (existing !== undefined && canonical(existingCandidateRecord) === canonical(nextRecord)) return { ok: true, changed: false, digest: validated.digest, record_digest: recordDigest(existing.record), effect_class: validated.effect_class, promotion_state: existing.record.promotion_receipt === null ? "unpromoted" : "promotion-claim-present" };
-		if (existing !== undefined) {
-			const observed = recordDigest(existing.record);
-			if (input.expectedRecordDigest === undefined) return { ok: false, code: "action_replacement_digest_required", message: "replacement requires the currently observed action record digest." };
-			if (input.expectedRecordDigest !== observed) return { ok: false, code: "action_replacement_digest_stale", message: "the action record changed after observation; refresh before replacing it." };
-		}
-		if (!(await persistAsset(actionsRoot, validated.digest, input.candidate.source))) return { ok: false, code: "action_asset_collision", message: "the content-addressed action asset path contains different bytes." };
-		const entry: RegistryEntry = { asset_path: `assets/${validated.digest}.js`, record: nextRecord, ...(existing?.promotion_history !== undefined ? { promotion_history: [...existing.promotion_history] } : {}) };
-		const currentReceipt = existing?.record.promotion_receipt;
-		if (currentReceipt !== undefined && currentReceipt !== null) entry.promotion_history = [...(entry.promotion_history ?? []), currentReceipt];
-		if (existing === undefined) registry.actions.push(entry); else registry.actions[registry.actions.indexOf(existing)] = entry;
-		registry.actions.sort((left, right) => String(left.record.action_id).localeCompare(String(right.record.action_id)));
-		const bytes = `${JSON.stringify(registry, null, 2)}\n`;
-		const temporary = join(actionsRoot, `.registry.${process.pid}.tmp`);
-		const handle = await open(temporary, "wx", 0o600);
-		try { await handle.writeFile(bytes, "utf8"); await handle.sync(); } finally { await handle.close(); }
-		await rename(temporary, registryPath);
-		return { ok: true, changed: true, digest: validated.digest, record_digest: recordDigest(nextRecord), effect_class: validated.effect_class, promotion_state: "unpromoted" };
+		const locked = await withSourceLock({ lockPath: join(actionsRoot, LOCK_FILE), subject: "Reviewed Action" }, async (): Promise<BrowserUseReviewedActionApplyResult> => {
+			const registryPath = join(actionsRoot, REGISTRY_FILE);
+			const registryStat = await lstat(registryPath).catch(() => undefined);
+			if (registryStat === undefined || !registryStat.isFile() || registryStat.isSymbolicLink()) return { ok: false, code: "action_registry_unsafe", message: "the private Reviewed Action registry is missing or unsafe." };
+			const registry = parseRegistry(await readFile(registryPath, "utf8"));
+			if (registry === undefined) return { ok: false, code: "action_registry_invalid", message: "the private Reviewed Action registry is invalid." };
+			const matches = registry.actions.filter((entry) => entry.record.action_id === input.candidate.action_id);
+			if (matches.length > 1) return { ok: false, code: "action_registry_duplicate", message: "the private Reviewed Action registry has a duplicate action id." };
+			const existing = matches[0];
+			const nextRecord = candidateRecord(input.candidate, validated);
+			// Compare the complete authored document while leaving signed history outside agent authority.
+			const existingCandidateRecord = existing === undefined ? undefined : { ...existing.record, promotion_receipt: null };
+			if (existing !== undefined && canonical(existingCandidateRecord) === canonical(nextRecord)) return { ok: true, changed: false, digest: validated.digest, record_digest: recordDigest(existing.record), effect_class: validated.effect_class, promotion_state: existing.record.promotion_receipt === null ? "unpromoted" : "promotion-claim-present" };
+			if (existing !== undefined) {
+				const observed = recordDigest(existing.record);
+				if (input.expectedRecordDigest === undefined) return { ok: false, code: "action_replacement_digest_required", message: "replacement requires the currently observed action record digest." };
+				if (input.expectedRecordDigest !== observed) return { ok: false, code: "action_replacement_digest_stale", message: "the action record changed after observation; refresh before replacing it." };
+			}
+			if (!(await persistAsset(actionsRoot, validated.digest, input.candidate.source))) return { ok: false, code: "action_asset_collision", message: "the content-addressed action asset path contains different bytes." };
+			const entry: RegistryEntry = { asset_path: `assets/${validated.digest}.js`, record: nextRecord, ...(existing?.promotion_history !== undefined ? { promotion_history: [...existing.promotion_history] } : {}) };
+			const currentReceipt = existing?.record.promotion_receipt;
+			if (currentReceipt !== undefined && currentReceipt !== null) entry.promotion_history = [...(entry.promotion_history ?? []), currentReceipt];
+			if (existing === undefined) registry.actions.push(entry); else registry.actions[registry.actions.indexOf(existing)] = entry;
+			registry.actions.sort((left, right) => String(left.record.action_id).localeCompare(String(right.record.action_id)));
+			await writeSourceFileAtomically({ path: registryPath, bytes: `${JSON.stringify(registry, null, 2)}\n` });
+			return { ok: true, changed: true, digest: validated.digest, record_digest: recordDigest(nextRecord), effect_class: validated.effect_class, promotion_state: "unpromoted" };
+		});
+		return locked.acquired
+			? locked.value
+			: { ok: false, code: "action_source_lock_contended", message: locked.message };
 	} catch {
 		return { ok: false, code: "action_source_write_failed", message: "the private Reviewed Action source mutation failed." };
-	} finally { await lock.close(); await rm(lockPath, { force: true }); }
+	}
 }
 
 type PromotionGitResult = { exitCode: number; stdout: string; stderr: string };
@@ -393,6 +395,16 @@ async function runPromotionGit(
 	return { exitCode, stdout, stderr };
 }
 
+/** Operator promotion result after exact committed-source verification. */
+type BrowserUseReviewedActionPromotionResult =
+	| {
+			ok: true;
+			source_commit: string;
+			receipt_id: string;
+			approved_digest: string;
+	  }
+	| { ok: false; code: string; message: string };
+
 /**
  * Review and promote one committed candidate through the external-human broker.
  *
@@ -406,15 +418,7 @@ export async function promoteReviewedActionCandidate(input: {
 	approvalReference: string;
 	router: BrowserUseReviewedActionPromotionRouter;
 	verifier: BrowserUseReviewedActionApprovalVerifier;
-}): Promise<
-	| {
-			ok: true;
-			source_commit: string;
-			receipt_id: string;
-			approved_digest: string;
-	  }
-	| { ok: false; code: string; message: string }
-> {
+}): Promise<BrowserUseReviewedActionPromotionResult> {
 	const actionsRoot = await admittedActionsRoot(input.sourceRoot);
 	if (actionsRoot === undefined) {
 		return {
@@ -430,18 +434,8 @@ export async function promoteReviewedActionCandidate(input: {
 			message: "action id must be a safe slug.",
 		};
 	}
-	const lockPath = join(actionsRoot, LOCK_FILE);
-	let lock: Awaited<ReturnType<typeof open>>;
 	try {
-		lock = await open(lockPath, "wx", 0o600);
-	} catch {
-		return {
-			ok: false,
-			code: "action_source_lock_contended",
-			message: "another Reviewed Action source mutation holds the catalog lock.",
-		};
-	}
-	try {
+		const locked = await withSourceLock({ lockPath: join(actionsRoot, LOCK_FILE), subject: "Reviewed Action" }, async (): Promise<BrowserUseReviewedActionPromotionResult> => {
 		const top = await runPromotionGit(input.sourceRoot, [
 			"rev-parse",
 			"--show-toplevel",
@@ -581,30 +575,26 @@ export async function promoteReviewedActionCandidate(input: {
 			...(entry.record as BrowserUseAuthoredReviewedActionRecord),
 			promotion_receipt: issued.receipt,
 		};
-		const bytes = `${JSON.stringify(registry, null, 2)}\n`;
-		const temporary = join(actionsRoot, `.registry.promotion.${process.pid}.tmp`);
-		const handle = await open(temporary, "wx", 0o600);
-		try {
-			await handle.writeFile(bytes, "utf8");
-			await handle.sync();
-		} finally {
-			await handle.close();
-		}
-		await rename(temporary, registryPath);
+		await writeSourceFileAtomically({ path: registryPath, bytes: `${JSON.stringify(registry, null, 2)}\n` });
 		return {
 			ok: true,
 			source_commit: commit,
 			receipt_id: verified.receipt_id,
 			approved_digest: derived.facts.approved_digest,
 		};
+		});
+		return locked.acquired
+			? locked.value
+			: {
+					ok: false,
+					code: "action_source_lock_contended",
+					message: locked.message,
+			  };
 	} catch {
 		return {
 			ok: false,
 			code: "action_promotion_failed",
 			message: "the Reviewed Action promotion transaction failed closed.",
 		};
-	} finally {
-		await lock.close();
-		await rm(lockPath, { force: true });
 	}
 }

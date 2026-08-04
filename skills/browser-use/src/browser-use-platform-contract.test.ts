@@ -161,6 +161,10 @@ describe("platform family help and discovery", () => {
 			"runbook_source_checkout_required",
 			"action_document_unreadable",
 			"action_source_checkout_required",
+			"activation_flag_invalid",
+			"human-identity-attestation-required",
+			"action_promotion_verifier_store_unsafe",
+			"action_promotion_verifier_identity_invalid",
 		] as const) {
 			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
 		}

@@ -705,12 +705,15 @@ export async function admitBrowserUseRoot(
  * stores; existing roots retain the symlink, owner, type, and mode checks.
  * No directory creation, chmod, write probe, or ignore probe occurs.
  */
-async function inspectBrowserUseRoot(
+export async function inspectBrowserUseRoot(
 	fs: BrowserUsePlatformFs,
 	input: { kind: BrowserUseRootKind; path: string },
-): Promise<{ ok: true } | { ok: false; refusal: BrowserUsePathRefusal }> {
+): Promise<
+	| { ok: true; exists: boolean }
+	| { ok: false; refusal: BrowserUsePathRefusal }
+> {
 	const validated = await validateExistingBrowserUseRoot(fs, input);
-	return validated.ok ? { ok: true } : validated;
+	return validated;
 }
 
 // --- The Target XDG Shape -----------------------------------------------------

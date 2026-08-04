@@ -230,6 +230,20 @@ describe("private runbook catalog Git closure", () => {
 		).toMatchObject({ ok: false, code: "promotion_verification_failed" });
 	});
 
+	test("maps a rejecting verifier promise to the typed promotion failure", async () => {
+		const root = await fixture({ action: true });
+		expect(
+			await loadPrivateRunbookCatalogFromGit({
+				repoRoot: root,
+				promotionVerifier: {
+					verify: async () => {
+						throw new Error("verifier unavailable");
+					},
+				},
+			}),
+		).toMatchObject({ ok: false, code: "promotion_verification_failed" });
+	});
+
 	test("refuses invalid committed Runbooks rather than dropping them", async () => {
 		const root = await fixture();
 		await writeFile(

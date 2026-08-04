@@ -157,6 +157,7 @@ export async function runBrowserUseRunbookAuth(
 		};
 	}
 	let fragment = fragmentOf(run);
+	const handoffEvidenceId = run.handoff_evidence_id ?? "handoff-unbound";
 	let binding: BrowserUseItemBinding | undefined;
 	let readyResume = false;
 	let postSubmitProofResume = false;
@@ -164,7 +165,7 @@ export async function runBrowserUseRunbookAuth(
 		const expectedOrigin = originOf(input.expected_url);
 		const stale =
 			fragment.binding.run_id !== run.run_id ||
-			fragment.binding.handoff_evidence_id !== run.handoff_evidence_id ||
+			fragment.binding.handoff_evidence_id !== handoffEvidenceId ||
 			fragment.binding.lane_id !== "agent-browser" ||
 			fragment.binding.environment !== run.environment_profile.environment ||
 			fragment.binding.profile !== run.environment_profile.profile ||
@@ -278,7 +279,7 @@ export async function runBrowserUseRunbookAuth(
 		const begun = beginAuthTransaction({
 			binding: {
 				run_id: run.run_id,
-				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+				handoff_evidence_id: handoffEvidenceId,
 				lane_id: "agent-browser",
 				environment: run.environment_profile.environment,
 				profile: run.environment_profile.profile,
@@ -337,7 +338,7 @@ export async function runBrowserUseRunbookAuth(
 		const observedAt = deps.store.clock();
 		const attestation: BrowserUseAuthAttestation = {
 			run_id: run.run_id,
-			handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+			handoff_evidence_id: handoffEvidenceId,
 			lane_id: "agent-browser",
 			implementation_integrity_key: deps.implementation_integrity_key,
 			environment: run.environment_profile.environment,
