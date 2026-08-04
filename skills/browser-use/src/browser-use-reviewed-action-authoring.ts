@@ -367,9 +367,9 @@ export async function applyReviewedActionCandidate(input: { sourceRoot: string; 
 			await writeSourceFileAtomically({ path: registryPath, bytes: `${JSON.stringify(registry, null, 2)}\n` });
 			return { ok: true, changed: true, digest: validated.digest, record_digest: recordDigest(nextRecord), effect_class: validated.effect_class, promotion_state: "unpromoted" };
 		});
-		return locked.acquired
-			? locked.value
-			: { ok: false, code: "action_source_lock_contended", message: locked.message };
+		if (!locked.acquired) return { ok: false, code: "action_source_lock_contended", message: locked.message };
+		if (!locked.released) return { ok: false, code: "action_source_lock_release_failed", message: locked.release_failure.message };
+		return locked.value;
 	} catch {
 		return { ok: false, code: "action_source_write_failed", message: "the private Reviewed Action source mutation failed." };
 	}
@@ -583,13 +583,9 @@ export async function promoteReviewedActionCandidate(input: {
 			approved_digest: derived.facts.approved_digest,
 		};
 		});
-		return locked.acquired
-			? locked.value
-			: {
-					ok: false,
-					code: "action_source_lock_contended",
-					message: locked.message,
-			  };
+		if (!locked.acquired) return { ok: false, code: "action_source_lock_contended", message: locked.message };
+		if (!locked.released) return { ok: false, code: "action_source_lock_release_failed", message: locked.release_failure.message };
+		return locked.value;
 	} catch {
 		return {
 			ok: false,

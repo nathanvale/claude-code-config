@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	acquireSourceLock,
+	withSourceLock,
 	writeSourceFileAtomically,
 } from "./browser-use-source-lock";
 
@@ -75,6 +76,17 @@ describe("source authoring lock", () => {
 		});
 	});
 
+	test("removes its owner lock when a transition claim blocks direct acquisition", async () => {
+		const { lockPath } = await lockFixture();
+		await writeFile(
+			`${lockPath}.reclaim`,
+			`${JSON.stringify({ token: "stuck-transition", pid: process.pid, acquired_at_epoch_ms: Date.now() })}\n`,
+		);
+		const acquired = await acquireSourceLock({ lockPath, subject: "fixture" });
+		expect(acquired).toMatchObject({ ok: false, reason: "repair-required" });
+		expect(await readFile(lockPath, "utf8").catch(() => undefined)).toBeUndefined();
+	});
+
 	test("serializes simultaneous reclaim and preserves the winner's ownership", async () => {
 		const { lockPath } = await lockFixture();
 		await writeFile(
@@ -107,6 +119,27 @@ describe("source authoring lock", () => {
 		await writeFile(lockPath, `${JSON.stringify(successor)}\n`);
 		await acquired.release();
 		expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(successor);
+	});
+
+	test("reports release failure when transition acquisition is exhausted", async () => {
+		const { lockPath } = await lockFixture();
+		const operation = await withSourceLock(
+			{ lockPath, subject: "fixture" },
+			async () => {
+				await writeFile(
+					`${lockPath}.reclaim`,
+					`${JSON.stringify({ token: "stuck-transition", pid: process.pid, acquired_at_epoch_ms: Date.now() })}\n`,
+				);
+				return "mutated";
+			},
+		);
+		expect(operation).toMatchObject({
+			acquired: true,
+			released: false,
+			value: "mutated",
+			release_failure: { ok: false, reason: "transition-unavailable" },
+		});
+		expect(await readFile(lockPath, "utf8")).toContain('"token"');
 	});
 
 	test("removes an owned temporary file after a failed atomic replacement", async () => {

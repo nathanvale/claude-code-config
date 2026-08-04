@@ -51,6 +51,7 @@ describe("Approval Broker signing-key custody source policy", () => {
 		expect(loadBody).toContain("throw BrokerError.signingKeyCustodyMismatch");
 		expect(loadBody).toContain("verifier.key_id == decoded.verifierKeyID");
 		expect(loadBody).not.toContain("createDeviceBoundSigningKey");
+		expect(enrollBody).toBeDefined();
 		expect(enrollBody).toContain("createDeviceBoundSigningKey");
 		expect(enrollBody).toContain("SecItemAdd");
 		expect(brokerSource).toContain('case "enroll":');
@@ -60,8 +61,6 @@ describe("Approval Broker signing-key custody source policy", () => {
 		expect(protocolSource).toContain("presenceBacked: Bool");
 		expect(protocolSource).toContain("presence_backed: presenceBacked");
 		expect(protocolSource).not.toContain("presence_backed: true");
-		expect(brokerSource).toContain(
-			"presenceBacked: admittedKey.presenceBacked",
-		);
+		expect(brokerSource).toContain("admittedKey.presencePolicy ==");
 	});
 });

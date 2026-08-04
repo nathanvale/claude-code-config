@@ -606,9 +606,9 @@ export async function applyRunbookDraft(input: {
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return locked.acquired
-		? locked.value
-		: { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.acquired) return { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.released) return { ok: false, code: "runbook_source_lock_release_failed", message: locked.release_failure.message };
+	return locked.value;
 }
 
 /** Delete one source Runbook only when its exact observed digest still matches. */
@@ -652,7 +652,7 @@ export async function deleteRunbookDraft(input: {
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return locked.acquired
-		? locked.value
-		: { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.acquired) return { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.released) return { ok: false, code: "runbook_source_lock_release_failed", message: locked.release_failure.message };
+	return locked.value;
 }

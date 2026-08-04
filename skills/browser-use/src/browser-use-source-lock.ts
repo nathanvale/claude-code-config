@@ -21,8 +21,20 @@ export type BrowserUseSourceLockHandle = {
 	/** Persisted identity for inspection and fenced release. */
 	owner: BrowserUseSourceLockOwner;
 	/** Release only when the persisted owner still matches this handle. */
-	release: () => Promise<void>;
+	release: () => Promise<BrowserUseSourceLockReleaseResult>;
 };
+
+/** Fenced release result, including any lock that may require manual repair. */
+export type BrowserUseSourceLockReleaseResult =
+	| { ok: true; status: "released" | "ownership-changed" }
+	| {
+			ok: false;
+			reason:
+				| "transition-unavailable"
+				| "owner-remove-failed"
+				| "transition-release-failed";
+			message: string;
+	  };
 
 /** Typed acquisition outcome with a deterministic operator repair path. */
 export type BrowserUseSourceLockAcquireResult =
@@ -35,7 +47,13 @@ export type BrowserUseSourceLockAcquireResult =
 
 /** Body result or the acquisition refusal that prevented it from running. */
 export type BrowserUseSourceLockOperationResult<T> =
-	| { acquired: true; value: T }
+	| { acquired: true; released: true; value: T }
+	| {
+			acquired: true;
+			released: false;
+			value: T;
+			release_failure: Extract<BrowserUseSourceLockReleaseResult, { ok: false }>;
+	  }
 	| {
 			acquired: false;
 			reason: "contended" | "repair-required";
@@ -169,12 +187,13 @@ function handleFor(
 	lockPath: string,
 	owner: BrowserUseSourceLockOwner,
 	ownerRaw: string,
+	repair: string,
 ): BrowserUseSourceLockHandle {
 	let released = false;
 	return {
 		owner,
 		release: async () => {
-			if (released) return;
+			if (released) return { ok: true, status: "released" };
 			const transitionPath = `${lockPath}.reclaim`;
 			let transition: Awaited<ReturnType<typeof acquireTransition>>;
 			for (let attempt = 0; attempt < TRANSITION_RETRY_COUNT; attempt += 1) {
@@ -182,13 +201,40 @@ function handleFor(
 				if (transition !== undefined) break;
 				await Bun.sleep(TRANSITION_RETRY_MS);
 			}
-			if (transition === undefined) return;
-			try {
-				await removeIfOwned(lockPath, ownerRaw);
-				released = true;
-			} finally {
-				await transition.release();
+			if (transition === undefined) {
+				return {
+					ok: false,
+					reason: "transition-unavailable",
+					message: repair,
+				};
 			}
+			let result: BrowserUseSourceLockReleaseResult;
+			try {
+				const current = await readOwnedFile(lockPath);
+				if (current.status === "missing" ||
+					(current.status === "present" && current.raw !== ownerRaw)) {
+					released = true;
+					result = { ok: true, status: "ownership-changed" };
+				} else if (current.status === "present" && await removeIfOwned(lockPath, ownerRaw)) {
+					released = true;
+					result = { ok: true, status: "released" };
+				} else {
+					result = {
+						ok: false,
+						reason: "owner-remove-failed",
+						message: repair,
+					};
+				}
+			} finally {
+				if (!(await transition.release())) {
+					result = {
+						ok: false,
+						reason: "transition-release-failed",
+						message: repair,
+					};
+				}
+			}
+			return result;
 		},
 	};
 }
@@ -210,26 +256,19 @@ export async function acquireSourceLock(input: {
 }): Promise<BrowserUseSourceLockAcquireResult> {
 	const transitionPath = `${input.lockPath}.reclaim`;
 	const repair = repairMessage(input.subject, input.lockPath);
-	const transitionState = await readOwnedFile(transitionPath);
-	if (transitionState.status !== "missing") {
-		return {
-			ok: false,
-			reason: transitionState.status === "unreadable" ? "repair-required" : "contended",
-			message: repair,
-		};
-	}
-
 	const owner = newOwner();
 	const direct = await createOwnedFile(input.lockPath, owner);
 	if (direct.status === "created") {
 		if (!(await transitionIsAbsent(transitionPath))) {
+			await removeIfOwned(input.lockPath, direct.raw);
 			return { ok: false, reason: "repair-required", message: repair };
 		}
 		const current = await readOwnedFile(input.lockPath);
 		if (current.status !== "present" || current.raw !== direct.raw) {
+			await removeIfOwned(input.lockPath, direct.raw);
 			return { ok: false, reason: "contended", message: repair };
 		}
-		return { ok: true, ...handleFor(input.lockPath, owner, direct.raw) };
+		return { ok: true, ...handleFor(input.lockPath, owner, direct.raw, repair) };
 	}
 	if (direct.status === "failed") {
 		return { ok: false, reason: "repair-required", message: repair };
@@ -276,10 +315,13 @@ export async function acquireSourceLock(input: {
 	} finally {
 		transitionReleased = await transition.release();
 	}
+	if (replacement?.status === "created" && !transitionReleased) {
+		await removeIfOwned(input.lockPath, replacement.raw);
+	}
 	if (replacement?.status !== "created" || !transitionReleased) {
 		return { ok: false, reason: "repair-required", message: repair };
 	}
-	return { ok: true, ...handleFor(input.lockPath, owner, replacement.raw) };
+	return { ok: true, ...handleFor(input.lockPath, owner, replacement.raw, repair) };
 }
 
 /**
@@ -303,11 +345,17 @@ export async function withSourceLock<T>(
 			message: acquired.message,
 		};
 	}
+	let value: T;
 	try {
-		return { acquired: true, value: await body() };
-	} finally {
+		value = await body();
+	} catch (error) {
 		await acquired.release();
+		throw error;
 	}
+	const released = await acquired.release();
+	return released.ok
+		? { acquired: true, released: true, value }
+		: { acquired: true, released: false, value, release_failure: released };
 }
 
 /**
@@ -340,6 +388,7 @@ export async function writeSourceFileAtomically(input: {
 			await handle.close();
 		}
 		await rename(temporary, input.path);
+		created = false;
 	} finally {
 		if (created) await rm(temporary, { force: true }).catch(() => undefined);
 	}

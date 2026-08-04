@@ -200,7 +200,7 @@ private enum SigningKeyHandleLocator {
 /// A reconstructed key plus custody evidence admitted by the broker.
 private struct AdmittedSigningKey {
     let key: SecureEnclave.P256.Signing.PrivateKey
-    let presenceBacked: Bool
+    let presencePolicy: String
 }
 
 private enum ApprovalBrokerCommandSupport {
@@ -283,7 +283,7 @@ private enum ApprovalBrokerCommandSupport {
         guard verifier.key_id == decoded.verifierKeyID else {
             throw BrokerError.signingKeyCustodyMismatch
         }
-        return AdmittedSigningKey(key: key, presenceBacked: decoded.presenceBacked)
+        return AdmittedSigningKey(key: key, presencePolicy: decoded.presencePolicy)
     }
 
     /// Explicitly enroll the first signing identity. Never replaces an item.
@@ -331,7 +331,7 @@ private enum ApprovalBrokerCommandSupport {
 
     private static func decodeCustodyRecord(
         _ data: Data
-    ) throws -> (representation: Data, verifierKeyID: String, presenceBacked: Bool) {
+    ) throws -> (representation: Data, verifierKeyID: String, presencePolicy: String) {
         let expectedKeys: Set<String> = [
             "schema_version", "presence_policy", "verifier_key_id", "key_representation",
         ]
@@ -347,9 +347,10 @@ private enum ApprovalBrokerCommandSupport {
         else {
             throw BrokerError.signingKeyCustodyMismatch
         }
-        let presenceBacked = presencePolicy == SigningKeyHandleLocator.presencePolicy
-        guard presenceBacked else { throw BrokerError.signingKeyCustodyMismatch }
-        return (representation, verifierKeyID, presenceBacked)
+        guard presencePolicy == SigningKeyHandleLocator.presencePolicy else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        return (representation, verifierKeyID, presencePolicy)
     }
 
     static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> ReviewedActionVerifierIdentity {
@@ -412,7 +413,7 @@ private enum ApprovalBrokerCommandSupport {
             receiptID: receiptID,
             issuedAtEpochMilliseconds: issuedAt,
             verifierKeyID: verifier.key_id,
-            presenceBacked: admittedKey.presenceBacked
+            presenceBacked: admittedKey.presencePolicy == SigningKeyHandleLocator.presencePolicy
         )
         let digest = Data(SHA256.hash(
             data: try ReviewedActionPromotionProtocol.canonicalPayload(for: unsigned)

@@ -160,6 +160,38 @@ describe("Reviewed Action external-human approval boundary", () => {
 		});
 	});
 
+	test("forwards signing-key custody refusals from the broker", async () => {
+		for (const [brokerCode, routerCode] of [
+			["signing-key-missing", "action_promotion_signing_key_missing"],
+			[
+				"signing-key-already-enrolled",
+				"action_promotion_signing_key_already_enrolled",
+			],
+			[
+				"signing-key-custody-invalid",
+				"action_promotion_signing_key_custody_invalid",
+			],
+		] as const) {
+			const message = `broker refusal: ${brokerCode}`;
+			const broker: BrowserUseReviewedActionPromotionBrokerPort = {
+				async issueReviewedActionPromotion() {
+					return { ok: false, rejection: { code: brokerCode, message } };
+				},
+			};
+			const router = createReviewedActionPromotionRouter({
+				broker,
+				verifier: verifier(),
+			});
+			expect(
+				await router.requestPromotion({
+					facts: FACTS,
+					candidate_bytes: "candidate",
+					approval_reference: "review-1",
+				}),
+			).toEqual({ ok: false, code: routerCode, message });
+		}
+	});
+
 	test("presence-backed approval binds exact source commit, bytes, origin, audit, schemas, and postcondition", () => {
 		expect(verifyReviewedActionApproval({ facts: FACTS, receipts: [receipt()], verifier: verifier() })).toMatchObject({ ok: true, receipt_id: "receipt-1" });
 	});

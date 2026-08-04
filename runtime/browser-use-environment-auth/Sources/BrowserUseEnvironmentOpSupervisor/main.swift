@@ -687,10 +687,9 @@ private func profilePolicyCheck(
     guard mkdtemp(&templateBytes) != nil else {
         return ["status": "blocked", "cause": "profile-policy-unsafe"]
     }
-    let snapshotDirectory = String(
-        decoding: templateBytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
-        as: UTF8.self
-    )
+    let snapshotDirectory = templateBytes.withUnsafeBufferPointer {
+        String(cString: $0.baseAddress!)
+    }
     defer { try? FileManager.default.removeItem(atPath: snapshotDirectory) }
     var snapshotDirectoryMetadata = stat()
     guard lstat(snapshotDirectory, &snapshotDirectoryMetadata) == 0,
@@ -888,12 +887,13 @@ private func openStableLockedLoginDataSnapshot(
           lstat(sourcePath, &sourcePathAfter) == 0,
           loginDataMetadataIsStable(sourceBefore, sourceAfter),
           loginDataMetadataIsStable(sourceBefore, sourcePathAfter),
-          sidecarPaths.allSatisfy(loginDataSidecarIsEmptyOrMissing),
-          close(snapshotDescriptor) == 0
+          sidecarPaths.allSatisfy(loginDataSidecarIsEmptyOrMissing)
     else {
         return nil
     }
+    let snapshotCloseResult = close(snapshotDescriptor)
     snapshotDescriptor = -1
+    guard snapshotCloseResult == 0 else { return nil }
     guard profileSnapshotFileIsOwned(snapshotPath) else { return nil }
 
     var database: OpaquePointer?

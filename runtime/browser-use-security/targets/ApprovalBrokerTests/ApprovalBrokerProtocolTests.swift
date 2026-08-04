@@ -164,7 +164,7 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         }
     }
 
-    func testUnsignedReceiptRequiresCustodyDerivedPresenceEvidence() throws {
+    func testUnsignedReceiptRefusesUnbackedPresence() throws {
         let unsigned = try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
             request: request,
             receiptID: "receipt-custody-derived-presence",

@@ -90,6 +90,9 @@ export type BrowserUseReviewedActionPromotionBrokerPort = {
 						| "biometric-capability-missing"
 						| "presence-cancelled"
 						| "headless-environment"
+						| "signing-key-missing"
+						| "signing-key-already-enrolled"
+						| "signing-key-custody-invalid"
 						| "broker-failed";
 					message: string;
 				};
