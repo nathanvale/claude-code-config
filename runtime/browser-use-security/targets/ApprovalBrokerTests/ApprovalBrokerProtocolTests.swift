@@ -164,6 +164,35 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         }
     }
 
+    func testAttestationReviewShowsSignedRunAlongsideConflictingDisplayEntry() throws {
+        let brokerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ApprovalBroker/ApprovalBroker.swift")
+        let source = try String(contentsOf: brokerURL, encoding: .utf8)
+        let reviewStart = try XCTUnwrap(
+            source.range(of: "static func reviewHumanIdentityAttestation(")
+        )
+        let reviewEnd = try XCTUnwrap(
+            source.range(of: "static func promotionReceipt(", range: reviewStart.upperBound..<source.endIndex)
+        )
+        let reviewBody = String(source[reviewStart.lowerBound..<reviewEnd.lowerBound])
+        XCTAssertTrue(reviewBody.contains("runID: String"))
+        XCTAssertTrue(reviewBody.contains(
+            #"SIGNED RUN ID\n\(runID)\n\nDISPLAY ENTRIES\n\(display.joined(separator: "\n"))"#
+        ))
+        let subjectRunID = "run-signed"
+        let conflictingDisplay = ["Run ID: run-displayed"]
+        let renderedReview = "SIGNED RUN ID\n\(subjectRunID)\n\nDISPLAY ENTRIES\n\(conflictingDisplay.joined(separator: "\n"))"
+        XCTAssertTrue(renderedReview.contains("SIGNED RUN ID\nrun-signed"))
+        XCTAssertTrue(renderedReview.contains("DISPLAY ENTRIES\nRun ID: run-displayed"))
+
+        let grantStart = try XCTUnwrap(source.range(of: "static func humanIdentityGrant("))
+        let grantBody = String(source[grantStart.lowerBound...])
+        XCTAssertTrue(grantBody.contains("let runID = subject[\"run_id\"] as? String"))
+        XCTAssertTrue(grantBody.contains("runID: runID"))
+    }
+
     func testUnsignedReceiptRefusesUnbackedPresence() throws {
         let unsigned = try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
             request: request,

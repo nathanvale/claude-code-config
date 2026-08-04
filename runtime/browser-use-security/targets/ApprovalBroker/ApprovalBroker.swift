@@ -443,6 +443,7 @@ private enum ApprovalBrokerCommandSupport {
     }
 
     static func reviewHumanIdentityAttestation(
+        runID: String,
         boundFacts: [String: Any],
         display: [String]
     ) throws {
@@ -461,7 +462,7 @@ private enum ApprovalBrokerCommandSupport {
         textView.isEditable = false
         textView.isSelectable = true
         textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        textView.string = "DISPLAY ENTRIES\n\(display.joined(separator: "\n"))\n\nBOUND FACTS\n\(factsText)"
+        textView.string = "SIGNED RUN ID\n\(runID)\n\nDISPLAY ENTRIES\n\(display.joined(separator: "\n"))\n\nBOUND FACTS\n\(factsText)"
         let scrollView = NSScrollView(frame: textView.frame)
         scrollView.hasVerticalScroller = true
         scrollView.documentView = textView
@@ -545,6 +546,7 @@ private enum ApprovalBrokerCommandSupport {
             }
         }
         try reviewHumanIdentityAttestation(
+            runID: runID,
             boundFacts: boundFacts,
             display: display
         )

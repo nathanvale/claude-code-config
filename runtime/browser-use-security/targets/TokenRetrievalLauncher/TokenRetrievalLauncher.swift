@@ -49,6 +49,28 @@ enum TokenItemLocator {
 }
 
 struct TokenRetrievalLauncher {
+    private static func entitlementQualifiedTokenAccessGroup() throws -> String {
+        let task = SecTaskCreateFromSelf(nil)
+        guard let task,
+              let groups = SecTaskCopyValueForEntitlement(
+                  task,
+                  "keychain-access-groups" as CFString,
+                  nil
+              ) as? [String]
+        else {
+            throw LauncherError.entitlementMissing
+        }
+        let suffix = ".\(TokenItemLocator.accessGroup)"
+        let matchingGroups = groups.filter { $0.hasSuffix(suffix) }
+        guard matchingGroups.count == 1,
+              let entitlementGroup = matchingGroups.first
+        else {
+            throw LauncherError.entitlementMissing
+        }
+        let appIdentifierPrefix = entitlementGroup.dropLast(TokenItemLocator.accessGroup.count)
+        return String(appIdentifierPrefix) + TokenItemLocator.accessGroup
+    }
+
     /// Read EXACTLY one token item from the private data-protection group.
     ///
     /// Zero matches -> `tokenItemMissing`; more than one -> `tokenItemAmbiguous`.
@@ -63,10 +85,11 @@ struct TokenRetrievalLauncher {
     /// protection, or a synchronizing/backup-eligible one) is rejected as
     /// `tokenAccessibilityMismatch` rather than accepted.
     static func readSingleTokenItem() throws -> Data {
+        let accessGroup = try entitlementQualifiedTokenAccessGroup()
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: TokenItemLocator.service,
-            kSecAttrAccessGroup as String: TokenItemLocator.accessGroup,
+            kSecAttrAccessGroup as String: accessGroup,
             kSecAttrSynchronizable as String: false,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnData as String: true,
