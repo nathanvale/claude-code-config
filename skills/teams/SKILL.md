@@ -120,6 +120,7 @@ Common routes:
 | who is this person | `whois "<name>"`, `people` |
 | two people, same name | `disambiguate "<name>"` |
 | what got reacted to | `reactions` |
+| what was asked of me | `requests --to-me` (candidates, judge them) |
 
 Add `--json` to any command for a structured envelope. Diagnostics go to
 stderr, so `--json` stdout stays parseable.
@@ -168,9 +169,13 @@ what is worth interrupting you for.
 - **Unread is not per-message.** This cache keeps no per-message read horizon.
   `unread` reports unread *activity-feed items* and *conversations*; channel
   threads carry no read flag at all.
-- **`decisions`, `action-items` and `standup` are regex heuristics**, not
-  summarizers. They are flagged `heuristic: true` in JSON and carry a caveat in
-  text. Treat their output as candidates to check, never as findings.
+- **`requests`, `decisions` and `standup` retrieve candidates, they do not
+  classify.** Each row carries its evidence — `matched` (which phrase fired),
+  `addressed_to_me`, `is_question`, `automated` — because deciding whether a
+  message *is* a request needs tense, speaker and addressee, which keywords
+  cannot see. Read the evidence and judge; never quote their output as a
+  finding. `requests` ranks addressed-to-you questions first and drops bot
+  PR/deploy traffic (`--include-automated` keeps it, `--to-me` narrows harder).
 
 ## The Corpus
 

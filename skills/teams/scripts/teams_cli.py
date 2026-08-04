@@ -36,7 +36,7 @@ from teams_output import (  # noqa: E402
     FAILURE_CONFIG_INVALID,
     FAILURE_NOT_FOUND,
     FAILURE_STORE_NOT_FOUND,
-    HEURISTIC_CAVEAT,
+    CANDIDATE_CAVEAT,
     emit_failure,
     emit_json,
     warn,
@@ -108,14 +108,18 @@ COMMANDS: list[dict] = [
     {"name": "disambiguate", "group": "identity", "heuristic": False,
      "summary": "Separate distinct people who share a display name.",
      "usage": "disambiguate <display-name>"},
-    {"name": "decisions", "group": "heuristic", "heuristic": True,
-     "summary": "Messages that look like decisions. Regex-only, noisy.",
-     "usage": "decisions [--channel NAME] [--since YYYY-MM-DD]"},
-    {"name": "action-items", "group": "heuristic", "heuristic": True,
-     "summary": "Messages that look like commitments. Regex-only, noisy.",
-     "usage": "action-items [--since YYYY-MM-DD] [--limit N]"},
-    {"name": "standup", "group": "heuristic", "heuristic": True,
-     "summary": "Bucket recent watched activity for standup. Regex-only, noisy.",
+    {"name": "requests", "group": "candidates", "heuristic": True,
+     "summary": "Candidate requests: messages with request vocabulary, ranked "
+                "with evidence (what matched, addressed to you, question). "
+                "Retrieval for you to judge, NOT a classified action-item list.",
+     "usage": "requests [--to-me] [--since YYYY-MM-DD] [--limit N] [--include-automated]"},
+    {"name": "decisions", "group": "candidates", "heuristic": True,
+     "summary": "Candidate decisions: messages with decision vocabulary, each "
+                "with the matched phrase as evidence. Judge them yourself.",
+     "usage": "decisions [--channel NAME] [--since YYYY-MM-DD] [--include-automated]"},
+    {"name": "standup", "group": "candidates", "heuristic": True,
+     "summary": "Recent watched activity bucketed for standup: what you said, "
+                "what was addressed to you, which tickets came up.",
      "usage": "standup [--hours N]"},
 ]
 
@@ -756,23 +760,43 @@ def cmd_disambiguate(reader: TeamsReader, cfg: Config, args, warnings: list[str]
 
 def cmd_decisions(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
     conv_id = one_channel(reader, args.channel) if args.channel else None
-    messages = reader.decisions(conv_id, since=parse_date(args.since))[: args.limit]
+    items = reader.decisions(conv_id, since=parse_date(args.since),
+                             include_automated=args.include_automated)[: args.limit]
     if not args.json:
-        print(HEURISTIC_CAVEAT)
-        print_messages(reader, messages, "Possible decisions")
-    return msg_rows(messages)
-
-
-def cmd_action_items(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
-    identity = resolve_identity(reader, cfg, warnings)
-    items = reader.action_items(identity=identity, name_gate=cfg.name_gate,
-                                since=parse_date(args.since))[: args.limit]
-    if not args.json:
-        print(HEURISTIC_CAVEAT)
-        print(f"Possible action items ({len(items)})")
+        print(CANDIDATE_CAVEAT)
+        print(f"Candidate decisions ({len(items)})")
+        names = reader.conversations()
         for x in items:
-            tag = "FROM-YOU" if x["from_me"] else ("TO-YOU" if x["to_me"] else "        ")
-            print(f"  [{fmt_time(x['time'])}] {tag} {x['author']}: {truncate(x['content'], 130)}")
+            conv = names.get(x["conversation_id"])
+            where = f" · {conv.name}" if conv and conv.name else ""
+            print(f"  [{fmt_time(x['time'])}] matched {x['matched']!r}{where}")
+            print(f"    {x['author']}: {truncate(x['content'], 130)}")
+    return items
+
+
+def cmd_requests(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
+    identity = resolve_identity(reader, cfg, warnings)
+    items = reader.requests(identity=identity, name_gate=cfg.name_gate,
+                            since=parse_date(args.since),
+                            addressed_only=args.to_me,
+                            include_automated=args.include_automated)[: args.limit]
+    if not args.json:
+        print(CANDIDATE_CAVEAT)
+        print(f"Candidate requests ({len(items)}, strongest first)")
+        names = reader.conversations()
+        for x in items:
+            flags = []
+            if x["addressed_to_me"]:
+                flags.append("TO-YOU")
+            if x["from_me"]:
+                flags.append("FROM-YOU")
+            if x["is_question"]:
+                flags.append("?")
+            tag = " ".join(flags) or "-"
+            conv = names.get(x["conversation_id"])
+            where = f" · {conv.name}" if conv and conv.name else ""
+            print(f"  [{fmt_time(x['time'])}] [{tag}] matched {x['matched']!r}{where}")
+            print(f"    {x['author']}: {truncate(x['content'], 130)}")
     return items
 
 
@@ -797,7 +821,7 @@ def cmd_standup(reader: TeamsReader, cfg: Config, args, warnings: list[str]):
                      "content": m.content} for key, m in result["tickets"]],
     }
     if not args.json:
-        print(HEURISTIC_CAVEAT)
+        print(CANDIDATE_CAVEAT)
         print(f"Standup prep — last {hours}h")
         print(f"\n  You said ({len(result['mine'])}):")
         for m in result["mine"][:10]:
@@ -831,7 +855,7 @@ HANDLERS = {
     "whoami": cmd_whoami,
     "disambiguate": cmd_disambiguate,
     "decisions": cmd_decisions,
-    "action-items": cmd_action_items,
+    "requests": cmd_requests,
     "standup": cmd_standup,
 }
 
@@ -1019,14 +1043,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("disambiguate", "Separate distinct people sharing a display name.")
     p.add_argument("name")
 
-    p = add("decisions", "HEURISTIC: messages that look like decisions.")
+    p = add("decisions", "Candidate decisions, with the matched phrase as evidence.")
     p.add_argument("--channel", default=None)
     p.add_argument("--since", default=None)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--include-automated", action="store_true",
+                   help="keep bot/PR/deploy notifications (excluded by default)")
 
-    p = add("action-items", "HEURISTIC: messages that look like commitments.")
+    p = add("requests", "Candidate requests, ranked, with evidence to judge them.")
     p.add_argument("--since", default=None)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--to-me", action="store_true",
+                   help="only messages that appear addressed to you")
+    p.add_argument("--include-automated", action="store_true",
+                   help="keep bot/PR/deploy notifications (excluded by default)")
 
     p = add("standup", "HEURISTIC: bucket recent activity for standup.")
     p.add_argument("--hours", type=int, default=None)

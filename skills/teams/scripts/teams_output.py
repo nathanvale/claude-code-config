@@ -104,7 +104,10 @@ def emit_failure(command: str, category: str, message: str, *,
 
 
 # The caveat attached to every regex-derived capability, in both output modes.
-HEURISTIC_CAVEAT = (
-    "HEURISTIC: this is a regex grep over message text, not a summarizer. "
-    "Expect false positives and missed items."
+# For the candidate-retrieval commands. These do not claim to have classified
+# anything: they return keyword matches plus the evidence needed to judge them.
+CANDIDATE_CAVEAT = (
+    "CANDIDATES, not conclusions: keyword retrieval over message text. "
+    "Each row shows what matched and who it was addressed to — read them and "
+    "decide. A phrase match is not proof of a request or a decision."
 )

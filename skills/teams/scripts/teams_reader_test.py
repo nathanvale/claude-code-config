@@ -30,7 +30,10 @@ from teams_reader import Message, SelfIdentity, TeamsReader  # noqa: E402
 SKILL_DIR = Path(__file__).resolve().parent.parent
 CLI = SKILL_DIR / "scripts" / "teams_cli.py"
 
-NOW = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+# Relative to the moment the tests run, NOT a fixed date. standup_prep filters
+# through digest()'s rolling `hours` window, so absolute fixture timestamps
+# silently fall out of range as they age and the suite rots.
+NOW = datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------- fakes
@@ -241,18 +244,52 @@ def test_standup_flags_questions_using_derived_identity():
     assert result["mine"], "own messages should be bucketed separately"
 
 
-def test_action_items_flags_to_me_without_hardcoded_name():
+def test_requests_flags_addressed_without_hardcoded_name():
     reader = acme_reader()
-    items = reader.action_items(identity=reader.self_identity())
-    to_me = [i for i in items if i["to_me"]]
+    items = reader.requests(identity=reader.self_identity())
+    to_me = [i for i in items if i["addressed_to_me"]]
     assert any("Priya please review" in i["content"] for i in to_me)
 
 
-def test_action_items_disables_to_me_when_identity_unresolved():
+def test_requests_disables_addressed_when_identity_unresolved():
     reader = acme_reader()
-    items = reader.action_items(identity=None)
+    items = reader.requests(identity=None)
     assert items, "still returns candidates"
-    assert not any(i["to_me"] for i in items), "but never guesses 'to me'"
+    assert not any(i["addressed_to_me"] for i in items), "but never guesses 'to me'"
+
+
+def test_requests_returns_evidence_not_a_verdict():
+    """The contract: retrieval hands back what matched, so the caller can judge."""
+    reader = acme_reader()
+    items = reader.requests(identity=reader.self_identity())
+    assert items
+    for item in items:
+        assert item["matched"], "every candidate must say which phrase fired"
+        assert item["matched"] in item["content"].lower()
+        assert "is_question" in item and "automated" in item
+
+
+def test_requests_ranks_addressed_questions_first():
+    reader = acme_reader()
+    items = reader.requests(identity=reader.self_identity())
+    top = items[0]
+    assert top["addressed_to_me"], "messages aimed at you must outrank generic hits"
+
+
+def test_requests_excludes_automated_notifications_by_default():
+    """Bot PR/deploy traffic uses request vocabulary but is never a request."""
+    bot = msg("Please review: My PR POS-1 by someone · Pull Request #285 · Acme",
+              author="Bot")
+    reader = FakeReader([bot], ACME_PROFILES, user_guid=ACME_GUID)
+    assert reader.requests() == []
+    assert len(reader.requests(include_automated=True)) == 1
+
+
+def test_decisions_returns_matched_phrase():
+    reader = acme_reader()
+    items = reader.decisions()
+    assert items
+    assert all(i["matched"] for i in items)
 
 
 # ---------------------------------------------------------------- config
@@ -385,7 +422,7 @@ def test_live_commands_emit_valid_envelope(command: str):
 
 
 @live
-@pytest.mark.parametrize("command", ["decisions", "action-items", "standup"])
+@pytest.mark.parametrize("command", ["decisions", "requests", "standup"])
 def test_live_heuristic_commands_are_flagged(command: str):
     payload = run_cli(command)
     assert payload["heuristic"] is True, "heuristic output must be labelled as such"

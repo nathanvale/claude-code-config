@@ -607,25 +607,52 @@ class TeamsReader:
         r"\b(we (?:decided|agreed|will go with|should)|let'?s (?:go with|do)|"
         r"final(?:ised|ized)?|the plan is|conclusion|going with|agreed to)\b", re.I)
 
-    def decisions(self, conversation_id: str | None = None, since: datetime | None = None) -> list[Message]:
-        """Messages that look like decisions.
+    def decisions(self, conversation_id: str | None = None,
+                  since: datetime | None = None,
+                  include_automated: bool = False) -> list[dict]:
+        """Candidate decisions: messages carrying decision vocabulary.
 
-        HEURISTIC: a regex grep over message text, not a summarizer. Expect
-        false positives.
+        Retrieval, not classification — see ``requests``. Returns the matched
+        phrase as evidence so the caller can judge whether a decision was
+        actually made, or merely discussed.
         """
         out = []
         for m in self.iter_messages({conversation_id} if conversation_id else None):
             if since and (not m.time or m.time < since):
                 continue
-            if self._DECISION.search(m.content):
-                out.append(m)
-        out.sort(key=lambda m: m.time or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            hit = self._DECISION.search(m.content)
+            if not hit:
+                continue
+            automated = bool(self._AUTOMATED.search(m.content))
+            if automated and not include_automated:
+                continue
+            out.append({
+                "time": m.time,
+                "author": m.author,
+                "author_mri": m.creator_mri,
+                "from_me": m.from_me,
+                "matched": hit.group(0).lower(),
+                "automated": automated,
+                "conversation_id": m.conversation_id,
+                "content": m.content,
+            })
+        out.sort(key=lambda x: x["time"] or datetime.min.replace(tzinfo=timezone.utc),
+                 reverse=True)
         return out
 
     # ---- CAP10: action-item detector (feature 11) -----------------------------
     _ACTION = re.compile(
         r"\b(can you|could you|please|pls|will you|need you to|"
         r"assigned to|todo|to-do|action item|follow up|by (?:eod|tomorrow|friday|monday))\b", re.I)
+
+    # Automated traffic that matches the request vocabulary without ever being a
+    # request: PR/deploy/pipeline notifications relayed into channels by bots and
+    # integrations. Excluding these is the single biggest precision win, because
+    # they are high-volume and never actionable in the "someone asked me" sense.
+    _AUTOMATED = re.compile(
+        r"(pull request #\d+|·\s*Pull Request|\bPR #\d+\b.*\bhttps?://|"
+        r"deploy-ha\.|octopus|\bpipeline (?:failed|succeeded)\b|"
+        r"\bbuild \d+\b|jenkins|\brelease \d+\.\d+)", re.I)
 
     def _name_gate(self, identity: SelfIdentity | None,
                    name_gate: list[str] | None) -> list[str]:
@@ -650,28 +677,65 @@ class TeamsReader:
         gate.extend(g.lower() for g in (name_gate or []) if g)
         return list(dict.fromkeys(gate))
 
-    def action_items(self, identity: SelfIdentity | None = None,
-                     name_gate: list[str] | None = None,
-                     since: datetime | None = None) -> list[dict]:
-        """Messages that look like commitments. Flags to_me / from_me.
+    def requests(self, identity: SelfIdentity | None = None,
+                 name_gate: list[str] | None = None,
+                 since: datetime | None = None,
+                 addressed_only: bool = False,
+                 include_automated: bool = False) -> list[dict]:
+        """Candidate requests: messages carrying request vocabulary.
 
-        HEURISTIC: a regex grep over message text, not a summarizer. Expect
-        false positives.
+        This is a RETRIEVAL step, not a classifier. It deliberately favours
+        recall and hands the caller the evidence needed to judge — ``matched``
+        (which phrase fired), ``addressed_to_me``, ``is_question``, ``automated``
+        — rather than asserting that a message *is* an action item. Deciding
+        that requires reading tense, speaker and addressee, which a regex cannot
+        do; the caller (an LLM, or you) does it with the evidence supplied.
+
+        Ranked so the strongest candidates surface first: addressed to you and
+        phrased as a question beats a keyword hit in a bot notification.
         """
         gate = self._name_gate(identity, name_gate)
         out = []
         for m in self.iter_messages():
             if since and (not m.time or m.time < since):
                 continue
-            if not self._ACTION.search(m.content):
+            hit = self._ACTION.search(m.content)
+            if not hit:
+                continue
+            automated = bool(self._AUTOMATED.search(m.content))
+            if automated and not include_automated:
                 continue
             lowered = m.content.lower()
-            to_me = any(g in lowered for g in gate) if gate else False
-            out.append({"time": m.time, "author": m.author, "from_me": m.from_me,
-                        "to_me": to_me, "conversation_id": m.conversation_id,
-                        "content": m.content})
-        out.sort(key=lambda x: x["time"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            addressed = any(g in lowered for g in gate) if gate else False
+            if addressed_only and not addressed:
+                continue
+            out.append({
+                "time": m.time,
+                "author": m.author,
+                "author_mri": m.creator_mri,
+                "from_me": m.from_me,
+                "addressed_to_me": addressed,
+                "matched": hit.group(0).lower(),
+                "is_question": "?" in m.content,
+                "automated": automated,
+                "conversation_id": m.conversation_id,
+                "content": m.content,
+            })
+
+        def rank(row: dict) -> tuple:
+            return (
+                not row["addressed_to_me"],   # addressed to you first
+                not row["is_question"],       # then explicit questions
+                row["from_me"],               # your own messages last
+                -(row["time"].timestamp() if row["time"] else 0),
+            )
+
+        out.sort(key=rank)
         return out
+
+    # Back-compat alias: the original name asserted a verdict the implementation
+    # cannot deliver. `requests` describes what it actually returns.
+    action_items = requests
 
     # ---- CAP11: standup prep (feature 12) -------------------------------------
     # Generic Jira-style key. Trackers with another shape (GitHub #1234,
