@@ -167,6 +167,92 @@ async function withCommittedCatalogSource<T>(
 	return await run({ GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot });
 }
 
+async function createPublicCatalogSource(
+	base: string,
+	runbook: BrowserUseRunbook,
+): Promise<string> {
+	const sourceRoot = join(base, "public-catalog-source");
+	mkdirSync(
+		join(
+			sourceRoot,
+			"skills/browser-use/runbooks",
+			runbook.service_id,
+			runbook.flow_id,
+		),
+		{ recursive: true },
+	);
+	mkdirSync(join(sourceRoot, "skills/browser-use/actions"), { recursive: true });
+	writeFileSync(
+		join(sourceRoot, "skills/browser-use/actions/registry.json"),
+		'{"actions":[]}\n',
+		"utf-8",
+	);
+	writeFileSync(
+		join(
+			sourceRoot,
+			"skills/browser-use/runbooks",
+			runbook.service_id,
+			runbook.flow_id,
+			"runbook.json",
+		),
+		`${JSON.stringify(runbook, null, 2)}\n`,
+		"utf-8",
+	);
+	await gitFixtureCommand({ cwd: sourceRoot }, "init", "-q");
+	await gitFixtureCommand({ cwd: sourceRoot }, "config", "user.email", "test@example.invalid");
+	await gitFixtureCommand({ cwd: sourceRoot }, "config", "user.name", "Catalog Test");
+	await gitFixtureCommand({ cwd: sourceRoot }, "add", "skills/browser-use/runbooks", "skills/browser-use/actions");
+	await gitFixtureCommand({ cwd: sourceRoot }, "commit", "-qm", "initial catalog");
+	return sourceRoot;
+}
+
+async function commitPublicCatalogRunbook(
+	sourceRoot: string,
+	runbook: BrowserUseRunbook,
+	message: string,
+): Promise<void> {
+	const relativePath = `skills/browser-use/runbooks/${runbook.service_id}/${runbook.flow_id}/runbook.json`;
+	writeFileSync(
+		join(sourceRoot, relativePath),
+		`${JSON.stringify(runbook, null, 2)}\n`,
+		"utf-8",
+	);
+	await gitFixtureCommand({ cwd: sourceRoot }, "add", relativePath);
+	await gitFixtureCommand({ cwd: sourceRoot }, "commit", "-qm", message);
+}
+
+async function publicCatalogDigest(
+	env: Record<string, string | undefined>,
+	sourceRoot: string,
+): Promise<string> {
+	const listed = await runForTest(
+		["runbook", "list", "--json"],
+		makeRuntime({ env, sourceCheckoutRoot: sourceRoot }),
+	);
+	expect(listed.exitCode).toBe(0);
+	const digest = (parseJson(listed.stdout).data as Record<string, unknown>)
+		.source_catalog_digest;
+	if (typeof digest !== "string") throw new Error("source digest missing");
+	return digest;
+}
+
+async function activatePublicCatalog(input: {
+	env: Record<string, string | undefined>;
+	sourceRoot: string;
+	digest: string;
+	expectedEpoch: number;
+}) {
+	return await runForTest(
+		[
+			"runbook", "activate",
+			"--catalog-digest", input.digest,
+			"--expected-epoch", String(input.expectedEpoch),
+			"--json",
+		],
+		makeRuntime({ env: input.env, sourceCheckoutRoot: input.sourceRoot }),
+	);
+}
+
 function writeHandoff(
 	base: string,
 	adapterId: string,
@@ -729,6 +815,292 @@ describe("runbook family — live (U4 wiring)", () => {
 		const loaded = await loadSharedRun(store.deps, "run-runbook-1");
 		expect(loaded.ok).toBe(true);
 		if (loaded.ok) expect(loaded.run.state).toBe("confirmed");
+	});
+
+	test("a fresh public run racing activation retries wholly against one generation", async () => {
+		const store = await makeStore();
+		const firstRunbook = readOnlyRunbook();
+		const sourceRoot = await createPublicCatalogSource(store.base, firstRunbook);
+		const firstDigest = await publicCatalogDigest(store.env, sourceRoot);
+		expect((await activatePublicCatalog({
+			env: store.env,
+			sourceRoot,
+			digest: firstDigest,
+			expectedEpoch: 0,
+		})).exitCode).toBe(0);
+
+		const secondRunbook = {
+			...firstRunbook,
+			version: "3",
+			summary: "Read-only snapshot verification after activation.",
+		};
+		await commitPublicCatalogRunbook(
+			sourceRoot,
+			secondRunbook,
+			"second catalog",
+		);
+		const secondDigest = await publicCatalogDigest(store.env, sourceRoot);
+		const runId = "run-generation-race";
+		const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+		const browserCalls: Array<readonly string[]> = [];
+		let activationResult:
+			| Awaited<ReturnType<typeof activatePublicCatalog>>
+			| undefined;
+		let activationStarted = false;
+		const runtime = makeRuntime({
+			env: store.env,
+			sourceCheckoutRoot: sourceRoot,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.readFile(path, "utf-8"),
+				),
+			runCommand: async (input) => {
+				const semantic = input.args.slice(4);
+				browserCalls.push(semantic);
+				if (!activationStarted) {
+					activationStarted = true;
+					activationResult = await activatePublicCatalog({
+						env: store.env,
+						sourceRoot,
+						digest: secondDigest,
+						expectedEpoch: 1,
+					});
+				}
+				const data =
+					semantic[0] === "tab" && semantic[1] === "list"
+						? {
+								tabs: [
+									{
+										tabId: "t1",
+										active: true,
+										type: "page",
+										url: "https://example.test/",
+									},
+								],
+							}
+						: semantic[0] === "get" && semantic[1] === "url"
+							? { url: "https://example.test/" }
+							: semantic[0] === "snapshot"
+								? { snapshot: "@e1 button", refs: { "@e1": {} } }
+								: semantic[0] === "open"
+									? { opened: true }
+									: { selected: true };
+				return { exitCode: 0, stdout: agentSuccess(data), stderr: "" };
+			},
+		});
+
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(activationResult?.exitCode).toBe(0);
+		expect(result.exitCode).toBe(0);
+		const payload = parseJson(result.stdout) as {
+			data: {
+				run: {
+					run_id: string;
+					state: string;
+					run_execution_binding: {
+						generation_id: string;
+						activation_epoch: number;
+						runbook_version: string;
+					};
+				};
+			};
+		};
+		expect(payload.data.run).toMatchObject({
+			run_id: runId,
+			state: "confirmed",
+			run_execution_binding: {
+				generation_id: `gen-${secondDigest}`,
+				activation_epoch: 2,
+				runbook_version: "3",
+			},
+		});
+		expect(browserCalls.length).toBeGreaterThan(0);
+	});
+
+	test("a retained public run never falls forward when its pinned generation is missing", async () => {
+		const store = await makeStore();
+		const firstRunbook = readOnlyRunbook();
+		const sourceRoot = await createPublicCatalogSource(store.base, firstRunbook);
+		const firstDigest = await publicCatalogDigest(store.env, sourceRoot);
+		expect((await activatePublicCatalog({
+			env: store.env,
+			sourceRoot,
+			digest: firstDigest,
+			expectedEpoch: 0,
+		})).exitCode).toBe(0);
+
+		const templateRunId = "run-generation-template";
+		const templateHandoff = writeHandoff(
+			store.base,
+			"agent-browser",
+			templateRunId,
+		);
+		const templateRuntime = scriptedRuntime(store.env, [
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: "https://example.test/",
+						},
+					],
+				}),
+			},
+			{ stdout: agentSuccess({ selected: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ opened: true }) },
+			{ stdout: agentSuccess({ url: "https://example.test/" }) },
+			{ stdout: agentSuccess({ snapshot: "@e1 button", refs: { "@e1": {} } }) },
+		]);
+		const templateResult = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--handoff", templateHandoff,
+				"--tab", "t1",
+				"--json",
+			],
+			templateRuntime.runtime,
+		);
+		expect(templateResult.exitCode).toBe(0);
+		const templateRun = (
+			parseJson(templateResult.stdout).data as {
+				run: BrowserUseSharedRun;
+			}
+		).run;
+		expect(templateRun).toMatchObject({
+			state: "confirmed",
+			run_execution_binding: {
+				generation_id: `gen-${firstDigest}`,
+				activation_epoch: 1,
+			},
+		});
+		if (templateRun.run_execution_binding === undefined) {
+			throw new Error("public run omitted generation binding");
+		}
+
+		const secondRunbook = {
+			...firstRunbook,
+			version: "3",
+			summary: "Read-only replacement generation.",
+		};
+		await commitPublicCatalogRunbook(
+			sourceRoot,
+			secondRunbook,
+			"replacement catalog",
+		);
+		const secondDigest = await publicCatalogDigest(store.env, sourceRoot);
+		expect((await activatePublicCatalog({
+			env: store.env,
+			sourceRoot,
+			digest: secondDigest,
+			expectedEpoch: 1,
+		})).exitCode).toBe(0);
+
+		const retainedRunId = "run-retained-generation-missing";
+		const retainedEnvelope = handoffEnvelope("agent-browser", retainedRunId);
+		const retainedHandoff = join(store.base, "handoff-retained-generation.json");
+		writeFileSync(retainedHandoff, JSON.stringify(retainedEnvelope), "utf-8");
+		const parsedHandoff = parseHandoffFacts(JSON.stringify(retainedEnvelope));
+		if (!parsedHandoff.ok || parsedHandoff.kind !== "verified") {
+			throw new Error("retained handoff fixture invalid");
+		}
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId: retainedRunId,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: parsedHandoff.facts.handoffEvidenceId,
+		});
+		expect((await createSharedRun(store.deps, {
+			run_id: retainedRunId,
+			state: "needs-human",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: parsedHandoff.facts.handoffEvidenceId,
+			runbook_target_binding: {
+				schema_version: "1",
+				mode: "exact",
+				binding_id: candidateIdOf(targetEnvelopeId, ["adapter_page_id", "t1"]),
+			},
+			runbook_progress: {
+				schema_version: "1",
+				service_id: "oncore",
+				flow_id: "snapshot-verify",
+				runbook_version: "2",
+				next_step: 1,
+				total_steps: 2,
+			},
+			run_execution_binding: templateRun.run_execution_binding,
+			continuation: {
+				next_action_id: "runbook-resume:1",
+				summary: "Resume the retained read-only generation.",
+			},
+			mutation_dispatched: false,
+			artifacts: [],
+		})).ok).toBe(true);
+
+		await store.deps.fs.removeDirectoryRecursive(
+			join(
+				store.deps.paths.data.runbookGenerationsDir,
+				`gen-${firstDigest}`,
+			),
+		);
+		const activeProjection = await runForTest(
+			["runbook", "list", "--json"],
+			makeRuntime({ env: store.env, sourceCheckoutRoot: sourceRoot }),
+		);
+		expect(activeProjection.exitCode).toBe(0);
+		expect(parseJson(activeProjection.stdout).data).toMatchObject({
+			active_generation_id: `gen-${secondDigest}`,
+			active_epoch: 2,
+		});
+
+		const resumed = scriptedRuntime(store.env, []);
+		const refusal = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--run", retainedRunId,
+				"--handoff", retainedHandoff,
+				"--tab", "t1",
+				"--json",
+			],
+			resumed.runtime,
+		);
+		expect(refusal.exitCode).toBe(20);
+		expect(parseJson(refusal.stdout)).toMatchObject({
+			error: { code: "activation_generation_corrupt" },
+			continuation: { next_action_id: "activate_runbook_catalog" },
+		});
+		expect(resumed.calls).toEqual([]);
 	});
 
 	test("auth_context_ref keeps one shared run and dispatches the first business step once after proof", async () => {

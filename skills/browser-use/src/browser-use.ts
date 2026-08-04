@@ -4745,7 +4745,10 @@ function buildRunbookAuthDelivery(
  * @param input - Store-backed command input
  * @returns Process exit code
  */
-async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+async function runRunbookRun(
+	input: PlatformCommandInput,
+	generationConflictRetries = 1,
+): Promise<number> {
 	const flags = input.parsed.flagValues;
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
@@ -5164,6 +5167,16 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		});
 		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
+			// Target preparation is read-only. If activation wins before the fresh
+			// run commits its immutable binding, restart the public command once and
+			// prepare wholly against the newly selected manifest + epoch. Never carry
+			// the prior plan, target proof, or generation facts into the retry.
+			if (
+				created.code === "activation_epoch_conflict" &&
+				generationConflictRetries > 0
+			) {
+				return await runRunbookRun(input, generationConflictRetries - 1);
+			}
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(created.code, created.message),
