@@ -344,7 +344,10 @@ function startAuthCdpFixture(input: { initial: "neutral" | "login" | "ambiguous"
 	};
 }
 
-function authTokenPort(origin: string): BrowserUseEnvironmentTokenRetrievalPort {
+function authTokenPort(
+	origin: string,
+	counts?: { fetches: number; redeems: number },
+): BrowserUseEnvironmentTokenRetrievalPort {
 	const item = {
 		item_id: "item-fixture",
 		vault_id: "vault-fixture",
@@ -357,14 +360,20 @@ function authTokenPort(origin: string): BrowserUseEnvironmentTokenRetrievalPort 
 		listVaults: async () => ({ ok: true, vaults: [{ vault_id: "vault-fixture" }] }),
 		listLoginItems: async () => ({ ok: true, items: [item] }),
 		getLoginItem: async () => ({ ok: true, item }),
-		fetchCredentialField: async ({ field }) => ({
-			ok: true,
-			handle: { handle_id: `fixture-${field}`, field, expires_at_epoch_ms: 60_000 },
-		}),
-		redeemCredentialField: async () => ({
-			ok: true,
-			shape: { field: "password", byte_length: 12 },
-		}),
+		fetchCredentialField: async ({ field }) => {
+			if (counts !== undefined) counts.fetches += 1;
+			return {
+				ok: true,
+				handle: { handle_id: `fixture-${field}`, field, expires_at_epoch_ms: 60_000 },
+			};
+		},
+		redeemCredentialField: async () => {
+			if (counts !== undefined) counts.redeems += 1;
+			return {
+				ok: true,
+				shape: { field: "password", byte_length: 12 },
+			};
+		},
 	};
 }
 
@@ -737,21 +746,29 @@ describe("runbook family — live (U4 wiring)", () => {
 				{ stdout: agentSuccess({ url: `${cdp.origin}/login` }) },
 				{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
 			]);
-			runtime.authTokenRetrieval = authTokenPort(cdp.origin);
+			const credentialDispatches = { fetches: 0, redeems: 0 };
+			runtime.authTokenRetrieval = authTokenPort(
+				cdp.origin,
+				credentialDispatches,
+			);
 			runtime.runbookAuthTransport = () => cdp.transport;
-			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
-				proven: true,
-				proof: {
-					target_id,
-					page_id: "page-authenticated",
-					frame_id: "frame-auth",
-					origin: cdp.origin,
-					subject_reference: "subject-fixture",
-					account_reference: "account-fixture",
-					tenant_reference: "tenant-fixture",
-					identity_basis_digest: "identity-basis-fixture",
-				},
-			});
+			let proofDispatches = 0;
+			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => {
+				proofDispatches += 1;
+				return {
+					proven: true,
+					proof: {
+						target_id,
+						page_id: "page-authenticated",
+						frame_id: "frame-auth",
+						origin: cdp.origin,
+						subject_reference: "subject-fixture",
+						account_reference: "account-fixture",
+						tenant_reference: "tenant-fixture",
+						identity_basis_digest: "identity-basis-fixture",
+					},
+				};
+			};
 
 			const result = await runForTest(
 				[
@@ -771,6 +788,8 @@ describe("runbook family — live (U4 wiring)", () => {
 			expect(run.handoff_evidence_id).toBeDefined();
 			expect(run.state).toBe("confirmed");
 			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			expect(credentialDispatches).toEqual({ fetches: 2, redeems: 2 });
+			expect(proofDispatches).toBe(1);
 			const durable = await loadSharedRun(store.deps, runId);
 			expect(durable.ok).toBe(true);
 			if (durable.ok) {
@@ -948,6 +967,38 @@ describe("runbook family — live (U4 wiring)", () => {
 		});
 		expect(result.stdout).toContain("browser-use auth install-token");
 		expect(result.stdout).toContain("browser-use auth status --json");
+	});
+
+	test("production-shaped CLI without a proof owner refuses before browser dispatch", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, authContextRunbook("https://fixture.test"));
+		const runId = "run-runbook-auth-proof-absent";
+		const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+		const { runtime, calls } = scriptedRuntime(store.env, []);
+		runtime.authTokenRetrieval = authTokenPort("https://fixture.test");
+
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "fixture-auth",
+				"--flow", "business-after-login",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "human-identity-attestation-required" },
+			continuation: {
+				next_action_id: "inspect_task_run_result",
+			},
+			data: { external_effect: "none" },
+		});
+		expect(calls).toEqual([]);
+		expect((await loadSharedRun(store.deps, runId)).ok).toBe(false);
 	});
 
 	test("runbook run on a chrome handoff fails closed, never substitutes the lane (R11)", async () => {
@@ -1138,6 +1189,54 @@ describe("runbook family — live (U4 wiring)", () => {
 		if (loaded.ok) {
 			expect(loaded.run.runbook_target_binding).toBeUndefined();
 			expect(loaded.run.revision).toBe(1);
+		}
+	});
+
+	test("mutation-dispatched runbook restart returns unknown effect without browser calls", async () => {
+		const store = await makeStore();
+		const runId = "run-runbook-mutation-unknown";
+		seedRunbook(store.dataRoot, readOnlyRunbook());
+		const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+		const seed: Omit<BrowserUseSharedRun, "revision"> = {
+			run_id: runId,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: {
+				environment: "agent-chrome",
+				profile: "default",
+			},
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed-evidence",
+			mutation_dispatched: true,
+			artifacts: [],
+		};
+		expect((await createSharedRun(store.deps, seed)).ok).toBe(true);
+		const { runtime, calls } = scriptedRuntime(store.env, []);
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "oncore",
+				"--flow", "snapshot-verify",
+				"--run", runId,
+				"--handoff", handoffPath,
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "task_run_effect_unknown" },
+			data: { external_effect: "unknown" },
+			continuation: { next_action_id: "inspect_task_run_result" },
+		});
+		expect(calls).toEqual([]);
+		const durable = await loadSharedRun(store.deps, runId);
+		expect(durable.ok).toBe(true);
+		if (durable.ok) {
+			expect(durable.run).toMatchObject({
+				run_id: runId,
+				mutation_dispatched: true,
+			});
 		}
 	});
 

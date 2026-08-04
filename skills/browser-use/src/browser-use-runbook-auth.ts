@@ -142,9 +142,48 @@ export async function runBrowserUseRunbookAuth(
 	input: BrowserUseRunbookAuthInput,
 ): Promise<BrowserUseRunbookAuthResult> {
 	let run = input.run;
+	const persistedCandidate = run.auth_fragment?.fragment;
+	if (
+		run.auth_fragment !== undefined &&
+		validateAuthFragmentShape(persistedCandidate).length > 0
+	) {
+		return {
+			ok: false,
+			run,
+			failure: {
+				code: "auth_fragment_invalid",
+				message: "persisted authentication fragment is malformed or stale.",
+			},
+		};
+	}
 	let fragment = fragmentOf(run);
 	let binding: BrowserUseItemBinding | undefined;
 	let readyResume = false;
+	let postSubmitProofResume = false;
+	if (fragment !== undefined) {
+		const expectedOrigin = originOf(input.expected_url);
+		const stale =
+			fragment.binding.run_id !== run.run_id ||
+			fragment.binding.handoff_evidence_id !== run.handoff_evidence_id ||
+			fragment.binding.lane_id !== "agent-browser" ||
+			fragment.binding.environment !== run.environment_profile.environment ||
+			fragment.binding.profile !== run.environment_profile.profile ||
+			fragment.binding.service_id !== input.service_id ||
+			fragment.binding.auth_context !== input.auth_context_ref ||
+			fragment.binding.target_id !== input.target_id ||
+			expectedOrigin === undefined ||
+			fragment.binding.origin !== expectedOrigin;
+		if (stale) {
+			return {
+				ok: false,
+				run,
+				failure: {
+					code: "auth_fragment_invalid",
+					message: "persisted authentication fragment does not match this run.",
+				},
+			};
+		}
+	}
 
 	const commit = async (): Promise<{ ok: true } | { ok: false; code: string; message: string }> => {
 		if (fragment === undefined) {
@@ -173,6 +212,10 @@ export async function runBrowserUseRunbookAuth(
 	};
 
 	if (fragment !== undefined) {
+		postSubmitProofResume =
+			fragment.status === "active" &&
+			(fragment.phase === "post-auth-proof" ||
+				fragment.phase === "bounded-attestation");
 		const resumed = resumeAuthTransactionAfterRestart(fragment);
 		if (!resumed.ok) {
 			return { ok: false, run, failure: resumed.rejection };
@@ -275,6 +318,104 @@ export async function runBrowserUseRunbookAuth(
 		const blocked = await transition({ type: "blocked", cause });
 		if (!blocked.ok) return { ok: false, run, failure: blocked };
 		return { ok: false, run, blocked: blockedOf(cause) };
+	}
+	const issueAttestation = async (
+		proof: BrowserUseAuthenticatedStateProofRecord,
+	): Promise<BrowserUseRunbookAuthResult> => {
+		const proofRefusal = authenticatedProofRefusal(proof, input);
+		if (proofRefusal !== undefined) {
+			const refused = await transition({ type: "blocked", cause: proofRefusal });
+			if (!refused.ok) return { ok: false, run, failure: refused };
+			return { ok: false, run, blocked: blockedOf(proofRefusal) };
+		}
+		const postcondition = await transition({
+			type: "postcondition-proven",
+			identity_basis: "session-identity-proof",
+			identity_basis_digest: proof.identity_basis_digest,
+		});
+		if (!postcondition.ok) return { ok: false, run, failure: postcondition };
+		const observedAt = deps.store.clock();
+		const attestation: BrowserUseAuthAttestation = {
+			run_id: run.run_id,
+			handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+			lane_id: "agent-browser",
+			implementation_integrity_key: deps.implementation_integrity_key,
+			environment: run.environment_profile.environment,
+			profile: run.environment_profile.profile,
+			target_id: proof.target_id,
+			page_id: proof.page_id,
+			frame_id: proof.frame_id,
+			service_id: input.service_id,
+			auth_context: input.auth_context_ref,
+			subject_reference: proof.subject_reference,
+			account_reference: proof.account_reference,
+			tenant_reference: proof.tenant_reference,
+			identity_basis: "session-identity-proof",
+			identity_basis_digest: proof.identity_basis_digest,
+			observed_at_epoch_ms: observedAt,
+			fresh_until_epoch_ms: observedAt + 30_000,
+		};
+		const digest = authAttestationDigestOf(attestation);
+		const written = await writeAuthAttestationRecord(deps.store, {
+			digest,
+			record: attestation,
+		});
+		if (!written.ok) return { ok: false, run, failure: written };
+		const issued = await transition({
+			type: "attestation-issued",
+			attestation_digest: digest,
+			fresh_until_epoch_ms: attestation.fresh_until_epoch_ms,
+		});
+		return issued.ok
+			? { ok: true, run, binding }
+			: { ok: false, run, failure: issued };
+	};
+	if (postSubmitProofResume) {
+		if (deps.login.proveAuthenticatedState === undefined) {
+			const refused = await transition({
+				type: "blocked",
+				cause: "human-identity-attestation-required",
+			});
+			return refused.ok
+				? {
+						ok: false,
+						run,
+						blocked: blockedOf("human-identity-attestation-required"),
+					}
+				: { ok: false, run, failure: refused };
+		}
+		const observed = await deps.login.observer.snapshot({
+			target_id: input.target_id,
+		});
+		if (!observed.ok) {
+			const refused = await transition({
+				type: "blocked",
+				cause: "unknown-post-submit-state",
+			});
+			return refused.ok
+				? { ok: false, run, blocked: blockedOf("unknown-post-submit-state") }
+				: { ok: false, run, failure: refused };
+		}
+		const fresh = await deps.login.proveAuthenticatedState({
+			lane_id: "agent-browser",
+			run_id: run.run_id,
+			target_id: input.target_id,
+			expected_url: input.expected_url,
+			allowed_origins: input.allowed_origins,
+			binding,
+			snapshot: observed.snapshot,
+			transition: "post-submit",
+		});
+		if (!fresh.proven) {
+			const refused = await transition({
+				type: "blocked",
+				cause: "unknown-post-submit-state",
+			});
+			return refused.ok
+				? { ok: false, run, blocked: blockedOf("unknown-post-submit-state") }
+				: { ok: false, run, failure: refused };
+		}
+		return await issueAttestation(fresh.proof);
 	}
 	if (readyResume) {
 		const observed = await deps.login.observer.snapshot({ target_id: input.target_id });
@@ -427,50 +568,7 @@ export async function runBrowserUseRunbookAuth(
 			const reused = await transition({ type: "session-already-authenticated" });
 			if (!reused.ok) return { ok: false, run, failure: reused };
 		}
-		const proofRefusal = authenticatedProofRefusal(engine.proof, input);
-		if (proofRefusal !== undefined) {
-			const refused = await transition({ type: "blocked", cause: proofRefusal });
-			if (!refused.ok) return { ok: false, run, failure: refused };
-			return { ok: false, run, blocked: blockedOf(proofRefusal) };
-		}
-
-		const postcondition = await transition({
-			type: "postcondition-proven",
-			identity_basis: "session-identity-proof",
-			identity_basis_digest: engine.proof.identity_basis_digest,
-		});
-		if (!postcondition.ok) return { ok: false, run, failure: postcondition };
-		const observedAt = deps.store.clock();
-		const attestation: BrowserUseAuthAttestation = {
-			run_id: run.run_id,
-			handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
-			lane_id: "agent-browser",
-			implementation_integrity_key: deps.implementation_integrity_key,
-			environment: run.environment_profile.environment,
-			profile: run.environment_profile.profile,
-			target_id: engine.proof.target_id,
-			page_id: engine.proof.page_id,
-			frame_id: engine.proof.frame_id,
-			service_id: input.service_id,
-			auth_context: input.auth_context_ref,
-			subject_reference: engine.proof.subject_reference,
-			account_reference: engine.proof.account_reference,
-			tenant_reference: engine.proof.tenant_reference,
-			identity_basis: "session-identity-proof",
-			identity_basis_digest: engine.proof.identity_basis_digest,
-			observed_at_epoch_ms: observedAt,
-			fresh_until_epoch_ms: observedAt + 30_000,
-		};
-		const digest = authAttestationDigestOf(attestation);
-		const written = await writeAuthAttestationRecord(deps.store, { digest, record: attestation });
-		if (!written.ok) return { ok: false, run, failure: written };
-		const issued = await transition({
-			type: "attestation-issued",
-			attestation_digest: digest,
-			fresh_until_epoch_ms: attestation.fresh_until_epoch_ms,
-		});
-		if (!issued.ok) return { ok: false, run, failure: issued };
-		return { ok: true, run, binding };
+		return await issueAttestation(engine.proof);
 	} finally {
 		await deps.provider.releaseSensitiveIntervalLease({ lease: acquired.lease });
 	}
