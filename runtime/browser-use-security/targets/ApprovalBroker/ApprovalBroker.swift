@@ -58,6 +58,9 @@ enum BrokerError: Error {
     case userPresenceCancelled
     case secureEnclaveUnavailable
     case signingKeyMissing
+    case signingKeyAmbiguous
+    case signingKeyCustodyMismatch
+    case signingKeyAlreadyEnrolled
 }
 
 /// The broker's device-bound signing authority.
@@ -214,8 +217,23 @@ private enum PromotionCommandError: Error {
     case reviewCancelled
 }
 
+/// The only Keychain item allowed to retain the opaque Secure Enclave handle.
+private enum SigningKeyHandleLocator {
+    static let accessGroup = "com.side-quest.browser-use-security.approval-broker"
+    static let service = "com.side-quest.browser-use-security.reviewed-action-signing-key"
+    static let account = "device-bound-signing-key-v1"
+    static let schemaVersion = "1"
+    static let presencePolicy = "secure-enclave-private-key-usage-user-presence-v1"
+    static let expectedAccessible = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
+}
+
+/// A reconstructed key plus custody evidence admitted by the broker.
+private struct AdmittedSigningKey {
+    let key: SecureEnclave.P256.Signing.PrivateKey
+    let presencePolicy: String
+}
+
 private enum ApprovalBrokerCommandSupport {
-    private static let signingKeyHandleDefaultsKey = "reviewed-action-signing-key-handle-v1"
     private static let humanIdentityBoundFactKeys: Set<String> = [
         "service_id",
         "auth_context",
@@ -236,39 +254,157 @@ private enum ApprovalBrokerCommandSupport {
         "action_policy_hash",
     ]
 
-    static func loadOrCreateSigningKey(
-        localizedReason: String
-    ) throws -> SecureEnclave.P256.Signing.PrivateKey {
-        let context = LAContext()
-        context.localizedReason = localizedReason
-        if let representation = UserDefaults.standard.data(forKey: signingKeyHandleDefaultsKey) {
-            return try SecureEnclave.P256.Signing.PrivateKey(
-                dataRepresentation: representation,
-                authenticationContext: context
-            )
+    private static func signingKeyItemQuery() throws -> [String: Any] {
+        let task = SecTaskCreateFromSelf(nil)
+        guard let task,
+              let groups = SecTaskCopyValueForEntitlement(
+                  task,
+                  "keychain-access-groups" as CFString,
+                  nil
+              ) as? [String],
+              groups.count == 1,
+              let accessGroup = groups.first,
+              accessGroup == SigningKeyHandleLocator.accessGroup ||
+                  accessGroup.hasSuffix(".\(SigningKeyHandleLocator.accessGroup)")
+        else {
+            throw BrokerError.signingKeyCustodyMismatch
         }
-        let key = try ApprovalBroker.createDeviceBoundSigningKey()
-        UserDefaults.standard.set(key.dataRepresentation, forKey: signingKeyHandleDefaultsKey)
-        return key
-    }
-
-    static func hex<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
-        bytes.map { String(format: "%02x", $0) }.joined()
-    }
-
-    static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> [String: Any] {
-        let raw = ApprovalBroker.pinnedPublicVerifier(for: key)
         return [
-            "key_id": hex(SHA256.hash(data: raw)),
-            "public_key": raw.base64EncodedString(),
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: SigningKeyHandleLocator.service,
+            kSecAttrAccount as String: SigningKeyHandleLocator.account,
+            kSecAttrAccessGroup as String: accessGroup,
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 
-    static func canonicalData(_ value: Any) throws -> Data {
+    /// Load one immutable, device-only handle and admit its recorded key policy.
+    ///
+    /// CryptoKit does not expose the reconstructed Secure Enclave key's
+    /// `SecAccessControl`. The private Keychain record therefore binds the exact
+    /// creation policy and verifier identity to the opaque representation. This
+    /// broker has no update/delete path, and a missing, ambiguous, malformed, or
+    /// identity-mismatched record fails closed instead of rotating the key.
+    static func loadSigningKey() throws -> AdmittedSigningKey {
+        var query = try signingKeyItemQuery()
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        query[kSecReturnAttributes as String] = true
+        query[kSecReturnData as String] = true
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            break
+        case errSecItemNotFound:
+            throw BrokerError.signingKeyMissing
+        default:
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        guard let items = result as? [[String: Any]] else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        guard items.count == 1, let item = items.first else {
+            throw items.isEmpty ? BrokerError.signingKeyMissing : BrokerError.signingKeyAmbiguous
+        }
+        let accessible = item[kSecAttrAccessible as String] as CFTypeRef?
+        guard let accessible,
+              CFEqual(accessible, SigningKeyHandleLocator.expectedAccessible),
+              item[kSecAttrSynchronizable as String] as? Bool == false,
+              let custodyRecord = item[kSecValueData as String] as? Data
+        else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+
+        let decoded = try decodeCustodyRecord(custodyRecord)
+        let context = LAContext()
+        context.localizedReason = "Sign the Reviewed Action promotion receipt"
+        let key: SecureEnclave.P256.Signing.PrivateKey
+        do {
+            key = try SecureEnclave.P256.Signing.PrivateKey(
+                dataRepresentation: decoded.representation,
+                authenticationContext: context
+            )
+        } catch {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        let verifier = verifierIdentity(for: key)
+        guard verifier.key_id == decoded.verifierKeyID else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        return AdmittedSigningKey(key: key, presencePolicy: decoded.presencePolicy)
+    }
+
+    /// Explicitly enroll the first signing identity. Never replaces an item.
+    static func enrollSigningKey() throws -> AdmittedSigningKey {
+        do {
+            _ = try loadSigningKey()
+            throw BrokerError.signingKeyAlreadyEnrolled
+        } catch BrokerError.signingKeyMissing {
+            // Absence is safe only on this explicit, user-presence-backed path.
+        }
+
+        let key = try ApprovalBroker.createDeviceBoundSigningKey()
+        let verifier = verifierIdentity(for: key)
+        let custodyRecord = try encodeCustodyRecord(
+            representation: key.dataRepresentation,
+            verifierKeyID: verifier.key_id
+        )
+        var item = try signingKeyItemQuery()
+        item[kSecAttrAccessible as String] = SigningKeyHandleLocator.expectedAccessible
+        item[kSecValueData as String] = custodyRecord
+        switch SecItemAdd(item as CFDictionary, nil) {
+        case errSecSuccess:
+            return try loadSigningKey()
+        case errSecDuplicateItem:
+            throw BrokerError.signingKeyAlreadyEnrolled
+        default:
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+    }
+
+    private static func encodeCustodyRecord(
+        representation: Data,
+        verifierKeyID: String
+    ) throws -> Data {
         try JSONSerialization.data(
-            withJSONObject: value,
+            withJSONObject: [
+                "schema_version": SigningKeyHandleLocator.schemaVersion,
+                "presence_policy": SigningKeyHandleLocator.presencePolicy,
+                "verifier_key_id": verifierKeyID,
+                "key_representation": representation.base64EncodedString(),
+            ],
             options: [.sortedKeys, .withoutEscapingSlashes]
         )
+    }
+
+    private static func decodeCustodyRecord(
+        _ data: Data
+    ) throws -> (representation: Data, verifierKeyID: String, presencePolicy: String) {
+        let expectedKeys: Set<String> = [
+            "schema_version", "presence_policy", "verifier_key_id", "key_representation",
+        ]
+        guard data.count <= 65_536,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == expectedKeys,
+              object["schema_version"] as? String == SigningKeyHandleLocator.schemaVersion,
+              let presencePolicy = object["presence_policy"] as? String,
+              let verifierKeyID = object["verifier_key_id"] as? String,
+              let representationBase64 = object["key_representation"] as? String,
+              let representation = Data(base64Encoded: representationBase64),
+              !representation.isEmpty
+        else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        guard presencePolicy == SigningKeyHandleLocator.presencePolicy else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        return (representation, verifierKeyID, presencePolicy)
+    }
+
+    static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> ReviewedActionVerifierIdentity {
+        ReviewedActionPromotionProtocol.verifierIdentity(for: key.publicKey)
     }
 
     static func reviewExactCandidate(facts: [String: Any], candidateBytes: String) throws {
@@ -276,7 +412,10 @@ private enum ApprovalBrokerCommandSupport {
         application.setActivationPolicy(.accessory)
         application.activate(ignoringOtherApps: true)
 
-        let factsData = try canonicalData(facts)
+        let factsData = try JSONSerialization.data(
+            withJSONObject: facts,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
         guard let factsText = String(data: factsData, encoding: .utf8) else {
             throw PromotionCommandError.invalidInput
         }
@@ -302,42 +441,35 @@ private enum ApprovalBrokerCommandSupport {
     }
 
     static func promotionReceipt(
-        request: [String: Any],
-        key: SecureEnclave.P256.Signing.PrivateKey
-    ) throws -> [String: Any] {
-        guard
-            let facts = request["facts"] as? [String: Any],
-            let candidateBytes = request["candidate_bytes"] as? String,
-            let approvalReference = request["approval_reference"] as? String,
-            let approvedDigest = facts["approved_digest"] as? String,
-            approvalReference.range(of: "^[a-z0-9][a-z0-9-]{0,127}$", options: .regularExpression) != nil
-        else {
-            throw PromotionCommandError.invalidInput
-        }
-        let observedDigest = hex(SHA256.hash(data: Data(candidateBytes.utf8)))
-        guard observedDigest == approvedDigest else {
+        request: ReviewedActionPromotionRequest,
+        admittedKey: AdmittedSigningKey
+    ) throws -> ReviewedActionPromotionReceipt {
+        let observedDigest = ReviewedActionPromotionProtocol.hex(
+            SHA256.hash(data: Data(request.candidate_bytes.utf8))
+        )
+        guard observedDigest == request.facts.approved_digest else {
             throw PromotionCommandError.candidateDigestMismatch
         }
-        try reviewExactCandidate(facts: facts, candidateBytes: candidateBytes)
+        try reviewExactCandidate(
+            facts: ReviewedActionPromotionProtocol.factsJSONObject(request.facts),
+            candidateBytes: request.candidate_bytes
+        )
 
-        let verifier = verifierIdentity(for: key)
+        let verifier = verifierIdentity(for: admittedKey.key)
         let receiptID = "receipt-\(UUID().uuidString.lowercased())"
-        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
-        var unsigned = facts
-        unsigned["receipt_id"] = receiptID
-        unsigned["approval_reference"] = approvalReference
-        unsigned["issued_at_epoch_ms"] = issuedAt
-        unsigned["verifier_key_id"] = verifier["key_id"]
-        let factsDigest = SHA256.hash(data: try canonicalData(unsigned))
-        let signature = try key.signature(for: Data(factsDigest))
-
-        var receipt = unsigned
-        receipt["contract"] = "browser-use.reviewed-action-promotion"
-        receipt["schema_version"] = "1"
-        receipt["disposition"] = "approved"
-        receipt["presence_backed"] = true
-        receipt["signature"] = signature.derRepresentation.base64EncodedString()
-        return receipt
+        let issuedAt = Int64(Date().timeIntervalSince1970 * 1_000)
+        let unsigned = try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
+            request: request,
+            receiptID: receiptID,
+            issuedAtEpochMilliseconds: issuedAt,
+            verifierKeyID: verifier.key_id,
+            presenceBacked: admittedKey.presencePolicy == SigningKeyHandleLocator.presencePolicy
+        )
+        let digest = Data(SHA256.hash(
+            data: try ReviewedActionPromotionProtocol.canonicalPayload(for: unsigned)
+        ))
+        let signature = try admittedKey.key.signature(for: digest).derRepresentation.base64EncodedString()
+        return ReviewedActionPromotionProtocol.withSignature(unsigned, signature: signature)
     }
 
     static func humanIdentityGrant(
@@ -388,42 +520,54 @@ private enum ApprovalBrokerCommandSupport {
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
+
+    static func writeFailure(code: String, message: String) {
+        if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "promote",
+           let data = try? ReviewedActionPromotionProtocol.encodeResponse(
+               .refused(code: code, message: message)
+           ) {
+            FileHandle.standardOutput.write(data)
+            FileHandle.standardOutput.write(Data("\n".utf8))
+            return
+        }
+        write(["ok": false, "code": code, "message": message])
+    }
 }
 
 @main
 enum ApprovalBrokerCommand {
     static func main() {
         guard CommandLine.arguments.count == 2 else {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected verifier, promote, or attest mode"])
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, verifier, promote, or attest mode"])
             exit(20)
         }
         do {
             switch CommandLine.arguments[1] {
-            case "verifier":
-                let key = try ApprovalBrokerCommandSupport.loadOrCreateSigningKey(
-                    localizedReason: "Read the Browser Use approval verifier"
-                )
+            case "enroll":
+                let admittedKey = try ApprovalBrokerCommandSupport.enrollSigningKey()
+                let verifier = ApprovalBrokerCommandSupport.verifierIdentity(for: admittedKey.key)
                 ApprovalBrokerCommandSupport.write([
                     "ok": true,
-                    "verifier": ApprovalBrokerCommandSupport.verifierIdentity(for: key),
+                    "verifier": ["key_id": verifier.key_id, "public_key": verifier.public_key],
+                ])
+            case "verifier":
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey()
+                let verifier = ApprovalBrokerCommandSupport.verifierIdentity(for: admittedKey.key)
+                ApprovalBrokerCommandSupport.write([
+                    "ok": true,
+                    "verifier": ["key_id": verifier.key_id, "public_key": verifier.public_key],
                 ])
             case "promote":
-                let key = try ApprovalBrokerCommandSupport.loadOrCreateSigningKey(
-                    localizedReason: "Sign the Reviewed Action promotion receipt"
-                )
                 let input = FileHandle.standardInput.readDataToEndOfFile()
-                guard
-                    input.count <= 1_048_576,
-                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
-                else {
-                    throw PromotionCommandError.invalidInput
-                }
-                let receipt = try ApprovalBrokerCommandSupport.promotionReceipt(request: request, key: key)
-                ApprovalBrokerCommandSupport.write(["ok": true, "receipt": receipt])
+                guard input.count <= 1_048_576 else { throw PromotionCommandError.invalidInput }
+                let request = try ReviewedActionPromotionProtocol.decodeRequest(input)
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey()
+                let receipt = try ApprovalBrokerCommandSupport.promotionReceipt(request: request, admittedKey: admittedKey)
+                let response = try ReviewedActionPromotionProtocol.encodeResponse(.approved(receipt))
+                FileHandle.standardOutput.write(response)
+                FileHandle.standardOutput.write(Data("\n".utf8))
             case "attest":
-                let key = try ApprovalBrokerCommandSupport.loadOrCreateSigningKey(
-                    localizedReason: "Confirm this one-run browser identity claim"
-                )
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey()
                 let input = FileHandle.standardInput.readDataToEndOfFile()
                 guard
                     input.count <= 1_048_576,
@@ -433,23 +577,33 @@ enum ApprovalBrokerCommand {
                 }
                 let grant = try ApprovalBrokerCommandSupport.humanIdentityGrant(
                     request: request,
-                    key: key
+                    key: admittedKey.key
                 )
                 ApprovalBrokerCommandSupport.write(["ok": true, "grant": grant])
             default:
                 throw PromotionCommandError.invalidInput
             }
         } catch PromotionCommandError.reviewCancelled {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "the human reviewer cancelled promotion"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "the human reviewer cancelled promotion")
             exit(20)
         } catch BrokerError.userPresenceUnavailable {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "biometric-capability-missing", "message": "Touch ID user presence is unavailable"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "biometric-capability-missing", message: "Touch ID user presence is unavailable")
             exit(20)
         } catch BrokerError.userPresenceCancelled {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "Touch ID user presence was cancelled"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "Touch ID user presence was cancelled")
+            exit(20)
+        } catch BrokerError.signingKeyMissing {
+            ApprovalBrokerCommandSupport.writeFailure(code: "signing-key-missing", message: "the approval broker signing key is not enrolled; an operator must run the explicit enroll action")
+            exit(20)
+        } catch BrokerError.signingKeyAlreadyEnrolled {
+            ApprovalBrokerCommandSupport.writeFailure(code: "signing-key-already-enrolled", message: "the approval broker signing key is already enrolled and was not replaced")
+            exit(20)
+        } catch BrokerError.signingKeyAmbiguous,
+                BrokerError.signingKeyCustodyMismatch {
+            ApprovalBrokerCommandSupport.writeFailure(code: "signing-key-custody-invalid", message: "the approval broker signing key failed private Keychain custody checks")
             exit(20)
         } catch {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "broker-failed", "message": "the approval broker failed closed"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "broker-failed", message: "the approval broker failed closed")
             exit(20)
         }
     }

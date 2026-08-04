@@ -2,11 +2,9 @@ import type { Dirent } from "node:fs";
 import {
 	lstat,
 	mkdir,
-	open,
 	readFile,
 	readdir,
 	realpath,
-	rename,
 	rm,
 	rmdir,
 } from "node:fs/promises";
@@ -31,6 +29,10 @@ import {
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import { findRedactionViolations } from "./browser-use-schemas";
+import {
+	withSourceLock,
+	writeSourceFileAtomically,
+} from "./browser-use-source-lock";
 import {
 	type BrowserUsePrivateCatalogSeparated,
 	privateRunbookCatalogDigest,
@@ -560,68 +562,6 @@ export async function readRunbookSourceCatalog(input: {
 	return { ok: true, catalog: { catalog_digest: privateRunbookCatalogDigest(fileDigests), records, separated, activation_blockers: activationBlockers } };
 }
 
-const LOCK_STALE_MS = 5 * 60_000;
-
-/** True when the pid is not a live process this user can signal. */
-function pidIsDead(pid: number): boolean {
-	if (!Number.isInteger(pid) || pid <= 0) return true;
-	try { process.kill(pid, 0); return false; } catch (error) {
-		// EPERM means the process exists but is owned by another user (alive).
-		return (error as NodeJS.ErrnoException).code !== "EPERM";
-	}
-}
-
-/** A lock is reclaimable when its owner pid is dead or it has outlived the bound. */
-async function catalogLockIsStale(lockPath: string): Promise<boolean> {
-	try {
-		const parsed = JSON.parse(await readFile(lockPath, "utf8")) as { pid?: unknown; acquired_at?: unknown };
-		const pid = typeof parsed.pid === "number" ? parsed.pid : Number.NaN;
-		const acquiredAt = typeof parsed.acquired_at === "string" ? Date.parse(parsed.acquired_at) : Number.NaN;
-		if (pidIsDead(pid)) return true;
-		return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > LOCK_STALE_MS;
-	} catch {
-		// Unreadable or malformed lock content cannot prove a live holder.
-		return true;
-	}
-}
-
-/** Create the lock with owner identity already inside it (no empty-file window). */
-async function createOwnedLock(lockPath: string): Promise<Awaited<ReturnType<typeof open>> | undefined> {
-	let handle: Awaited<ReturnType<typeof open>>;
-	try {
-		handle = await open(lockPath, "wx", 0o600);
-	} catch {
-		return undefined;
-	}
-	try {
-		await handle.write(JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }));
-		return handle;
-	} catch {
-		await handle.close();
-		await rm(lockPath, { force: true }).catch(() => undefined);
-		return undefined;
-	}
-}
-
-async function withCatalogLock<T>(runbooksRoot: string, body: () => Promise<T>): Promise<T | undefined> {
-	const lockPath = join(runbooksRoot, LOCK_FILE);
-	let lock = await createOwnedLock(lockPath);
-	if (lock === undefined) {
-		// A crashed holder leaves the lock behind and would deadlock every future
-		// mutation. Steal a stale lock atomically: rename it aside to a per-pid temp
-		// (only one racer's rename of a given inode wins), then recreate. If the
-		// rename fails, another process already reclaimed it — do not delete a live
-		// lock out from under it.
-		if (!(await catalogLockIsStale(lockPath))) return undefined;
-		const stolen = `${lockPath}.stale-${process.pid}`;
-		try { await rename(lockPath, stolen); } catch { return undefined; }
-		await rm(stolen, { force: true }).catch(() => undefined);
-		lock = await createOwnedLock(lockPath);
-		if (lock === undefined) return undefined;
-	}
-	try { return await body(); } finally { await lock.close(); await rm(lockPath, { force: true }); }
-}
-
 /** Apply one exact validated Runbook document to admitted private source. */
 export async function applyRunbookDraft(input: {
 	sourceRoot: string;
@@ -633,9 +573,9 @@ export async function applyRunbookDraft(input: {
 	if (roots === undefined) return { ok: false, code: "runbook_source_checkout_required", message: "Runbook apply requires the setup-owned source checkout." };
 	const parsed = await validateRunbookDraftForSource(input);
 	if (!parsed.ok) return parsed;
-	let outcome: BrowserUseRunbookMutationResult | undefined;
+	let locked: Awaited<ReturnType<typeof withSourceLock<BrowserUseRunbookMutationResult>>>;
 	try {
-		outcome = await withCatalogLock(roots.runbooks, async (): Promise<BrowserUseRunbookMutationResult> => {
+		locked = await withSourceLock({ lockPath: join(roots.runbooks, LOCK_FILE), subject: "Runbook" }, async (): Promise<BrowserUseRunbookMutationResult> => {
 		const serviceDirectory = join(roots.runbooks, parsed.runbook.service_id);
 		await mkdir(serviceDirectory, { mode: 0o700 }).catch(async (error: unknown) => {
 			if (!isObject(error) || error.code !== "EEXIST") throw error;
@@ -660,20 +600,15 @@ export async function applyRunbookDraft(input: {
 		if (existingBytes === input.bytes) return { ok: true, changed: false, service_id: parsed.runbook.service_id, flow_id: parsed.runbook.flow_id, record_digest: parsed.record_digest, synchronization_status: "new-pending-activation" };
 		if (currentDigest !== undefined && input.expectedRecordDigest === undefined) return { ok: false, code: "runbook_replacement_digest_required", message: "replacement requires the currently observed Runbook record digest.", current_record_digest: currentDigest };
 		if (currentDigest !== undefined && input.expectedRecordDigest !== currentDigest) return { ok: false, code: "runbook_replacement_digest_stale", message: "the Runbook record changed after observation; refresh before replacing it.", current_record_digest: currentDigest };
-		const temporary = join(canonicalDirectory, `.runbook.${process.pid}.tmp`);
-		try {
-			const handle = await open(temporary, "wx", 0o600);
-			try { await handle.writeFile(input.bytes, "utf8"); await handle.sync(); } finally { await handle.close(); }
-			await rename(temporary, path);
-		} finally {
-			await rm(temporary, { force: true });
-		}
+		await writeSourceFileAtomically({ path, bytes: input.bytes });
 		return { ok: true, changed: true, service_id: parsed.runbook.service_id, flow_id: parsed.runbook.flow_id, record_digest: parsed.record_digest, synchronization_status: "new-pending-activation" };
 		});
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock; a stale lock (dead owner pid or older than 5 minutes) is reclaimed automatically on the next attempt." };
+	if (!locked.acquired) return { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.released) return { ok: false, code: "runbook_source_lock_release_failed", message: locked.release_failure.message };
+	return locked.value;
 }
 
 /** Delete one source Runbook only when its exact observed digest still matches. */
@@ -687,9 +622,9 @@ export async function deleteRunbookDraft(input: {
 	if (roots === undefined) return { ok: false, code: "runbook_source_checkout_required", message: "Runbook delete requires the setup-owned source checkout." };
 	if (!SAFE_ID.test(input.serviceId) || !SAFE_ID.test(input.flowId)) return { ok: false, code: "runbook_id_invalid", message: "Runbook service and flow ids must be safe lowercase slugs." };
 	if (input.expectedRecordDigest !== undefined && !SAFE_DIGEST.test(input.expectedRecordDigest)) return { ok: false, code: "runbook_delete_digest_invalid", message: "the expected Runbook record digest must be lowercase sha256." };
-	let outcome: BrowserUseRunbookMutationResult | undefined;
+	let locked: Awaited<ReturnType<typeof withSourceLock<BrowserUseRunbookMutationResult>>>;
 	try {
-		outcome = await withCatalogLock(roots.runbooks, async (): Promise<BrowserUseRunbookMutationResult> => {
+		locked = await withSourceLock({ lockPath: join(roots.runbooks, LOCK_FILE), subject: "Runbook" }, async (): Promise<BrowserUseRunbookMutationResult> => {
 		const absent = (): BrowserUseRunbookMutationResult => ({ ok: true, changed: false, service_id: input.serviceId, flow_id: input.flowId, record_digest: null, synchronization_status: "deletion-pending-activation" });
 		const serviceDirectory = join(roots.runbooks, input.serviceId);
 		const serviceStat = await lstat(serviceDirectory).catch(() => undefined);
@@ -717,5 +652,7 @@ export async function deleteRunbookDraft(input: {
 	} catch {
 		return { ok: false, code: "runbook_source_write_failed", message: "the private Runbook source mutation failed." };
 	}
-	return outcome ?? { ok: false, code: "runbook_source_lock_contended", message: "another Runbook source mutation holds the catalog lock; a stale lock (dead owner pid or older than 5 minutes) is reclaimed automatically on the next attempt." };
+	if (!locked.acquired) return { ok: false, code: "runbook_source_lock_contended", message: locked.message };
+	if (!locked.released) return { ok: false, code: "runbook_source_lock_release_failed", message: locked.release_failure.message };
+	return locked.value;
 }

@@ -272,7 +272,7 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		});
 	});
 
-	test("verify-submitted is exact, unpromoted, and mechanically read-only", async () => {
+	test("verify-submitted is exact, promoted, and mechanically read-only", async () => {
 		const bytes = await readFile(
 			join(import.meta.dir, "..", "actions", "assets", `${VERIFY_DIGEST}.js`),
 			"utf8",
@@ -287,7 +287,11 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 					action_id: string;
 					expected_digest: string;
 					effect_class: string;
-					promotion_receipt: unknown;
+					promotion_receipt: {
+						approved_digest: string;
+						disposition: "approved";
+						presence_backed: true;
+					};
 				};
 			}>;
 		};
@@ -301,7 +305,11 @@ describe("FastTrack exact Submit Reviewed Action", () => {
 		expect(record).toMatchObject({
 			expected_digest: VERIFY_DIGEST,
 			effect_class: "read",
-			promotion_receipt: null,
+			promotion_receipt: {
+				approved_digest: VERIFY_DIGEST,
+				disposition: "approved",
+				presence_backed: true,
+			},
 		});
 		const runbook = JSON.parse(await readFile(SUBMIT_RUNBOOK_PATH, "utf8")) as {
 			steps: Array<{ action_id?: string; expected_digest?: string }>;

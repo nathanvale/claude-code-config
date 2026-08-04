@@ -143,8 +143,7 @@ import {
 	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
 	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
+	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
 	isAuthTokenSourceReference,
 	readBoundedAuthChildOutput,
 	resolveWarmChromeProfilePath,
@@ -201,7 +200,10 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
-import type { BrowserUseAuthContext } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
 import {
 	type BrowserUseCdpObserverRequest,
 	createBrowserUseCdpObserver,
@@ -269,11 +271,6 @@ import {
 	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import {
-	createNativeReviewedActionOperatorBroker,
-	runReviewedActionPromotionFrontDoor,
-} from "./browser-use-reviewed-action-promotion";
-import { BROWSER_USE_APPROVAL_BROKER_ENV } from "./command-contract";
-import {
 	activateRunbookGeneration,
 	createSelectedGenerationActionSeam,
 	createSelectedGenerationRunbookSeam,
@@ -326,6 +323,38 @@ import { renderGuide } from "./browser-use-guide";
 // ---------------------------------------------------------------------------
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
+
+/**
+ * Non-authority inputs admitted by production composition.
+ *
+ * Authority ports stay available only through test helpers. Production may
+ * select its process environment and setup-admitted source checkout, but it
+ * cannot replace credential, approval, native-admission, or identity-proof
+ * owners.
+ */
+export type BrowserUseProductionRuntimeOptions = {
+	/** Process environment consumed as data by production-owned adapters. */
+	env?: Record<string, string | undefined>;
+	/** Setup-admitted source root; null models a packaged installation. */
+	sourceCheckoutRoot?: string | null;
+};
+
+/**
+ * Compose the production runtime without accepting injectable authority.
+ *
+ * @param options - Explicit non-authority production inputs
+ * @returns Runtime backed only by production-owned authority discovery
+ */
+export async function createProductionBrowserUseRuntime(
+	options: BrowserUseProductionRuntimeOptions = {},
+): Promise<BrowserUseRuntime> {
+	return await createProductionBrowserUseRuntimeInternal({
+		...(options.env === undefined ? {} : { env: options.env }),
+		...(options.sourceCheckoutRoot === undefined
+			? {}
+			: { sourceCheckoutRoot: options.sourceCheckoutRoot }),
+	});
+}
 
 export async function runBrowserUseCli(
 	argv: readonly string[],
@@ -682,7 +711,7 @@ async function executeCommand(input: {
 	}
 
 	if (parsed.family === "action" && !parsed.dryRun) {
-		return runReviewedActionCommand({
+		const actionInput: PlatformCommandInput = {
 			parsed,
 			runtime,
 			stdout: input.stdout,
@@ -690,7 +719,15 @@ async function executeCommand(input: {
 			runId: input.runId,
 			caller,
 			durationMs: input.durationMs,
-		});
+		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitReviewedActionFailure(
+				actionInput,
+				runtime.reviewedActionApprovalVerifierIssue.code,
+				runtime.reviewedActionApprovalVerifierIssue.message,
+			);
+		}
+		return runReviewedActionCommand(actionInput);
 	}
 
 	// Browser Runbook family (platform plan U4): list/show project the discovered
@@ -708,6 +745,15 @@ async function executeCommand(input: {
 			caller,
 			durationMs: input.durationMs,
 		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitPlatformStoreFailure(runbookInput, {
+				code: runtime.reviewedActionApprovalVerifierIssue.code,
+				message: runtime.reviewedActionApprovalVerifierIssue.message,
+				actionId: "activate_runbook_catalog",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
 		if (
 			parsed.command === "runbook-schema" ||
 			parsed.command === "runbook-validate" ||
@@ -4041,7 +4087,11 @@ async function nonterminalMutationRunIds(
 	const blockers: string[] = [];
 	for (const runId of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
 		const loaded = await loadSharedRun(deps, runId);
-		if (!loaded.ok || isTerminalRunState(loaded.run.state)) continue;
+		if (!loaded.ok) {
+			blockers.push(runId);
+			continue;
+		}
+		if (isTerminalRunState(loaded.run.state)) continue;
 		if (loaded.run.mutation_dispatched) {
 			blockers.push(runId);
 			continue;
@@ -4116,21 +4166,6 @@ async function runReviewedActionCommand(input: PlatformCommandInput): Promise<nu
 		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot read private source promotion state; use the setup-owned source checkout front door.");
 		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
 		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
-	}
-	if (input.parsed.command === "action-promote") {
-		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
-		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
-		const brokerPath = stringField(input.runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV]);
-		const broker = input.runtime.reviewedActionPromotionBroker ?? (brokerPath === undefined ? undefined : createNativeReviewedActionOperatorBroker(brokerPath));
-		if (broker === undefined) return emitReviewedActionFailure(input, "action_promotion_broker_unavailable", `${BROWSER_USE_APPROVAL_BROKER_ENV} must name the absolute signed ApprovalBroker executable.`);
-		const promoted = await runReviewedActionPromotionFrontDoor({
-			sourceRoot,
-			actionId: stringField(input.parsed.flagValues["--id"]) ?? "",
-			approvalReference: stringField(input.parsed.flagValues["--approval-reference"]) ?? "",
-			env: input.runtime.env,
-			broker,
-		});
-		return promoted.ok ? emitReviewedActionSuccess(input, promoted) : emitReviewedActionFailure(input, promoted.code, promoted.message);
 	}
 	const loaded = await readActionCandidateFile(input);
 	if (!loaded.ok) return loaded.exitCode;
@@ -4627,6 +4662,13 @@ async function navigateRunbookAuthTarget(
 
 type RunbookAuthDeliveryBuilderDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	resolveApprovedBinding?(input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}): Promise<BrowserUseItemBinding | null>;
 	createTargetTransport(
 		handoff: AgentBrowserVerifiedHandoff,
 	): CloseableTargetTransport;
@@ -4680,6 +4722,44 @@ function fieldMethod(
 	field: BrowserUseOpCredentialField,
 ): "password" | "otp" {
 	return field === "otp-current" ? "otp" : "password";
+}
+
+function runbookLoginPathOf(expectedTargetUrl: string): string | null {
+	try {
+		return new URL(expectedTargetUrl).pathname;
+	} catch {
+		return null;
+	}
+}
+
+async function prepareApprovedRunbookBinding(input: {
+	provider: BrowserUseAuthProvider;
+	deps: RunbookAuthDeliveryBuilderDeps;
+	request: Parameters<BrowserUseRunbookAuthDelivery>[0];
+	bindingRef: string;
+	field: Parameters<BrowserUseRunbookAuthDelivery>[0]["confidentialFields"][number];
+	loginPath: string | null;
+}) {
+	const approvedBinding =
+		(await input.deps.resolveApprovedBinding?.({
+			binding_ref: input.bindingRef,
+			service_id: input.request.serviceId,
+			auth_context: "interactive-login",
+			environment: input.request.handoff.environment.name,
+			profile: input.request.handoff.environment.profile,
+		})) ?? null;
+	return await input.provider.prepareSecretFree({
+		service_id: input.request.serviceId,
+		auth_context: "interactive-login",
+		target_origins: input.request.allowedOrigins,
+		login_path: input.loginPath,
+		method: fieldMethod(input.field.credentialField),
+		binding: approvedBinding,
+		candidate_hint: {
+			hint_item_id: input.bindingRef,
+			legacy_vault_name: null,
+		},
+	});
 }
 
 function environmentDeliveryHook(input: {
@@ -4905,6 +4985,7 @@ function buildRunbookAuthDelivery(
 				]),
 			);
 			const preparedBindings = [];
+			const loginPath = runbookLoginPathOf(input.expectedTargetUrl);
 			for (const slug of input.pendingItemBindings) {
 				const field = fieldBySlug.get(slug);
 				if (field === undefined) {
@@ -4914,24 +4995,13 @@ function buildRunbookAuthDelivery(
 							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: the runbook binding has no confidential field plan.",
 					};
 				}
-				const loginPath = (() => {
-					try {
-						return new URL(input.expectedTargetUrl).pathname;
-					} catch {
-						return null;
-					}
-				})();
-				const prepared = await provider.prepareSecretFree({
-					service_id: input.serviceId,
-					auth_context: "interactive-login",
-					target_origins: input.allowedOrigins,
-					login_path: loginPath,
-					method: fieldMethod(field.credentialField),
-					binding: null,
-					candidate_hint: {
-						hint_item_id: slug,
-						legacy_vault_name: null,
-					},
+				const prepared = await prepareApprovedRunbookBinding({
+					provider,
+					deps,
+					request: input,
+					bindingRef: slug,
+					field,
+					loginPath,
 				});
 				if (!prepared.ok) {
 					return { ok: false, message: preparationRefusalMessage(prepared) };
@@ -5080,7 +5150,10 @@ function buildRunbookAuthDelivery(
  * @param input - Store-backed command input
  * @returns Process exit code
  */
-async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+async function runRunbookRun(
+	input: PlatformCommandInput,
+	generationConflictRetries = 1,
+): Promise<number> {
 	const flags = input.parsed.flagValues;
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
@@ -5352,6 +5425,21 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			});
 		}
 	}
+	if (
+		plan.auth_context_ref !== undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined &&
+		input.runtime.runbookHumanIdentityAttestation === undefined
+	) {
+		return emitTaskRunFailure(input, run?.run_id ?? handoff.runId, {
+			code: "human-identity-attestation-required",
+			message:
+				"runbook authentication requires an approved fresh identity-proof owner before any browser dispatch.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: { external_effect: "none" },
+		});
+	}
 
 	// A nonterminal crash residue may already have confirmed every step. Close it
 	// without resolving a browser target or entering auth again.
@@ -5521,6 +5609,16 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		});
 		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
+			// Target preparation is read-only. If activation wins before the fresh
+			// run commits its immutable binding, restart the public command once and
+			// prepare wholly against the newly selected manifest + epoch. Never carry
+			// the prior plan, target proof, or generation facts into the retry.
+			if (
+				created.code === "activation_epoch_conflict" &&
+				generationConflictRetries > 0
+			) {
+				return await runRunbookRun(input, generationConflictRetries - 1);
+			}
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(created.code, created.message),
@@ -5671,6 +5769,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					store: store.deps,
 					provider: authProvider,
 					implementation_integrity_key: "agent-browser:verified-handoff-v2",
+					...(input.runtime.runbookApprovedBindingResolver === undefined
+						? {}
+						: {
+								resolveApprovedBinding:
+									input.runtime.runbookApprovedBindingResolver,
+							}),
 					...(input.runtime.runbookHumanIdentityAttestation === undefined
 						? {}
 						: {
@@ -5826,6 +5930,8 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 						authDelivery: buildRunbookAuthDelivery(authProvider, {
 							tokenRetrieval:
 								tokenRetrieval as BrowserUseTokenRetrievalPort,
+							resolveApprovedBinding:
+								input.runtime.runbookApprovedBindingResolver,
 							createTargetTransport: createWebSocketTargetTransport,
 							createDeliveryHook: environmentDeliveryHook,
 						}),
@@ -7644,6 +7750,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 			return "repair-vault-grant";
 		case "revoked-binding":
 			return "repair-item-binding";
+		case "binding-approval-required":
 		case "ambiguous-binding-selection":
 			return "request-binding-selection-grant";
 		default:
@@ -8011,9 +8118,6 @@ export {
 } from "./browser-use-transport";
 export {
 	type BrowserUseRuntime,
-	type BrowserUseSecuritySeam,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {

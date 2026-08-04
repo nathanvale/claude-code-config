@@ -1073,6 +1073,7 @@ describe("subcommand <-> blocked-cause continuation alignment (the drift tripwir
 			"missing-token",
 			"invalid-vault-scope",
 			"revoked-binding",
+			"binding-approval-required",
 			"ambiguous-binding-selection",
 		] as const) {
 			const continuation =

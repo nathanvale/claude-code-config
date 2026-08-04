@@ -440,7 +440,6 @@ export const BROWSER_USE_ACTION_SUBCOMMANDS = [
 	"validate",
 	"apply",
 	"status",
-	"promote",
 ] as const;
 export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
 
@@ -598,7 +597,6 @@ export type BrowserUseCommand =
 	| "action-validate"
 	| "action-apply"
 	| "action-status"
-	| "action-promote"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -724,6 +722,15 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"catalog_record_invalid",
 	"catalog_action_closure_incomplete",
 	"promotion_verification_failed",
+	"action_promotion_verifier_store_unsafe",
+	"action_promotion_verifier_identity_invalid",
+	// Runbook and Reviewed Action authoring front doors. These representative
+	// driver-level codes keep handler dispatch and structured diagnostics tied
+	// to the advertised leaves; domain validators own their deeper issue codes.
+	"runbook_document_unreadable",
+	"runbook_source_checkout_required",
+	"action_document_unreadable",
+	"action_source_checkout_required",
 	"catalog_drift",
 	"activation_epoch_conflict",
 	"activation_blocked_by_run",
@@ -731,7 +738,9 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"activation_generation_corrupt",
 	"activation_authority_corrupt",
 	"activation_interrupted",
+	"activation_flag_invalid",
 	"activation_required",
+	"human-identity-attestation-required",
 	"pre_cutover_unavailable",
 	// Clean-break migration engine refusals (platform plan U3). Each phase
 	// (inventory/plan/apply/verify) fails closed with its own typed code so an
@@ -1672,12 +1681,6 @@ const browserUseActionStatusFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
-const browserUseActionPromoteFlags = {
-	"--id": { type: "string", description: "Exact committed Reviewed Action id to promote." },
-	"--approval-reference": { type: "string", description: "Opaque external-human review reference bound into the signed promotion receipt." },
-	...browserUsePlatformFlags,
-} as const satisfies BrowserUseCommandContract["flags"];
-
 const browserUseRunbookFileFlags = {
 	"--file": { type: "path", description: "Complete Browser Runbook JSON document." },
 	...browserUsePlatformFlags,
@@ -2377,16 +2380,6 @@ export const browserUseContracts = defineCommandFacadeContract(
 			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
 			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
 			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
-		},
-		"action-promote": {
-			script: "browser-use",
-			summary: "Promote one exact committed Reviewed Action through the signed, presence-backed ApprovalBroker.",
-			usage: ["action promote --id <action-id> --approval-reference <reference> [--caller <label>] [--json|--plain]"],
-			json: true, audience: "operator", mutation: "write", sideEffects: ["check", "auth", "write"], executionModes: ["normal"],
-			previewExemption: { reason: "Promotion is exact-commit bound and requires live operator presence at the signed broker." },
-			outputModes: ["json", "plain"], interactivity: "required",
-			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
-			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionPromoteFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-schema": {
 			script: "browser-use",

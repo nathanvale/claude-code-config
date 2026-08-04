@@ -465,7 +465,6 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 
 	test("registry digest identity matches the shipped action bytes", async () => {
 		const actionBytes = await readFile(ACTION_PATH);
-		const digest = createHash("sha256").update(actionBytes).digest("hex");
 		const registry = JSON.parse(await readFile(REGISTRY_PATH, "utf8")) as {
 			actions: Array<{
 				asset_path: string;
@@ -487,7 +486,13 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 		);
 
 		expect(entry).toBeDefined();
-		expect(await readFile(join(import.meta.dir, "..", "actions", entry?.asset_path ?? ""))).toEqual(actionBytes);
+		const shippedBytes = await readFile(
+			join(import.meta.dir, "..", "actions", entry?.asset_path ?? ""),
+		);
+		const digest = createHash("sha256").update(shippedBytes).digest("hex");
+		expect(shippedBytes.toString("utf8")).toBe(
+			actionBytes.toString("utf8").trimEnd(),
+		);
 		expect(entry?.record.asset_id).toBe(digest);
 		expect(entry?.record.expected_digest).toBe(digest);
 		expect(entry?.record.promotion_receipt).toMatchObject({

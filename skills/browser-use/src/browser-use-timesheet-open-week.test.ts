@@ -290,7 +290,11 @@ describe("FastTrack open-week Reviewed Action", () => {
 				record: {
 					action_id: string;
 					expected_digest: string;
-					promotion_receipt: unknown;
+					promotion_receipt: {
+						approved_digest: string;
+						disposition: "approved";
+						presence_backed: true;
+					};
 					required_postcondition: unknown;
 				};
 			}>;
@@ -301,7 +305,11 @@ describe("FastTrack open-week Reviewed Action", () => {
 
 		expect(entry?.record).toMatchObject({
 			expected_digest: digest,
-			promotion_receipt: null,
+			promotion_receipt: {
+				approved_digest: digest,
+				disposition: "approved",
+				presence_backed: true,
+			},
 			required_postcondition: {
 				kind: "element-visible",
 				selector: "tr[ng-repeat]",

@@ -3,6 +3,10 @@
 Use the setup-owned source-checkout `browser-use` front door. Never edit the
 Private Runbook Catalog or Reviewed Action source directly.
 
+Production promotion is unavailable. A separate reviewed plan owns signed-product
+installation, admission, presence-backed acceptance, and repair. This runbook
+makes no production Touch ID or Developer ID acceptance claim.
+
 ## Discover the contracts
 
 - Run `browser-use action --help`, `browser-use runbook --help`, and
@@ -61,11 +65,12 @@ browser-use action status --id <action-id> --json
 - On a stale-digest refusal, inspect again. Never retry with the refusal's
   digest without reviewing current source.
 
-Hand the exact reviewed commit and mechanically derived approval facts to the
-external human promotion process. Only the presence-backed Approval Broker may
-issue the promotion receipt. Never fabricate, edit, or replay a receipt. Treat
-`promotion-claim-present` as a source claim; activation independently verifies
-the exact digest and receipt.
+Keep the exact reviewed commit and mechanically derived approval facts ready for
+the future external human promotion process. Do not attempt production promotion:
+the separately reviewed signed-product installation, admission, presence-backed
+acceptance, and repair lifecycle does not exist yet. Never fabricate, edit, or
+replay a receipt. Treat `promotion-claim-present` as a source claim; activation
+independently verifies the exact digest and receipt.
 
 Owners:
 [candidate authoring](../../skills/browser-use/src/browser-use-reviewed-action-authoring.ts)

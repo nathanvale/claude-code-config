@@ -142,6 +142,7 @@ const BLOCK_CAUSES_BY_PHASE: Readonly<
 	"secret-free-preparation": [
 		"missing-token",
 		"invalid-vault-scope",
+		"binding-approval-required",
 		"ambiguous-binding-selection",
 		"revoked-binding",
 		"unsupported-method",
@@ -164,6 +165,7 @@ const BLOCK_CAUSES_BY_PHASE: Readonly<
 		"origin-mismatch",
 		"session-identity-proof-unavailable",
 		"human-identity-attestation-required",
+		"unknown-post-submit-state",
 		"user-presence-required",
 		"target-proof-invalid",
 		"capability-loss",
@@ -181,6 +183,7 @@ const RESOLUTION_PHASE_BY_CAUSE: Readonly<
 > = {
 	"missing-token": "secret-free-preparation",
 	"invalid-vault-scope": "secret-free-preparation",
+	"binding-approval-required": "secret-free-preparation",
 	"ambiguous-binding-selection": "secret-free-preparation",
 	"revoked-binding": "secret-free-preparation",
 	"lease-unavailable": "lease-request",
@@ -669,6 +672,20 @@ export function resumeAuthTransactionAfterRestart(
 	}
 	if (fragment.submission_started) {
 		return blockWith(fragment, "unknown-post-submit-state");
+	}
+	if (
+		fragment.phase === "post-auth-proof" ||
+		fragment.phase === "bounded-attestation"
+	) {
+		// Credentials were already submitted and their outcome was observed.
+		// Re-enter only the fresh proof phase: resetting to pre-auth would let a
+		// delayed/stale form replay the consumed credential attempt.
+		return activeAt(fragment, "post-auth-proof", {
+			identity_basis: null,
+			identity_basis_digest: null,
+			attestation_digest: null,
+			fresh_until_epoch_ms: null,
+		});
 	}
 	return activeAt(fragment, "pre-auth-proof", { submit_outcome: null });
 }

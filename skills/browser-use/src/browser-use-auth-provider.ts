@@ -151,7 +151,7 @@ export type BrowserUsePreparationBlockedCause = Extract<
 	BrowserUseAuthBlockedCause,
 	| "missing-token"
 	| "invalid-vault-scope"
-	| "ambiguous-binding-selection"
+	| "binding-approval-required"
 	| "revoked-binding"
 	| "unsupported-method"
 	| "capability-loss"
@@ -442,7 +442,8 @@ export function createBrowserUseAuthProvider(
 		// Gate 1 — method admission. session-reuse completes with zero Port
 		// calls; user-presence is unsupported-method in preparation (D5, R13);
 		// an existing binding must list the method. A first bind with
-		// password/otp defers admission to the live-matched binding below.
+		// password/otp defers admission until a later resume supplies an approved
+		// binding. Discovery itself cannot create that authorization artifact.
 		if (
 			input.method === "session-reuse" ||
 			input.method === "user-presence" ||
@@ -541,15 +542,6 @@ export function createBrowserUseAuthProvider(
 			items: listed.items,
 			hint: input.candidate_hint,
 		});
-		if (match.kind === "bound") {
-			const admitted = assessBindingMethod(match.binding, input.method);
-			if (!admitted.ok) {
-				return preparationBlock(admitted.blocked_cause, admitted.continuation, {
-					kind: "method",
-				});
-			}
-			return preparationComplete(match.binding);
-		}
 		if (match.kind === "missing-item") {
 			return preparationBlock(match.blocked_cause, match.continuation, {
 				kind: "binding-repair",
@@ -557,7 +549,7 @@ export function createBrowserUseAuthProvider(
 				stale_state: null,
 			});
 		}
-		if (match.kind === "ambiguous-selection") {
+		if (match.kind === "binding-approval-required") {
 			return preparationBlock(match.blocked_cause, match.continuation, {
 				kind: "selection",
 				selection: match.selection,

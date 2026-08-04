@@ -325,21 +325,10 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
-	if (command === "action-status" || command === "action-promote") {
+	if (command === "action-status") {
 		const actionId = stringField(flagValues["--id"]);
 		if (actionId === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(actionId)) {
-			throw usageError(`${command.replace("-", " ")} requires --id <action-id> as a safe slug.`);
-		}
-	}
-	if (command === "action-promote") {
-		const approvalReference = stringField(flagValues["--approval-reference"]);
-		if (
-			approvalReference === undefined ||
-			!/^[a-z0-9][a-z0-9-]{0,127}$/.test(approvalReference)
-		) {
-			throw usageError(
-				"action promote requires --approval-reference <reference> as an opaque safe identifier.",
-			);
+			throw usageError("action status requires --id <action-id> as a safe slug.");
 		}
 	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the

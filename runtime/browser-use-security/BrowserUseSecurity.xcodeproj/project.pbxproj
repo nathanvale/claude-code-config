@@ -8,12 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		AB01000000000000000000A1 /* ApprovalBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000A1 /* ApprovalBroker.swift */; };
+		AB01000000000000000000A4 /* ApprovalBrokerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000A4 /* ApprovalBrokerProtocol.swift */; };
 		AB01000000000000000000B1 /* TokenRetrievalLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000B1 /* TokenRetrievalLauncher.swift */; };
 		AB01000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift */; };
+		AB01000000000000000000D1 /* ApprovalBrokerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000A4 /* ApprovalBrokerProtocol.swift */; };
+		AB01000000000000000000D2 /* ApprovalBrokerProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000000000000000000D1 /* ApprovalBrokerProtocolTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AB00000000000000000000A1 /* ApprovalBroker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalBroker.swift; sourceTree = "<group>"; };
+		AB00000000000000000000A4 /* ApprovalBrokerProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalBrokerProtocol.swift; sourceTree = "<group>"; };
 		AB00000000000000000000A2 /* ApprovalBroker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = ApprovalBroker.entitlements; path = ../entitlements/ApprovalBroker.entitlements; sourceTree = "<group>"; };
 		AB00000000000000000000A3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AB00000000000000000000A9 /* ApprovalBroker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ApprovalBroker.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -25,12 +29,15 @@
 		AB00000000000000000000C2 /* ConfidentialFieldDeliveryXPC.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = ConfidentialFieldDeliveryXPC.entitlements; path = ../entitlements/ConfidentialFieldDeliveryXPC.entitlements; sourceTree = "<group>"; };
 		AB00000000000000000000C3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */ = {isa = PBXFileReference; explicitFileType = wrapper.xpc-service; includeInIndex = 0; path = ConfidentialFieldDeliveryXPC.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB00000000000000000000D1 /* ApprovalBrokerProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalBrokerProtocolTests.swift; sourceTree = "<group>"; };
+		AB00000000000000000000D9 /* ApprovalBrokerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ApprovalBrokerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AB02000000000000000000A1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
 		AB02000000000000000000B1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
 		AB02000000000000000000C1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		AB02000000000000000000D1 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +45,7 @@
 			isa = PBXGroup;
 			children = (
 				AB03000000000000000000A0 /* ApprovalBroker */,
+				AB03000000000000000000D0 /* ApprovalBrokerTests */,
 				AB03000000000000000000B0 /* TokenRetrievalLauncher */,
 				AB03000000000000000000C0 /* ConfidentialFieldDeliveryXPC */,
 				AB03000000000000000000E0 /* entitlements */,
@@ -49,9 +57,18 @@
 			isa = PBXGroup;
 			children = (
 				AB00000000000000000000A1 /* ApprovalBroker.swift */,
+				AB00000000000000000000A4 /* ApprovalBrokerProtocol.swift */,
 				AB00000000000000000000A3 /* Info.plist */,
 			);
 			path = targets/ApprovalBroker;
+			sourceTree = "<group>";
+		};
+		AB03000000000000000000D0 /* ApprovalBrokerTests */ = {
+			isa = PBXGroup;
+			children = (
+				AB00000000000000000000D1 /* ApprovalBrokerProtocolTests.swift */,
+			);
+			path = targets/ApprovalBrokerTests;
 			sourceTree = "<group>";
 		};
 		AB03000000000000000000B0 /* TokenRetrievalLauncher */ = {
@@ -88,6 +105,7 @@
 				AB00000000000000000000A9 /* ApprovalBroker.app */,
 				AB00000000000000000000B9 /* TokenRetrievalLauncher.app */,
 				AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */,
+				AB00000000000000000000D9 /* ApprovalBrokerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -137,6 +155,20 @@
 			productReference = AB00000000000000000000C9 /* ConfidentialFieldDeliveryXPC.xpc */;
 			productType = "com.apple.product-type.xpc-service";
 		};
+		AB05000000000000000000D1 /* ApprovalBrokerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB06000000000000000000D1 /* Build configuration list for PBXNativeTarget "ApprovalBrokerTests" */;
+			buildPhases = (
+				AB04000000000000000000D1 /* Sources */,
+				AB02000000000000000000D1 /* Frameworks */,
+			);
+			buildRules = ( );
+			dependencies = ( );
+			name = ApprovalBrokerTests;
+			productName = ApprovalBrokerTests;
+			productReference = AB00000000000000000000D9 /* ApprovalBrokerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -150,6 +182,7 @@
 					AB05000000000000000000A1 = { CreatedOnToolsVersion = 15.0; };
 					AB05000000000000000000B1 = { CreatedOnToolsVersion = 15.0; };
 					AB05000000000000000000C1 = { CreatedOnToolsVersion = 15.0; };
+					AB05000000000000000000D1 = { CreatedOnToolsVersion = 15.0; };
 				};
 			};
 			buildConfigurationList = AB07000000000000000000FF /* Build configuration list for PBXProject "BrowserUseSecurity" */;
@@ -165,6 +198,7 @@
 				AB05000000000000000000A1 /* ApprovalBroker */,
 				AB05000000000000000000B1 /* TokenRetrievalLauncher */,
 				AB05000000000000000000C1 /* ConfidentialFieldDeliveryXPC */,
+				AB05000000000000000000D1 /* ApprovalBrokerTests */,
 			);
 		};
 /* End PBXProject section */
@@ -173,7 +207,7 @@
 		AB04000000000000000000A1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ( AB01000000000000000000A1 /* ApprovalBroker.swift in Sources */, );
+			files = ( AB01000000000000000000A1 /* ApprovalBroker.swift in Sources */, AB01000000000000000000A4 /* ApprovalBrokerProtocol.swift in Sources */, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AB04000000000000000000B1 /* Sources */ = {
@@ -186,6 +220,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = ( AB01000000000000000000C1 /* ConfidentialFieldDeliveryXPC.swift in Sources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB04000000000000000000D1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ( AB01000000000000000000D1 /* ApprovalBrokerProtocol.swift in Sources */, AB01000000000000000000D2 /* ApprovalBrokerProtocolTests.swift in Sources */, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -320,6 +360,26 @@
 			};
 			name = Release;
 		};
+		AB09000000000000000000D1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker-tests";
+				PRODUCT_NAME = ApprovalBrokerTests;
+			};
+			name = Debug;
+		};
+		AB09000000000000000000D2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.side-quest.browser-use-security.approval-broker-tests";
+				PRODUCT_NAME = ApprovalBrokerTests;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -344,6 +404,12 @@
 		AB06000000000000000000C1 /* Build configuration list for PBXNativeTarget "ConfidentialFieldDeliveryXPC" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = ( AB09000000000000000000C1 /* Debug */, AB09000000000000000000C2 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB06000000000000000000D1 /* Build configuration list for PBXNativeTarget "ApprovalBrokerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( AB09000000000000000000D1 /* Debug */, AB09000000000000000000D2 /* Release */, );
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};

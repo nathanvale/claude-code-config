@@ -117,7 +117,7 @@ function binding(origin: string, shape: LoginFixtureShape): BrowserUseItemBindin
 	};
 }
 
-function tokenPort(): BrowserUseTokenRetrievalPort {
+function tokenPort(onCredentialFetch: () => void): BrowserUseTokenRetrievalPort {
 	return {
 		listVaults: async () => ({ ok: true, vaults: [] }),
 		listLoginItems: async () => ({ ok: true, items: [] }),
@@ -125,14 +125,17 @@ function tokenPort(): BrowserUseTokenRetrievalPort {
 			ok: false,
 			rejection: { code: "item-missing", message: "unused by prototype" },
 		}),
-		fetchCredentialField: async ({ field }) => ({
-			ok: true,
-			handle: {
-				handle_id: `dummy-${field}`,
-				field,
-				expires_at_epoch_ms: 9_999_999_999_999,
-			} satisfies BrowserUseSecretHandle,
-		}),
+		fetchCredentialField: async ({ field }) => {
+			onCredentialFetch();
+			return {
+				ok: true,
+				handle: {
+					handle_id: `dummy-${field}`,
+					field,
+					expires_at_epoch_ms: 9_999_999_999_999,
+				} satisfies BrowserUseSecretHandle,
+			};
+		},
 	};
 }
 
@@ -186,6 +189,7 @@ async function runShape(
 	const targetId = created.targetId;
 	if (typeof targetId !== "string") throw new Error("fixture target absent");
 	await Bun.sleep(250);
+	let credentialFetchCount = 0;
 	const proofFields = new Map<string, number>();
 	const proveTarget: BrowserUseLoginTargetProof = async (input) => {
 		const proof = await mintBrowserUseVerifiedTarget(client, input);
@@ -240,7 +244,9 @@ async function runShape(
 			{
 				observer: createBrowserUseCdpObserver(client),
 				proveTarget,
-				tokenRetrieval: tokenPort(),
+				tokenRetrieval: tokenPort(() => {
+					credentialFetchCount += 1;
+				}),
 				deliver,
 			},
 			{
@@ -260,6 +266,7 @@ async function runShape(
 			blocked_cause: result.ok ? null : result.blocked.blocked_cause,
 			committed: probe.committed,
 			activation_count: probe.activationCount,
+			credential_fetch_count: credentialFetchCount,
 			signed_in: probe.signedIn,
 		};
 	} finally {
@@ -297,12 +304,17 @@ try {
 	const nearMiss = outcomes.find(
 		(outcome) => outcome.shape === "ambiguous-near-miss",
 	);
+	const nearMissCommitted = objectOf(nearMiss?.committed);
 	const passed =
 		positive.every(
 			(outcome) => outcome.engine_ok === true && outcome.signed_in === true,
 		) &&
 		nearMiss?.engine_ok === false &&
-		nearMiss.blocked_cause === "human-identity-attestation-required";
+		nearMiss.blocked_cause === "human-identity-attestation-required" &&
+		nearMiss.credential_fetch_count === 0 &&
+		Object.keys(nearMissCommitted).length > 0 &&
+		Object.values(nearMissCommitted).every((value) => value === false) &&
+		nearMiss.activation_count === 0;
 	console.log(
 		JSON.stringify({
 			verdict: passed ? "PASS" : "FAIL",

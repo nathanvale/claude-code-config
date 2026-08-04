@@ -183,7 +183,12 @@ export async function loadPrivateRunbookCatalogFromGit(input: { repoRoot: string
 				blobBytes.set(sourcePath, assetBytes);
 			}
 			if (actionAssetDigest(assetBytes) !== ref.expectedDigest || registryEntry.record.expected_digest !== ref.expectedDigest) return failure("catalog_action_closure_incomplete", "a referenced action digest does not match the committed asset and registry.");
-			const verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record, promotionHistory: registryEntry.promotion_history });
+			let verified: Awaited<ReturnType<BrowserUsePromotionVerifier["verify"]>> | undefined;
+			try {
+				verified = await input.promotionVerifier?.verify({ commit, actionId: ref.actionId, expectedDigest: ref.expectedDigest, assetBytes, record: registryEntry.record, promotionHistory: registryEntry.promotion_history });
+			} catch {
+				return failure("promotion_verification_failed", "a referenced action lacks valid external-human promotion authority.");
+			}
 			if (verified !== undefined && !verified.ok) return failure("promotion_verification_failed", "a referenced action lacks valid external-human promotion authority.");
 			proofEntries.set(sourcePath, treeEntry);
 			runbookActionEntries.push({ sourcePath, treeEntry });

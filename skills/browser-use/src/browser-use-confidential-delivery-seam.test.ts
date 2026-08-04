@@ -146,6 +146,9 @@ const BINDING: BrowserUseItemBinding = {
 	binding_revision: 1,
 };
 
+const resolveApprovedBinding = async (): Promise<BrowserUseItemBinding> =>
+	BINDING;
+
 function verifiedTarget(runId: string): BrowserUseVerifiedTarget {
 	return {
 		lane_id: "agent-browser",
@@ -291,18 +294,52 @@ function activeVaultPort(
 					vault_id: "vault-1",
 					origins: ["https://oncore.test"],
 					login_paths: ["/login"],
-					supported_methods: ["password"],
+					supported_methods: ["password"] as const,
 					state: "active",
 				},
 			],
 		}),
 		getLoginItem: async () => ({
-			ok: false,
-			rejection: { code: "item-missing", message: "unused" },
+			ok: true,
+			item: {
+				item_id: "item-1",
+				vault_id: "vault-1",
+				origins: ["https://oncore.test"],
+				login_paths: ["/login"],
+				supported_methods: ["password", "otp"],
+				state: "active",
+			},
 		}),
 		fetchCredentialField: fakePort.fetchCredentialField,
 		...overrides,
 	};
+}
+
+type ApprovedBindingResolver = NonNullable<
+	Parameters<
+		typeof buildRunbookAuthDelivery
+	>[1]["resolveApprovedBinding"]
+>;
+
+function buildApprovedAuthDelivery(
+	store: RunStoreDeps,
+	port: BrowserUseTokenRetrievalPort,
+	deps: Omit<
+		Parameters<typeof buildRunbookAuthDelivery>[1],
+		"tokenRetrieval" | "resolveApprovedBinding"
+	>,
+	resolver: ApprovedBindingResolver = resolveApprovedBinding,
+) {
+	const provider = createBrowserUseAuthProvider({
+		store,
+		tokenRetrieval: port,
+		attestationByDigest: () => undefined,
+	});
+	return buildRunbookAuthDelivery(provider, {
+		...deps,
+		tokenRetrieval: port,
+		resolveApprovedBinding: resolver,
+	});
 }
 
 // Build the delivery context through the REAL provider builder (wiring_spec
@@ -406,14 +443,8 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				};
 			},
 		};
-		const provider = createBrowserUseAuthProvider({
-			store: store.deps,
-			tokenRetrieval: port,
-			attestationByDigest: () => undefined,
-		});
 		let transportClosed = 0;
-		const seam = buildRunbookAuthDelivery(provider, {
-			tokenRetrieval: port,
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
 			createTargetTransport: () => ({
 				transport: stableProofTransport(),
 				close: () => {
@@ -504,13 +535,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				};
 			},
 		};
-		const provider = createBrowserUseAuthProvider({
-			store: store.deps,
-			tokenRetrieval: port,
-			attestationByDigest: () => undefined,
-		});
-		const seam = buildRunbookAuthDelivery(provider, {
-			tokenRetrieval: port,
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
 			createTargetTransport: () => ({
 				transport: stableProofTransport(),
 				close: () => {},
@@ -645,35 +670,36 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		expect(transportCalls).toBe(0);
 	});
 
-	test("zero and ambiguous vault matches block typed before target proof or handle mint", async () => {
+	test("zero, one, and many vault matches block typed before target proof or handle mint", async () => {
 		const store = await makeStore();
-		for (const scenario of ["zero", "ambiguous"] as const) {
+		for (const scenario of ["zero", "single", "ambiguous"] as const) {
 			let handleMints = 0;
 			let transportCalls = 0;
+			const matchingItems = [
+				{
+					item_id: "item-a",
+					vault_id: "vault-1",
+					origins: ["https://oncore.test"],
+					login_paths: ["/login"],
+					supported_methods: ["password"] as const,
+					state: "active" as const,
+				},
+				{
+					item_id: "item-b",
+					vault_id: "vault-1",
+					origins: ["https://oncore.test"],
+					login_paths: ["/login"],
+					supported_methods: ["password"] as const,
+					state: "active" as const,
+				},
+			];
 			const port = activeVaultPort({
 				listLoginItems: async () => ({
 					ok: true,
 					items:
 						scenario === "zero"
 							? []
-							: [
-									{
-										item_id: "item-a",
-										vault_id: "vault-1",
-										origins: ["https://oncore.test"],
-										login_paths: ["/login"],
-										supported_methods: ["password"],
-										state: "active",
-									},
-									{
-										item_id: "item-b",
-										vault_id: "vault-1",
-										origins: ["https://oncore.test"],
-										login_paths: ["/login"],
-										supported_methods: ["password"],
-										state: "active",
-									},
-								],
+							: matchingItems.slice(0, scenario === "single" ? 1 : 2),
 				}),
 				fetchCredentialField: async (request) => {
 					handleMints += 1;
@@ -699,9 +725,9 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			expect(outcome.message).toContain(
 				scenario === "zero"
 					? "revoked-binding"
-					: "ambiguous-binding-selection",
+					: "binding-approval-required",
 			);
-			if (scenario === "ambiguous") {
+			if (scenario !== "zero") {
 				expect(outcome.message).toContain("rank 1 item item-a");
 			}
 			expect(handleMints).toBe(0);
@@ -759,13 +785,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 					};
 				},
 			};
-			const provider = createBrowserUseAuthProvider({
-				store: store.deps,
-				tokenRetrieval: port,
-				attestationByDigest: () => undefined,
-			});
-			const seam = buildRunbookAuthDelivery(provider, {
-				tokenRetrieval: port,
+			const seam = buildApprovedAuthDelivery(store.deps, port, {
 				createTargetTransport: () => ({
 					transport: stableProofTransport(),
 					close: () => {},
@@ -815,7 +835,6 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		{
 			let handleMints = 0;
 			let transportCalls = 0;
-			let listCalls = 0;
 			const itemFor = (itemId: string) => ({
 				item_id: itemId,
 				vault_id: "vault-1",
@@ -825,31 +844,31 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				state: "active" as const,
 			});
 			const port = activeVaultPort({
-				listLoginItems: async () => {
-					listCalls += 1;
-					return {
-						ok: true,
-						items: [itemFor(listCalls === 1 ? "item-a" : "item-b")],
-					};
-				},
+				getLoginItem: async ({ item_id }) => ({
+					ok: true,
+					item: itemFor(item_id),
+				}),
 				fetchCredentialField: async (request) => {
 					handleMints += 1;
 					return await fakePort.fetchCredentialField(request);
 				},
 			});
-			const provider = createBrowserUseAuthProvider({
-				store: store.deps,
-				tokenRetrieval: port,
-				attestationByDigest: () => undefined,
-			});
-			const seam = buildRunbookAuthDelivery(provider, {
-				tokenRetrieval: port,
-				createTargetTransport: () => {
-					transportCalls += 1;
-					return { transport: stableProofTransport(), close: () => {} };
+			const seam = buildApprovedAuthDelivery(
+				store.deps,
+				port,
+				{
+					createTargetTransport: () => {
+						transportCalls += 1;
+						return { transport: stableProofTransport(), close: () => {} };
+					},
+					createDeliveryHook: () => undefined,
 				},
-				createDeliveryHook: () => undefined,
-			});
+				async ({ binding_ref }) => ({
+					...BINDING,
+					item_id:
+						binding_ref === "oncore_password" ? "item-a" : "item-b",
+				}),
+			);
 			const outcome = await seam(twoSlugInput("run-r10-two-items"));
 			expect(outcome.ok).toBe(false);
 			if (!outcome.ok) {
@@ -899,13 +918,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				return await fakePort.fetchCredentialField(request);
 			},
 		});
-		const provider = createBrowserUseAuthProvider({
-			store: store.deps,
-			tokenRetrieval: port,
-			attestationByDigest: () => undefined,
-		});
-		const seam = buildRunbookAuthDelivery(provider, {
-			tokenRetrieval: port,
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
 			createTargetTransport: () => ({
 				transport: driftingTransport,
 				close: () => {},
@@ -958,13 +971,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 	test("sensitive lease contention blocks the second run and its key cannot collide with dispatch", async () => {
 		const store = await makeStore();
 		const port = activeVaultPort();
-		const provider = createBrowserUseAuthProvider({
-			store: store.deps,
-			tokenRetrieval: port,
-			attestationByDigest: () => undefined,
-		});
-		const seam = buildRunbookAuthDelivery(provider, {
-			tokenRetrieval: port,
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
 			createTargetTransport: () => ({
 				transport: stableProofTransport(),
 				close: () => {},

@@ -36,13 +36,16 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import {
 	BROWSER_USE_APPROVAL_BROKER_ENV,
 	type BrowserUseHumanIdentityAttestationDriver,
 	createNativeHumanIdentityAttestationDriver,
 } from "./browser-use-human-identity-attestation";
-import type { BrowserUseReviewedActionOperatorBroker } from "./browser-use-reviewed-action-promotion";
 import {
 	type BrowserUseReviewedActionApprovalVerifier,
 	type BrowserUseReviewedActionVerifierIdentity,
@@ -58,6 +61,7 @@ import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	fullFsyncDurableFile,
+	inspectBrowserUseRoot,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
@@ -584,25 +588,77 @@ function environmentTokenRetrievalOf(
 	});
 }
 
+type BrowserUseReviewedActionApprovalVerifierIssue = {
+	code:
+		| "action_promotion_verifier_store_unsafe"
+		| "action_promotion_verifier_identity_invalid";
+	message: string;
+};
 
-async function productionReviewedActionVerifierIdentityOf(
+type BrowserUseReviewedActionApprovalVerifierResolution =
+	| {
+			status: "ready";
+			verifier: BrowserUseReviewedActionApprovalVerifier;
+			identity: BrowserUseReviewedActionVerifierIdentity;
+	  }
+	| { status: "absent" }
+	| { status: "rejected"; issue: BrowserUseReviewedActionApprovalVerifierIssue };
+
+async function productionReviewedActionApprovalVerifierOf(
 	runtime: BrowserUseRuntime,
-): Promise<BrowserUseReviewedActionVerifierIdentity | undefined> {
+): Promise<BrowserUseReviewedActionApprovalVerifierResolution> {
 	const resolved = resolveBrowserUsePaths(runtime.env);
-	if (!resolved.ok) return undefined;
-	const path = join(
-		resolved.resolution.roots.config,
-		REVIEWED_ACTION_VERIFIER_FILE,
-	);
+	if (!resolved.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be resolved safely.",
+			},
+		};
+	}
+	const configRoot = resolved.resolution.roots.config;
+	const inspected = await inspectBrowserUseRoot(runtime.platformFs, {
+		kind: "config",
+		path: configRoot,
+	});
+	if (!inspected.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root is not private and owner-controlled.",
+			},
+		};
+	}
+	if (!inspected.exists) return { status: "absent" };
+	const canonicalConfigRoot = await runtime.platformFs.realpath(configRoot);
+	if (canonicalConfigRoot === undefined) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be canonicalized.",
+			},
+		};
+	}
+	const path = join(canonicalConfigRoot, REVIEWED_ACTION_VERIFIER_FILE);
 	try {
 		const stat = await runtime.platformFs.lstat(path);
+		if (stat === undefined) return { status: "absent" };
 		const processUid = process.getuid?.();
 		if (
-			stat?.kind !== "file" ||
+			stat.kind !== "file" ||
 			(stat.mode & 0o077) !== 0 ||
 			(processUid !== undefined && stat.uid !== processUid)
 		) {
-			return undefined;
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_store_unsafe",
+					message: "the Reviewed Action verifier pin is not an owner-only regular file.",
+				},
+			};
 		}
 		const parsed = JSON.parse(
 			await runtime.platformFs.readTextFile(path),
@@ -620,27 +676,40 @@ async function productionReviewedActionVerifierIdentityOf(
 			typeof parsed.key_id !== "string" ||
 			typeof parsed.public_key !== "string"
 		) {
-			return undefined;
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_identity_invalid",
+					message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+				},
+			};
 		}
 		const identity = {
 			key_id: parsed.key_id,
 			public_key: parsed.public_key,
 		};
 		return reviewedActionVerifierIdentityIsValid(identity)
-			? identity
-			: undefined;
+			? {
+					status: "ready",
+					verifier: createP256ReviewedActionApprovalVerifier(identity),
+					identity,
+				}
+			: {
+					status: "rejected",
+					issue: {
+						code: "action_promotion_verifier_identity_invalid",
+						message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+					},
+				};
 	} catch {
-		return undefined;
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_identity_invalid",
+				message: "the Reviewed Action verifier pin could not be parsed.",
+			},
+		};
 	}
-}
-
-async function productionReviewedActionApprovalVerifierOf(
-	runtime: BrowserUseRuntime,
-): Promise<BrowserUseReviewedActionApprovalVerifier | undefined> {
-	const identity = await productionReviewedActionVerifierIdentityOf(runtime);
-	return identity === undefined
-		? undefined
-		: createP256ReviewedActionApprovalVerifier(identity);
 }
 
 type EnvironmentTokenSupervisorDeps = {
@@ -1160,10 +1229,18 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Test/composition seam for an already approved binding catalog owner. */
+	runbookApprovedBindingResolver?: (input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}) => Promise<BrowserUseItemBinding | null>;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
-	/** Operator-only presence-backed promotion broker; tests inject a hermetic fake. */
-	reviewedActionPromotionBroker?: BrowserUseReviewedActionOperatorBroker;
+	/** Present but rejected production verifier pin; absent means not provisioned. */
+	reviewedActionApprovalVerifierIssue?: BrowserUseReviewedActionApprovalVerifierIssue;
 	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
 	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
 	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
@@ -1278,21 +1355,33 @@ export async function createProductionBrowserUseRuntime(
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
 	}
-	if (runtime.reviewedActionApprovalVerifier === undefined) {
-		runtime.reviewedActionApprovalVerifier =
-			await productionReviewedActionApprovalVerifierOf(runtime);
+	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
+	if (
+		runtime.reviewedActionApprovalVerifier === undefined ||
+		runtime.runbookHumanIdentityAttestation === undefined
+	) {
+		const resolution = await productionReviewedActionApprovalVerifierOf(runtime);
+		if (resolution.status === "ready") {
+			reviewedActionVerifierIdentity = resolution.identity;
+			if (runtime.reviewedActionApprovalVerifier === undefined) {
+				runtime.reviewedActionApprovalVerifier = resolution.verifier;
+			}
+		} else if (resolution.status === "rejected") {
+			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
+		}
 	}
 	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
 	if (
 		runtime.runbookHumanIdentityAttestation === undefined &&
 		brokerPath !== undefined &&
-		brokerPath !== ""
+		brokerPath !== "" &&
+		reviewedActionVerifierIdentity !== undefined
 	) {
-		const identity = await productionReviewedActionVerifierIdentityOf(runtime);
-		if (identity !== undefined) {
-			runtime.runbookHumanIdentityAttestation =
-				createNativeHumanIdentityAttestationDriver(brokerPath, identity);
-		}
+		runtime.runbookHumanIdentityAttestation =
+			createNativeHumanIdentityAttestationDriver(
+				brokerPath,
+				reviewedActionVerifierIdentity,
+			);
 	}
 	return runtime;
 }
