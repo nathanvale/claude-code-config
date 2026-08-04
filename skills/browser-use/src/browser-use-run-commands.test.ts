@@ -940,7 +940,7 @@ describe("run approval artifact custody", () => {
 		const deleted = await deleteArtifact(store.deps, {
 			runId,
 			artifactId,
-			reason: "operator-delete",
+			reason: "explicit-delete",
 		});
 		expect(deleted.ok).toBe(true);
 
