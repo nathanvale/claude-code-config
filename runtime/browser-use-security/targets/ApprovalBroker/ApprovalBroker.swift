@@ -174,7 +174,7 @@ struct ApprovalBroker {
     static func pinnedPublicVerifier(
         for signingKey: SecureEnclave.P256.Signing.PrivateKey
     ) -> Data {
-        signingKey.publicKey.rawRepresentation
+        signingKey.publicKey.x963Representation
     }
 }
 
@@ -201,23 +201,8 @@ private enum ApprovalBrokerCommandSupport {
         return key
     }
 
-    static func hex<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
-        bytes.map { String(format: "%02x", $0) }.joined()
-    }
-
-    static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> [String: Any] {
-        let raw = ApprovalBroker.pinnedPublicVerifier(for: key)
-        return [
-            "key_id": hex(SHA256.hash(data: raw)),
-            "public_key": raw.base64EncodedString(),
-        ]
-    }
-
-    static func canonicalData(_ value: Any) throws -> Data {
-        try JSONSerialization.data(
-            withJSONObject: value,
-            options: [.sortedKeys, .withoutEscapingSlashes]
-        )
+    static func verifierIdentity(for key: SecureEnclave.P256.Signing.PrivateKey) -> ReviewedActionVerifierIdentity {
+        ReviewedActionPromotionProtocol.verifierIdentity(for: key.publicKey)
     }
 
     static func reviewExactCandidate(facts: [String: Any], candidateBytes: String) throws {
@@ -225,7 +210,10 @@ private enum ApprovalBrokerCommandSupport {
         application.setActivationPolicy(.accessory)
         application.activate(ignoringOtherApps: true)
 
-        let factsData = try canonicalData(facts)
+        let factsData = try JSONSerialization.data(
+            withJSONObject: facts,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
         guard let factsText = String(data: factsData, encoding: .utf8) else {
             throw PromotionCommandError.invalidInput
         }
@@ -251,42 +239,34 @@ private enum ApprovalBrokerCommandSupport {
     }
 
     static func promotionReceipt(
-        request: [String: Any],
+        request: ReviewedActionPromotionRequest,
         key: SecureEnclave.P256.Signing.PrivateKey
-    ) throws -> [String: Any] {
-        guard
-            let facts = request["facts"] as? [String: Any],
-            let candidateBytes = request["candidate_bytes"] as? String,
-            let approvalReference = request["approval_reference"] as? String,
-            let approvedDigest = facts["approved_digest"] as? String,
-            approvalReference.range(of: "^[a-z0-9][a-z0-9-]{0,127}$", options: .regularExpression) != nil
-        else {
-            throw PromotionCommandError.invalidInput
-        }
-        let observedDigest = hex(SHA256.hash(data: Data(candidateBytes.utf8)))
-        guard observedDigest == approvedDigest else {
+    ) throws -> ReviewedActionPromotionReceipt {
+        let observedDigest = ReviewedActionPromotionProtocol.hex(
+            SHA256.hash(data: Data(request.candidate_bytes.utf8))
+        )
+        guard observedDigest == request.facts.approved_digest else {
             throw PromotionCommandError.candidateDigestMismatch
         }
-        try reviewExactCandidate(facts: facts, candidateBytes: candidateBytes)
+        try reviewExactCandidate(
+            facts: ReviewedActionPromotionProtocol.factsJSONObject(request.facts),
+            candidateBytes: request.candidate_bytes
+        )
 
         let verifier = verifierIdentity(for: key)
         let receiptID = "receipt-\(UUID().uuidString.lowercased())"
-        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
-        var unsigned = facts
-        unsigned["receipt_id"] = receiptID
-        unsigned["approval_reference"] = approvalReference
-        unsigned["issued_at_epoch_ms"] = issuedAt
-        unsigned["verifier_key_id"] = verifier["key_id"]
-        let factsDigest = SHA256.hash(data: try canonicalData(unsigned))
-        let signature = try key.signature(for: Data(factsDigest))
-
-        var receipt = unsigned
-        receipt["contract"] = "browser-use.reviewed-action-promotion"
-        receipt["schema_version"] = "1"
-        receipt["disposition"] = "approved"
-        receipt["presence_backed"] = true
-        receipt["signature"] = signature.derRepresentation.base64EncodedString()
-        return receipt
+        let issuedAt = Int64(Date().timeIntervalSince1970 * 1_000)
+        let unsigned = try ReviewedActionPromotionProtocol.makeUnsignedReceipt(
+            request: request,
+            receiptID: receiptID,
+            issuedAtEpochMilliseconds: issuedAt,
+            verifierKeyID: verifier.key_id
+        )
+        let digest = Data(SHA256.hash(
+            data: try ReviewedActionPromotionProtocol.canonicalPayload(for: unsigned)
+        ))
+        let signature = try key.signature(for: digest).derRepresentation.base64EncodedString()
+        return ReviewedActionPromotionProtocol.withSignature(unsigned, signature: signature)
     }
 
     static func write(_ value: [String: Any]) {
@@ -295,6 +275,18 @@ private enum ApprovalBrokerCommandSupport {
         }
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+
+    static func writeFailure(code: String, message: String) {
+        if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "promote",
+           let data = try? ReviewedActionPromotionProtocol.encodeResponse(
+               .refused(code: code, message: message)
+           ) {
+            FileHandle.standardOutput.write(data)
+            FileHandle.standardOutput.write(Data("\n".utf8))
+            return
+        }
+        write(["ok": false, "code": code, "message": message])
     }
 }
 
@@ -309,34 +301,33 @@ enum ApprovalBrokerCommand {
             let key = try ApprovalBrokerCommandSupport.loadOrCreateSigningKey()
             switch CommandLine.arguments[1] {
             case "verifier":
+                let verifier = ApprovalBrokerCommandSupport.verifierIdentity(for: key)
                 ApprovalBrokerCommandSupport.write([
                     "ok": true,
-                    "verifier": ApprovalBrokerCommandSupport.verifierIdentity(for: key),
+                    "verifier": ["key_id": verifier.key_id, "public_key": verifier.public_key],
                 ])
             case "promote":
                 let input = FileHandle.standardInput.readDataToEndOfFile()
-                guard
-                    input.count <= 1_048_576,
-                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
-                else {
-                    throw PromotionCommandError.invalidInput
-                }
+                guard input.count <= 1_048_576 else { throw PromotionCommandError.invalidInput }
+                let request = try ReviewedActionPromotionProtocol.decodeRequest(input)
                 let receipt = try ApprovalBrokerCommandSupport.promotionReceipt(request: request, key: key)
-                ApprovalBrokerCommandSupport.write(["ok": true, "receipt": receipt])
+                let response = try ReviewedActionPromotionProtocol.encodeResponse(.approved(receipt))
+                FileHandle.standardOutput.write(response)
+                FileHandle.standardOutput.write(Data("\n".utf8))
             default:
                 throw PromotionCommandError.invalidInput
             }
         } catch PromotionCommandError.reviewCancelled {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "the human reviewer cancelled promotion"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "the human reviewer cancelled promotion")
             exit(20)
         } catch BrokerError.userPresenceUnavailable {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "biometric-capability-missing", "message": "Touch ID user presence is unavailable"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "biometric-capability-missing", message: "Touch ID user presence is unavailable")
             exit(20)
         } catch BrokerError.userPresenceCancelled {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "presence-cancelled", "message": "Touch ID user presence was cancelled"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "presence-cancelled", message: "Touch ID user presence was cancelled")
             exit(20)
         } catch {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "broker-failed", "message": "the approval broker failed closed"])
+            ApprovalBrokerCommandSupport.writeFailure(code: "broker-failed", message: "the approval broker failed closed")
             exit(20)
         }
     }

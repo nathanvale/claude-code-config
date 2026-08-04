@@ -49,6 +49,12 @@ jobs:
           swift --version
           swift test --package-path runtime/browser-use-environment-auth
 
+      - name: Build ApprovalBroker unsigned
+        run: xcodebuild -project runtime/browser-use-security/BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+
+      - name: Test ApprovalBroker protocol hermetically
+        run: xcodebuild -project runtime/browser-use-security/BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+
       # The auth-doctor process-boundary suite drives the RELEASE supervisor
       # (.build/release/browser-use-op-supervisor) and hard-fails when it is
       # absent (build, never skip). Build it so the real-binary proof runs in
