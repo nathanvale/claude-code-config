@@ -171,8 +171,20 @@ The per-run authentication path entered when a Browser Runbook declares an auth-
 _Avoid_: login runbook, auth action, stored login choreography, portal-specific login script
 
 **Reviewed Action**:
-A content-addressed JavaScript business capability promoted independently of a Browser Runbook. Its registry record binds exact bytes to one origin, effect class, input and result schemas, postcondition, and human approval; a runbook may reference only its action id and expected digest.
+A content-addressed JavaScript business capability promoted independently of a Browser Runbook. Its registry record binds exact bytes to one origin, effect class, input and result schemas, postcondition, and Reviewed Action Promotion Authority; a runbook may reference only its action id and expected digest.
 _Avoid_: inline runbook script, self-approved action, auth script, unreviewed fast path
+
+**Reviewed Action Promotion Authority**:
+An ApprovalBroker-signed record of fresh human approval for one exact Reviewed Action. It is the sole authority for execution; changing the action bytes or any approved boundary requires fresh promotion.
+_Avoid_: approval claim, unsigned receipt, inherited approval, runbook approval
+
+**Legacy Promotion Evidence**:
+An unsigned historical claim that a Reviewed Action was approved. It may be retained for inspection and migration, but never authorizes execution; the action requires fresh Reviewed Action Promotion Authority before use.
+_Avoid_: Legacy Promotion Receipt, executable legacy approval, grandfathered authority
+
+**Reviewed Action Re-promotion**:
+A fresh per-action human approval that replaces Legacy Promotion Evidence with Reviewed Action Promotion Authority. It never automatically signs, wraps, or upgrades the legacy claim.
+_Avoid_: receipt conversion, automatic migration, approval carry-forward, bulk wrapping
 
 **Recorder JSON** (planned, unbuilt):
 A deterministic replay artifact intended to pair with a Browser Runbook once deterministic replay ships. It would contain replayable business-workflow steps, but never login selectors, login choreography, secret values, or 1Password item details. No type, parser, or pairing exists in code yet (v2 dropped v1 record/replay).

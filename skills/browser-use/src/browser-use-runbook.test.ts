@@ -75,6 +75,7 @@ import type {
 	BrowserUseItemBatchState,
 	BrowserUseReviewedActionRecord,
 } from "./browser-use-runbook-actions";
+import type { BrowserUseReviewedActionPromotionReceipt } from "./browser-use-reviewed-action-approval";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -135,6 +136,49 @@ function baseRunbook(
 
 function json(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
+}
+
+function testPromotionReceipt(input: {
+	actionId: string;
+	digest: string;
+	origin: string;
+	effect: "read" | "mutation";
+	containment: "none" | "read-only-observation";
+}): BrowserUseReviewedActionPromotionReceipt {
+	const auditedCapabilities = input.effect === "read"
+		? ["dom-query", "dom-read"]
+		: ["dom-query", "dom-write"];
+	return {
+		contract: "browser-use.reviewed-action-promotion",
+		schema_version: "1",
+		receipt_id: `receipt-${input.actionId}`,
+		disposition: "approved",
+		source_commit: "1".repeat(40),
+		action_id: input.actionId,
+		approved_digest: input.digest,
+		approved_origin: input.origin,
+		approved_effect: input.effect,
+		audited_capabilities: auditedCapabilities,
+		containment: input.containment,
+		input_schema_digest: "2".repeat(64),
+		result_schema_digest: "3".repeat(64),
+		postcondition_digest: input.effect === "mutation" ? "4".repeat(64) : null,
+		approval_reference: "test-review",
+		presence_backed: true,
+		issued_at_epoch_ms: 1,
+		verifier_key_id: "test-key",
+		signature: "TEST-SIGNATURE",
+	};
+}
+
+function expectPreparedActionRefusal(
+	prepared: Awaited<ReturnType<typeof prepareRunbookExecution>>,
+	actionCode: string,
+): void {
+	expect(prepared.ok).toBe(false);
+	if (prepared.ok) return;
+	expect(prepared.refusal.code).toBe("runbook_action_refused");
+	expect(prepared.refusal.message).toContain(actionCode);
 }
 
 function runtimeFor(
@@ -1192,7 +1236,7 @@ describe("shipped runbooks root resolution", () => {
 		}
 	});
 
-	test("prepares FastTrack from shipped reviewed actions without Submit", async () => {
+	test("retains shipped legacy action evidence but refuses execution authority", async () => {
 		const prepared = await prepareRunbookExecution(
 			createDefaultPlatformFs(),
 			mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
@@ -1231,19 +1275,10 @@ describe("shipped runbooks root resolution", () => {
 			},
 		);
 
-		expect(prepared.ok).toBe(true);
-		if (!prepared.ok) return;
-		expect(prepared.plan.steps).toHaveLength(8);
-		expect(
-			prepared.plan.steps.filter((step) => step.kind === "evaluate"),
-		).toHaveLength(4);
-		expect(
-			prepared.plan.steps.some(
-				(step) =>
-					step.kind === "evaluate" &&
-					step.action_id.toLowerCase().includes("submit"),
-			),
-		).toBe(false);
+		expectPreparedActionRefusal(
+			prepared,
+			"action_promotion_authority_missing",
+		);
 	});
 
 	test("resolves to an existing directory containing the shipped runbooks", () => {
@@ -2857,6 +2892,9 @@ function actionSeam(
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes: found };
 		},
+		async verifyPromotion() {
+			return { ok: true };
+		},
 	};
 }
 
@@ -2875,13 +2913,14 @@ function approvedReadRecord(): BrowserUseReviewedActionRecord {
 		},
 		result_sensitivity: "low",
 		source_provenance: "oncore/diagnose-grid-state.js",
-		promotion_receipt: {
-			approved_digest: ACTION_READ_DIGEST,
-			disposition: "approved",
-			approved_origin: ACTION_ORIGIN,
-			approved_effect: "read",
-			approver_ref: "operator-1",
-		},
+		audited_capabilities: ["dom-query", "dom-read"],
+		promotion_receipt: testPromotionReceipt({
+			actionId: "diagnose-grid",
+			digest: ACTION_READ_DIGEST,
+			origin: ACTION_ORIGIN,
+			effect: "read",
+			containment: "read-only-observation",
+		}),
 	};
 }
 
@@ -3011,10 +3050,7 @@ describe("engine reviewed-action step resolution (U3)", () => {
 					),
 				},
 			);
-			expect(prepared.ok).toBe(false);
-			if (prepared.ok) return;
-			expect(prepared.refusal.code).toBe("runbook_action_refused");
-			expect(prepared.refusal.message).toContain("action_receipt_not_approved");
+			expectPreparedActionRefusal(prepared, "action_receipt_not_approved");
 		}),
 	);
 
@@ -3590,13 +3626,20 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 		required_postcondition?: BrowserUseReviewedActionRecord["required_postcondition"],
 	): BrowserUseReviewedActionRecord => {
 		const digest = actionAssetDigest(bytes);
+		const containment = effect_class === "read"
+			? "read-only-observation"
+			: "none";
+		const auditedCapabilities = effect_class === "read"
+			? ["dom-query", "dom-read"]
+			: ["dom-query", "dom-write"];
 		return {
 			action_id,
 			asset_id: digest,
 			expected_digest: digest,
 			allowed_origin: ONCORE_STAGED_ORIGIN,
 			effect_class,
-			containment: effect_class === "read" ? "read-only-observation" : "none",
+			audited_capabilities: auditedCapabilities,
+			containment,
 			input_schema,
 			result_schema,
 			result_sensitivity: "low",
@@ -3604,13 +3647,13 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 				? { required_postcondition }
 				: {}),
 			source_provenance: `oncore/${action_id}.js`,
-			promotion_receipt: {
-				approved_digest: digest,
-				disposition: "approved",
-				approved_origin: ONCORE_STAGED_ORIGIN,
-				approved_effect: effect_class,
-				approver_ref: "synthetic-staged-proof",
-			},
+			promotion_receipt: testPromotionReceipt({
+				actionId: action_id,
+				digest,
+				origin: ONCORE_STAGED_ORIGIN,
+				effect: effect_class,
+				containment,
+			}),
 		};
 	};
 	return [
@@ -3706,6 +3749,9 @@ function oncoreActionSeam(): BrowserUseActionGenerationSeam {
 			return bytes === undefined
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes };
+		},
+		async verifyPromotion() {
+			return { ok: true };
 		},
 	};
 }
