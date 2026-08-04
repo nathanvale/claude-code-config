@@ -530,6 +530,25 @@ describe("restart resume (R19, AE11)", () => {
 				...TO_WRITE_AHEAD,
 				{ type: "submit-outcome-observed", outcome: "success" },
 			],
+		];
+		for (const path of activePaths) {
+			const resumed = resumeAuthTransactionAfterRestart(drive(begun(), path));
+			expect(resumed.ok).toBe(true);
+			if (resumed.ok) {
+				expect(resumed.fragment.status).toBe("active");
+				expect(resumed.fragment.phase).toBe("pre-auth-proof");
+				expect(resumed.fragment.method_step).toBeNull();
+				expect(validateAuthFragmentShape(resumed.fragment)).toEqual([]);
+			}
+		}
+	});
+
+	// U4 (R8): once the run has passed submit and cleanup, restart reconstructs the
+	// same post-submit authenticated run rather than dropping back to pre-auth-proof
+	// and re-proving. Both the cleanup-complete and proof-completed states resume at
+	// post-auth-proof.
+	test("post-submit authenticated phases restart at post-auth proof without secrets", () => {
+		const postSubmitPaths: readonly (readonly BrowserUseAuthTransactionEvent[])[] = [
 			[
 				...TO_WRITE_AHEAD,
 				{ type: "submit-outcome-observed", outcome: "success" },
@@ -546,12 +565,12 @@ describe("restart resume (R19, AE11)", () => {
 				},
 			],
 		];
-		for (const path of activePaths) {
+		for (const path of postSubmitPaths) {
 			const resumed = resumeAuthTransactionAfterRestart(drive(begun(), path));
 			expect(resumed.ok).toBe(true);
 			if (resumed.ok) {
 				expect(resumed.fragment.status).toBe("active");
-				expect(resumed.fragment.phase).toBe("pre-auth-proof");
+				expect(resumed.fragment.phase).toBe("post-auth-proof");
 				expect(resumed.fragment.method_step).toBeNull();
 				expect(validateAuthFragmentShape(resumed.fragment)).toEqual([]);
 			}
