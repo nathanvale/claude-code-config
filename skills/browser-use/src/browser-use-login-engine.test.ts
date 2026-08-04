@@ -161,6 +161,46 @@ function statefulObserver(
 	};
 }
 
+function delayedPostSubmitObserver(
+	initial: BrowserUseAccessibilitySnapshot,
+	postSubmit: readonly BrowserUseAccessibilitySnapshot[],
+	activated: number[] = [],
+): {
+	observer: BrowserUseCdpObserver;
+	current: () => BrowserUseAccessibilitySnapshot;
+	snapshotCalls: () => number;
+} {
+	let submitted = false;
+	let postSubmitIndex = 0;
+	let current = initial;
+	let snapshotCallCount = 0;
+	return {
+		current: () => current,
+		snapshotCalls: () => snapshotCallCount,
+		observer: {
+			snapshot: async () => {
+				snapshotCallCount += 1;
+				if (submitted) {
+					const next = postSubmit[Math.min(postSubmitIndex, postSubmit.length - 1)];
+					if (next === undefined) throw new Error("post-submit screen required");
+					current = next;
+					postSubmitIndex += 1;
+				}
+				return { ok: true, snapshot: current };
+			},
+			probeNode: async () => ({
+				ok: true,
+				probe: { visible: true, operable: true },
+			}),
+			activateControl: async ({ backend_node_id }) => {
+				activated.push(backend_node_id);
+				submitted = true;
+				return { ok: true };
+			},
+		},
+	};
+}
+
 function binding(origin: string, allowOtp = false): BrowserUseItemBinding {
 	return {
 		service_id: "fixture-login",
@@ -476,6 +516,414 @@ describe("generic browser-use login engine", () => {
 				blocked_cause: "human-identity-attestation-required",
 			},
 		});
+	});
+
+	test("accepts generic signed-in words in a pre-existing session only with fresh proof", async () => {
+		const welcome = signedInSnapshot();
+		const proofTransitions: string[] = [];
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([welcome]),
+				proveTarget: async () => {
+					throw new Error("a signed-in screen has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofTransitions.push(input.transition);
+					return authenticatedStateProof()(input);
+				},
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-pre-existing-session",
+				target_id: welcome.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			signed_in: true,
+			authenticated_state: "pre-existing-session",
+			proof: { identity_basis_digest: "identity-proof-fixture" },
+		});
+		expect(proofTransitions).toEqual(["pre-existing-session"]);
+	});
+
+	test("returns one unknown-state continuation when signed-in words fail post-submit proof", async () => {
+		const form = loginFormSnapshot();
+		const activated: number[] = [];
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const state = statefulObserver([form, signedInSnapshot()], activated);
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(false),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-signed-in-refused",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "no-progress",
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
+	});
+
+	test("authenticates a changed markerless post-submit page only after fresh proof", async () => {
+		const form = loginFormSnapshot();
+		const markerless = screen([
+			node("reports", "heading", "Reports", undefined, ""),
+			node("search", "searchbox", "Search reports", 81, ""),
+		]);
+		const state = statefulObserver([form, markerless]);
+		const proofTransitions: string[] = [];
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofTransitions.push(input.transition);
+					return authenticatedStateProof()(input);
+				},
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-markerless",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			signed_in: true,
+			authenticated_state: "post-submit",
+		});
+		expect(proofTransitions).toEqual(["post-submit"]);
+	});
+
+	test("returns one unknown-state continuation when markerless proof is missing or refused", async () => {
+		const markerless = screen([
+			node("reports", "heading", "Reports", undefined, ""),
+			node("period", "combobox", "Current period", 81, ""),
+		]);
+		for (const proof of [undefined, authenticatedStateProof(false)]) {
+			const form = loginFormSnapshot();
+			const activated: number[] = [];
+			const fetched: BrowserUseOpCredentialField[] = [];
+			const delivered: BrowserUseOpCredentialField[] = [];
+			const state = statefulObserver([form, markerless], activated);
+			const result = await runBrowserUseLoginEngine(
+				{
+					observer: state.observer,
+					proveTarget: targetProof(state.current),
+					tokenRetrieval: tokenPort(fetched),
+					deliver: deliveryHook(delivered),
+					...(proof === undefined ? {} : { proveAuthenticatedState: proof }),
+				},
+				{
+					lane_id: "agent-browser",
+					run_id: "run-markerless-refused",
+					target_id: form.target_id,
+					expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+					allowed_origins: [fixtureOrigin],
+					binding: binding(fixtureOrigin),
+				},
+			);
+
+			expect(result).toMatchObject({
+				ok: false,
+				blocked: {
+					blocked_cause: "unknown-post-submit-state",
+					continuation: { next_action_id: "inspect-post-submit-state" },
+				},
+			});
+			expect(fetched).toEqual(["username", "password"]);
+			expect(delivered).toEqual(["username", "password"]);
+			expect(activated).toEqual([43]);
+		}
+	});
+
+	test("observes bounded identical snapshots until a delayed markerless transition", async () => {
+		const form = loginFormSnapshot();
+		const markerless = screen([node("reports", "heading", "Reports", undefined, "")]);
+		const activated: number[] = [];
+		const state = delayedPostSubmitObserver(
+			form,
+			[form, form, markerless],
+			activated,
+		);
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-delayed-markerless",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+				max_iterations: 6,
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			authenticated_state: "post-submit",
+			proof: { identity_basis_digest: "identity-proof-fixture" },
+		});
+		expect(state.snapshotCalls()).toBe(6);
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
+	});
+
+	test("refuses a changed persistent credential form without credential replay", async () => {
+		const form = loginFormSnapshot();
+		const persistent = screen([
+			{
+				...node("form-new", "form", "Sign in again", undefined, ""),
+				child_ids: ["username-new", "password-new", "submit-new"],
+			},
+			node("username-new", "textbox", "Username", 141),
+			node("password-new", "textbox", "Password", 142),
+			node("submit-new", "button", "Sign in", 143),
+		]);
+		const activated: number[] = [];
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const state = statefulObserver([form, persistent], activated);
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-persistent-form",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
+	});
+
+	test("maps post-submit origin and target proof drift to one unknown-state continuation", async () => {
+		for (const cause of ["origin-mismatch", "target-proof-invalid"] as const) {
+			const form = loginFormSnapshot();
+			const markerless = {
+				...screen([node("reports", "heading", "Reports", undefined, "")]),
+				...(cause === "target-proof-invalid" ? { target_id: "drifted-target" } : {}),
+			};
+			const activated: number[] = [];
+			const fetched: BrowserUseOpCredentialField[] = [];
+			const delivered: BrowserUseOpCredentialField[] = [];
+			const state = statefulObserver([form, markerless], activated);
+			let proofCalls = 0;
+			const result = await runBrowserUseLoginEngine(
+				{
+					observer: state.observer,
+					proveTarget: targetProof(state.current),
+					tokenRetrieval: tokenPort(fetched),
+					deliver: deliveryHook(delivered),
+					proveAuthenticatedState: async () => {
+						proofCalls += 1;
+						return { proven: false, cause };
+					},
+				},
+				{
+					lane_id: "agent-browser",
+					run_id: `run-${cause}`,
+					target_id: form.target_id,
+					expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+					allowed_origins: [fixtureOrigin],
+					binding: binding(fixtureOrigin),
+				},
+			);
+
+			expect(result).toMatchObject({
+				ok: false,
+				blocked: {
+					blocked_cause: "unknown-post-submit-state",
+					continuation: { next_action_id: "inspect-post-submit-state" },
+				},
+			});
+			expect(proofCalls).toBe(1);
+			expect(fetched).toEqual(["username", "password"]);
+			expect(delivered).toEqual(["username", "password"]);
+			expect(activated).toEqual([43]);
+		}
+	});
+
+	test("routes a post-submit human challenge without credential replay", async () => {
+		const form = loginFormSnapshot();
+		const challenge = screen([
+			node("captcha", "heading", "Complete CAPTCHA verification", undefined),
+			node("captcha-button", "button", "Continue", 191),
+		]);
+		const activated: number[] = [];
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const state = statefulObserver([form, challenge], activated);
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-post-submit-challenge",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "human-challenge",
+			blocked: {
+				blocked_cause: "user-presence-required",
+				continuation: { next_action_id: "complete-user-presence" },
+			},
+		});
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
+	});
+
+	test("returns unknown post-submit state when observation is lost", async () => {
+		const form = loginFormSnapshot();
+		let submitted = false;
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: {
+					snapshot: async () =>
+						submitted
+							? { ok: false, cause: "target-unavailable" }
+							: { ok: true, snapshot: form },
+					probeNode: async () => ({
+						ok: true,
+						probe: { visible: true, operable: true },
+					}),
+					activateControl: async () => {
+						submitted = true;
+						return { ok: true };
+					},
+				},
+				proveTarget: targetProof(() => form),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-observation-lost",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("exhausts the bounded identical-snapshot loop without credential replay", async () => {
+		const form = loginFormSnapshot();
+		const activated: number[] = [];
+		const fetched: BrowserUseOpCredentialField[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const state = delayedPostSubmitObserver(form, [form], activated);
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(fetched),
+				deliver: deliveryHook(delivered),
+			},
+			{
+				lane_id: "agent-browser",
+				run_id: "run-exhausted-observation",
+				target_id: form.target_id,
+				expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+				allowed_origins: [fixtureOrigin],
+				binding: binding(fixtureOrigin),
+				max_iterations: 5,
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "no-progress",
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(state.snapshotCalls()).toBe(5);
+		expect(fetched).toEqual(["username", "password"]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
 	});
 
 	test("routes a human challenge to a resumable continuation without delivery", async () => {

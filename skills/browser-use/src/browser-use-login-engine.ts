@@ -362,6 +362,28 @@ function signedIn(snapshot: BrowserUseAccessibilitySnapshot): boolean {
 	);
 }
 
+function markerlessPostSubmitCandidate(
+	snapshot: BrowserUseAccessibilitySnapshot,
+): boolean {
+	const visibleFields = snapshot.nodes.filter(
+		(node) =>
+			!node.ignored &&
+			(node.role.toLowerCase() === "textbox" ||
+				node.role.toLowerCase() === "searchbox"),
+	);
+	const classification = classifyBrowserUseLoginStep(snapshot);
+	const hasCredentialField =
+		classification.step === "username" ||
+		classification.step === "password" ||
+		classification.step === "otp" ||
+		visibleFields.some((field) => field.accessible_name.trim() === "");
+	return (
+		!hasCredentialField &&
+		advanceControls(snapshot).length === 0 &&
+		challengedBy(snapshot) === undefined
+	);
+}
+
 function fingerprint(snapshot: BrowserUseAccessibilitySnapshot): string {
 	return JSON.stringify(
 		snapshot.nodes.map((node) => [
@@ -470,7 +492,9 @@ export async function runBrowserUseLoginEngine(
 			target_id: input.target_id,
 		});
 		if (!observed.ok) {
-			return failed("blocked", "target-proof-invalid", trace);
+			return submitted
+				? failed("no-progress", "unknown-post-submit-state", trace)
+				: failed("blocked", "target-proof-invalid", trace);
 		}
 		// Serialized only when a prior submit set a fingerprint to compare
 		// against, or when a submit is about to record one (below).
@@ -478,15 +502,16 @@ export async function runBrowserUseLoginEngine(
 			activationFingerprint === undefined
 				? undefined
 				: fingerprint(observed.snapshot);
-		if (signedIn(observed.snapshot)) {
-			if (awaitingSubmitOutcome) {
-				const journaled = await deps.journal?.({
-					type: "submit-outcome-observed",
-					outcome: "success",
-				});
-				if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
-				awaitingSubmitOutcome = false;
-			}
+		const changedSinceActivation =
+			activationFingerprint !== undefined &&
+			activationFingerprint !== currentFingerprint;
+		const proofCandidate =
+			challengedBy(observed.snapshot) === undefined &&
+			(signedIn(observed.snapshot) ||
+				(submitted &&
+					changedSinceActivation &&
+					markerlessPostSubmitCandidate(observed.snapshot)));
+		if (proofCandidate) {
 			const transition = submitted ? "post-submit" : "pre-existing-session";
 			const proof = await deps.proveAuthenticatedState?.({
 				lane_id: input.lane_id,
@@ -499,11 +524,22 @@ export async function runBrowserUseLoginEngine(
 				transition,
 			});
 			if (proof?.proven !== true) {
+				if (transition === "post-submit") {
+					return failed("no-progress", "unknown-post-submit-state", trace);
+				}
 				return failed(
 					"human-challenge",
 					proof?.cause ?? "human-identity-attestation-required",
 					trace,
 				);
+			}
+			if (awaitingSubmitOutcome) {
+				const journaled = await deps.journal?.({
+					type: "submit-outcome-observed",
+					outcome: "success",
+				});
+				if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+				awaitingSubmitOutcome = false;
 			}
 			return {
 				ok: true,
@@ -517,11 +553,7 @@ export async function runBrowserUseLoginEngine(
 			activationFingerprint !== undefined &&
 			activationFingerprint === currentFingerprint
 		) {
-			return failed(
-				"no-progress",
-				"human-identity-attestation-required",
-				trace,
-			);
+			continue;
 		}
 		activationFingerprint = undefined;
 
@@ -542,21 +574,10 @@ export async function runBrowserUseLoginEngine(
 		}
 		if (
 			awaitingSubmitOutcome &&
-			classification.step === "submit" &&
-			!(deliveredSinceActivation.has("password") || deliveredSinceActivation.has("otp-current"))
+			classification.step !== "otp" &&
+			classification.step !== "challenge"
 		) {
-			// A username advance while still awaiting the submit outcome would map to
-			// submit-username, an illegal transition in write-ahead-submission that the
-			// journal rejects while awaitingSubmitOutcome never clears. Record the
-			// unknown post-submit effect first, then block for inspection instead of
-			// dispatching the illegal advance.
-			const journaled = await deps.journal?.({
-				type: "submit-outcome-observed",
-				outcome: "timeout-unknown",
-			});
-			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
-			awaitingSubmitOutcome = false;
-			return failed("human-challenge", "human-identity-attestation-required", trace);
+			return failed("no-progress", "unknown-post-submit-state", trace);
 		}
 		if (classification.step === "challenge") {
 			return failed("human-challenge", "user-presence-required", trace);
@@ -652,9 +673,7 @@ export async function runBrowserUseLoginEngine(
 		});
 	}
 
-	return failed(
-		"no-progress",
-		"human-identity-attestation-required",
-		trace,
-	);
+	return submitted
+		? failed("no-progress", "unknown-post-submit-state", trace)
+		: failed("no-progress", "human-identity-attestation-required", trace);
 }
