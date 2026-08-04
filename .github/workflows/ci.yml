@@ -50,10 +50,10 @@ jobs:
           swift test --package-path runtime/browser-use-environment-auth
 
       - name: Build ApprovalBroker unsigned
-        run: xcodebuild -project runtime/browser-use-security/BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+        run: bun run --cwd runtime/browser-use-security build:unsigned
 
       - name: Test ApprovalBroker protocol hermetically
-        run: xcodebuild -project runtime/browser-use-security/BrowserUseSecurity.xcodeproj -scheme ApprovalBroker -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+        run: bun run --cwd runtime/browser-use-security test:protocol
 
       # The auth-doctor process-boundary suite drives the RELEASE supervisor
       # (.build/release/browser-use-op-supervisor) and hard-fails when it is
@@ -61,6 +61,9 @@ jobs:
       # CI instead of throwing.
       - name: Build Swift custody package (release)
         run: bun run --cwd runtime/browser-use-environment-auth build:release
+
+      - name: Test (command entrypoint integration)
+        run: bun run command-entrypoint:integration
 
       # Test scope: skills/browser-use/src, via the repo's test-runner (which
       # knows to exclude the intentional-fail fixtures under
@@ -75,5 +78,13 @@ jobs:
       - name: Test (browser-use)
         run: bash skills/test-runner/src/test-runner.sh run -- skills/browser-use/src/
 
-      - name: Test (command entrypoint integration)
-        run: bun run command-entrypoint:integration
+      - name: Typecheck Browser Use
+        run: bun run --cwd skills/browser-use typecheck
+
+      - name: Typecheck Browser Use Security
+        run: bun run --cwd runtime/browser-use-security typecheck
+
+      - name: Build and inspect public Browser Use package
+        run: |
+          bun run --cwd skills/browser-use build
+          bun run --cwd skills/browser-use pack:dry-run
