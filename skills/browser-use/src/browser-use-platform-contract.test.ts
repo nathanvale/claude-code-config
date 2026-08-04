@@ -19,7 +19,7 @@ import {
 	browserUseContracts,
 } from "./command-contract";
 import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
-import { renderHelp } from "./browser-use-parser";
+import { parseBrowserUseArgv, renderHelp } from "./browser-use-parser";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -33,6 +33,31 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 // =========================================================================
 
 describe("platform family help and discovery", () => {
+	test("run cancel discovery, help, parser, and repair affordance stay aligned", () => {
+		const contract = browserUseContracts["run-cancel"];
+		expect(contract.usage).toEqual([
+			"run cancel --run <id> [--caller <label>] [--json|--plain]",
+		]);
+		expect(contract.summary).toContain("refuses after mutation dispatch");
+		expect(
+			contract.actionAffordances?.failure?.map((action) => action.id),
+		).toContain("inspect_shared_run");
+		const help = renderHelp("run", "run-cancel");
+		expect(help).toContain("Usage: browser-use run cancel --run <id>");
+		expect(help).toContain("refuses after mutation dispatch");
+		expect(
+			parseBrowserUseArgv([
+				"run",
+				"cancel",
+				"--run",
+				"run-1",
+				"--caller",
+				"operator",
+				"--json",
+			]),
+		).toMatchObject({ kind: "command", command: "run-cancel" });
+	});
+
 	test("root help lists every command family", () => {
 		const help = renderHelp();
 		for (const family of BROWSER_USE_FAMILIES) {
@@ -142,6 +167,13 @@ describe("platform family help and discovery", () => {
 				"--plain",
 			],
 			"action-status": ["--caller", "--id", "--json", "--plain"],
+			"action-promote": [
+				"--approval-reference",
+				"--caller",
+				"--id",
+				"--json",
+				"--plain",
+			],
 		} as const;
 
 		for (const [command, flags] of Object.entries(expectedFlags)) {
@@ -193,6 +225,7 @@ describe("platform family help and discovery", () => {
 			"action-validate": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 			"action-apply": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 			"action-status": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-promote": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
@@ -233,6 +266,7 @@ describe("platform family help and discovery", () => {
 			"runbook-show",
 			"runbook-activate",
 			"runbook-run",
+			"action-promote",
 			// R27 auth repair commands read the run store when --run binds the
 			// evaluation to a blocked run (auth plan U3a).
 			"auth-enroll-browser-automation-token",
@@ -254,7 +288,12 @@ describe("platform family help and discovery", () => {
 					: "1",
 			);
 			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
-				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,
+				command === "runbook-run" || command === "action-promote"
+					? [
+							...(STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS),
+							"BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER",
+						]
+					: STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,
 			);
 		}
 	});

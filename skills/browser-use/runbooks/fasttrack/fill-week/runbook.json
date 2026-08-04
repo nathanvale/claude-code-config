@@ -208,10 +208,10 @@
   "steps": [
     {
       "kind": "open",
-      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00",
       "postcondition": {
-        "kind": "url-equals",
-        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+        "kind": "url-starts-with",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00"
       }
     },
     {
@@ -221,7 +221,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-fill-week",
-      "expected_digest": "52eb92eb4dc435eba4ecb5cabf44d811b788a675a88f649b3a1612666fcf3c76",
+      "expected_digest": "f9df669f19812f1276b4d8f06bb465db50ceabf4c370f2e9955d3d8f44989342",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",
@@ -229,9 +229,13 @@
       }
     },
     {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
       "kind": "action",
       "action_id": "fasttrack-verify-filled-week",
-      "expected_digest": "e1e26d70b1bd0401244ce295fb1d85ef61d1ebcd3f58c0903ac0721ec0298f61",
+      "expected_digest": "0cf30bac5a848bde7c6db40b647021c8cd31e4c7d26dac307d922444dd7ef9e6",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",
@@ -245,7 +249,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-save-draft",
-      "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+      "expected_digest": "ceb82764fadff1d4ad8741984858c5bf2eca023520d542333551633e9d199355",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}"
@@ -258,7 +262,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-verify-saved-draft",
-      "expected_digest": "4e6320f72fe70563e57328e0912bbe93275071a107c05f69234ecf71c87fa020",
+      "expected_digest": "9320d30f7fb0d8b68b27df5ecf0ca65db2ddc09c08bf1555abb439e1d3b1e0cb",
       "inputs": {
         "week_start": "{{timesheet_run.envelope.period_start}}",
         "week_end": "{{timesheet_run.envelope.period_end}}",

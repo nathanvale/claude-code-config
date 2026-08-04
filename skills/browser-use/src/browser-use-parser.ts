@@ -207,10 +207,24 @@ export function parseBrowserUseArgv(
 	// flag check and the dry-run/live split — so an unregistered enum value fails
 	// closed for dry-run and live alike (R27, api-contract parity).
 	validateEnumFlagValues(flagValues, flags);
-	if (command === "run-resume" || command === "run-cancel") {
+	if (
+		command === "run-resume" ||
+		command === "run-approve" ||
+		command === "run-cancel"
+	) {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
 			throw usageError(`${command.replace("-", " ")} requires --run <id>.`);
+		}
+	}
+	if (command === "run-approve") {
+		const continuation = stringField(flagValues["--continuation"]);
+		const artifact = stringField(flagValues["--artifact"]);
+		if (!continuation || continuation.startsWith("--")) {
+			throw usageError("run approve requires --continuation <id>.");
+		}
+		if (!artifact || artifact.startsWith("--")) {
+			throw usageError("run approve requires --artifact <id>.");
 		}
 	}
 	if (command === "lanes-show") {
@@ -311,10 +325,21 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
-	if (command === "action-status") {
+	if (command === "action-status" || command === "action-promote") {
 		const actionId = stringField(flagValues["--id"]);
 		if (actionId === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(actionId)) {
-			throw usageError("action status requires --id <action-id> as a safe slug.");
+			throw usageError(`${command.replace("-", " ")} requires --id <action-id> as a safe slug.`);
+		}
+	}
+	if (command === "action-promote") {
+		const approvalReference = stringField(flagValues["--approval-reference"]);
+		if (
+			approvalReference === undefined ||
+			!/^[a-z0-9][a-z0-9-]{0,127}$/.test(approvalReference)
+		) {
+			throw usageError(
+				"action promote requires --approval-reference <reference> as an opaque safe identifier.",
+			);
 		}
 	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the

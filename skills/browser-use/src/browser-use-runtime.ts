@@ -36,9 +36,19 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import {
+	BROWSER_USE_APPROVAL_BROKER_ENV,
+	type BrowserUseHumanIdentityAttestationDriver,
+	createNativeHumanIdentityAttestationDriver,
+} from "./browser-use-human-identity-attestation";
+import {
 	type BrowserUseReviewedActionApprovalVerifier,
+	type BrowserUseReviewedActionVerifierIdentity,
 	REVIEWED_ACTION_VERIFIER_CONTRACT,
 	REVIEWED_ACTION_VERIFIER_FILE,
 	REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION,
@@ -578,7 +588,6 @@ function environmentTokenRetrievalOf(
 	});
 }
 
-
 type BrowserUseReviewedActionApprovalVerifierIssue = {
 	code:
 		| "action_promotion_verifier_store_unsafe"
@@ -587,7 +596,11 @@ type BrowserUseReviewedActionApprovalVerifierIssue = {
 };
 
 type BrowserUseReviewedActionApprovalVerifierResolution =
-	| { status: "ready"; verifier: BrowserUseReviewedActionApprovalVerifier }
+	| {
+			status: "ready";
+			verifier: BrowserUseReviewedActionApprovalVerifier;
+			identity: BrowserUseReviewedActionVerifierIdentity;
+	  }
 	| { status: "absent" }
 	| { status: "rejected"; issue: BrowserUseReviewedActionApprovalVerifierIssue };
 
@@ -679,6 +692,7 @@ async function productionReviewedActionApprovalVerifierOf(
 			? {
 					status: "ready",
 					verifier: createP256ReviewedActionApprovalVerifier(identity),
+					identity,
 				}
 			: {
 					status: "rejected",
@@ -1215,12 +1229,22 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Test/composition seam for an already approved binding catalog owner. */
+	runbookApprovedBindingResolver?: (input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}) => Promise<BrowserUseItemBinding | null>;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
 	/** Present but rejected production verifier pin; absent means not provisioned. */
 	reviewedActionApprovalVerifierIssue?: BrowserUseReviewedActionApprovalVerifierIssue;
 	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
 	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
+	runbookHumanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */
 	runbookAuthTransport?: () => {
 		transport: {
@@ -1331,13 +1355,33 @@ export async function createProductionBrowserUseRuntime(
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
 	}
-	if (runtime.reviewedActionApprovalVerifier === undefined) {
+	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
+	if (
+		runtime.reviewedActionApprovalVerifier === undefined ||
+		runtime.runbookHumanIdentityAttestation === undefined
+	) {
 		const resolution = await productionReviewedActionApprovalVerifierOf(runtime);
 		if (resolution.status === "ready") {
-			runtime.reviewedActionApprovalVerifier = resolution.verifier;
+			reviewedActionVerifierIdentity = resolution.identity;
+			if (runtime.reviewedActionApprovalVerifier === undefined) {
+				runtime.reviewedActionApprovalVerifier = resolution.verifier;
+			}
 		} else if (resolution.status === "rejected") {
 			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
 		}
+	}
+	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
+	if (
+		runtime.runbookHumanIdentityAttestation === undefined &&
+		brokerPath !== undefined &&
+		brokerPath !== "" &&
+		reviewedActionVerifierIdentity !== undefined
+	) {
+		runtime.runbookHumanIdentityAttestation =
+			createNativeHumanIdentityAttestationDriver(
+				brokerPath,
+				reviewedActionVerifierIdentity,
+			);
 	}
 	return runtime;
 }

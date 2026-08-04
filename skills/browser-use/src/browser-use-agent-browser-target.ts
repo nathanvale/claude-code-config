@@ -547,7 +547,10 @@ export async function verifyAgentBrowserPostcondition(
 	postcondition: AgentBrowserPostcondition,
 	allowedOrigins: ReadonlySet<string>,
 ): Promise<"confirmed" | "not-achieved" | "unavailable"> {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		if (!agentBrowserOriginIsAllowed(postcondition.url, allowedOrigins)) {
 			return "not-achieved";
 		}
@@ -558,7 +561,17 @@ export async function verifyAgentBrowserPostcondition(
 		) {
 			return "unavailable";
 		}
-		return data.url === postcondition.url ? "confirmed" : "not-achieved";
+		const achieved =
+			postcondition.kind === "url-equals"
+				? data.url === postcondition.url
+				: data.url.startsWith(postcondition.url);
+		return achieved ? "confirmed" : "not-achieved";
+	}
+	if (
+		postcondition.kind !== "value-equals" &&
+		postcondition.kind !== "element-visible"
+	) {
+		return "not-achieved";
 	}
 	if (
 		postcondition.selector.startsWith("@") ||

@@ -15,6 +15,7 @@ import {
 	classifyBrowserUseLoginStep,
 	runBrowserUseLoginEngine,
 	type BrowserUseAuthenticatedStateProof,
+	type BrowserUseLoginEngineInput,
 	type BrowserUseLoginTargetProof,
 } from "./browser-use-login-engine";
 import type {
@@ -121,6 +122,16 @@ function signedInSnapshot(): BrowserUseAccessibilitySnapshot {
 	return screen([node("welcome", "heading", "Welcome, signed in", undefined, "")]);
 }
 
+function authenticatedPortalSnapshot(): BrowserUseAccessibilitySnapshot {
+	return screen([
+		node("navigation", "navigation", "Primary", undefined, ""),
+		node("profile", "heading", "Profile", undefined, ""),
+		node("documents", "heading", "Documents", undefined, ""),
+		node("edit-profile", "button", "Edit profile", 81, ""),
+		node("activity", "link", "Recent activity", 82, ""),
+	]);
+}
+
 function scriptedObserver(
 	screens: readonly BrowserUseAccessibilitySnapshot[],
 	activated: number[] = [],
@@ -134,6 +145,7 @@ function statefulObserver(
 ): {
 	observer: BrowserUseCdpObserver;
 	current: () => BrowserUseAccessibilitySnapshot;
+	advanceTo: (nextIndex: number) => void;
 } {
 	let index = 0;
 	const current = (): BrowserUseAccessibilitySnapshot => {
@@ -143,6 +155,9 @@ function statefulObserver(
 	};
 	return {
 		current,
+		advanceTo: (nextIndex) => {
+			index = nextIndex;
+		},
 		observer: {
 			snapshot: async () => ({
 				ok: true,
@@ -214,6 +229,27 @@ function binding(origin: string, allowOtp = false): BrowserUseItemBinding {
 	};
 }
 
+function loginInput(runId: string, targetId: string): BrowserUseLoginEngineInput {
+	return {
+		lane_id: "agent-browser",
+		run_id: runId,
+		target_id: targetId,
+		expected_url: `${fixtureOrigin}/shape/label-wrapped`,
+		allowed_origins: [fixtureOrigin],
+		binding: binding(fixtureOrigin),
+	};
+}
+
+function expectTwoFieldLogin(
+	result: Awaited<ReturnType<typeof runBrowserUseLoginEngine>>,
+	delivered: readonly BrowserUseOpCredentialField[],
+	activated: readonly number[],
+): void {
+	expect(result.ok).toBe(true);
+	expect(delivered).toEqual(["username", "password"]);
+	expect(activated).toEqual([52, 62]);
+}
+
 function secretHandle(field: BrowserUseOpCredentialField): BrowserUseSecretHandle {
 	return {
 		handle_id: `handle-${field}`,
@@ -256,6 +292,7 @@ function targetProof(
 		}
 		const origin = new URL(input.expected_url).origin;
 		const target: BrowserUseVerifiedTarget & {
+			top_level_url: string;
 			field: {
 				role: string;
 				accessible_name: string;
@@ -264,6 +301,7 @@ function targetProof(
 		} = {
 			lane_id: input.lane_id,
 			run_id: input.run_id,
+			top_level_url: input.expected_url,
 			top_level_origin: origin,
 			frame_origin: origin,
 			target_id: snapshotOf().target_id,
@@ -444,6 +482,267 @@ describe("generic browser-use login engine", () => {
 				"submit",
 			]);
 		}
+	});
+
+	test("does not redeliver a credential after its backend node is replaced", () => {
+		const rerendered = screen([
+			node("username-rerendered", "textbox", "Username", 141),
+			node("password-rerendered", "textbox", "Password", 142),
+			node("submit-rerendered", "button", "Sign in", 143),
+		]);
+
+		expect(
+			classifyBrowserUseLoginStep(
+				rerendered,
+				new Set([41]),
+				new Set<BrowserUseOpCredentialField>(["username"]),
+			),
+		).toMatchObject({
+			step: "password",
+			field: "password",
+			field_node: { backend_node_id: 142 },
+		});
+	});
+
+	test("skips a stale credential node retained after activation", async () => {
+		const username = screen([
+			node("username", "textbox", "Username", 51),
+			node("username-next", "button", "Next", 52),
+		]);
+		const passwordWithStaleUsername = screen([
+			node("stale-username", "textbox", "Username", 51),
+			node("password", "textbox", "Password", 61),
+			node("password-next", "button", "Continue", 62),
+		]);
+		const screens = [username, passwordWithStaleUsername, signedInSnapshot()];
+		const activated: number[] = [];
+		const state = statefulObserver(screens, activated);
+		const delivered: BrowserUseOpCredentialField[] = [];
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(),
+			},
+			loginInput("run-hidden-stale-node", username.target_id),
+		);
+
+		expectTwoFieldLogin(result, delivered, activated);
+	});
+
+	test("waits for fresh structure after activation without retrying delivery", async () => {
+		const username = screen([
+			node("username-heading", "heading", "Sign in", undefined),
+			node("username", "textbox", "", 51),
+			node("username-next", "button", "Next", 52),
+		]);
+		const transitional = screen([
+			node("stale-heading", "heading", "Sign in", undefined),
+			node("stale-username", "textbox", "", 51),
+			node("stale-next", "button", "Next", 52),
+		]);
+		const password = screen([
+			node("password-heading", "heading", "Enter password", undefined),
+			node("password", "textbox", "", 61),
+			node("password-next", "button", "Continue", 62),
+		]);
+		const screens = [username, transitional, password, signedInSnapshot()];
+		const activated: number[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		let waits = 0;
+		const state = statefulObserver(screens, activated);
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: authenticatedStateProof(),
+				waitForPostActivation: async () => {
+					waits += 1;
+					state.advanceTo(2);
+				},
+			},
+			loginInput("run-post-activation-settle", username.target_id),
+		);
+
+		expectTwoFieldLogin(result, delivered, activated);
+		expect(waits).toBe(1);
+	});
+
+	test("accepts a markerless post-submit portal only after fresh authenticated-state proof", async () => {
+		const form = loginFormSnapshot();
+		const portal = authenticatedPortalSnapshot();
+		const activated: number[] = [];
+		const delivered: BrowserUseOpCredentialField[] = [];
+		const transitions: string[] = [];
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([form, portal], activated),
+				proveTarget: targetProof(() => form),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook(delivered),
+				proveAuthenticatedState: async (input) => {
+					transitions.push(input.transition);
+					return await authenticatedStateProof()(input);
+				},
+			},
+			loginInput("run-markerless-post-submit", form.target_id),
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			authenticated_state: "post-submit",
+		});
+		expect(delivered).toEqual(["username", "password"]);
+		expect(activated).toEqual([43]);
+		expect(transitions).toEqual(["post-submit"]);
+	});
+
+	test("recognizes a substantive markerless portal on the declared target as a pre-existing session", async () => {
+		const portal = authenticatedPortalSnapshot();
+		const transitions: string[] = [];
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([portal]),
+				proveTarget: async () => {
+					throw new Error("an authenticated portal has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					transitions.push(input.transition);
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-pre-existing-portal", portal.target_id),
+				observed_url: `${fixtureOrigin}/home`,
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			authenticated_state: "pre-existing-session",
+		});
+		expect(transitions).toEqual(["pre-existing-session"]);
+	});
+
+	test("does not recognize a login page with credential fields as a pre-existing session", async () => {
+		const login = loginFormSnapshot();
+		let proofCalls = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([login]),
+				proveTarget: targetProof(() => login),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofCalls += 1;
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-login-page-near-miss", login.target_id),
+				observed_url: `${fixtureOrigin}/login`,
+				max_iterations: 1,
+			},
+		);
+
+		expect(result.ok).toBe(false);
+		expect(proofCalls).toBe(0);
+	});
+
+	test("does not recognize an empty page off the declared target", async () => {
+		const empty = screen([]);
+		let proofCalls = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([empty]),
+				proveTarget: async () => {
+					throw new Error("an empty page has no credential target");
+				},
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofCalls += 1;
+					return await authenticatedStateProof()(input);
+				},
+			},
+			{
+				...loginInput("run-off-target-empty", empty.target_id),
+				observed_url: "https://off-target.invalid/",
+				max_iterations: 1,
+			},
+		);
+
+		expect(result.ok).toBe(false);
+		expect(proofCalls).toBe(0);
+	});
+
+	test("keeps a post-submit login form blocked without attempting authenticated-state proof", async () => {
+		const form = loginFormSnapshot();
+		let proofCalls = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: scriptedObserver([form, form]),
+				proveTarget: targetProof(() => form),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: async (input) => {
+					proofCalls += 1;
+					return await authenticatedStateProof()(input);
+				},
+			},
+			loginInput("run-login-form-persists", form.target_id),
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "no-progress",
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(proofCalls).toBe(0);
+	});
+
+	test("re-observes a delayed markerless portal before reporting no progress", async () => {
+		const form = loginFormSnapshot();
+		const portal = authenticatedPortalSnapshot();
+		const state = statefulObserver([form, form, portal]);
+		let waits = 0;
+
+		const result = await runBrowserUseLoginEngine(
+			{
+				observer: state.observer,
+				proveTarget: targetProof(state.current),
+				tokenRetrieval: tokenPort(),
+				deliver: deliveryHook([]),
+				proveAuthenticatedState: authenticatedStateProof(),
+				waitForPostActivation: async () => {
+					waits += 1;
+					state.advanceTo(2);
+				},
+			},
+			loginInput("run-delayed-markerless-portal", form.target_id),
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			authenticated_state: "post-submit",
+		});
+		expect(waits).toBe(1);
 	});
 
 	test("refuses origin drift before retrieving or delivering a secret", async () => {

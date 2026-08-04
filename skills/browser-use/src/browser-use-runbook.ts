@@ -46,7 +46,7 @@ import {
 	type BrowserUseRunbookPlan,
 	type BrowserUseRunbookReadActionMeta,
 	type BrowserUseRunbookStep,
-	materializeRunbookInputs,
+	admitRunbookInputs,
 	nextRunbookStepAfterExecution,
 	parseRunbookRecord,
 	projectRunbookCatalogRow,
@@ -576,6 +576,7 @@ type BrowserUseRunbookExecutionPlan = Pick<
 	| "total_steps"
 	| "compiled_step_runbook_indices"
 	| "pending_item_bindings"
+	| "approval_gate"
 >;
 
 function executionPlanOf(
@@ -589,6 +590,9 @@ function executionPlanOf(
 		total_steps: plan.total_steps,
 		compiled_step_runbook_indices: plan.compiled_step_runbook_indices,
 		pending_item_bindings: plan.pending_item_bindings,
+		...(plan.approval_gate === undefined
+			? {}
+			: { approval_gate: plan.approval_gate }),
 	};
 }
 
@@ -829,10 +833,9 @@ export async function prepareRunbookExecution(
 			: failure("runbook_not_found", `no runbook is defined for ${input.serviceId}/${input.flowId}.`);
 		return { ok: false, refusal };
 	}
-	const normalizedInputs = materializeRunbookInputs(
-		shown.runbook,
-		input.inputs,
-	);
+	const admittedInputs = admitRunbookInputs(shown.runbook, input.inputs);
+	if (!admittedInputs.ok) return admittedInputs;
+	const normalizedInputs = admittedInputs.inputs;
 	let resolvedActionSteps:
 		| ReadonlyMap<number, BrowserUseRunbookActionResolution>
 		| undefined;

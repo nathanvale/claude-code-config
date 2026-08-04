@@ -347,6 +347,14 @@ describe("front door: machine discovery stays parseable (D7)", () => {
 				command: "action-status",
 				code: "action_source_checkout_required",
 			},
+			{
+				argv: [
+					"action", "promote", "--id", "action-id",
+					"--approval-reference", "review-1", "--json",
+				],
+				command: "action-promote",
+				code: "action_source_checkout_required",
+			},
 		] as const;
 
 		for (const { argv, command, code } of cases) {

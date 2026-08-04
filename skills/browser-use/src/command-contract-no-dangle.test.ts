@@ -100,15 +100,21 @@ function offendersIn(corpus: Array<{ path: string; text: string }>): string[] {
 }
 
 describe("R4 no-dangle sweep — deleted command surfaces", () => {
-	test("human-only Reviewed Action promotion is absent from agent discovery", () => {
+	test("operator-only Reviewed Action promotion stays discoverable and human-gated", () => {
 		expect(BROWSER_USE_ACTION_SUBCOMMANDS).toEqual([
 			"schema",
 			"validate",
 			"apply",
 			"status",
+			"promote",
 		]);
-		expect(Object.keys(browserUseContracts)).not.toContain("action-promote");
-		expect(renderHelp("action")).not.toMatch(/^\s+promote(?:\s|$)/m);
+		expect(Object.keys(browserUseContracts)).toContain("action-promote");
+		expect(renderHelp("action")).toMatch(/^\s+promote(?:\s|$)/m);
+		expect(browserUseContracts["action-promote"]).toMatchObject({
+			audience: "operator",
+			interactivity: "required",
+			sideEffects: ["check", "auth", "write"],
+		});
 	});
 
 	// Canary: the sweep itself must be able to fail. A matcher regression that

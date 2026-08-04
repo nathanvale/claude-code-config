@@ -55,6 +55,8 @@ export type BrowserUseVerifiedField = {
  * preserves the AX-to-DOM identity without changing that stable contract.
  */
 export type BrowserUseMintedVerifiedTarget = BrowserUseVerifiedTarget & {
+	/** Fresh observed URL used by exact-target delivery after same-origin redirects. */
+	top_level_url: string;
 	field: BrowserUseVerifiedField;
 };
 
@@ -480,6 +482,7 @@ export async function mintBrowserUseVerifiedTarget(
 	const target: BrowserUseMintedVerifiedTarget = {
 		lane_id: input.lane_id,
 		run_id: input.run_id,
+		top_level_url: observed.identity.top_level_url,
 		top_level_origin: observed.identity.top_level_origin,
 		frame_origin: observed.identity.frame_origin,
 		target_id: observed.identity.target_id,

@@ -83,11 +83,24 @@ async ({ inputs }) => {
     return false;
   };
   const navigateToTimeAttendance = async () => {
+    // The portal's real Time And Attendance route (confirmed live). The trailing
+    // "00" is part of the actual SPA route the portal ships, not base64 padding.
     const targetPath = "/VGltZUFuZEF0dGVuZGFuY2U00";
     const targetUrl = "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00";
     if (document.title.includes("Time - Search Timesheet") || editRows().length >= 5) return { ok: true, mode: "already_on_time_attendance" };
     if (location.href.includes("CandidateLogin") || document.querySelector("input[type='password']")) {
       fail("login_required", { title: document.title, url: location.href });
+    }
+    // Prefer the portal's own navigation control: find a link/menu item whose
+    // visible text is "Time And Attendance" and click it. This uses the real
+    // href the portal ships, so it never depends on a hand-encoded route.
+    const timeLink = Array.from(document.querySelectorAll("a[href], [ng-click], [role='link'], [role='menuitem']")).find((el) => {
+      const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      return text === "time and attendance" || text.startsWith("time and attendance");
+    });
+    if (timeLink) {
+      timeLink.click();
+      if (await waitForTimeAttendance()) return { ok: true, mode: "portal_link_click" };
     }
     try {
       const angularRef = window.angular;
@@ -153,11 +166,19 @@ async ({ inputs }) => {
   // shapes FastTrack renders it in (a date cell, or the date half of the
   // rxg.startDateTime input). Returns a dmy string or "" when undeterminable.
   const rowDate = (row) => {
-    // The row's own rxg.startDateTime input is authoritative: a generic
-    // date-shaped cell can be a shared period/processed-date column repeated
-    // on every row, which would collapse all rows onto one date. Read the
-    // input's date half first; fall back to a date-shaped cell only when the
-    // input carries no date.
+    // The row's own per-day work-date model is authoritative and is present even
+    // on an empty grid (rxg.workDate1). Read it first: on a fresh timesheet the
+    // rxg.startDateTime time input is blank, so relying on it alone made every
+    // row unreadable and refused the whole fill.
+    const workDateEl = row.querySelector("[ng-model='rxg.workDate1']") || row.querySelector("[ng-model*='workDate']") || row.querySelector("[ng-model*='itemDate']");
+    if (workDateEl) {
+      const wdRaw = normalize(workDateEl.value || workDateEl.getAttribute?.("value") || workDateEl.innerText || workDateEl.textContent || "");
+      const wdMatch = wdRaw && wdRaw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const wdParsed = wdMatch && parseDate(wdMatch[0]);
+      if (wdParsed) return dmy(wdParsed);
+    }
+    // Fall back to the start-time input's date half (a populated grid may carry
+    // the date there), then a generic date-shaped cell.
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
     const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
     const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
