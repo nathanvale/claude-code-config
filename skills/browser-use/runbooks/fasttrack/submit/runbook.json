@@ -147,7 +147,7 @@
     {
       "kind": "action",
       "action_id": "fasttrack-verify-filled-week",
-      "expected_digest": "222b054ab8ed925d4736ff9e8835850f21fbbd0a1ff0edc406296f098419a962",
+      "expected_digest": "0cf30bac5a848bde7c6db40b647021c8cd31e4c7d26dac307d922444dd7ef9e6",
       "inputs": {
         "week_start": "{{timesheet_submission.period_start}}",
         "week_end": "{{timesheet_submission.period_end}}",
