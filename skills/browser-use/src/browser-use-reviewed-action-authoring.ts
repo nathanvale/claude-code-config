@@ -35,6 +35,7 @@ const SAFE_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const ACTIONS_RELATIVE_ROOT = "skills/browser-use/actions";
 const REGISTRY_FILE = "registry.json";
 const LOCK_FILE = ".reviewed-action-authoring.lock";
+const UNSAFE_COMPUTED_PROPERTY_ACCESS = /(?:\bdocument\s*(?:\?\.\s*)?\[|(?:(?<![\w$])(?!(?:async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|let|new|of|return|switch|throw|try|typeof|var|void|while|with|yield)\b)[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*|[)\]])\s*(?:\?\.\s*)?\[\s*(?!(?:\d+|''|"")\s*\]))/;
 
 /** Closed capabilities emitted by the mechanical action audit. */
 export type BrowserUseReviewedActionCapability = "dom-query" | "dom-read" | "dom-write";
@@ -168,7 +169,7 @@ function capabilityIssue(source: string): BrowserUseReviewedActionValidationIssu
 	const rules: readonly [string, RegExp, string][] = [
 		["action_capability_credential_field", /\b(?:password|passcode|credential|username|user_name|otp|one[-_ ]?time|1password|op\.read|login|sign[-_ ]?in)\b/i, "credential and login behavior belongs to generic login"],
 		["action_capability_dynamic_code", /\b(?:eval|Function|constructor|import|require|WebAssembly|Worker|SharedWorker)\b/, "dynamic code construction is outside the Reviewed Action vocabulary"],
-		["action_capability_computed_property", /[[\]]/, "computed property access is not mechanically containable"],
+		["action_capability_computed_property", UNSAFE_COMPUTED_PROPERTY_ACCESS, "dynamic or browser-authority computed property access is not mechanically containable"],
 		["action_capability_cookie_storage", /\b(?:cookie|localStorage|sessionStorage|indexedDB|caches)\b/i, "cookie and browser storage access is prohibited"],
 		["action_capability_network", /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|RTCPeerConnection)\b/, "network access is prohibited"],
 		["action_capability_navigation", /\b(?:location|history|window\.open|open\s*\()\b/, "navigation is prohibited"],

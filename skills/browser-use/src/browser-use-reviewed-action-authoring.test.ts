@@ -88,6 +88,48 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 		expect(JSON.stringify(secret)).not.toContain("op://vault/item/field");
 	});
 
+	test("non-authority bracket syntax passes while dynamic member access stays closed", () => {
+		const fastTrackBracketShapes = validateReviewedActionCandidate(
+			candidate({
+				containment: "none",
+				required_postcondition: { kind: "element-visible", selector: ".row" },
+				source: `async ({ inputs }) => {
+				const context = { requested: "visible" };
+				let text = "";
+				for (const [key, value] of Object.entries(context)) text = key + value;
+				const match = text.match(new RegExp("^(.*)$"));
+				const fallback = [context["requested"]];
+				return { rows: document.querySelectorAll('.row').length, text: match ? match[1] : fallback[0] };
+			}`,
+			}) as never,
+		);
+		expect(fastTrackBracketShapes).toMatchObject({
+			ok: true,
+			effect_class: "mutation",
+		});
+
+		const dynamicMember = validateReviewedActionCandidate(
+			candidate({
+				source:
+					"async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }",
+			}) as never,
+		);
+		expect(dynamicMember).toMatchObject({
+			ok: false,
+			issues: [{ code: "action_capability_computed_property" }],
+		});
+
+		const documentMember = validateReviewedActionCandidate(
+			candidate({
+				source: "async ({ inputs }) => ({ value: document['cookie'] })",
+			}) as never,
+		);
+		expect(documentMember).toMatchObject({
+			ok: false,
+			issues: [{ code: "action_capability_computed_property" }],
+		});
+	});
+
 	test("closed capability audit rejects direct and indirect evasion fixtures", () => {
 		const fixtures: Array<[string, string]> = [
 			["dynamic", "async ({ inputs }) => eval(inputs.code)"],
