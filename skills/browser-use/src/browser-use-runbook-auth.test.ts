@@ -168,6 +168,7 @@ type FixtureOptions = {
 	handoffEvidenceId?: string | null;
 	loginFormPersists?: boolean;
 	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
+	actionPolicyHash?: string | null;
 	preExistingSession?: boolean;
 };
 
@@ -328,7 +329,10 @@ async function fixture(options: FixtureOptions) {
 			dispatch_claim: { fencing_token: 1, activation_epoch: 1, holderId: "dispatch" },
 			service_id: "fixture",
 			flow_id: "business",
-			action_policy_hash: "a".repeat(64),
+			action_policy_hash:
+				options.actionPolicyHash === undefined
+					? "a".repeat(64)
+					: options.actionPolicyHash,
 			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://fixture.test"],
 			expected_url: expectedUrl,
@@ -512,6 +516,28 @@ describe("runbook auth route", () => {
 				},
 			},
 		});
+	});
+
+	test("refuses human identity authorization without an execution-binding digest", async () => {
+		let attestationCalls = 0;
+		const { result } = await fixture({
+			proof: false,
+			actionPolicyHash: null,
+			humanIdentityAttestation: async () => {
+				attestationCalls += 1;
+				return {
+					ok: false,
+					code: "unreachable",
+					message: "unreachable",
+				};
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			failure: { code: "runbook_auth_execution_binding_missing" },
+		});
+		expect(attestationCalls).toBe(0);
 	});
 
 	test("authenticated-state proof on a moved origin refuses before business dispatch", async () => {

@@ -169,6 +169,16 @@ function sourceWithoutStringsAndComments(source: string): string {
 	return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n\r]*/g, " ").replace(/'(?:\\.|[^'\\])*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
 
+function sourceCarriesSecretShapedMaterial(source: string): boolean {
+	const secretShapedValues =
+		source.match(
+			/\b(?:op|wss?):\/\/[^\s'"`]+|(?:~\/|\/(?:Users|home|private|var|tmp|etc|opt)\/)[^\s'"`]+/gi,
+		) ?? [];
+	return secretShapedValues.some(
+		(value) => findRedactionViolations(value).length > 0,
+	);
+}
+
 function staticNavigationTarget(
 	source: string,
 	rightHandSide: string,
@@ -202,6 +212,7 @@ function capabilityIssue(candidate: BrowserUseReviewedActionCandidate): BrowserU
 	}
 	if (/\.dispatchEvent\s*\(\s*new\s+(?:Custom)?Event\s*\(\s*(['"])submit\1/i.test(source)) return issue("action_capability_form_submission", "source", "form submission is prohibited");
 	if (/querySelector(?:All)?\s*\(\s*(['"])[^'"]*(?:password|passcode|username|otp)[^'"]*\1\s*\)\s*(?:\?\.|\.)\s*(?:value|textContent|innerText|getAttribute)\b/i.test(source)) return issue("action_capability_credential_field", "source", "credential field values belong to generic login");
+	if (/(?:window\s*\.\s*)?location\s*\.\s*href\s*=\s*`/.test(source)) return issue("action_capability_navigation", "source", "template-literal navigation is not statically containable");
 	const unsupportedWindow = code
 		.replace(/\bwindow\s*\.\s*(?:angular|location)\b/g, "")
 		.replace(/\bview\s*:\s*window\b/g, "");
@@ -254,6 +265,7 @@ export function validateReviewedActionCandidate(candidate: BrowserUseReviewedAct
 		if (candidate.required_postcondition !== undefined && !postconditionValid(candidate.required_postcondition)) issues.push(issue("action_postcondition_invalid", "required_postcondition", "postcondition is not mechanically checkable"));
 		const { source: _reviewedSourceBytes, ...persistedMetadata } = candidate;
 		if (findRedactionViolations(persistedMetadata).length > 0) issues.push(issue("action_secret_shaped_material", "$", "candidate metadata carries secret-shaped material and cannot be persisted"));
+		if (typeof candidate.source === "string" && sourceCarriesSecretShapedMaterial(candidate.source)) issues.push(issue("action_secret_shaped_material", "source", "candidate source carries secret-shaped material and cannot be persisted"));
 	}
 	if (issues.length > 0) return { ok: false, issues, repair: "Fix the named mechanical issue. Keep authentication in generic login and use only direct reviewed business-action DOM operations." };
 	const effect = auditActionEffectClass(candidate.source);

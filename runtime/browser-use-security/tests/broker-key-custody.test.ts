@@ -16,6 +16,17 @@ const brokerEntitlements = readFileSync(
 	new URL("../entitlements/ApprovalBroker.entitlements", import.meta.url),
 	"utf8",
 );
+const launcherSource = readFileSync(
+	new URL(
+		"../targets/TokenRetrievalLauncher/TokenRetrievalLauncher.swift",
+		import.meta.url,
+	),
+	"utf8",
+);
+const launcherEntitlements = readFileSync(
+	new URL("../entitlements/TokenRetrievalLauncher.entitlements", import.meta.url),
+	"utf8",
+);
 
 describe("Approval Broker signing-key custody source policy", () => {
 	test("keeps the opaque handle in the private device-only Keychain group", () => {
@@ -40,7 +51,7 @@ describe("Approval Broker signing-key custody source policy", () => {
 
 	test("loads fail closed and creation stays behind explicit enrollment", () => {
 		const loadBody = brokerSource.match(
-			/static func loadSigningKey\(\)[\s\S]*?(?=\n {4}\/\/\/ Explicitly enroll)/,
+			/static func loadSigningKey\([^)]*\)[\s\S]*?(?=\n {4}\/\/\/ Explicitly enroll)/,
 		)?.[0];
 		const enrollBody = brokerSource.match(
 			/static func enrollSigningKey\(\)[\s\S]*?(?=\n {4}private static func encodeCustodyRecord)/,
@@ -62,5 +73,27 @@ describe("Approval Broker signing-key custody source policy", () => {
 		expect(protocolSource).toContain("presence_backed: presenceBacked");
 		expect(protocolSource).not.toContain("presence_backed: true");
 		expect(brokerSource).toContain("admittedKey.presencePolicy ==");
+	});
+
+	test("reviews attestation display and bound facts before an attestation-specific biometric sign", () => {
+		const attestBody = brokerSource.match(
+			/case "attest":[\s\S]*?(?=\n {12}default:)/,
+		)?.[0];
+		expect(attestBody).toBeDefined();
+		expect(attestBody).toContain("Sign this one-run Human Identity Attestation");
+		expect(brokerSource).toContain("reviewHumanIdentityAttestation");
+		expect(brokerSource).toContain("DISPLAY ENTRIES");
+		expect(brokerSource).toContain("BOUND FACTS");
+	});
+});
+
+describe("Token Retrieval Launcher token custody source policy", () => {
+	test("queries the exact token access group carried by its entitlement", () => {
+		expect(launcherSource).toContain(
+			'static let accessGroup = "com.nathanvow.browser-use-security.token"',
+		);
+		expect(launcherEntitlements).toContain(
+			"$(AppIdentifierPrefix)com.nathanvow.browser-use-security.token",
+		);
 	});
 });

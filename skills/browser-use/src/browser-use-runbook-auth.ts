@@ -86,7 +86,7 @@ export type BrowserUseRunbookAuthInput = {
 	dispatch_claim: LeaseWriteClaim;
 	service_id: string;
 	flow_id: string;
-	action_policy_hash: string;
+	action_policy_hash: string | null;
 	auth_context_ref: BrowserUseAuthContext;
 	allowed_origins: readonly string[];
 	expected_url: string;
@@ -292,6 +292,17 @@ export async function runBrowserUseRunbookAuth(
 			fragment.blocked_cause !== "human-identity-attestation-required"
 		) {
 			return undefined;
+		}
+		if (input.action_policy_hash === null) {
+			return {
+				ok: false,
+				run,
+				failure: {
+					code: "runbook_auth_execution_binding_missing",
+					message:
+						"human identity authorization requires an immutable execution-binding digest.",
+				},
+			};
 		}
 		const issued = await deps.humanIdentityAttestation({
 			run,

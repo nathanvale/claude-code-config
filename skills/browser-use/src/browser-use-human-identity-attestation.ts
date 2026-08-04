@@ -233,15 +233,19 @@ function createP256HumanIdentityApprovalVerifier(
 	let publicKey: ReturnType<typeof createPublicKey> | undefined;
 	if (reviewedActionVerifierIdentityIsValid(identity)) {
 		const raw = Buffer.from(identity.public_key, "base64");
-		publicKey = createPublicKey({
-			key: {
-				kty: "EC",
-				crv: "P-256",
-				x: raw.subarray(1, 33).toString("base64url"),
-				y: raw.subarray(33, 65).toString("base64url"),
-			},
-			format: "jwk",
-		});
+		try {
+			publicKey = createPublicKey({
+				key: {
+					kty: "EC",
+					crv: "P-256",
+					x: raw.subarray(1, 33).toString("base64url"),
+					y: raw.subarray(33, 65).toString("base64url"),
+				},
+				format: "jwk",
+			});
+		} catch {
+			publicKey = undefined;
+		}
 	}
 	return createApprovalVerifier({
 		verifier: identity,

@@ -129,6 +129,21 @@ function brokerHarness(
 }
 
 describe("one-run Human Identity Attestation driver", () => {
+	test("an off-curve verifier identity does not throw during driver construction", () => {
+		const raw = Buffer.concat([Buffer.from([4]), Buffer.alloc(64)]);
+		const verifierIdentity = {
+			key_id: createHash("sha256").update(raw).digest("hex"),
+			public_key: raw.toString("base64"),
+		};
+
+		expect(() =>
+			createNativeHumanIdentityAttestationDriver(
+				"/Applications/ApprovalBroker.app/Contents/MacOS/ApprovalBroker",
+				verifierIdentity,
+			),
+		).not.toThrow();
+	});
+
 	test("drives an executable broker and verifies its P-256 grant without browser or biometric access", async () => {
 		const root = await mkdtemp(join(tmpdir(), "human-attestation-broker-"));
 		cleanup.add(root);

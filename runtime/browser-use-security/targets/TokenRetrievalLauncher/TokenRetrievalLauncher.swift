@@ -37,7 +37,7 @@ enum LauncherError: Error {
 /// Where the single token item lives: the private data-protection keychain
 /// access group scoped to this launcher, with the fixed service label.
 enum TokenItemLocator {
-    static let accessGroup = "com.side-quest.browser-use-security.token"
+    static let accessGroup = "com.nathanvow.browser-use-security.token"
     static let service = "com.side-quest.browser-use-security.op-service-account-token"
     /// The one environment variable the disposable op child receives.
     static let tokenEnvVar = "OP_SERVICE_ACCOUNT_TOKEN"

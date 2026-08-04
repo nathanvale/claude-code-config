@@ -148,6 +148,9 @@ export function cancelAuthFragmentSlot(
 		{ type: "cancel" },
 	);
 	if (!transitioned.ok) {
+		if (transitioned.rejection.code === "auth_fragment_terminal") {
+			return { ok: true, fragment: slot };
+		}
 		return {
 			ok: false,
 			code:

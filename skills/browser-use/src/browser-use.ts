@@ -1973,6 +1973,20 @@ async function runRunApprove(input: PlatformCommandInput): Promise<number> {
 			recoverability: "change_input",
 		});
 	}
+	const approvalArtifact = await readArtifactStatus(store.deps, {
+		runId,
+		artifactId,
+	});
+	if (approvalArtifact.status !== "present") {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_artifact_unavailable",
+			message:
+				"the supplied review artifact bytes are not present; approval was refused.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
 	const approvedAt = input.runtime.now();
 	const updated = await persistRunbookPrivateState(
 		store.deps,
@@ -3501,6 +3515,7 @@ async function enterSubmitApprovalGate(input: {
 	gateStepIndex: number;
 	heldClaim: LeaseWriteClaim;
 	structuredResults?: readonly BrowserUseRunStructuredResult[];
+	guard?: BrowserUseSensitiveRunGuard;
 }): Promise<number> {
 	let checkpointedRun = input.run;
 	if (checkpointedRun.runbook_progress?.next_step !== input.gateStepIndex) {
@@ -3598,6 +3613,18 @@ async function enterSubmitApprovalGate(input: {
 				platformStoreFailureOf(captured.code, captured.message),
 			);
 		}
+		let contentHash: string;
+		try {
+			contentHash = await input.deps.fs.hashFile(artifactPath);
+		} catch (error) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(
+					"artifact_hash_failed",
+					`the approval screenshot bytes could not be hashed (${platformErrorCode(error)}).`,
+				),
+			);
+		}
 		const manifest: BrowserUseArtifactManifestPayload = {
 			artifact_id: artifactId,
 			run_id: checkpointedRun.run_id,
@@ -3609,7 +3636,7 @@ async function enterSubmitApprovalGate(input: {
 				path_shape: target.pathname,
 			},
 			producer_capability: "screenshot_media",
-			content_hash: await input.deps.fs.hashFile(artifactPath),
+			content_hash: contentHash,
 			sensitivity: "high",
 			retention: "ephemeral",
 			outcome_ref: `approval:${checkpointedRun.run_id}`,
@@ -3651,21 +3678,70 @@ async function enterSubmitApprovalGate(input: {
 	if (!awaiting.ok) {
 		return emitPlatformStoreFailure(input.command, awaiting.failure);
 	}
-	return emitSharedRunSuccess({
+	return await emitSubmitApprovalGate({
 		command: input.command,
+		deps: input.deps,
 		run: awaiting.run,
 		continuationId: blocked.continuation.next_action_id,
-		dataExtra: {
-			approval_review: {
-				artifact_id: artifactId,
-				producer_capability: "screenshot_media",
-			},
-		},
-		plainExtra: [
-			`approval_artifact=${artifactId}`,
-			"producer_capability=screenshot_media",
-		],
+		artifactId,
+		...(input.guard === undefined ? {} : { guard: input.guard }),
 	});
+}
+
+async function emitSubmitApprovalGate(input: {
+	command: PlatformCommandInput;
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	continuationId: string;
+	artifactId: string;
+	guard?: BrowserUseSensitiveRunGuard;
+}): Promise<number> {
+	const emitApprovalGate = (target: PlatformCommandInput): number =>
+		emitSharedRunSuccess({
+			command: target,
+			run: input.run,
+			continuationId: input.continuationId,
+			dataExtra: {
+				approval_review: {
+					artifact_id: input.artifactId,
+					producer_capability: "screenshot_media",
+				},
+			},
+			plainExtra: [
+				`approval_artifact=${input.artifactId}`,
+				"producer_capability=screenshot_media",
+			],
+		});
+	if (input.guard?.sensitive) {
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const exitCode = emitApprovalGate({
+			...input.command,
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+		});
+		const release = assertContainmentBeforeRelease(input.guard, [
+			...(await collectRunGovernedSurfaces(input.deps, input.run.run_id)),
+			{
+				kind: "stdout-envelope",
+				label: `approval-gate-envelope:${input.run.run_id}`,
+				content: stdoutChunks.join("") + stderrChunks.join(""),
+			},
+		]);
+		if (!release.release) {
+			return emitTaskRunFailure(input.command, input.run.run_id, {
+				code: "task_run_lane_refused",
+				message: `sensitive run containment failed (${release.reason}); approval outputs were withheld and a human repair path is preserved.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		for (const chunk of stdoutChunks) input.command.stdout.write(chunk);
+		for (const chunk of stderrChunks) input.command.stderr.write(chunk);
+		return exitCode;
+	}
+	return emitApprovalGate(input.command);
 }
 
 // Persist the dispatch outcome onto the shared run (its terminal or blocked
@@ -5704,6 +5780,9 @@ async function runRunbookRun(
 	let executionExpectedTargetUrl = targetResolution.target_url;
 
 	if (plan.auth_context_ref !== undefined) {
+		const actionPolicyHash =
+			run.run_execution_binding?.action_registry_digest ??
+			run.run_execution_binding?.runbook_digest;
 		if (authProvider === undefined || tokenRetrieval === undefined) {
 			return await recordTaskRunOutcome(
 				input,
@@ -5804,10 +5883,7 @@ async function runRunbookRun(
 					dispatch_claim: dispatchClaim,
 					service_id: plan.service_id,
 					flow_id: plan.flow_id,
-					action_policy_hash:
-						run.run_execution_binding?.action_registry_digest ??
-						run.run_execution_binding?.runbook_digest ??
-						normalizedInputDigest(runbookInputs),
+					action_policy_hash: actionPolicyHash ?? null,
 					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
 					allowed_origins: plan.allowed_origins,
 					expected_url: authExpectedTargetUrl,
@@ -6010,6 +6086,9 @@ async function runRunbookRun(
 			gateStepIndex: outcome.plan.approval_gate.runbook_step_index,
 			heldClaim: dispatchClaim,
 			structuredResults: outcome.structured_results ?? [],
+			...(dispatchGuard.guard !== undefined
+				? { guard: dispatchGuard.guard }
+				: {}),
 		});
 	}
 	return await recordTaskRunOutcome(
@@ -8140,6 +8219,7 @@ export const __confidentialDeliveryDriverForTest = {
 	collectRunGovernedSurfaces,
 	sentinelRegistrationWithheldFailure,
 	recordTaskRunOutcome,
+	emitSubmitApprovalGate,
 	buildRunbookAuthDelivery,
 	environmentDeliveryHook,
 } as const;

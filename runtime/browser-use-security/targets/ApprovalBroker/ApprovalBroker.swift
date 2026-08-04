@@ -286,7 +286,9 @@ private enum ApprovalBrokerCommandSupport {
     /// creation policy and verifier identity to the opaque representation. This
     /// broker has no update/delete path, and a missing, ambiguous, malformed, or
     /// identity-mismatched record fails closed instead of rotating the key.
-    static func loadSigningKey() throws -> AdmittedSigningKey {
+    static func loadSigningKey(
+        signingReason: String = "Sign the Reviewed Action promotion receipt"
+    ) throws -> AdmittedSigningKey {
         var query = try signingKeyItemQuery()
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecReturnAttributes as String] = true
@@ -319,7 +321,7 @@ private enum ApprovalBrokerCommandSupport {
 
         let decoded = try decodeCustodyRecord(custodyRecord)
         let context = LAContext()
-        context.localizedReason = "Sign the Reviewed Action promotion receipt"
+        context.localizedReason = signingReason
         let key: SecureEnclave.P256.Signing.PrivateKey
         do {
             key = try SecureEnclave.P256.Signing.PrivateKey(
@@ -440,6 +442,42 @@ private enum ApprovalBrokerCommandSupport {
         }
     }
 
+    static func reviewHumanIdentityAttestation(
+        boundFacts: [String: Any],
+        display: [String]
+    ) throws {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.activate(ignoringOtherApps: true)
+
+        let factsData = try JSONSerialization.data(
+            withJSONObject: boundFacts,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        guard let factsText = String(data: factsData, encoding: .utf8) else {
+            throw PromotionCommandError.invalidInput
+        }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.string = "DISPLAY ENTRIES\n\(display.joined(separator: "\n"))\n\nBOUND FACTS\n\(factsText)"
+        let scrollView = NSScrollView(frame: textView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = textView
+
+        let alert = NSAlert()
+        alert.messageText = "Review one-run Human Identity Attestation"
+        alert.informativeText = "Approve only if every displayed identity claim and bound fact is correct. Touch ID signs this one-run attestation."
+        alert.alertStyle = .warning
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: "Approve and Sign")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            throw PromotionCommandError.reviewCancelled
+        }
+    }
+
     static func promotionReceipt(
         request: ReviewedActionPromotionRequest,
         admittedKey: AdmittedSigningKey
@@ -506,6 +544,10 @@ private enum ApprovalBrokerCommandSupport {
                 throw PromotionCommandError.invalidInput
             }
         }
+        try reviewHumanIdentityAttestation(
+            boundFacts: boundFacts,
+            display: display
+        )
         return try ApprovalBroker.issueHumanIdentityAttestation(
             subject: subject,
             boundFacts: boundFacts,
@@ -567,7 +609,9 @@ enum ApprovalBrokerCommand {
                 FileHandle.standardOutput.write(response)
                 FileHandle.standardOutput.write(Data("\n".utf8))
             case "attest":
-                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey()
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey(
+                    signingReason: "Sign this one-run Human Identity Attestation"
+                )
                 let input = FileHandle.standardInput.readDataToEndOfFile()
                 guard
                     input.count <= 1_048_576,

@@ -137,6 +137,25 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			if (!result.ok) expect(result.issues[0]?.code, label).toStartWith("action_capability_");
 		}
 	});
+
+	test("template-literal location navigation is contained without requiring a semicolon", () => {
+		const result = validateReviewedActionCandidate(
+			candidate({
+				source:
+					"async ({ inputs }) => { document.querySelector('.row'); location.href = `https://other.example/path` }",
+				containment: "none",
+				required_postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/",
+				},
+			}) as never,
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			issues: [{ code: "action_capability_navigation" }],
+		});
+	});
 });
 
 describe("Reviewed Action candidate lifecycle", () => {
@@ -304,8 +323,26 @@ describe("Reviewed Action candidate lifecycle", () => {
 
 	test("secret-shaped candidate is refused before asset or registry persistence", async () => {
 		const sourceRoot = await sourceFixture();
-		const result = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate({ result_schema: { kind: "string", pattern: "wss://private-endpoint" } }) as never });
-		expect(result).toMatchObject({ ok: false, code: "action_secret_shaped_material" });
+		for (const secretCandidate of [
+			candidate({ result_schema: { kind: "string", pattern: "wss://private-endpoint" } }),
+			candidate({
+				source:
+					"async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length, reference: 'op://vault/item/field' })",
+			}),
+			candidate({
+				source:
+					"async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length, reference: '/Users/example/private.txt' })",
+			}),
+		]) {
+			const result = await applyReviewedActionCandidate({
+				sourceRoot,
+				candidate: secretCandidate as never,
+			});
+			expect(result).toMatchObject({
+				ok: false,
+				code: "action_secret_shaped_material",
+			});
+		}
 		const registry = JSON.parse(await readFile(join(sourceRoot, "skills/browser-use/actions/registry.json"), "utf8"));
 		expect(registry.actions).toEqual([]);
 		expect(await readFile(join(sourceRoot, "skills/browser-use/actions/assets"), "utf8").catch(() => undefined)).toBeUndefined();

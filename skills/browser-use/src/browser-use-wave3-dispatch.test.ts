@@ -604,7 +604,18 @@ function approvedBinding(origin: string, serviceId = "fixture-auth") {
 async function presenceBlockedRunbookFixture(runId: string) {
 	const cdp = startAuthCdpFixture({ initial: "ambiguous" });
 	const store = await makeStore();
-	seedRunbook(store.dataRoot, authContextRunbook(cdp.origin));
+	const sourceRoot = await createPublicCatalogSource(
+		store.base,
+		authContextRunbook(cdp.origin),
+	);
+	const digest = await publicCatalogDigest(store.env, sourceRoot);
+	const activated = await activatePublicCatalog({
+		env: store.env,
+		sourceRoot,
+		digest,
+		expectedEpoch: 0,
+	});
+	if (activated.exitCode !== 0) throw new Error(activated.stdout);
 	const handoffPath = writeHandoff(store.base, "agent-browser", runId);
 	const blockedRuntime = scriptedRuntime(store.env, [
 		{ stdout: agentSuccess({ tabs: [{ tabId: "t1", active: true, type: "page", url: `${cdp.origin}/login` }] }) },
@@ -1125,6 +1136,82 @@ describe("runbook family — live (U4 wiring)", () => {
 				},
 			]);
 		}
+	});
+
+	test("submit approval gate returns a typed refusal when artifact hashing fails", async () => {
+		const store = await makeStore();
+		seedRunbook(store.dataRoot, approvalGatedMutationRunbook());
+		const handoffPath = writeHandoff(
+			store.base,
+			"agent-browser",
+			"run-approval-hash-failure",
+		);
+		const platformFs = createDefaultPlatformFs();
+		const runtime = makeRuntime({
+			env: store.env,
+			platformFs: {
+				...platformFs,
+				hashFile: async (path) => {
+					if (path.endsWith(".png")) {
+						throw Object.assign(new Error("hash refused"), { code: "EIO" });
+					}
+					return await platformFs.hashFile(path);
+				},
+			},
+			readTextFile: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.readFile(path, "utf-8"),
+				),
+			ensureDirectory: (path: string) =>
+				import("node:fs/promises").then((module) =>
+					module.mkdir(path, { recursive: true, mode: 0o700 }).then(() => undefined),
+				),
+			runCommand: async (input) => {
+				if (input.args.includes("screenshot")) {
+					const artifactPath = input.args.find((argument) =>
+						argument.endsWith(".png"),
+					);
+					if (artifactPath !== undefined) {
+						writeFileSync(artifactPath, Buffer.from("approval-png"));
+					}
+				}
+				const data = input.args.includes("tab") && input.args.includes("list")
+					? {
+							tabs: [
+								{
+									tabId: "t1",
+									active: true,
+									type: "page",
+									url: "https://example.test/timesheet",
+								},
+							],
+						}
+					: input.args.includes("snapshot")
+						? { snapshot: "@e1 button Submit", refs: { e1: {} } }
+						: input.args.includes("get") && input.args.includes("url")
+							? { url: "https://example.test/timesheet" }
+							: input.args.includes("is") && input.args.includes("visible")
+								? { visible: true }
+								: {};
+				return { exitCode: 0, stdout: agentSuccess(data), stderr: "" };
+			},
+		});
+
+		const result = await runForTest(
+			[
+				"runbook", "run",
+				"--service", "fixture",
+				"--flow", "approval-gated-submit",
+				"--handoff", handoffPath,
+				"--tab", "t1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "artifact_hash_failed",
+		});
 	});
 
 	for (const scenario of [

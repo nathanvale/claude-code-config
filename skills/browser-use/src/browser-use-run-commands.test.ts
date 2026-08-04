@@ -918,6 +918,60 @@ describe("run cancel terminal-truth mapping (R37, AE15)", () => {
 	});
 });
 
+describe("run approval artifact custody", () => {
+	test("tombstoned review bytes refuse approval even when the run retains the artifact reference", async () => {
+		const store = await makeStore();
+		const runId = "run-approval-artifact-deleted";
+		const artifactId = "submit-approval-2.png";
+		await createOk(
+			store.deps,
+			blockedRun(runId, {
+				state: "awaiting-approval",
+				continuation: {
+					next_action_id: "complete-submit-approval",
+					summary: "Review the captured submit state, then approve or stop.",
+				},
+				artifacts: [
+					{ artifact_id: artifactId, sensitivity: "high", retention: "ephemeral" },
+				],
+			}),
+		);
+		await seedPresentArtifact(store.deps, runId, artifactId, "approval-png");
+		const deleted = await deleteArtifact(store.deps, {
+			runId,
+			artifactId,
+			reason: "operator-delete",
+		});
+		expect(deleted.ok).toBe(true);
+
+		const result = await runForTest(
+			[
+				"run",
+				"approve",
+				"--run",
+				runId,
+				"--continuation",
+				"complete-submit-approval",
+				"--artifact",
+				artifactId,
+				"--json",
+			],
+			makeRuntime({ env: store.env }),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			error: { code: "run_approval_artifact_unavailable" },
+		});
+		const standing = await loadSharedRun(store.deps, runId);
+		expect(standing.ok).toBe(true);
+		if (standing.ok) {
+			expect(standing.run.state).toBe("awaiting-approval");
+			expect(standing.run.approvals).toBeUndefined();
+		}
+	});
+});
+
 describe("artifact list (R29/R35, AE14 substrate)", () => {
 	async function seedArtifacts(store: Awaited<ReturnType<typeof makeStore>>) {
 		await seedPresentArtifact(store.deps, "run-a", "art-present", "bytes-a");
