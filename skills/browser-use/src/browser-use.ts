@@ -141,8 +141,7 @@ import {
 	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
 	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
+	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
 	isAuthTokenSourceReference,
 	readBoundedAuthChildOutput,
 	resolveWarmChromeProfilePath,
@@ -311,6 +310,38 @@ import { renderGuide } from "./browser-use-guide";
 // ---------------------------------------------------------------------------
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
+
+/**
+ * Non-authority inputs admitted by production composition.
+ *
+ * Authority ports stay available only through test helpers. Production may
+ * select its process environment and setup-admitted source checkout, but it
+ * cannot replace credential, approval, native-admission, or identity-proof
+ * owners.
+ */
+export type BrowserUseProductionRuntimeOptions = {
+	/** Process environment consumed as data by production-owned adapters. */
+	env?: Record<string, string | undefined>;
+	/** Setup-admitted source root; null models a packaged installation. */
+	sourceCheckoutRoot?: string | null;
+};
+
+/**
+ * Compose the production runtime without accepting injectable authority.
+ *
+ * @param options - Explicit non-authority production inputs
+ * @returns Runtime backed only by production-owned authority discovery
+ */
+export async function createProductionBrowserUseRuntime(
+	options: BrowserUseProductionRuntimeOptions = {},
+): Promise<BrowserUseRuntime> {
+	return await createProductionBrowserUseRuntimeInternal({
+		...(options.env === undefined ? {} : { env: options.env }),
+		...(options.sourceCheckoutRoot === undefined
+			? {}
+			: { sourceCheckoutRoot: options.sourceCheckoutRoot }),
+	});
+}
 
 export async function runBrowserUseCli(
 	argv: readonly string[],
@@ -4714,7 +4745,10 @@ function buildRunbookAuthDelivery(
  * @param input - Store-backed command input
  * @returns Process exit code
  */
-async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+async function runRunbookRun(
+	input: PlatformCommandInput,
+	generationConflictRetries = 1,
+): Promise<number> {
 	const flags = input.parsed.flagValues;
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
@@ -4954,6 +4988,20 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			recoverability: "repair_state",
 		});
 	}
+	if (
+		plan.auth_context_ref !== undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined
+	) {
+		return emitTaskRunFailure(input, run?.run_id ?? handoff.runId, {
+			code: "human-identity-attestation-required",
+			message:
+				"runbook authentication requires an approved fresh identity-proof owner before any browser dispatch.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: { external_effect: "none" },
+		});
+	}
 
 	// A nonterminal crash residue may already have confirmed every step. Close it
 	// without resolving a browser target or entering auth again.
@@ -5119,6 +5167,16 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		});
 		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
+			// Target preparation is read-only. If activation wins before the fresh
+			// run commits its immutable binding, restart the public command once and
+			// prepare wholly against the newly selected manifest + epoch. Never carry
+			// the prior plan, target proof, or generation facts into the retry.
+			if (
+				created.code === "activation_epoch_conflict" &&
+				generationConflictRetries > 0
+			) {
+				return await runRunbookRun(input, generationConflictRetries - 1);
+			}
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(created.code, created.message),
@@ -7571,9 +7629,6 @@ export {
 } from "./browser-use-transport";
 export {
 	type BrowserUseRuntime,
-	type BrowserUseSecuritySeam,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {

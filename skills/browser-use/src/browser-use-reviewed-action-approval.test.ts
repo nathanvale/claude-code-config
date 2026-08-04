@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	type BrowserUseReviewedActionApprovalFacts,
 	type BrowserUseReviewedActionPromotionBrokerPort,
@@ -40,6 +42,59 @@ function verifier() {
 }
 
 describe("Reviewed Action external-human approval boundary", () => {
+	test("consumes the Swift-owned checked-in promotion vector", () => {
+		const fixturePath = join(
+			import.meta.dir,
+			"../../../runtime/browser-use-security/targets/ApprovalBrokerTests/Fixtures/reviewed-action-promotion-v1.json",
+		);
+		const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as {
+			generated_by: string;
+			canonical_payload_base64: string;
+			verifier: { key_id: string; public_key: string };
+			receipt: BrowserUseReviewedActionPromotionReceipt;
+		};
+		expect(fixture.generated_by).toBe("GeneratePromotionFixture.swift");
+		const { receipt: vector } = fixture;
+		const unsigned = {
+			source_commit: vector.source_commit,
+			action_id: vector.action_id,
+			approved_digest: vector.approved_digest,
+			approved_origin: vector.approved_origin,
+			approved_effect: vector.approved_effect,
+			audited_capabilities: vector.audited_capabilities,
+			containment: vector.containment,
+			input_schema_digest: vector.input_schema_digest,
+			result_schema_digest: vector.result_schema_digest,
+			postcondition_digest: vector.postcondition_digest,
+			receipt_id: vector.receipt_id,
+			approval_reference: vector.approval_reference,
+			issued_at_epoch_ms: vector.issued_at_epoch_ms,
+			verifier_key_id: vector.verifier_key_id,
+		};
+		const canonicalPayload = Buffer.from(fixture.canonical_payload_base64, "base64");
+		expect(createHash("sha256").update(canonicalPayload).digest("hex")).toBe(
+			reviewedActionApprovalFactsDigest(unsigned),
+		);
+		expect(createP256ReviewedActionApprovalVerifier(fixture.verifier).verify(vector)).toEqual({ ok: true });
+		for (const [field, value] of [
+			["source_commit", "2".repeat(40)],
+			["approved_digest", "9".repeat(64)],
+			["approved_origin", "https://other.example.test"],
+			["input_schema_digest", "5".repeat(64)],
+			["result_schema_digest", "6".repeat(64)],
+			["receipt_id", "receipt-mutated"],
+			["approval_reference", "review-mutated"],
+			["issued_at_epoch_ms", vector.issued_at_epoch_ms + 1],
+			["verifier_key_id", "a".repeat(64)],
+			["signature", Buffer.from("forged").toString("base64")],
+		] as const) {
+			expect(
+				createP256ReviewedActionApprovalVerifier(fixture.verifier).verify({ ...vector, [field]: value }),
+				field,
+			).toMatchObject({ ok: false });
+		}
+	});
+
 	test("production P-256 verifier accepts the broker signature and rejects a forgery", () => {
 		const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 		const jwk = publicKey.export({ format: "jwk" });

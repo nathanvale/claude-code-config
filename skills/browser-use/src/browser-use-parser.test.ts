@@ -81,6 +81,18 @@ describe("U3 help and version", () => {
 			[["operate", "snapshot", "--help"], "operate-snapshot"],
 			[["operate", "screenshot", "--help"], "operate-screenshot"],
 			[["operate", "emulate", "--help"], "operate-emulate"],
+			[["runbook", "schema", "--help"], "runbook-schema"],
+			[["runbook", "validate", "--help"], "runbook-validate"],
+			[["runbook", "apply", "--help"], "runbook-apply"],
+			[["runbook", "delete", "--help"], "runbook-delete"],
+			[["runbook", "list", "--help"], "runbook-list"],
+			[["runbook", "show", "--help"], "runbook-show"],
+			[["runbook", "activate", "--help"], "runbook-activate"],
+			[["runbook", "run", "--help"], "runbook-run"],
+			[["action", "schema", "--help"], "action-schema"],
+			[["action", "validate", "--help"], "action-validate"],
+			[["action", "apply", "--help"], "action-apply"],
+			[["action", "status", "--help"], "action-status"],
 		];
 		for (const [argv, command] of cases) {
 			const result = await runForTest(argv, makeRuntime());
@@ -93,9 +105,9 @@ describe("U3 help and version", () => {
 			// The mint-an-envelope prerequisite is contract-driven: rendered only
 			// for commands that accept --handoff (targets status reads selected
 			// state and carries no connection prerequisite).
-			if (command === "targets-status") {
+			if (!("--handoff" in (browserUseContracts[command].flags ?? {}))) {
 				expect(result.stdout).not.toContain("Prerequisite:");
-			} else if (command === "targets-list") {
+			} else if (command === "targets-list" || command === "runbook-run") {
 				expect(result.stdout).toContain("attaches automatically");
 				expect(result.stdout).not.toContain("browser-connect connect");
 			} else {
@@ -110,6 +122,157 @@ describe("U3 help and version", () => {
 // =========================================================================
 
 describe("U3 parser", () => {
+	test("every runbook and action leaf accepts its complete advertised flag surface", () => {
+		const digest = "a".repeat(64);
+		const cases: Array<{ argv: string[]; command: BrowserUseCommand }> = [
+			{
+				argv: ["runbook", "schema", "--caller", "test", "--json", "--plain"],
+				command: "runbook-schema",
+			},
+			{
+				argv: [
+					"runbook", "validate", "--file", "draft.json",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-validate",
+			},
+			{
+				argv: [
+					"runbook", "apply", "--file", "draft.json",
+					"--expected-record-digest", digest,
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-apply",
+			},
+			{
+				argv: [
+					"runbook", "delete", "--service", "service", "--flow", "flow",
+					"--expected-record-digest", digest,
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-delete",
+			},
+			{
+				argv: ["runbook", "list", "--caller", "test", "--json", "--plain"],
+				command: "runbook-list",
+			},
+			{
+				argv: [
+					"runbook", "show", "--service", "service", "--flow", "flow",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-show",
+			},
+			{
+				argv: [
+					"runbook", "activate", "--catalog-digest", digest,
+					"--expected-epoch", "0", "--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-activate",
+			},
+			{
+				argv: [
+					"runbook", "run", "--service", "service", "--flow", "flow",
+					"--input", "name=value", "--input-file", "private=/private/input.json",
+					"--handoff", "handoff.json", "--tab", "tab-1",
+					"--allowed-origin", "https://example.test", "--run", "run-1",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "runbook-run",
+			},
+			{
+				argv: ["action", "schema", "--caller", "test", "--json", "--plain"],
+				command: "action-schema",
+			},
+			{
+				argv: [
+					"action", "validate", "--file", "candidate.json",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "action-validate",
+			},
+			{
+				argv: [
+					"action", "apply", "--file", "candidate.json",
+					"--expected-record-digest", digest,
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "action-apply",
+			},
+			{
+				argv: [
+					"action", "status", "--id", "action-id",
+					"--caller", "test", "--json", "--plain",
+				],
+				command: "action-status",
+			},
+		];
+
+		for (const { argv, command } of cases) {
+			expect(parseBrowserUseArgv(argv)).toMatchObject({
+				kind: "command",
+				command,
+			});
+		}
+	});
+
+	test("runbook and action leaves reject every missing required input", () => {
+		const digest = "a".repeat(64);
+		const cases: Array<{ argv: string[]; message: string }> = [
+			{
+				argv: ["runbook", "validate", "--json"],
+				message: "runbook validate requires --file",
+			},
+			{
+				argv: ["runbook", "apply", "--json"],
+				message: "runbook apply requires --file",
+			},
+			{
+				argv: ["runbook", "delete", "--service", "service", "--json"],
+				message: "runbook delete requires --flow",
+			},
+			{
+				argv: ["runbook", "show", "--service", "service", "--json"],
+				message: "runbook show requires --flow",
+			},
+			{
+				argv: ["runbook", "activate", "--catalog-digest", digest, "--json"],
+				message: "runbook activate requires --expected-epoch",
+			},
+			{
+				argv: ["runbook", "run", "--service", "service", "--json"],
+				message: "runbook run requires --flow",
+			},
+			{
+				argv: ["action", "validate", "--json"],
+				message: "action validate requires --file",
+			},
+			{
+				argv: ["action", "apply", "--json"],
+				message: "action apply requires --file",
+			},
+			{
+				argv: ["action", "status", "--json"],
+				message: "action status requires --id",
+			},
+		];
+
+		for (const { argv, message } of cases) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(message);
+		}
+	});
+
+	test("Reviewed Action promotion remains parser-inaccessible", () => {
+		expect(() =>
+			parseBrowserUseArgv(["action", "promote", "--id", "action-id", "--json"]),
+		).toThrow("unknown subcommand for action: promote");
+		expect(() =>
+			parseBrowserUseArgv([
+				"action", "apply", "--file", "candidate.json", "--promote", "--json",
+			]),
+		).toThrow("unknown option: --promote");
+	});
+
 	test("action commands require their model-owned file and identity inputs", () => {
 		expect(parseBrowserUseArgv(["action", "schema", "--json"])).toMatchObject({ kind: "command", command: "action-schema" });
 		expect(parseBrowserUseArgv(["action", "apply", "--file", "candidate.json", "--expected-record-digest", "a".repeat(64), "--json"])).toMatchObject({ kind: "command", command: "action-apply" });

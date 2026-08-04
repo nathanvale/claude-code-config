@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runForTest } from "./browser-use";
@@ -18,6 +18,7 @@ import {
 } from "./browser-use-runbook-generation";
 import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
+import { createSharedRun } from "./browser-use-runs";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
 import { createTestOnlyReviewedActionPromotionAuthority } from "./fixtures/reviewed-action-promotion-test-fixture";
@@ -100,6 +101,33 @@ async function fixture() {
 	return { sourceRoot, xdg, deps: { fs, paths: opened.paths, clock: () => 1_000 } };
 }
 
+async function commitRunbook(
+	sourceRoot: string,
+	runbook: Record<string, unknown>,
+	message: string,
+): Promise<string> {
+	const serviceId = String(runbook.service_id);
+	const flowId = String(runbook.flow_id);
+	const relativePath = `skills/browser-use/runbooks/${serviceId}/${flowId}/runbook.json`;
+	await mkdir(join(sourceRoot, "skills/browser-use/runbooks", serviceId, flowId), {
+		recursive: true,
+	});
+	await writeFile(
+		join(sourceRoot, relativePath),
+		`${JSON.stringify(runbook, null, 2)}\n`,
+	);
+	await git(
+		sourceRoot,
+		"add",
+		"skills/browser-use/actions/registry.json",
+		relativePath,
+	);
+	await git(sourceRoot, "commit", "-qm", message);
+	const loaded = await loadPrivateRunbookCatalogFromGit({ repoRoot: sourceRoot });
+	if (!loaded.ok) throw new Error(loaded.message);
+	return loaded.catalog.catalog_digest;
+}
+
 function promotionVerifier(verifier: ReturnType<typeof createTestOnlyReviewedActionPromotionAuthority>["verifier"]) {
 	return {
 		async verify(input: {
@@ -121,6 +149,180 @@ function promotionVerifier(verifier: ReturnType<typeof createTestOnlyReviewedAct
 }
 
 describe("authoring-to-active-generation composed acceptance", () => {
+	test("public activation reports source and active authority, rejects stale review, and repeats as a no-op", async () => {
+		const { sourceRoot, xdg } = await fixture();
+		const firstRunbook = JSON.parse(UNIFI_RUNBOOK) as Record<string, unknown>;
+		const firstDigest = await commitRunbook(
+			sourceRoot,
+			firstRunbook,
+			"first public catalog",
+		);
+		const browserCalls: Array<readonly string[]> = [];
+		const runtime = makeRuntime({
+			env: xdg.env,
+			sourceCheckoutRoot: sourceRoot,
+			runCommand: async (input) => {
+				browserCalls.push([input.command, ...input.args]);
+				return { exitCode: 0, stdout: "", stderr: "" };
+			},
+		});
+
+		const activated = await runForTest(
+			[
+				"runbook", "activate",
+				"--catalog-digest", firstDigest,
+				"--expected-epoch", "0",
+				"--json",
+			],
+			runtime,
+		);
+		expect(activated.exitCode).toBe(0);
+		const activationData = parseJson(activated.stdout).data as Record<string, unknown>;
+		expect(activationData).toMatchObject({
+			contract: "browser-use.runbook-activation",
+			changed: true,
+			catalog_digest: firstDigest,
+			epoch: 1,
+			previous_generation_id: null,
+		});
+		expect(activationData.generation_id).toBe(`gen-${firstDigest}`);
+
+		const synchronized = await runForTest(
+			["runbook", "list", "--json"],
+			runtime,
+		);
+		expect(synchronized.exitCode).toBe(0);
+		expect(parseJson(synchronized.stdout).data).toMatchObject({
+			catalog_status: "in-sync",
+			source_catalog_digest: firstDigest,
+			active_catalog_digest: firstDigest,
+			active_generation_id: `gen-${firstDigest}`,
+			active_epoch: 1,
+			source_view: "available",
+		});
+
+		const repeated = await runForTest(
+			[
+				"runbook", "activate",
+				"--catalog-digest", firstDigest,
+				"--expected-epoch", "1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(repeated.exitCode).toBe(0);
+		expect(parseJson(repeated.stdout).data).toMatchObject({
+			changed: false,
+			generation_id: `gen-${firstDigest}`,
+			catalog_digest: firstDigest,
+			epoch: 1,
+		});
+
+		const staleDigest = `${firstDigest[0] === "0" ? "1" : "0"}${firstDigest.slice(1)}`;
+		const stale = await runForTest(
+			[
+				"runbook", "activate",
+				"--catalog-digest", staleDigest,
+				"--expected-epoch", "1",
+				"--json",
+			],
+			runtime,
+		);
+		expect(stale.exitCode).toBe(20);
+		expect(parseJson(stale.stdout)).toMatchObject({
+			error: { code: "catalog_drift" },
+			continuation: { next_action_id: "activate_runbook_catalog" },
+		});
+
+		const secondDigest = await commitRunbook(
+			sourceRoot,
+			{ ...firstRunbook, version: "2", summary: "Read changed source state." },
+			"changed public catalog",
+		);
+		const pending = await runForTest(["runbook", "list", "--json"], runtime);
+		expect(pending.exitCode).toBe(0);
+		expect(parseJson(pending.stdout).data).toMatchObject({
+			catalog_status: "activation-required",
+			source_catalog_digest: secondDigest,
+			active_catalog_digest: firstDigest,
+			active_generation_id: `gen-${firstDigest}`,
+			active_epoch: 1,
+			runbooks: [
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login-screen-verify",
+					synchronization_status: "new-pending-activation",
+				}),
+			],
+		});
+		expect(browserCalls).toEqual([]);
+	});
+
+	test("public activation refuses packaged source and nonterminal mutation state before dispatch", async () => {
+		const packaged = await fixture();
+		const packagedEntriesBefore = await readdir(packaged.xdg.base);
+		let packagedBrowserCalls = 0;
+		const packagedResult = await runForTest(
+			[
+				"runbook", "activate",
+				"--catalog-digest", "0".repeat(64),
+				"--expected-epoch", "0",
+				"--json",
+			],
+			makeRuntime({
+				env: packaged.xdg.env,
+				sourceCheckoutRoot: null,
+				runCommand: async () => {
+					packagedBrowserCalls += 1;
+					return { exitCode: 0, stdout: "", stderr: "" };
+				},
+			}),
+		);
+		expect(packagedResult.exitCode).toBe(20);
+		expect(parseJson(packagedResult.stdout)).toMatchObject({
+			error: { code: "catalog_source_unavailable" },
+			continuation: { next_action_id: "activate_runbook_catalog" },
+		});
+		expect(packagedBrowserCalls).toBe(0);
+		expect(await readdir(packaged.xdg.base)).toEqual(packagedEntriesBefore);
+
+		const { sourceRoot, xdg, deps } = await fixture();
+		const runbook = JSON.parse(UNIFI_RUNBOOK) as Record<string, unknown>;
+		const firstDigest = await commitRunbook(sourceRoot, runbook, "initial catalog");
+		const runtime = makeRuntime({ env: xdg.env, sourceCheckoutRoot: sourceRoot });
+		expect((await runForTest([
+			"runbook", "activate",
+			"--catalog-digest", firstDigest,
+			"--expected-epoch", "0",
+			"--json",
+		], runtime)).exitCode).toBe(0);
+		expect((await createSharedRun(deps, {
+			run_id: "mutation-blocker",
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			mutation_dispatched: true,
+			artifacts: [],
+		})).ok).toBe(true);
+		const secondDigest = await commitRunbook(
+			sourceRoot,
+			{ ...runbook, version: "2" },
+			"catalog blocked by mutation run",
+		);
+		const blocked = await runForTest([
+			"runbook", "activate",
+			"--catalog-digest", secondDigest,
+			"--expected-epoch", "1",
+			"--json",
+		], runtime);
+		expect(blocked.exitCode).toBe(20);
+		expect(parseJson(blocked.stdout)).toMatchObject({
+			error: { code: "activation_blocked_by_run" },
+			continuation: { next_action_id: "activate_runbook_catalog" },
+		});
+	});
+
 	test("production front doors compose UniFi plus a promoted action and preserve AE4 generation semantics", async () => {
 		const { sourceRoot, xdg, deps } = await fixture();
 		const authority = createTestOnlyReviewedActionPromotionAuthority();

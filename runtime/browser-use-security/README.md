@@ -30,6 +30,11 @@ native capability. The native product may be entirely absent — that is a legal
 tested state, `native-capability-absent`, expressed through typed verdicts, not
 a crash or a stub.
 
+Production promotion is unavailable. The unsigned sources and hermetic tests do
+not install or admit a signed product and make no production Touch ID or
+Developer ID acceptance claim. Route signed-product installation, admission,
+presence-backed acceptance, and repair to a separate reviewed plan.
+
 Bundle ids are minted: `src/model.ts` `TARGET_BUNDLE_IDS` carries the real
 `com.side-quest.browser-use-security.*` strings, mirroring each Xcode target's
 `PRODUCT_BUNDLE_IDENTIFIER` and `Info.plist` `CFBundleIdentifier`. The
