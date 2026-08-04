@@ -51,7 +51,15 @@ export type BrowserUseSourceLockOperationResult<T> =
 	| {
 			acquired: true;
 			released: false;
+			body_status: "succeeded";
 			value: T;
+			release_failure: Extract<BrowserUseSourceLockReleaseResult, { ok: false }>;
+	  }
+	| {
+			acquired: true;
+			released: false;
+			body_status: "failed";
+			body_error: unknown;
 			release_failure: Extract<BrowserUseSourceLockReleaseResult, { ok: false }>;
 	  }
 	| {
@@ -213,10 +221,8 @@ function handleFor(
 				const current = await readOwnedFile(lockPath);
 				if (current.status === "missing" ||
 					(current.status === "present" && current.raw !== ownerRaw)) {
-					released = true;
 					result = { ok: true, status: "ownership-changed" };
 				} else if (current.status === "present" && await removeIfOwned(lockPath, ownerRaw)) {
-					released = true;
 					result = { ok: true, status: "released" };
 				} else {
 					result = {
@@ -234,6 +240,7 @@ function handleFor(
 					};
 				}
 			}
+			if (result.ok) released = true;
 			return result;
 		},
 	};
@@ -329,8 +336,8 @@ export async function acquireSourceLock(input: {
  *
  * @param input - Absolute lock path and operator-facing mutation subject
  * @param body - Mutation that requires exclusive source ownership
- * @returns Body result or typed acquisition refusal
- * @throws When the body throws
+ * @returns Body result, combined body/release failure, or typed acquisition refusal
+ * @throws When the body throws and the lock releases cleanly
  * @internal
  */
 export async function withSourceLock<T>(
@@ -348,14 +355,27 @@ export async function withSourceLock<T>(
 	let value: T;
 	try {
 		value = await body();
-	} catch (error) {
-		await acquired.release();
-		throw error;
+	} catch (bodyError) {
+		const released = await acquired.release();
+		if (released.ok) throw bodyError;
+		return {
+			acquired: true,
+			released: false,
+			body_status: "failed",
+			body_error: bodyError,
+			release_failure: released,
+		};
 	}
 	const released = await acquired.release();
 	return released.ok
 		? { acquired: true, released: true, value }
-		: { acquired: true, released: false, value, release_failure: released };
+		: {
+				acquired: true,
+				released: false,
+				body_status: "succeeded",
+				value,
+				release_failure: released,
+		  };
 }
 
 /**

@@ -121,6 +121,33 @@ describe("source authoring lock", () => {
 		expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(successor);
 	});
 
+	test("keeps release retryable when transition release fails after owner removal", async () => {
+		const { lockPath } = await lockFixture();
+		const acquired = await acquireSourceLock({ lockPath, subject: "fixture" });
+		if (!acquired.ok) throw new Error(acquired.message);
+		const sabotage = (async () => {
+			for (let attempt = 0; attempt < 1_000; attempt += 1) {
+				if (await readFile(`${lockPath}.reclaim`, "utf8").catch(() => undefined) !== undefined) {
+					await rm(`${lockPath}.reclaim`);
+					return;
+				}
+				await Bun.sleep(0);
+			}
+			throw new Error("transition claim was not observed");
+		})();
+		const firstRelease = await acquired.release();
+		await sabotage;
+		expect(firstRelease).toMatchObject({
+			ok: false,
+			reason: "transition-release-failed",
+		});
+		expect(await readFile(lockPath, "utf8").catch(() => undefined)).toBeUndefined();
+		expect(await acquired.release()).toEqual({
+			ok: true,
+			status: "ownership-changed",
+		});
+	});
+
 	test("reports release failure when transition acquisition is exhausted", async () => {
 		const { lockPath } = await lockFixture();
 		const operation = await withSourceLock(
@@ -140,6 +167,28 @@ describe("source authoring lock", () => {
 			release_failure: { ok: false, reason: "transition-unavailable" },
 		});
 		expect(await readFile(lockPath, "utf8")).toContain('"token"');
+	});
+
+	test("preserves a thrown body error beside unavailable-transition release failure", async () => {
+		const { lockPath } = await lockFixture();
+		const bodyError = new Error("fixture mutation failed");
+		const operation = await withSourceLock(
+			{ lockPath, subject: "fixture" },
+			async () => {
+				await writeFile(
+					`${lockPath}.reclaim`,
+					`${JSON.stringify({ token: "stuck-transition", pid: process.pid, acquired_at_epoch_ms: Date.now() })}\n`,
+				);
+				throw bodyError;
+			},
+		);
+		expect(operation).toMatchObject({
+			acquired: true,
+			released: false,
+			body_status: "failed",
+			body_error: bodyError,
+			release_failure: { ok: false, reason: "transition-unavailable" },
+		});
 	});
 
 	test("removes an owned temporary file after a failed atomic replacement", async () => {
