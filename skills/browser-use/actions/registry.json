@@ -252,6 +252,117 @@
       }
     },
     {
+      "asset_path": "fasttrack/save-draft.js",
+      "record": {
+        "action_id": "fasttrack-save-draft",
+        "asset_id": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+        "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
+        "effect_class": "mutation",
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "week_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "week_end": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "source": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 128
+              }
+            },
+            "resultType": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "promiseLike": {
+              "required": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "buttonText": {
+              "required": false,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            },
+            "beforeUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "afterUrl": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 2048
+              }
+            },
+            "title": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 512
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": ".nav-tabs, table"
+        },
+        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/save-draft.js",
+        "promotion_receipt": {
+          "approved_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
+          "disposition": "approved",
+          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
+          "approved_effect": "mutation",
+          "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
+        }
+      }
+    },
+    {
       "asset_path": "fasttrack/verify-filled-week.js",
       "record": {
         "action_id": "fasttrack-verify-filled-week",
@@ -453,117 +564,6 @@
       }
     },
     {
-      "asset_path": "fasttrack/save-draft.js",
-      "record": {
-        "action_id": "fasttrack-save-draft",
-        "asset_id": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-        "expected_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-        "allowed_origin": "https://manpowergroup.fasttrack360.com.au",
-        "effect_class": "mutation",
-        "containment": "none",
-        "input_schema": {
-          "kind": "object",
-          "fields": {
-            "week_start": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 10,
-                "pattern": "\\d{4}-\\d{2}-\\d{2}"
-              }
-            },
-            "week_end": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 10,
-                "pattern": "\\d{4}-\\d{2}-\\d{2}"
-              }
-            }
-          }
-        },
-        "result_schema": {
-          "kind": "object",
-          "fields": {
-            "ok": {
-              "required": true,
-              "schema": {
-                "kind": "boolean"
-              }
-            },
-            "mode": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 64
-              }
-            },
-            "source": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 128
-              }
-            },
-            "resultType": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 32
-              }
-            },
-            "promiseLike": {
-              "required": false,
-              "schema": {
-                "kind": "boolean"
-              }
-            },
-            "buttonText": {
-              "required": false,
-              "schema": {
-                "kind": "string",
-                "max_length": 64
-              }
-            },
-            "beforeUrl": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 2048
-              }
-            },
-            "afterUrl": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 2048
-              }
-            },
-            "title": {
-              "required": true,
-              "schema": {
-                "kind": "string",
-                "max_length": 512
-              }
-            }
-          }
-        },
-        "result_sensitivity": "low",
-        "required_postcondition": {
-          "kind": "element-visible",
-          "selector": ".nav-tabs, table"
-        },
-        "source_provenance": "domains/manpowergroup-fasttrack360/domain-script-actions/save-draft.js",
-        "promotion_receipt": {
-          "approved_digest": "da89e58af07317cb46ec859635d8a63ab40d497864550074308565857cd9e387",
-          "disposition": "approved",
-          "approved_origin": "https://manpowergroup.fasttrack360.com.au",
-          "approved_effect": "mutation",
-          "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30;review-fix:week-guard+date-anchor+exact-save-allowlist-2026-07-31"
-        }
-      }
-    },
-    {
       "asset_path": "fasttrack/verify-saved-draft.js",
       "record": {
         "action_id": "fasttrack-verify-saved-draft",
@@ -761,6 +761,489 @@
           "approved_effect": "mutation",
           "approver_ref": "operator-request:three-runbook-daily-driver-2026-07-30;review-fix:submit-guard+week-date-anchor+submitted-state-2026-07-30"
         }
+      }
+    },
+    {
+      "asset_path": "assets/eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b.js",
+      "record": {
+        "action_id": "oncore-fill-week",
+        "asset_id": "eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b",
+        "expected_digest": "eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "rate_value": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "45548822362"
+                ]
+              }
+            },
+            "require_empty_grid": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "rows": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10,
+                        "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "inserted_days": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "date_str": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "row_count_after_each_insert": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "row_count": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "integer": true,
+                        "minimum": 0,
+                        "maximum": 7
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "row_count": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "integer": true,
+                "minimum": 0,
+                "maximum": 7
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "tr.rgRow, tr.rgAltRow"
+        },
+        "source_provenance": "authored:oncore-fill-week",
+        "promotion_receipt": null
+      }
+    },
+    {
+      "asset_path": "assets/aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1.js",
+      "record": {
+        "action_id": "oncore-open-week",
+        "asset_id": "aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1",
+        "expected_digest": "aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "already_open",
+                  "timesheet_link_clicked"
+                ]
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "#ctl00_MainContent_TimesheetWorkGrid_ctl00"
+        },
+        "source_provenance": "authored:oncore-open-week",
+        "promotion_receipt": null
+      }
+    },
+    {
+      "asset_path": "assets/edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c.js",
+      "record": {
+        "action_id": "oncore-verify-filled",
+        "asset_id": "edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c",
+        "expected_digest": "edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "rate_value": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "45548822362"
+                ]
+              }
+            },
+            "rows": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10,
+                        "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "proof_schema": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "OncoreFillTimesheetProofV1"
+                ]
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "row_count": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "integer": true,
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
+            "total_units": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
+            "entries": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "rate_value": {
+                      "required": true,
+                      "schema": {
+                        "kind": "enum",
+                        "values": [
+                          "45548822362"
+                        ]
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "submitted": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "editable_state": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "editable"
+                ]
+              }
+            },
+            "proof_observed_at": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "tr.rgRow, tr.rgAltRow"
+        },
+        "source_provenance": "authored:oncore-verify-filled",
+        "promotion_receipt": null
       }
     }
   ]
