@@ -9,7 +9,7 @@
   "allowed_origins": [
     "https://manpowergroup.fasttrack360.com.au"
   ],
-  "auth_context_ref": "fasttrack-session",
+  "auth_context_ref": "interactive-login",
   "inputs": [
     {
       "id": "timesheet_run",
@@ -206,6 +206,14 @@
     }
   ],
   "steps": [
+    {
+      "kind": "open",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+      }
+    },
     {
       "kind": "snapshot",
       "interactive": false

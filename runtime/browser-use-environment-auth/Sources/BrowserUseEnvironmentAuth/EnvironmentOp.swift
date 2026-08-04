@@ -1479,15 +1479,15 @@ private func safeMetadataURL(_ value: Any?) -> String? {
           ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
           components.host != nil,
           components.user == nil,
-          components.password == nil,
-          components.query == nil,
-          components.fragment == nil
+          components.password == nil
     else {
         return nil
     }
     components.scheme = components.scheme?.lowercased()
     components.host = components.host?.lowercased()
     components.path = "/"
+    components.query = nil
+    components.fragment = nil
     return components.url?.absoluteString
 }
 
@@ -1500,7 +1500,7 @@ private func projectVault(_ raw: Any) -> [String: Any]? {
     return ["id": id]
 }
 
-private func projectItem(_ raw: Any) -> [String: Any]? {
+func projectItem(_ raw: Any) -> [String: Any]? {
     guard let row = raw as? [String: Any],
           let id = boundedString(row["id"]),
           let category = boundedString(row["category"]),
@@ -1519,7 +1519,7 @@ private func projectItem(_ raw: Any) -> [String: Any]? {
         guard let url = rawURL as? [String: Any],
               let href = safeMetadataURL(url["href"])
         else {
-            return nil
+            continue
         }
         urls.append(["href": href])
     }
@@ -1537,7 +1537,7 @@ private func projectItem(_ raw: Any) -> [String: Any]? {
     return projected
 }
 
-private func projectMetadata(
+func projectMetadata(
     operation: EnvironmentOpMetadataOperation,
     bytes: [UInt8]
 ) -> Any? {

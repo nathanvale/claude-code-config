@@ -121,6 +121,7 @@ export type BrowserUseAuthSubmitOutcome =
 export const BROWSER_USE_AUTH_BLOCKED_CAUSES = [
 	"missing-token",
 	"invalid-vault-scope",
+	"binding-approval-required",
 	"ambiguous-binding-selection",
 	"revoked-binding",
 	"lease-unavailable",
@@ -186,6 +187,14 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 		continuation: {
 			next_action_id: "repair-vault-grant",
 			summary: "Repair the token's vault grant to exactly one visible vault.",
+		},
+	},
+	"binding-approval-required": {
+		run_state: "awaiting-approval",
+		continuation: {
+			next_action_id: "request-binding-selection-grant",
+			summary:
+				"Request approval before binding the service and auth context to one login item.",
 		},
 	},
 	"ambiguous-binding-selection": {

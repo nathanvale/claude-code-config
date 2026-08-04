@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
 	type BrowserUseActionGenerationSeam,
 	type BrowserUseItemBatchState,
+	type BrowserUseLegacyPromotionEvidence,
 	type BrowserUseReviewedActionRecord,
+	type BrowserUseReviewedActionRefusalCode,
 	type BrowserUseRetainedGenerationSeam,
 	type BrowserUseRunExecutionBinding,
 	ACTION_ASSET_MAX_BYTES,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	actionAssetDigest,
 	auditActionEffectClass,
 	captureStructuredResult,
@@ -17,7 +18,10 @@ import {
 	resolveNextBatchItem,
 	resolveResumeAgainstBinding,
 	resolveReviewedAction,
+	reviewedActionRecordIsValid,
 } from "./browser-use-runbook-actions";
+import type { BrowserUseReviewedActionPromotionReceipt } from "./browser-use-reviewed-action-approval";
+import { ONCORE_DRAFT_VERIFICATION_ACTION_BYTES } from "./fixtures/oncore-draft-verification-action-fixture";
 
 // --- Fixtures (hermetic, synthetic; no real domains or secrets) --------------
 
@@ -28,6 +32,60 @@ const READ_DIGEST = actionAssetDigest(READ_ASSET_BYTES);
 // A mutation asset: clicks + fills.
 const MUTATION_ASSET_BYTES = "async ({ inputs }) => { document.querySelector('#save').click(); return { saved: true } }";
 const MUTATION_DIGEST = actionAssetDigest(MUTATION_ASSET_BYTES);
+
+function readPromotionReceipt(
+	overrides: Partial<BrowserUseReviewedActionPromotionReceipt> = {},
+): BrowserUseReviewedActionPromotionReceipt {
+	return {
+		contract: "browser-use.reviewed-action-promotion",
+		schema_version: "1",
+		receipt_id: "receipt-read",
+		disposition: "approved",
+		source_commit: "1".repeat(40),
+		action_id: "diagnose-grid",
+		approved_digest: READ_DIGEST,
+		approved_origin: ORIGIN,
+		approved_effect: "read",
+		audited_capabilities: ["dom-query", "dom-read"],
+		containment: "read-only-observation",
+		input_schema_digest: "2".repeat(64),
+		result_schema_digest: "3".repeat(64),
+		postcondition_digest: null,
+		approval_reference: "review-1",
+		presence_backed: true,
+		issued_at_epoch_ms: 1,
+		verifier_key_id: "test-key",
+		signature: "TEST-SIGNATURE",
+		...overrides,
+	};
+}
+
+function mutationPromotionReceipt(
+	overrides: Partial<BrowserUseReviewedActionPromotionReceipt> = {},
+): BrowserUseReviewedActionPromotionReceipt {
+	return readPromotionReceipt({
+		receipt_id: "receipt-mutation",
+		action_id: "save-draft",
+		approved_digest: MUTATION_DIGEST,
+		approved_effect: "mutation",
+		containment: "none",
+		postcondition_digest: "4".repeat(64),
+		...overrides,
+	});
+}
+
+function legacyPromotionEvidence(
+	overrides: Partial<BrowserUseLegacyPromotionEvidence> = {},
+): BrowserUseLegacyPromotionEvidence {
+	return {
+		approved_digest: READ_DIGEST,
+		disposition: "approved",
+		approved_origin: ORIGIN,
+		approved_effect: "read",
+		approver_ref: "operator-1",
+		...overrides,
+	};
+}
 
 function readRecord(
 	overrides: Partial<BrowserUseReviewedActionRecord> = {},
@@ -46,13 +104,8 @@ function readRecord(
 		},
 		result_sensitivity: "low",
 		source_provenance: "oncore/diagnose-grid-state.js",
-		promotion_receipt: {
-			approved_digest: READ_DIGEST,
-			disposition: "approved",
-			approved_origin: ORIGIN,
-			approved_effect: "read",
-			approver_ref: "operator-1",
-		},
+		audited_capabilities: ["dom-query", "dom-read"],
+		promotion_receipt: readPromotionReceipt(),
 		...overrides,
 	};
 }
@@ -72,13 +125,8 @@ function mutationRecord(
 		result_sensitivity: "low",
 		required_postcondition: { kind: "element-visible", selector: "#saved-banner" },
 		source_provenance: "oncore/save-draft.js",
-		promotion_receipt: {
-			approved_digest: MUTATION_DIGEST,
-			disposition: "approved",
-			approved_origin: ORIGIN,
-			approved_effect: "mutation",
-			approver_ref: "operator-1",
-		},
+		audited_capabilities: ["dom-query", "dom-write"],
+		promotion_receipt: mutationPromotionReceipt(),
 		...overrides,
 	};
 }
@@ -86,8 +134,9 @@ function mutationRecord(
 function seamFor(
 	record: BrowserUseReviewedActionRecord,
 	bytesById: Readonly<Record<string, string>>,
+	withPromotionVerifier = true,
 ): BrowserUseActionGenerationSeam {
-	return {
+	const seam: BrowserUseActionGenerationSeam = {
 		async loadActionRecord(actionId) {
 			return actionId === record.action_id
 				? { ok: true, record }
@@ -100,13 +149,46 @@ function seamFor(
 				: { ok: true, bytes };
 		},
 	};
+	if (withPromotionVerifier) {
+		seam.verifyPromotion = async () => ({ ok: true });
+	}
+	return seam;
 }
 
 const READ_BYTES_STORE = { [READ_DIGEST]: READ_ASSET_BYTES };
 
+async function expectReadRecordRefusal(
+	record: BrowserUseReviewedActionRecord,
+	code: BrowserUseReviewedActionRefusalCode,
+): Promise<void> {
+	const result = await resolveReviewedAction({
+		actionId: "diagnose-grid",
+		expectedDigest: READ_DIGEST,
+		requestedOrigin: ORIGIN,
+		inputs: {},
+		seam: seamFor(record, READ_BYTES_STORE),
+	});
+	expect(result.ok).toBe(false);
+	if (!result.ok) expect(result.refusal.code).toBe(code);
+}
+
 // --- Happy paths -------------------------------------------------------------
 
 describe("resolveReviewedAction — approved happy paths", () => {
+	test("a signed exact receipt resolves only through the generation verifier", async () => {
+		const signedRecord = readRecord({
+			promotion_receipt: readPromotionReceipt({ receipt_id: "receipt-1" }),
+		});
+		let verificationCalls = 0;
+		const seam = seamFor(signedRecord, READ_BYTES_STORE);
+		seam.verifyPromotion = async () => { verificationCalls += 1; return { ok: true }; };
+		const result = await resolveReviewedAction({ actionId: "diagnose-grid", expectedDigest: READ_DIGEST, requestedOrigin: ORIGIN, inputs: {}, seam });
+		expect(result.ok).toBe(true);
+		expect(verificationCalls).toBe(1);
+		const unavailable = await resolveReviewedAction({ actionId: "diagnose-grid", expectedDigest: READ_DIGEST, requestedOrigin: ORIGIN, inputs: {}, seam: seamFor(signedRecord, READ_BYTES_STORE, false) });
+		expect(unavailable).toMatchObject({ ok: false, refusal: { code: "action_promotion_verifier_unavailable" } });
+	});
+
 	test("an approved exact read action resolves to an approved evaluate step", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
@@ -143,67 +225,79 @@ describe("resolveReviewedAction — approved happy paths", () => {
 // --- Refusal paths (RED FIRST; each proves fail-closed before dispatch) ------
 
 describe("resolveReviewedAction — every refusal fails closed before dispatch", () => {
-	test("candidate/non-approved receipt refuses (rejected)", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: READ_DIGEST,
-				disposition: "rejected",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
-		});
+	test("an unpromoted authored candidate refuses before dispatch", async () => {
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
 			expectedDigest: READ_DIGEST,
 			requestedOrigin: ORIGIN,
 			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
+			seam: seamFor(readRecord({ promotion_receipt: null }), READ_BYTES_STORE),
 		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_not_approved");
+		expect(result).toMatchObject({
+			ok: false,
+			refusal: { code: "action_receipt_not_approved" },
+		});
+	});
+
+	test("approved legacy promotion evidence remains readable but never executable", async () => {
+		const record = readRecord({ promotion_receipt: legacyPromotionEvidence() });
+		let assetLoadAttempted = false;
+		let verificationAttempted = false;
+		expect(reviewedActionRecordIsValid(record)).toBe(true);
+
+		const result = await resolveReviewedAction({
+			actionId: "diagnose-grid",
+			expectedDigest: READ_DIGEST,
+			requestedOrigin: ORIGIN,
+			inputs: {},
+			seam: {
+				async loadActionRecord() {
+					return { ok: true, record };
+				},
+				async loadActionAssetBytes() {
+					assetLoadAttempted = true;
+					return { ok: true, bytes: READ_ASSET_BYTES };
+				},
+				async verifyPromotion() {
+					verificationAttempted = true;
+					return { ok: true };
+				},
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			refusal: { code: "action_promotion_authority_missing" },
+		});
+		expect(assetLoadAttempted).toBe(false);
+		expect(verificationAttempted).toBe(false);
+	});
+
+	test("candidate/non-approved receipt refuses (rejected)", async () => {
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: legacyPromotionEvidence({ disposition: "rejected" }),
+			}),
+			"action_receipt_not_approved",
+		);
 	});
 
 	test("withdrawn receipt refuses", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: READ_DIGEST,
-				disposition: "withdrawn",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_not_approved");
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: legacyPromotionEvidence({ disposition: "withdrawn" }),
+			}),
+			"action_receipt_not_approved",
+		);
 	});
 
 	test("invalidated receipt refuses", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: READ_DIGEST,
-				disposition: "invalidated",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_not_approved");
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: legacyPromotionEvidence({ disposition: "invalidated" }),
+			}),
+			"action_receipt_not_approved",
+		);
 	});
 
 	test("missing registry record refuses", async () => {
@@ -275,13 +369,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		const record = readRecord({
 			asset_id: oversizedDigest,
 			expected_digest: oversizedDigest,
-			promotion_receipt: {
-				approved_digest: oversizedDigest,
-				disposition: "approved",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
+			promotion_receipt: readPromotionReceipt({ approved_digest: oversizedDigest }),
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
@@ -313,13 +401,7 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 		const record = readRecord({
 			asset_id: navDigest,
 			expected_digest: navDigest,
-			promotion_receipt: {
-				approved_digest: navDigest,
-				disposition: "approved",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
+			promotion_receipt: readPromotionReceipt({ approved_digest: navDigest }),
 		});
 		const result = await resolveReviewedAction({
 			actionId: "diagnose-grid",
@@ -333,18 +415,10 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 	});
 
 	test("unsupported containment claim refuses", async () => {
-		const record = readRecord({
-			containment: "detect-only" as never,
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_containment_unsupported");
+		await expectReadRecordRefusal(
+			readRecord({ containment: "detect-only" as never }),
+			"action_containment_unsupported",
+		);
 	});
 
 	test("invalid input against the typed input schema refuses", async () => {
@@ -547,66 +621,30 @@ describe("resolveReviewedAction — every refusal fails closed before dispatch",
 	});
 
 	test("receipt approving a DIFFERENT digest refuses (a runbook cannot grant its own approval)", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: MUTATION_DIGEST, // approves other bytes
-				disposition: "approved",
-				approved_origin: ORIGIN,
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_digest_mismatch");
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: readPromotionReceipt({ approved_digest: MUTATION_DIGEST }),
+			}),
+			"action_receipt_digest_mismatch",
+		);
 	});
 
 	test("receipt approving a DIFFERENT origin refuses", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: READ_DIGEST,
-				disposition: "approved",
-				approved_origin: "https://other.example",
-				approved_effect: "read",
-				approver_ref: "operator-1",
-			},
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_origin_mismatch");
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: readPromotionReceipt({ approved_origin: "https://other.example" }),
+			}),
+			"action_receipt_origin_mismatch",
+		);
 	});
 
 	test("receipt approving a DIFFERENT effect refuses", async () => {
-		const record = readRecord({
-			promotion_receipt: {
-				approved_digest: READ_DIGEST,
-				disposition: "approved",
-				approved_origin: ORIGIN,
-				approved_effect: "mutation",
-				approver_ref: "operator-1",
-			},
-		});
-		const result = await resolveReviewedAction({
-			actionId: "diagnose-grid",
-			expectedDigest: READ_DIGEST,
-			requestedOrigin: ORIGIN,
-			inputs: {},
-			seam: seamFor(record, READ_BYTES_STORE),
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.refusal.code).toBe("action_receipt_effect_mismatch");
+		await expectReadRecordRefusal(
+			readRecord({
+				promotion_receipt: readPromotionReceipt({ approved_effect: "mutation" }),
+			}),
+			"action_receipt_effect_mismatch",
+		);
 	});
 });
 

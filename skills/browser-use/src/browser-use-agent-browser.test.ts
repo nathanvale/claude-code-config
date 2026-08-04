@@ -1467,7 +1467,11 @@ describe("Agent Browser target resolution", () => {
 			steps: [{ kind: "snapshot", interactive: true }],
 		});
 
-		expect(accepted).toMatchObject({ ok: true, target_tab_id: "t1" });
+		expect(accepted).toMatchObject({
+			ok: true,
+			target_tab_id: "t1",
+			target_url: "about:blank",
+		});
 		expect(refused).toMatchObject({
 			ok: false,
 			code: "agent_browser_target_unavailable",

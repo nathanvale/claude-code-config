@@ -4,10 +4,14 @@ import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+	BROWSER_USE_DIAGNOSTIC_CODES,
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
@@ -63,7 +67,7 @@ describe("platform family help and discovery", () => {
 		expect(renderHelp("operate")).toContain("Verified Handoff Envelope");
 		expect(renderHelp("task")).toContain("Verified Handoff Envelope");
 		expect(renderHelp("runbook")).toContain("Verified Handoff Envelope");
-		for (const family of ["run", "migration", "artifact", "repair"] as const) {
+		for (const family of ["run", "action", "migration", "artifact", "repair"] as const) {
 			expect(renderHelp(family)).not.toContain("Verified Handoff Envelope");
 		}
 	});
@@ -81,6 +85,91 @@ describe("platform family help and discovery", () => {
 		}
 	});
 
+	test("runbook and action leaves retain their exact advertised flags", () => {
+		const expectedFlags = {
+			"runbook-schema": ["--caller", "--json", "--plain"],
+			"runbook-validate": ["--caller", "--file", "--json", "--plain"],
+			"runbook-apply": [
+				"--caller",
+				"--expected-record-digest",
+				"--file",
+				"--json",
+				"--plain",
+			],
+			"runbook-delete": [
+				"--caller",
+				"--expected-record-digest",
+				"--flow",
+				"--json",
+				"--plain",
+				"--service",
+			],
+			"runbook-list": ["--caller", "--json", "--plain"],
+			"runbook-show": [
+				"--caller",
+				"--flow",
+				"--json",
+				"--plain",
+				"--service",
+			],
+			"runbook-activate": [
+				"--caller",
+				"--catalog-digest",
+				"--expected-epoch",
+				"--json",
+				"--plain",
+			],
+			"runbook-run": [
+				"--allowed-origin",
+				"--caller",
+				"--flow",
+				"--handoff",
+				"--input",
+				"--input-file",
+				"--json",
+				"--plain",
+				"--run",
+				"--service",
+				"--tab",
+			],
+			"action-schema": ["--caller", "--json", "--plain"],
+			"action-validate": ["--caller", "--file", "--json", "--plain"],
+			"action-apply": [
+				"--caller",
+				"--expected-record-digest",
+				"--file",
+				"--json",
+				"--plain",
+			],
+			"action-status": ["--caller", "--id", "--json", "--plain"],
+		} as const;
+
+		for (const [command, flags] of Object.entries(expectedFlags)) {
+			expect(
+				Object.keys(
+					browserUseContracts[command as keyof typeof browserUseContracts].flags ?? {},
+				).sort(),
+			).toEqual([...flags].sort());
+		}
+	});
+
+	test("runbook and action handler diagnostics stay in the public vocabulary", () => {
+		for (const code of [
+			"xdg_root_relative",
+			"catalog_source_unavailable",
+			"runbook_document_unreadable",
+			"runbook_source_checkout_required",
+			"action_document_unreadable",
+			"action_source_checkout_required",
+			"activation_flag_invalid",
+			"human-identity-attestation-required",
+			"action_promotion_verifier_store_unsafe",
+			"action_promotion_verifier_identity_invalid",
+		] as const) {
+			expect(BROWSER_USE_DIAGNOSTIC_CODES).toContain(code);
+		}
+	});
+
 	test("platform discovery exposes each result contract and only supported env vars", () => {
 		const tree = projectCommandDiscoveryTree(
 			Object.entries(browserUseContracts),
@@ -94,7 +183,16 @@ describe("platform family help and discovery", () => {
 			"run-cancel": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 			"runbook-list": BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
 			"runbook-show": BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+			"runbook-schema": BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+			"runbook-validate": BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+			"runbook-apply": BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+			"runbook-delete": BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+			"runbook-activate": BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
 			"runbook-run": BROWSER_USE_SHARED_RUN_CONTRACT_ID,
+			"action-schema": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-validate": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-apply": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			"action-status": BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 			"migration-status": BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 			"artifact-list": BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 			"repair-status": BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
@@ -133,6 +231,7 @@ describe("platform family help and discovery", () => {
 			// durable shared run.
 			"runbook-list",
 			"runbook-show",
+			"runbook-activate",
 			"runbook-run",
 			// R27 auth repair commands read the run store when --run binds the
 			// evaluation to a blocked run (auth plan U3a).
@@ -148,7 +247,11 @@ describe("platform family help and discovery", () => {
 			const discovered = tree.commands[command];
 			expect(discovered?.result_contract?.id).toBe(contractId);
 			expect(discovered?.result_contract?.schema_version).toBe(
-				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ? "2" : "1",
+				contractId === BROWSER_USE_SHARED_RUN_CONTRACT_ID ||
+				contractId === BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID ||
+				contractId === BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID
+					? "2"
+					: "1",
 			);
 			expect(discovered?.env_vars?.map((entry) => entry.name)).toEqual(
 				STORE_BACKED.has(command) ? STORE_ENV_VARS : PLATFORM_ENV_VARS,

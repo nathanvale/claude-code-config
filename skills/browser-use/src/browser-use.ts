@@ -12,7 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type CliWriter,
@@ -22,6 +22,7 @@ import {
 	CliUsageError,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCommandResultData,
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
@@ -43,8 +44,14 @@ import {
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
+	BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
@@ -56,6 +63,7 @@ import {
 	type BrowserUseFamily,
 	type BrowserUseGuideTopic,
 	browserUseAdapterLanesFailureActions,
+	browserUseContracts,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
 	browserUsePlatformStoreFailureActions,
@@ -77,6 +85,7 @@ import {
 	type BrowserUseDevToolsTransport,
 	type BrowserUseMintedVerifiedTarget,
 	mintBrowserUseVerifiedTarget,
+	resolveBrowserUseCdpTargetIdentity,
 } from "./browser-use-target-proof";
 import {
 	type BrowserUseAdapterLaneView,
@@ -106,7 +115,9 @@ import {
 	type BrowserUseSharedRun,
 	type BrowserUseTaskIntent,
 	classifyCancellation,
+	revalidateAuthAttestation,
 } from "./browser-use-run-model";
+import { createBrowserUseAuthContract } from "./browser-use-auth";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -130,8 +141,7 @@ import {
 	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
 	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
+	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
 	isAuthTokenSourceReference,
 	readBoundedAuthChildOutput,
 	resolveWarmChromeProfilePath,
@@ -183,6 +193,14 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
+import {
+	type BrowserUseCdpObserverRequest,
+	createBrowserUseCdpObserver,
+} from "./browser-use-cdp-observer";
 import {
 	listOrphanTempFiles,
 	readDurableFile,
@@ -226,10 +244,41 @@ import {
 	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
-import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
+import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
+import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import {
+	applyRunbookDraft,
+	deleteRunbookDraft,
+	parseRunbookDraftDocument,
+	readRunbookSourceCatalog,
+	runbookAuthoringSchema,
+	validateRunbookDraftForSource,
+} from "./browser-use-runbook-authoring";
+import {
+	applyReviewedActionCandidate,
+	type BrowserUseAuthoredReviewedActionRecord,
+	parseReviewedActionCandidate,
+	readReviewedActionSourceState,
+	reviewedActionAuthoringSchema,
+	validateReviewedActionCandidate,
+	verifyAuthoredReviewedActionPromotion,
+} from "./browser-use-reviewed-action-authoring";
+import {
+	activateRunbookGeneration,
+	createSelectedGenerationActionSeam,
+	createSelectedGenerationRunbookSeam,
+	projectRunbookGenerationSynchronization,
+	resolveRetainedRunbookGeneration,
+	resolveSelectedRunbookGeneration,
+	withRunbookGenerationSelectionBarrier,
+} from "./browser-use-runbook-generation";
+import { itemKeySequenceDigest, normalizedInputDigest } from "./browser-use-runbook-actions";
+import {
+	type BrowserUseRunbook,
+	type BrowserUseRunbookCatalogRow,
 	type BrowserUseRunbookInputs,
 	nextRunbookStepAfterExecution,
+	projectRunbookCatalogRow,
 } from "./browser-use-runbook-model";
 import {
 	type BrowserUseGovernedSurface,
@@ -264,6 +313,38 @@ import { renderGuide } from "./browser-use-guide";
 // ---------------------------------------------------------------------------
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
+
+/**
+ * Non-authority inputs admitted by production composition.
+ *
+ * Authority ports stay available only through test helpers. Production may
+ * select its process environment and setup-admitted source checkout, but it
+ * cannot replace credential, approval, native-admission, or identity-proof
+ * owners.
+ */
+export type BrowserUseProductionRuntimeOptions = {
+	/** Process environment consumed as data by production-owned adapters. */
+	env?: Record<string, string | undefined>;
+	/** Setup-admitted source root; null models a packaged installation. */
+	sourceCheckoutRoot?: string | null;
+};
+
+/**
+ * Compose the production runtime without accepting injectable authority.
+ *
+ * @param options - Explicit non-authority production inputs
+ * @returns Runtime backed only by production-owned authority discovery
+ */
+export async function createProductionBrowserUseRuntime(
+	options: BrowserUseProductionRuntimeOptions = {},
+): Promise<BrowserUseRuntime> {
+	return await createProductionBrowserUseRuntimeInternal({
+		...(options.env === undefined ? {} : { env: options.env }),
+		...(options.sourceCheckoutRoot === undefined
+			? {}
+			: { sourceCheckoutRoot: options.sourceCheckoutRoot }),
+	});
+}
 
 export async function runBrowserUseCli(
 	argv: readonly string[],
@@ -455,6 +536,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	lanes: "adapter_lanes",
 	run: "shared_run",
 	runbook: "runbook_catalog",
+	action: "reviewed_action",
 	migration: "migration_status",
 	artifact: "artifact_manifest",
 	repair: "repair_status",
@@ -618,6 +700,26 @@ async function executeCommand(input: {
 		});
 	}
 
+	if (parsed.family === "action" && !parsed.dryRun) {
+		const actionInput: PlatformCommandInput = {
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitReviewedActionFailure(
+				actionInput,
+				runtime.reviewedActionApprovalVerifierIssue.code,
+				runtime.reviewedActionApprovalVerifierIssue.message,
+			);
+		}
+		return runReviewedActionCommand(actionInput);
+	}
+
 	// Browser Runbook family (platform plan U4): list/show project the discovered
 	// runbook catalog and one validated definition; run compiles a runbook and
 	// dispatches it through the agent-browser lane via the shared run-store
@@ -633,8 +735,24 @@ async function executeCommand(input: {
 			caller,
 			durationMs: input.durationMs,
 		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitPlatformStoreFailure(runbookInput, {
+				code: runtime.reviewedActionApprovalVerifierIssue.code,
+				message: runtime.reviewedActionApprovalVerifierIssue.message,
+				actionId: "activate_runbook_catalog",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		if (
+			parsed.command === "runbook-schema" ||
+			parsed.command === "runbook-validate" ||
+			parsed.command === "runbook-apply" ||
+			parsed.command === "runbook-delete"
+		) return runRunbookAuthoringCommand(runbookInput);
 		if (parsed.command === "runbook-list") return runRunbookList(runbookInput);
 		if (parsed.command === "runbook-show") return runRunbookShow(runbookInput);
+		if (parsed.command === "runbook-activate") return runRunbookActivate(runbookInput);
 		return runRunbookRun(runbookInput);
 	}
 
@@ -3395,6 +3513,418 @@ async function recordTaskRunOutcome(
 // plan; this driver seam owns store I/O, handoff reads, and envelope emission.
 // ---------------------------------------------------------------------------
 
+type RunbookAuthoringCommandPayload = {
+	command: string;
+	result: unknown;
+	caller: BrowserUseCallerMetadata;
+};
+
+function emitRunbookAuthoringSuccess(
+	input: PlatformCommandInput,
+	result: unknown,
+): number {
+	const payload: RunbookAuthoringCommandPayload = {
+		command: input.parsed.command,
+		result,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(
+				BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+				input.caller,
+				[`command=${input.parsed.command}`],
+			),
+		);
+		input.stdout.write(`${JSON.stringify(result)}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: createCommandResultData(
+				browserUseContracts[input.parsed.command],
+				payload,
+			),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+function emitRunbookAuthoringFailure(
+	input: PlatformCommandInput,
+	code: string,
+	message: string,
+	data: Record<string, unknown> = {},
+): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${code}: ${safeMessage} (run_id=${input.runId})\n`,
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+				...data,
+			},
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code,
+				message: safeMessage,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability(
+					code.endsWith("_stale") ? "change_input" : "repair_state",
+				),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+async function readRunbookDocumentFile(
+	input: PlatformCommandInput,
+): Promise<{ ok: true; bytes: string } | { ok: false; exitCode: number }> {
+	try {
+		return {
+			ok: true,
+			bytes: await input.runtime.readTextFile(
+				stringField(input.parsed.flagValues["--file"]) ?? "",
+			),
+		};
+	} catch {
+		return {
+			ok: false,
+			exitCode: emitRunbookAuthoringFailure(
+				input,
+				"runbook_document_unreadable",
+				"the Runbook document file could not be read.",
+			),
+		};
+	}
+}
+
+async function runRunbookAuthoringCommand(
+	input: PlatformCommandInput,
+): Promise<number> {
+	if (input.parsed.command === "runbook-schema") {
+		return emitRunbookAuthoringSuccess(input, runbookAuthoringSchema());
+	}
+	const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+	if (input.parsed.command === "runbook-delete") {
+		if (sourceRoot === undefined) {
+			return emitRunbookAuthoringFailure(
+				input,
+				"runbook_source_checkout_required",
+				"packaged runtime cannot mutate private Runbook source; use the setup-owned source checkout front door.",
+			);
+		}
+		const deleted = await deleteRunbookDraft({
+			sourceRoot,
+			serviceId: stringField(input.parsed.flagValues["--service"]) ?? "",
+			flowId: stringField(input.parsed.flagValues["--flow"]) ?? "",
+			...(stringField(input.parsed.flagValues["--expected-record-digest"]) === undefined
+				? {}
+				: {
+						expectedRecordDigest: stringField(
+							input.parsed.flagValues["--expected-record-digest"],
+						) as string,
+					}),
+		});
+		return deleted.ok
+			? emitRunbookAuthoringSuccess(input, deleted)
+			: emitRunbookAuthoringFailure(input, deleted.code, deleted.message, {
+					...(deleted.current_record_digest === undefined
+						? {}
+						: { current_record_digest: deleted.current_record_digest }),
+				});
+	}
+	if (input.parsed.command === "runbook-apply" && sourceRoot === undefined) {
+		return emitRunbookAuthoringFailure(
+			input,
+			"runbook_source_checkout_required",
+			"packaged runtime cannot mutate private Runbook source; use the setup-owned source checkout front door.",
+		);
+	}
+	const loaded = await readRunbookDocumentFile(input);
+	if (!loaded.ok) return loaded.exitCode;
+	if (input.parsed.command === "runbook-validate") {
+		const parsed = parseRunbookDraftDocument(loaded.bytes);
+		if (!parsed.ok) {
+			return emitRunbookAuthoringFailure(input, parsed.code, parsed.message, {
+				issues: parsed.issues,
+				repair: parsed.repair,
+			});
+		}
+		const hasActions = parsed.runbook.steps.some(
+			(step) => step.kind === "action" || step.kind === "iterate",
+		);
+		if (!hasActions) {
+			return emitRunbookAuthoringSuccess(input, {
+				ok: true,
+				record_digest: parsed.record_digest,
+			});
+		}
+		if (sourceRoot === undefined) {
+			return emitRunbookAuthoringFailure(
+				input,
+				"runbook_source_checkout_required",
+				"packaged validation cannot resolve the private Reviewed Action closure; use the setup-owned source checkout front door.",
+			);
+		}
+		const validated = await validateRunbookDraftForSource({
+			sourceRoot,
+			bytes: loaded.bytes,
+			...(input.runtime.reviewedActionApprovalVerifier === undefined
+				? {}
+				: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+		});
+		return validated.ok
+			? emitRunbookAuthoringSuccess(input, {
+					ok: true,
+					record_digest: validated.record_digest,
+				})
+			: emitRunbookAuthoringFailure(input, validated.code, validated.message);
+	}
+	const applied = await applyRunbookDraft({
+		sourceRoot: sourceRoot as string,
+		bytes: loaded.bytes,
+		...(stringField(input.parsed.flagValues["--expected-record-digest"]) === undefined
+			? {}
+			: {
+					expectedRecordDigest: stringField(
+						input.parsed.flagValues["--expected-record-digest"],
+					) as string,
+				}),
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+	});
+	return applied.ok
+		? emitRunbookAuthoringSuccess(input, applied)
+		: emitRunbookAuthoringFailure(input, applied.code, applied.message, {
+				...(applied.current_record_digest === undefined
+					? {}
+					: { current_record_digest: applied.current_record_digest }),
+			});
+}
+
+function owningSourceCheckoutRoot(runtime: BrowserUseRuntime): string | undefined {
+	if (runtime.sourceCheckoutRoot !== undefined) {
+		return runtime.sourceCheckoutRoot === null
+			? undefined
+			: normalize(runtime.sourceCheckoutRoot);
+	}
+	const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+	if (basename(moduleDirectory) !== "src") return undefined;
+	return normalize(join(moduleDirectory, "..", "..", ".."));
+}
+
+async function nonterminalMutationRunIds(
+	deps: RunStoreDeps,
+	_activeGenerationId: string | null,
+): Promise<readonly string[]> {
+	const stat = await deps.fs.lstat(deps.paths.state.runsDir);
+	if (stat === undefined || stat.kind !== "directory") return [];
+	const blockers: string[] = [];
+	for (const runId of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
+		const loaded = await loadSharedRun(deps, runId);
+		if (!loaded.ok) {
+			blockers.push(runId);
+			continue;
+		}
+		if (isTerminalRunState(loaded.run.state)) continue;
+		if (loaded.run.mutation_dispatched) {
+			blockers.push(runId);
+			continue;
+		}
+		const binding = loaded.run.run_execution_binding;
+		if (binding !== undefined) {
+			const retained = await resolveRetainedRunbookGeneration(deps, binding);
+			if (!retained.ok) {
+				blockers.push(runId);
+				continue;
+			}
+			const shown = await createSelectedGenerationRunbookSeam(deps, retained).loadRunbook({
+				serviceId: binding.service_id,
+				flowId: binding.flow_id,
+			});
+			if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+			continue;
+		}
+		const progress = loaded.run.runbook_progress;
+		if (progress === undefined) continue;
+		const shown = await showRunbook(deps.fs, deps.paths.data.root, { serviceId: progress.service_id, flowId: progress.flow_id });
+		if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+	}
+	return blockers.sort();
+}
+
+
+
+function emitReviewedActionSuccess(input: PlatformCommandInput, result: unknown): number {
+	const payload: RunbookAuthoringCommandPayload = { command: input.parsed.command, result, caller: input.caller };
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(platformPlainHeader(BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID, input.caller, [`command=${input.parsed.command}`]));
+		input.stdout.write(`${JSON.stringify(result)}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeSuccessEnvelope({ run_id: input.runId, data: createCommandResultData(browserUseContracts[input.parsed.command], payload) }), { runId: input.runId, durationMs: input.durationMs() });
+	return 0;
+}
+
+function emitReviewedActionFailure(input: PlatformCommandInput, code: string, message: string, exitCode = BINDING_FAIL_CLOSED_EXIT_CODE): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(`browser_use ${code}: ${safeMessage} (run_id=${input.runId})\n`);
+		return exitCode;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeErrorEnvelope({
+		run_id: input.runId, process_exit_code: exitCode,
+		data: { command: input.parsed.command, result_kind: "reviewed_action", caller: input.caller },
+		error: createCliRuntimeError({ run_id: input.runId, code, message: safeMessage, exit_code: exitCode, severity: "error", ...retryabilityForRecoverability(code === "action_replacement_digest_stale" ? "change_input" : "repair_state"), failure_domain: "browser_use" }),
+	}), { runId: input.runId, durationMs: input.durationMs() });
+	return exitCode;
+}
+
+async function readActionCandidateFile(input: PlatformCommandInput): Promise<
+	| { ok: true; candidate: ReturnType<typeof parseReviewedActionCandidate> & { ok: true } }
+	| { ok: false; exitCode: number }
+> {
+	const file = stringField(input.parsed.flagValues["--file"]) ?? "";
+	let raw: string;
+	try { raw = await input.runtime.readTextFile(file); } catch {
+		return { ok: false, exitCode: emitReviewedActionFailure(input, "action_document_unreadable", "the Reviewed Action candidate file could not be read.") };
+	}
+	const parsed = parseReviewedActionCandidate(raw);
+	if (!parsed.ok) return { ok: false, exitCode: emitReviewedActionFailure(input, parsed.code, parsed.message) };
+	return { ok: true, candidate: parsed };
+}
+
+async function runReviewedActionCommand(input: PlatformCommandInput): Promise<number> {
+	if (input.parsed.command === "action-schema") return emitReviewedActionSuccess(input, reviewedActionAuthoringSchema());
+	if (input.parsed.command === "action-status") {
+		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot read private source promotion state; use the setup-owned source checkout front door.");
+		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
+		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
+	}
+	const loaded = await readActionCandidateFile(input);
+	if (!loaded.ok) return loaded.exitCode;
+	if (input.parsed.command === "action-validate") {
+		const validated = validateReviewedActionCandidate(loaded.candidate.candidate);
+		return validated.ok ? emitReviewedActionSuccess(input, validated) : emitReviewedActionFailure(input, validated.issues[0]?.code ?? "action_candidate_invalid", validated.repair);
+	}
+	const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+	if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+	const expectedRecordDigest = stringField(input.parsed.flagValues["--expected-record-digest"]);
+	const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: loaded.candidate.candidate, ...(expectedRecordDigest === undefined ? {} : { expectedRecordDigest }) });
+	return applied.ok ? emitReviewedActionSuccess(input, applied) : emitReviewedActionFailure(input, applied.code, applied.message);
+}
+
+async function runRunbookActivate(input: PlatformCommandInput): Promise<number> {
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	if (repoRoot === undefined) {
+		return emitPlatformStoreFailure(input, {
+			code: "catalog_source_unavailable",
+			message:
+				"packaged runtime cannot mutate or activate the private source catalog; use the setup-owned source checkout front door.",
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	// Validate caller-correctable flags up front so a malformed epoch/digest is a
+	// change_input usage error, not an activation repair_state failure that points
+	// the operator at catalog repair.
+	const rawCatalogDigest = stringField(input.parsed.flagValues["--catalog-digest"]) ?? "";
+	const rawExpectedEpoch = stringField(input.parsed.flagValues["--expected-epoch"]);
+	if (!/^[0-9a-f]{64}$/.test(rawCatalogDigest)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--catalog-digest must be 64 lowercase hex characters (the reviewed whole-catalog digest).", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
+	if (rawExpectedEpoch === undefined || !/^(0|[1-9][0-9]*)$/.test(rawExpectedEpoch)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--expected-epoch must be a non-negative integer.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
+	const catalog = await loadPrivateRunbookCatalogFromGit({
+		repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined ? {} : { promotionVerifier: { verify: async (verification) => {
+			const result = verifyAuthoredReviewedActionPromotion({ commit: verification.commit, record: verification.record as BrowserUseAuthoredReviewedActionRecord, assetBytes: verification.assetBytes, promotionHistory: verification.promotionHistory, verifier: input.runtime.reviewedActionApprovalVerifier as NonNullable<BrowserUseRuntime["reviewedActionApprovalVerifier"]> });
+			return result.ok ? { ok: true as const } : result;
+		} } }),
+	});
+	if (!catalog.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: catalog.code,
+			message: catalog.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const activated = await activateRunbookGeneration({
+		...store.deps,
+		nonterminalMutationRuns: (activeGenerationId) =>
+			nonterminalMutationRunIds(store.deps, activeGenerationId),
+	}, {
+		catalog: catalog.catalog,
+		reviewedCatalogDigest: rawCatalogDigest,
+		expectedEpoch: Number.parseInt(rawExpectedEpoch, 10),
+	});
+	if (!activated.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: activated.code,
+			message: activated.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID, input.caller, [
+				`changed=${activated.changed}`,
+				`generation=${activated.generation_id}`,
+				`catalog_digest=${activated.catalog_digest}`,
+				`epoch=${activated.epoch}`,
+				`previous=${activated.previous_generation_id ?? "none"}`,
+			]),
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+				schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
+				changed: activated.changed,
+				generation_id: activated.generation_id,
+				previous_generation_id: activated.previous_generation_id,
+				catalog_digest: activated.catalog_digest,
+				epoch: activated.epoch,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
 /**
  * `runbook list` (R35). Projects every discovered valid runbook as a redacted
  * catalog row under the runbook-catalog contract. Discovery is read-only, so
@@ -3406,7 +3936,49 @@ async function recordTaskRunOutcome(
 async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 	const store = await openPlatformStore(input);
 	if (!store.ok) return store.exitCode;
-	const rows = await listRunbooks(store.deps.fs, store.deps.paths.data.root);
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	const source = repoRoot === undefined ? undefined : await readRunbookSourceCatalog({
+		sourceRoot: repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+	});
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const legacyRows = !activeResult.ok && activeResult.code === "pre_cutover_unavailable" ? await listRunbooks(store.deps.fs, store.deps.paths.data.root) : [];
+	const separatedIds = new Set(source?.ok === true ? source.catalog.separated.map((entry) => entry.record_id) : []);
+	const sourceRecords = source?.ok === true ? Object.fromEntries(source.catalog.records.flatMap((record) => record.record_digest === null || separatedIds.has(record.id) ? [] : [[record.id, record.record_digest]])) : {};
+	const activeRecords = active === undefined ? {} : Object.fromEntries(active.manifest.runbooks.map((record) => [`${record.service_id}/${record.flow_id}`, record.record_digest]));
+	const synchronizationBase = projectRunbookGenerationSynchronization(
+		source?.ok === true ? { available: true, catalog_digest: source.catalog.catalog_digest, records: sourceRecords } : { available: false },
+		active === undefined ? { available: false } : { available: true, catalog_digest: active.catalog_digest, generation_id: active.generation_id, epoch: active.epoch, records: activeRecords },
+	);
+	const synchronization =
+		source?.ok === true && source.catalog.activation_blockers.length > 0
+			? { ...synchronizationBase, catalog_status: "activation-required" as const }
+			: synchronizationBase;
+	const rowById = new Map<string, BrowserUseRunbookCatalogRow & { record_digest: string }>();
+	if (source?.ok === true) for (const record of source.catalog.records) {
+		if (record.runbook !== undefined && record.record_digest !== null) rowById.set(record.id, { ...projectRunbookCatalogRow(record.runbook, record.activation_blocker === undefined ? "healthy" : "stale"), record_digest: record.record_digest });
+	}
+	if (active !== undefined) {
+		const seam = createSelectedGenerationRunbookSeam(store.deps, active);
+		for (const record of active.manifest.runbooks) {
+			const id = `${record.service_id}/${record.flow_id}`;
+			if (rowById.has(id)) continue;
+			const loaded = await seam.loadRunbook({ serviceId: record.service_id, flowId: record.flow_id });
+			if (!loaded.ok) return emitPlatformStoreFailure(input, runbookFailureOf("failure" in loaded ? loaded.failure.code : "runbook_record_corrupt", "failure" in loaded ? loaded.failure.message : "active generation Runbook is missing."));
+			rowById.set(id, { ...projectRunbookCatalogRow(loaded.runbook, loaded.health), record_digest: record.record_digest });
+		}
+	}
+	for (const row of legacyRows) {
+		const id = `${row.service_id}/${row.flow_id}`;
+		if (!rowById.has(id)) rowById.set(id, { ...row, record_digest: createHash("sha256").update(JSON.stringify(row)).digest("hex") });
+	}
+	const statusById = new Map(synchronization.records.map((record) => [record.id, record.status]));
+	const rows = [...rowById.entries()].map(([id, row]) => ({ ...row, synchronization_status: separatedIds.has(id) ? "separated" : statusById.get(id) ?? "new-pending-activation" })).sort((left, right) => `${left.service_id}/${left.flow_id}`.localeCompare(`${right.service_id}/${right.flow_id}`));
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID, input.caller, [
@@ -3415,8 +3987,14 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 		);
 		for (const row of rows) {
 			input.stdout.write(
-				`service=${row.service_id} flow=${row.flow_id} health=${row.health} ${row.summary}\n`,
+				`service=${row.service_id} flow=${row.flow_id} health=${row.health} sync=${row.synchronization_status} ${row.summary}\n`,
 			);
+		}
+		if (source?.ok === true) for (const blocker of source.catalog.activation_blockers) {
+			input.stdout.write(`blocker=${blocker.id} code=${blocker.code}\n`);
+		}
+		if (source?.ok === true) for (const separated of source.catalog.separated) {
+			input.stdout.write(`separated=${separated.record_id} code=${separated.code}\n`);
 		}
 		return 0;
 	}
@@ -3426,9 +4004,14 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
 				runbook_count: rows.length,
 				runbooks: rows,
+				activation_blockers:
+					source?.ok === true ? source.catalog.activation_blockers : [],
+				separated: source?.ok === true ? source.catalog.separated : [],
+				...synchronization,
+				source_view: source?.ok === true ? "available" : "source_unavailable",
 				caller: input.caller,
 			},
 		}),
@@ -3500,16 +4083,43 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 	const serviceId = stringField(input.parsed.flagValues["--service"]) ?? "";
 	const flowId = stringField(input.parsed.flagValues["--flow"]) ?? "";
-	const shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, {
-		serviceId,
-		flowId,
+	const id = `${serviceId}/${flowId}`;
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	const source = repoRoot === undefined ? undefined : await readRunbookSourceCatalog({
+		sourceRoot: repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
 	});
-	if (!shown.ok) {
-		return emitPlatformStoreFailure(
-			input,
-			runbookFailureOf(shown.failure.code, shown.failure.message),
-		);
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const sourceRecord = source?.ok === true ? source.catalog.records.find((record) => record.id === id) : undefined;
+	const sourceSeparation = source?.ok === true ? source.catalog.separated.find((entry) => entry.record_id === id) : undefined;
+	const activeRecord = active?.manifest.runbooks.find((record) => record.service_id === serviceId && record.flow_id === flowId);
+	if (sourceRecord?.activation_blocker !== undefined && sourceSeparation === undefined) {
+		return emitPlatformStoreFailure(input, {
+			code: sourceRecord.activation_blocker.code,
+			message: sourceRecord.activation_blocker.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
 	}
+	let shown: { ok: true; runbook: BrowserUseRunbook; health: "healthy" | "degrading" | "stale" } | { ok: false; failure: { code: string; message: string } };
+	if (sourceRecord?.runbook !== undefined) shown = { ok: true, runbook: sourceRecord.runbook, health: sourceSeparation === undefined ? "healthy" : "stale" };
+	else if (active !== undefined && activeRecord !== undefined) {
+		const loaded = await createSelectedGenerationRunbookSeam(store.deps, active).loadRunbook({ serviceId, flowId });
+		shown = loaded.ok ? loaded : { ok: false, failure: "failure" in loaded ? loaded.failure : { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
+	} else if (active === undefined && !activeResult.ok && activeResult.code === "pre_cutover_unavailable") shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, { serviceId, flowId });
+	else shown = { ok: false, failure: { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
+	if (!shown.ok) {
+		return emitPlatformStoreFailure(input, runbookFailureOf(shown.failure.code, shown.failure.message));
+	}
+	const sourceDigest = source?.ok === true ? source.catalog.catalog_digest : null;
+	const recordStatus = sourceSeparation !== undefined ? "separated" : sourceRecord !== undefined && activeRecord?.record_digest === sourceRecord.record_digest ? "in-sync" : sourceRecord !== undefined ? "new-pending-activation" : activeRecord !== undefined ? "deletion-pending-activation" : "new-pending-activation";
+	const catalogStatus = source === undefined ? "source-unavailable" : active?.catalog_digest === sourceDigest ? "in-sync" : "activation-required";
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(
@@ -3519,11 +4129,13 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 					`service=${shown.runbook.service_id}`,
 					`flow=${shown.runbook.flow_id}`,
 					`health=${shown.health}`,
+					`catalog_sync=${catalogStatus}`,
+					`record_sync=${recordStatus}`,
 				],
 			),
 		);
 		input.stdout.write(
-			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}\n`,
+			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}${sourceSeparation === undefined ? "" : ` separated=${sourceSeparation.code}`}\n`,
 		);
 		return 0;
 	}
@@ -3533,9 +4145,18 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 				runbook: shown.runbook,
 				health: shown.health,
+				record_digest: sourceRecord?.record_digest ?? activeRecord?.record_digest ?? null,
+				synchronization_status: recordStatus,
+				separated: sourceSeparation ?? null,
+				catalog_status: catalogStatus,
+				source_catalog_digest: sourceDigest,
+				active_catalog_digest: active?.catalog_digest ?? null,
+				active_generation_id: active?.generation_id ?? null,
+				active_epoch: active?.epoch ?? null,
+				source_view: source === undefined ? "source_unavailable" : "available",
 				caller: input.caller,
 			},
 		}),
@@ -3636,12 +4257,72 @@ function sanitizeInputPairForError(pair: string): string {
 }
 
 type CloseableTargetTransport = {
-	transport: BrowserUseDevToolsTransport;
+	transport: {
+		request(
+			request:
+				| BrowserUseDevToolsRequest
+				| BrowserUseCdpObserverRequest
+				| {
+						method: "Page.navigate";
+						sessionId: string;
+						params: { url: string };
+					  },
+		): Promise<unknown>;
+	};
 	close(): void;
 };
 
+async function navigateRunbookAuthTarget(
+	transport: CloseableTargetTransport["transport"],
+	input: { target_id: string; url: string },
+): Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }> {
+	let sessionId: string | undefined;
+	try {
+		const attached = await transport.request({
+			method: "Target.attachToTarget",
+			params: { targetId: input.target_id, flatten: true },
+		});
+		sessionId =
+			typeof attached === "object" &&
+			attached !== null &&
+			"sessionId" in attached &&
+			typeof attached.sessionId === "string"
+				? attached.sessionId
+				: undefined;
+		if (sessionId === undefined) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		await transport.request({
+			method: "Page.navigate",
+			sessionId,
+			params: { url: input.url },
+		});
+		return { ok: true };
+	} catch {
+		return { ok: false, cause: "target-proof-invalid" };
+	} finally {
+		if (sessionId !== undefined) {
+			try {
+				await transport.request({
+					method: "Target.detachFromTarget",
+					params: { sessionId },
+				});
+			} catch {
+				// Navigation already dispatched once. Later proof fails closed on drift.
+			}
+		}
+	}
+}
+
 type RunbookAuthDeliveryBuilderDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	resolveApprovedBinding?(input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}): Promise<BrowserUseItemBinding | null>;
 	createTargetTransport(
 		handoff: AgentBrowserVerifiedHandoff,
 	): CloseableTargetTransport;
@@ -3697,6 +4378,44 @@ function fieldMethod(
 	return field === "otp-current" ? "otp" : "password";
 }
 
+function runbookLoginPathOf(expectedTargetUrl: string): string | null {
+	try {
+		return new URL(expectedTargetUrl).pathname;
+	} catch {
+		return null;
+	}
+}
+
+async function prepareApprovedRunbookBinding(input: {
+	provider: BrowserUseAuthProvider;
+	deps: RunbookAuthDeliveryBuilderDeps;
+	request: Parameters<BrowserUseRunbookAuthDelivery>[0];
+	bindingRef: string;
+	field: Parameters<BrowserUseRunbookAuthDelivery>[0]["confidentialFields"][number];
+	loginPath: string | null;
+}) {
+	const approvedBinding =
+		(await input.deps.resolveApprovedBinding?.({
+			binding_ref: input.bindingRef,
+			service_id: input.request.serviceId,
+			auth_context: "interactive-login",
+			environment: input.request.handoff.environment.name,
+			profile: input.request.handoff.environment.profile,
+		})) ?? null;
+	return await input.provider.prepareSecretFree({
+		service_id: input.request.serviceId,
+		auth_context: "interactive-login",
+		target_origins: input.request.allowedOrigins,
+		login_path: input.loginPath,
+		method: fieldMethod(input.field.credentialField),
+		binding: approvedBinding,
+		candidate_hint: {
+			hint_item_id: input.bindingRef,
+			legacy_vault_name: null,
+		},
+	});
+}
+
 function environmentDeliveryHook(input: {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	handoff: AgentBrowserVerifiedHandoff;
@@ -3745,6 +4464,46 @@ function environmentDeliveryHook(input: {
 				: delivered?.external_effect_possible === true
 					? "helper-crash"
 					: "helper-unavailable",
+			field_cleared: delivered?.field_cleared ?? false,
+		};
+	};
+}
+
+function environmentLoginDeliveryHook(input: {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	expectedTargetUrl: string;
+}): BrowserUseDeliveryHook | undefined {
+	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
+	if (typeof port.redeemCredentialField !== "function") return undefined;
+	return async ({ handle, target }) => {
+		const field = (target as Partial<BrowserUseMintedVerifiedTarget>).field;
+		if (field === undefined) {
+			return { ok: false, reason: "target-drift", field_cleared: false };
+		}
+		const delivered = await port.redeemCredentialField?.({
+			handle,
+			target_digest: target.target_proof_digest,
+			ws_url: input.handoff.endpoint.ws,
+			target_url: input.expectedTargetUrl,
+			target_origin: target.frame_origin,
+			field: {
+				role: field.role,
+				accessible_name: field.accessible_name,
+			},
+		});
+		if (delivered?.ok) return delivered;
+		const rejection = delivered?.rejection.code;
+		return {
+			ok: false,
+			reason:
+				rejection === "target-digest-mismatch" ||
+				rejection === "origin-mismatch" ||
+				rejection === "target-proof-invalid"
+					? "target-drift"
+					: delivered?.external_effect_possible === true
+						? "helper-crash"
+						: "helper-unavailable",
 			field_cleared: delivered?.field_cleared ?? false,
 		};
 	};
@@ -3823,7 +4582,9 @@ function createWebSocketTargetTransport(
 	socket.addEventListener("close", rejectPending);
 	return {
 		transport: {
-			async request(request: BrowserUseDevToolsRequest): Promise<unknown> {
+			async request(
+				request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+			): Promise<unknown> {
 				await opened;
 				if (closed) throw new Error("DevTools transport is closed.");
 				const id = nextId;
@@ -3878,6 +4639,7 @@ function buildRunbookAuthDelivery(
 				]),
 			);
 			const preparedBindings = [];
+			const loginPath = runbookLoginPathOf(input.expectedTargetUrl);
 			for (const slug of input.pendingItemBindings) {
 				const field = fieldBySlug.get(slug);
 				if (field === undefined) {
@@ -3887,24 +4649,13 @@ function buildRunbookAuthDelivery(
 							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: the runbook binding has no confidential field plan.",
 					};
 				}
-				const loginPath = (() => {
-					try {
-						return new URL(input.expectedTargetUrl).pathname;
-					} catch {
-						return null;
-					}
-				})();
-				const prepared = await provider.prepareSecretFree({
-					service_id: input.serviceId,
-					auth_context: "interactive-login",
-					target_origins: input.allowedOrigins,
-					login_path: loginPath,
-					method: fieldMethod(field.credentialField),
-					binding: null,
-					candidate_hint: {
-						hint_item_id: slug,
-						legacy_vault_name: null,
-					},
+				const prepared = await prepareApprovedRunbookBinding({
+					provider,
+					deps,
+					request: input,
+					bindingRef: slug,
+					field,
+					loginPath,
 				});
 				if (!prepared.ok) {
 					return { ok: false, message: preparationRefusalMessage(prepared) };
@@ -4053,7 +4804,10 @@ function buildRunbookAuthDelivery(
  * @param input - Store-backed command input
  * @returns Process exit code
  */
-async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+async function runRunbookRun(
+	input: PlatformCommandInput,
+	generationConflictRetries = 1,
+): Promise<number> {
 	const flags = input.parsed.flagValues;
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
@@ -4185,6 +4939,17 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				recoverability: "none",
 			});
 		}
+		if (loaded.run.mutation_dispatched) {
+			return emitTaskRunFailure(input, loaded.run.run_id, {
+				code: "task_run_effect_unknown",
+				message:
+					"the prior process ended after business write-ahead; inspect outcome before any redispatch.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { external_effect: "unknown" },
+			});
+		}
 		const check = checkSameLaneResumeForTaskRun(
 			loaded.run,
 			"agent-browser",
@@ -4211,6 +4976,15 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		resumeFromStep = runbookResumeCursorOf(loaded.run);
 	}
 
+	const generationResolution = run?.run_execution_binding !== undefined
+		? await resolveRetainedRunbookGeneration(store.deps, run.run_execution_binding)
+		: await resolveSelectedRunbookGeneration(store.deps);
+	const selectedGeneration = generationResolution.ok ? generationResolution : undefined;
+	if (!generationResolution.ok && generationResolution.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: generationResolution.code, message: generationResolution.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	if (run !== undefined && run.run_execution_binding === undefined && selectedGeneration !== undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the retained run has no immutable generation binding and cannot acquire current authority during resume.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	if (run?.run_execution_binding?.normalized_input_digest !== undefined && run.run_execution_binding.normalized_input_digest !== normalizedInputDigest(runbookInputs)) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the resumed input does not match the immutable run execution binding.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+
 	const prepared = await prepareRunbookExecution(
 		store.deps.fs,
 		store.deps.paths.data.root,
@@ -4219,7 +4993,14 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			flowId,
 			inputs: runbookInputs,
 			resumeFromStep,
-			actionSeam: createBrowserUseShippedActionSeam(store.deps.fs),
+			...(selectedGeneration !== undefined ? {
+				actionSeam: createSelectedGenerationActionSeam(
+					store.deps,
+					selectedGeneration,
+					input.runtime.reviewedActionApprovalVerifier,
+				),
+			} : {}),
+			...(selectedGeneration !== undefined ? { runbookSeam: createSelectedGenerationRunbookSeam(store.deps, selectedGeneration) } : {}),
 		},
 	);
 	if (!prepared.ok) {
@@ -4244,6 +5025,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		);
 	}
 	const plan = prepared.plan;
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	// generation manifest holds no record for this plan, generation and plan
+	// disagree (already inconsistent); fail closed rather than persist an empty,
+	// unverifiable digest. (Must sit after `plan` is declared.)
+	const boundRunbookDigest = selectedGeneration?.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest;
+	if (selectedGeneration !== undefined && boundRunbookDigest === undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the selected generation has no record for this Runbook; the generation and plan disagree.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (
 		run?.runbook_progress !== undefined &&
 		(run.runbook_progress.service_id !== plan.service_id ||
@@ -4258,6 +5045,20 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			actionId: "inspect_task_run_result",
 			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 			recoverability: "repair_state",
+		});
+	}
+	if (
+		plan.auth_context_ref !== undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined
+	) {
+		return emitTaskRunFailure(input, run?.run_id ?? handoff.runId, {
+			code: "human-identity-attestation-required",
+			message:
+				"runbook authentication requires an approved fresh identity-proof owner before any browser dispatch.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: { external_effect: "none" },
 		});
 	}
 
@@ -4392,7 +5193,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		binding_id: targetResolution.binding.target_candidate_id,
 	} as const;
 	if (run === undefined) {
-		const created = await createSharedRun(store.deps, {
+		const create = async () => await createSharedRun(store.deps, {
 			run_id: handoff.runId,
 			state: "running",
 			task_intent: "runbook-execution",
@@ -4404,10 +5205,37 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff_evidence_id: handoff.handoffEvidenceId,
 			runbook_target_binding: durableTargetBinding,
 			runbook_progress: progress,
+			...(selectedGeneration !== undefined ? {
+				run_execution_binding: {
+					schema_version: "1" as const,
+					generation_id: selectedGeneration.generation_id,
+					activation_epoch: selectedGeneration.epoch,
+					service_id: plan.service_id,
+					flow_id: plan.flow_id,
+					runbook_version: plan.version,
+					runbook_digest: boundRunbookDigest ?? "",
+					action_registry_digest: selectedGeneration.action_registry_digest,
+					normalized_input_digest: normalizedInputDigest(runbookInputs),
+					item_key_digest: itemKeySequenceDigest([]),
+					target_scope: plan.allowed_origins[0] ?? "",
+					postcondition: { id: `${plan.service_id}/${plan.flow_id}`, summary: "Runbook completion postcondition." },
+				},
+			} : {}),
 			mutation_dispatched: false,
 			artifacts: [],
 		});
+		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
+			// Target preparation is read-only. If activation wins before the fresh
+			// run commits its immutable binding, restart the public command once and
+			// prepare wholly against the newly selected manifest + epoch. Never carry
+			// the prior plan, target proof, or generation facts into the retry.
+			if (
+				created.code === "activation_epoch_conflict" &&
+				generationConflictRetries > 0
+			) {
+				return await runRunbookRun(input, generationConflictRetries - 1);
+			}
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(created.code, created.message),
@@ -4484,6 +5312,183 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					attestationByDigest: attestationByDigestFrom(store.deps),
 				})
 			: undefined;
+	const authExpectedTargetUrl =
+		plan.auth_context_ref !== undefined &&
+		targetResolution.target_url === "about:blank" &&
+		plan.steps[0]?.kind === "open"
+			? plan.steps[0].url
+			: targetResolution.target_url;
+	let executionExpectedTargetUrl = targetResolution.target_url;
+
+	if (plan.auth_context_ref !== undefined) {
+		if (authProvider === undefined || tokenRetrieval === undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
+				{
+					kind: "blocked",
+					state: "awaiting-auth",
+					continuation: {
+						next_action_id: "enroll-browser-automation-token",
+						summary: "Enroll or repair the Browser Automation service-account token.",
+					},
+					mutationDispatched: false,
+					failure: {
+						code: "runbook_auth_capability_absent",
+						message: "runbook authentication requires the native Token Retrieval capability.",
+						actionId: "inspect_task_run_result",
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "repair_state",
+					},
+				},
+				{ runbookNextStep: resumeFromStep, heldClaim: dispatchClaim },
+			);
+		}
+		const authTransport =
+			input.runtime.runbookAuthTransport?.() ??
+			createWebSocketTargetTransport(
+				rawHandoffData as AgentBrowserVerifiedHandoff,
+			);
+		try {
+			const authTarget = await resolveBrowserUseCdpTargetIdentity(
+				authTransport.transport,
+				{
+					expected_url: targetResolution.target_url,
+					allowed_origins: plan.allowed_origins,
+				},
+			);
+			if (!authTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						authTarget.cause,
+						"the adapter-selected page could not be resolved to one browser-level CDP target.",
+					),
+				);
+			}
+			const deliver = environmentLoginDeliveryHook({
+				tokenRetrieval,
+				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+				expectedTargetUrl: authExpectedTargetUrl,
+			});
+			if (deliver === undefined) {
+				return emitPlatformStoreFailure(input, {
+					code: "runbook_auth_delivery_unavailable",
+					message: "the native credential lane cannot redeem a generic login field.",
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			const authenticated = await runBrowserUseRunbookAuth(
+				{
+					store: store.deps,
+					provider: authProvider,
+					implementation_integrity_key: "agent-browser:verified-handoff-v2",
+					login: {
+						observer: createBrowserUseCdpObserver(authTransport.transport),
+						proveTarget: async (proofInput) =>
+							await mintBrowserUseVerifiedTarget(authTransport.transport, proofInput),
+						tokenRetrieval,
+						deliver,
+						...(input.runtime.runbookAuthenticatedStateProof !== undefined
+							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
+							: {}),
+					},
+					navigateToDeclaredTarget: async (navigation) =>
+						await navigateRunbookAuthTarget(
+							authTransport.transport,
+							navigation,
+						),
+				},
+				{
+					run,
+					dispatch_claim: dispatchClaim,
+					service_id: plan.service_id,
+					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
+					allowed_origins: plan.allowed_origins,
+					expected_url: authExpectedTargetUrl,
+					observed_url: targetResolution.target_url,
+					target_id: authTarget.target.target_id,
+				},
+			);
+			if (!authenticated.ok) {
+				if ("blocked" in authenticated) {
+					return emitSharedRunSuccess({
+						command: input,
+						run: authenticated.run,
+						continuationId: authenticated.blocked.continuation.next_action_id,
+						dataExtra: { selected_lane: "agent-browser", external_effect: "none" },
+					});
+				}
+				return emitPlatformStoreFailure(
+					input,
+					platformStoreFailureOf(
+						authenticated.failure.code,
+						authenticated.failure.message,
+					),
+				);
+			}
+			run = authenticated.run;
+			const attestation = await revalidateAuthAttestation(
+				run,
+				{
+					at_epoch_ms: input.runtime.now(),
+					adapter_id: "agent-browser",
+					handoff_evidence_id: handoff.handoffEvidenceId,
+				},
+				createBrowserUseAuthContract({
+					attestationByDigest: attestationByDigestFrom(store.deps),
+				}),
+			);
+			if (!attestation.valid) {
+				return emitPlatformStoreFailure(input, {
+					code: attestation.code,
+					message: attestation.message,
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			const postAuthTarget = await resolveAgentBrowserTaskTarget(
+				{ runCommand: input.runtime.runCommand },
+				{
+					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+					run_id: run.run_id,
+					allowed_origins: plan.allowed_origins,
+					steps: plan.steps,
+					target: {
+						kind: "exact",
+						tab_id: targetResolution.target_tab_id,
+						target_envelope_id: targetEnvelopeId,
+					},
+				},
+			);
+			if (!postAuthTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(postAuthTarget.code, postAuthTarget.message),
+				);
+			}
+			if (
+				postAuthTarget.binding.target_candidate_id !==
+				targetResolution.binding.target_candidate_id
+			) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						"agent_browser_target_moved",
+						"the authenticated target no longer matches the runbook target binding.",
+					),
+				);
+			}
+			executionExpectedTargetUrl = postAuthTarget.target_url;
+		} finally {
+			authTransport.close();
+		}
+	}
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;
@@ -4541,7 +5546,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
 			runId: run.run_id,
 			targetTabId: targetResolution.target_tab_id,
-			expectedTargetUrl: targetResolution.target_url,
+			expectedTargetUrl: executionExpectedTargetUrl,
 		},
 	);
 	if (mutationMarkerFailure !== undefined) {
@@ -6316,6 +7321,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 			return "repair-vault-grant";
 		case "revoked-binding":
 			return "repair-item-binding";
+		case "binding-approval-required":
 		case "ambiguous-binding-selection":
 			return "request-binding-selection-grant";
 		default:
@@ -6683,9 +7689,6 @@ export {
 } from "./browser-use-transport";
 export {
 	type BrowserUseRuntime,
-	type BrowserUseSecuritySeam,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {

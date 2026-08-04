@@ -246,15 +246,26 @@ describe.skipIf(!DARWIN)("auth doctor real process boundary", () => {
 		async () => {
 			const fixture = scratch("cold");
 			const dist = join(fixture.root, "dist");
-			const build = await Bun.build({
-				entrypoints: [BROWSER_USE_CLI],
-				outdir: dist,
-				target: "bun",
-				splitting: false,
-				minify: false,
-				external: ["@side-quest/browser-connect/cli"],
-			});
-			expect(build.success).toBe(true);
+			// Build in a subprocess, not in-process Bun.build: a sibling test that
+			// imports @side-quest/cli-command-facade/testing loads that test-only
+			// module into this process's registry, which then poisons an in-process
+			// Bun.build resolution of the same package's siblings. A fresh `bun build`
+			// process has a clean registry.
+			const build = spawnSync(
+				process.execPath,
+				[
+					"build",
+					BROWSER_USE_CLI,
+					"--target",
+					"bun",
+					"--outdir",
+					dist,
+					"--external",
+					"@side-quest/browser-connect/cli",
+				],
+				{ encoding: "utf8" },
+			);
+			expect(build.status).toBe(0);
 			const coldCli = join(dist, "browser-use.js");
 			expect(existsSync(join(dist, "bin", "browser-use-op-supervisor"))).toBe(
 				false,

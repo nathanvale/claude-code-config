@@ -31,7 +31,7 @@ import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
 // Item Binding + Import Candidate model seam (auth U3a PR1, ADR 0029 SD1-SD6;
 // R10, R11, R13). Proves: legacy data proposes and never binds (hints rank,
 // never authorize; legacy origins become grant-requiring proposals), the
-// single-owner match policy binds only on exactly one live-evidence match,
+// single-owner match policy always requires approval for live-evidence matches,
 // candidate screening refuses secret-positive input without echoing bytes,
 // stale bindings sweep to the one revoked-binding repair continuation, and
 // the passkey/user-presence lane is unrepresentable as a binding method.
@@ -100,6 +100,43 @@ function baseMatchInput(
 		hint: null,
 		...overrides,
 	};
+}
+
+function expectApprovalRequired(result: ReturnType<typeof matchItemBinding>) {
+	expect(result.kind).toBe("binding-approval-required");
+	if (result.kind !== "binding-approval-required") {
+		throw new Error("expected binding approval to be required");
+	}
+	expect(result.blocked_cause).toBe("binding-approval-required");
+	expect(result.continuation).toEqual(
+		BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["binding-approval-required"]
+			.continuation,
+	);
+	return result;
+}
+
+function expectImportedOriginProposals(
+	result: ReturnType<typeof importCandidates>[number] | undefined,
+	origins: readonly string[],
+) {
+	expect(result?.ok).toBe(true);
+	const imported = result as Extract<
+		ReturnType<typeof importCandidates>[number],
+		{ ok: true }
+	>;
+	expect(imported.disposition.kind).toBe("binding-approval-required");
+	const disposition = imported.disposition as Extract<
+		typeof imported.disposition,
+		{ kind: "binding-approval-required" }
+	>;
+	expect(disposition.origin_proposals).toEqual(
+		origins.map((origin) => ({
+			origin,
+			provenance: "legacy-import",
+			requires_grant: true,
+		})),
+	);
+	return disposition;
 }
 
 describe("secret-shape guard (D3)", () => {
@@ -217,7 +254,7 @@ describe("shape validators (fail-closed Issue[])", () => {
 		expect(JSON.stringify(issues)).not.toContain("op://");
 	});
 
-	test("flag-shaped evidence ids never admit; evidence ids reach op argv via minted bindings", () => {
+	test("flag-shaped evidence ids never admit; approved ids later reach op argv", () => {
 		const flagged = validateVaultItemEvidenceShape(
 			baseEvidence({ item_id: "--reveal" }),
 		);
@@ -385,52 +422,44 @@ describe("candidate screening (SD3, SD5)", () => {
 });
 
 describe("match policy (single owner; SD1, SD6, R10)", () => {
-	test("exactly one live match binds deterministically from live evidence only", () => {
+	test("exactly one live match requires approval and never mints a binding", () => {
 		const item = baseEvidence({
 			origins: [PORTAL_ORIGIN, "https://sso.example.com"],
 		});
-		const result = matchItemBinding(baseMatchInput({ items: [item] }));
-		expect(result.kind).toBe("bound");
-		if (result.kind === "bound") {
-			expect(result.binding).toEqual({
-				service_id: "oncore",
-				auth_context: "interactive-login",
-				allowed_origins: [PORTAL_ORIGIN, "https://sso.example.com"],
-				allowed_login_paths: ["/login"],
-				vault_id: "vault-1",
-				item_id: "item-1",
-				allowed_auth_methods: ["password", "otp"],
-				binding_revision: 1,
-			});
-			expect(validateItemBindingShape(result.binding)).toEqual([]);
-		}
+		const result = expectApprovalRequired(
+			matchItemBinding(baseMatchInput({ items: [item] })),
+		);
+		expect(result.selection).toEqual([
+				{
+					item_id: "item-1",
+					rank: 1,
+					hinted: false,
+					matched_origin: PORTAL_ORIGIN,
+				},
+		]);
+		expect(JSON.stringify(result)).not.toContain('"binding"');
+		expect(JSON.stringify(result)).not.toContain('"service_id"');
+		expect(JSON.stringify(result)).not.toContain('"auth_context"');
+		expect(JSON.stringify(result)).not.toContain("https://sso.example.com");
 	});
 
 	test("the hint never breaks a tie (SD1)", () => {
-		const result = matchItemBinding(
-			baseMatchInput({
+		const result = expectApprovalRequired(
+			matchItemBinding(baseMatchInput({
 				items: [baseEvidence(), baseEvidence({ item_id: "item-2" })],
 				hint: { hint_item_id: "item-1", legacy_vault_name: null },
-			}),
+			})),
 		);
-		expect(result.kind).toBe("ambiguous-selection");
-		if (result.kind === "ambiguous-selection") {
-			expect(result.blocked_cause).toBe("ambiguous-binding-selection");
-			expect(result.continuation).toEqual(
-				BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["ambiguous-binding-selection"]
-					.continuation,
-			);
-			expect(result.continuation.next_action_id).toBe(
-				"request-binding-selection-grant",
-			);
-			expect(result.selection[0]).toEqual({
+		expect(result.continuation.next_action_id).toBe(
+			"request-binding-selection-grant",
+		);
+		expect(result.selection[0]).toEqual({
 				item_id: "item-1",
 				rank: 1,
 				hinted: true,
 				matched_origin: PORTAL_ORIGIN,
-			});
-			expect(result.selection).toHaveLength(2);
-		}
+		});
+		expect(result.selection).toHaveLength(2);
 	});
 
 	test("live evidence overrides a contradicting hint", () => {
@@ -440,9 +469,10 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 				hint: { hint_item_id: "item-legacy", legacy_vault_name: null },
 			}),
 		);
-		expect(result.kind).toBe("bound");
-		if (result.kind === "bound") {
-			expect(result.binding.item_id).toBe("item-live");
+		expect(result.kind).toBe("binding-approval-required");
+		if (result.kind === "binding-approval-required") {
+			expect(result.selection[0]?.item_id).toBe("item-live");
+			expect(result.selection[0]?.hinted).toBe(false);
 		}
 	});
 
@@ -467,18 +497,17 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 
 	test("a mismatching legacy vault name is display-only when the item lives in the token vault (SD6)", () => {
 		// The hint's legacy_vault_name contradicts live reality, but the item
-		// IS in the token-scoped vault: it binds normally — the mismatch lives
-		// in the dead hint, never in eligibility.
+		// IS in the token-scoped vault: it remains eligible for approval — the
+		// mismatch lives in the dead hint, never in eligibility.
 		const result = matchItemBinding(
 			baseMatchInput({
 				items: [baseEvidence()],
 				hint: { hint_item_id: null, legacy_vault_name: "Old Personal" },
 			}),
 		);
-		expect(result.kind).toBe("bound");
-		if (result.kind === "bound") {
-			expect(result.binding.item_id).toBe("item-1");
-			expect(result.binding.vault_id).toBe("vault-1");
+		expect(result.kind).toBe("binding-approval-required");
+		if (result.kind === "binding-approval-required") {
+			expect(result.selection[0]?.item_id).toBe("item-1");
 		}
 	});
 
@@ -519,8 +548,8 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 				],
 			}),
 		);
-		expect(result.kind).toBe("ambiguous-selection");
-		if (result.kind === "ambiguous-selection") {
+		expect(result.kind).toBe("binding-approval-required");
+		if (result.kind === "binding-approval-required") {
 			expect(result.selection.map((s) => s.item_id)).toEqual([
 				"item-b",
 				"item-a",
@@ -549,8 +578,8 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 		});
 		const inputBefore = structuredClone(input);
 		const result = matchItemBinding(input);
-		expect(result.kind).toBe("ambiguous-selection");
-		if (result.kind === "ambiguous-selection") {
+		expect(result.kind).toBe("binding-approval-required");
+		if (result.kind === "binding-approval-required") {
 			result.continuation.next_action_id = "mutated";
 		}
 		expect(input).toEqual(inputBefore);
@@ -559,7 +588,7 @@ describe("match policy (single owner; SD1, SD6, R10)", () => {
 });
 
 describe("candidate import (SD2, SD3, SD4)", () => {
-	test("a legacy-only origin becomes a proposal, never a widened binding (SD2)", () => {
+	test("legacy origins remain proposals and never become an approved binding (SD2)", () => {
 		const results = importCandidates({
 			candidates: [
 				baseCandidate({ proposed_origins: [PORTAL_ORIGIN, LEGACY_ORIGIN] }),
@@ -568,26 +597,14 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 			items: [baseEvidence()],
 		});
 		expect(results).toHaveLength(1);
-		const result = results[0];
-		expect(result?.ok).toBe(true);
-		if (result?.ok) {
-			expect(result.disposition.kind).toBe("bound");
-			if (result.disposition.kind === "bound") {
-				expect(result.disposition.binding.allowed_origins).toEqual([
-					PORTAL_ORIGIN,
-				]);
-				expect(result.disposition.origin_proposals).toEqual([
-					{
-						origin: LEGACY_ORIGIN,
-						provenance: "legacy-import",
-						requires_grant: true,
-					},
-				]);
-			}
-		}
+		const disposition = expectImportedOriginProposals(results[0], [
+			PORTAL_ORIGIN,
+			LEGACY_ORIGIN,
+		]);
+		expect(JSON.stringify(disposition)).not.toContain('"binding"');
 	});
 
-	test("proposed origins are normalized before matching; no proposals when live covers all", () => {
+	test("proposed origins are normalized and remain grant-requiring", () => {
 		const results = importCandidates({
 			candidates: [
 				baseCandidate({
@@ -597,14 +614,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 			vault_id: "vault-1",
 			items: [baseEvidence()],
 		});
-		const result = results[0];
-		expect(result?.ok).toBe(true);
-		if (result?.ok) {
-			expect(result.disposition.kind).toBe("bound");
-			if (result.disposition.kind === "bound") {
-				expect(result.disposition.origin_proposals).toEqual([]);
-			}
-		}
+		expectImportedOriginProposals(results[0], [PORTAL_ORIGIN]);
 	});
 
 	test("an unparseable proposed origin refuses that candidate as shape-invalid", () => {
@@ -668,7 +678,7 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 		}
 	});
 
-	test("independent bindings share an item without linking (SD4)", () => {
+	test("independent candidates may rank the same item but mint no bindings (SD4)", () => {
 		const item = baseEvidence();
 		const results = importCandidates({
 			candidates: [
@@ -678,25 +688,18 @@ describe("candidate import (SD2, SD3, SD4)", () => {
 			vault_id: "vault-1",
 			items: [item],
 		});
-		const bindings: BrowserUseItemBinding[] = [];
+		const selections: string[] = [];
 		for (const result of results) {
 			expect(result.ok).toBe(true);
-			if (result.ok && result.disposition.kind === "bound") {
-				bindings.push(result.disposition.binding);
+			if (
+				result.ok &&
+				result.disposition.kind === "binding-approval-required"
+			) {
+				selections.push(result.disposition.selection[0]?.item_id ?? "");
+				expect(JSON.stringify(result.disposition)).not.toContain('"binding"');
 			}
 		}
-		expect(bindings).toHaveLength(2);
-		expect(bindings[0]?.item_id).toBe(bindings[1]?.item_id ?? "");
-		expect(bindings[0]?.service_id).not.toBe(bindings[1]?.service_id);
-
-		// Revoking service A's live item never crosses to service B (SD4).
-		const bindingA = bindings[0];
-		const bindingB = bindings[1];
-		if (bindingA === undefined || bindingB === undefined) throw new Error("unreachable");
-		const revokedA = assessBindingUsability(bindingA, { item: null });
-		expect(revokedA.usable).toBe(false);
-		const liveB = assessBindingUsability(bindingB, { item });
-		expect(liveB.usable).toBe(true);
+		expect(selections).toEqual(["item-1", "item-1"]);
 	});
 });
 
