@@ -19,6 +19,7 @@ import {
 } from "./browser-use-auth-transaction";
 import type { BrowserUseAccessibilitySnapshot } from "./browser-use-cdp-observer";
 import type { BrowserUseDeliveryHook } from "./browser-use-confidential-field-delivery";
+import type { BrowserUseHumanIdentityAttestationDriver } from "./browser-use-human-identity-attestation";
 import type { BrowserUseTokenRetrievalPort } from "./browser-use-op";
 import { createDefaultPlatformFs, openBrowserUsePaths } from "./browser-use-paths";
 import { fixedClock, makeTempXdgEnv } from "./browser-use-platform-test-helpers";
@@ -61,7 +62,11 @@ function form(passwordFirst = false): BrowserUseAccessibilitySnapshot {
 function welcome(): BrowserUseAccessibilitySnapshot {
 	return {
 		target_id: "target-fixture",
-		nodes: [{ node_id: "welcome", role: "heading", accessible_name: "Welcome to Dashboard", ignored: false, properties: {} }],
+		nodes: [
+			{ node_id: "profile", role: "heading", accessible_name: "Profile", ignored: false, properties: {} },
+			{ node_id: "documents", role: "heading", accessible_name: "Documents", ignored: false, properties: {} },
+			{ node_id: "edit-profile", role: "button", accessible_name: "Edit profile", ignored: false, backend_node_id: 21, properties: {} },
+		],
 	};
 }
 
@@ -161,6 +166,10 @@ type FixtureOptions = {
 	initialScreen?: BrowserUseAccessibilitySnapshot;
 	proofOwner?: boolean;
 	handoffEvidenceId?: string | null;
+	loginFormPersists?: boolean;
+	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
+	actionPolicyHash?: string | null;
+	preExistingSession?: boolean;
 };
 
 async function fixture(options: FixtureOptions) {
@@ -260,8 +269,11 @@ async function fixture(options: FixtureOptions) {
 		delivered.push(field);
 		return { ok: true, shape: { field, byte_length: 8 } };
 	};
-	let screen = options.initialScreen ?? form(options.passwordFirst);
+	let screen =
+		options.initialScreen ??
+		(options.preExistingSession ? welcome() : form(options.passwordFirst));
 	const navigations: Array<{ target_id: string; url: string }> = [];
+	const proofTransitions: string[] = [];
 	let proofCalls = 0;
 	let snapshotCalls = 0;
 	const result = await runBrowserUseRunbookAuth(
@@ -269,6 +281,9 @@ async function fixture(options: FixtureOptions) {
 			store,
 			provider,
 			implementation_integrity_key: "fixture-integrity",
+			...(options.humanIdentityAttestation === undefined
+				? {}
+				: { humanIdentityAttestation: options.humanIdentityAttestation }),
 			login: {
 				observer: {
 					snapshot: async () => {
@@ -278,14 +293,16 @@ async function fixture(options: FixtureOptions) {
 					probeNode: async () => ({ ok: true, probe: { visible: true, operable: true } }),
 					activateControl: async () => {
 						expect(latestSubmissionStarted).toBe(true);
-						screen = welcome();
+						screen = options.loginFormPersists
+							? form(options.passwordFirst)
+							: welcome();
 						return { ok: true };
 					},
 				},
 				proveTarget: async (input) => {
 					const node = screen.nodes.find((candidate) => candidate.accessible_name === input.field.accessible_name);
 					if (node?.backend_node_id === undefined) return { ok: false, cause: "target-proof-invalid" };
-					const target = { lane_id: input.lane_id, run_id: input.run_id, top_level_origin: "https://fixture.test", frame_origin: "https://fixture.test", target_id: "target-fixture", page_id: "page-fixture", frame_id: "frame-fixture", account_ref: "account-ref-fixture", target_proof_digest: `proof-${node.backend_node_id}`, field: { role: node.role, accessible_name: node.accessible_name, backend_node_id: node.backend_node_id } };
+					const target = { lane_id: input.lane_id, run_id: input.run_id, top_level_url: input.expected_url, top_level_origin: "https://fixture.test", frame_origin: "https://fixture.test", target_id: "target-fixture", page_id: "page-fixture", frame_id: "frame-fixture", account_ref: "account-ref-fixture", target_proof_digest: `proof-${node.backend_node_id}`, field: { role: node.role, accessible_name: node.accessible_name, backend_node_id: node.backend_node_id } };
 					return { ok: true, target, reproveTarget: async () => ({ proven: true, observed_digest: target.target_proof_digest }) };
 				},
 				tokenRetrieval,
@@ -293,8 +310,9 @@ async function fixture(options: FixtureOptions) {
 				...(options.proofOwner === false
 					? {}
 					: {
-							proveAuthenticatedState: async ({ target_id }) => {
+							proveAuthenticatedState: async ({ target_id, transition }) => {
 								proofCalls += 1;
+								proofTransitions.push(transition);
 								return options.proof
 									? { proven: true as const, proof: { target_id, page_id: "page-authenticated", frame_id: "frame-authenticated", origin: proofOrigin, subject_reference: "subject-ref", account_reference: "account-ref", tenant_reference: "tenant-ref", identity_basis_digest: "basis-digest" } }
 									: { proven: false as const, cause: "human-identity-attestation-required" as const };
@@ -310,6 +328,11 @@ async function fixture(options: FixtureOptions) {
 			run,
 			dispatch_claim: { fencing_token: 1, activation_epoch: 1, holderId: "dispatch" },
 			service_id: "fixture",
+			flow_id: "business",
+			action_policy_hash:
+				options.actionPolicyHash === undefined
+					? "a".repeat(64)
+					: options.actionPolicyHash,
 			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://fixture.test"],
 			expected_url: expectedUrl,
@@ -319,7 +342,14 @@ async function fixture(options: FixtureOptions) {
 			target_id: "target-fixture",
 		},
 	);
-	return { result, delivered, navigations, proofCalls, snapshotCalls };
+	return {
+		result,
+		delivered,
+		navigations,
+		proofTransitions,
+		proofCalls,
+		snapshotCalls,
+	};
 }
 
 describe("runbook auth route", () => {
@@ -360,6 +390,18 @@ describe("runbook auth route", () => {
 		expect(delivered).toEqual(["username", "password"]);
 	});
 
+	test("reuses a substantive pre-existing session without credential delivery", async () => {
+		const { result, delivered, proofTransitions } = await fixture({
+			proof: true,
+			observedUrl: "https://fixture.test/home",
+			preExistingSession: true,
+		});
+
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		expect(delivered).toEqual([]);
+		expect(proofTransitions).toEqual(["pre-existing-session"]);
+	});
+
 	test("combined form authenticates when accessibility order exposes password before username", async () => {
 		const { result, delivered } = await fixture({
 			proof: true,
@@ -367,6 +409,22 @@ describe("runbook auth route", () => {
 		});
 		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
 		expect(delivered).toEqual(["username", "password"]);
+	});
+
+	test("keeps business dispatch blocked when the post-submit login form remains", async () => {
+		const { result } = await fixture({
+			proof: true,
+			loginFormPersists: true,
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			blocked: {
+				blocked_cause: "unknown-post-submit-state",
+				continuation: { next_action_id: "inspect-post-submit-state" },
+			},
+		});
+		expect(result.ok === false && "run" in result && result.run.state === "ready").toBe(false);
 	});
 
 	test("debug diagnostics record ordered secret-free lifecycle mappings", async () => {
@@ -409,6 +467,77 @@ describe("runbook auth route", () => {
 			},
 		});
 		expect(result.ok === false && "run" in result && result.run.state === "ready").toBe(false);
+	});
+
+	test("persists the presence gate, consumes one human attestation, and resumes the same run to ready", async () => {
+		const observedStates: string[] = [];
+		const { result } = await fixture({
+			proof: false,
+			humanIdentityAttestation: async (input) => {
+				observedStates.push(input.run.state);
+				expect(input.run.continuation?.next_action_id).toBe(
+					"complete-human-identity-attestation",
+				);
+				return {
+					ok: true,
+					attestation: {
+						run_id: input.run.run_id,
+						handoff_evidence_id: "handoff-fixture",
+						lane_id: "agent-browser",
+						implementation_integrity_key: "fixture-integrity",
+						environment: "agent-chrome",
+						profile: "default",
+						target_id: "target-fixture",
+						page_id: "target-fixture",
+						frame_id: "target-fixture",
+						service_id: "fixture",
+						auth_context: "interactive-login",
+						subject_reference: "subject-ref",
+						account_reference: "account-ref",
+						tenant_reference: "tenant-ref",
+						identity_basis: "human-identity-attestation",
+						identity_basis_digest: "b".repeat(64),
+						observed_at_epoch_ms: 10_000,
+						fresh_until_epoch_ms: 40_000,
+					},
+				};
+			},
+		});
+
+		expect(observedStates).toEqual(["awaiting-user-presence"]);
+		expect(result).toMatchObject({
+			ok: true,
+			run: {
+				run_id: "shared-run-fixture",
+				state: "ready",
+				auth_attestation: {
+					attestation_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+					fresh_until_epoch_ms: 40_000,
+				},
+			},
+		});
+	});
+
+	test("refuses human identity authorization without an execution-binding digest", async () => {
+		let attestationCalls = 0;
+		const { result } = await fixture({
+			proof: false,
+			actionPolicyHash: null,
+			humanIdentityAttestation: async () => {
+				attestationCalls += 1;
+				return {
+					ok: false,
+					code: "unreachable",
+					message: "unreachable",
+				};
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			failure: { code: "runbook_auth_execution_binding_missing" },
+		});
+		expect(attestationCalls).toBe(0);
 	});
 
 	test("authenticated-state proof on a moved origin refuses before business dispatch", async () => {

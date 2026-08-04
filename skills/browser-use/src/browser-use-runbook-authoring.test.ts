@@ -196,6 +196,18 @@ describe("complete-document Runbook authoring", () => {
 
 	test("schema example round-trips through the model-owned parser and validator", () => {
 		const schema = runbookAuthoringSchema();
+		expect(schema.fields.steps.postconditions).toEqual({
+			variants: ["url-equals", "url-starts-with", "value-equals", "element-visible"],
+			open_variants: ["url-equals", "url-starts-with"],
+		});
+		expect(schema.minimal_valid_example.steps).toContainEqual({
+			kind: "open",
+			url: "https://portal.example.test/status",
+			postcondition: {
+				kind: "url-starts-with",
+				url: "https://portal.example.test/status",
+			},
+		});
 		const parsed = parseRunbookDraftDocument(
 			`${JSON.stringify(schema.minimal_valid_example, null, 2)}\n`,
 		);

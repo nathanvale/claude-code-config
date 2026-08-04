@@ -275,13 +275,10 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"run-live",
 				"--json",
 			]);
-			expect(result.exitCode).toBe(0);
+			expect(result.exitCode).toBe(20);
 			const envelope = parse(result.stdout);
-			const data = envelope.data as Record<string, unknown>;
-			expect((data.run as Record<string, unknown>).state).toBe("unknown");
-			expect(data.cancellation).toEqual({
-				external_effect: "unknown",
-				rolled_back: false,
+			expect(envelope.error).toMatchObject({
+				code: "run_cancel_mutation_dispatched",
 			});
 			expect(
 				(envelope.continuation as Record<string, unknown>).next_action_id,

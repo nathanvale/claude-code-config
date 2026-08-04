@@ -76,6 +76,7 @@ const {
 	collectRunGovernedSurfaces,
 	sentinelRegistrationWithheldFailure,
 	recordTaskRunOutcome,
+	emitSubmitApprovalGate,
 	buildRunbookAuthDelivery,
 	environmentDeliveryHook,
 } = __confidentialDeliveryDriverForTest;
@@ -394,7 +395,7 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 }
 
 describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
-	test("live seam composes deterministic binding, target proof, sensitive lease, and binding-keyed context", async () => {
+	test("live seam delivers to the observed target URL after a same-origin redirect", async () => {
 		const store = await makeStore();
 		let deliveryCalls = 0;
 		const port = {
@@ -453,7 +454,10 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 			}),
 			createDeliveryHook: environmentDeliveryHook,
 		});
-		const outcome = await seam(liveSeamInput("run-live-seam"));
+		const outcome = await seam({
+			...liveSeamInput("run-live-seam"),
+			expectedTargetUrl: "https://oncore.test/candidate",
+		});
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		expect(outcome.context.in_sensitive_interval).toBe(true);
@@ -1501,6 +1505,71 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		// The leaking envelope was withheld: the sentinel never reached the real
 		// streams; what WAS emitted is the containment refusal.
 		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).toContain("containment failed");
+	});
+
+	test("the submit approval gate withholds its envelope when persisted run containment fails", async () => {
+		const RUN = "run-cfd-seam-approval-gate";
+		const SENTINEL = "sentinel-approval-gate-000333";
+		const store = await makeStore();
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: SENTINEL,
+			mutation_dispatched: true,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+
+		const baseGuard = beginSensitiveRunGuard(RUN);
+		expect(baseGuard.ok).toBe(true);
+		if (!baseGuard.ok) return;
+		const marked = markRunSensitive(baseGuard.guard, {
+			trigger: "confidential-field-delivery",
+			sentinels: [SENTINEL],
+		});
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+
+		const parsed = parseBrowserUseArgv([
+			"task",
+			"run",
+			"--handoff",
+			"handoff.json",
+			"--intent",
+			"scrape",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const command = {
+			parsed,
+			runtime: makeRuntime(),
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+			runId: "cli-run-approval-gate",
+			caller: { label: null },
+			durationMs: () => 1,
+		};
+
+		const exitCode = await emitSubmitApprovalGate({
+			command,
+			deps: store.deps,
+			run: created.run,
+			continuationId: "complete-submit-approval",
+			artifactId: "submit-approval-2.png",
+			guard: marked.guard,
+		});
+		expect(exitCode).toBe(BINDING_FAIL_CLOSED_EXIT_CODE);
+		const emitted = stdoutChunks.join("") + stderrChunks.join("");
+		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).not.toContain("approval_review");
 		expect(emitted).toContain("containment failed");
 	});
 

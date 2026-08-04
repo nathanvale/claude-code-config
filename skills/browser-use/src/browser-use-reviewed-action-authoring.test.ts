@@ -6,8 +6,10 @@ import {
 	applyReviewedActionCandidate,
 	parseReviewedActionCandidate,
 	promoteReviewedActionCandidate,
+	reviewedActionApprovalFactsFromRecord,
 	reviewedActionAuthoringSchema,
 	validateReviewedActionCandidate,
+	verifyAuthoredReviewedActionPromotion,
 } from "./browser-use-reviewed-action-authoring";
 import {
 	createReviewedActionApprovalVerifier,
@@ -61,6 +63,29 @@ async function git(root: string, ...args: string[]): Promise<string> {
 }
 
 describe("Reviewed Action schema and mechanical capability audit", () => {
+	test("the four FastTrack legacy assets validate unchanged through the current candidate schema", async () => {
+		const registry = JSON.parse(await readFile(join(import.meta.dir, "../actions/registry.json"), "utf8")) as {
+			actions: Array<{ asset_path: string; record: Record<string, unknown> }>;
+		};
+		for (const entry of registry.actions) {
+			const record = entry.record;
+			const source = await readFile(join(import.meta.dir, "../actions", entry.asset_path), "utf8");
+			const result = validateReviewedActionCandidate({
+				contract: "browser-use.reviewed-action-candidate",
+				schema_version: "1",
+				action_id: record.action_id,
+				origin: record.allowed_origin,
+				source,
+				containment: record.containment,
+				input_schema: record.input_schema,
+				result_schema: record.result_schema,
+				result_sensitivity: record.result_sensitivity,
+				required_postcondition: record.required_postcondition,
+			} as never);
+			expect(result.ok, String(record.action_id)).toBe(true);
+		}
+	});
+
 	test("public schema and validate commands emit the facade-owned result contract", async () => {
 		const schemaResult = await runForTest(["action", "schema", "--json"], makeRuntime());
 		expect(schemaResult.exitCode).toBe(0);
@@ -98,8 +123,14 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 				let text = "";
 				for (const [key, value] of Object.entries(context)) text = key + value;
 				const match = text.match(new RegExp("^(.*)$"));
-				const fallback = [context["requested"]];
-				return { rows: document.querySelectorAll('.row').length, text: match ? match[1] : fallback[0] };
+				const fallback = [context["requested"], "second"];
+				const rows = ["first", "second"];
+				const cells = ["first", "second"];
+				const i = 0;
+				const index = 1;
+				const n = 0;
+				const [x, y] = fallback;
+				return { rows: document.querySelectorAll('.row').length, text: match ? match[1] : fallback[0], values: [rows[index], cells[n], fallback[i], x, y] };
 			}`,
 			}) as never,
 		);
@@ -108,26 +139,24 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			effect_class: "mutation",
 		});
 
-		const dynamicMember = validateReviewedActionCandidate(
-			candidate({
-				source:
-					"async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }",
-			}) as never,
-		);
-		expect(dynamicMember).toMatchObject({
-			ok: false,
-			issues: [{ code: "action_capability_computed_property" }],
-		});
-
-		const documentMember = validateReviewedActionCandidate(
-			candidate({
-				source: "async ({ inputs }) => ({ value: document['cookie'] })",
-			}) as never,
-		);
-		expect(documentMember).toMatchObject({
-			ok: false,
-			issues: [{ code: "action_capability_computed_property" }],
-		});
+		const rejected: Array<[string, string]> = [
+			["inputs-derived alias", "async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }"],
+			["inputs-derived destructuring", "async ({ inputs }) => { const payload = {}; const { key } = inputs; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
+			["direct inputs key", "async ({ inputs }) => { const payload = {}; payload[inputs.key] = document.querySelector('.row')?.textContent; return payload }"],
+			["member-expression key", "async ({ inputs }) => { const payload = {}; const context = { key: 'row' }; payload[context.key] = document.querySelector('.row')?.textContent; return payload }"],
+			["call key", "async ({ inputs }) => { const payload = {}; payload[getKey()] = document.querySelector('.row')?.textContent; return payload }"],
+			["document string", "async ({ inputs }) => ({ value: document['cookie'] })"],
+			["document number", "async ({ inputs }) => ({ value: document[0] })"],
+			["call result", "async ({ inputs }) => ({ value: getThing()[inputs.key], rows: document.querySelectorAll('.row').length })"],
+			["member call result", "async ({ inputs }) => ({ value: foo.bar()[inputs.key], rows: document.querySelectorAll('.row').length })"],
+			["window authority", "async ({ inputs }) => ({ value: window[name], rows: document.querySelectorAll('.row').length })"],
+		];
+		for (const [label, source] of rejected) {
+			expect(validateReviewedActionCandidate(candidate({ source }) as never), label).toMatchObject({
+				ok: false,
+				issues: [{ code: "action_capability_computed_property" }],
+			});
+		}
 	});
 
 	test("closed capability audit rejects direct and indirect evasion fixtures", () => {
@@ -154,13 +183,113 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			if (!result.ok) expect(result.issues[0]?.code, label).toStartWith("action_capability_");
 		}
 	});
+
+	test("template-literal location navigation is contained without requiring a semicolon", () => {
+		const result = validateReviewedActionCandidate(
+			candidate({
+				source:
+					"async ({ inputs }) => { document.querySelector('.row'); location.href = `https://other.example/path` }",
+				containment: "none",
+				required_postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/",
+				},
+			}) as never,
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			issues: [{ code: "action_capability_navigation" }],
+		});
+	});
 });
 
 describe("Reviewed Action candidate lifecycle", () => {
-	test("operator promotion reads committed exact bytes and persists a verified receipt", async () => {
+	test("current signed promotion remains authoritative when audit history contains a legacy claim", () => {
+		const commit = "1".repeat(40);
+		const validation = validateReviewedActionCandidate(candidate() as never);
+		if (!validation.ok) throw new Error("fixture candidate failed validation");
+		const record = {
+			action_id: "count-rows",
+			asset_id: validation.digest,
+			expected_digest: validation.digest,
+			allowed_origin: "https://portal.example.test",
+			effect_class: validation.effect_class,
+			audited_capabilities: validation.audited_capabilities,
+			containment: "read-only-observation",
+			input_schema: { kind: "object", fields: {} },
+			result_schema: {
+				kind: "object",
+				fields: {
+					rows: {
+						required: true,
+						schema: { kind: "number", integer: true },
+					},
+				},
+			},
+			result_sensitivity: "low",
+			source_provenance: "authored:count-rows",
+			promotion_receipt: null,
+		};
+		const derived = reviewedActionApprovalFactsFromRecord({
+			commit,
+			record: record as never,
+			assetBytes: READ_SOURCE,
+		});
+		if (!derived.ok) throw new Error(derived.code);
+		const unsigned = {
+			...derived.facts,
+			receipt_id: "receipt-current",
+			approval_reference: "review-current",
+			issued_at_epoch_ms: 1_000,
+			verifier_key_id: "test-key",
+		};
+		const verifier = createReviewedActionApprovalVerifier({
+			verifier: {
+				key_id: "test-key",
+				public_key: "TEST-ONLY-PUBLIC-KEY",
+			},
+			verifySignature: ({ digest, signature }) =>
+				signature === `TEST:${digest}`,
+		});
+		record.promotion_receipt = {
+			contract: "browser-use.reviewed-action-promotion",
+			schema_version: "1",
+			disposition: "approved",
+			presence_backed: true,
+			...unsigned,
+			signature: `TEST:${reviewedActionApprovalFactsDigest(unsigned)}`,
+		} as never;
+
+		expect(
+			verifyAuthoredReviewedActionPromotion({
+				commit: "2".repeat(40),
+				record: record as never,
+				assetBytes: READ_SOURCE,
+				promotionHistory: [
+					{
+						approved_digest: validation.digest,
+						disposition: "approved",
+						approved_origin: "https://portal.example.test",
+						approved_effect: "read",
+						approver_ref: "legacy-review",
+					},
+				],
+				verifier,
+			}),
+		).toMatchObject({
+			ok: true,
+			receipt_id: "receipt-current",
+			approval_reference: "review-current",
+		});
+	});
+
+	test("operator promotion reads committed exact bytes and admits only verified receipt drift for a same-commit batch", async () => {
 		const sourceRoot = await sourceFixture();
 		const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate() as never });
 		if (!applied.ok) throw new Error(applied.message);
+		const second = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate({ action_id: "count-more-rows" }) as never });
+		if (!second.ok) throw new Error(second.message);
 		await git(sourceRoot, "init", "-q");
 		await git(sourceRoot, "add", "skills/browser-use/actions/registry.json", `skills/browser-use/actions/assets/${applied.digest}.js`);
 		await git(sourceRoot, "commit", "-qm", "candidate");
@@ -175,7 +304,7 @@ describe("Reviewed Action candidate lifecycle", () => {
 				async issueReviewedActionPromotion(input) {
 					const unsigned = {
 						...input.facts,
-						receipt_id: "receipt-committed-candidate",
+						receipt_id: `receipt-${input.facts.action_id}`,
 						approval_reference: input.approval_reference,
 						issued_at_epoch_ms: 1_000,
 						verifier_key_id: "test-key",
@@ -201,9 +330,20 @@ describe("Reviewed Action candidate lifecycle", () => {
 			router,
 			verifier,
 		});
-		expect(promoted).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-committed-candidate" });
+		expect(promoted).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-count-rows" });
+		const promotedSecond = await promoteReviewedActionCandidate({
+			sourceRoot,
+			actionId: "count-more-rows",
+			approvalReference: "review-2",
+			router,
+			verifier,
+		});
+		expect(promotedSecond).toMatchObject({ ok: true, source_commit: commit, receipt_id: "receipt-count-more-rows" });
 		const registry = JSON.parse(await readFile(join(sourceRoot, "skills/browser-use/actions/registry.json"), "utf8"));
-		expect(registry.actions[0].record.promotion_receipt).toMatchObject({ source_commit: commit, approved_digest: applied.digest });
+		expect(registry.actions.map((entry: { record: { promotion_receipt: unknown } }) => entry.record.promotion_receipt)).toEqual([
+			expect.objectContaining({ source_commit: commit, approved_digest: applied.digest }),
+			expect.objectContaining({ source_commit: commit, approved_digest: second.digest }),
+		]);
 	});
 
 	test("apply creates one unpromoted digest and complete identical apply is a no-op", async () => {
@@ -229,8 +369,26 @@ describe("Reviewed Action candidate lifecycle", () => {
 
 	test("secret-shaped candidate is refused before asset or registry persistence", async () => {
 		const sourceRoot = await sourceFixture();
-		const result = await applyReviewedActionCandidate({ sourceRoot, candidate: candidate({ result_schema: { kind: "string", pattern: "wss://private-endpoint" } }) as never });
-		expect(result).toMatchObject({ ok: false, code: "action_secret_shaped_material" });
+		for (const secretCandidate of [
+			candidate({ result_schema: { kind: "string", pattern: "wss://private-endpoint" } }),
+			candidate({
+				source:
+					"async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length, reference: 'op://vault/item/field' })",
+			}),
+			candidate({
+				source:
+					"async ({ inputs }) => ({ rows: document.querySelectorAll('.row').length, reference: '/Users/example/private.txt' })",
+			}),
+		]) {
+			const result = await applyReviewedActionCandidate({
+				sourceRoot,
+				candidate: secretCandidate as never,
+			});
+			expect(result).toMatchObject({
+				ok: false,
+				code: "action_secret_shaped_material",
+			});
+		}
 		const registry = JSON.parse(await readFile(join(sourceRoot, "skills/browser-use/actions/registry.json"), "utf8"));
 		expect(registry.actions).toEqual([]);
 		expect(await readFile(join(sourceRoot, "skills/browser-use/actions/assets"), "utf8").catch(() => undefined)).toBeUndefined();

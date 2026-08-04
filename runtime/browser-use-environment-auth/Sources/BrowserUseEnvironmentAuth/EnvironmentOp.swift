@@ -1208,6 +1208,19 @@ private func validDeliveryExecutable(_ path: String) -> Bool {
         && access(path, X_OK) == 0
 }
 
+private func deliverySourceDescriptorsToClose(
+    _ descriptors: [Int32]
+) -> [Int32] {
+    descriptors.filter { $0 > 3 }
+}
+
+@_spi(Testing)
+public func testingDeliverySourceDescriptorsToClose(
+    _ descriptors: [Int32]
+) -> [Int32] {
+    deliverySourceDescriptorsToClose(descriptors)
+}
+
 private func deliveryChild(
     executablePath: String,
     arguments: [String],
@@ -1238,11 +1251,16 @@ private func deliveryChild(
     else {
         childExit(125)
     }
-    closeOpDescriptor(nullInput)
-    closeOpDescriptor(nullError)
-    closeOpDescriptor(stdoutWrite)
-    if secretReadDescriptor != 3 {
-        closeOpDescriptor(secretReadDescriptor)
+    // Source descriptor numbers may collide with a destination after dup2.
+    // Close only originals above the preserved 0...3 range; closing a stale
+    // source variable equal to 3 would close the newly remapped secret pipe.
+    for descriptor in deliverySourceDescriptorsToClose([
+        nullInput,
+        nullError,
+        stdoutWrite,
+        secretReadDescriptor,
+    ]) {
+        closeOpDescriptor(descriptor)
     }
     var zeroLimit = rlimit(rlim_cur: 0, rlim_max: 0)
     guard setrlimit(RLIMIT_CORE, &zeroLimit) == 0 else {

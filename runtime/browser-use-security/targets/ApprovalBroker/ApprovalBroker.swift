@@ -52,15 +52,6 @@ struct AuthorizationPolicy: Codable {
     let oneUse: Bool
 }
 
-/// A one-run Human Identity Attestation (ADR 0026: one run only).
-struct HumanIdentityAttestation: Codable {
-    let attestationID: String
-    let runID: String
-    let issuedAtEpochSeconds: Int
-    /// Base64 of the device-bound signature over the attestation digest.
-    let signatureBase64: String
-}
-
 /// Errors the broker returns as typed states — never a crash (R21).
 enum BrokerError: Error {
     case userPresenceUnavailable
@@ -150,30 +141,69 @@ struct ApprovalBroker {
         }
     }
 
-    /// Issue a one-run Human Identity Attestation for a single run (ADR 0026).
-    ///
-    /// Signs the attestation digest with the device-bound key. The broker holds
-    /// no OP token and no credential; the attestation is evidence, not a secret.
-    static func issueHumanIdentityAttestation(
-        runID: String,
-        signingKey: SecureEnclave.P256.Signing.PrivateKey
-    ) throws -> HumanIdentityAttestation {
-        let attestationID = UUID().uuidString
-        let issuedAt = Int(Date().timeIntervalSince1970)
-        let digestInput = "\(attestationID)|\(runID)|\(issuedAt)"
-        let digest = Data(SHA256.hash(data: Data(digestInput.utf8)))
-        let signature = try signingKey.signature(for: digest)
-        return HumanIdentityAttestation(
-            attestationID: attestationID,
-            runID: runID,
-            issuedAtEpochSeconds: issuedAt,
-            signatureBase64: signature.derRepresentation.base64EncodedString()
-        )
+    private static func canonicalApprovalValue(_ value: Any) throws -> Any {
+        if let array = value as? [Any] {
+            return try array.map(canonicalApprovalValue)
+        }
+        if let object = value as? [String: Any] {
+            return try object.keys.sorted().map { key in
+                [key, try canonicalApprovalValue(object[key]!)] as [Any]
+            }
+        }
+        return value
     }
 
-    /// The pinned public verifier identity: the raw public key bytes verifiers
-    /// trust. Rotation changes this identity and revokes every outstanding
-    /// authorization (R20).
+    private static func hex<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+        bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Issue the signed one-use grant that backs one Human Identity Attestation.
+    ///
+    /// The request has already passed the command boundary's exact key and
+    /// bounded-string checks. This function signs the TypeScript contract's
+    /// canonical grant digest, so ordinary Browser Use can verify it offline.
+    static func issueHumanIdentityAttestation(
+        subject: [String: Any],
+        boundFacts: [String: Any],
+        signingKey: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        let verifierKeyID = hex(SHA256.hash(data: pinnedPublicVerifier(for: signingKey)))
+        var unsigned: [String: Any] = [
+            "grant_id": "grant-\(UUID().uuidString.lowercased())",
+            "subject": subject,
+            "bound_facts": boundFacts,
+            "issued_at_epoch_ms": issuedAt,
+            "expires_at_epoch_ms": issuedAt + 30_000,
+            "verifier_key_id": verifierKeyID,
+        ]
+        let digestKeys = [
+            "grant_id",
+            "subject",
+            "bound_facts",
+            "issued_at_epoch_ms",
+            "expires_at_epoch_ms",
+            "verifier_key_id",
+        ]
+        let canonicalValues = try digestKeys.map { key in
+            try canonicalApprovalValue(unsigned[key]!)
+        }
+        let canonical = try JSONSerialization.data(
+            withJSONObject: canonicalValues,
+            options: [.withoutEscapingSlashes]
+        )
+        let digest = Data(SHA256.hash(data: canonical))
+        let signature = try signingKey.signature(for: digest)
+        unsigned["signature"] = signature.derRepresentation.base64EncodedString()
+        return unsigned
+    }
+
+    /// The pinned public verifier identity: the SEC1 uncompressed (x9.63) public
+    /// key bytes verifiers trust — a 65-byte `0x04 || X || Y` point. The
+    /// TypeScript verifier requires this encoding (it reads the `0x04` prefix and
+    /// slices X/Y at offsets 1..33 and 33..65); CryptoKit's `rawRepresentation`
+    /// omits the prefix, so emit `x963Representation`. Rotation changes this
+    /// identity and revokes every outstanding authorization (R20).
     static func pinnedPublicVerifier(
         for signingKey: SecureEnclave.P256.Signing.PrivateKey
     ) -> Data {
@@ -204,6 +234,26 @@ private struct AdmittedSigningKey {
 }
 
 private enum ApprovalBrokerCommandSupport {
+    private static let humanIdentityBoundFactKeys: Set<String> = [
+        "service_id",
+        "auth_context",
+        "environment",
+        "profile",
+        "origin",
+        "runbook_id",
+        "action",
+        "mutation_class",
+        "handoff_evidence_id",
+        "lane_id",
+        "target_id",
+        "subject_reference",
+        "account_reference",
+        "tenant_reference",
+        "mutation_target",
+        "mutation_scope",
+        "action_policy_hash",
+    ]
+
     private static func signingKeyItemQuery() throws -> [String: Any] {
         let task = SecTaskCreateFromSelf(nil)
         guard let task,
@@ -236,7 +286,9 @@ private enum ApprovalBrokerCommandSupport {
     /// creation policy and verifier identity to the opaque representation. This
     /// broker has no update/delete path, and a missing, ambiguous, malformed, or
     /// identity-mismatched record fails closed instead of rotating the key.
-    static func loadSigningKey() throws -> AdmittedSigningKey {
+    static func loadSigningKey(
+        signingReason: String = "Sign the Reviewed Action promotion receipt"
+    ) throws -> AdmittedSigningKey {
         var query = try signingKeyItemQuery()
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecReturnAttributes as String] = true
@@ -269,7 +321,7 @@ private enum ApprovalBrokerCommandSupport {
 
         let decoded = try decodeCustodyRecord(custodyRecord)
         let context = LAContext()
-        context.localizedReason = "Sign the Reviewed Action promotion receipt"
+        context.localizedReason = signingReason
         let key: SecureEnclave.P256.Signing.PrivateKey
         do {
             key = try SecureEnclave.P256.Signing.PrivateKey(
@@ -390,6 +442,43 @@ private enum ApprovalBrokerCommandSupport {
         }
     }
 
+    static func reviewHumanIdentityAttestation(
+        runID: String,
+        boundFacts: [String: Any],
+        display: [String]
+    ) throws {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.activate(ignoringOtherApps: true)
+
+        let factsData = try JSONSerialization.data(
+            withJSONObject: boundFacts,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        guard let factsText = String(data: factsData, encoding: .utf8) else {
+            throw PromotionCommandError.invalidInput
+        }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.string = "SIGNED RUN ID\n\(runID)\n\nDISPLAY ENTRIES\n\(display.joined(separator: "\n"))\n\nBOUND FACTS\n\(factsText)"
+        let scrollView = NSScrollView(frame: textView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = textView
+
+        let alert = NSAlert()
+        alert.messageText = "Review one-run Human Identity Attestation"
+        alert.informativeText = "Approve only if every displayed identity claim and bound fact is correct. Touch ID signs this one-run attestation."
+        alert.alertStyle = .warning
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: "Approve and Sign")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            throw PromotionCommandError.reviewCancelled
+        }
+    }
+
     static func promotionReceipt(
         request: ReviewedActionPromotionRequest,
         admittedKey: AdmittedSigningKey
@@ -422,6 +511,52 @@ private enum ApprovalBrokerCommandSupport {
         return ReviewedActionPromotionProtocol.withSignature(unsigned, signature: signature)
     }
 
+    static func humanIdentityGrant(
+        request: [String: Any],
+        key: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        guard
+            Set(request.keys) == Set(["subject", "bound_facts", "display"]),
+            let subject = request["subject"] as? [String: Any],
+            Set(subject.keys) == Set(["purpose", "run_id"]),
+            subject["purpose"] as? String == "human-identity-attestation",
+            let runID = subject["run_id"] as? String,
+            !runID.isEmpty,
+            runID.utf8.count <= 512,
+            let boundFacts = request["bound_facts"] as? [String: Any],
+            Set(boundFacts.keys) == humanIdentityBoundFactKeys,
+            let display = request["display"] as? [String],
+            display.count > 0,
+            display.count <= 16,
+            display.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 })
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        for key in humanIdentityBoundFactKeys {
+            let value = boundFacts[key]
+            if key == "runbook_id", value is NSNull {
+                continue
+            }
+            guard
+                let text = value as? String,
+                !text.isEmpty,
+                text.utf8.count <= 1_024
+            else {
+                throw PromotionCommandError.invalidInput
+            }
+        }
+        try reviewHumanIdentityAttestation(
+            runID: runID,
+            boundFacts: boundFacts,
+            display: display
+        )
+        return try ApprovalBroker.issueHumanIdentityAttestation(
+            subject: subject,
+            boundFacts: boundFacts,
+            signingKey: key
+        )
+    }
+
     static func write(_ value: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes]) else {
             exit(20)
@@ -447,7 +582,7 @@ private enum ApprovalBrokerCommandSupport {
 enum ApprovalBrokerCommand {
     static func main() {
         guard CommandLine.arguments.count == 2 else {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, verifier, or promote mode"])
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, verifier, promote, or attest mode"])
             exit(20)
         }
         do {
@@ -475,6 +610,22 @@ enum ApprovalBrokerCommand {
                 let response = try ReviewedActionPromotionProtocol.encodeResponse(.approved(receipt))
                 FileHandle.standardOutput.write(response)
                 FileHandle.standardOutput.write(Data("\n".utf8))
+            case "attest":
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey(
+                    signingReason: "Sign this one-run Human Identity Attestation"
+                )
+                let input = FileHandle.standardInput.readDataToEndOfFile()
+                guard
+                    input.count <= 1_048_576,
+                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
+                else {
+                    throw PromotionCommandError.invalidInput
+                }
+                let grant = try ApprovalBrokerCommandSupport.humanIdentityGrant(
+                    request: request,
+                    key: admittedKey.key
+                )
+                ApprovalBrokerCommandSupport.write(["ok": true, "grant": grant])
             default:
                 throw PromotionCommandError.invalidInput
             }

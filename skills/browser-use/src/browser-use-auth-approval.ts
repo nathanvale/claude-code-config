@@ -71,6 +71,15 @@ export type BrowserUseApprovalBoundFacts = {
 	runbook_id: string | null;
 	action: string;
 	mutation_class: string;
+	handoff_evidence_id: string;
+	lane_id: string;
+	target_id: string;
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+	mutation_target: string;
+	mutation_scope: string;
+	action_policy_hash: string;
 };
 export const BROWSER_USE_APPROVAL_BOUND_FACT_KEYS = [
 	"service_id",
@@ -81,6 +90,15 @@ export const BROWSER_USE_APPROVAL_BOUND_FACT_KEYS = [
 	"runbook_id",
 	"action",
 	"mutation_class",
+	"handoff_evidence_id",
+	"lane_id",
+	"target_id",
+	"subject_reference",
+	"account_reference",
+	"tenant_reference",
+	"mutation_target",
+	"mutation_scope",
+	"action_policy_hash",
 ] as const satisfies readonly (keyof BrowserUseApprovalBoundFacts)[];
 
 /** Pinned verifier identity; rotation revokes everything outstanding. */
@@ -889,6 +907,7 @@ export function createApprovalRouter(deps: {
 			for (const factKey of BROWSER_USE_APPROVAL_BOUND_FACT_KEYS) {
 				const fact = input.bound_facts[factKey];
 				if (
+					factKey !== "action_policy_hash" &&
 					typeof fact === "string" &&
 					secretShapeFindingOf(fact) !== undefined
 				) {

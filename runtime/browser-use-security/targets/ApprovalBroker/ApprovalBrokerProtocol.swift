@@ -69,7 +69,6 @@ enum ReviewedActionPromotionClientResult: Equatable {
 
 enum ReviewedActionPromotionProtocol {
     static let requestContract = "browser-use.reviewed-action-promotion-request"
-    static let responseContract = "browser-use.reviewed-action-promotion-response"
     static let receiptContract = "browser-use.reviewed-action-promotion"
     static let schemaVersion = "1"
 
@@ -218,19 +217,17 @@ enum ReviewedActionPromotionProtocol {
     }
 
     static func encodeResponse(_ response: ReviewedActionPromotionResponse) throws -> Data {
+        // Keep this exact envelope aligned with the installed signed broker.
+        // The nested receipt owns the versioned promotion contract.
         let object: [String: Any]
         switch response {
         case .approved(let receipt):
             object = [
-                "contract": responseContract,
-                "schema_version": schemaVersion,
                 "ok": true,
                 "receipt": receiptJSONObject(receipt),
             ]
         case .refused(let code, let message):
             object = [
-                "contract": responseContract,
-                "schema_version": schemaVersion,
                 "ok": false,
                 "code": code,
                 "message": message,
@@ -241,13 +238,11 @@ enum ReviewedActionPromotionProtocol {
 
     static func decodeResponse(_ data: Data) throws -> ReviewedActionPromotionResponse {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["contract"] as? String == responseContract,
-              object["schema_version"] as? String == schemaVersion,
               let ok = object["ok"] as? Bool else {
             throw ReviewedActionPromotionProtocolError.invalidEnvelope
         }
         if ok {
-            guard Set(object.keys) == ["contract", "schema_version", "ok", "receipt"], let receiptObject = object["receipt"] as? [String: Any], Set(receiptObject.keys) == receiptKeys else {
+            guard Set(object.keys) == ["ok", "receipt"], let receiptObject = object["receipt"] as? [String: Any], Set(receiptObject.keys) == receiptKeys else {
                 throw ReviewedActionPromotionProtocolError.invalidEnvelope
             }
             let receiptData = try JSONSerialization.data(withJSONObject: receiptObject)
@@ -255,7 +250,7 @@ enum ReviewedActionPromotionProtocol {
             guard receiptIsValid(receipt) else { throw ReviewedActionPromotionProtocolError.invalidReceipt }
             return .approved(receipt)
         }
-        guard Set(object.keys) == ["contract", "schema_version", "ok", "code", "message"],
+        guard Set(object.keys) == ["ok", "code", "message"],
               let code = object["code"] as? String, safeID(code),
               let message = object["message"] as? String, !message.isEmpty, message.utf8.count <= 4096 else {
             throw ReviewedActionPromotionProtocolError.invalidEnvelope

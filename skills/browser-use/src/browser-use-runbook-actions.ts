@@ -137,13 +137,23 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*JSON\s*\.\s*parse\s*\(\s*document\s*\.\s*querySelector\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*textContent\s*\)\s*;?\s*$/,
 ];
 
-/**
- * Exact reviewed Oncore draft-verification action.
- *
- * Its byte identity is the mechanical read proof: any edit falls back to the
- * conservative mutation audit until reviewed and represented here again. The
- * action emits only a schema-pinned sentinel after exact draft semantics pass.
- */
+const OBSERVATIONAL_ESCAPE_FINGERPRINTS: readonly RegExp[] = [
+	/\b(?:eval|Function|WebAssembly|Worker|SharedWorker|BroadcastChannel)\b/,
+	/\b(?:globalThis|window)\b/,
+	/\b(?:import|require)\s*\(/,
+	/\bObject\s*\.\s*(?:assign|defineProperty|defineProperties|setPrototypeOf)\s*\(/,
+	/\bReflect\s*\.\s*(?:set|defineProperty|deleteProperty|setPrototypeOf)\s*\(/,
+	/(?:\.\s*[A-Za-z_$][\w$]*|\[[^\]]+\])\s*(?:\+\+|--|=(?!=)|[+\-*/%]=)/,
+];
+
+function observationalActionMechanicsProven(bytes: string): boolean {
+	return (
+		/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>/.test(bytes) &&
+		/\bdocument\s*\.\s*querySelector(?:All)?\s*\(/.test(bytes) &&
+		!OBSERVATIONAL_ESCAPE_FINGERPRINTS.some((pattern) => pattern.test(bytes))
+	);
+}
+
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
  * effect class the bytes MECHANICALLY prove: `read` only when the complete
@@ -158,7 +168,8 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
+	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes)) ||
+		observationalActionMechanicsProven(bytes)
 		? "read"
 		: "mutation";
 }
@@ -679,7 +690,10 @@ export function exactOriginValid(value: string): boolean {
 }
 
 function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		return typeof postcondition.url === "string" && postcondition.url.length > 0;
 	}
 	if (postcondition.kind !== "element-visible") return false;

@@ -97,6 +97,29 @@ describe("production Reviewed Action verifier wiring", () => {
 		expect((await createProductionBrowserUseRuntime({ env: fixture.env, reviewedActionApprovalVerifier: explicit })).reviewedActionApprovalVerifier).toBe(explicit);
 	});
 
+	test("wires the pinned broker only as the human attestation source and ignores the removed development switch", async () => {
+		const fixture = await verifierFixture();
+		const removedSwitch = ["BROWSER_USE_DEV", "BYPASS_PROMOTION"].join("_");
+		const runtime = await createProductionBrowserUseRuntime({
+			env: {
+				...fixture.env,
+				BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER: "/fixture/ApprovalBroker",
+				[removedSwitch]: "1",
+			},
+		});
+		expect(runtime.runbookHumanIdentityAttestation).toBeDefined();
+		expect(runtime.runbookAuthenticatedStateProof).toBeUndefined();
+
+		await chmod(fixture.verifierPath, 0o644);
+		const unpinned = await createProductionBrowserUseRuntime({
+			env: {
+				...fixture.env,
+				BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER: "/fixture/ApprovalBroker",
+			},
+		});
+		expect(unpinned.runbookHumanIdentityAttestation).toBeUndefined();
+	});
+
 	test("distinguishes an absent pin from a malformed identity", async () => {
 		const fixture = await verifierFixture();
 		await rm(fixture.verifierPath);

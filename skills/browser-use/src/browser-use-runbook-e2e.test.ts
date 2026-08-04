@@ -463,10 +463,16 @@ describe("authoring-to-active-generation composed acceptance", () => {
 		});
 	});
 
-	test("ordinary action CLI has no promotion command", async () => {
+	test("action promotion refuses without the signed ApprovalBroker path", async () => {
 		const { sourceRoot } = await fixture();
-		const result = await runForTest(["action", "promote", "--id", "count-visible-rows", "--json"], makeRuntime({ sourceCheckoutRoot: sourceRoot }));
-		expect(result.exitCode).toBe(2);
-		expect(result.stdout).not.toContain("reviewed-action-promotion");
+		const result = await runForTest([
+			"action", "promote", "--id", "count-visible-rows",
+			"--approval-reference", "review-1", "--json",
+		], makeRuntime({ env: {}, sourceCheckoutRoot: sourceRoot }));
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout)).toMatchObject({
+			data: { command: "action-promote" },
+			error: { code: "action_promotion_broker_unavailable" },
+		});
 	});
 });

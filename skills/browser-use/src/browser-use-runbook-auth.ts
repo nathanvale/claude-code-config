@@ -9,6 +9,7 @@ import {
 	validateAuthFragmentShape,
 } from "./browser-use-auth-model";
 import type { BrowserUseAuthProvider } from "./browser-use-auth-provider";
+import type { BrowserUseHumanIdentityAttestationDriver } from "./browser-use-human-identity-attestation";
 import { createBrowserUseAuthContract } from "./browser-use-auth";
 import {
 	applyAuthTransition,
@@ -61,8 +62,18 @@ export type BrowserUseRunbookAuthResult =
 export type BrowserUseRunbookAuthDeps = {
 	store: RunStoreDeps;
 	provider: BrowserUseAuthProvider;
+	/** Resolve only an already approved binding. Absence keeps first-bind discovery blocked. */
+	resolveApprovedBinding?: (input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}) => Promise<BrowserUseItemBinding | null>;
 	login: Omit<BrowserUseLoginEngineDeps, "journal">;
 	implementation_integrity_key: string;
+	/** Presence-backed fallback invoked only after the exact gate is durable. */
+	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
 	/** Dispatch one exact, auth-owned navigation before any login observation. */
 	navigateToDeclaredTarget?: (input: {
 		target_id: string;
@@ -74,6 +85,8 @@ export type BrowserUseRunbookAuthInput = {
 	run: BrowserUseSharedRun;
 	dispatch_claim: LeaseWriteClaim;
 	service_id: string;
+	flow_id: string;
+	action_policy_hash: string | null;
 	auth_context_ref: BrowserUseAuthContext;
 	allowed_origins: readonly string[];
 	expected_url: string;
@@ -160,6 +173,7 @@ export async function runBrowserUseRunbookAuth(
 	const handoffEvidenceId = run.handoff_evidence_id ?? "handoff-unbound";
 	let binding: BrowserUseItemBinding | undefined;
 	let readyResume = false;
+	let humanAttestationResume = false;
 	let postSubmitProofResume = false;
 	if (fragment !== undefined) {
 		const expectedOrigin = originOf(input.expected_url);
@@ -212,6 +226,152 @@ export async function runBrowserUseRunbookAuth(
 		return await commit();
 	};
 
+	const restartAuthenticatedReuse = async (
+		readyBinding: BrowserUseItemBinding,
+	): Promise<
+		| { ok: true }
+		| {
+				ok: false;
+				result: Extract<BrowserUseRunbookAuthResult, { ok: false }>;
+		  }
+	> => {
+		const origin = originOf(input.expected_url);
+		if (origin === undefined) {
+			return {
+				ok: false,
+				result: { ok: false, run, blocked: blockedOf("origin-mismatch") },
+			};
+		}
+		const renewed = beginAuthTransaction({
+			binding: {
+				run_id: run.run_id,
+				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
+				lane_id: "agent-browser",
+				environment: run.environment_profile.environment,
+				profile: run.environment_profile.profile,
+				service_id: input.service_id,
+				auth_context: input.auth_context_ref,
+				origin,
+				target_id: input.target_id,
+				page_id: input.target_id,
+				frame_id: input.target_id,
+			},
+			method: readyBinding.allowed_auth_methods.includes("otp")
+				? "otp"
+				: "password",
+			attempt_limit: 3,
+			attempts_already_consumed: 0,
+		});
+		if (!renewed.ok) {
+			return {
+				ok: false,
+				result: { ok: false, run, failure: renewed.rejection },
+			};
+		}
+		fragment = renewed.fragment;
+		const persisted = await commit();
+		if (!persisted.ok) {
+			return {
+				ok: false,
+				result: { ok: false, run, failure: persisted },
+			};
+		}
+		const reused = await transition({ type: "session-already-authenticated" });
+		return reused.ok
+			? { ok: true }
+			: { ok: false, result: { ok: false, run, failure: reused } };
+	};
+
+	const completeHumanIdentityAttestation = async (): Promise<
+		BrowserUseRunbookAuthResult | undefined
+	> => {
+		if (
+			deps.humanIdentityAttestation === undefined ||
+			binding === undefined ||
+			fragment?.status !== "blocked" ||
+			fragment.blocked_cause !== "human-identity-attestation-required"
+		) {
+			return undefined;
+		}
+		if (input.action_policy_hash === null) {
+			return {
+				ok: false,
+				run,
+				failure: {
+					code: "runbook_auth_execution_binding_missing",
+					message:
+						"human identity authorization requires an immutable execution-binding digest.",
+				},
+			};
+		}
+		const issued = await deps.humanIdentityAttestation({
+			run,
+			binding,
+			service_id: input.service_id,
+			flow_id: input.flow_id,
+			auth_context_ref: input.auth_context_ref,
+			expected_url: input.expected_url,
+			allowed_origins: input.allowed_origins,
+			target_id: input.target_id,
+			action_policy_hash: input.action_policy_hash,
+			implementation_integrity_key: deps.implementation_integrity_key,
+		});
+		if (!issued.ok) {
+			emitCliDiagnostic(
+				"browser-use.cli",
+				"debug",
+				"human-identity-attestation-refused",
+				{ refusal_code: issued.code },
+			);
+			return { ok: false, run, blocked: blockedOf(fragment.blocked_cause) };
+		}
+		const attestation = issued.attestation;
+		if (
+			attestation.run_id !== run.run_id ||
+			attestation.handoff_evidence_id !== run.handoff_evidence_id ||
+			attestation.lane_id !== run.adapter_id ||
+			attestation.environment !== run.environment_profile.environment ||
+			attestation.profile !== run.environment_profile.profile ||
+			attestation.target_id !== input.target_id ||
+			attestation.service_id !== input.service_id ||
+			attestation.auth_context !== input.auth_context_ref ||
+			attestation.identity_basis !== "human-identity-attestation" ||
+			attestation.implementation_integrity_key !==
+				deps.implementation_integrity_key
+		) {
+			return {
+				ok: false,
+				run,
+				failure: {
+					code: "human_identity_attestation_binding_invalid",
+					message:
+						"the broker-backed attestation changed an exact Shared Run binding.",
+				},
+			};
+		}
+		const digest = authAttestationDigestOf(attestation);
+		const written = await writeAuthAttestationRecord(deps.store, {
+			digest,
+			record: attestation,
+		});
+		if (!written.ok) return { ok: false, run, failure: written };
+		const resolved = await transition({ type: "blocked-cause-resolved" });
+		if (!resolved.ok) return { ok: false, run, failure: resolved };
+		const proved = await transition({
+			type: "postcondition-proven",
+			identity_basis: "human-identity-attestation",
+			identity_basis_digest: attestation.identity_basis_digest,
+		});
+		if (!proved.ok) return { ok: false, run, failure: proved };
+		const finalized = await transition({
+			type: "attestation-issued",
+			attestation_digest: digest,
+			fresh_until_epoch_ms: attestation.fresh_until_epoch_ms,
+		});
+		if (!finalized.ok) return { ok: false, run, failure: finalized };
+		return { ok: true, run, binding };
+	};
+
 	if (fragment !== undefined) {
 		postSubmitProofResume =
 			fragment.status === "active" &&
@@ -230,7 +390,15 @@ export async function runBrowserUseRunbookAuth(
 				const persisted = await commit();
 				if (!persisted.ok) return { ok: false, run, failure: persisted };
 			}
-			return { ok: false, run, blocked: blockedOf(fragment.blocked_cause) };
+			if (
+				fragment.blocked_cause ===
+					"human-identity-attestation-required" &&
+				deps.humanIdentityAttestation !== undefined
+			) {
+				humanAttestationResume = true;
+			} else {
+				return { ok: false, run, blocked: blockedOf(fragment.blocked_cause) };
+			}
 		}
 		if (fragment.terminal_outcome === "authenticated") {
 			readyResume = true;
@@ -260,14 +428,26 @@ export async function runBrowserUseRunbookAuth(
 			return null;
 		}
 	})();
+	const bindingRef = input.service_id;
+	const approvedBinding =
+		(await deps.resolveApprovedBinding?.({
+			binding_ref: bindingRef,
+			service_id: input.service_id,
+			auth_context: input.auth_context_ref,
+			environment: run.environment_profile.environment,
+			profile: run.environment_profile.profile,
+		})) ?? null;
 	const prepared = await deps.provider.prepareSecretFree({
 		service_id: input.service_id,
 		auth_context: input.auth_context_ref,
 		target_origins: input.allowed_origins,
 		login_path: loginPath,
 		method: "password",
-		binding: null,
-		candidate_hint: null,
+		binding: approvedBinding,
+		candidate_hint: {
+			hint_item_id: bindingRef,
+			legacy_vault_name: null,
+		},
 	});
 	if (prepared.ok) binding = prepared.binding ?? undefined;
 
@@ -319,6 +499,16 @@ export async function runBrowserUseRunbookAuth(
 		const blocked = await transition({ type: "blocked", cause });
 		if (!blocked.ok) return { ok: false, run, failure: blocked };
 		return { ok: false, run, blocked: blockedOf(cause) };
+	}
+	if (humanAttestationResume) {
+		const completed = await completeHumanIdentityAttestation();
+		return (
+			completed ?? {
+				ok: false,
+				run,
+				blocked: blockedOf("human-identity-attestation-required"),
+			}
+		);
 	}
 	const issueAttestation = async (
 		proof: BrowserUseAuthenticatedStateProofRecord,
@@ -419,6 +609,49 @@ export async function runBrowserUseRunbookAuth(
 		return await issueAttestation(fresh.proof);
 	}
 	if (readyResume) {
+		const reference = run.auth_attestation;
+		const storedAttestation =
+			reference === undefined
+				? undefined
+				: await attestationByDigestFrom(deps.store)(
+						reference.attestation_digest,
+					);
+		if (storedAttestation?.identity_basis === "human-identity-attestation") {
+			const revalidated = await revalidateAuthAttestation(
+				run,
+				{
+					at_epoch_ms: deps.store.clock(),
+					adapter_id: "agent-browser",
+					handoff_evidence_id: run.handoff_evidence_id,
+				},
+				createBrowserUseAuthContract({
+					attestationByDigest: attestationByDigestFrom(deps.store),
+				}),
+			);
+			if (revalidated.valid) return { ok: true, run, binding };
+			if (revalidated.code !== "attestation_expired") {
+				return {
+					ok: false,
+					run,
+					blocked: blockedOf("human-identity-attestation-required"),
+				};
+			}
+			const restarted = await restartAuthenticatedReuse(binding);
+			if (!restarted.ok) return restarted.result;
+			const blocked = await transition({
+				type: "blocked",
+				cause: "human-identity-attestation-required",
+			});
+			if (!blocked.ok) return { ok: false, run, failure: blocked };
+			const completed = await completeHumanIdentityAttestation();
+			return (
+				completed ?? {
+					ok: false,
+					run,
+					blocked: blockedOf("human-identity-attestation-required"),
+				}
+			);
+		}
 		const observed = await deps.login.observer.snapshot({ target_id: input.target_id });
 		if (!observed.ok || deps.login.proveAuthenticatedState === undefined) {
 			return { ok: false, run, blocked: blockedOf("human-identity-attestation-required") };
@@ -449,9 +682,18 @@ export async function runBrowserUseRunbookAuth(
 				attestationByDigest: attestationByDigestFrom(deps.store),
 			}),
 		);
-		return attestation.valid
-			? { ok: true, run, binding }
-			: { ok: false, run, blocked: blockedOf("session-identity-proof-unavailable") };
+		if (attestation.valid) return { ok: true, run, binding };
+		if (attestation.code !== "attestation_expired") {
+			return {
+				ok: false,
+				run,
+				blocked: blockedOf("session-identity-proof-unavailable"),
+			};
+		}
+
+		const restarted = await restartAuthenticatedReuse(binding);
+		if (!restarted.ok) return restarted.result;
+		return await issueAttestation(fresh.proof);
 	}
 	if (fragment.phase === "secret-free-preparation") {
 		const completed = await transition(prepared.event);
@@ -547,13 +789,27 @@ export async function runBrowserUseRunbookAuth(
 				run_id: run.run_id,
 				target_id: input.target_id,
 				expected_url: input.expected_url,
+				...(input.observed_url === undefined
+					? {}
+					: {
+							observed_url:
+								input.observed_url === "about:blank"
+									? input.expected_url
+									: input.observed_url,
+						}),
 				allowed_origins: input.allowed_origins,
 				binding,
+				allow_human_identity_attestation:
+					deps.humanIdentityAttestation !== undefined,
 			},
 		);
 		if (!engine.ok) {
 			let cause = engine.blocked.blocked_cause;
-			if (fragment?.submission_started) {
+			if (
+				fragment?.submission_started &&
+				(cause !== "human-identity-attestation-required" ||
+					deps.humanIdentityAttestation === undefined)
+			) {
 				const unknown = await transition({ type: "submit-outcome-observed", outcome: "timeout-unknown" });
 				if (!unknown.ok) return { ok: false, run, failure: unknown };
 				const cleaned = await transition({ type: "cleanup-complete" });
@@ -562,6 +818,13 @@ export async function runBrowserUseRunbookAuth(
 			} else {
 				const blocked = await transition({ type: "blocked", cause });
 				if (!blocked.ok) return { ok: false, run, failure: blocked };
+			}
+			if (
+				cause === "human-identity-attestation-required" &&
+				deps.humanIdentityAttestation !== undefined
+			) {
+				const completed = await completeHumanIdentityAttestation();
+				if (completed !== undefined) return completed;
 			}
 			return { ok: false, run, blocked: blockedOf(cause) };
 		}

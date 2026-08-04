@@ -128,7 +128,11 @@ export const BROWSER_USE_ADAPTER_LANE_TABLE = {
 		// element mutation (click/fill -> element_actions). open (navigation) and
 		// evaluate (page JS) have no capability-vocabulary member, so they are not
 		// advertised here — the lane claims only what the executor proves.
-		operation_capabilities: ["snapshot_refs", "element_actions"],
+		operation_capabilities: [
+			"snapshot_refs",
+			"screenshot_media",
+			"element_actions",
+		],
 		native_implementation: {
 			implemented: true,
 			execution_interface: "agent-browser-native-call",

@@ -245,11 +245,15 @@ export type BrowserUseRunbookSemanticTarget = {
 export type BrowserUseRunbookStep =
 	| { kind: "snapshot"; interactive: boolean }
 	| {
+			kind: "approval-gate";
+			blocked_cause: "submit-approval-required";
+	  }
+	| {
 			kind: "open";
 			url: string;
 			postcondition: Extract<
 				BrowserUseRunbookPostcondition,
-				{ kind: "url-equals" }
+				{ kind: "url-equals" | "url-starts-with" }
 			>;
 	  }
 	| {
@@ -408,9 +412,16 @@ function referencedInputs(value: string): string[] {
 function validatePostcondition(
 	postcondition: BrowserUseRunbookPostcondition,
 ): boolean {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		return postcondition.url.length > 0;
 	}
+	if (
+		postcondition.kind !== "value-equals" &&
+		postcondition.kind !== "element-visible"
+	) return false;
 	// value-equals / element-visible: a `@`-ref is not a valid CSS selector for
 	// a postcondition (the executor refuses those), and an empty selector is a
 	// bug, not a probe.
@@ -855,7 +866,7 @@ function validateStep(
 	issues: BrowserUseRunbookIssue[],
 ): void {
 	const at = `step ${index}`;
-	if (step.kind === "snapshot") return;
+	if (step.kind === "snapshot" || step.kind === "approval-gate") return;
 	if (step.kind === "open") {
 		if (!originAllowed(step.url, allowed)) {
 			issues.push({
@@ -864,12 +875,13 @@ function validateStep(
 			});
 		}
 		if (
-			step.postcondition.kind !== "url-equals" ||
+			(step.postcondition.kind !== "url-equals" &&
+				step.postcondition.kind !== "url-starts-with") ||
 			!validatePostcondition(step.postcondition)
 		) {
 			issues.push({
 				code: "runbook_step_invalid",
-				message: `${at}: open requires a valid url-equals postcondition.`,
+				message: `${at}: open requires a valid url-equals or url-starts-with postcondition.`,
 			});
 		}
 		return;
@@ -1000,7 +1012,16 @@ export function runbookDocumentAuthoringSchema() {
 		summary: "Read the current service status.",
 		allowed_origins: ["https://portal.example.test"],
 		inputs: [],
-		steps: [{ kind: "snapshot", interactive: false }],
+		steps: [
+			{
+				kind: "open",
+				url: "https://portal.example.test/status",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/status",
+				},
+			},
+		],
 	} as const satisfies BrowserUseRunbook;
 	return {
 		document_contract: "browser-use.runbook",
@@ -1020,7 +1041,19 @@ export function runbookDocumentAuthoringSchema() {
 			inputs: { type: "array", item_owner: "BrowserUseRunbookInput + parseRunbookRecord" },
 			steps: {
 				type: "non-empty-array",
-				variants: ["snapshot", "open", "click", "fill", "action", "iterate"],
+				variants: [
+					"snapshot",
+					"approval-gate",
+					"open",
+					"click",
+					"fill",
+					"action",
+					"iterate",
+				],
+				postconditions: {
+					variants: ["url-equals", "url-starts-with", "value-equals", "element-visible"],
+					open_variants: ["url-equals", "url-starts-with"],
+				},
 				item_owner: "BrowserUseRunbookStep + parseRunbookRecord",
 			},
 		},
@@ -1045,7 +1078,7 @@ function inspectExactKeys(
 
 function inspectPostconditionKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
 	if (!isPlainObject(value)) return;
-	const allowed = value.kind === "url-equals" ? ["kind", "url"] : value.kind === "value-equals" ? ["kind", "selector", "value"] : ["kind", "selector"];
+	const allowed = value.kind === "url-equals" || value.kind === "url-starts-with" ? ["kind", "url"] : value.kind === "value-equals" ? ["kind", "selector", "value"] : ["kind", "selector"];
 	inspectExactKeys(value, path, allowed, allowed, issues);
 }
 
@@ -1090,6 +1123,15 @@ function inspectStepKeys(value: unknown, path: string, issues: BrowserUseRunbook
 	switch (value.kind) {
 		case "snapshot":
 			inspectExactKeys(value, path, ["kind", "interactive"], ["kind", "interactive"], issues);
+			break;
+		case "approval-gate":
+			inspectExactKeys(
+				value,
+				path,
+				["kind", "blocked_cause"],
+				["kind", "blocked_cause"],
+				issues,
+			);
 			break;
 		case "open":
 			inspectExactKeys(value, path, ["kind", "url", "postcondition"], ["kind", "url", "postcondition"], issues);
@@ -1276,6 +1318,10 @@ function parsePostcondition(
 		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
 		return { kind: "url-equals", url: raw.url };
 	}
+	if (raw.kind === "url-starts-with" && typeof raw.url === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
+		return { kind: "url-starts-with", url: raw.url };
+	}
 	if (raw.kind === "value-equals" && typeof raw.selector === "string" && typeof raw.value === "string") {
 		if (!hasOnlyKeys(raw, ["kind", "selector", "value"])) return undefined;
 		return { kind: "value-equals", selector: raw.selector, value: raw.value };
@@ -1347,10 +1393,22 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 			if (typeof raw.interactive !== "boolean") return undefined;
 			return { kind: "snapshot", interactive: raw.interactive };
 		}
+		case "approval-gate": {
+			if (!hasOnlyKeys(raw, ["kind", "blocked_cause"])) return undefined;
+			if (raw.blocked_cause !== "submit-approval-required") return undefined;
+			return {
+				kind: "approval-gate",
+				blocked_cause: "submit-approval-required",
+			};
+		}
 		case "open": {
 			if (!hasOnlyKeys(raw, ["kind", "url", "postcondition"])) return undefined;
 			const post = parsePostcondition(raw.postcondition);
-			if (typeof raw.url !== "string" || post === undefined || post.kind !== "url-equals") {
+			if (
+				typeof raw.url !== "string" ||
+				post === undefined ||
+				(post.kind !== "url-equals" && post.kind !== "url-starts-with")
+			) {
 				return undefined;
 			}
 			return { kind: "open", url: raw.url, postcondition: post };
@@ -1540,6 +1598,54 @@ export type BrowserUseRunbookPlanRefusal = {
 	message: string;
 };
 
+/** Result of admitting runbook inputs before any downstream action resolution. */
+export type BrowserUseRunbookInputAdmissionResult =
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; refusal: BrowserUseRunbookPlanRefusal };
+
+/**
+ * Materialize defaults and enforce every declared runbook input schema.
+ *
+ * The engine calls this before resolving Reviewed Actions so malformed input
+ * cannot escape its owning schema gate and surface as a downstream action error.
+ *
+ * @param runbook - Validated runbook whose declared inputs own admission
+ * @param inputs - Caller-supplied input bindings
+ * @returns Normalized admitted inputs, or the first typed input refusal
+ * @internal
+ */
+export function admitRunbookInputs(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): BrowserUseRunbookInputAdmissionResult {
+	const normalizedInputs = materializeRunbookInputs(runbook, inputs);
+	for (const declared of runbook.inputs) {
+		const value = normalizedInputs[declared.id];
+		if (value === undefined) {
+			if (declared.required) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_input_missing",
+						message: `required input ${declared.id} was not supplied.`,
+					},
+				};
+			}
+			continue;
+		}
+		if (!valueMatchesSchema(value, declared.schema)) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_input_rejected",
+					message: `input ${declared.id} does not satisfy its declared value schema.`,
+				},
+			};
+		}
+	}
+	return { ok: true, inputs: normalizedInputs };
+}
+
 /**
  * A planned execution: the compiled bounded Agent Browser steps (from
  * `resume_from_step` onward) plus the resolved allowed origins, ready to hand
@@ -1576,6 +1682,11 @@ export type BrowserUseRunbookPlan = {
 	resume_from_step: number;
 	total_steps: number;
 	steps: readonly AgentBrowserTaskStep[];
+	/** First generic approval boundary; adapter steps after it are not compiled. */
+	approval_gate?: {
+		runbook_step_index: number;
+		blocked_cause: "submit-approval-required";
+	};
 	/**
 	 * Absolute runbook step index for each compiled executor step. Expanded
 	 * iterations repeat their source index so partial execution resumes the
@@ -1602,11 +1713,14 @@ export function nextRunbookStepAfterExecution(
 		| "resume_from_step"
 		| "total_steps"
 		| "compiled_step_runbook_indices"
+		| "approval_gate"
 	>,
 	executedSteps: number,
 ): number {
 	if (executedSteps >= plan.compiled_step_runbook_indices.length) {
-		return plan.total_steps;
+		return plan.approval_gate !== undefined
+			? plan.approval_gate.runbook_step_index
+			: plan.total_steps;
 	}
 	return (
 		plan.compiled_step_runbook_indices[executedSteps] ??
@@ -1745,7 +1859,9 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	const normalizedInputs = materializeRunbookInputs(runbook, input.inputs);
+	const admittedInputs = admitRunbookInputs(runbook, input.inputs);
+	if (!admittedInputs.ok) return admittedInputs;
+	const normalizedInputs = admittedInputs.inputs;
 	// Reviewed-action and iteration steps require an engine-resolved executor
 	// step (U3): the pure model NEVER resolves an asset. When the engine supplies
 	// no resolution for an action/iterate step, refuse with a typed pointer
@@ -1772,30 +1888,6 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	for (const declared of runbook.inputs) {
-		const value = normalizedInputs[declared.id];
-		if (value === undefined) {
-			if (declared.required) {
-				return {
-					ok: false,
-					refusal: {
-						code: "runbook_input_missing",
-						message: `required input ${declared.id} was not supplied.`,
-					},
-				};
-			}
-			continue;
-		}
-		if (!valueMatchesSchema(value, declared.schema)) {
-			return {
-				ok: false,
-				refusal: {
-					code: "runbook_input_rejected",
-					message: `input ${declared.id} does not satisfy its declared value schema.`,
-				},
-			};
-		}
-	}
 	if (
 		!Number.isInteger(input.resumeFromStep) ||
 		input.resumeFromStep < 0 ||
@@ -1810,12 +1902,19 @@ export function planRunbookExecution(
 		};
 	}
 	const remaining = runbook.steps.slice(input.resumeFromStep);
+	const approvalGateOffset = remaining.findIndex(
+		(step) => step.kind === "approval-gate",
+	);
+	const executableRemaining =
+		approvalGateOffset === -1
+			? remaining
+			: remaining.slice(0, approvalGateOffset);
 	// Compile each remaining step. An `action`/`iterate` step expands into its
 	// engine-resolved executor steps (U3, keyed by ABSOLUTE step index); every
 	// other kind compiles through the pure `compileStep`.
 	const compiled: AgentBrowserTaskStep[] = [];
 	const compiledStepRunbookIndices: number[] = [];
-	for (const [offset, step] of remaining.entries()) {
+	for (const [offset, step] of executableRemaining.entries()) {
 		const absoluteIndex = input.resumeFromStep + offset;
 		if (step.kind === "action" || step.kind === "iterate") {
 			const resolution = resolvedActionSteps.get(absoluteIndex);
@@ -1829,7 +1928,7 @@ export function planRunbookExecution(
 		compiled.push(compileStep(step, normalizedInputs));
 		compiledStepRunbookIndices.push(absoluteIndex);
 	}
-	const pendingBindings = remaining
+	const pendingBindings = executableRemaining
 		.filter(
 			(
 				step,
@@ -1852,6 +1951,15 @@ export function planRunbookExecution(
 			resume_from_step: input.resumeFromStep,
 			total_steps: runbook.steps.length,
 			steps: compiled,
+			...(approvalGateOffset === -1
+				? {}
+				: {
+						approval_gate: {
+							runbook_step_index:
+								input.resumeFromStep + approvalGateOffset,
+							blocked_cause: "submit-approval-required" as const,
+						},
+					}),
 			compiled_step_runbook_indices: compiledStepRunbookIndices,
 			pending_item_bindings: [...new Set(pendingBindings)],
 			read_action_meta: input.readActionMeta ?? {},

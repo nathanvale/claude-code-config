@@ -416,6 +416,7 @@ export type BrowserUseLanesSubcommand =
 const BROWSER_USE_RUN_SUBCOMMANDS = [
 	"status",
 	"resume",
+	"approve",
 	"cancel",
 ] as const;
 export type BrowserUseRunSubcommand =
@@ -434,7 +435,13 @@ const BROWSER_USE_RUNBOOK_SUBCOMMANDS = [
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
 
-export const BROWSER_USE_ACTION_SUBCOMMANDS = ["schema", "validate", "apply", "status"] as const;
+export const BROWSER_USE_ACTION_SUBCOMMANDS = [
+	"schema",
+	"validate",
+	"apply",
+	"status",
+	"promote",
+] as const;
 export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
 
 const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
@@ -577,6 +584,7 @@ export type BrowserUseCommand =
 	| "lanes-show"
 	| "run-status"
 	| "run-resume"
+	| "run-approve"
 	| "run-cancel"
 	| "runbook-list"
 	| "runbook-show"
@@ -590,6 +598,7 @@ export type BrowserUseCommand =
 	| "action-validate"
 	| "action-apply"
 	| "action-status"
+	| "action-promote"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -699,6 +708,7 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"run_record_corrupt",
 	"run_resume_execution_unavailable",
 	"run_terminal_truth",
+	"run_cancel_mutation_dispatched",
 	"retention_collision",
 	"artifact_missing",
 	"artifact_corrupt",
@@ -1043,6 +1053,12 @@ export const browserUsePlatformStoreFailureActions = [
 	},
 ] as const;
 
+const browserUseInspectSharedRunAction = {
+	id: "inspect_shared_run",
+	summary: "Read the shared run projection and follow its continuation.",
+	sideEffects: ["check"],
+} as const;
+
 export const browserUsePlatformStoreSuccessActions = [
 	{
 		id: "apply_repair",
@@ -1050,16 +1066,18 @@ export const browserUsePlatformStoreSuccessActions = [
 			"Apply the bounded repair plan with browser-use repair apply, then inspect repair status again.",
 		sideEffects: ["write"],
 	},
-	{
-		id: "inspect_shared_run",
-		summary: "Read the shared run projection and follow its continuation.",
-		sideEffects: ["check"],
-	},
+	browserUseInspectSharedRunAction,
 	{
 		id: "resume_shared_run",
 		summary:
 			"Resume the blocked shared run with browser-use run resume --run <id>.",
 		sideEffects: ["check"],
+	},
+	{
+		id: "resume_runbook_execution",
+		summary:
+			"Rerun the original browser-use runbook run command with --run <id> after explicit approval.",
+		sideEffects: ["browser", "write"],
 	},
 ] as const;
 
@@ -1328,6 +1346,15 @@ const browserUsePlatformEnvVars = [
 	browserUseCallerEnvVar,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
+export const BROWSER_USE_APPROVAL_BROKER_ENV =
+	"BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER";
+
+const browserUseApprovalBrokerEnvVar = {
+	name: BROWSER_USE_APPROVAL_BROKER_ENV,
+	description:
+		"Absolute signed ApprovalBroker executable used for presence-backed action promotion and one-run identity attestation.",
+} as const;
+
 // XDG env vars the store-backed platform commands consume (platform plan U2,
 // R7/R11). Declared once; browser-use-paths.ts is the one resolution owner —
 // this table only names the consumed vars for discovery/help.
@@ -1444,6 +1471,22 @@ const browserUseRunFlags = {
 	"--run": {
 		type: "string",
 		description: "Shared Browser Use run id to inspect, resume, or cancel.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunApproveFlags = {
+	"--run": {
+		type: "string",
+		description: "Shared Browser Use run id at an awaiting-approval gate.",
+	},
+	"--continuation": {
+		type: "string",
+		description: "Exact persisted approval continuation being satisfied.",
+	},
+	"--artifact": {
+		type: "string",
+		description: "Exact attached screenshot artifact reviewed by the operator.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -1637,6 +1680,12 @@ const browserUseActionApplyFlags = {
 
 const browserUseActionStatusFlags = {
 	"--id": { type: "string", description: "Exact Reviewed Action id whose promotion state is projected." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionPromoteFlags = {
+	"--id": { type: "string", description: "Exact committed Reviewed Action id to promote." },
+	"--approval-reference": { type: "string", description: "Opaque external-human review reference bound into the signed promotion receipt." },
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
@@ -2253,10 +2302,37 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
+		"run-approve": {
+			script: "browser-use",
+			summary:
+				"Record one explicit approval for the run's exact continuation and attached review screenshot.",
+			usage: [
+				"run approve --run <id> --continuation <id> --artifact <id> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Approval records explicit operator intent but does not dispatch the browser mutation.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunApproveFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
 		"run-cancel": {
 			script: "browser-use",
 			summary:
-				"Cancel a shared Browser Use run and report the last proven external-effect classification; never claims rollback after dispatch.",
+				"Cancel a pre-dispatch shared Browser Use run; refuses after mutation dispatch because external write truth may be unresolved.",
 			usage: ["run cancel --run <id> [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
@@ -2272,7 +2348,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,
-				failure: browserUsePlatformStoreFailureActions,
+				failure: [
+					...browserUsePlatformStoreFailureActions,
+					browserUseInspectSharedRunAction,
+				],
 			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
@@ -2309,6 +2388,16 @@ export const browserUseContracts = defineCommandFacadeContract(
 			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
 			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
 			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-promote": {
+			script: "browser-use",
+			summary: "Promote one exact committed Reviewed Action through the signed, presence-backed ApprovalBroker.",
+			usage: ["action promote --id <action-id> --approval-reference <reference> [--caller <label>] [--json|--plain]"],
+			json: true, audience: "operator", mutation: "write", sideEffects: ["check", "auth", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Promotion is exact-commit bound and requires live operator presence at the signed broker." },
+			outputModes: ["json", "plain"], interactivity: "required",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionPromoteFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-schema": {
 			script: "browser-use",
@@ -2414,15 +2503,15 @@ export const browserUseContracts = defineCommandFacadeContract(
 			json: true,
 			audience: "agent",
 			mutation: "browser",
-			sideEffects: ["check", "browser", "write"],
+			sideEffects: ["check", "auth", "browser", "write"],
 			executionModes: ["normal"],
 			previewExemption: {
 				reason:
 					"Runbook run creates or resumes a durable shared run and dispatches live agent-browser execution against the verified handoff.",
 			},
 			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: browserUsePlatformStoreEnvVars,
+			interactivity: "optional",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,

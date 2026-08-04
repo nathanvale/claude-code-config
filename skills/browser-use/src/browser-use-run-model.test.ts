@@ -580,17 +580,21 @@ describe("same-lane resume (R28)", () => {
 describe("cancellation truth (R26, R37)", () => {
 	test("cancel before any dispatched mutation reports no external effect", () => {
 		expect(classifyCancellation(baseRun())).toEqual({
-			external_effect: "none",
-			rolled_back: false,
+			ok: true,
+			report: {
+				external_effect: "none",
+				rolled_back: false,
+			},
 		});
 	});
 
-	test("cancel after a possible mutation reports unknown and never rollback", () => {
+	test("cancel after a possible mutation is a typed refusal", () => {
 		expect(
 			classifyCancellation(baseRun({ mutation_dispatched: true })),
 		).toEqual({
-			external_effect: "unknown",
-			rolled_back: false,
+			ok: false,
+			code: "run_cancel_mutation_dispatched",
+			message: expect.any(String),
 		});
 	});
 });
