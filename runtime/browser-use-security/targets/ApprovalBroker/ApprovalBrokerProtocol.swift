@@ -201,13 +201,7 @@ enum ReviewedActionPromotionProtocol {
     ) -> Bool {
         verify(receipt: receipt, verifier: verifier) &&
             receipt.approval_reference == request.approval_reference &&
-            ReviewedActionApprovalFacts(
-                source_commit: receipt.source_commit, action_id: receipt.action_id,
-                approved_digest: receipt.approved_digest, approved_origin: receipt.approved_origin,
-                approved_effect: receipt.approved_effect, audited_capabilities: receipt.audited_capabilities,
-                containment: receipt.containment, input_schema_digest: receipt.input_schema_digest,
-                result_schema_digest: receipt.result_schema_digest, postcondition_digest: receipt.postcondition_digest
-            ) == request.facts
+            factsOf(receipt) == request.facts
     }
 
     static func verifyUnique(
@@ -299,13 +293,7 @@ enum ReviewedActionPromotionProtocol {
     }
 
     static func receiptJSONObject(_ receipt: ReviewedActionPromotionReceipt) -> [String: Any] {
-        var object = factsJSONObject(ReviewedActionApprovalFacts(
-            source_commit: receipt.source_commit, action_id: receipt.action_id,
-            approved_digest: receipt.approved_digest, approved_origin: receipt.approved_origin,
-            approved_effect: receipt.approved_effect, audited_capabilities: receipt.audited_capabilities,
-            containment: receipt.containment, input_schema_digest: receipt.input_schema_digest,
-            result_schema_digest: receipt.result_schema_digest, postcondition_digest: receipt.postcondition_digest
-        ))
+        var object = factsJSONObject(factsOf(receipt))
         object["contract"] = receipt.contract
         object["schema_version"] = receipt.schema_version
         object["receipt_id"] = receipt.receipt_id
@@ -343,13 +331,20 @@ enum ReviewedActionPromotionProtocol {
             safeID(receipt.receipt_id) && safeID(receipt.approval_reference) &&
             safeID(receipt.verifier_key_id) && receipt.issued_at_epoch_ms >= 0 &&
             receipt.signature.utf8.count <= 4096 && !receipt.signature.isEmpty &&
-            factsAreValid(ReviewedActionApprovalFacts(
-                source_commit: receipt.source_commit, action_id: receipt.action_id,
-                approved_digest: receipt.approved_digest, approved_origin: receipt.approved_origin,
-                approved_effect: receipt.approved_effect, audited_capabilities: receipt.audited_capabilities,
-                containment: receipt.containment, input_schema_digest: receipt.input_schema_digest,
-                result_schema_digest: receipt.result_schema_digest, postcondition_digest: receipt.postcondition_digest
-            ))
+            factsAreValid(factsOf(receipt))
+    }
+
+    // Project the ten approval-facts fields out of a receipt. Kept in one place so a
+    // new fact field is added once here rather than silently omitted at one of the
+    // call sites (verify, receiptJSONObject, receiptIsValid) that reconstruct facts.
+    static func factsOf(_ receipt: ReviewedActionPromotionReceipt) -> ReviewedActionApprovalFacts {
+        ReviewedActionApprovalFacts(
+            source_commit: receipt.source_commit, action_id: receipt.action_id,
+            approved_digest: receipt.approved_digest, approved_origin: receipt.approved_origin,
+            approved_effect: receipt.approved_effect, audited_capabilities: receipt.audited_capabilities,
+            containment: receipt.containment, input_schema_digest: receipt.input_schema_digest,
+            result_schema_digest: receipt.result_schema_digest, postcondition_digest: receipt.postcondition_digest
+        )
     }
 
     private static func factsAreValid(_ facts: ReviewedActionApprovalFacts) -> Bool {
