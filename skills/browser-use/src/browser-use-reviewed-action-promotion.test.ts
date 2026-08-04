@@ -26,6 +26,15 @@ async function promotionFixture() {
 			"utf8",
 		),
 	) as {
+		approved_response: {
+			ok: true;
+			receipt: BrowserUseReviewedActionPromotionReceipt;
+		};
+		refused_response: {
+			ok: false;
+			code: "presence-cancelled";
+			message: string;
+		};
 		request: {
 			facts: BrowserUseReviewedActionApprovalFacts;
 			candidate_bytes: string;
@@ -44,18 +53,13 @@ async function writeBrokerScript(root: string, body: string): Promise<string> {
 }
 
 describe("native Reviewed Action promotion broker", () => {
-	test("sends the versioned exact-facts request and admits the versioned response", async () => {
+	test("sends the versioned exact-facts request and admits the signed broker response", async () => {
 		const fixture = await promotionFixture();
 		const root = await mkdtemp(join(tmpdir(), "reviewed-action-broker-"));
 		cleanup.add(root);
 		const requestPath = join(root, "request.json");
 		const verifierEnvelope = JSON.stringify({ ok: true, verifier: fixture.verifier });
-		const responseEnvelope = JSON.stringify({
-			contract: "browser-use.reviewed-action-promotion-response",
-			schema_version: "1",
-			ok: true,
-			receipt: fixture.receipt,
-		});
+		const responseEnvelope = JSON.stringify(fixture.approved_response);
 		const executable = await writeBrokerScript(
 			root,
 			`case "$1" in\n  verifier) printf '%s\\n' '${verifierEnvelope}' ;;\n  promote) IFS= read -r request; printf '%s\\n' "$request" > '${requestPath}'; printf '%s\\n' '${responseEnvelope}' ;;\n  *) exit 20 ;;\nesac`,
@@ -80,13 +84,7 @@ describe("native Reviewed Action promotion broker", () => {
 		const fixture = await promotionFixture();
 		const root = await mkdtemp(join(tmpdir(), "reviewed-action-broker-"));
 		cleanup.add(root);
-		const responseEnvelope = JSON.stringify({
-			contract: "browser-use.reviewed-action-promotion-response",
-			schema_version: "1",
-			ok: false,
-			code: "presence-cancelled",
-			message: "Touch ID presence was cancelled",
-		});
+		const responseEnvelope = JSON.stringify(fixture.refused_response);
 		const executable = await writeBrokerScript(
 			root,
 			`IFS= read -r request\nprintf '%s\\n' '${responseEnvelope}'\nexit 20`,
@@ -99,10 +97,40 @@ describe("native Reviewed Action promotion broker", () => {
 		).toEqual({
 			ok: false,
 			rejection: {
-				code: "presence-cancelled",
-				message: "Touch ID presence was cancelled",
+				code: fixture.refused_response.code,
+				message: fixture.refused_response.message,
 			},
 		});
+	});
+
+	test("rejects extra broker response fields and malformed receipts", async () => {
+		const fixture = await promotionFixture();
+		const cases = [
+			{ ...fixture.approved_response, contract: "untrusted" },
+			{
+				...fixture.approved_response,
+				receipt: { ...fixture.receipt, extra: true },
+			},
+			{ ...fixture.refused_response, extra: true },
+		];
+
+		for (const response of cases) {
+			const root = await mkdtemp(join(tmpdir(), "reviewed-action-broker-"));
+			cleanup.add(root);
+			const executable = await writeBrokerScript(
+				root,
+				`IFS= read -r request\nprintf '%s\\n' '${JSON.stringify(response)}'`,
+			);
+
+			expect(
+				await createNativeReviewedActionOperatorBroker(
+					executable,
+				).issueReviewedActionPromotion(fixture.request),
+			).toMatchObject({
+				ok: false,
+				rejection: { code: "broker-response-unknown" },
+			});
+		}
 	});
 
 	test("classifies a lost broker response as unknown without retrying", async () => {

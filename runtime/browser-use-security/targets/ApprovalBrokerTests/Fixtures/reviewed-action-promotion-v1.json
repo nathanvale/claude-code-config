@@ -1,4 +1,31 @@
 {
+  "approved_response" : {
+    "ok" : true,
+    "receipt" : {
+      "action_id" : "count-visible-rows",
+      "approval_reference" : "review-swift-vector",
+      "approved_digest" : "ac9c63bdfa8f7dc11d70906f8084ed1eadbf102b27d7486b355bd1fc307f3bca",
+      "approved_effect" : "read",
+      "approved_origin" : "https://portal.example.test",
+      "audited_capabilities" : [
+        "dom-query",
+        "dom-read"
+      ],
+      "containment" : "read-only-observation",
+      "contract" : "browser-use.reviewed-action-promotion",
+      "disposition" : "approved",
+      "input_schema_digest" : "3333333333333333333333333333333333333333333333333333333333333333",
+      "issued_at_epoch_ms" : 1754265600000,
+      "postcondition_digest" : null,
+      "presence_backed" : true,
+      "receipt_id" : "receipt-swift-vector",
+      "result_schema_digest" : "4444444444444444444444444444444444444444444444444444444444444444",
+      "schema_version" : "1",
+      "signature" : "MEYCIQDVwWdYw5JG0ADhcyV3hEauldib3GoKQn3pFWvLXCjF+AIhAJd7vr4dbkwdGdY7+/GK1+qGyrCkEn3SF34/IdW6CuY+",
+      "source_commit" : "1111111111111111111111111111111111111111",
+      "verifier_key_id" : "698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be"
+    }
+  },
   "canonical_payload_base64" : "eyJhY3Rpb25faWQiOiJjb3VudC12aXNpYmxlLXJvd3MiLCJhcHByb3ZhbF9yZWZlcmVuY2UiOiJyZXZpZXctc3dpZnQtdmVjdG9yIiwiYXBwcm92ZWRfZGlnZXN0IjoiYWM5YzYzYmRmYThmN2RjMTFkNzA5MDZmODA4NGVkMWVhZGJmMTAyYjI3ZDc0ODZiMzU1YmQxZmMzMDdmM2JjYSIsImFwcHJvdmVkX2VmZmVjdCI6InJlYWQiLCJhcHByb3ZlZF9vcmlnaW4iOiJodHRwczovL3BvcnRhbC5leGFtcGxlLnRlc3QiLCJhdWRpdGVkX2NhcGFiaWxpdGllcyI6WyJkb20tcXVlcnkiLCJkb20tcmVhZCJdLCJjb250YWlubWVudCI6InJlYWQtb25seS1vYnNlcnZhdGlvbiIsImlucHV0X3NjaGVtYV9kaWdlc3QiOiIzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzIiwiaXNzdWVkX2F0X2Vwb2NoX21zIjoxNzU0MjY1NjAwMDAwLCJwb3N0Y29uZGl0aW9uX2RpZ2VzdCI6bnVsbCwicmVjZWlwdF9pZCI6InJlY2VpcHQtc3dpZnQtdmVjdG9yIiwicmVzdWx0X3NjaGVtYV9kaWdlc3QiOiI0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0Iiwic291cmNlX2NvbW1pdCI6IjExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJ2ZXJpZmllcl9rZXlfaWQiOiI2OThiZWE2M2RjNDRhMzQ0NjYzZmYxNDI5YWVhMTA4NDJkZjI3YjZiOTkxZWYyNTg2NmIyYzZjMDJjZGNjNWJlIn0=",
   "contract" : "browser-use.reviewed-action-promotion-fixture",
   "generated_by" : "GeneratePromotionFixture.swift",
@@ -25,6 +52,11 @@
     "signature" : "MEYCIQDVwWdYw5JG0ADhcyV3hEauldib3GoKQn3pFWvLXCjF+AIhAJd7vr4dbkwdGdY7+/GK1+qGyrCkEn3SF34/IdW6CuY+",
     "source_commit" : "1111111111111111111111111111111111111111",
     "verifier_key_id" : "698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be"
+  },
+  "refused_response" : {
+    "code" : "presence-cancelled",
+    "message" : "Touch ID presence was cancelled",
+    "ok" : false
   },
   "request" : {
     "approval_reference" : "review-swift-vector",

@@ -66,6 +66,15 @@ let fixture: [String: Any] = [
     "contract": "browser-use.reviewed-action-promotion-fixture",
     "schema_version": "1",
     "generated_by": "GeneratePromotionFixture.swift",
+    "approved_response": [
+        "ok": true,
+        "receipt": receipt,
+    ],
+    "refused_response": [
+        "ok": false,
+        "code": "presence-cancelled",
+        "message": "Touch ID presence was cancelled",
+    ],
     "request": request,
     "canonical_payload_base64": canonicalPayload.base64EncodedString(),
     "verifier": [

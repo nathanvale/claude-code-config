@@ -20,9 +20,7 @@ const VERIFIER_SCHEMA_VERSION = REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION;
 const VERIFIER_FILE = REVIEWED_ACTION_VERIFIER_FILE;
 const PROMOTION_REQUEST_CONTRACT =
 	"browser-use.reviewed-action-promotion-request";
-const PROMOTION_RESPONSE_CONTRACT =
-	"browser-use.reviewed-action-promotion-response";
-const PROMOTION_SCHEMA_VERSION = "1";
+const PROMOTION_REQUEST_SCHEMA_VERSION = "1";
 const MAXIMUM_BROKER_OUTPUT_BYTES = 1_048_576;
 const BROKER_PROMOTE_TIMEOUT_MS = 5 * 60_000;
 const BROKER_VERIFIER_TIMEOUT_MS = 30_000;
@@ -84,27 +82,18 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 
 function parsePromotionResponse(value: unknown): NativePromotionResponse | undefined {
 	const response = recordOf(value);
-	if (
-		response === undefined ||
-		response.contract !== PROMOTION_RESPONSE_CONTRACT ||
-		response.schema_version !== PROMOTION_SCHEMA_VERSION ||
-		typeof response.ok !== "boolean"
-	) {
+	// The signed broker's envelope is exact and unversioned; its receipt carries
+	// the versioned contract that offline verification admits.
+	if (response === undefined || typeof response.ok !== "boolean") {
 		return undefined;
 	}
 	if (response.ok) {
-		return exactKeys(response, ["contract", "schema_version", "ok", "receipt"]) &&
+		return exactKeys(response, ["ok", "receipt"]) &&
 			reviewedActionPromotionReceiptIsValid(response.receipt)
 			? { ok: true, receipt: response.receipt }
 			: undefined;
 	}
-	return exactKeys(response, [
-		"contract",
-		"schema_version",
-		"ok",
-		"code",
-		"message",
-	]) &&
+	return exactKeys(response, ["ok", "code", "message"]) &&
 		typeof response.code === "string" &&
 		SAFE_BROKER_CODE.test(response.code) &&
 		typeof response.message === "string" &&
@@ -222,7 +211,7 @@ export function createNativeReviewedActionOperatorBroker(
 			}
 			const result = await invokeNativeBroker(executablePath, "promote", {
 				contract: PROMOTION_REQUEST_CONTRACT,
-				schema_version: PROMOTION_SCHEMA_VERSION,
+				schema_version: PROMOTION_REQUEST_SCHEMA_VERSION,
 				...input,
 			});
 			if (result === undefined) return unknownPromotionResponse();

@@ -34,7 +34,7 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         )
     }
 
-    func testVersionedRequestAndResponseRejectUnknownOrExtraFields() throws {
+    func testVersionedRequestAndExactBrokerResponseRejectUnknownOrExtraFields() throws {
         let requestObject = try XCTUnwrap(fixture["request"] as? [String: Any])
         var extra = requestObject
         extra["authority"] = "self-reported"
@@ -64,6 +64,11 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         )
 
         let response = try ReviewedActionPromotionProtocol.encodeResponse(.approved(receipt))
+        let approvedResponse = try XCTUnwrap(fixture["approved_response"] as? [String: Any])
+        XCTAssertEqual(
+            response,
+            try JSONSerialization.data(withJSONObject: approvedResponse, options: [.sortedKeys, .withoutEscapingSlashes])
+        )
         XCTAssertEqual(try ReviewedActionPromotionProtocol.decodeResponse(response), .approved(receipt))
         var responseObject = try XCTUnwrap(JSONSerialization.jsonObject(with: response) as? [String: Any])
         responseObject["extra"] = true
@@ -72,12 +77,6 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
         ))
 
         responseObject.removeValue(forKey: "extra")
-        responseObject["schema_version"] = "999"
-        XCTAssertThrowsError(try ReviewedActionPromotionProtocol.decodeResponse(
-            JSONSerialization.data(withJSONObject: responseObject)
-        ))
-
-        responseObject["schema_version"] = "1"
         var extraReceipt = try XCTUnwrap(responseObject["receipt"] as? [String: Any])
         extraReceipt["extra"] = true
         responseObject["receipt"] = extraReceipt
@@ -153,6 +152,26 @@ final class ApprovalBrokerProtocolTests: XCTestCase {
     }
 
     func testPresenceOutcomesRemainTypedProtocolResults() throws {
+        let refusedResponse = try XCTUnwrap(fixture["refused_response"] as? [String: Any])
+        let fixtureCode = try XCTUnwrap(refusedResponse["code"] as? String)
+        let fixtureMessage = try XCTUnwrap(refusedResponse["message"] as? String)
+        let fixtureEncoded = try ReviewedActionPromotionProtocol.encodeResponse(
+            .refused(code: fixtureCode, message: fixtureMessage)
+        )
+        XCTAssertEqual(
+            fixtureEncoded,
+            try JSONSerialization.data(withJSONObject: refusedResponse, options: [.sortedKeys, .withoutEscapingSlashes])
+        )
+        XCTAssertEqual(
+            try ReviewedActionPromotionProtocol.decodeResponse(fixtureEncoded),
+            .refused(code: fixtureCode, message: fixtureMessage)
+        )
+        var extraRefusal = refusedResponse
+        extraRefusal["extra"] = true
+        XCTAssertThrowsError(try ReviewedActionPromotionProtocol.decodeResponse(
+            JSONSerialization.data(withJSONObject: extraRefusal)
+        ))
+
         for code in ["biometric-capability-missing", "presence-cancelled"] {
             let encoded = try ReviewedActionPromotionProtocol.encodeResponse(
                 .refused(code: code, message: "presence unavailable")
