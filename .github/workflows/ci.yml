@@ -55,6 +55,13 @@ jobs:
       - name: Test ApprovalBroker protocol hermetically
         run: bun run --cwd runtime/browser-use-security test:protocol
 
+      # Manifest, policy, runtime-admission, refusal, and docs-drift tests for
+      # Browser Use Security. These prove production promotion stays fail-closed
+      # (native-capability-absent) and are the only gate on that behavior — a
+      # regression here would otherwise merge green (Verification Contract, U2).
+      - name: Test Browser Use Security
+        run: bun run --cwd runtime/browser-use-security test
+
       # The auth-doctor process-boundary suite drives the RELEASE supervisor
       # (.build/release/browser-use-op-supervisor) and hard-fails when it is
       # absent (build, never skip). Build it so the real-binary proof runs in

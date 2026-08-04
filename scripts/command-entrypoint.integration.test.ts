@@ -1493,6 +1493,9 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"browser-use source entry launches and discovers work from an unrelated repository",
 		async () => {
+			// Intentionally under repoRoot, not tmpdir(): on macOS os.tmpdir() is
+			// /var/folders/... where /var symlinks to /private/var, and the CLI's
+			// R12 XDG safety check refuses an XDG root with a symlink ancestor.
 			const xdgRoot = mkdtempSync(join(repoRoot, ".command-entrypoint-xdg-"));
 			const browserUseEnv: NodeJS.ProcessEnv = {
 				...process.env,
