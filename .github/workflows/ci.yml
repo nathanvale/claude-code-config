@@ -43,6 +43,12 @@ jobs:
       - name: Build Swift custody package
         run: swift build --package-path runtime/browser-use-environment-auth
 
+      - name: Test Swift custody package
+        run: |
+          printf 'Runner image: %s (%s)\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          swift --version
+          swift test --package-path runtime/browser-use-environment-auth
+
       # The auth-doctor process-boundary suite drives the RELEASE supervisor
       # (.build/release/browser-use-op-supervisor) and hard-fails when it is
       # absent (build, never skip). Build it so the real-binary proof runs in
