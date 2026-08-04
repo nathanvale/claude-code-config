@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,14 +49,26 @@ describe("production package authority boundary", () => {
 		const root = await mkdtemp(join(tmpdir(), "browser-use-production-bundle-"));
 		cleanup.add(root);
 		const outdir = join(root, "bundle");
-		const built = await Bun.build({
-			entrypoints: [join(import.meta.dir, "browser-use.ts")],
-			outdir,
-			target: "bun",
-			splitting: false,
-			external: ["@side-quest/browser-connect/cli"],
-		});
-		expect(built.success).toBe(true);
+		// Build in a subprocess, not in-process Bun.build: a sibling test that
+		// imports @side-quest/cli-command-facade/testing loads that test-only
+		// module into this process's registry, which then poisons an in-process
+		// Bun.build resolution of the same package's siblings (./process-testing).
+		// A fresh `bun build` process has a clean registry.
+		const built = spawnSync(
+			process.execPath,
+			[
+				"build",
+				join(import.meta.dir, "browser-use.ts"),
+				"--target",
+				"bun",
+				"--outdir",
+				outdir,
+				"--external",
+				"@side-quest/browser-connect/cli",
+			],
+			{ encoding: "utf8" },
+		);
+		expect(built.status).toBe(0);
 		const bundlePath = join(outdir, "browser-use.js");
 		const module = (await import(
 			`${pathToFileURL(bundlePath).href}?test=${Date.now()}`
