@@ -5,7 +5,7 @@
   "flow_id": "fill",
   "flow_name": "fill",
   "version": "1",
-  "summary": "Open, fill, and verify one OnCore week as persisted draft rows. Final approval stays human-controlled.",
+  "summary": "Open, fill, and verify one OnCore week as persisted draft rows. For seven rows, the fill action can wait approximately 175 seconds in the worst case; set the outer timeout accordingly. Final approval stays human-controlled.",
   "allowed_origins": [
     "https://iteraterecruitment.oncoreservices.com"
   ],
@@ -135,7 +135,8 @@
                 "require_empty_grid": {
                   "required": true,
                   "schema": {
-                    "kind": "boolean"
+                    "kind": "boolean",
+                    "constant": true
                   }
                 },
                 "rows": {
@@ -157,7 +158,7 @@
                           "required": true,
                           "schema": {
                             "kind": "number",
-                            "minimum": 0,
+                            "exclusive_minimum": 0,
                             "maximum": 1
                           }
                         }
@@ -188,7 +189,7 @@
     {
       "kind": "action",
       "action_id": "oncore-open-week",
-      "expected_digest": "aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1",
+      "expected_digest": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
       "inputs": {
         "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
         "period_start": "{{timesheet_run.envelope.period_start}}",
@@ -202,7 +203,7 @@
     {
       "kind": "action",
       "action_id": "oncore-fill-week",
-      "expected_digest": "eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b",
+      "expected_digest": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
       "inputs": {
         "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
         "period_start": "{{timesheet_run.envelope.period_start}}",
@@ -219,12 +220,13 @@
     {
       "kind": "action",
       "action_id": "oncore-verify-filled",
-      "expected_digest": "edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c",
+      "expected_digest": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
       "inputs": {
         "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
         "period_start": "{{timesheet_run.envelope.period_start}}",
         "period_end": "{{timesheet_run.envelope.period_end}}",
         "rate_value": "{{timesheet_run.payload.rate_value}}",
+        "expected_total_units": "{{timesheet_run.envelope.expected_aggregate.value}}",
         "rows": "{{timesheet_run.payload.rows}}"
       }
     }

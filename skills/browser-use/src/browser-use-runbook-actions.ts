@@ -184,8 +184,14 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
  */
 export type BrowserUseActionValueSchema =
 	| { kind: "string"; max_length?: number; pattern?: string }
-	| { kind: "number"; integer?: boolean; minimum?: number; maximum?: number }
-	| { kind: "boolean" }
+	| {
+			kind: "number";
+			integer?: boolean;
+			minimum?: number;
+			exclusive_minimum?: number;
+			maximum?: number;
+	  }
+	| { kind: "boolean"; constant?: boolean }
 	| { kind: "enum"; values: readonly string[] }
 	| { kind: "array"; items: BrowserUseActionValueSchema; max_items?: number }
 	| {
@@ -258,7 +264,13 @@ function stringSchemaIsValid(record: Record<string, unknown>): boolean {
 
 function numberSchemaIsValid(record: Record<string, unknown>): boolean {
 	if (
-		!objectHasOnlyKeys(record, ["kind", "integer", "minimum", "maximum"])
+		!objectHasOnlyKeys(record, [
+			"kind",
+			"integer",
+			"minimum",
+			"exclusive_minimum",
+			"maximum",
+		])
 	) {
 		return false;
 	}
@@ -269,15 +281,25 @@ function numberSchemaIsValid(record: Record<string, unknown>): boolean {
 		(record.minimum !== undefined &&
 			(typeof record.minimum !== "number" ||
 				!Number.isFinite(record.minimum))) ||
+		(record.exclusive_minimum !== undefined &&
+			(typeof record.exclusive_minimum !== "number" ||
+				!Number.isFinite(record.exclusive_minimum))) ||
 		(record.maximum !== undefined &&
 			(typeof record.maximum !== "number" || !Number.isFinite(record.maximum)))
 	) {
 		return false;
 	}
-	return !(
+	if (
 		typeof record.minimum === "number" &&
 		typeof record.maximum === "number" &&
 		record.minimum > record.maximum
+	) {
+		return false;
+	}
+	return !(
+		typeof record.exclusive_minimum === "number" &&
+		typeof record.maximum === "number" &&
+		record.exclusive_minimum >= record.maximum
 	);
 }
 
@@ -374,7 +396,10 @@ function isValueSchemaNode(
 			case "number":
 				return numberSchemaIsValid(record);
 			case "boolean":
-				return objectHasOnlyKeys(record, ["kind"]);
+				return (
+					objectHasOnlyKeys(record, ["kind", "constant"]) &&
+					(record.constant === undefined || typeof record.constant === "boolean")
+				);
 			case "enum":
 				return enumSchemaIsValid(record);
 			case "array":
@@ -426,6 +451,9 @@ function numberValueMatches(
 	if (typeof value !== "number" || !Number.isFinite(value)) return false;
 	if (schema.integer === true && !Number.isInteger(value)) return false;
 	if (schema.minimum !== undefined && value < schema.minimum) return false;
+	if (schema.exclusive_minimum !== undefined && value <= schema.exclusive_minimum) {
+		return false;
+	}
 	return schema.maximum === undefined || value <= schema.maximum;
 }
 
@@ -475,7 +503,10 @@ function valueMatchesValidatedSchema(
 		case "number":
 			return numberValueMatches(value, schema);
 		case "boolean":
-			return typeof value === "boolean";
+			return (
+				typeof value === "boolean" &&
+				(schema.constant === undefined || value === schema.constant)
+			);
 		case "enum":
 			return typeof value === "string" && schema.values.includes(value);
 		case "array":

@@ -140,7 +140,7 @@ class SyntheticTimesheetLink extends SyntheticElement {
 
 	constructor(
 		private readonly fixture: OncoreFixture,
-		timesheetId: string,
+		private readonly timesheetId: string,
 		label: string,
 	) {
 		super();
@@ -155,7 +155,7 @@ class SyntheticTimesheetLink extends SyntheticElement {
 
 	override click() {
 		this.fixture.clicks.push("timesheet-link");
-		this.fixture.baseUrl = `https://iteraterecruitment.oncoreservices.com/pages/TimesheetSubmit.aspx?id=${TIMESHEET_ID}`;
+		this.fixture.baseUrl = `https://iteraterecruitment.oncoreservices.com/pages/TimesheetSubmit.aspx?id=${this.timesheetId}`;
 	}
 }
 
@@ -172,6 +172,7 @@ class OncoreFixture {
 	baseUrl = `https://iteraterecruitment.oncoreservices.com/pages/TimesheetSubmit.aspx?id=${TIMESHEET_ID}`;
 	bodyText = "";
 	editable = true;
+	gridPresent = true;
 	formOpen = false;
 	rows: RowRecord[] = [];
 	readonly clicks: string[] = [];
@@ -232,9 +233,11 @@ class OncoreFixture {
 	querySelector(selector: string): unknown {
 		if (selector === "html") return this.html;
 		if (selector === "body") return this.body;
-		if (selector === `#${GRID_ID}`) return new SyntheticGrid(this);
+		if (selector === `#${GRID_ID}`) {
+			return this.gridPresent ? new SyntheticGrid(this) : null;
+		}
 		if (selector === "[id$='TimesheetWorkGrid_ctl00']") {
-			return new SyntheticGrid(this);
+			return this.gridPresent ? new SyntheticGrid(this) : null;
 		}
 		if (selector === `#${ADD_ID}`) {
 			if (!this.editable || this.formOpen) return null;
@@ -335,6 +338,14 @@ const fillInputs = (
 	rows,
 });
 
+const verifyInputs = (
+	rows: readonly { date: string; units: number }[] = EXPECTED_ROWS,
+	expectedTotalUnits = rows.reduce((sum, row) => sum + row.units, 0),
+) => ({
+	...fillInputs(rows),
+	expected_total_units: expectedTotalUnits,
+});
+
 async function runFailure(
 	path: string,
 	fixture: OncoreFixture,
@@ -357,12 +368,17 @@ describe("OnCore reviewed-action fill path", () => {
 			new SyntheticTimesheetLink(
 				fixture,
 				TIMESHEET_ID,
-				"Submit Timesheet for period 27/07/2026 - 2/08/2026",
+				"Submit Timesheet for period 3/8/2026 - 9/8/2026",
 			),
 			new SyntheticTimesheetLink(
 				fixture,
 				"999",
-				"Submit Timesheet for period 3/08/2026 - 9/08/2026",
+				"Submit Timesheet for period 27/7/2026 - 2/8/2026",
+			),
+			new SyntheticTimesheetLink(
+				fixture,
+				TIMESHEET_ID,
+				"Submit Timesheet for period 27/7/2026 - 2/8/2026",
 			),
 		);
 
@@ -381,6 +397,31 @@ describe("OnCore reviewed-action fill path", () => {
 		expect(fixture.baseUrl).toEndWith(
 			`TimesheetSubmit.aspx?id=${TIMESHEET_ID}`,
 		);
+	});
+
+	test("rejects a link label with ambiguous period dates", async () => {
+		const fixture = new OncoreFixture();
+		fixture.baseUrl =
+			"https://iteraterecruitment.oncoreservices.com/pages/ContractorSummary.aspx";
+		fixture.links.push(
+			new SyntheticTimesheetLink(
+				fixture,
+				TIMESHEET_ID,
+				"Submit Timesheet for period 27/7/2026 - 2/8/2026, amended 3/8/2026",
+			),
+		);
+
+		const failure = await runFailure(OPEN_ACTION_PATH, fixture, {
+			timesheet_id: TIMESHEET_ID,
+			period_start: PERIOD_START,
+			period_end: PERIOD_END,
+		});
+
+		expect(failure).toMatchObject({
+			failure_code: "wrong_week_open",
+			matching_link_count: 0,
+		});
+		expect(fixture.clicks).toEqual([]);
 	});
 
 	test("fills exact ISO dates through the Telerik form and verifies persisted rows", async () => {
@@ -414,7 +455,7 @@ describe("OnCore reviewed-action fill path", () => {
 			"insert",
 		]);
 
-		const proof = await runAction(VERIFY_ACTION_PATH, fixture, fillInputs());
+		const proof = await runAction(VERIFY_ACTION_PATH, fixture, verifyInputs());
 		expect(proof).toMatchObject({
 			proof_schema: "OncoreFillTimesheetProofV1",
 			timesheet_id: TIMESHEET_ID,
@@ -433,35 +474,195 @@ describe("OnCore reviewed-action fill path", () => {
 });
 
 describe("OnCore fill guards", () => {
-	test("rejects a row outside the requested period before any DOM mutation", async () => {
+	test.each([
+		["fill", FILL_ACTION_PATH],
+		["verify", VERIFY_ACTION_PATH],
+	] as const)("%s refuses a missing timesheet grid", async (_label, path) => {
 		const fixture = new OncoreFixture();
+		fixture.gridPresent = false;
+
 		const failure = await runFailure(
-			FILL_ACTION_PATH,
+			path,
 			fixture,
-			fillInputs([{ date: "2026-08-03", units: 1 }]),
+			path === VERIFY_ACTION_PATH ? verifyInputs() : fillInputs(),
 		);
 
 		expect(failure).toMatchObject({
-			failure_code: "period_boundary_rejected",
+			failure_code: "timesheet_grid_not_found",
 		});
 		expect(fixture.clicks).toEqual([]);
 		expect(fixture.rows).toEqual([]);
 	});
 
 	test.each([
-		["submitted", "Timesheet was successfully submitted"],
-		["approved", "This timesheet is approved"],
-	] as const)("rejects the %s state", async (expectedState, bodyText) => {
+		["fill", FILL_ACTION_PATH],
+		["verify", VERIFY_ACTION_PATH],
+	] as const)("%s requires at least one row", async (_label, path) => {
 		const fixture = new OncoreFixture();
-		fixture.bodyText = bodyText;
-		const failure = await runFailure(FILL_ACTION_PATH, fixture, fillInputs());
+		const failure = await runFailure(
+			path,
+			fixture,
+			path === VERIFY_ACTION_PATH ? verifyInputs([], 0) : fillInputs([]),
+		);
 
 		expect(failure).toMatchObject({
-			failure_code: "editable_state_unexpected",
-			editable_state: expectedState,
+			failure_code: "rows_required",
 		});
 		expect(fixture.clicks).toEqual([]);
+		expect(fixture.rows).toEqual([]);
 	});
+
+	test.each([
+		[
+			"fill",
+			"invalid date",
+			FILL_ACTION_PATH,
+			[{ date: "2026-02-30", units: 1 }],
+		],
+		[
+			"fill",
+			"out-of-range date",
+			FILL_ACTION_PATH,
+			[{ date: "2026-08-03", units: 1 }],
+		],
+		[
+			"fill",
+			"duplicate date",
+			FILL_ACTION_PATH,
+			[
+				{ date: "2026-07-27", units: 1 },
+				{ date: "2026-07-27", units: 1 },
+			],
+		],
+		[
+			"fill",
+			"invalid units",
+			FILL_ACTION_PATH,
+			[{ date: "2026-07-27", units: 2 }],
+		],
+		[
+			"verify",
+			"invalid date",
+			VERIFY_ACTION_PATH,
+			[{ date: "2026-02-30", units: 1 }],
+		],
+		[
+			"verify",
+			"out-of-range date",
+			VERIFY_ACTION_PATH,
+			[{ date: "2026-08-03", units: 1 }],
+		],
+		[
+			"verify",
+			"duplicate date",
+			VERIFY_ACTION_PATH,
+			[
+				{ date: "2026-07-27", units: 1 },
+				{ date: "2026-07-27", units: 1 },
+			],
+		],
+		[
+			"verify",
+			"invalid units",
+			VERIFY_ACTION_PATH,
+			[{ date: "2026-07-27", units: 2 }],
+		],
+	] as const)(
+		"%s rejects %s row input before any DOM mutation",
+		async (_label, _case, path, rows) => {
+			const fixture = new OncoreFixture();
+			const failure = await runFailure(
+				path,
+				fixture,
+				path === VERIFY_ACTION_PATH
+					? verifyInputs(rows, 1)
+					: fillInputs(rows),
+			);
+
+			expect(failure).toMatchObject({
+				failure_code: "row_dates_rejected",
+			});
+			expect(fixture.clicks).toEqual([]);
+			expect(fixture.rows).toEqual([]);
+		},
+	);
+
+	test.each([
+		["fill", FILL_ACTION_PATH],
+		["verify", VERIFY_ACTION_PATH],
+	] as const)(
+		"%s treats incidental approval text as editable",
+		async (_label, path) => {
+			const rows = [{ date: "2026-07-27", units: 1 }] as const;
+			const fixture = new OncoreFixture();
+			fixture.bodyText =
+				"Approved By is shown after approval. See the approval help text.";
+			if (path === VERIFY_ACTION_PATH) {
+				fixture.rows = [
+					{
+						dateDisplay: "27/07/2026",
+						rateText: "Standard Day",
+						units: 1,
+					},
+				];
+			}
+
+			const result = await runAction(
+				path,
+				fixture,
+				path === VERIFY_ACTION_PATH ? verifyInputs(rows) : fillInputs(rows),
+			);
+
+			expect(result.timesheet_id).toBe(TIMESHEET_ID);
+		},
+	);
+
+	test.each([
+		["fill", "submitted", FILL_ACTION_PATH, "Timesheet was submitted"],
+		["fill", "approved", FILL_ACTION_PATH, "This timesheet is approved"],
+		["verify", "submitted", VERIFY_ACTION_PATH, "Timesheet was submitted"],
+		["verify", "approved", VERIFY_ACTION_PATH, "This timesheet is approved"],
+	] as const)(
+		"%s rejects the non-editable %s state",
+		async (_label, expectedState, path, bodyText) => {
+			const fixture = new OncoreFixture();
+			fixture.editable = false;
+			fixture.bodyText = bodyText;
+			const failure = await runFailure(
+				path,
+				fixture,
+				path === VERIFY_ACTION_PATH ? verifyInputs() : fillInputs(),
+			);
+
+			expect(failure).toMatchObject({
+				failure_code: "editable_state_unexpected",
+				editable_state: expectedState,
+			});
+			expect(fixture.clicks).toEqual([]);
+		},
+	);
+
+	test.each([
+		["fill", FILL_ACTION_PATH],
+		["verify", VERIFY_ACTION_PATH],
+	] as const)(
+		"%s lets explicit submission override editable controls",
+		async (_label, path) => {
+			const fixture = new OncoreFixture();
+			fixture.bodyText = "Timesheet was successfully submitted";
+			const failure = await runFailure(
+				path,
+				fixture,
+				path === VERIFY_ACTION_PATH ? verifyInputs() : fillInputs(),
+			);
+
+			expect(failure).toMatchObject({
+				failure_code: "editable_state_unexpected",
+				editable_state: "submitted",
+			});
+			expect(fixture.clicks).toEqual([]);
+		},
+	);
 
 	test("rejects a wrong open timesheet before any DOM mutation", async () => {
 		const fixture = new OncoreFixture();
@@ -479,17 +680,115 @@ describe("OnCore fill guards", () => {
 	test("verification rejects a persisted row that does not match expected units", async () => {
 		const fixture = new OncoreFixture();
 		fixture.rows = [
-			{ dateDisplay: "27/07/2026", rateText: "Standard Day", units: 2 },
+			{
+				dateDisplay: "27/07/2026",
+				rateText: "private-client-rate",
+				units: 1,
+			},
 		];
 		const failure = await runFailure(
 			VERIFY_ACTION_PATH,
 			fixture,
-			fillInputs([{ date: "2026-07-27", units: 1 }]),
+			verifyInputs([{ date: "2026-07-27", units: 1 }]),
 		);
 
 		expect(failure).toMatchObject({
 			failure_code: "readback_mismatch",
+			observed: {
+				index: 0,
+				date: "2026-07-27",
+				units: 1,
+				rate_match: false,
+			},
+			rows: [
+				{
+					index: 0,
+					date: "2026-07-27",
+					units: 1,
+					rate_match: false,
+				},
+			],
 		});
+		expect(JSON.stringify(failure)).not.toContain("private-client-rate");
+		expect(JSON.stringify(failure)).not.toContain("cells");
+		expect(JSON.stringify(failure)).not.toContain("rate_text");
+	});
+
+	test("verification accepts decimal aggregate equivalence", async () => {
+		const rows = [
+			{ date: "2026-07-27", units: 0.1 },
+			{ date: "2026-07-28", units: 0.2 },
+		] as const;
+		const fixture = new OncoreFixture();
+		fixture.rows = [
+			{ dateDisplay: "27/07/2026", rateText: "Standard Day", units: 0.1 },
+			{ dateDisplay: "28/07/2026", rateText: "Standard Day", units: 0.2 },
+		];
+
+		const proof = await runAction(
+			VERIFY_ACTION_PATH,
+			fixture,
+			verifyInputs(rows, 0.3),
+		);
+
+		expect(proof.total_units).toBeCloseTo(0.3);
+	});
+
+	test("verification rejects an aggregate mismatch with bounded evidence", async () => {
+		const rows = [
+			{ date: "2026-07-27", units: 0.1 },
+			{ date: "2026-07-28", units: 0.2 },
+		] as const;
+		const fixture = new OncoreFixture();
+		fixture.rows = [
+			{ dateDisplay: "27/07/2026", rateText: "Standard Day", units: 0.1 },
+			{ dateDisplay: "28/07/2026", rateText: "Standard Day", units: 0.2 },
+		];
+
+		const failure = await runFailure(
+			VERIFY_ACTION_PATH,
+			fixture,
+			verifyInputs(rows, 0.4),
+		);
+
+		expect(failure).toMatchObject({
+			failure_code: "aggregate_mismatch",
+			expected_total_units: 0.4,
+		});
+		expect(failure.observed_total_units).toBeCloseTo(0.3);
+		expect(Object.keys(failure).sort()).toEqual([
+			"expected_total_units",
+			"failure_code",
+			"failure_observed_at",
+			"observed_total_units",
+			"timesheet_id",
+		]);
+	});
+
+	test("fill reports existing rows with bounded sanitized evidence", async () => {
+		const fixture = new OncoreFixture();
+		fixture.rows = Array.from({ length: 16 }, (_, index) => ({
+			dateDisplay: `${27 + (index % 5)}/07/2026`,
+			rateText: `private-rate-${index}`,
+			units: 1,
+		}));
+
+		const failure = await runFailure(FILL_ACTION_PATH, fixture, fillInputs());
+
+		expect(failure).toMatchObject({
+			failure_code: "existing_rows_before_fill",
+			existing_row_count: 16,
+		});
+		expect(failure.existing_rows).toHaveLength(14);
+		expect((failure.existing_rows as Record<string, unknown>[])[0]).toEqual({
+			index: 0,
+			date: "2026-07-27",
+			units: 1,
+			rate_match: false,
+		});
+		expect(JSON.stringify(failure)).not.toContain("private-rate");
+		expect(JSON.stringify(failure)).not.toContain("cells");
+		expect(JSON.stringify(failure)).not.toContain("rate_text");
 	});
 });
 
@@ -506,7 +805,8 @@ describe("OnCore fill assets and runbook", () => {
 				action_id: `oncore-${id}`,
 				origin: "https://iteraterecruitment.oncoreservices.com",
 				source,
-				containment: "none",
+				containment:
+					id === "verify-filled" ? "read-only-observation" : "none",
 				result_sensitivity: "low",
 			});
 		}

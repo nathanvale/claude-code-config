@@ -326,8 +326,64 @@ function replaceComputedIdentifier(source: string, identifier: string): string {
 	return source.replace(new RegExp(`\\[\\s*${escaped}\\s*(?:[+-]\\s*\\d+)?\\s*\\]`, "g"), "[0]");
 }
 
+function inputsDerivedAliases(code: string): ReadonlySet<string> {
+	const aliases = new Set(["inputs"]);
+	let discovered = true;
+	while (discovered) {
+		discovered = false;
+		for (const match of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+			const alias = match[1] ?? "";
+			const initializer = match[2] ?? "";
+			const derivesFromInput = [...aliases].some((source) => new RegExp(`\\b${escapeRegex(source)}\\b`).test(initializer));
+			if (alias.length > 0 && derivesFromInput && !aliases.has(alias)) {
+				aliases.add(alias);
+				discovered = true;
+			}
+		}
+	}
+	return aliases;
+}
+
+function replaceSameContainerComputedIdentifier(statement: string, container: string, identifier: string): string {
+	const escapedContainer = escapeRegex(container);
+	const escapedIdentifier = escapeRegex(identifier);
+	return statement.replace(
+		new RegExp(`\\b${escapedContainer}\\s*(?:\\?\\.\\s*)?\\[\\s*${escapedIdentifier}\\s*\\]`, "g"),
+		`${container}[0]`,
+	);
+}
+
+function staticObjectHasOnlyBoundedKeys(body: string): boolean {
+	return !/\.\.\.|\[|\b(?:__proto__|prototype|constructor)\b/.test(body);
+}
+
+function boundedObjectEntryContainers(code: string): ReadonlySet<string> {
+	const bounded = new Set<string>();
+	for (const match of code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^{}]*)\}\s*;/g)) {
+		const body = match[2] ?? "";
+		if (staticObjectHasOnlyBoundedKeys(body)) bounded.add(match[1] ?? "");
+	}
+	for (const match of code.matchAll(/\bconst\s*\{[^}\n]*\.\.\.\s*([A-Za-z_$][\w$]*)\s*\}\s*=\s*([A-Za-z_$][\w$]*)\s*;/g)) {
+		const container = match[1] ?? "";
+		const parameter = match[2] ?? "";
+		if (container.length === 0 || parameter.length === 0) continue;
+		for (const functionMatch of code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\(([^)]*)\)\s*=>/g)) {
+			const functionName = functionMatch[1] ?? "";
+			const parameters = functionMatch[2] ?? "";
+			if (!new RegExp(`\\b${escapeRegex(parameter)}\\s*=\\s*\\{\\s*\\}`).test(parameters)) continue;
+			const calls = code.match(new RegExp(`\\b${escapeRegex(functionName)}\\s*\\(`, "g")) ?? [];
+			const boundedCalls = code.match(new RegExp(`\\b${escapeRegex(functionName)}\\s*\\(\\s*[^,()]+,\\s*\\{(?![^{}]*(?:\\.\\.\\.|\\[|\\b(?:__proto__|prototype|constructor)\\b))[^{}]*\\}\\s*\\)`, "g")) ?? [];
+			if (calls.length > 0 && calls.length === boundedCalls.length) bounded.add(container);
+		}
+	}
+	bounded.delete("");
+	return bounded;
+}
+
 function computedPropertyCodeWithProvenIndexes(source: string): string {
 	let code = computedPropertyAuditSource(source);
+	const inputAliases = inputsDerivedAliases(code);
+	const boundedEntryContainers = boundedObjectEntryContainers(code);
 	const numericIdentifiers = new Set<string>();
 	for (const match of code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[^;\n]*\.\s*(?:findIndex|indexOf)\s*\()/g)) {
 		numericIdentifiers.add(match[1] ?? "");
@@ -344,9 +400,10 @@ function computedPropertyCodeWithProvenIndexes(source: string): string {
 	}
 
 	code = code.replace(/for\s*\(\s*const\s*\[\s*([A-Za-z_$][\w$]*)\s*,[^\]]+\]\s*of\s*Object\s*\.\s*entries\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\)\s*(?:\{[\s\S]*?\}|[^;]+;)/g, (statement, key: string, container: string) => {
-		const escapedContainer = escapeRegex(container);
-		if (container === "inputs" || new RegExp(`\\b(?:const|let|var)\\s+${escapedContainer}\\s*=\\s*[^;\\n]*\\binputs\\b`).test(code)) return statement;
-		return replaceComputedIdentifier(statement, key);
+		if (inputAliases.has(container)) return statement;
+		return boundedEntryContainers.has(container)
+			? replaceComputedIdentifier(statement, key)
+			: replaceSameContainerComputedIdentifier(statement, container, key);
 	});
 
 	code = code.replace(/Object\s*\.\s*keys\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\.\s*filter\s*\(\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*=>[^;]+;/gs, (statement, objectName: string, key: string) => {
@@ -380,11 +437,37 @@ function computedPropertyCodeWithProvenIndexes(source: string): string {
 function sourceCarriesSecretShapedMaterial(source: string): boolean {
 	const secretShapedValues =
 		source.match(
-			/\b(?:op|wss?):\/\/[^\s'"`]+|(?:~\/|\/(?:Users|home|private|var|tmp|etc|opt)\/)[^\s'"`]+/gi,
+			/\b(?:https?|op|wss?):\/\/[^\s'"`]+|(?:~\/|\/(?:Users|home|private|var|tmp|etc|opt)\/)[^\s'"`]+/gi,
 		) ?? [];
 	return secretShapedValues.some(
 		(value) => findRedactionViolations(value).length > 0,
 	);
+}
+
+function literalBracketMembers(source: string): readonly string[] {
+	const members: string[] = [];
+	for (const match of source.matchAll(/\[\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\s*\]/g)) {
+		const raw = match[1] ?? match[2] ?? "";
+		const decoded = raw
+			.replace(/\\u\{([0-9a-f]+)\}/gi, (_escape, hex: string) => {
+				const codePoint = Number.parseInt(hex, 16);
+				return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "";
+			})
+			.replace(/\\u([0-9a-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+			.replace(/\\x([0-9a-f]{2})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+			.replace(/\\([\\'"])/g, "$1");
+		members.push(decoded);
+	}
+	return members;
+}
+
+function literalBracketCapabilityIssue(source: string): BrowserUseReviewedActionValidationIssue | undefined {
+	const members = literalBracketMembers(source);
+	const storageMembers = new Set(["cookie", "localStorage", "sessionStorage", "indexedDB", "caches"]);
+	if (members.some((member) => storageMembers.has(member))) return issue("action_capability_cookie_storage", "source", "cookie and browser storage access is prohibited");
+	const authorityMembers = new Set(["ownerDocument", "defaultView", "document", "window", "globalThis", "self", "navigator", "parent", "top", "frames"]);
+	if (members.some((member) => authorityMembers.has(member))) return issue("action_capability_global_escape", "source", "browser authority is outside the Reviewed Action vocabulary");
+	return undefined;
 }
 
 function staticNavigationTarget(
@@ -403,6 +486,8 @@ function staticNavigationTarget(
 
 function capabilityIssue(candidate: BrowserUseReviewedActionCandidate): BrowserUseReviewedActionValidationIssue | undefined {
 	const { source } = candidate;
+	const literalBracketIssue = literalBracketCapabilityIssue(source);
+	if (literalBracketIssue !== undefined) return literalBracketIssue;
 	const code = sourceWithoutStringsAndComments(source);
 	const rules: readonly [string, RegExp, string][] = [
 		["action_capability_credential_field", /\b(?:password|passcode|credential|username|user_name|otp|one[-_ ]?time|1password|op\.read|login|sign[-_ ]?in)\b/i, "credential and login behavior belongs to generic login"],

@@ -111,6 +111,11 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 		const secret = validateReviewedActionCandidate(candidate({ input_schema: { kind: "string", pattern: "op://vault/item/field" } }) as never);
 		expect(secret).toMatchObject({ ok: false, issues: expect.arrayContaining([expect.objectContaining({ code: "action_secret_shaped_material" })]) });
 		expect(JSON.stringify(secret)).not.toContain("op://vault/item/field");
+		const safeUrl = validateReviewedActionCandidate(candidate({ source: "async ({ inputs }) => { document.querySelectorAll('.row'); const target = 'https://portal.example.test/public'; return { target, rows: 1 } }" }) as never);
+		expect(safeUrl).toMatchObject({ ok: true, effect_class: "read" });
+		const secretInHttpUrl = validateReviewedActionCandidate(candidate({ source: "async ({ inputs }) => { document.querySelectorAll('.row'); const target = 'https://portal.example.test/callback?ref=op://vault/item/field'; return { target, rows: 1 } }" }) as never);
+		expect(secretInHttpUrl).toMatchObject({ ok: false, issues: expect.arrayContaining([expect.objectContaining({ code: "action_secret_shaped_material", path: "source" })]) });
+		expect(JSON.stringify(secretInHttpUrl)).not.toContain("op://vault/item/field");
 	});
 
 	test("non-authority bracket syntax passes while dynamic member access stays closed", () => {
@@ -121,7 +126,7 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 				source: `async ({ inputs }) => {
 				const context = { requested: "visible" };
 				let text = "";
-				for (const [key, value] of Object.entries(context)) text = key + value;
+				for (const [key, value] of Object.entries(context)) text = context[key] + value;
 				const match = text.match(new RegExp("^(.*)$"));
 				const fallback = [context["requested"], "second"];
 				const rows = ["first", "second"];
@@ -141,6 +146,14 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			ok: true,
 			effect_class: "mutation",
 		});
+		const boundedEntryKeys = validateReviewedActionCandidate(
+			candidate({
+				containment: "none",
+				required_postcondition: { kind: "element-visible", selector: ".row" },
+				source: "async ({ inputs }) => { const context = { row: 'value' }; const payload = {}; for (const [key, value] of Object.entries(context)) payload[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }",
+			}) as never,
+		);
+		expect(boundedEntryKeys).toMatchObject({ ok: true, effect_class: "mutation" });
 
 		const rejected: Array<[string, string]> = [
 			["bare local dynamic key", "async ({ inputs }) => { const payload = {}; const k = 'row'; payload[k] = document.querySelector('.row')?.textContent; return payload }"],
@@ -152,13 +165,15 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			["shadowed numeric index", "async ({ inputs }) => { const payload = {}; const i = 0; const read = (i) => payload[i]; return { value: read('row'), rows: document.querySelectorAll('.row').length } }"],
 			["template expression key", `async ({ inputs }) => { const payload = {}; const key = 'row'; return { value: \`\${payload[key]}\`, rows: document.querySelectorAll('.row').length } }`],
 			["inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs; for (const [key, value] of Object.entries(context)) payload[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
+			["transitive inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs; const entries = context; for (const [key, value] of Object.entries(entries)) entries[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
+			["transformed inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs.rows; const entries = context; for (const [key, value] of Object.entries(entries)) entries[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
+			["arbitrary entries key used on another object", "async ({ inputs }) => { const payload = {}; const context = getContext(); for (const [key, value] of Object.entries(context)) payload[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
 			["selected-index name spoof", "async ({ inputs }) => { const payload = { selectedIndex: 'row' }; return { value: payload[payload.selectedIndex], rows: document.querySelectorAll('.row').length } }"],
 			["inputs-derived alias", "async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }"],
 			["inputs-derived destructuring", "async ({ inputs }) => { const payload = {}; const { key } = inputs; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
 			["direct inputs key", "async ({ inputs }) => { const payload = {}; payload[inputs.key] = document.querySelector('.row')?.textContent; return payload }"],
 			["member-expression key", "async ({ inputs }) => { const payload = {}; const context = { key: 'row' }; payload[context.key] = document.querySelector('.row')?.textContent; return payload }"],
 			["call key", "async ({ inputs }) => { const payload = {}; payload[getKey()] = document.querySelector('.row')?.textContent; return payload }"],
-			["document string", "async ({ inputs }) => ({ value: document['cookie'] })"],
 			["document number", "async ({ inputs }) => ({ value: document[0] })"],
 			["call result", "async ({ inputs }) => ({ value: getThing()[inputs.key], rows: document.querySelectorAll('.row').length })"],
 			["member call result", "async ({ inputs }) => ({ value: foo.bar()[inputs.key], rows: document.querySelectorAll('.row').length })"],
@@ -179,10 +194,14 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			["alias", "async ({ inputs }) => { const d = document; return d.title }"],
 			["destructured-alias", "async ({ inputs }) => { const { querySelector } = document; return querySelector('.row') }"],
 			["computed", "async ({ inputs }) => document['cookie']"],
+			["literal bracket cookie", "async ({ inputs }) => ({ value: document['cookie'] })"],
+			["escaped literal bracket cookie", "async ({ inputs }) => ({ value: document.querySelector('.row')['\\u0063ookie'] })"],
 			["reflect-computed", "async ({ inputs }) => Reflect.get(document, inputs.key)"],
 			["credential", "async ({ inputs }) => ({ otp: inputs.otp })"],
 			["cookie", "async ({ inputs }) => document.cookie"],
 			["storage", "async ({ inputs }) => localStorage.getItem('x')"],
+			["literal bracket authority chain", "async ({ inputs }) => ({ value: document.querySelector('.row')['ownerDocument']['cookie'] })"],
+			["literal bracket authority alias", "async ({ inputs }) => { const node = document.querySelector('.row'); return { value: node['ownerDocument']['cookie'] } }"],
 			["network", "async ({ inputs }) => fetch('/private')"],
 			["indirect-network", "async ({ inputs }) => { const send = window.fetch; return send('/private') }"],
 			["navigation", "async ({ inputs }) => { location.href = '/next' }"],

@@ -1,5 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	cpSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	createDefaultPlatformFs,
@@ -155,20 +162,56 @@ async function gitFixtureCommand(
 async function withCommittedCatalogSource<T>(
 	base: string,
 	run: (gitEnv: { GIT_DIR: string; GIT_WORK_TREE: string }) => Promise<T>,
+	options: { excludeRunbooks?: readonly string[] } = {},
 ): Promise<T> {
 	const repoRoot = resolve(import.meta.dir, "../../..");
+	const workTree =
+		options.excludeRunbooks === undefined
+			? repoRoot
+			: join(base, "catalog-source-worktree");
+	if (options.excludeRunbooks !== undefined) {
+		const browserUseRoot = join(workTree, "skills/browser-use");
+		mkdirSync(browserUseRoot, { recursive: true });
+		cpSync(
+			join(repoRoot, "skills/browser-use/runbooks"),
+			join(browserUseRoot, "runbooks"),
+			{ recursive: true },
+		);
+		cpSync(
+			join(repoRoot, "skills/browser-use/actions"),
+			join(browserUseRoot, "actions"),
+			{ recursive: true },
+		);
+		for (const relativePath of options.excludeRunbooks) {
+			rmSync(join(browserUseRoot, "runbooks", relativePath));
+		}
+		await gitFixtureCommand({ cwd: workTree }, "init", "-q");
+		await gitFixtureCommand({ cwd: workTree }, "config", "user.email", "test@example.invalid");
+		await gitFixtureCommand({ cwd: workTree }, "config", "user.name", "Catalog Test");
+		await gitFixtureCommand(
+			{ cwd: workTree },
+			"add",
+			"skills/browser-use/runbooks",
+			"skills/browser-use/actions",
+		);
+		await gitFixtureCommand({ cwd: workTree }, "commit", "-qm", "test catalog fixture");
+		return await run({
+			GIT_DIR: join(workTree, ".git"),
+			GIT_WORK_TREE: workTree,
+		});
+	}
 	const gitDir = join(base, "catalog-source.git");
 	await gitFixtureCommand({ cwd: base }, "init", "--bare", "-q", gitDir);
-	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "config", "user.email", "test@example.invalid");
-	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "config", "user.name", "Catalog Test");
+	await gitFixtureCommand({ cwd: workTree, gitDir, workTree }, "config", "user.email", "test@example.invalid");
+	await gitFixtureCommand({ cwd: workTree, gitDir, workTree }, "config", "user.name", "Catalog Test");
 	await gitFixtureCommand(
-		{ cwd: repoRoot, gitDir, workTree: repoRoot },
+		{ cwd: workTree, gitDir, workTree },
 		"add",
 		"skills/browser-use/runbooks",
 		"skills/browser-use/actions",
 	);
-	await gitFixtureCommand({ cwd: repoRoot, gitDir, workTree: repoRoot }, "commit", "-qm", "test catalog fixture");
-	return await run({ GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot });
+	await gitFixtureCommand({ cwd: workTree, gitDir, workTree }, "commit", "-qm", "test catalog fixture");
+	return await run({ GIT_DIR: gitDir, GIT_WORK_TREE: workTree });
 }
 
 async function createPublicCatalogSource(
@@ -1441,6 +1484,7 @@ describe("runbook family — live (U4 wiring)", () => {
 
 				await withCommittedCatalogSource(store.base, async (gitEnv) => {
 					Object.assign(runtime.env, gitEnv);
+					runtime.sourceCheckoutRoot = gitEnv.GIT_WORK_TREE;
 					const listed = await runForTest(["runbook", "list", "--json"], runtime);
 					expect(listed.exitCode).toBe(0);
 					const catalogDigest = (
@@ -1566,7 +1610,7 @@ describe("runbook family — live (U4 wiring)", () => {
 						scenario.submitFails ? 20 : 0,
 					);
 					expect(evalCalls).toBe(evalsBeforeSecondResume);
-				});
+				}, { excludeRunbooks: ["oncore/fill/runbook.json"] });
 			} finally {
 				cdp.transport.close();
 			}

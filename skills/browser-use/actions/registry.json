@@ -1574,17 +1574,19 @@
       ]
     },
     {
-      "asset_path": "assets/eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b.js",
+      "asset_path": "assets/26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e.js",
       "record": {
         "action_id": "oncore-fill-week",
-        "asset_id": "eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b",
-        "expected_digest": "eb570a31c9d076a4c998fe82a59fae80a1ac064bb67e32fa4ec46cb0eba6b03b",
+        "asset_id": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
+        "expected_digest": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
         "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
         "effect_class": "mutation",
         "audited_capabilities": [
           "dom-query",
           "dom-read",
-          "dom-write"
+          "dom-write",
+          "dom-events",
+          "framework-runtime"
         ],
         "containment": "none",
         "input_schema": {
@@ -1626,7 +1628,8 @@
             "require_empty_grid": {
               "required": true,
               "schema": {
-                "kind": "boolean"
+                "kind": "boolean",
+                "constant": true
               }
             },
             "rows": {
@@ -1649,7 +1652,7 @@
                       "required": true,
                       "schema": {
                         "kind": "number",
-                        "minimum": 0,
+                        "exclusive_minimum": 0,
                         "maximum": 1
                       }
                     }
@@ -1764,17 +1767,18 @@
       }
     },
     {
-      "asset_path": "assets/aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1.js",
+      "asset_path": "assets/2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f.js",
       "record": {
         "action_id": "oncore-open-week",
-        "asset_id": "aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1",
-        "expected_digest": "aa59416babd4de0eae8d2f31a75e5251e05fd9812c154b0424ce341842dc8cb1",
+        "asset_id": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
+        "expected_digest": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
         "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
         "effect_class": "mutation",
         "audited_capabilities": [
           "dom-query",
           "dom-read",
-          "dom-write"
+          "dom-write",
+          "dom-events"
         ],
         "containment": "none",
         "input_schema": {
@@ -1858,19 +1862,18 @@
       }
     },
     {
-      "asset_path": "assets/edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c.js",
+      "asset_path": "assets/b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16.js",
       "record": {
         "action_id": "oncore-verify-filled",
-        "asset_id": "edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c",
-        "expected_digest": "edc75c24c39bbd1a5f11282ff157fd5333394ea0e29b6dd4e1fbe39a2df6f33c",
+        "asset_id": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
+        "expected_digest": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
         "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
-        "effect_class": "mutation",
+        "effect_class": "read",
         "audited_capabilities": [
           "dom-query",
-          "dom-read",
-          "dom-write"
+          "dom-read"
         ],
-        "containment": "none",
+        "containment": "read-only-observation",
         "input_schema": {
           "kind": "object",
           "fields": {
@@ -1907,6 +1910,14 @@
                 ]
               }
             },
+            "expected_total_units": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
             "rows": {
               "required": true,
               "schema": {
@@ -1927,7 +1938,7 @@
                       "required": true,
                       "schema": {
                         "kind": "number",
-                        "minimum": 0,
+                        "exclusive_minimum": 0,
                         "maximum": 1
                       }
                     }
