@@ -39,6 +39,8 @@ Rules:
 
 ## Status summary
 
+The 2026-08-05 reconciliation at main `285b4948` records the PR #303 and PR #300 Browser Use changes. Runbook schema/validate/apply/delete, Reviewed Action authoring and signed promotion, immutable whole-catalog activation, active-generation-only execution, opaque target continuity, production Human Identity Attestation, pre-existing-session recognition, and expired-attestation renewal now have current component, hermetic, or process evidence. Rows were promoted only to the highest tier actually evidenced. Production Session Identity Proof, automated wrong-account detection, unsupported authenticated adapter lanes, and unrecorded live or golden journeys remain failed, partial, blocked, or unassessed.
+
 Current status includes the 2026-07-27 process, clean-home installation, and
 deterministic-routing harvest, plus the 2026-07-27 ledger gap audit: verdict
 corrections (front-door driver rule, blocked-vs-fail integrity), 52 admitted
@@ -81,7 +83,7 @@ admissible until Apple-signed, so no tier-L/G verdict flips: native custody
 stays absent behind the operator gate (Apple signing U04, 1Password U05,
 Keychain enrollment U06).
 
-OPERATOR DECISION 2026-07-28 (Nathan): the signed native lane is declined for
+HISTORICAL OPERATOR DECISION 2026-07-28 (Nathan): the signed confidential-delivery lane was declined for
 this deployment. Rationale: target host is a headless Mac Mini with no built-in
 Touch ID, and the signed lane's device-bound key + `AfterFirstUnlockThisDeviceOnly`
 Keychain item do not transit a planned MacBook Pro -> Mac Mini move (ADR 0028
@@ -98,16 +100,17 @@ permanently PARTIAL by choice. Same applies to any row whose only gap is the
 signed native auth product (F01-F05, F07-F17 native-custody halves): env-var
 custody does not build the signed Approval Broker / Confidential Field Delivery
 XPC, so their L/G native-delivery tiers are out of scope for this deployment.
-The scaffold stays committed and inert (`native-capability-absent`); if a
-future host has real Touch ID the lane is already built and re-enrollable.
+The scaffold remained committed and inert (`native-capability-absent`) at that checkpoint.
+
+2026-08-05 overlay: PR #300 does not supersede the decision against a signed Confidential Field Delivery XPC deployment. It does supersede the broader claim that all production human authority is absent. Main now admits an environment-token retrieval lane and composes signed ApprovalBroker Human Identity Attestation when its verifier and executable are admitted. Rows requiring signed confidential delivery remain partial by deployment choice; rows about human attestation, generic login, and resumable approval use the newer evidence below.
 
 | Verdict | Count |
 | --- | ---: |
-| PASS | 58 |
-| PARTIAL | 54 |
-| FAIL | 25 |
+| PASS | 62 |
+| PARTIAL | 66 |
+| FAIL | 13 |
 | BLOCKED | 7 |
-| UNASSESSED | 79 |
+| UNASSESSED | 75 |
 | N/A | 2 |
 
 | Status | Meaning |
@@ -217,18 +220,18 @@ future host has real Touch ID the lane is already built and re-enrollable.
 | DDA-D11 | Playwright stale locators cannot prove a mutation. | L | BLOCKED | Hermetic and public-driver proofs now show zero/duplicate/stale semantic matches refuse before the write-ahead marker with no click, no external effect, and no confirmed run; click uncertainty becomes terminal unknown after exactly one dispatch. Live stale-locator proof shares D08's operator-gated pinned adapter install. |
 | DDA-D12 | Ambiguous external effect becomes `unknown` and is not repeated. | H,L | PASS | Live 2026-07-28 (port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912): a dispatched Save click whose postcondition selector cannot be freshly proven (`--expect-visible "#does-not-exist-at-all"`) -> exit 20, lane_outcome agent_browser_mutation_effect_unknown, external_effect unknown, error task_run_effect_unknown, retryable false, next_action inspect_task_run_result (never retry) — run_id 2616f9f4…. The no-repeat property holds structurally (retryable false + terminal unknown; hermetic proof asserts exactly one click and terminal-truth resume refusal, CAS-persisted dispatch across the crash window). |
 | DDA-D13 | Conflicting ambient text cannot override the named postcondition. | H,L | PASS | Live 2026-07-28 (port 9231, agent-browser 0.31.2, real Chrome 150, fixture 127.0.0.1:8912 whose DOM contains the ambient text "Saved successfully" plus a present-but-hidden `[data-decoy='true']`): a Save click with a false named postcondition (`--expect-visible "[data-decoy='true']"`, an element that exists but stays hidden) -> exit 20, lane_outcome agent_browser_postcondition_not_achieved, "Fresh structure did not satisfy the declared mutation postcondition", external_effect unknown (conservative post-dispatch truth), run_id bf527282…. The ambient "Saved successfully" text never reached stdout (leak count 0): only the named structural postcondition governs success. |
-| DDA-D14 | Closing the active tab during a run yields typed recovery. | H,L | UNASSESSED | Journey missing. |
+| DDA-D14 | Closing the active tab during a run yields typed recovery. | H,L | PARTIAL | `browser-use-wave3-dispatch.test.ts` proves bound-target disappearance or movement records `agent_browser_target_moved` before business dispatch; live tab-close journey missing. |
 | DDA-D15 | Popup and new-tab flows bind refs to the correct tab. | H,L | UNASSESSED | Journey missing. |
 | DDA-D16 | Iframe interaction preserves ref and origin boundaries. | H,L | UNASSESSED | Journey missing. |
 | DDA-D17 | Alert, confirm, prompt, and beforeunload states do not deadlock runs. | H,L | UNASSESSED | Journey missing. |
-| DDA-D18 | SPA rerender invalidates stale refs and supports a fresh observation. | H,L | UNASSESSED | Fixture journey missing. |
-| DDA-D19 | Cross-origin redirects remain inside declared origin policy. | H,L | UNASSESSED | Fixture journey missing. |
+| DDA-D18 | SPA rerender invalidates stale refs and supports a fresh observation. | H,L | PARTIAL | `browser-use-agent-browser.test.ts` and confidential-delivery resume coverage discard pre-delivery refs and require a fresh snapshot; live SPA journey missing. |
+| DDA-D19 | Cross-origin redirects remain inside declared origin policy. | H,L | PARTIAL | Target-proof, login-engine, and Runbook-auth tests reject origin drift before delivery or dispatch; live redirect journey missing. |
 | DDA-D20 | Upload and download actions keep file paths bounded. | H,L | UNASSESSED | Fixture journey missing. Includes download sub-oracle: downloads land only under the bounded artifact root or are refused. |
 | DDA-D21 | Unicode, multiline, and keyboard-composition input stays exact. | H,L | UNASSESSED | Fixture journey missing. |
 | DDA-D22 | Long-running pages use bounded waits and timeouts. | H,L | UNASSESSED | Fixture journey missing. Bound: every wait carries an explicit timeout; proposed default ≤ 30 s. |
 | DDA-D23 | Output truncation and content boundaries prevent context flooding. | C,H,L | UNASSESSED | Agent Browser supports knobs; Browser Use journey missing. |
 | DDA-D24 | Prompt-shaped page content remains untrusted data. | H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
-| DDA-D25 | Action confirmation policy gates externally visible mutation. | H,L,G | UNASSESSED | End-to-end journey missing. |
+| DDA-D25 | Action confirmation policy gates externally visible mutation. | H,L,G | PARTIAL | Signed Reviewed Action approval and approval-gated FastTrack submit tests prove no dispatch before the approved one-use gate and exactly one dispatch after resume; independent live/golden receipt missing. |
 | DDA-D26 | Zero open pages returns empty candidates plus a typed continuation, never a crash. | H,L | PASS | Hermetic PASS (browser-use-target-realism.test.ts) plus live 2026-07-28: Agent Chrome reduced to zero page targets (out-of-band CDP `/json/close` cascade; CDP still alive on 9231), then `browser-use targets list --mode handoff-bound --adapter agent-browser --json` returned the exact named oracle — exit 20, `target_discovery_no_candidates` ("No Browser Target Candidates were discovered through the attached adapter."), continuation `open_browser_target`, run_id 757e03b4-1a6c-480e-80af-7a555f8e67d1, 520ms, stderr no stack trace = never a crash. Agent Chrome restored to a fixture tab afterward; post-restore discovery green (candidate_count 1). The agent-browser discovery transport now reaches this continuation live (see DDA-D01). |
 | DDA-D27 | Hundreds of tabs stay within the output budget and hint selection still resolves. | H,L | PASS | Hermetic PASS (300-target fixture) plus live 2026-07-28: 7 real loopback tabs on 9231 (fixture on 8912), `browser-use targets list --mode handoff-bound --adapter agent-browser --show-url --json` stayed bounded and typed — status ok, operation_ready true, candidate_count 7, dense ordinals [1..7], R32 redaction intact (each candidate origin `http://127.0.0.1:8912`, path_shape `/ […]`, query stripped), handoff_evidence_id cbea1f32311dddc8fb162715615ee69f, 285ms, exit 0. The candidate-projection half now runs live through the agent-browser CLI-subcommand discovery transport (see DDA-D01). Note: `--url-contains` is a `targets select` flag, not a `targets list` flag; listing exposes `--show-url`. |
 | DDA-D28 | Service workers, extension pages, devtools, and `chrome://` targets never appear operation-ready. | C,H | PASS | browser-use-target-realism.test.ts: mixed CDP listing admits only http(s) page targets; fixed a real defect (service_worker with an https url was admitted) via RawPage.type preservation and a type filter in discovery. |
@@ -243,47 +246,47 @@ future host has real Touch ID the lane is already built and re-enrollable.
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
 | DDA-E01 | Shipped runbooks list from the installed package. | E,H | PASS | Clean-home installation invokes `browser-use runbook list` and finds the shipped catalog. |
-| DDA-E02 | Repository-owned runbooks list from an unrelated repository. | E,H,G | FAIL | No public repository discovery journey. |
-| DDA-E03 | Shipped and repository runbook precedence is deterministic. | C,H | UNASSESSED | Contract and fixture missing. |
-| DDA-E04 | `runbook show` validates one exact service and flow. | C,E | PARTIAL | Tests exist; process proof missing. |
-| DDA-E05 | A user or agent can create a draft Browser Runbook through `browser-use`. | C,E,H | FAIL | No create command exists. Golden lifecycle owned by DDA-J05. |
-| DDA-E06 | Draft validation rejects secrets and invalid origins. | C,H | FAIL | No public authoring path exists. |
-| DDA-E07 | Exactly one runbook version can be active for a flow. | C,H | FAIL | Activation authoring surface missing. |
-| DDA-E08 | A prior valid runbook version can be rolled back safely. | C,H,G | FAIL | Rollback surface missing. |
+| DDA-E02 | Repository-owned runbooks list from an unrelated repository. | E,H,G | FAIL | Private source authoring and active-generation reads exist, but no unrelated-repository discovery journey proves this criterion. |
+| DDA-E03 | Shipped and repository runbook precedence is deterministic. | C,H | PASS | `browser-use-runbook-authoring.test.ts` and `browser-use-runbook-e2e.test.ts` distinguish source from active truth; runtime reads only the selected immutable generation and reports source/active drift explicitly. |
+| DDA-E04 | `runbook show` validates one exact service and flow. | C,E | PARTIAL | `browser-use-wave3-dispatch.test.ts` proves exact show, health, signed-action projection, and typed missing-flow refusal; spawned-process show proof remains missing. |
+| DDA-E05 | A user or agent can create a draft Browser Runbook through `browser-use`. | C,E,H | PARTIAL | Code-owned schema, validate, and complete-document apply create or replace private catalog records with observed-digest concurrency guards; full spawned-process lifecycle remains missing. Golden lifecycle owned by DDA-J05. |
+| DDA-E06 | Draft validation rejects secrets and invalid origins. | C,H | PASS | `browser-use-runbook-authoring.test.ts` rejects secret-shaped values, credential/login steps, and invalid origin policy before source mutation. |
+| DDA-E07 | Exactly one runbook version can be active for a flow. | C,H | PASS | `browser-use-runbook-generation.test.ts` and `browser-use-runbook-e2e.test.ts` prove whole-catalog immutable activation, atomic current selection, one next epoch under concurrency, and no fallback. |
+| DDA-E08 | A prior valid runbook version can be rolled back safely. | C,H,G | FAIL | Prior generations are retained and pinned resumes remain safe, but no explicit reviewed rollback surface exists. |
 | DDA-E09 | Declared runbook inputs bind exactly once and redact sensitive values. | C,H,L | PARTIAL | Input tests exist; full confidential journey missing. |
 | DDA-E10 | Runbook origins constrain every navigation and mutation. | C,H,L | PARTIAL | Compiler tests exist; live adversarial journey missing. |
 | DDA-E11 | Fresh `runbook run` internally attaches Agent Browser. | C,E,L | PARTIAL | Mint tests exist; live public-front-door journey missing. |
-| DDA-E12 | Auth-bound runbook execution resumes after approved auth. | H,L,G | FAIL | Native auth capability absent. |
+| DDA-E12 | Auth-bound runbook execution resumes after approved auth. | H,L,G | PARTIAL | `browser-use-runbook-auth.test.ts` and `browser-use-wave3-dispatch.test.ts` prove a presence-blocked run resumes through one signed Human Identity Attestation and dispatches once; independent live/golden receipt missing. |
 | DDA-E13 | Selector drift follows the coded heal ladder or blocks honestly. | H,L,G | UNASSESSED | Fixture journey missing. Prerequisite: runbook-mode execution. |
 | DDA-E14 | Recorder JSON can be paired, validated, and replayed without secrets. | C,H,L | FAIL | Public deterministic-mode lifecycle missing. |
 | DDA-E15 | Run Outcome records confirmed, not-achieved, unknown, and value metrics. | C,H,G | PARTIAL | Schema exists; full workflow evidence missing. |
 | DDA-E16 | Browser capture can promote selected Scratch Evidence into a runbook or gotcha. | H,G | FAIL | Public capture workflow missing. |
 | DDA-E17 | Runbook schema migration preserves active flow identity. | C,H | UNASSESSED | Migration fixtures do not yet prove authoring lifecycle. |
-| DDA-E18 | Concurrent authoring cannot activate two current versions. | C,H | FAIL | Authoring and activation surface missing. |
+| DDA-E18 | Concurrent authoring cannot activate two current versions. | C,H | PASS | Authoring requires the observed record/catalog digest and `browser-use-runbook-generation.test.ts` proves concurrent activation admits one next epoch. |
 | DDA-E19 | A runbook with an unknown schema version fails typed with migration guidance. | C,H | UNASSESSED | Oracle: version-bumped fixture — typed refusal. |
 | DDA-E20 | A corrupt runbook file fails closed naming the file. | C,H | UNASSESSED | Oracle: truncated fixture — typed error with path, no stack trace. |
-| DDA-E21 | Hostile runbook content is refused at load, not only at authoring. | C,H | UNASSESSED | Oracle: hand-authored hostile runbook (out-of-policy origins, secret-shaped values) — show and run refuse with typed per-finding report. |
+| DDA-E21 | Hostile runbook content is refused at load, not only at authoring. | C,H | PARTIAL | `browser-use-runbook-authoring.test.ts` keeps invalid source records visible as typed activation blockers and hostile drafts fail validation; explicit show-and-run hostile-load pair remains missing. |
 
 ## F. Authentication and security
 
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
-| DDA-F01 | Auth readiness reports operational, blocked, or absent truthfully. | C,E | PARTIAL | Auth command tests exist; native capability absent. |
+| DDA-F01 | Auth readiness reports operational, blocked, or absent truthfully. | C,E | PARTIAL | Auth command tests cover environment-token and native-product states with typed repair; installed-process matrix remains incomplete. |
 | DDA-F02 | A service resolves exactly one approved Item Binding. | C,H,G | PARTIAL | Binding model tests exist; live path missing. |
 | DDA-F03 | Ambiguous binding requires a signed one-use selection grant. | C,H,G | PARTIAL | Candidate projection tests exist; signing owner absent. |
 | DDA-F04 | Moved, forbidden, or revoked items return typed repair without rescan. | C,H | PARTIAL | Model tests exist; live vault journey missing. |
 | DDA-F05 | Raw credentials reach only disposable secret helpers. | C,H,L | PARTIAL | Leak and confidential-delivery tests exist; native live proof missing. |
 | DDA-F06 | No password, OTP, cookie, token, or auth URL reaches output or artifacts. | C,H,L,G | PARTIAL | C/H strengthened and now wired-seam: `src/browser-use-confidential-field-delivery-leak.test.ts` (3 tests / 29 expect), `src/browser-use-confidential-delivery-seam.test.ts` (12 tests / 100 expect, +1 wired H-tier over the prior 11/79), and `src/browser-use-confidential-delivery-interruption.test.ts` (1 test / 6 expect) sweep success, helper crash, later failure, real run-store bytes, stdout/stderr, and a SIGKILL temp tree with negative leak controls. New runbook-delivery wired-seam coverage lands the confidential path through the real runbook executor: `src/browser-use-runbook.test.ts` (38 tests / 104 expect, +5 wired C-tier over the prior 33) backed by `src/fixtures/confidential-runbook-delivery-fixture.ts` (standalone smoke exit 0, journal [quarantine:raised, lease:acquired:oncore_password, op-execute:secret-acquired, delivery:bounded-write, cleanup:released], run.json sentinel count 0) and the runtime wiring in `src/browser-use-runbook.ts` / `src/browser-use-runtime.ts` proven by `src/browser-use-runtime-security-wiring.test.ts`. Full `skills/browser-use/src` suite 63 files / 1298 tests / 7676 expect / exit 0; tsc_check errorCount 0; biome clean on the new specs and fixture. Public-front-door receipt 2026-07-28, run `1a6aa68d-825e-47ad-82af-0252697d2a6e`: `browser-use auth enroll-browser-automation-token --json` returned `native-capability-absent` with continuation `acquire-native-capability`; the signed Browser Use Security product is absent, so no public live auth workflow can begin. Tier L (and tier G) stay PARTIAL, now WON'T-FIX per operator decision 2026-07-28 (signed native lane declined for the headless Mac Mini deployment; see status summary): the signed confidential-delivery product is the only path to tier L/G and will not be built here. C/H proven and shippable. Owns live auth workflow leakage; scan-harness coverage owned by DDA-I09. |
-| DDA-F07 | Authenticated Session Reuse works across supported adapters. | H,L,G | FAIL | No lane advertises an auth method. Root cause shared with DDA-F16. |
-| DDA-F08 | Session Identity Proof confirms expected subject, account, and tenant. | H,L,G | FAIL | End-to-end proof owner not operational. |
+| DDA-F07 | Authenticated Session Reuse works across supported adapters. | H,L,G | PARTIAL | Agent Browser generically recognizes substantive pre-existing authenticated structure and reuses it with fresh proof or bounded Human Identity Attestation; other adapter auth lanes and live/golden evidence remain absent. |
+| DDA-F08 | Session Identity Proof confirms expected subject, account, and tenant. | H,L,G | FAIL | Production machine-proof owner is not operational. Human Identity Attestation is a separate explicit human claim and does not satisfy automated expected-principal proof. |
 | DDA-F09 | Wrong account or tenant stops before mutation. | H,L,G | FAIL | End-to-end journey missing. |
-| DDA-F10 | Expired login state routes to auth repair, not adapter fallback. | H,L,G | UNASSESSED | Journey missing. |
-| DDA-F11 | MFA routes to bounded user presence and resumes the same run. | H,L,G | FAIL | Native auth and user-presence path incomplete. |
+| DDA-F10 | Expired login state routes to auth repair, not adapter fallback. | H,L,G | PARTIAL | Runbook-auth and approved-submit tests prove expired attestation triggers fresh session proof and a newly persisted attestation before one-shot dispatch; live/golden journey missing. |
+| DDA-F11 | MFA routes to bounded user presence and resumes the same run. | H,L,G | PARTIAL | Generic OTP transaction and one-run human-presence resume are proven hermetically; production MFA challenge and live/golden continuation remain unproven. |
 | DDA-F12 | Current OTP retrieval respects expiry and attempt budgets. | C,H,L | PARTIAL | Auth transaction tests exist; live proof missing. |
-| DDA-F13 | Human Identity Attestation is one-run and cannot override mismatch. | C,H,G | PARTIAL | Model proof needs public journey. |
+| DDA-F13 | Human Identity Attestation is one-run and cannot override mismatch. | C,H,G | PARTIAL | Signed broker grants bind run, handoff, lane, target, origin, policy, and redacted identity references; P-256 verification, expiry, replay, rotated-key, wrong-run, and binding-mismatch refusals pass. Golden journey missing. |
 | DDA-F14 | Credential rotation invalidates stale binding evidence cleanly. | H,L,G | UNASSESSED | Live vault journey missing. |
 | DDA-F15 | Account lockout risk stops automatic retry. | C,H,G | UNASSESSED | Failure fixture missing. |
-| DDA-F16 | Browser Automation token custody and vault grant can become operational. | H,L,G | FAIL | Commands report native-capability-absent state. Root cause shared with DDA-F07. |
+| DDA-F16 | Browser Automation token custody and vault grant can become operational. | H,L,G | PARTIAL | Production runtime supports the admitted environment-token retrieval lane and typed enrollment/status repair; independent live vault and golden receipts remain missing. |
 | DDA-F17 | Each supported lane advertises only proven auth methods. | C,H,L | PARTIAL | Honest empty lists today; operational conformance missing. |
 | DDA-F18 | Confidential delivery interruption leaves no secret-bearing durable state. | C,H,L | PARTIAL | `src/browser-use-confidential-delivery-interruption.test.ts` (1 test / 6 expect) drives a real child to the confidential helper with a derived password sentinel, parent sends SIGKILL, then scans stdout, stderr, runtime/state roots, and every fixture artifact with zero sentinel bytes, backed by `src/fixtures/confidential-delivery-interruption-fixture.ts` (support fixture, not a spec target). The wired runbook-delivery seam extends this to the real executor: `src/browser-use-runbook.test.ts` (+5 C-tier, 38/104) and `src/fixtures/confidential-runbook-delivery-fixture.ts` prove the bounded-write delivery + cleanup:released path leaves run.json sentinel count 0. C/H pass. Tier L is WON'T-FIX per operator decision 2026-07-28 (signed native lane declined for the headless Mac Mini deployment; see status summary): public auth run `1a6aa68d-825e-47ad-82af-0252697d2a6e` shows tier-L interruption is unreachable before secret acquisition because native custody is absent, and the signed product that would supply it will not be built here. C/H proven and shippable. |
 | DDA-F19 | Prompt injection cannot grant auth, origin, or mutation authority. | C,H,L | UNASSESSED | Adversarial fixture journey missing; G deferred until the H fixture ladder exists. |
@@ -322,11 +325,11 @@ future host has real Touch ID the lane is already built and re-enrollable.
 | ID | Acceptance criterion | Tier | Current verdict | Evidence or gap |
 | --- | --- | --- | --- | --- |
 | DDA-H01 | Run status projects state, revision, lane, auth, and next action. | C,E | PARTIAL | Command tests exist; process proof missing. |
-| DDA-H02 | Blocked run resume preserves original lane and handoff identity. | C,H,L | PARTIAL | Run tests exist; live journey missing. |
+| DDA-H02 | Blocked run resume preserves original lane and handoff identity. | C,H,L | PARTIAL | Run-model, Runbook-auth, and wave3 dispatch tests revalidate lane, handoff, target binding, identity proof, and attestation freshness on resume; live journey missing. |
 | DDA-H03 | Cancel before dispatch reports no external effect. | C,E | PARTIAL | Model test exists; public process proof missing. |
 | DDA-H04 | Cancel after possible dispatch reports unknown and never rollback. | C,H | PARTIAL | Model test exists; journey missing. |
 | DDA-H05 | CLI crash before dispatch is safely repeatable. | H | UNASSESSED | Kill fixture missing. |
-| DDA-H06 | CLI crash after possible dispatch requires inspection before retry. | H,L | UNASSESSED | Kill fixture missing. |
+| DDA-H06 | CLI crash after possible dispatch requires inspection before retry. | H,L | PARTIAL | `browser-use-wave3-dispatch.test.ts` proves persisted mutation-dispatched restart returns unknown effect with zero browser calls or redispatch; real kill fixture and live journey missing. |
 | DDA-H07 | Adapter process death returns typed failure and preserves run evidence. | H,L | UNASSESSED | Kill fixture missing. |
 | DDA-H08 | Browser death returns Browser Entry Handoff and preserves run evidence. | H,L | UNASSESSED | Journey missing. |
 | DDA-H09 | Network timeout records whether dispatch may have occurred. | H,L | UNASSESSED | Fixture journey missing. |
@@ -373,14 +376,14 @@ future host has real Touch ID the lane is already built and re-enrollable.
 | DDA-J02 | From a product repository, route a debug request through Chrome DevTools and return evidence. | G | UNASSESSED | Golden journey missing. |
 | DDA-J03 | From a product repository, route a frontend interaction proof through Playwright. | G | BLOCKED | Deterministic snapshot dispatch exists; product-repository live journey blocked on the operator-gated pinned adapter install. |
 | DDA-J04 | List, show, and run a shipped read-only Browser Runbook through one front door. | G | UNASSESSED | Live journey missing. |
-| DDA-J05 | Create, validate, activate, list, show, and execute a new Browser Runbook. | G | FAIL | Authoring lifecycle missing. |
-| DDA-J06 | Authenticate through an Item Binding and complete a read-only runbook. | G | FAIL | Native auth capability absent. |
+| DDA-J05 | Create, validate, activate, list, show, and execute a new Browser Runbook. | G | UNASSESSED | The complete authoring and immutable-activation lifecycle is shipped and covered below G tier; one recorded external golden journey remains missing. |
+| DDA-J06 | Authenticate through an Item Binding and complete a read-only runbook. | G | UNASSESSED | Approved binding, environment-token custody, generic login, Human Identity Attestation, and Runbook execution are integrated below G tier; one recorded golden journey remains missing. |
 | DDA-J07 | Detect wrong account identity and stop before mutation. | G | FAIL | Operational identity proof missing. |
-| DDA-J08 | Expire auth mid-run, repair it, and resume the same Shared Browser Use Run. | G | FAIL | Operational auth and resume journey missing. |
+| DDA-J08 | Expire auth mid-run, repair it, and resume the same Shared Browser Use Run. | G | UNASSESSED | Expired-attestation renewal and same-run one-shot resume pass hermetically; one recorded golden journey remains missing. |
 | DDA-J09 | Run Agent Browser, Chrome DevTools, then Playwright against one intended tab. | G | BLOCKED | All three execution paths exist; same-tab live swap journey blocked on the operator-gated pinned adapter install. |
 | DDA-J10 | Run two repositories concurrently without state, tab, or artifact collision. | G | UNASSESSED | Golden concurrency journey missing. |
 | DDA-J11 | Recover from stopped Agent Chrome using only the returned continuation. | G | UNASSESSED | Public-front-door recovery journey missing. |
-| DDA-J12 | Execute a bounded externally visible mutation with identity proof, confirmation, fresh postcondition, and receipt. | G | FAIL | Auth, confirmation, and receipt integration incomplete. |
+| DDA-J12 | Execute a bounded externally visible mutation with identity proof, confirmation, fresh postcondition, and receipt. | G | UNASSESSED | Signed Human Identity Attestation, approval-gated dispatch, fresh submitted-state verification, and signed Reviewed Action receipts are integrated below G tier; one independent golden receipt remains missing. |
 | DDA-J13 | Multi-page pagination scrape completes with bounded output and per-page provenance. | G | UNASSESSED | Oracle: fixture site with N pages — one result artifact, N provenance entries, size within budget. |
 | DDA-J14 | Debug journey returns console and network evidence as a run artifact from a product-repository page. | G | UNASSESSED | Oracle: artifact exists, redacted, correlated to the run id. Sharpens the DDA-J02 oracle. |
 | DDA-J16 | Upgrade day: run DDA-J04 on version N, upgrade, run again; runs and knowledge survive. | G | UNASSESSED | Oracle: both runs green; store intact; no re-setup beyond `setup sync`. ID J15 reserved for an appendix candidate. |
@@ -439,8 +442,8 @@ Promote by moving a row into its owning section with its reserved ID.
 | Process and installed entrypoint proof partial | A04, A08-A09, A11-A13, A15-A18, G02 | fixable-now | Add source-built-packed parity and a real product-repository journey. |
 | Playwright lane partially operational | B06, B17, D08, D11, J03, J09 | fixable-now | Add trace/archive contracts, install the pinned adapter through its operator gate, then run same-tab live proof. |
 | Lane evidence remains unproven | B03, B11-B13, B20, F17 | needs-fixture | Define and run lane conformance producers against pinned adapters. |
-| Runbook authoring lifecycle absent | E02-E08, E16, E18, J05 | fixable-now | Design the smallest draft-validate-activate vertical slice. |
-| Native auth product absent | E12, F01-F18, J06-J08, J12 | blocked-backend | Complete Browser Use Security entry gate and capture live vault fixtures. |
+| Runbook golden lifecycle not recorded | E02, E04-E05, E08, E16, E21, J05 | needs-fixture | Run the shipped schema-validate-apply-activate-list-show-execute path from an unrelated repository and retain its receipt. |
+| Production machine identity and live auth proof incomplete | E12, F01-F18, J06-J08, J12 | blocked-backend | Implement Session Identity Proof, retain Human Identity Attestation as a separate basis, and capture authorized live/golden evidence. |
 | Cross-repo state isolation unproved | G02-G14, J01, J10 | needs-fixture | Create two temporary repository fixtures and run one public process in each. |
 | Integrated fault journeys absent | H05-H18 | needs-fixture | Build controlled process, adapter, browser, network, and filesystem failures. |
 | Security seam guards unproven | B21, C16-C19, D29, D34, E21, F23-F25 | fixable-now | Add contract and hermetic guards for test seams, envelope trust, hostile inputs, and output sanitization. |
@@ -463,6 +466,6 @@ Merged 2026-07-27 gap-audit order; earlier implementation order folded in.
 5. Envelope version negotiation and store compatibility: C16, C19, G20; cheap anti-drift A19-A20, G17.
 6. Process hygiene: H22 (no daemon), B25 (hang timeout), H21 (leftover session); runtime environment A21-A22, G16, F24.
 7. Remaining Playwright trace/archive contracts, then operator gate opens B17/J03/J09 BLOCKED rows and live same-tab proof.
-8. Cross-repository isolation pair; runbook draft-validate-activate slice; integrated failure and cleanup journeys.
-9. Auth readiness implementation and live credential-safe proof; auth-adjacent typed failures (M03, appendix F21) first — they need no native custody.
+8. Cross-repository isolation pair; run the shipped Runbook authoring/activation golden journey; integrated failure and cleanup journeys.
+9. Production Session Identity Proof and live credential-safe proof; auth-adjacent typed failures (M03, appendix F21) first.
 10. Golden workflows (J13, J14, J16) and sustained-use soak; ratify the proposed numeric budgets in A08, I01, I02, D22.
