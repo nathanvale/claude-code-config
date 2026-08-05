@@ -9,6 +9,7 @@ import {
 } from "./browser-use-auth-model";
 import {
 	authCommitSummaryOf,
+	cancelAuthFragmentSlot,
 	commitAuthTransaction,
 	createBrowserUseAuthContract,
 } from "./browser-use-auth";
@@ -104,6 +105,23 @@ function contractFor(record: BrowserUseAuthAttestation | undefined) {
 				: undefined,
 	});
 }
+
+test("cancelling a terminal auth fragment is an idempotent projection", () => {
+	const slot = {
+		schema_version: BROWSER_USE_AUTH_FRAGMENT_SCHEMA_VERSION,
+		fragment: baseFragment({
+			phase: "terminal",
+			status: "terminal",
+			terminal_outcome: "authenticated",
+			identity_basis: "session-identity-proof",
+			identity_basis_digest: "basis-digest-1",
+			attestation_digest: "attestation-digest-1",
+			fresh_until_epoch_ms: 9_000,
+		}),
+	};
+
+	expect(cancelAuthFragmentSlot(slot)).toEqual({ ok: true, fragment: slot });
+});
 
 function verifyInput(record: BrowserUseAuthAttestation) {
 	return {

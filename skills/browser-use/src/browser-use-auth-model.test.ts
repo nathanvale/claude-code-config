@@ -107,6 +107,13 @@ describe("blocked cause table (R21)", () => {
 		).toBe("wait-for-lease-holder");
 	});
 
+	test("first binding approval owns the selection-grant continuation", () => {
+		expect(
+			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["binding-approval-required"]
+				.continuation.next_action_id,
+		).toBe("request-binding-selection-grant");
+	});
+
 	test("unknown post-submit state offers same-lane inspection, never retry (AE6)", () => {
 		expect(
 			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["unknown-post-submit-state"]

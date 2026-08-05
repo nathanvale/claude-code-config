@@ -1,0 +1,12 @@
+{
+	"name": "@local/xero-skill",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"quarter-ledger": "./scripts/quarter-ledger.ts"
+	},
+	"scripts": {
+		"test": "bun test scripts/quarter-ledger.test.ts",
+		"typecheck": "bunx tsc --noEmit -p tsconfig.json"
+	}
+}

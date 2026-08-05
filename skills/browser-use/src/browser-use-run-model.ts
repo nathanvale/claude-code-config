@@ -260,6 +260,15 @@ export type BrowserUseArtifactReference = {
 	retention: BrowserUseArtifactRetentionClass;
 };
 
+/** Durable explicit approval bound to the exact continuation and review artifact. */
+export type BrowserUseRunApprovalRecord = {
+	continuation_id: string;
+	artifact_id: string;
+	approved_at_epoch_ms: number;
+	/** Write-ahead marker set immediately before the approved mutation dispatch. */
+	dispatch_started_at_epoch_ms?: number;
+};
+
 /**
  * Exactly-one next safe action for a blocked run (R24).
  */
@@ -426,6 +435,8 @@ export type BrowserUseSharedRun = {
 	/** Write-ahead truth: a mutation may have reached the site (R26/R37). */
 	mutation_dispatched: boolean;
 	artifacts: readonly BrowserUseArtifactReference[];
+	/** Explicit operator approvals; append-only and bound to one review artifact. */
+	approvals?: readonly BrowserUseRunApprovalRecord[];
 	/** Exactly one next safe action; required in blocked states (R24). */
 	continuation?: BrowserUseRunContinuation;
 	/** Audit-only caller metadata (R35); never authority. */
@@ -446,7 +457,8 @@ export type BrowserUseRunIssueCode =
 	| "runbook_progress_invalid"
 	| "run_execution_binding_invalid"
 	| "run_item_batch_invalid"
-	| "run_structured_results_invalid";
+	| "run_structured_results_invalid"
+	| "run_approvals_invalid";
 
 /** One typed validation issue. */
 export type BrowserUseRunIssue = {
@@ -484,7 +496,14 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 			message: `state ${run.state} requires exactly one next safe action.`,
 		});
 	}
-	if (isBlockedState(run.state) && run.auth_attestation !== undefined) {
+	if (
+		isBlockedState(run.state) &&
+		run.auth_attestation !== undefined &&
+		!(
+			run.state === "awaiting-approval" &&
+			run.continuation?.next_action_id === "complete-submit-approval"
+		)
+	) {
 		issues.push({
 			code: "run_blocked_with_attestation",
 			message: `state ${run.state} cannot carry a mutation-authorizing attestation.`,
@@ -598,7 +617,45 @@ export function validateSharedRun(run: BrowserUseSharedRun): BrowserUseRunIssue[
 			message: structuredResultsProblem,
 		});
 	}
+	const approvalsProblem = runApprovalsValidationProblem(
+		run.approvals ?? [],
+		run.artifacts,
+	);
+	if (approvalsProblem !== undefined) {
+		issues.push({
+			code: "run_approvals_invalid",
+			message: approvalsProblem,
+		});
+	}
 	return issues;
+}
+
+function runApprovalsValidationProblem(
+	approvals: readonly BrowserUseRunApprovalRecord[],
+	artifacts: readonly BrowserUseArtifactReference[],
+): string | undefined {
+	const artifactIds = new Set(artifacts.map((artifact) => artifact.artifact_id));
+	const approvalKeys = new Set<string>();
+	for (const approval of approvals) {
+		if (
+			approval.continuation_id !== "complete-submit-approval" ||
+			typeof approval.artifact_id !== "string" ||
+			approval.artifact_id.length === 0 ||
+			!Number.isSafeInteger(approval.approved_at_epoch_ms) ||
+			approval.approved_at_epoch_ms < 0 ||
+			(approval.dispatch_started_at_epoch_ms !== undefined &&
+				(!Number.isSafeInteger(approval.dispatch_started_at_epoch_ms) ||
+					approval.dispatch_started_at_epoch_ms <
+						approval.approved_at_epoch_ms)) ||
+			!artifactIds.has(approval.artifact_id)
+		) {
+			return "each approval must bind the submit continuation, one attached artifact, and a non-negative approval time.";
+		}
+		const key = `${approval.continuation_id}\0${approval.artifact_id}`;
+		if (approvalKeys.has(key)) return "approval records cannot be duplicated.";
+		approvalKeys.add(key);
+	}
+	return undefined;
 }
 
 function objectHasExactlyKeys(
@@ -1361,25 +1418,40 @@ export function checkSameLaneResume(
  * after a mutation may have reached the site (R37).
  */
 export type BrowserUseCancellationReport = {
-	external_effect: "none" | "unknown";
+	external_effect: "none";
 	rolled_back: false;
 };
 
+/** Cancellation admission: pre-dispatch truth or a fail-closed write refusal. */
+export type BrowserUseCancellationClassification =
+	| { ok: true; report: BrowserUseCancellationReport }
+	| {
+			ok: false;
+			code: "run_cancel_mutation_dispatched";
+			message: string;
+	  };
+
 /**
- * Classify a cancellation truthfully (R26/R37). Once a mutation was
- * dispatched and the run holds no confirmed terminal truth, the external
- * effect is `unknown` — same-lane inspection is the only continuation, never
- * retry, adapter switch, or a rollback claim.
+ * Classify cancellation admission truthfully (R26/R37). Once a mutation was
+ * dispatched, cancellation refuses because terminalising the run would hide
+ * a possible in-flight or applied external write.
  *
  * @param run - Shared run being cancelled
- * @returns External-effect truth with rollback structurally denied
+ * @returns Pre-dispatch external-effect truth, or the typed dispatch refusal
  */
 export function classifyCancellation(
 	run: BrowserUseSharedRun,
-): BrowserUseCancellationReport {
-	const effectKnownNone = !run.mutation_dispatched;
+): BrowserUseCancellationClassification {
+	if (run.mutation_dispatched) {
+		return {
+			ok: false,
+			code: "run_cancel_mutation_dispatched",
+			message:
+				"the run dispatched a mutation; inspect its external effect instead of cancelling it.",
+		};
+	}
 	return {
-		external_effect: effectKnownNone ? "none" : "unknown",
-		rolled_back: false,
+		ok: true,
+		report: { external_effect: "none", rolled_back: false },
 	};
 }

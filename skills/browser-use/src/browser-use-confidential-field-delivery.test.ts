@@ -147,6 +147,97 @@ describe("happy-path delivery", () => {
 });
 
 describe("target re-proof gate (R14)", () => {
+	test("passes the fresh target proof and proven frame origin to environment credential fetch", async () => {
+		let fetchedRequest:
+			| Parameters<BrowserUseTokenRetrievalPort["fetchCredentialField"]>[0]
+			| undefined;
+		const port = fakePort({
+			fetchCredentialField: async (input) => {
+				fetchedRequest = input;
+				if (
+					typeof input.target_digest !== "string" ||
+					input.target_digest.length === 0
+				) {
+					return {
+						ok: false,
+						rejection: {
+							code: "binding-shape-invalid",
+							message: "target-proof-invalid",
+						},
+					};
+				}
+				if (
+					typeof input.observed_origin !== "string" ||
+					!input.binding.allowed_origins.includes(input.observed_origin)
+				) {
+					return {
+						ok: false,
+						rejection: {
+							code: "binding-shape-invalid",
+							message: "origin-mismatch",
+						},
+					};
+				}
+				return { ok: true, handle: handle(input.field) };
+			},
+		});
+		const result = await deliverConfidentialFields({
+			binding: BINDING,
+			target: TARGET,
+			fields: ["username"],
+			tokenRetrieval: port,
+			deliver: recordingHook().hook,
+			reproveTarget: reproveOk,
+		});
+
+		expect(result.ok).toBe(true);
+		expect(fetchedRequest).toMatchObject({
+			target_digest: TARGET.target_proof_digest,
+			observed_origin: TARGET.frame_origin,
+		});
+	});
+
+	test("environment credential fetch still refuses a proven origin outside the binding", async () => {
+		const outsideTarget: BrowserUseVerifiedTarget = {
+			...TARGET,
+			frame_origin: "https://outside.test",
+		};
+		let observedOrigin: string | undefined;
+		const { hook, fields } = recordingHook();
+		const result = await deliverConfidentialFields({
+			binding: BINDING,
+			target: outsideTarget,
+			fields: ["password"],
+			tokenRetrieval: fakePort({
+				fetchCredentialField: async (input) => {
+					observedOrigin = input.observed_origin;
+					if (
+						typeof input.observed_origin !== "string" ||
+						!input.binding.allowed_origins.includes(input.observed_origin)
+					) {
+						return {
+							ok: false,
+							rejection: {
+								code: "binding-shape-invalid",
+								message: "origin-mismatch",
+							},
+						};
+					}
+					return { ok: true, handle: handle(input.field) };
+				},
+			}),
+			deliver: hook,
+			reproveTarget: async ({ target }) => ({
+				proven: true,
+				observed_digest: target.target_proof_digest,
+			}),
+		});
+
+		expect(result.ok).toBe(false);
+		expect(observedOrigin).toBe("https://outside.test");
+		expect(fields).toEqual([]);
+	});
+
 	test("blocks on origin mismatch before any secret handle is minted", async () => {
 		let fetched = false;
 		const port = fakePort({

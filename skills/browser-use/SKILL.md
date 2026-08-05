@@ -28,6 +28,8 @@ attachment.
 - Connection attaches automatically on `task run` / `runbook run`. Open-ended
   native delegation uses browser-connect directly because it owns attachment.
   Envelopes and repair paths stay owned by `runtime/browser-connect`.
+- For Runbook or Reviewed Action authoring and activation, read
+  `../../docs/runbooks/authoring-runbooks.md` before mutation.
 - For browser-use project work, read `references/coding-task-tracker.md` before
   choosing or updating a tracker task.
 

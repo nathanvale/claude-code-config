@@ -5,11 +5,11 @@
   "flow_id": "login",
   "flow_name": "login",
   "version": "1",
-  "summary": "Sign in to the FastTrack candidate portal. Credentials resolve through the Browser Authentication Transaction by binding slug; this file never carries a secret, endpoint, or vault identifier. Chain fill-week after a confirmed sign-in.",
+  "summary": "Open the FastTrack candidate portal and enter the generic interactive login transaction. Chain fill-week after a confirmed sign-in.",
   "allowed_origins": [
     "https://manpowergroup.fasttrack360.com.au"
   ],
-  "auth_context_ref": "fasttrack-session",
+  "auth_context_ref": "interactive-login",
   "inputs": [],
   "steps": [
     {
@@ -23,51 +23,6 @@
     {
       "kind": "snapshot",
       "interactive": true
-    },
-    {
-      "kind": "fill",
-      "target": {
-        "role": "textbox",
-        "name": "Username"
-      },
-      "sensitivity": "confidential",
-      "item_binding": "fasttrack_username",
-      "postcondition": {
-        "kind": "element-visible",
-        "selector": "input[type=password]"
-      }
-    },
-    {
-      "kind": "snapshot",
-      "interactive": true
-    },
-    {
-      "kind": "fill",
-      "target": {
-        "role": "textbox",
-        "name": "Password"
-      },
-      "sensitivity": "confidential",
-      "item_binding": "fasttrack_password",
-      "postcondition": {
-        "kind": "element-visible",
-        "selector": "input[type=password]"
-      }
-    },
-    {
-      "kind": "snapshot",
-      "interactive": true
-    },
-    {
-      "kind": "click",
-      "target": {
-        "role": "button",
-        "name": "Sign In"
-      },
-      "postcondition": {
-        "kind": "element-visible",
-        "selector": "ul.nav.nav-tabs.top-3"
-      }
     }
   ]
 }

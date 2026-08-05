@@ -1,0 +1,23 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "unifi",
+  "flow_id": "login",
+  "flow_name": "login",
+  "version": "1",
+  "summary": "Open the UniFi OS login page, authenticate through the generic Browser Authentication Transaction, and capture a fresh interactive snapshot without changing router settings.",
+  "allowed_origins": ["https://192.168.1.1"],
+  "auth_context_ref": "interactive-login",
+  "inputs": [],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://192.168.1.1/login",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://192.168.1.1/login"
+      }
+    },
+    { "kind": "snapshot", "interactive": true }
+  ]
+}

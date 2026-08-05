@@ -147,7 +147,7 @@ export function buildOncoreSaveDraftMigration(
 		version: "2",
 		summary: "Reconcile rows, fill checkpointed entries, and preserve a controlled draft.",
 		allowed_origins: [input.allowedOrigin],
-		auth_context_ref: "oncore-session",
+		auth_context_ref: "interactive-login",
 		inputs: [
 			{
 				id: "item_keys",

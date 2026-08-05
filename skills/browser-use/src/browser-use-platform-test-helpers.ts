@@ -118,6 +118,8 @@ export type VolatileOverlayFs = {
 	crash(): void;
 	/** Real directory backing the current epoch (for raw inspection). */
 	currentBackingDir(): string;
+	/** Replace live file bytes synchronously without updating durable truth. */
+	tamperFile(path: string, contents: string): void;
 	/**
 	 * One-shot gate: the next readTextFile completes its read, resolves
 	 * `reached` with the logical path, and pauses until `release()` — the
@@ -160,7 +162,11 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 	const durableFiles = new Map<string, { contents: string; mode: number }>();
 	const durableDirs = new Map<string, number>();
 	const volatileFiles = new Set<string>();
-	let pendingRenames: Array<{ from: string; to: string }> = [];
+	let pendingRenames: Array<{
+		from: string;
+		to: string;
+		kind: "file" | "directory";
+	}> = [];
 	const flags = { failRenameExdev: false };
 	const hooks: VolatileOverlayHooks = {};
 	let pendingPause:
@@ -229,6 +235,26 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 		await recordDurableAncestors(key);
 	}
 
+	function renameKey(key: string, from: string, to: string): string | undefined {
+		if (key === from) return to;
+		return key.startsWith(`${from}${sep}`) ? `${to}${key.slice(from.length)}` : undefined;
+	}
+
+	function promoteDirectoryRename(from: string, to: string): void {
+		for (const [path, record] of [...durableFiles]) {
+			const renamed = renameKey(path, from, to);
+			if (renamed === undefined) continue;
+			durableFiles.delete(path);
+			durableFiles.set(renamed, record);
+		}
+		for (const [path, mode] of [...durableDirs]) {
+			const renamed = renameKey(path, from, to);
+			if (renamed === undefined) continue;
+			durableDirs.delete(path);
+			durableDirs.set(renamed, mode);
+		}
+	}
+
 	const port: BrowserUsePlatformFs = {
 		async lstat(path) {
 			return await real.lstat(live(path));
@@ -288,9 +314,23 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 		},
 		async rename(oldPath, newPath) {
 			if (flags.failRenameExdev) throw exdevError();
+			const oldStat = await real.lstat(live(oldPath));
+			if (oldStat === undefined) throw new Error("volatile overlay: rename source missing");
 			await real.rename(live(oldPath), live(newPath));
-			pendingRenames.push({ from: logical(oldPath), to: logical(newPath) });
-			volatileFiles.delete(logical(oldPath));
+			const from = logical(oldPath);
+			const to = logical(newPath);
+			const kind = oldStat.kind === "directory" ? "directory" : "file";
+			pendingRenames.push({ from, to, kind });
+			if (kind === "directory") {
+				for (const path of [...volatileFiles]) {
+					const renamed = renameKey(path, from, to);
+					if (renamed === undefined) continue;
+					volatileFiles.delete(path);
+					volatileFiles.add(renamed);
+				}
+			} else {
+				volatileFiles.delete(from);
+			}
 			// Crash inside this hook: the rename entry was never dir-flushed,
 			// so durable truth still holds the OLD state (never torn).
 			await runHook(hooks.onAfterRename, logical(newPath));
@@ -309,6 +349,24 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 				(pending) => pending.from !== key && pending.to !== key,
 			);
 		},
+		async removeDirectoryRecursive(path) {
+			await real.removeDirectoryRecursive(live(path));
+			const logicalPath = logical(path);
+			const prefix = `${logicalPath}${sep}`;
+			const under = (key: string) => key === logicalPath || key.startsWith(prefix);
+			for (const key of [...durableFiles.keys(), ...volatileFiles.keys()]) {
+				if (under(key)) {
+					durableFiles.delete(key);
+					volatileFiles.delete(key);
+				}
+			}
+			// durableDirs must also drop, or crash() re-materializes the removed tree
+			// as empty dirs and a "staging dir is gone after crash" assertion falsely passes.
+			for (const key of [...durableDirs.keys()]) if (under(key)) durableDirs.delete(key);
+			pendingRenames = pendingRenames.filter(
+				(pending) => !(under(pending.from) || under(pending.to)),
+			);
+		},
 		async syncDirectory(path) {
 			await real.syncDirectory(live(path));
 			const dir = logical(path);
@@ -321,8 +379,12 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 				(pending) => !promoted.includes(pending),
 			);
 			for (const pending of promoted) {
-				durableFiles.delete(pending.from);
-				await promoteFile(pending.to);
+				if (pending.kind === "directory") {
+					promoteDirectoryRename(pending.from, pending.to);
+				} else {
+					durableFiles.delete(pending.from);
+					await promoteFile(pending.to);
+				}
 			}
 			for (const file of [...volatileFiles]) {
 				if (dirname(file) === dir) await promoteFile(file);
@@ -380,6 +442,11 @@ export function makeVolatileOverlayFs(): VolatileOverlayFs {
 		crash,
 		currentBackingDir(): string {
 			return join(backingBase, `epoch-${epoch}`);
+		},
+		tamperFile(path: string, contents: string): void {
+			const target = live(path);
+			writeFileSync(target, contents, { mode: 0o600 });
+			chmodSync(target, 0o600);
 		},
 		pauseAfterRead(): { reached: Promise<string>; release(): void } {
 			let resolveReached!: (path: string) => void;

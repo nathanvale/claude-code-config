@@ -1,0 +1,198 @@
+{
+  "contract": "browser-use.reviewed-action-candidate",
+  "schema_version": "1",
+  "action_id": "oncore-verify-filled",
+  "origin": "https://iteraterecruitment.oncoreservices.com",
+  "source": "async ({ inputs }) => {\n  const whitespacePattern = new RegExp(\"\\\\s+\", \"g\");\n  const isoDatePattern = new RegExp(\"^(\\\\d{4})-(\\\\d{2})-(\\\\d{2})$\");\n  const displayDatePattern = new RegExp(\"\\\\b(\\\\d{1,2})/(\\\\d{1,2})/(\\\\d{4})\\\\b\");\n  const submittedPattern = new RegExp(\n    \"successfully submitted|timesheet was submitted|submitted for approval\",\n    \"i\",\n  );\n  const approvedPattern = new RegExp(\"approved\", \"i\");\n  const numericPattern = new RegExp(\"^-?\\\\d+(?:\\\\.\\\\d+)?$\");\n  const standardDayPattern = new RegExp(\"\\\\bStandard Day\\\\b\", \"i\");\n  const ignoredRowPattern = new RegExp(\n    \"No records to display|No timesheet entries|^Add new timesheet entry$\",\n    \"i\",\n  );\n  const normalize = (value) =>\n    String(value || \"\")\n      .replace(whitespacePattern, \" \")\n      .trim();\n  const observedAt = () => new Date().toISOString();\n  const addButtonSelector =\n    \"#ctl00_MainContent_TimesheetWorkGrid_ctl00_ctl02_ctl00_AddNewRecordButton\";\n  const standardDayValue = \"45548822362\";\n  const fail = (failureCode, extra = {}) => {\n    const payload = {\n      failure_code: failureCode,\n      timesheet_id: String(inputs.timesheet_id || \"\"),\n      failure_observed_at: observedAt(),\n      ...extra,\n    };\n    const message = JSON.stringify(payload);\n    throw new Error(\n      message.length <= 2000\n        ? message\n        : JSON.stringify({\n            failure_code: failureCode,\n            timesheet_id: payload.timesheet_id,\n            truncated: true,\n          }),\n    );\n  };\n  const pageUrl = () => String(document.querySelector(\"html\")?.baseURI || \"\");\n  const currentTimesheetId = () => {\n    try {\n      return new URL(pageUrl()).searchParams.get(\"id\") || \"\";\n    } catch (_error) {\n      return \"\";\n    }\n  };\n  const parseYmd = (value) => {\n    const match = String(value || \"\").match(isoDatePattern);\n    if (!match) return null;\n    const date = new Date(\n      Number(match[1]),\n      Number(match[2]) - 1,\n      Number(match[3]),\n    );\n    return date.getFullYear() === Number(match[1]) &&\n      date.getMonth() === Number(match[2]) - 1 &&\n      date.getDate() === Number(match[3])\n      ? date\n      : null;\n  };\n  const parseDisplayDate = (value) => {\n    const match = normalize(value).match(displayDatePattern);\n    return match\n      ? `${match[3]}-${match[2].padStart(2, \"0\")}-${match[1].padStart(2, \"0\")}`\n      : \"\";\n  };\n  const isWithin = (ymd, start, end) => {\n    const date = parseYmd(ymd);\n    const startDate = parseYmd(start);\n    const endDate = parseYmd(end);\n    return Boolean(\n      date && startDate && endDate && date >= startDate && date <= endDate,\n    );\n  };\n  const bodyText = normalize(\n    document.querySelector(\"body\")?.innerText ||\n      document.querySelector(\"body\")?.textContent ||\n      \"\",\n  );\n  const editableState = () => {\n    if (submittedPattern.test(bodyText)) return \"submitted\";\n    if (\n      document.querySelector(addButtonSelector) ||\n      document.querySelector(\"#MainContent_btnSubmit\")\n    )\n      return \"editable\";\n    if (approvedPattern.test(bodyText)) return \"approved\";\n    return \"submitted\";\n  };\n  const parseNumber = (value) => {\n    const match = normalize(value).match(numericPattern);\n    return match ? Number(match[0]) : null;\n  };\n  const gridRoot = () =>\n    document.querySelector(\"#ctl00_MainContent_TimesheetWorkGrid_ctl00\") ||\n    document.querySelector(\"[id$='TimesheetWorkGrid_ctl00']\");\n  const dataRows = () => {\n    const root = gridRoot();\n    if (!root) fail(\"timesheet_grid_not_found\");\n    const telerikRows = Array.from(\n      root.querySelectorAll(\"tr.rgRow, tr.rgAltRow\"),\n    );\n    return telerikRows.length > 0\n      ? telerikRows\n      : Array.from(root.querySelectorAll(\"tbody tr\"));\n  };\n  const entries = () =>\n    dataRows()\n      .map((row, index) => {\n        const cells = Array.from(row.querySelectorAll(\"td\"))\n          .map((cell) => normalize(cell.innerText || cell.textContent))\n          .filter(Boolean);\n        const joined = cells.join(\" \");\n        const date = parseDisplayDate(joined);\n        const units =\n          cells\n            .map(parseNumber)\n            .find((value) => value !== null && value > 0 && value <= 1) ??\n          null;\n        const rateText =\n          cells.find((cell) => standardDayPattern.test(cell)) || \"\";\n        return {\n          index,\n          date,\n          rate_text: rateText,\n          units,\n          cells: cells.slice(0, 12),\n        };\n      })\n      .filter((entry) => {\n        const joined = entry.cells.join(\" \");\n        return entry.cells.length > 0 && !ignoredRowPattern.test(joined);\n      });\n  const rowEvidence = (row) =>\n    row\n      ? {\n          index: row.index,\n          date: row.date,\n          units: row.units,\n          rate_match: Boolean(row.rate_text),\n        }\n      : null;\n  const rowsEvidence = (rows) => rows.slice(0, 14).map(rowEvidence);\n\n  const timesheetId = String(inputs.timesheet_id || \"\").trim();\n  if (!timesheetId || currentTimesheetId() !== timesheetId) {\n    fail(\"wrong_timesheet_id_open\", {\n      expected_timesheet_id: timesheetId,\n      current_timesheet_id: currentTimesheetId(),\n      url: pageUrl(),\n    });\n  }\n  const state = editableState();\n  if (state !== \"editable\")\n    fail(\"editable_state_unexpected\", { editable_state: state });\n  const periodStart = String(inputs.period_start || \"\");\n  const periodEnd = String(inputs.period_end || \"\");\n  if (\n    !parseYmd(periodStart) ||\n    !parseYmd(periodEnd) ||\n    periodStart > periodEnd\n  ) {\n    fail(\"period_boundary_rejected\", {\n      period_start: periodStart,\n      period_end: periodEnd,\n    });\n  }\n  if (!Array.isArray(inputs.rows) || inputs.rows.length === 0) {\n    fail(\"rows_required\");\n  }\n  const expectedRows = inputs.rows.map((row) => ({\n    date: String(row.date || \"\"),\n    units: Number(row.units),\n  }));\n  const expectedDates = expectedRows.map((row) => row.date);\n  if (\n    expectedRows.some(\n      (row) =>\n        !isWithin(row.date, periodStart, periodEnd) ||\n        !Number.isFinite(row.units) ||\n        row.units <= 0 ||\n        row.units > 1,\n    ) ||\n    new Set(expectedDates).size !== expectedDates.length\n  ) {\n    fail(\"row_dates_rejected\", {\n      expected_dates: expectedDates.slice(0, 14),\n    });\n  }\n  const rateValue = String(inputs.rate_value || \"\").trim();\n  if (rateValue !== standardDayValue) {\n    fail(\"telerik_clientstate_rejected\", {\n      field: \"rate\",\n      rate_value: rateValue,\n    });\n  }\n  const expectedTotalUnits = Number(inputs.expected_total_units);\n  if (\n    !Number.isFinite(expectedTotalUnits) ||\n    expectedTotalUnits < 0 ||\n    expectedTotalUnits > 7\n  ) {\n    fail(\"aggregate_expectation_rejected\", {\n      expected_total_units: Number.isFinite(expectedTotalUnits)\n        ? expectedTotalUnits\n        : null,\n    });\n  }\n\n  const observedRows = entries();\n  if (observedRows.length !== expectedRows.length) {\n    fail(\"row_count_mismatch_after_fill\", {\n      expected_day_count: expectedRows.length,\n      row_count: observedRows.length,\n      rows: rowsEvidence(observedRows),\n    });\n  }\n  const proofEntries = [];\n  for (const expected of expectedRows) {\n    const observed = observedRows.find((row) => row.date === expected.date);\n    if (!observed || observed.units !== expected.units || !observed.rate_text) {\n      fail(\"readback_mismatch\", {\n        expected,\n        observed: rowEvidence(observed),\n        rows: rowsEvidence(observedRows),\n      });\n    }\n    proofEntries.push({\n      date: expected.date,\n      rate_value: rateValue,\n      units: observed.units,\n    });\n  }\n  if (\n    observedRows.some(\n      (row) => !row.date || !isWithin(row.date, periodStart, periodEnd),\n    )\n  ) {\n    fail(\"wrong_period_open\", {\n      period_start: periodStart,\n      period_end: periodEnd,\n      rows: rowsEvidence(observedRows),\n    });\n  }\n  proofEntries.sort((left, right) => left.date.localeCompare(right.date));\n  const totalUnits = proofEntries.reduce(\n    (sum, entry) => sum + Number(entry.units || 0),\n    0,\n  );\n  const totalTolerance =\n    Number.EPSILON *\n    Math.max(1, Math.abs(expectedTotalUnits), Math.abs(totalUnits)) *\n    16;\n  if (Math.abs(totalUnits - expectedTotalUnits) > totalTolerance) {\n    fail(\"aggregate_mismatch\", {\n      expected_total_units: expectedTotalUnits,\n      observed_total_units: totalUnits,\n    });\n  }\n  return {\n    proof_schema: \"OncoreFillTimesheetProofV1\",\n    timesheet_id: timesheetId,\n    period_start: periodStart,\n    period_end: periodEnd,\n    row_count: observedRows.length,\n    total_units: totalUnits,\n    entries: proofEntries,\n    submitted: false,\n    editable_state: state,\n    proof_observed_at: observedAt(),\n  };\n}\n",
+  "containment": "read-only-observation",
+  "input_schema": {
+    "kind": "object",
+    "fields": {
+      "timesheet_id": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 32,
+          "pattern": "\\d{1,32}"
+        }
+      },
+      "period_start": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10,
+          "pattern": "\\d{4}-\\d{2}-\\d{2}"
+        }
+      },
+      "period_end": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10,
+          "pattern": "\\d{4}-\\d{2}-\\d{2}"
+        }
+      },
+      "rate_value": {
+        "required": true,
+        "schema": {
+          "kind": "enum",
+          "values": [
+            "45548822362"
+          ]
+        }
+      },
+      "expected_total_units": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "minimum": 0,
+          "maximum": 7
+        }
+      },
+      "rows": {
+        "required": true,
+        "schema": {
+          "kind": "array",
+          "min_items": 1,
+          "max_items": 7,
+          "items": {
+            "kind": "object",
+            "fields": {
+              "date": {
+                "required": true,
+                "schema": {
+                  "kind": "string",
+                  "max_length": 10,
+                  "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                }
+              },
+              "units": {
+                "required": true,
+                "schema": {
+                  "kind": "number",
+                  "exclusive_minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "result_schema": {
+    "kind": "object",
+    "fields": {
+      "proof_schema": {
+        "required": true,
+        "schema": {
+          "kind": "enum",
+          "values": [
+            "OncoreFillTimesheetProofV1"
+          ]
+        }
+      },
+      "timesheet_id": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 32
+        }
+      },
+      "period_start": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10
+        }
+      },
+      "period_end": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10
+        }
+      },
+      "row_count": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "integer": true,
+          "minimum": 0,
+          "maximum": 7
+        }
+      },
+      "total_units": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "minimum": 0,
+          "maximum": 7
+        }
+      },
+      "entries": {
+        "required": true,
+        "schema": {
+          "kind": "array",
+          "max_items": 7,
+          "items": {
+            "kind": "object",
+            "fields": {
+              "date": {
+                "required": true,
+                "schema": {
+                  "kind": "string",
+                  "max_length": 10
+                }
+              },
+              "rate_value": {
+                "required": true,
+                "schema": {
+                  "kind": "enum",
+                  "values": [
+                    "45548822362"
+                  ]
+                }
+              },
+              "units": {
+                "required": true,
+                "schema": {
+                  "kind": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "submitted": {
+        "required": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      "editable_state": {
+        "required": true,
+        "schema": {
+          "kind": "enum",
+          "values": [
+            "editable"
+          ]
+        }
+      },
+      "proof_observed_at": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 64
+        }
+      }
+    }
+  },
+  "result_sensitivity": "low",
+  "required_postcondition": {
+    "kind": "element-visible",
+    "selector": "tr.rgRow, tr.rgAltRow"
+  }
+}

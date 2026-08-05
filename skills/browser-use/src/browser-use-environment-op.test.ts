@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { realpath } from "node:fs/promises";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
 import { blockOfRetrievalRejection } from "./browser-use-op";
@@ -51,10 +54,12 @@ type SupervisorFixture = {
 	opPath: string;
 	configRoot: string;
 	callsPath: string;
+	tmpdirsPath: string;
 	setItemResponse(value: unknown): void;
 	setVaultResponse(value: unknown): void;
 	setDeliveryResponse(value: unknown): void;
 	calls(): string[];
+	tmpdirs(): string[];
 };
 
 function envelope(value: unknown): unknown {
@@ -82,6 +87,7 @@ function fixture(): SupervisorFixture {
 	const root = mkdtempSync(join(tmpdir(), "browser-use-environment-op-"));
 	temporaryRoots.push(root);
 	const callsPath = join(root, "calls.log");
+	const tmpdirsPath = join(root, "tmpdirs.log");
 	const vaultResponsePath = join(root, "vault-response.json");
 	const itemResponsePath = join(root, "item-response.json");
 	const deliveryResponsePath = join(root, "delivery-response.json");
@@ -102,6 +108,23 @@ function fixture(): SupervisorFixture {
 		supervisorPath,
 		`#!/bin/sh
 /usr/bin/printf '%s\n' "$*" >> ${shellLiteral(callsPath)}
+/usr/bin/printf '%s\n' "$TMPDIR" >> ${shellLiteral(tmpdirsPath)}
+config_root=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--config-root" ]; then config_root="$argument"; break; fi
+  previous="$argument"
+done
+config_parent="$(/usr/bin/dirname "$config_root")"
+config_parent_mode="$(/usr/bin/stat -f '%Lp' "$config_parent")"
+case "$config_parent_mode" in
+  ?[2367]?|??[2367]) unsafe_parent=true ;;
+  *) unsafe_parent=false ;;
+esac
+if [ -L "$config_parent" ] || [ "$unsafe_parent" = true ]; then
+  /usr/bin/printf '%s\n' '{"schema_version":1,"ok":false,"rejection":{"code":"unsafe-ancestry"}}'
+  exit 20
+fi
 case "$*" in
   *"--operation vault-list"*) response=${shellLiteral(vaultResponsePath)} ;;
   *"--operation item-get"*) response=${shellLiteral(itemResponsePath)} ;;
@@ -121,6 +144,7 @@ exit 20
 		opPath,
 		configRoot: root,
 		callsPath,
+		tmpdirsPath,
 		setItemResponse(value) {
 			writeFileSync(itemResponsePath, JSON.stringify(value));
 		},
@@ -137,6 +161,13 @@ exit 20
 				return [];
 			}
 		},
+		tmpdirs() {
+			try {
+				return readFileSync(tmpdirsPath, "utf8").trim().split("\n");
+			} catch {
+				return [];
+			}
+		},
 	};
 }
 
@@ -149,6 +180,13 @@ function portOf(
 		supervisorPath: supervisor.supervisorPath,
 		opPath: supervisor.opPath,
 		configRoot: supervisor.configRoot,
+		realpath: async (path) => {
+			try {
+				return await realpath(path);
+			} catch {
+				return undefined;
+			}
+		},
 		now: options.now ?? (() => 1_000),
 		handleTtlMs: options.handleTtlMs ?? 30_000,
 		mintHandleId: () => `handle-${++nextHandle}`,
@@ -406,6 +444,45 @@ describe("environment OP secret-handle registry", () => {
 });
 
 describe("environment OP metadata and fail-closed causes", () => {
+	test("canonicalizes a legitimate symlinked config ancestry before native metadata execution", async () => {
+		const supervisor = fixture();
+		const canonicalParent = join(supervisor.root, "canonical-config");
+		const canonicalRoot = join(canonicalParent, "browser-use");
+		const linkedParent = join(supervisor.root, "config-link");
+		mkdirSync(canonicalRoot, { recursive: true, mode: 0o700 });
+		symlinkSync(canonicalParent, linkedParent, "dir");
+		supervisor.configRoot = join(linkedParent, "browser-use");
+		const admittedRoot = await realpath(canonicalRoot);
+
+		expect(await portOf(supervisor).listVaults()).toEqual({
+			ok: true,
+			vaults: [{ vault_id: "vault-1" }],
+		});
+		expect(supervisor.calls()[0]).toContain(`--config-root ${admittedRoot}`);
+		expect(supervisor.calls()[0]).not.toContain(supervisor.configRoot);
+		expect(supervisor.tmpdirs()).toEqual([admittedRoot]);
+	});
+
+	test("still refuses world-writable real config ancestry after canonicalization", async () => {
+		const supervisor = fixture();
+		const unsafeParent = join(supervisor.root, "unsafe-real-ancestry");
+		const unsafeRoot = join(unsafeParent, "browser-use");
+		mkdirSync(unsafeRoot, { recursive: true, mode: 0o700 });
+		chmodSync(unsafeParent, 0o777);
+		supervisor.configRoot = unsafeRoot;
+		const admittedRoot = await realpath(unsafeRoot);
+
+		expect(await portOf(supervisor).listVaults()).toEqual({
+			ok: false,
+			rejection: {
+				code: "io-failure",
+				message: "native environment-token execution was refused.",
+			},
+		});
+		expect(supervisor.calls()[0]).toContain(`--config-root ${admittedRoot}`);
+		expect(supervisor.tmpdirs()).toEqual([admittedRoot]);
+	});
+
 	test("vault-list and item-get metadata operations remain unchanged", async () => {
 		const supervisor = fixture();
 		const port = portOf(supervisor);

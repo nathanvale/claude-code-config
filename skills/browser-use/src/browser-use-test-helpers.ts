@@ -1,8 +1,10 @@
 import { type BrowserUseCommand, browserUseContracts } from "./command-contract";
 import {
 	type BrowserUseRuntime,
+	type BrowserUseSecuritySeam,
 	createDefaultBrowserUseRuntime,
-} from "./browser-use";
+	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
+} from "./browser-use-runtime";
 import { createDefaultPlatformFs } from "./browser-use-paths";
 import type {
 	McporterCommandInput,
@@ -56,6 +58,25 @@ export function makeRuntime(
 		...overrides,
 	});
 }
+
+/**
+ * Compose production wiring with explicit test authority.
+ *
+ * This helper is source-test-only and is never imported by the production
+ * entrypoint, so package consumers cannot replace native admission.
+ *
+ * @param overrides - Hermetic runtime ports used by the test
+ * @param seam - Native admission and token-executor fixture
+ * @returns Runtime with the requested hermetic authority wiring
+ */
+export async function createProductionBrowserUseRuntimeForTest(
+	overrides: Partial<BrowserUseRuntime> = {},
+	seam?: BrowserUseSecuritySeam,
+): Promise<BrowserUseRuntime> {
+	return await createProductionBrowserUseRuntimeInternal(overrides, seam);
+}
+
+export type { BrowserUseSecuritySeam } from "./browser-use-runtime";
 
 // Capture the exact command vector the transport hands the runtime, so tests can
 // assert how the override prefixes mcporter subcommands. okCommand stands in for

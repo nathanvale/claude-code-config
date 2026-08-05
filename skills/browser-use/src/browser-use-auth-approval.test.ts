@@ -52,6 +52,15 @@ function baseFacts(
 		runbook_id: null,
 		action: "submit-timesheet",
 		mutation_class: "read-write",
+		handoff_evidence_id: "handoff-1",
+		lane_id: "agent-browser",
+		target_id: "target-1",
+		subject_reference: "subject-1",
+		account_reference: "account-1",
+		tenant_reference: "tenant-1",
+		mutation_target: "oncore/submit-timesheet",
+		mutation_scope: "https://portal.example.com",
+		action_policy_hash: "a".repeat(64),
 		...overrides,
 	};
 }

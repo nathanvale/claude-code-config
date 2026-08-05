@@ -6,10 +6,12 @@ import {
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
 import {
-	type BrowserUseSecuritySeam,
-	createProductionBrowserUseRuntime,
 	runForTest,
 } from "./browser-use";
+import {
+	type BrowserUseSecuritySeam,
+	createProductionBrowserUseRuntimeForTest,
+} from "./browser-use-test-helpers";
 import type {
 	BrowserUseOpCommandSpec,
 	BrowserUseOpExecute,
@@ -103,7 +105,7 @@ const EMPTY_OVERRIDES = { env: {} } as const;
 
 describe("U10 native TokenRetrievalPort wiring", () => {
 	test("absent seam (production default) leaves authTokenRetrieval undefined", async () => {
-		const runtime = await createProductionBrowserUseRuntime(EMPTY_OVERRIDES);
+		const runtime = await createProductionBrowserUseRuntimeForTest(EMPTY_OVERRIDES);
 		expect(runtime.authTokenRetrieval).toBeUndefined();
 	});
 
@@ -114,7 +116,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 				throw new Error("must not be reached when absent");
 			},
 		};
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			seam,
 		);
@@ -144,7 +146,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 				throw new Error("must not be reached when not admitted");
 			},
 		};
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			seam,
 		);
@@ -166,7 +168,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 				throw new Error("must not be reached");
 			},
 		};
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			throwingSeam,
 		);
@@ -185,7 +187,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 				throw new Error("executor miswired: native product absent");
 			},
 		};
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			seam,
 		);
@@ -194,7 +196,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 
 	test("admitted seam constructs a working Token Retrieval Port", async () => {
 		const present = presentSeam();
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			present.seam,
 		);
@@ -230,7 +232,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 			},
 		};
 		const explicitPort = { marker: "explicit" } as never;
-		const runtime = await createProductionBrowserUseRuntime(
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			{ env: {}, authTokenRetrieval: explicitPort },
 			seam,
 		);
@@ -244,7 +246,7 @@ describe("U10 byte-identical typed absence on this (unsigned) machine", () => {
 		// Drive the REAL production runtime (default native-absent seam) through
 		// the REAL CLI: the observable envelope must be the typed absence with the
 		// install-token continuation, exit 0, no crash.
-		const runtime = await createProductionBrowserUseRuntime(EMPTY_OVERRIDES);
+		const runtime = await createProductionBrowserUseRuntimeForTest(EMPTY_OVERRIDES);
 		expect(runtime.authTokenRetrieval).toBeUndefined();
 
 		const result = await runForTest(

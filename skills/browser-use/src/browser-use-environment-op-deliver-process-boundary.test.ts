@@ -40,6 +40,7 @@ type CDPState = {
 	methods: string[];
 	attachedTargetIDs: string[];
 	mouseEvents: string[];
+	binaryFrames: number;
 	failInsert: boolean;
 };
 
@@ -49,6 +50,7 @@ const cdpState: CDPState = {
 	methods: [],
 	attachedTargetIDs: [],
 	mouseEvents: [],
+	binaryFrames: 0,
 	failInsert: false,
 };
 
@@ -63,7 +65,12 @@ function startCDPServer(): ReturnType<typeof Bun.serve> | undefined {
 			},
 			websocket: {
 				message(socket, rawMessage) {
-					const message = JSON.parse(String(rawMessage)) as {
+					if (typeof rawMessage !== "string") {
+						cdpState.binaryFrames += 1;
+						socket.close(1003, "cdp-text-frames-required");
+						return;
+					}
+					const message = JSON.parse(rawMessage) as {
 						id: number;
 						method: string;
 						params?: Record<string, unknown>;
@@ -302,6 +309,7 @@ function resetCDP(options: { failInsert?: boolean } = {}): void {
 	cdpState.methods = [];
 	cdpState.attachedTargetIDs = [];
 	cdpState.mouseEvents = [];
+	cdpState.binaryFrames = 0;
 	cdpState.failInsert = options.failInsert ?? false;
 }
 
@@ -310,7 +318,7 @@ function surfacesContainSentinel(surfaces: readonly string[]): boolean {
 }
 
 describe.skipIf(!DARWIN)("environment OP supervisor deliver process boundary", () => {
-	test("real child re-proves by URL, replaces the field, activates with trusted events, and exits after one write", async () => {
+	test("real child uses CDP text frames, re-proves by URL, replaces the field, activates with trusted events, and exits after one write", async () => {
 		if (!cdpServer) throw new Error("loopback fixture unavailable");
 		resetCDP();
 		const root = fixtureRoot();
@@ -332,6 +340,7 @@ describe.skipIf(!DARWIN)("environment OP supervisor deliver process boundary", (
 			shape: { kind: "utf8", byte_length: SENTINEL.length },
 		});
 		expect(cdpState.value).toBe(SENTINEL);
+		expect(cdpState.binaryFrames).toBe(0);
 		expect(cdpState.methods.filter((method) => method === "Target.getTargets")).toHaveLength(2);
 		expect(cdpState.methods.filter((method) => method === "Input.insertText")).toHaveLength(1);
 		expect(cdpState.attachedTargetIDs).toEqual([REAL_TARGET_ID]);
