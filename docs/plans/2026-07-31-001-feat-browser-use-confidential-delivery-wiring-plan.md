@@ -8,9 +8,17 @@ artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 origin: docs/plans/2026-07-21-003-feat-browser-use-cross-adapter-authentication-plan.md
 execution: code
+status: active
+last_updated: 2026-08-05
 ---
 
 # Browser Use lane-neutral confidential delivery wiring - Plan
+
+## Current Status
+
+The obsolete `buildRunbookAuthDelivery` stub is gone. Main at `285b4948` composes token retrieval, approved binding resolution, independently resolved CDP Target Identity, Verified Browser Target reproof, sensitive-interval custody, generic login, durable authentication, and resume through the public Runbook path. Hermetic and real-process tests prove secret containment, target drift refusal, interruption cleanup, markerless login, and stale-ref discard.
+
+PR #300 added the signed ApprovalBroker-backed Human Identity Attestation path and exercised approval-gated FastTrack submit. This completes the hermetic implementation arc and the production human-attestation composition. Still open: production Session Identity Proof, automated expected-principal detection, unsupported adapter auth lanes, and a separately authorized live confidential-delivery acceptance receipt. These gaps do not restore the old stub claim.
 
 ## Goal Capsule
 

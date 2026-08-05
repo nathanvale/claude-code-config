@@ -7,9 +7,18 @@ title: "feat: Private Runbook activation and authoring front doors"
 created: "2026-08-02"
 deepened: "2026-08-02"
 plan_type: "feat"
+status: "completed"
+completed: "2026-08-04"
+last_updated: "2026-08-05"
 ---
 
 # feat: Private Runbook activation and authoring front doors
+
+## Current Status
+
+Implemented by PR #303 at `41a0b606`. The code-owned `runbook` and `action` schema, validate, apply, delete/status, promotion, activation, list, show, run, and resume surfaces now operate through the Private Runbook Catalog and selected immutable Runbook Generation. Runtime execution does not fall back to mutable source after cutover.
+
+PR #300 at `285b4948` exercised the shipped authoring and activation path with signed Reviewed Actions and approval-gated FastTrack execution. The original UniFi fixture was not the final consumer; FastTrack became the worked production path. Production Session Identity Proof and the complete external golden journey remain separate acceptance-ledger work, not unfinished CRUD-front-door implementation.
 
 ## Goal Capsule
 

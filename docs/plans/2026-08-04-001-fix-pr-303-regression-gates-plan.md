@@ -7,9 +7,18 @@ title: "PR 303 Regression Closure - Plan"
 type: "fix"
 date: "2026-08-04"
 deepened: "2026-08-04"
+status: "completed"
+completed: "2026-08-04"
+last_updated: "2026-08-05"
 ---
 
 # PR 303 Regression Closure - Plan
+
+## Current Status
+
+Completed at PR #303 merge commit `41a0b606`. The merge-blocking native, approval, authentication-restart, generation-authority, public-command, package-boundary, and CLI anti-drift gates landed before merge. Main at `285b4948` retains those gates and adds signed Human Identity Attestation plus approved-submit attestation renewal through PR #300.
+
+Retained deferrals are production Session Identity Proof, automated expected-subject/account/tenant detection, and operator-gated live acceptance. The original statement that production promotion and Human Identity Attestation were unavailable is historical; PR #300 later wired the admitted signed ApprovalBroker. The exported `runBrowserUseCli` runtime-injection seam remains a separate production-authority follow-up.
 
 ## Goal Capsule
 
