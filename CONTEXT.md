@@ -72,6 +72,10 @@ _Avoid_: path check, config trust, database name match, weak warning
 The smallest stable future lookup surface a decision log belongs to. Use it for product areas, workflows, skills, implementation slices, operational areas, or long-running systems; source sessions, tags, dates, agents, and people are metadata, not owners.
 _Avoid_: chat owner, tag owner, date owner, agent owner, mini ADR
 
+**Retrospective domain modeling**:
+Evidence-led recovery of project-specific language and architectural decisions from prior agent-runtime sessions, reconciled against current repository behavior. It updates domain context and ADR owners; it does not create session summaries or solution learnings.
+_Avoid_: compounding, session documentation, solution store, retrospective data modeling
+
 **Light janitor pass**:
 Bounded cleanup pass that removes obvious agent-runtime and context drift: broken owner routes, stale generated outputs, appendix bloat, duplicate policy, or leftover fragments. It is not a broad documentation rewrite.
 _Avoid_: governance program, documentation overhaul, content audit, policy review
