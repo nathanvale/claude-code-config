@@ -151,7 +151,7 @@ export type BrowserUsePreparationBlockedCause = Extract<
 	BrowserUseAuthBlockedCause,
 	| "missing-token"
 	| "invalid-vault-scope"
-	| "ambiguous-binding-selection"
+	| "binding-approval-required"
 	| "revoked-binding"
 	| "unsupported-method"
 	| "capability-loss"
@@ -206,6 +206,7 @@ export type BrowserUseAuthProvider = {
 		holder_id: string;
 		ttl_ms: number;
 		scope?: BrowserUseLeasePayload["scope"];
+		key_family?: "run" | "sensitive-interval";
 	}): Promise<BrowserUseLeaseEventOutcome>;
 	heartbeatSensitiveIntervalLease(input: {
 		lease: BrowserUseLeasePayload;
@@ -247,7 +248,7 @@ export type BrowserUseAuthProvider = {
  * Everything the auth command supplies to route a sensitive-interval delivery
  * through the agent-browser lane (wave-4 delivery builder wiring_spec item 3):
  * the approved binding, the freshly proven VERIFIED TARGET, the lane's delivery
- * hook + target re-proof, and the per-ref field plan. `in_sensitive_interval`
+ * hook + target re-proof, and the per-binding field plan. `in_sensitive_interval`
  * MUST be true only between lease-granted and submission-dispatched — the
  * builder stamps it onto the context so the lane refuses a confidential fill
  * outside the sensitive interval exactly as it would without any context.
@@ -257,10 +258,34 @@ export type BrowserUseDeliveryContextInput = {
 	target: BrowserUseVerifiedTarget;
 	deliver: BrowserUseDeliveryHook;
 	reproveTarget: BrowserUseTargetReproof;
-	field_by_ref: Readonly<Record<string, BrowserUseOpCredentialField>>;
+	field_by_binding_slug: Readonly<
+		Record<string, BrowserUseOpCredentialField>
+	>;
 	/** True only inside the sensitive interval (post lease-granted, pre submit). */
 	in_sensitive_interval: boolean;
 };
+
+/**
+ * Derive the profile-scoped sensitive-interval lease key.
+ *
+ * The prefix keeps confidential delivery from contending with the runbook
+ * dispatch lease already held for the same environment and profile.
+ *
+ * @param run - Carrier of the proven environment and profile identity
+ * @returns Opaque key for the sensitive-interval lease family
+ *
+ * @example
+ * ```typescript
+ * sensitiveIntervalLeaseKeyForRun({
+ *   environment_profile: { environment: "agent-chrome", profile: "default" },
+ * })
+ * ```
+ */
+export function sensitiveIntervalLeaseKeyForRun(
+	run: Pick<BrowserUseSharedRun, "environment_profile">,
+): string {
+	return `browser-auth-sensitive-interval\0${leaseKeyForRun(run)}`;
+}
 
 // --- Internal helpers ---------------------------------------------------------
 
@@ -417,7 +442,8 @@ export function createBrowserUseAuthProvider(
 		// Gate 1 — method admission. session-reuse completes with zero Port
 		// calls; user-presence is unsupported-method in preparation (D5, R13);
 		// an existing binding must list the method. A first bind with
-		// password/otp defers admission to the live-matched binding below.
+		// password/otp defers admission until a later resume supplies an approved
+		// binding. Discovery itself cannot create that authorization artifact.
 		if (
 			input.method === "session-reuse" ||
 			input.method === "user-presence" ||
@@ -516,15 +542,6 @@ export function createBrowserUseAuthProvider(
 			items: listed.items,
 			hint: input.candidate_hint,
 		});
-		if (match.kind === "bound") {
-			const admitted = assessBindingMethod(match.binding, input.method);
-			if (!admitted.ok) {
-				return preparationBlock(admitted.blocked_cause, admitted.continuation, {
-					kind: "method",
-				});
-			}
-			return preparationComplete(match.binding);
-		}
 		if (match.kind === "missing-item") {
 			return preparationBlock(match.blocked_cause, match.continuation, {
 				kind: "binding-repair",
@@ -532,7 +549,7 @@ export function createBrowserUseAuthProvider(
 				stale_state: null,
 			});
 		}
-		if (match.kind === "ambiguous-selection") {
+		if (match.kind === "binding-approval-required") {
 			return preparationBlock(match.blocked_cause, match.continuation, {
 				kind: "selection",
 				selection: match.selection,
@@ -550,7 +567,10 @@ export function createBrowserUseAuthProvider(
 		async acquireSensitiveIntervalLease(input) {
 			return leaseEventOutcomeOf(
 				await acquireLease(deps.store, {
-					key: leaseKeyForRun(input.run),
+					key:
+						input.key_family === "sensitive-interval"
+							? sensitiveIntervalLeaseKeyForRun(input.run)
+							: leaseKeyForRun(input.run),
 					holderId: input.holder_id,
 					ttlMs: input.ttl_ms,
 					scope: input.scope,
@@ -675,10 +695,18 @@ export function createBrowserUseAuthProvider(
 				in_sensitive_interval: input.in_sensitive_interval,
 				binding: input.binding,
 				target: input.target,
-				tokenRetrieval: deps.tokenRetrieval,
+				tokenRetrieval: {
+					listVaults: () => deps.tokenRetrieval.listVaults(),
+					listLoginItems: (request) =>
+						deps.tokenRetrieval.listLoginItems(request),
+					getLoginItem: (request) =>
+						deps.tokenRetrieval.getLoginItem(request),
+					fetchCredentialField: (request) =>
+						deps.tokenRetrieval.fetchCredentialField(request),
+				},
 				deliver: input.deliver,
 				reproveTarget: input.reproveTarget,
-				field_by_ref: input.field_by_ref,
+				field_by_binding_slug: input.field_by_binding_slug,
 			};
 		},
 	};

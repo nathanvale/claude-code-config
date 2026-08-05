@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Five STRUCTURALLY DIFFERENT login field shapes on one
+     page. The generic delivery engine must fill every "Password" field using ONLY
+     role + accessible name, with zero per-shape special-casing. Each shape has an
+     ngModel-equivalent model that commits ONLY on real input/change events, so a
+     raw .value write would be caught. Secret-free. Wipe with scratchpad. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Login Shapes</title>
+<style>fieldset{margin:1rem 0;padding:1rem}.state{font-family:monospace;font-size:12px;background:#f6f6f6;padding:.5rem;white-space:pre-wrap}</style>
+</head>
+<body>
+  <h1>Generic delivery — five login field shapes</h1>
+
+  <!-- Shape 1: standard <label> wrapping the input -->
+  <fieldset id="s1"><legend>1. label-wrapped</legend>
+    <label>Username <input data-shape="s1" data-role="username" type="text"></label>
+    <label>Password <input data-shape="s1" data-role="password" type="password"></label>
+  </fieldset>
+
+  <!-- Shape 2: aria-labelledby pointing at a separate element -->
+  <fieldset id="s2"><legend>2. aria-labelledby</legend>
+    <span id="s2u">Username</span><input data-shape="s2" data-role="username" type="text" aria-labelledby="s2u">
+    <span id="s2p">Password</span><input data-shape="s2" data-role="password" type="password" aria-labelledby="s2p">
+  </fieldset>
+
+  <!-- Shape 3: placeholder-only (accessible name derives from placeholder) -->
+  <fieldset id="s3"><legend>3. placeholder-only</legend>
+    <input data-shape="s3" data-role="username" type="text" placeholder="Username">
+    <input data-shape="s3" data-role="password" type="password" placeholder="Password">
+  </fieldset>
+
+  <!-- Shape 4: fields inside a same-origin iframe -->
+  <fieldset id="s4"><legend>4. iframe-embedded</legend>
+    <iframe id="s4frame" title="iframe-embedded login shape" style="width:100%;height:90px;border:1px solid #ccc"></iframe>
+  </fieldset>
+
+  <!-- Shape 5: fields inside an open shadow root -->
+  <fieldset id="s5"><legend>5. shadow-DOM</legend>
+    <div id="s5host"></div>
+  </fieldset>
+
+  <!-- Shape 6: Oncore-style — hosted form, label ABOVE input (no wrapping),
+       associated via for/id. Represents the second real portal (Oncore). -->
+  <fieldset id="s6"><legend>6. oncore-style (for/id, label above)</legend>
+    <div><label for="s6u">Username</label><br><input id="s6u" data-shape="s6" data-role="username" type="text"></div>
+    <div><label for="s6p">Password</label><br><input id="s6p" data-shape="s6" data-role="password" type="password"></div>
+  </fieldset>
+
+  <div class="state" id="stateDump"></div>
+
+  <script>
+    // Central ngModel-equivalent registry. Each field commits on input/change only.
+    const model = {};
+    function wire(input, shape, role){
+      const key = shape+"."+role;
+      model[key] = "";
+      const commit = () => { model[key] = input.value; dump(); };
+      input.addEventListener('input', commit);
+      input.addEventListener('change', commit);
+    }
+    // wire shapes 1-3 + 6 (light DOM)
+    document.querySelectorAll('#s1 input, #s2 input, #s3 input, #s6 input').forEach(i => { wire(i, i.dataset.shape, i.dataset.role); });
+
+    // shape 4: iframe (same-origin srcdoc)
+    const frame = document.getElementById('s4frame');
+    frame.srcdoc = `<!doctype html><body style="font-family:system-ui;margin:6px">
+      <label>Username <input data-role="username" type="text"></label>
+      <label>Password <input data-role="password" type="password"></label></body>`;
+    frame.addEventListener('load', () => {
+      frame.contentDocument.querySelectorAll('input').forEach(i => {
+        const key = "s4."+i.dataset.role; model[key]="";
+        const commit=()=>{ model[key]=i.value; dump(); };
+        i.addEventListener('input',commit); i.addEventListener('change',commit);
+      });
+      dump();
+    });
+
+    // shape 5: shadow DOM (open)
+    const host = document.getElementById('s5host');
+    const root = host.attachShadow({mode:'open'});
+    root.innerHTML = `<label>Username <input data-role="username" type="text"></label>
+      <label>Password <input data-role="password" type="password"></label>`;
+    root.querySelectorAll('input').forEach(i => {
+      const key="s5."+i.dataset.role; model[key]="";
+      const commit=()=>{ model[key]=i.value; dump(); };
+      i.addEventListener('input',commit); i.addEventListener('change',commit);
+    });
+
+    function dump(note){ document.getElementById('stateDump').textContent =
+      (note?'>> '+note+'\n':'') + JSON.stringify(model, null, 2); }
+    window.__shapes = () => JSON.parse(JSON.stringify(model));
+    dump('ready');
+  </script>
+</body>
+</html>

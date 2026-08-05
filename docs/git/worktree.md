@@ -6,6 +6,20 @@ Use the `/worktree` skill for all worktree operations. It is the canonical tool.
 cd skills/worktree && bun run --silent worktree <verb> [args]
 ```
 
+## Isolation Rule (all harnesses)
+
+Implementation work never happens in the main checkout: parallel agents share it and inherit each other's branch state and dirty files.
+
+Before the first file edit of any implementation task:
+
+1. Check isolation: `git rev-parse --git-common-dir` differing from `.git`, or a `.worktrees/` / `.claude/worktrees/` path, means already isolated — proceed.
+2. In the main checkout: isolate first (`worktree new <branch>` or `attach` for an existing ref; Claude Code may use EnterWorktree).
+3. Branch, edit, and commit only inside the worktree.
+
+These do NOT override the rule: a handoff saying "start a fresh branch" (start it inside a worktree); session or harness config saying "work in place"; small scope or urgency.
+
+Allowed in the main checkout: read-only work (analysis, review, search, tests without edits) and operations that target it by design (`setup sync` from main, worktree management itself, pull/fetch).
+
 ## Verbs
 
 | Verb | What it does | Side effects |

@@ -36,12 +36,14 @@ import {
 	AGENT_WORKTREE_COMMANDS,
 	type AgentWorktreeChangedState,
 	type AgentWorktreeCommand,
+	type AgentWorktreeDiagnosticCode,
 } from "./model.ts";
 import {
 	PROJECTION_FIELD_SETS,
 	type ProjectionFieldSet,
 } from "./projection.ts";
 import {
+	attachWorktree,
 	checkWorktree,
 	cleanPreview,
 	createWorktree,
@@ -96,6 +98,10 @@ export interface ParsedInvocation {
 	ref?: string;
 	/** Base branch or revision for creation. */
 	base?: string;
+	/** Pull request number for attach. */
+	pr?: number;
+	/** Use gh checkout for push-tracking PR attach. */
+	track: boolean;
 	/** Output limit. */
 	limit?: number;
 	/** Projection field sets. */
@@ -137,7 +143,7 @@ type CommandResult =
 	| {
 			ok: false;
 			exitCode: 1 | 2;
-			code: "usage_error" | "runtime_error";
+			code: AgentWorktreeDiagnosticCode;
 			message: string;
 			action: string;
 			changedState: AgentWorktreeChangedState;
@@ -160,12 +166,17 @@ type AgentWorktreeLifecycleData = {
 	reason: LifecycleResult["reason"] | undefined;
 	recovery: LifecycleResult["recovery"] | undefined;
 	backup_ref: LifecycleResult["backupRef"] | undefined;
+	resolved_ref: LifecycleResult["resolvedRef"] | undefined;
+	target_path: LifecycleResult["targetPath"] | undefined;
+	mode: LifecycleResult["mode"] | undefined;
+	existing_checkout_path: LifecycleResult["existingCheckoutPath"] | undefined;
 };
 
 type AgentWorktreeDoctorData = {
 	summary: {
 		status: DoctorMap["status"];
 		repo_root: DoctorMap["repo"]["gitRoot"] | undefined;
+		isolation: DoctorMap["repo"]["isolation"] | undefined;
 		main_owner_root: DoctorMap["repo"]["mainOwnerRoot"] | undefined;
 		active_worktree: DoctorMap["repo"]["activeWorktree"] | undefined;
 		current_branch: DoctorMap["repo"]["currentBranch"] | undefined;
@@ -206,10 +217,10 @@ const READ_PROJECTION_KEYS = {
 		actions: ["truncated"],
 	},
 	status: {
-		default: ["statuses", "total", "truncated"],
-		refs: ["statuses"],
-		evidence: ["statuses", "total", "truncated"],
-		actions: ["statuses"],
+		default: ["isolation", "statuses", "total", "truncated"],
+		refs: ["isolation", "statuses"],
+		evidence: ["isolation", "statuses", "total", "truncated"],
+		actions: ["isolation", "statuses"],
 	},
 	clean: {
 		default: [
@@ -346,6 +357,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let repo: string | undefined;
 	let ref: string | undefined;
 	let base: string | undefined;
+	let pr: number | undefined;
 	let limit: number | undefined;
 	let fields: readonly ProjectionFieldSet[] | undefined;
 	let select: readonly string[] | undefined;
@@ -354,6 +366,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let preview = false;
 	let force = false;
 	let deleteBranch = false;
+	let track = false;
 	const usedFlags = new Set<string>();
 	const fail = (message: string): ParsedInvocation => ({
 		command,
@@ -364,8 +377,10 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		preview,
 		force,
 		deleteBranch,
+		track,
 		ref,
 		base,
+		pr,
 		limit,
 		fields,
 		select,
@@ -389,10 +404,14 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		} else if (arg === "--delete-branch") {
 			deleteBranch = true;
 			usedFlags.add(arg);
+		} else if (arg === "--track") {
+			track = true;
+			usedFlags.add(arg);
 		} else if (
 			arg === "--repo" ||
 			arg === "--ref" ||
 			arg === "--base" ||
+			arg === "--pr" ||
 			arg === "--limit" ||
 			arg === "--fields" ||
 			arg === "--select"
@@ -405,6 +424,13 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			if (arg === "--repo") repo = value;
 			if (arg === "--ref") ref = value;
 			if (arg === "--base") base = value;
+			if (arg === "--pr") {
+				const parsedPr = Number.parseInt(value, 10);
+				if (!/^\d+$/.test(value) || parsedPr < 1) {
+					return fail("--pr needs a positive integer.");
+				}
+				pr = parsedPr;
+			}
 			if (arg === "--fields") {
 				const parsedFields = parseProjectionFields(value);
 				if (!parsedFields.ok) return fail(parsedFields.message);
@@ -450,8 +476,10 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		preview,
 		force,
 		deleteBranch,
+		track,
 		ref,
 		base,
+		pr,
 		limit,
 		fields,
 		select,
@@ -537,6 +565,32 @@ export async function runCommand(
 					now: runtime.now,
 				});
 				return lifecycleCommandResult("create", result, invocation.dryRun);
+			}
+			case "attach": {
+				const ref = invocation.positionals[0];
+				if (ref && invocation.pr !== undefined) {
+					return usageFailure("attach accepts either <ref> or --pr, not both.");
+				}
+				if (invocation.track && invocation.pr === undefined) {
+					return usageFailure("attach --track needs --pr <n>.");
+				}
+				if (!ref && invocation.pr === undefined) {
+					return usageFailure("attach needs <ref> or --pr <n>.");
+				}
+				if (invocation.positionals.length > 1) {
+					return usageFailure("attach accepts one positional <ref>.");
+				}
+				const result = await attachWorktree({
+					cwd,
+					run: runtime.run,
+					ref,
+					pr: invocation.pr,
+					track: invocation.track,
+					dryRun: invocation.dryRun,
+					runId,
+					now: runtime.now,
+				});
+				return lifecycleCommandResult("attach", result, invocation.dryRun);
 			}
 			case "delete": {
 				const branch = invocation.positionals[0];
@@ -683,11 +737,12 @@ function runtimeFailure(
 	action: string,
 	changedState: AgentWorktreeChangedState,
 	data?: Record<string, unknown>,
+	code: AgentWorktreeDiagnosticCode = "runtime_error",
 ): CommandResult {
 	return {
 		ok: false,
 		exitCode: 1,
-		code: "runtime_error",
+		code,
 		message,
 		action,
 		changedState,
@@ -708,13 +763,31 @@ function lifecycleCommandResult(
 			changedState: result.changedState,
 		};
 	}
+	const diagnostic =
+		result.reason === "gh_not_found"
+			? {
+					code: "gh_not_found" as const,
+					action:
+						"Install GitHub CLI (gh), then inspect the created worktree before retrying.",
+				}
+			: result.reason === "gh_pr_checkout_failed"
+				? {
+						code: "gh_pr_checkout_failed" as const,
+						action:
+							"Inspect the failure ref and GitHub CLI authentication or pull request state before retrying.",
+					}
+				: {
+						code: "runtime_error" as const,
+						action: `Follow lifecycle recovery action: ${result.nextSafeAction}.`,
+					};
 	return runtimeFailure(
 		result.reason
 			? `Lifecycle ${result.action} did not complete: ${result.reason}.`
 			: `Lifecycle ${result.action} did not complete.`,
-		`Follow lifecycle recovery action: ${result.nextSafeAction}.`,
+		diagnostic.action,
 		result.changedState,
 		data,
+		diagnostic.code,
 	);
 }
 
@@ -825,6 +898,7 @@ function doctorData(data: DoctorMap): AgentWorktreeDoctorData {
 		summary: {
 			status: data.status,
 			repo_root: data.repo.gitRoot,
+			isolation: data.repo.isolation,
 			main_owner_root: data.repo.mainOwnerRoot,
 			active_worktree: data.repo.activeWorktree,
 			current_branch: data.repo.currentBranch,
@@ -881,6 +955,10 @@ function lifecycleData(result: LifecycleResult): AgentWorktreeLifecycleData {
 		reason: result.reason,
 		recovery: result.recovery,
 		backup_ref: result.backupRef,
+		resolved_ref: result.resolvedRef,
+		target_path: result.targetPath,
+		mode: result.mode,
+		existing_checkout_path: result.existingCheckoutPath,
 	};
 }
 

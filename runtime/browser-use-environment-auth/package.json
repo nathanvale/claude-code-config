@@ -1,0 +1,9 @@
+{
+	"name": "@side-quest/browser-use-environment-auth",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Native Browser Use environment-token proof.",
+	"scripts": {
+		"build:release": "swift build -c release --disable-sandbox"
+	}
+}

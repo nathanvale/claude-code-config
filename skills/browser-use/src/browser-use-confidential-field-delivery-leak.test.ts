@@ -246,6 +246,83 @@ describe("delivery-level leak harness (AE5)", () => {
 		}
 	});
 
+	test("delivery-child planted regression: a child that echoes the value to stdout flips the verdict from release to withheld", async () => {
+		// U7 planted-regression proof for the DELIVERY-CHILD path. The disposable
+		// delivery child's stdout is a governed surface: a correct child prints
+		// only its shape envelope (kind + byte length), never the value. Phase 1
+		// runs the REAL choreography with a correct child and observes the harness
+		// PASS; phase 2 reruns it with a child regressed to echo the raw value to
+		// stdout and observes the SAME sweep FAIL. Asserting the flip proves the
+		// harness is non-vacuous for a leaking delivery child.
+		async function deliverThroughChild(leakToStdout: boolean): Promise<{
+			gate: ReturnType<typeof sweepAndRelease>["gate"];
+			childSawBytes: boolean;
+		}> {
+			const childStdout: string[] = [];
+			let childSawBytes = false;
+			const hook: BrowserUseDeliveryHook = async (input) => {
+				const value = SENTINEL_VALUE[input.field];
+				childSawBytes = true;
+				// What the disposable delivery child prints on ITS stdout: shape only
+				// when correct; the raw value too when regressed.
+				const envelope: Record<string, unknown> = {
+					ok: true,
+					shape: { kind: "utf8", byte_length: value.length },
+				};
+				if (leakToStdout) envelope.debug = `typed value ${value}`;
+				childStdout.push(JSON.stringify(envelope));
+				return {
+					ok: true,
+					shape: { field: input.field, byte_length: value.length },
+				};
+			};
+			const result = await deliverConfidentialFields({
+				binding: BINDING,
+				target: TARGET,
+				fields: ["password"],
+				tokenRetrieval: fakePort,
+				deliver: hook,
+				reproveTarget: reproveOk,
+			});
+			if (!result.ok) throw new Error("delivery did not complete");
+			const surfaces: BrowserUseGovernedSurface[] = [
+				{
+					kind: "stdout-envelope",
+					label: "delivery-result",
+					content: JSON.stringify(result),
+				},
+				{
+					kind: "log",
+					label: "delivery-child-stdout",
+					content: childStdout.join("\n"),
+				},
+			];
+			const { gate } = sweepAndRelease(
+				leakToStdout
+					? "run-cfd-child-leaking"
+					: "run-cfd-child-clean",
+				result.resume.delivered_shapes,
+				surfaces,
+			);
+			return { gate, childSawBytes };
+		}
+
+		// Phase 1 (proof-first): the correct child releases clean.
+		const clean = await deliverThroughChild(false);
+		expect(clean.childSawBytes).toBe(true);
+		expect(clean.gate.release).toBe(true);
+
+		// Phase 2: the SAME flow with the leaking child is CAUGHT.
+		const planted = await deliverThroughChild(true);
+		expect(planted.childSawBytes).toBe(true);
+		expect(planted.gate.release).toBe(false);
+		if (planted.gate.release) return;
+		expect(planted.gate.reason).toBe("containment_failed");
+
+		// The verdict FLIPPED on the child's stdout alone — nothing else differed.
+		expect(clean.gate.release).not.toBe(planted.gate.release);
+	});
+
 	test("the harness catches a REGRESSION that leaks a delivered value onto a surface", async () => {
 		// Negative fixture (plan U4 Verification): if a future change routed a
 		// delivered value onto a governed surface, the sweep MUST fail closed.

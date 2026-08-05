@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Implicit target acceptance</title>
+	</head>
+	<body>
+		<main>
+			<h1>Implicit target acceptance</h1>
+			<button id="commit" type="button">Commit marker</button>
+			<p id="committed" hidden>Committed</p>
+			<output id="state">clicks=0;committed=false</output>
+		</main>
+		<script>
+			let clicks = 0;
+			const committed = document.querySelector("#committed");
+			const state = document.querySelector("#state");
+			document.querySelector("#commit").addEventListener("click", () => {
+				clicks += 1;
+				committed.hidden = false;
+				state.textContent = `clicks=${clicks};committed=${!committed.hidden}`;
+			});
+		</script>
+	</body>
+</html>

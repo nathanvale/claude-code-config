@@ -300,13 +300,22 @@ export const BROWSER_USE_SHARED_RUN_CONTRACT_ID =
 export const BROWSER_USE_SHARED_RUN_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID =
 	"browser-use.runbook-catalog" as const;
-const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION = "2" as const;
 // `runbook show` returns one validated runbook definition plus its health
 // (platform plan U4, R30/R31). `runbook run` returns the shared-run projection
 // exactly like `task run`, so it reuses browserUseSharedRunResultContract.
 export const BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID =
 	"browser-use.runbook-definition" as const;
-const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION = "2" as const;
+export const BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID =
+	"browser-use.runbook-authoring" as const;
+export const BROWSER_USE_RUNBOOK_AUTHORING_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID =
+	"browser-use.runbook-activation" as const;
+export const BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID =
+	"browser-use.reviewed-action-authoring" as const;
+export const BROWSER_USE_REVIEWED_ACTION_AUTHORING_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID =
 	"browser-use.migration-status" as const;
 const BROWSER_USE_MIGRATION_STATUS_SCHEMA_VERSION = "1" as const;
@@ -407,14 +416,33 @@ export type BrowserUseLanesSubcommand =
 const BROWSER_USE_RUN_SUBCOMMANDS = [
 	"status",
 	"resume",
+	"approve",
 	"cancel",
 ] as const;
 export type BrowserUseRunSubcommand =
 	(typeof BROWSER_USE_RUN_SUBCOMMANDS)[number];
 
-const BROWSER_USE_RUNBOOK_SUBCOMMANDS = ["list", "show", "run"] as const;
+const BROWSER_USE_RUNBOOK_SUBCOMMANDS = [
+	"schema",
+	"validate",
+	"apply",
+	"delete",
+	"list",
+	"show",
+	"activate",
+	"run",
+] as const;
 export type BrowserUseRunbookSubcommand =
 	(typeof BROWSER_USE_RUNBOOK_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_ACTION_SUBCOMMANDS = [
+	"schema",
+	"validate",
+	"apply",
+	"status",
+	"promote",
+] as const;
+export type BrowserUseActionSubcommand = (typeof BROWSER_USE_ACTION_SUBCOMMANDS)[number];
 
 const BROWSER_USE_MIGRATION_SUBCOMMANDS = [
 	"status",
@@ -434,21 +462,34 @@ const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
 export type BrowserUseRepairSubcommand =
 	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
 
-// R27 auth repair surface (auth plan U3a; ADR 0028). Each subcommand name IS
+// R27 auth repair surface (auth plan U3a; ADR 0028). Each repair subcommand name IS
 // the blocked-cause continuation id from BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE
 // (browser-use-auth-model.ts), so an agent holding a blocked run's
 // continuation dispatches it verbatim — no mapping table to drift. U3a
 // bodies are check-stance evaluations: native custody (token launcher,
 // approval broker) is legally absent until U3b, and that absence is a typed
 // state, never a crash or a stub.
-export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+export const BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS = [
 	"enroll-browser-automation-token",
 	"repair-vault-grant",
 	"repair-item-binding",
 	"request-binding-selection-grant",
 ] as const;
+export const BROWSER_USE_AUTH_SETUP_SUBCOMMANDS = [
+	"install-token",
+	"remove-token",
+	"status",
+	"doctor",
+	"reload",
+] as const;
+export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+	...BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
+	...BROWSER_USE_AUTH_SETUP_SUBCOMMANDS,
+] as const;
 export type BrowserUseAuthSubcommand =
 	(typeof BROWSER_USE_AUTH_SUBCOMMANDS)[number];
+export type BrowserUseAuthRepairSubcommand =
+	(typeof BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS)[number];
 
 // Version-matched bundled guidance (agent-first front door, design brief D3:
 // docs/plans/2026-07-27-agent-first-front-door-brief.md). The guide ships
@@ -477,6 +518,7 @@ export const BROWSER_USE_FAMILIES = [
 	"lanes",
 	"run",
 	"runbook",
+	"action",
 	"migration",
 	"artifact",
 	"repair",
@@ -494,6 +536,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 	lanes: BROWSER_USE_LANES_SUBCOMMANDS,
 	run: BROWSER_USE_RUN_SUBCOMMANDS,
 	runbook: BROWSER_USE_RUNBOOK_SUBCOMMANDS,
+	action: BROWSER_USE_ACTION_SUBCOMMANDS,
 	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
 	artifact: BROWSER_USE_ARTIFACT_SUBCOMMANDS,
 	repair: BROWSER_USE_REPAIR_SUBCOMMANDS,
@@ -509,6 +552,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	lanes: "Browser Use Adapter Lane Registry discovery.",
 	run: "Shared Browser Use run status, resume, and cancel.",
 	runbook: "Browser Runbook catalog.",
+	action: "Reviewed Action authoring, validation, and promotion state.",
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
@@ -540,10 +584,21 @@ export type BrowserUseCommand =
 	| "lanes-show"
 	| "run-status"
 	| "run-resume"
+	| "run-approve"
 	| "run-cancel"
 	| "runbook-list"
 	| "runbook-show"
+	| "runbook-schema"
+	| "runbook-validate"
+	| "runbook-apply"
+	| "runbook-delete"
+	| "runbook-activate"
 	| "runbook-run"
+	| "action-schema"
+	| "action-validate"
+	| "action-apply"
+	| "action-status"
+	| "action-promote"
 	| "migration-status"
 	| "migration-inventory"
 	| "migration-plan"
@@ -555,7 +610,12 @@ export type BrowserUseCommand =
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
-	| "auth-request-binding-selection-grant";
+	| "auth-request-binding-selection-grant"
+	| "auth-install-token"
+	| "auth-remove-token"
+	| "auth-status"
+	| "auth-doctor"
+	| "auth-reload";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -648,12 +708,42 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"run_record_corrupt",
 	"run_resume_execution_unavailable",
 	"run_terminal_truth",
+	"run_cancel_mutation_dispatched",
 	"retention_collision",
 	"artifact_missing",
 	"artifact_corrupt",
 	"export_destination_unsafe",
 	"export_verify_failed",
 	"epoch_conflict",
+	"catalog_source_unavailable",
+	"catalog_git_unavailable",
+	"catalog_git_provenance_invalid",
+	"catalog_git_object_unsupported",
+	"catalog_git_filter_unsupported",
+	"catalog_git_drift",
+	"catalog_record_invalid",
+	"catalog_action_closure_incomplete",
+	"promotion_verification_failed",
+	"action_promotion_verifier_store_unsafe",
+	"action_promotion_verifier_identity_invalid",
+	// Runbook and Reviewed Action authoring front doors. These representative
+	// driver-level codes keep handler dispatch and structured diagnostics tied
+	// to the advertised leaves; domain validators own their deeper issue codes.
+	"runbook_document_unreadable",
+	"runbook_source_checkout_required",
+	"action_document_unreadable",
+	"action_source_checkout_required",
+	"catalog_drift",
+	"activation_epoch_conflict",
+	"activation_blocked_by_run",
+	"activation_store_unsafe",
+	"activation_generation_corrupt",
+	"activation_authority_corrupt",
+	"activation_interrupted",
+	"activation_flag_invalid",
+	"activation_required",
+	"human-identity-attestation-required",
+	"pre_cutover_unavailable",
 	// Clean-break migration engine refusals (platform plan U3). Each phase
 	// (inventory/plan/apply/verify) fails closed with its own typed code so an
 	// invalid source, drift after the frozen snapshot, a duplicate YAML key, an
@@ -674,6 +764,8 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	// against a run whose persisted continuation names a DIFFERENT next safe
 	// action fails closed — the run's own continuation stays the one truth.
 	"auth_continuation_mismatch",
+	"auth_token_input_rejected",
+	"auth_token_supervisor_failed",
 	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
 	// Each routing/dispatch failure class maps to its own recovery, never a
 	// silent lane substitution (R10, AE3) or an optimistic retry (R26, F7).
@@ -953,7 +1045,19 @@ export const browserUsePlatformStoreFailureActions = [
 			"Pass an absolute export destination outside every browser-use root.",
 		sideEffects: ["check"],
 	},
+	{
+		id: "activate_runbook_catalog",
+		summary:
+			"Use the setup-owned source checkout to inspect, review, and activate the complete private catalog.",
+		sideEffects: ["check", "write"],
+	},
 ] as const;
+
+const browserUseInspectSharedRunAction = {
+	id: "inspect_shared_run",
+	summary: "Read the shared run projection and follow its continuation.",
+	sideEffects: ["check"],
+} as const;
 
 export const browserUsePlatformStoreSuccessActions = [
 	{
@@ -962,16 +1066,18 @@ export const browserUsePlatformStoreSuccessActions = [
 			"Apply the bounded repair plan with browser-use repair apply, then inspect repair status again.",
 		sideEffects: ["write"],
 	},
-	{
-		id: "inspect_shared_run",
-		summary: "Read the shared run projection and follow its continuation.",
-		sideEffects: ["check"],
-	},
+	browserUseInspectSharedRunAction,
 	{
 		id: "resume_shared_run",
 		summary:
 			"Resume the blocked shared run with browser-use run resume --run <id>.",
 		sideEffects: ["check"],
+	},
+	{
+		id: "resume_runbook_execution",
+		summary:
+			"Rerun the original browser-use runbook run command with --run <id> after explicit approval.",
+		sideEffects: ["browser", "write"],
 	},
 ] as const;
 
@@ -1069,7 +1175,7 @@ export const browserUseTaskRunSuccessActions = [
 ] as const;
 
 type BrowserUseAudience = "agent" | "operator";
-type BrowserUseMutation = "check" | "browser";
+type BrowserUseMutation = "check" | "browser" | "write";
 type BrowserUseCommandContract = CommandFacadeContract<
 	BrowserUseCommand,
 	BrowserUseAudience,
@@ -1240,6 +1346,15 @@ const browserUsePlatformEnvVars = [
 	browserUseCallerEnvVar,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
+export const BROWSER_USE_APPROVAL_BROKER_ENV =
+	"BROWSER_USE_REVIEWED_ACTION_APPROVAL_BROKER";
+
+const browserUseApprovalBrokerEnvVar = {
+	name: BROWSER_USE_APPROVAL_BROKER_ENV,
+	description:
+		"Absolute signed ApprovalBroker executable used for presence-backed action promotion and one-run identity attestation.",
+} as const;
+
 // XDG env vars the store-backed platform commands consume (platform plan U2,
 // R7/R11). Declared once; browser-use-paths.ts is the one resolution owner —
 // this table only names the consumed vars for discovery/help.
@@ -1356,6 +1471,22 @@ const browserUseRunFlags = {
 	"--run": {
 		type: "string",
 		description: "Shared Browser Use run id to inspect, resume, or cancel.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunApproveFlags = {
+	"--run": {
+		type: "string",
+		description: "Shared Browser Use run id at an awaiting-approval gate.",
+	},
+	"--continuation": {
+		type: "string",
+		description: "Exact persisted approval continuation being satisfied.",
+	},
+	"--artifact": {
+		type: "string",
+		description: "Exact attached screenshot artifact reviewed by the operator.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -1519,6 +1650,62 @@ const browserUseRunbookDefinitionResultContract = {
 	schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseRunbookAuthoringResultContract = {
+	id: BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+	kind: "Complete-document Private Runbook authoring result.",
+	schema_version: BROWSER_USE_RUNBOOK_AUTHORING_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseRunbookActivationResultContract = {
+	id: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+	kind: "Immutable Runbook Generation activation result.",
+	schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseReviewedActionAuthoringResultContract = {
+	id: BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+	kind: "Reviewed Action authoring and promotion-state result.",
+	schema_version: BROWSER_USE_REVIEWED_ACTION_AUTHORING_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseActionFileFlags = {
+	"--file": { type: "path", description: "Complete Reviewed Action candidate JSON document." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionApplyFlags = {
+	...browserUseActionFileFlags,
+	"--expected-record-digest": { type: "string", description: "Observed action record sha256 required when replacing an existing candidate." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionStatusFlags = {
+	"--id": { type: "string", description: "Exact Reviewed Action id whose promotion state is projected." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseActionPromoteFlags = {
+	"--id": { type: "string", description: "Exact committed Reviewed Action id to promote." },
+	"--approval-reference": { type: "string", description: "Opaque external-human review reference bound into the signed promotion receipt." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookFileFlags = {
+	"--file": { type: "path", description: "Complete Browser Runbook JSON document." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookApplyFlags = {
+	...browserUseRunbookFileFlags,
+	"--expected-record-digest": { type: "string", description: "Observed Runbook record sha256 required when replacing different bytes." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookDeleteFlags = {
+	"--service": { type: "string", description: "Exact Runbook service id." },
+	"--flow": { type: "string", description: "Exact Runbook flow id." },
+	"--expected-record-digest": { type: "string", description: "Exact observed Runbook record sha256 required when the record exists." },
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 // `runbook show <service>/<flow>` is a targeted read of one exact runbook
 // (never a scan), so both coordinates are hard-required at the parser.
 const browserUseRunbookShowFlags = {
@@ -1529,6 +1716,20 @@ const browserUseRunbookShowFlags = {
 	"--flow": {
 		type: "string",
 		description: "Exact runbook flow id (a safe lowercase slug).",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseRunbookActivateFlags = {
+	"--catalog-digest": {
+		type: "string",
+		description:
+			"Reviewed sha256 digest of the complete commit-scoped catalog closure.",
+	},
+	"--expected-epoch": {
+		type: "string",
+		description:
+			"Observed active generation epoch used as the compare-and-swap gate; use 0 before first selection.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -1551,6 +1752,11 @@ const browserUseRunbookRunFlags = {
 		type: "string",
 		description:
 			"Runbook input binding as <id>=<value>. Repeatable; one per declared runbook input.",
+	},
+	"--input-file": {
+		type: "string",
+		description:
+			"Private structured input as <id>=<absolute-path>. Repeatable; files must be owner-only beneath the runtime private-input root.",
 	},
 	"--handoff": {
 		type: "path",
@@ -1609,7 +1815,71 @@ export const browserUseAuthRepairActions = [
 	{
 		id: "acquire-native-capability",
 		summary:
-			"Native auth custody is absent until the signed Browser Use Security product ships (ADR 0028); complete its entry gate, then re-run.",
+			"Install the environment-lane token with browser-use auth install-token, then verify with browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "auth-status",
+		summary:
+			"Verify environment-lane token custody and all confidential-delivery admission gates with browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "install-token",
+		summary:
+			"Install environment-lane custody with browser-use auth install-token, then verify status.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "rerun-confidential-command",
+		summary:
+			"Re-run the refused Browser Use command with the same inputs.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-token-custody",
+		summary:
+			"Repair the reported local token custody cause, then re-run browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-op-admission",
+		summary:
+			"Restore the pinned official OP CLI binary, then re-run browser-use auth status --json.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "build-token-supervisor",
+		summary:
+			"Build the local auth supervisor from this worktree, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "install-op-cli",
+		summary: "Install the supported OP CLI, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "authenticate-op-session",
+		summary: "Unlock the operator OP session, then retry the reload.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair-config-root",
+		summary:
+			"Repair the browser-use configuration root, then inspect readiness.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "create-credential-clean-profile",
+		summary:
+			"Ask the operator to create a fresh dedicated Agent Chrome profile using the documented clean policy.",
+		sideEffects: ["check", "write"],
+	},
+	{
+		id: "revoke-service-account-token-remotely",
+		summary:
+			"Retire remote service authority from a trusted device; local removal does not change remote authority.",
 		sideEffects: ["check"],
 	},
 	{
@@ -1652,6 +1922,34 @@ const browserUseAuthFlags = {
 		type: "string",
 		description:
 			"Blocked shared run id to bind this evaluation to; the run's persisted continuation must name this command.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthInstallFlags = {
+	"--from": {
+		type: "string",
+		description:
+			"Fetch from one OP item field reference and record that source only after installation succeeds.",
+	},
+	"--stdin": {
+		type: "boolean",
+		description:
+			"Read the token directly in the native supervisor from standard input. Omit for a hidden terminal prompt.",
+	},
+	"--replace": {
+		type: "boolean",
+		description:
+			"Validate a staged token, then atomically replace the existing token only on success.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseAuthDoctorFlags = {
+	"--fix": {
+		type: "boolean",
+		description:
+			"Attempt owner-delegated repairs for red gates, then re-check every gate; add profile to limit repair to profile policy.",
 	},
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
@@ -2004,10 +2302,37 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
+		"run-approve": {
+			script: "browser-use",
+			summary:
+				"Record one explicit approval for the run's exact continuation and attached review screenshot.",
+			usage: [
+				"run approve --run <id> --continuation <id> --artifact <id> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Approval records explicit operator intent but does not dispatch the browser mutation.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUsePlatformStoreSuccessActions,
+				failure: browserUsePlatformStoreFailureActions,
+			},
+			flags: browserUseRunApproveFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
 		"run-cancel": {
 			script: "browser-use",
 			summary:
-				"Cancel a shared Browser Use run and report the last proven external-effect classification; never claims rollback after dispatch.",
+				"Cancel a pre-dispatch shared Browser Use run; refuses after mutation dispatch because external write truth may be unresolved.",
 			usage: ["run cancel --run <id> [--caller <label>] [--json|--plain]"],
 			json: true,
 			audience: "agent",
@@ -2023,10 +2348,90 @@ export const browserUseContracts = defineCommandFacadeContract(
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,
-				failure: browserUsePlatformStoreFailureActions,
+				failure: [
+					...browserUsePlatformStoreFailureActions,
+					browserUseInspectSharedRunAction,
+				],
 			},
 			flags: browserUseRunFlags,
 			exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-schema": {
+			script: "browser-use",
+			summary: "Show the model-derived Reviewed Action authoring schema and a minimal validating example.",
+			usage: ["action schema [--caller <label>] --json"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUsePlatformFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-validate": {
+			script: "browser-use",
+			summary: "Validate one complete Reviewed Action candidate and derive its exact digest, effect, and closed capabilities.",
+			usage: ["action validate --file <path> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUseActionFileFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-apply": {
+			script: "browser-use",
+			summary: "Apply one validated candidate as unpromoted private source with record-digest concurrency.",
+			usage: ["action apply --file <path> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Apply is record-digest-gated, content-addressed, and never writes promotion authority." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionApplyFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-status": {
+			script: "browser-use",
+			summary: "Read one candidate's exact source digest and external-human promotion claim without granting authority.",
+			usage: ["action status --id <action-id> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseReviewedActionAuthoringResultContract,
+			flags: browserUseActionStatusFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"action-promote": {
+			script: "browser-use",
+			summary: "Promote one exact committed Reviewed Action through the signed, presence-backed ApprovalBroker.",
+			usage: ["action promote --id <action-id> --approval-reference <reference> [--caller <label>] [--json|--plain]"],
+			json: true, audience: "operator", mutation: "write", sideEffects: ["check", "auth", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Promotion is exact-commit bound and requires live operator presence at the signed broker." },
+			outputModes: ["json", "plain"], interactivity: "required",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
+			resultContract: browserUseReviewedActionAuthoringResultContract, flags: browserUseActionPromoteFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-schema": {
+			script: "browser-use",
+			summary: "Show the complete model-derived Runbook authoring schema and one validating example.",
+			usage: ["runbook schema [--caller <label>] --json"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseRunbookAuthoringResultContract,
+			flags: browserUsePlatformFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-validate": {
+			script: "browser-use",
+			summary: "Validate one complete Runbook document and its exact Reviewed Action closure without writing source.",
+			usage: ["runbook validate --file <path> [--caller <label>] [--json|--plain]"], json: true, audience: "agent", mutation: "check",
+			sideEffects: ["check"], executionModes: ["check"], outputModes: ["json", "plain"], interactivity: "none",
+			envVars: browserUsePlatformEnvVars, resultContract: browserUseRunbookAuthoringResultContract,
+			flags: browserUseRunbookFileFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-apply": {
+			script: "browser-use",
+			summary: "Apply one complete validated Runbook to private source with record-digest concurrency.",
+			usage: ["runbook apply --file <path> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Apply is complete-document and record-digest guarded; identical bytes are an idempotent no-op." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseRunbookAuthoringResultContract, flags: browserUseRunbookApplyFlags, exitCodes: browserUsePlatformExitCodes,
+		},
+		"runbook-delete": {
+			script: "browser-use",
+			summary: "Delete one private-source Runbook only when its exact observed record digest still matches.",
+			usage: ["runbook delete --service <id> --flow <id> [--expected-record-digest <sha256>] [--caller <label>] [--json|--plain]"],
+			json: true, audience: "agent", mutation: "write", sideEffects: ["check", "write"], executionModes: ["normal"],
+			previewExemption: { reason: "Delete is exact-record-digest guarded and an absent record is an idempotent no-op." },
+			outputModes: ["json", "plain"], interactivity: "none", envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseRunbookAuthoringResultContract, flags: browserUseRunbookDeleteFlags, exitCodes: browserUsePlatformExitCodes,
 		},
 		"runbook-list": {
 			script: "browser-use",
@@ -2064,25 +2469,49 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUseRunbookShowFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
+		"runbook-activate": {
+			script: "browser-use",
+			summary:
+				"Verify one complete private catalog closure, stage an immutable XDG Runbook Generation, and atomically select it.",
+			usage: [
+				"runbook activate --catalog-digest <sha256> --expected-epoch <n> [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Activation is digest- and epoch-gated, stages immutable content, and is idempotent for the selected digest.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseRunbookActivationResultContract,
+			actionAffordances: { failure: browserUsePlatformStoreFailureActions },
+			flags: browserUseRunbookActivateFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
 		"runbook-run": {
 			script: "browser-use",
 			summary:
 				"Compile one Browser Runbook and dispatch it through the agent-browser lane against a verified handoff; returns the shared run, external-effect state, and next safe action.",
 			usage: [
-				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
+				"runbook run --service <id> --flow <id> [--handoff <path>] [--input <id>=<value>]... [--input-file <id>=<absolute-path>]... [--tab <id>] [--run <id>] [--caller <label>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
 			mutation: "browser",
-			sideEffects: ["check", "browser", "write"],
+			sideEffects: ["check", "auth", "browser", "write"],
 			executionModes: ["normal"],
 			previewExemption: {
 				reason:
 					"Runbook run creates or resumes a durable shared run and dispatches live agent-browser execution against the verified handoff.",
 			},
 			outputModes: ["json", "plain"],
-			interactivity: "none",
-			envVars: browserUsePlatformStoreEnvVars,
+			interactivity: "optional",
+			envVars: [...browserUsePlatformStoreEnvVars, browserUseApprovalBrokerEnvVar],
 			resultContract: browserUseSharedRunResultContract,
 			actionAffordances: {
 				success: browserUsePlatformStoreSuccessActions,
@@ -2357,6 +2786,129 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseAuthRepairFailureActions,
 			},
 			flags: browserUseAuthSelectionFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-install-token": {
+			script: "browser-use",
+			summary:
+				"Install or replace the environment-lane service-account token through native hidden input or standard input; token argv and environment values are rejected.",
+			usage: [
+				"auth install-token [--from <reference>|--stdin] [--replace] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Validation needs the private token input; failed validation preserves the prior token and publishes no staged value.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthInstallFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-remove-token": {
+			script: "browser-use",
+			summary:
+				"Remove only the fixed admitted local token file; remote service-account revocation remains an explicit operator action.",
+			usage: [
+				"auth remove-token [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Removal is explicitly selected, targets one fixed custody file, and reports remote revocation as the remaining action.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-status": {
+			script: "browser-use",
+			summary:
+				"Report the five environment-lane admission checks and one repair action.",
+			usage: ["auth status [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-doctor": {
+			script: "browser-use",
+			summary:
+				"Render the five environment-lane admission gates and their operator repair ownership.",
+			usage: [
+				"auth doctor [--fix [profile]] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["check", "normal"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseAuthDoctorFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-reload": {
+			script: "browser-use",
+			summary:
+				"Refresh the installed environment-lane token from its admitted source without exposing token bytes.",
+			usage: ["auth reload [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Replacement validates before atomically changing the fixed custody file; failed validation preserves the prior value.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,

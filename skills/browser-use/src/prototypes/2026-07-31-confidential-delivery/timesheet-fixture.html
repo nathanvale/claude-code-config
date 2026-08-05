@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Served-over-http Angular-style timesheet grid mirroring
+     the real FastTrack DOM the action script targets: tr[ng-repeat] rows with
+     [ng-model='rxg.startDateTime'] / rxg.endDateTime / rxg.attendanceTypeId, a
+     per-row date cell, ngModel-equivalent commit on input/change only. Query
+     params drive which grid renders so the spike can exercise fail-closed guards:
+       ?week=03/08/2026        -> correct target week (Mon 03 - Sun 09 Aug)
+       ?week=03/08/2026&bad=fortnight  -> a 10-row fortnight (wrong-week superset)
+       ?week=03/08/2026&bad=dupe        -> two rows share a date (duplicate)
+       ?week=03/08/2026&bad=nodates     -> rows with unreadable dates
+     Secret-free. Wipe with scratchpad. -->
+<html lang="en"><head><meta charset="utf-8"><title>Time - Search Timesheet</title>
+<style>body{font-family:system-ui;margin:1rem}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:3px 7px;font-size:13px}input{width:70px}.state{font-family:monospace;font-size:12px;background:#f6f6f6;padding:.5rem;white-space:pre-wrap;margin-top:1rem}</style>
+</head><body ng-app>
+  <h2>Time - Search Timesheet</h2>
+  <ul class="nav nav-tabs top-3"><li><a>Available</a></li><li><a>Incomplete</a></li><li><a>Submitted</a></li></ul>
+  <table><tbody id="grid"></tbody></table>
+  <div class="state" id="dump"></div>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const weekStr = qs.get('week') || '03/08/2026';
+    const bad = qs.get('bad'); // fortnight | dupe | nodates | null
+    const model = {}; // key = date -> {start,end,attendance}; commits on input/change only
+
+    function parseDMY(s){const m=s.match(/(\d{2})\/(\d{2})\/(\d{4})/);return new Date(+m[3],+m[2]-1,+m[1]);}
+    function dmy(d){return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;}
+    function addDays(d,n){const c=new Date(d.getTime());c.setDate(c.getDate()+n);return c;}
+
+    const start = parseDMY(weekStr);
+    let rowDates = [];
+    let rowCount = 5;
+    if (bad === 'fortnight') rowCount = 10;      // superset: two weeks of rows
+    for (let i=0;i<rowCount;i++) rowDates.push(dmy(addDays(start, i)));
+    if (bad === 'dupe') rowDates[2] = rowDates[1]; // Wed collapses onto Tue's date
+
+    const grid = document.getElementById('grid');
+    rowDates.forEach((dateStr, i) => {
+      const tr = document.createElement('tr');
+      tr.setAttribute('ng-repeat','rxg in rows');
+      const dateCell = (bad === 'nodates') ? '' : dateStr; // unreadable-date variant
+      tr.innerHTML =
+        `<td class="rowdate">${dateCell}</td>`+
+        `<td><input ng-model="rxg.startDateTime" data-date="${dateStr}" value="${bad==='nodates'?'':dateStr+' '}"></td>`+
+        `<td><input ng-model="rxg.endDateTime" data-date="${dateStr}"></td>`+
+        `<td><select ng-model="rxg.attendanceTypeId"><option>Standard</option><option>Overtime</option><option>Leave</option></select></td>`;
+      grid.appendChild(tr);
+      const [s,e]=tr.querySelectorAll('input'); const sel=tr.querySelector('select');
+      const commit=(kind,el)=>()=>{ model[dateStr] ??= {}; model[dateStr][kind]=el.value; dump(); };
+      s.addEventListener('input',commit('start',s)); s.addEventListener('change',commit('start',s));
+      e.addEventListener('input',commit('end',e)); e.addEventListener('change',commit('end',e));
+      sel.addEventListener('change',()=>{ model[dateStr] ??= {}; model[dateStr].attendance=sel.value; dump(); });
+    });
+    function dump(n){document.getElementById('dump').textContent=(n?'>> '+n+'\n':'')+JSON.stringify({week:weekStr,bad,rowCount,model},null,2);}
+    window.__ts = () => ({ week:weekStr, bad, rowCount, model, title:document.title });
+    dump('ready: '+(bad?('BAD grid: '+bad):'clean target week'));
+  </script>
+</body></html>

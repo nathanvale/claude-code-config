@@ -39,6 +39,7 @@ import type {
 	AgentBrowserTaskStep,
 } from "./browser-use-agent-browser";
 import type { BrowserUseActionValueSchema } from "./browser-use-runbook-actions";
+import { isBrowserUseAuthContext } from "./browser-use-auth-bindings";
 
 /** The ONE supported runbook schema version. v1 is retired. */
 export const BROWSER_USE_RUNBOOK_SCHEMA_VERSION = "2" as const;
@@ -189,6 +190,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasOnlyKeys(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+): boolean {
+	return Object.keys(value).every((key) => allowed.includes(key));
+}
+
 function isCalendarValidIsoDate(value: string): boolean {
 	if (!ISO_DATE.test(value)) return false;
 	const [y, m, d] = value.split("-").map((part) => Number.parseInt(part, 10));
@@ -237,11 +245,15 @@ export type BrowserUseRunbookSemanticTarget = {
 export type BrowserUseRunbookStep =
 	| { kind: "snapshot"; interactive: boolean }
 	| {
+			kind: "approval-gate";
+			blocked_cause: "submit-approval-required";
+	  }
+	| {
 			kind: "open";
 			url: string;
 			postcondition: Extract<
 				BrowserUseRunbookPostcondition,
-				{ kind: "url-equals" }
+				{ kind: "url-equals" | "url-starts-with" }
 			>;
 	  }
 	| {
@@ -340,6 +352,7 @@ export type BrowserUseRunbookIssueCode =
 	| "runbook_schema_unsupported"
 	| "runbook_id_invalid"
 	| "runbook_origin_invalid"
+	| "runbook_auth_context_invalid"
 	| "runbook_no_steps"
 	| "runbook_input_invalid"
 	| "runbook_input_schema_invalid"
@@ -399,9 +412,16 @@ function referencedInputs(value: string): string[] {
 function validatePostcondition(
 	postcondition: BrowserUseRunbookPostcondition,
 ): boolean {
-	if (postcondition.kind === "url-equals") {
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
 		return postcondition.url.length > 0;
 	}
+	if (
+		postcondition.kind !== "value-equals" &&
+		postcondition.kind !== "element-visible"
+	) return false;
 	// value-equals / element-visible: a `@`-ref is not a valid CSS selector for
 	// a postcondition (the executor refuses those), and an empty selector is a
 	// bug, not a probe.
@@ -804,6 +824,16 @@ export function validateRunbook(
 			allowed.add(origin);
 		}
 	}
+	if (
+		runbook.auth_context_ref !== undefined &&
+		!isBrowserUseAuthContext(runbook.auth_context_ref)
+	) {
+		issues.push({
+			code: "runbook_auth_context_invalid",
+			message:
+				"auth_context_ref must name an auth-owned context vocabulary member.",
+		});
+	}
 	const inputIds = new Set<string>();
 	for (const input of runbook.inputs) {
 		if (!SAFE_INPUT_ID.test(input.id) || inputIds.has(input.id)) {
@@ -836,7 +866,7 @@ function validateStep(
 	issues: BrowserUseRunbookIssue[],
 ): void {
 	const at = `step ${index}`;
-	if (step.kind === "snapshot") return;
+	if (step.kind === "snapshot" || step.kind === "approval-gate") return;
 	if (step.kind === "open") {
 		if (!originAllowed(step.url, allowed)) {
 			issues.push({
@@ -845,12 +875,13 @@ function validateStep(
 			});
 		}
 		if (
-			step.postcondition.kind !== "url-equals" ||
+			(step.postcondition.kind !== "url-equals" &&
+				step.postcondition.kind !== "url-starts-with") ||
 			!validatePostcondition(step.postcondition)
 		) {
 			issues.push({
 				code: "runbook_step_invalid",
-				message: `${at}: open requires a valid url-equals postcondition.`,
+				message: `${at}: open requires a valid url-equals or url-starts-with postcondition.`,
 			});
 		}
 		return;
@@ -945,6 +976,204 @@ function shapeIssue(message: string): {
 	return { ok: false, issue: { code: "runbook_shape_invalid", message } };
 }
 
+/** One exact-key violation found before model normalization. */
+export type BrowserUseRunbookDocumentKeyIssue = {
+	code: "runbook_document_field_missing" | "runbook_document_key_unknown";
+	path: string;
+	message: string;
+};
+
+const RUNBOOK_DOCUMENT_ROOT_KEYS = [
+	"contract",
+	"schema_version",
+	"service_id",
+	"flow_id",
+	"flow_name",
+	"version",
+	"summary",
+	"allowed_origins",
+	"auth_context_ref",
+	"inputs",
+	"steps",
+] as const;
+const RUNBOOK_DOCUMENT_REQUIRED_KEYS = RUNBOOK_DOCUMENT_ROOT_KEYS.filter(
+	(key) => key !== "auth_context_ref",
+);
+
+/** Project the complete authoring shape from the parser and validator owner. */
+export function runbookDocumentAuthoringSchema() {
+	const minimalValidExample = {
+		contract: "browser-use.runbook",
+		schema_version: "2",
+		service_id: "example-service",
+		flow_id: "read-status",
+		flow_name: "example-read-status",
+		version: "1",
+		summary: "Read the current service status.",
+		allowed_origins: ["https://portal.example.test"],
+		inputs: [],
+		steps: [
+			{
+				kind: "open",
+				url: "https://portal.example.test/status",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/status",
+				},
+			},
+		],
+	} as const satisfies BrowserUseRunbook;
+	return {
+		document_contract: "browser-use.runbook",
+		document_schema_version: "2",
+		required: [...RUNBOOK_DOCUMENT_REQUIRED_KEYS],
+		optional: ["auth_context_ref"],
+		fields: {
+			contract: { const: "browser-use.runbook" },
+			schema_version: { const: "2" },
+			service_id: { type: "safe-slug", owner: "validateRunbook" },
+			flow_id: { type: "safe-slug", owner: "validateRunbook" },
+			flow_name: { type: "string", owner: "validateRunbook" },
+			version: { type: "string", owner: "validateRunbook" },
+			summary: { type: "string", owner: "validateRunbook" },
+			allowed_origins: { type: "exact-http-origin-array", owner: "validateRunbook" },
+			auth_context_ref: { type: "auth-owned-reference", owner: "validateRunbook" },
+			inputs: { type: "array", item_owner: "BrowserUseRunbookInput + parseRunbookRecord" },
+			steps: {
+				type: "non-empty-array",
+				variants: [
+					"snapshot",
+					"approval-gate",
+					"open",
+					"click",
+					"fill",
+					"action",
+					"iterate",
+				],
+				postconditions: {
+					variants: ["url-equals", "url-starts-with", "value-equals", "element-visible"],
+					open_variants: ["url-equals", "url-starts-with"],
+				},
+				item_owner: "BrowserUseRunbookStep + parseRunbookRecord",
+			},
+		},
+		minimal_valid_example: structuredClone(minimalValidExample),
+	} as const;
+}
+
+function inspectExactKeys(
+	value: Record<string, unknown>,
+	path: string,
+	allowed: readonly string[],
+	required: readonly string[],
+	issues: BrowserUseRunbookDocumentKeyIssue[],
+): void {
+	for (const key of required) {
+		if (!(key in value)) issues.push({ code: "runbook_document_field_missing", path: `${path}.${key}`, message: "a required field is missing." });
+	}
+	for (const key of Object.keys(value)) {
+		if (!allowed.includes(key)) issues.push({ code: "runbook_document_key_unknown", path: `${path}.${key}`, message: "an unknown field is forbidden." });
+	}
+}
+
+function inspectPostconditionKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
+	if (!isPlainObject(value)) return;
+	const allowed = value.kind === "url-equals" || value.kind === "url-starts-with" ? ["kind", "url"] : value.kind === "value-equals" ? ["kind", "selector", "value"] : ["kind", "selector"];
+	inspectExactKeys(value, path, allowed, allowed, issues);
+}
+
+function inspectSchemaFieldKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
+	if (!isPlainObject(value)) return;
+	for (const [key, field] of Object.entries(value)) {
+		if (!isPlainObject(field)) continue;
+		inspectExactKeys(field, `${path}.${key}`, ["schema", "required"], ["schema", "required"], issues);
+		inspectSchemaKeys(field.schema, `${path}.${key}.schema`, issues);
+	}
+}
+
+function inspectSchemaKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
+	if (!isPlainObject(value) || typeof value.kind !== "string") return;
+	const byKind: Readonly<Record<string, readonly string[]>> = {
+		string: ["kind", "min_length", "max_length", "pattern", "default"],
+		number: ["kind", "minimum", "maximum", "integer", "default"],
+		boolean: ["kind", "default"],
+		enum: ["kind", "values", "default"],
+		date: ["kind", "default"],
+		uuid: ["kind", "default"],
+		array: ["kind", "items", "min_items", "max_items"],
+		object: ["kind", "fields"],
+		"discriminated-union": ["kind", "discriminant", "variants"],
+	};
+	const allowed = byKind[value.kind];
+	if (allowed === undefined) return;
+	const required = ["kind", ...(value.kind === "array" ? ["items"] : value.kind === "object" ? ["fields"] : value.kind === "discriminated-union" ? ["discriminant", "variants"] : value.kind === "enum" ? ["values"] : [])];
+	inspectExactKeys(value, path, allowed, required, issues);
+	if (value.kind === "array") inspectSchemaKeys(value.items, `${path}.items`, issues);
+	if (value.kind === "object") inspectSchemaFieldKeys(value.fields, `${path}.fields`, issues);
+	if (value.kind === "discriminated-union" && isPlainObject(value.variants)) for (const [tag, fields] of Object.entries(value.variants)) inspectSchemaFieldKeys(fields, `${path}.variants.${tag}`, issues);
+}
+
+function inspectActionKeys(value: Record<string, unknown>, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
+	inspectExactKeys(value, path, ["kind", "action_id", "expected_digest", "inputs", "postcondition"], ["kind", "action_id", "expected_digest", "inputs"], issues);
+	if (value.postcondition !== undefined) inspectPostconditionKeys(value.postcondition, `${path}.postcondition`, issues);
+}
+
+function inspectStepKeys(value: unknown, path: string, issues: BrowserUseRunbookDocumentKeyIssue[]): void {
+	if (!isPlainObject(value)) return;
+	switch (value.kind) {
+		case "snapshot":
+			inspectExactKeys(value, path, ["kind", "interactive"], ["kind", "interactive"], issues);
+			break;
+		case "approval-gate":
+			inspectExactKeys(
+				value,
+				path,
+				["kind", "blocked_cause"],
+				["kind", "blocked_cause"],
+				issues,
+			);
+			break;
+		case "open":
+			inspectExactKeys(value, path, ["kind", "url", "postcondition"], ["kind", "url", "postcondition"], issues);
+			inspectPostconditionKeys(value.postcondition, `${path}.postcondition`, issues);
+			break;
+		case "click":
+			inspectExactKeys(value, path, ["kind", "target", "postcondition"], ["kind", "target", "postcondition"], issues);
+			if (isPlainObject(value.target)) inspectExactKeys(value.target, `${path}.target`, ["role", "name"], ["role", "name"], issues);
+			inspectPostconditionKeys(value.postcondition, `${path}.postcondition`, issues);
+			break;
+		case "fill": {
+			const confidential = value.sensitivity === "confidential";
+			const allowed = ["kind", "target", "sensitivity", confidential ? "item_binding" : "value", "postcondition"];
+			inspectExactKeys(value, path, allowed, allowed, issues);
+			if (isPlainObject(value.target)) inspectExactKeys(value.target, `${path}.target`, ["role", "name"], ["role", "name"], issues);
+			inspectPostconditionKeys(value.postcondition, `${path}.postcondition`, issues);
+			break;
+		}
+		case "action":
+			inspectActionKeys(value, path, issues);
+			break;
+		case "iterate":
+			inspectExactKeys(value, path, ["kind", "over_input", "step"], ["kind", "over_input", "step"], issues);
+			if (isPlainObject(value.step)) inspectActionKeys(value.step, `${path}.step`, issues);
+			break;
+	}
+}
+
+/** Inspect recursive allowed keys without normalizing or discarding input. */
+export function inspectRunbookDocumentKeys(raw: unknown): BrowserUseRunbookDocumentKeyIssue[] {
+	if (!isPlainObject(raw)) return [];
+	const issues: BrowserUseRunbookDocumentKeyIssue[] = [];
+	inspectExactKeys(raw, "$", RUNBOOK_DOCUMENT_ROOT_KEYS, RUNBOOK_DOCUMENT_REQUIRED_KEYS, issues);
+	if (Array.isArray(raw.inputs)) for (const [index, input] of raw.inputs.entries()) {
+		if (!isPlainObject(input)) continue;
+		inspectExactKeys(input, `$.inputs[${index}]`, ["id", "summary", "required", "schema"], ["id", "summary", "required", "schema"], issues);
+		inspectSchemaKeys(input.schema, `$.inputs[${index}].schema`, issues);
+	}
+	if (Array.isArray(raw.steps)) for (const [index, step] of raw.steps.entries()) inspectStepKeys(step, `$.steps[${index}]`, issues);
+	return issues;
+}
+
 // Recursively prove a value-schema shape from untrusted JSON. Returns undefined
 // on any structural violation; the caller maps that to a typed shape issue.
 function parseValueSchema(
@@ -960,6 +1189,7 @@ function parseValueSchema(
 		v !== undefined && Number.isNaN(v);
 	switch (kind) {
 		case "string": {
+			if (!hasOnlyKeys(raw, ["kind", "min_length", "max_length", "pattern", "default"])) return undefined;
 			const min = optNumber(raw.min_length);
 			const max = optNumber(raw.max_length);
 			if (badNum(min) || badNum(max)) return undefined;
@@ -974,6 +1204,7 @@ function parseValueSchema(
 			};
 		}
 		case "number": {
+			if (!hasOnlyKeys(raw, ["kind", "minimum", "maximum", "integer", "default"])) return undefined;
 			const min = optNumber(raw.minimum);
 			const max = optNumber(raw.maximum);
 			if (badNum(min) || badNum(max)) return undefined;
@@ -988,6 +1219,7 @@ function parseValueSchema(
 			};
 		}
 		case "boolean": {
+			if (!hasOnlyKeys(raw, ["kind", "default"])) return undefined;
 			if (raw.default !== undefined && typeof raw.default !== "boolean") return undefined;
 			return {
 				kind: "boolean",
@@ -995,6 +1227,7 @@ function parseValueSchema(
 			};
 		}
 		case "enum": {
+			if (!hasOnlyKeys(raw, ["kind", "values", "default"])) return undefined;
 			if (!Array.isArray(raw.values) || raw.values.some((v) => typeof v !== "string")) {
 				return undefined;
 			}
@@ -1007,6 +1240,7 @@ function parseValueSchema(
 		}
 		case "date":
 		case "uuid": {
+			if (!hasOnlyKeys(raw, ["kind", "default"])) return undefined;
 			if (raw.default !== undefined && typeof raw.default !== "string") return undefined;
 			return {
 				kind,
@@ -1014,6 +1248,7 @@ function parseValueSchema(
 			} as BrowserUseRunbookValueSchema;
 		}
 		case "array": {
+			if (!hasOnlyKeys(raw, ["kind", "items", "min_items", "max_items"])) return undefined;
 			const items = parseValueSchema(raw.items, depth + 1);
 			if (items === undefined) return undefined;
 			const min = optNumber(raw.min_items);
@@ -1027,11 +1262,13 @@ function parseValueSchema(
 			};
 		}
 		case "object": {
+			if (!hasOnlyKeys(raw, ["kind", "fields"])) return undefined;
 			const fields = parseSchemaFields(raw.fields, depth);
 			if (fields === undefined) return undefined;
 			return { kind: "object", fields };
 		}
 		case "discriminated-union": {
+			if (!hasOnlyKeys(raw, ["kind", "discriminant", "variants"])) return undefined;
 			if (typeof raw.discriminant !== "string" || !isPlainObject(raw.variants)) {
 				return undefined;
 			}
@@ -1064,6 +1301,7 @@ function parseSchemaFields(
 	> = {};
 	for (const [key, rawField] of Object.entries(raw)) {
 		if (!isPlainObject(rawField)) return undefined;
+		if (!hasOnlyKeys(rawField, ["schema", "required"])) return undefined;
 		if (typeof rawField.required !== "boolean") return undefined;
 		const schema = parseValueSchema(rawField.schema, depth + 1);
 		if (schema === undefined) return undefined;
@@ -1077,12 +1315,19 @@ function parsePostcondition(
 ): BrowserUseRunbookPostcondition | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	if (raw.kind === "url-equals" && typeof raw.url === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
 		return { kind: "url-equals", url: raw.url };
 	}
+	if (raw.kind === "url-starts-with" && typeof raw.url === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "url"])) return undefined;
+		return { kind: "url-starts-with", url: raw.url };
+	}
 	if (raw.kind === "value-equals" && typeof raw.selector === "string" && typeof raw.value === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "selector", "value"])) return undefined;
 		return { kind: "value-equals", selector: raw.selector, value: raw.value };
 	}
 	if (raw.kind === "element-visible" && typeof raw.selector === "string") {
+		if (!hasOnlyKeys(raw, ["kind", "selector"])) return undefined;
 		return { kind: "element-visible", selector: raw.selector };
 	}
 	return undefined;
@@ -1092,6 +1337,7 @@ function parseSemanticTarget(
 	raw: unknown,
 ): BrowserUseRunbookSemanticTarget | undefined {
 	if (!isPlainObject(raw)) return undefined;
+	if (!hasOnlyKeys(raw, ["role", "name"])) return undefined;
 	if (typeof raw.role !== "string" || typeof raw.name !== "string") return undefined;
 	return { role: raw.role, name: raw.name };
 }
@@ -1119,6 +1365,7 @@ function parseActionShape(
 			postcondition?: BrowserUseRunbookPostcondition;
 	  }
 	| undefined {
+	if (!hasOnlyKeys(raw, ["kind", "action_id", "expected_digest", "inputs", "postcondition"])) return undefined;
 	if (typeof raw.action_id !== "string" || typeof raw.expected_digest !== "string") {
 		return undefined;
 	}
@@ -1142,17 +1389,32 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	switch (raw.kind) {
 		case "snapshot": {
+			if (!hasOnlyKeys(raw, ["kind", "interactive"])) return undefined;
 			if (typeof raw.interactive !== "boolean") return undefined;
 			return { kind: "snapshot", interactive: raw.interactive };
 		}
+		case "approval-gate": {
+			if (!hasOnlyKeys(raw, ["kind", "blocked_cause"])) return undefined;
+			if (raw.blocked_cause !== "submit-approval-required") return undefined;
+			return {
+				kind: "approval-gate",
+				blocked_cause: "submit-approval-required",
+			};
+		}
 		case "open": {
+			if (!hasOnlyKeys(raw, ["kind", "url", "postcondition"])) return undefined;
 			const post = parsePostcondition(raw.postcondition);
-			if (typeof raw.url !== "string" || post === undefined || post.kind !== "url-equals") {
+			if (
+				typeof raw.url !== "string" ||
+				post === undefined ||
+				(post.kind !== "url-equals" && post.kind !== "url-starts-with")
+			) {
 				return undefined;
 			}
 			return { kind: "open", url: raw.url, postcondition: post };
 		}
 		case "click": {
+			if (!hasOnlyKeys(raw, ["kind", "target", "postcondition"])) return undefined;
 			const target = parseSemanticTarget(raw.target);
 			const post = parsePostcondition(raw.postcondition);
 			if (target === undefined || post === undefined || post.kind !== "element-visible") {
@@ -1165,6 +1427,7 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 			const post = parsePostcondition(raw.postcondition);
 			if (target === undefined || post === undefined) return undefined;
 			if (raw.sensitivity === "confidential") {
+				if (!hasOnlyKeys(raw, ["kind", "target", "sensitivity", "item_binding", "postcondition"])) return undefined;
 				if (typeof raw.item_binding !== "string") return undefined;
 				return {
 					kind: "fill",
@@ -1175,6 +1438,7 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 				};
 			}
 			if (raw.sensitivity === "ordinary") {
+				if (!hasOnlyKeys(raw, ["kind", "target", "sensitivity", "value", "postcondition"])) return undefined;
 				if (typeof raw.value !== "string") return undefined;
 				return {
 					kind: "fill",
@@ -1190,6 +1454,7 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 			return parseActionShape(raw);
 		}
 		case "iterate": {
+			if (!hasOnlyKeys(raw, ["kind", "over_input", "step"])) return undefined;
 			if (typeof raw.over_input !== "string" || !isPlainObject(raw.step)) return undefined;
 			if (raw.step.kind !== "action") return undefined;
 			const inner = parseActionShape(raw.step);
@@ -1203,6 +1468,7 @@ function parseStep(raw: unknown): BrowserUseRunbookStep | undefined {
 
 function parseInput(raw: unknown): BrowserUseRunbookInput | undefined {
 	if (!isPlainObject(raw)) return undefined;
+	if (!hasOnlyKeys(raw, ["id", "summary", "required", "schema"])) return undefined;
 	if (
 		typeof raw.id !== "string" ||
 		typeof raw.summary !== "string" ||
@@ -1229,6 +1495,24 @@ function parseInput(raw: unknown): BrowserUseRunbookInput | undefined {
 export function parseRunbookRecord(raw: unknown): BrowserUseRunbookParseResult {
 	if (!isPlainObject(raw)) {
 		return shapeIssue("runbook record is not a JSON object.");
+	}
+	if (inspectRunbookDocumentKeys(raw).length > 0) {
+		return shapeIssue("runbook record contains an unknown or missing field.");
+	}
+	if (!hasOnlyKeys(raw, [
+		"contract",
+		"schema_version",
+		"service_id",
+		"flow_id",
+		"flow_name",
+		"version",
+		"summary",
+		"allowed_origins",
+		"auth_context_ref",
+		"inputs",
+		"steps",
+	])) {
+		return shapeIssue("runbook record contains an unknown field.");
 	}
 	if (raw.contract !== "browser-use.runbook") {
 		return shapeIssue("runbook record contract id is not browser-use.runbook.");
@@ -1314,6 +1598,54 @@ export type BrowserUseRunbookPlanRefusal = {
 	message: string;
 };
 
+/** Result of admitting runbook inputs before any downstream action resolution. */
+export type BrowserUseRunbookInputAdmissionResult =
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; refusal: BrowserUseRunbookPlanRefusal };
+
+/**
+ * Materialize defaults and enforce every declared runbook input schema.
+ *
+ * The engine calls this before resolving Reviewed Actions so malformed input
+ * cannot escape its owning schema gate and surface as a downstream action error.
+ *
+ * @param runbook - Validated runbook whose declared inputs own admission
+ * @param inputs - Caller-supplied input bindings
+ * @returns Normalized admitted inputs, or the first typed input refusal
+ * @internal
+ */
+export function admitRunbookInputs(
+	runbook: BrowserUseRunbook,
+	inputs: BrowserUseRunbookInputs,
+): BrowserUseRunbookInputAdmissionResult {
+	const normalizedInputs = materializeRunbookInputs(runbook, inputs);
+	for (const declared of runbook.inputs) {
+		const value = normalizedInputs[declared.id];
+		if (value === undefined) {
+			if (declared.required) {
+				return {
+					ok: false,
+					refusal: {
+						code: "runbook_input_missing",
+						message: `required input ${declared.id} was not supplied.`,
+					},
+				};
+			}
+			continue;
+		}
+		if (!valueMatchesSchema(value, declared.schema)) {
+			return {
+				ok: false,
+				refusal: {
+					code: "runbook_input_rejected",
+					message: `input ${declared.id} does not satisfy its declared value schema.`,
+				},
+			};
+		}
+	}
+	return { ok: true, inputs: normalizedInputs };
+}
+
 /**
  * A planned execution: the compiled bounded Agent Browser steps (from
  * `resume_from_step` onward) plus the resolved allowed origins, ready to hand
@@ -1350,6 +1682,11 @@ export type BrowserUseRunbookPlan = {
 	resume_from_step: number;
 	total_steps: number;
 	steps: readonly AgentBrowserTaskStep[];
+	/** First generic approval boundary; adapter steps after it are not compiled. */
+	approval_gate?: {
+		runbook_step_index: number;
+		blocked_cause: "submit-approval-required";
+	};
 	/**
 	 * Absolute runbook step index for each compiled executor step. Expanded
 	 * iterations repeat their source index so partial execution resumes the
@@ -1376,11 +1713,14 @@ export function nextRunbookStepAfterExecution(
 		| "resume_from_step"
 		| "total_steps"
 		| "compiled_step_runbook_indices"
+		| "approval_gate"
 	>,
 	executedSteps: number,
 ): number {
 	if (executedSteps >= plan.compiled_step_runbook_indices.length) {
-		return plan.total_steps;
+		return plan.approval_gate !== undefined
+			? plan.approval_gate.runbook_step_index
+			: plan.total_steps;
 	}
 	return (
 		plan.compiled_step_runbook_indices[executedSteps] ??
@@ -1448,6 +1788,10 @@ function compileStep(
 			target: { role: step.target.role, name: step.target.name },
 			value: "",
 			sensitivity: "confidential",
+			// The step's own binding slug rides the compiled step so the executor
+			// resolves its credential field at fill time via the delivery context's
+			// `field_by_binding_slug` (KTD5) — never a positional lookup.
+			item_binding: step.item_binding,
 			postcondition: step.postcondition,
 		};
 	}
@@ -1515,7 +1859,9 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	const normalizedInputs = materializeRunbookInputs(runbook, input.inputs);
+	const admittedInputs = admitRunbookInputs(runbook, input.inputs);
+	if (!admittedInputs.ok) return admittedInputs;
+	const normalizedInputs = admittedInputs.inputs;
 	// Reviewed-action and iteration steps require an engine-resolved executor
 	// step (U3): the pure model NEVER resolves an asset. When the engine supplies
 	// no resolution for an action/iterate step, refuse with a typed pointer
@@ -1542,30 +1888,6 @@ export function planRunbookExecution(
 			},
 		};
 	}
-	for (const declared of runbook.inputs) {
-		const value = normalizedInputs[declared.id];
-		if (value === undefined) {
-			if (declared.required) {
-				return {
-					ok: false,
-					refusal: {
-						code: "runbook_input_missing",
-						message: `required input ${declared.id} was not supplied.`,
-					},
-				};
-			}
-			continue;
-		}
-		if (!valueMatchesSchema(value, declared.schema)) {
-			return {
-				ok: false,
-				refusal: {
-					code: "runbook_input_rejected",
-					message: `input ${declared.id} does not satisfy its declared value schema.`,
-				},
-			};
-		}
-	}
 	if (
 		!Number.isInteger(input.resumeFromStep) ||
 		input.resumeFromStep < 0 ||
@@ -1580,12 +1902,19 @@ export function planRunbookExecution(
 		};
 	}
 	const remaining = runbook.steps.slice(input.resumeFromStep);
+	const approvalGateOffset = remaining.findIndex(
+		(step) => step.kind === "approval-gate",
+	);
+	const executableRemaining =
+		approvalGateOffset === -1
+			? remaining
+			: remaining.slice(0, approvalGateOffset);
 	// Compile each remaining step. An `action`/`iterate` step expands into its
 	// engine-resolved executor steps (U3, keyed by ABSOLUTE step index); every
 	// other kind compiles through the pure `compileStep`.
 	const compiled: AgentBrowserTaskStep[] = [];
 	const compiledStepRunbookIndices: number[] = [];
-	for (const [offset, step] of remaining.entries()) {
+	for (const [offset, step] of executableRemaining.entries()) {
 		const absoluteIndex = input.resumeFromStep + offset;
 		if (step.kind === "action" || step.kind === "iterate") {
 			const resolution = resolvedActionSteps.get(absoluteIndex);
@@ -1599,7 +1928,7 @@ export function planRunbookExecution(
 		compiled.push(compileStep(step, normalizedInputs));
 		compiledStepRunbookIndices.push(absoluteIndex);
 	}
-	const pendingBindings = remaining
+	const pendingBindings = executableRemaining
 		.filter(
 			(
 				step,
@@ -1622,6 +1951,15 @@ export function planRunbookExecution(
 			resume_from_step: input.resumeFromStep,
 			total_steps: runbook.steps.length,
 			steps: compiled,
+			...(approvalGateOffset === -1
+				? {}
+				: {
+						approval_gate: {
+							runbook_step_index:
+								input.resumeFromStep + approvalGateOffset,
+							blocked_cause: "submit-approval-required" as const,
+						},
+					}),
 			compiled_step_runbook_indices: compiledStepRunbookIndices,
 			pending_item_bindings: [...new Set(pendingBindings)],
 			read_action_meta: input.readActionMeta ?? {},

@@ -51,3 +51,6 @@ skills/fallow/scripts/.fallow/
 # they must override the global package-lock.json ignore.
 !runtime/browser-connect/adapter-install/**/package-lock.json
 settings.json
+
+# Compound Engineering machine-local config
+.compound-engineering/*.local.yaml

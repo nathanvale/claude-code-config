@@ -166,7 +166,7 @@ export function buildFasttrackSaveDraftMigration(
 		summary:
 			"Reconcile the timesheet route, fill checkpointed days, add per-day breaks, and preserve a controlled draft.",
 		allowed_origins: [input.allowedOrigin],
-		auth_context_ref: "fasttrack-session",
+		auth_context_ref: "interactive-login",
 		inputs: [
 			{
 				id: "day_keys",

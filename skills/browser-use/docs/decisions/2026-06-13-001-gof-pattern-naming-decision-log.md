@@ -18,6 +18,9 @@ decision_metadata_format: fenced-yaml-per-decision
 
 ## Frame
 
+Decision 1 and Decision 3 are superseded by ADR 0031. Their pressure evidence
+remains useful, but Browser Use no longer owns the mapping or facade they named.
+
 The session settled the product (one warm Chrome, N independent CDP engines, a mechanical
 differential oracle). Three GoF labels were in informal use across docs/code — Facade,
 Adapter, Strategy. Ran the `gof-pressure-lens` (Pattern Referee Mode) to test whether each
@@ -28,7 +31,8 @@ name is pressure-earned against the session's prototype + decision evidence, und
 
 ```yaml
 pattern: Adapter
-verdict: keep
+verdict: superseded
+superseded_by: docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md
 seam_owner: two-axis mapping layer (src/ref-normalizer.ts parser-per-ref-format + src/vocab-map.ts dispatch-per-transport; engine-origin-tagged FacadeRef)
 pressure_source: n5-spike Finding 1 — transport seam is vocabulary-bound; playwright fit 0/6 seams; 5 engines speak different tool-name vocabularies AND dispatch shapes
 deletion_test: remove the mapping layer -> facade reaches only chrome-devtools; other 4 engines unreachable -> N collapses to 1
@@ -57,7 +61,8 @@ vocabulary "evidence-first routing" already names the pressure precisely; GoF ad
 
 ```yaml
 pattern: Facade
-verdict: qualified-keep
+verdict: superseded
+superseded_by: docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md
 scope: the operate/observe/verify ACTION surface only
 seam_owner: the facade interface (caller never names an engine; vocab/dispatch hidden on the common path)
 pressure_source: common-path callers genuinely get a simpler interface over a 5-engine subsystem

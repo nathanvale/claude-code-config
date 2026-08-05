@@ -17,6 +17,9 @@ decision_metadata_format: fenced-yaml-per-decision
 
 ## Frame
 
+Decisions 1 through 3 are superseded by ADR 0031. They remain below as
+historical evidence for the executor architecture being retired.
+
 The 2026-07-17 refactor plan re-anchored browser-use's live transport on the
 Verified Handoff Envelope. Execution (U1–U6) surfaced empirical seam behavior
 that amended the plan's KTD1 and forced two deviations. This log records the
@@ -28,7 +31,8 @@ logs it defers to.
 
 ```yaml
 id: envelope-derived-transport-001
-status: accepted
+status: superseded
+superseded_by: docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md
 decided_at: "2026-07-17"
 decision: browser-use keeps mcporter as the MCP protocol client and derives every live adapter invocation ad-hoc from the Verified Handoff Envelope
 owner: browser-use-transport
@@ -79,7 +83,8 @@ V2 Ideas:
 
 ```yaml
 id: envelope-derived-transport-002
-status: accepted
+status: superseded
+superseded_by: docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md
 decided_at: "2026-07-17"
 decision: every envelope-derived spawn sets MCPORTER_NO_KEEPALIVE=* and names the ad-hoc server; without the guard mcporter daemon-routes the call to the configured server
 owner: browser-use-transport
@@ -124,7 +129,8 @@ V2 Ideas:
 
 ```yaml
 id: envelope-derived-transport-003
-status: accepted
+status: superseded
+superseded_by: docs/adr/0031-browser-use-delegates-browser-mechanics-to-adapters.md
 decided_at: "2026-07-17"
 decision: operations carry pageId directly via the adapter's --experimentalPageIdRouting flag; the default select_page transport step is deleted; --bring-to-front still issues select_page with bringToFront true
 owner: browser-use-transport

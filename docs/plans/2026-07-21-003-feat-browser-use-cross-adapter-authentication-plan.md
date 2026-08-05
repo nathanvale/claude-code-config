@@ -8,9 +8,17 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
+status: active
+last_updated: 2026-08-05
 ---
 
 # Browser Use cross-adapter authentication - Plan
+
+## Current Status
+
+Agent Browser now has the Browser Authentication Transaction, approved Item Binding path, environment-token retrieval, disposable delivery, exact-origin and CDP-target proof, generic multi-step login, bounded attestations, Shared Run persistence, and restart revalidation. Human Identity Attestation is production-wired through the signed ApprovalBroker; expired approved-submit resumes mint a fresh session attestation before one-shot dispatch.
+
+Cross-adapter completion remains partial. Playwright and Chrome DevTools retain their browser-operation lanes but do not advertise equivalent production authentication. Production Session Identity Proof and automated expected subject/account/tenant verification remain unowned. Live and golden acceptance stays blocked or partial where the ledger requires unavailable adapter installation, native custody, or explicit external-effect authority.
 
 ## Goal Capsule
 

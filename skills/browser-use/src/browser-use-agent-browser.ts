@@ -4,6 +4,10 @@ import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/c
 import { TRANSPORT_STDIN_MAX_BYTES } from "@side-quest/mcporter-transport";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import type { BrowserUseAuthMethodStep } from "./browser-use-auth-model";
+import type {
+	BrowserUseAccessibilitySnapshot,
+	BrowserUseCdpObserver,
+} from "./browser-use-cdp-observer";
 import {
 	type BrowserUseDeliveryHook,
 	type BrowserUseDeliveryResumeDirective,
@@ -70,6 +74,7 @@ export type AgentBrowserVerifiedHandoff = BrowserConnectHandoffPayload & {
  */
 export type AgentBrowserPostcondition =
 	| { kind: "url-equals"; url: string }
+	| { kind: "url-starts-with"; url: string }
 	| { kind: "value-equals"; selector: string; value: string }
 	| { kind: "element-visible"; selector: string };
 
@@ -84,7 +89,10 @@ export type AgentBrowserTaskStep =
 	| {
 			kind: "open";
 			url: string;
-			postcondition: Extract<AgentBrowserPostcondition, { kind: "url-equals" }>;
+			postcondition: Extract<
+				AgentBrowserPostcondition,
+				{ kind: "url-equals" | "url-starts-with" }
+			>;
 	  }
 	| {
 			kind: "click";
@@ -103,6 +111,8 @@ export type AgentBrowserTaskStep =
 	| {
 			kind: "fill";
 			ref: string;
+			/** Binding slug resolved by confidential delivery at fill time. */
+			item_binding?: string;
 			value: string;
 			sensitivity: "ordinary" | "confidential";
 			/**
@@ -136,7 +146,7 @@ export type AgentBrowserTaskStep =
  *
  * The context is only ever handed in DURING the auth transaction's
  * sensitive-interval (`in_sensitive_interval` — post lease-granted, pre
- * submission-dispatched); `field_by_ref` names, per snapshot ref, which
+ * submission-dispatched); `field_by_binding_slug` names, per runbook binding,
  * credential field the choreography must deliver into that field. Every effect
  * is an injected port owned by the auth wiring: the disposable delivery helper
  * (`deliver`), the fresh target re-proof (`reproveTarget`), the verified target
@@ -158,8 +168,10 @@ export type AgentBrowserAuthDeliveryContext = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	deliver: BrowserUseDeliveryHook;
 	reproveTarget: BrowserUseTargetReproof;
-	/** Snapshot ref -> the credential field the choreography must deliver. */
-	field_by_ref: Readonly<Record<string, BrowserUseOpCredentialField>>;
+	/** Runbook binding slug -> credential field delivered for that step. */
+	field_by_binding_slug: Readonly<
+		Record<string, BrowserUseOpCredentialField>
+	>;
 };
 
 /**
@@ -483,10 +495,12 @@ function actionIntegrityIsValid(
 function reviewedActionPayload(
 	step: Extract<AgentBrowserTaskStep, { kind: "evaluate" }>,
 ): string {
-	return [
-		`const action = (${step.script});`,
-		`await action({ inputs: ${JSON.stringify(step.inputs)} });`,
-	].join("\n");
+	// Emit a single async-IIFE EXPRESSION, not a top-level `await` statement: the
+	// native `eval` harness evaluates the payload as one expression and awaits the
+	// returned promise. A bare `await action(...)` is top-level await, which the
+	// evaluation context rejects with `SyntaxError: await is only valid in async
+	// functions`, failing every async reviewed action before it runs.
+	return `(async () => { const action = (${step.script}); return await action({ inputs: ${JSON.stringify(step.inputs)} }); })()`;
 }
 
 type AgentBrowserCommandContext = Pick<
@@ -1031,12 +1045,15 @@ export async function executeAgentBrowserTask(
 			// of the executor's own `fill`. The choreography re-proves the target,
 			// mints an opaque handle, and performs one bounded write inside the
 			// disposable delivery helper — the executor never observes a value.
-			const field = delivery.field_by_ref[mutationRef];
+			const field =
+				step.item_binding === undefined
+					? undefined
+					: delivery.field_by_binding_slug[step.item_binding];
 			if (field === undefined) {
 				return withDelivery(failure(
 					"agent_browser_confidential_delivery_blocked",
 					"not-achieved",
-					"The confidential fill ref has no mapped credential field in the auth-delivery context.",
+					"The confidential fill binding has no mapped credential field in the auth-delivery context.",
 					executedSteps,
 				));
 			}
@@ -1161,5 +1178,205 @@ export async function executeAgentBrowserTask(
 				}
 			: {}),
 		...(readResults.length > 0 ? { read_results: readResults } : {}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Pause/resume continuity around confidential delivery (R18, AE10).
+//
+// The task lane pauses at the confidential step; the choreography
+// (browser-use-confidential-field-delivery.ts) emits the resume directive.
+// This section is the lane-side obedience: discard every adapter ref captured
+// before delivery and re-observe one fresh identity basis before continuing.
+// Ref staleness is judged by VISIBILITY/OPERABILITY over the non-secret
+// main-process CDP observer (browser-use-cdp-observer.ts) — a still-resolvable
+// but hidden node IS stale. SPA logins hide rather than remove screens, so a
+// succeeding DOM.resolveNode is a false still-valid signal; the observer's
+// probe API never consults it.
+// ---------------------------------------------------------------------------
+
+/**
+ * One adapter-local ref captured BEFORE a confidential delivery, bridged to
+ * the browser-global backend node id the main-process observer can probe. The
+ * bridge exists so staleness is judged by rendered visibility and operability,
+ * never by the adapter ref (or its DOM node) continuing to resolve.
+ */
+export type AgentBrowserCapturedRef = {
+	ref: string;
+	backend_node_id: number;
+};
+
+/**
+ * Probe-grounded staleness verdict for one captured ref. A node that still
+ * resolves but is hidden or inoperable IS stale (R18): the SPA advanced by
+ * hiding the previous screen, so acting through the old ref would write into
+ * an invisible surface.
+ */
+export type AgentBrowserRefStaleness =
+	| { stale: false }
+	| {
+			stale: true;
+			cause: "ref-not-visible" | "ref-not-operable" | "ref-unobservable";
+	  };
+
+/**
+ * Judge one captured ref through the observer's visibility/operability probe
+ * (R18). An unobservable node (target gone, snapshot refused, or the node
+ * absent from the fresh tree) is stale, not an error: the ref cannot be
+ * proven live, so it must not be reused.
+ *
+ * @param observer - U8 main-process CDP observer bound to a verified endpoint
+ * @param input - Exact CDP target id and the browser-global backend node id
+ * @returns Fresh-probe staleness truth; never consults DOM.resolveNode
+ */
+export async function judgeAgentBrowserRefStaleness(
+	observer: BrowserUseCdpObserver,
+	input: { cdp_target_id: string; backend_node_id: number },
+): Promise<AgentBrowserRefStaleness> {
+	const probed = await observer.probeNode({
+		target_id: input.cdp_target_id,
+		backend_node_id: input.backend_node_id,
+	});
+	if (!probed.ok) return { stale: true, cause: "ref-unobservable" };
+	if (!probed.probe.visible) return { stale: true, cause: "ref-not-visible" };
+	if (!probed.probe.operable) return { stale: true, cause: "ref-not-operable" };
+	return { stale: false };
+}
+
+/**
+ * Typed reuse refusal for a ref captured before delivery. The refusal is
+ * unconditional; the probe evidence names why the underlying node is (or is
+ * not) still live so the caller sees the screen-advance truth, never a bare
+ * policy "no".
+ */
+export type AgentBrowserRefReuseRefusal = {
+	reusable: false;
+	code: "agent_browser_stale_ref_refused";
+	message: string;
+	/** Probe evidence at refusal time; a still-live node is still refused. */
+	staleness: AgentBrowserRefStaleness;
+};
+
+/**
+ * Refuse reuse of one pre-delivery adapter ref (R18/AE10). The resume
+ * directive discarded every ref captured before delivery, so reuse is refused
+ * unconditionally — repair is obeying the directive through
+ * {@link resumeAgentBrowserAfterDelivery}, never retrying the old ref. The
+ * attached staleness verdict is freshly probed by visibility/operability.
+ *
+ * @param observer - U8 main-process CDP observer bound to a verified endpoint
+ * @param input - Exact CDP target id and the captured pre-delivery ref
+ * @returns The typed refusal with probe-grounded staleness evidence
+ */
+export async function refuseAgentBrowserPreDeliveryRef(
+	observer: BrowserUseCdpObserver,
+	input: { cdp_target_id: string; captured: AgentBrowserCapturedRef },
+): Promise<AgentBrowserRefReuseRefusal> {
+	const staleness = await judgeAgentBrowserRefStaleness(observer, {
+		cdp_target_id: input.cdp_target_id,
+		backend_node_id: input.captured.backend_node_id,
+	});
+	return {
+		reusable: false,
+		code: "agent_browser_stale_ref_refused",
+		message: `Ref ${input.captured.ref} was captured before confidential delivery; obey the resume directive — discard stale refs and re-observe a fresh identity basis — instead of reusing it.`,
+		staleness,
+	};
+}
+
+/**
+ * Input for obeying one delivery resume directive on the task lane.
+ */
+export type AgentBrowserResumeContinuityInput = {
+	resume: BrowserUseDeliveryResumeDirective;
+	/** Exact CDP target id observed fresh — never an adapter-owned page ref. */
+	cdp_target_id: string;
+	/** Every adapter ref the lane captured before the delivery pause. */
+	captured_refs: readonly AgentBrowserCapturedRef[];
+};
+
+/**
+ * Resume continuity truth. Success carries the discarded pre-delivery refs and
+ * ONE fresh identity basis — the only legal source of post-resume refs. When
+ * no fresh basis is observable the lane must not continue at all, and when the
+ * offered CDP target is not the directive's target the lane is refused before
+ * any observation happens.
+ */
+export type AgentBrowserResumeContinuityResult =
+	| {
+			ok: true;
+			/** The SAME lane resumes (R5/KTD3) — identity echoed from the directive. */
+			lane_id: string;
+			run_id: string;
+			/** Every pre-delivery ref, discarded per `resume.discard_stale_refs`. */
+			discarded_refs: readonly string[];
+			/** One fresh basis per `resume.require_fresh_identity_basis`. */
+			basis: BrowserUseAccessibilitySnapshot;
+	  }
+	| {
+			ok: false;
+			code: "agent_browser_resume_target_mismatch";
+			message: string;
+	  }
+	| {
+			ok: false;
+			code: "agent_browser_fresh_identity_basis_unavailable";
+			message: string;
+	  };
+
+/**
+ * Obey one resume directive before the task lane continues (R18). The offered
+ * CDP target must BE the directive's target: `resume.target_id` and
+ * `cdp_target_id` name the same CDP target, so a mismatch is refused before
+ * any snapshot — resuming on a different target would mint an identity basis
+ * the delivery never verified. Then discards every pre-delivery ref and takes
+ * exactly one fresh observer snapshot as the new identity basis. The
+ * directive's demands are type-level truths (`discard_stale_refs: true`,
+ * `require_fresh_identity_basis: true`), so obedience is unconditional —
+ * there is no branch that keeps an old ref.
+ *
+ * @param observer - U8 main-process CDP observer bound to a verified endpoint
+ * @param input - The choreography's directive, exact CDP target, captured refs
+ * @returns Fresh identity basis plus discarded refs, or a typed refusal
+ *
+ * @example
+ * ```ts
+ * const resumed = await resumeAgentBrowserAfterDelivery(observer, {
+ *   resume: delivery.resume,
+ *   cdp_target_id: "cdp-target-7",
+ *   captured_refs: [{ ref: "@e2", backend_node_id: 41 }],
+ * })
+ * if (resumed.ok) continueFrom(resumed.basis)
+ * ```
+ */
+export async function resumeAgentBrowserAfterDelivery(
+	observer: BrowserUseCdpObserver,
+	input: AgentBrowserResumeContinuityInput,
+): Promise<AgentBrowserResumeContinuityResult> {
+	if (input.cdp_target_id !== input.resume.target_id) {
+		return {
+			ok: false,
+			code: "agent_browser_resume_target_mismatch",
+			message: `The resume directive names CDP target ${input.resume.target_id} but the lane offered ${input.cdp_target_id}; resume only on the directive's target — a fresh identity basis on any other target was never verified by delivery.`,
+		};
+	}
+	const discarded_refs = input.captured_refs.map((captured) => captured.ref);
+	const observed = await observer.snapshot({
+		target_id: input.cdp_target_id,
+	});
+	if (!observed.ok) {
+		return {
+			ok: false,
+			code: "agent_browser_fresh_identity_basis_unavailable",
+			message:
+				"The resumed lane could not observe a fresh identity basis; repair the target before continuing — pre-delivery refs stay discarded.",
+		};
+	}
+	return {
+		ok: true,
+		lane_id: input.resume.lane_id,
+		run_id: input.resume.run_id,
+		discarded_refs,
+		basis: observed.snapshot,
 	};
 }

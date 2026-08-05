@@ -1,3 +1,5 @@
+import { basename, join } from "node:path";
+
 import { main, type AgentWorktreeCliRuntime } from "../src/cli.ts";
 import type { GitRunner } from "../src/discovery.ts";
 
@@ -154,6 +156,9 @@ export function fakeGitRunner(outputs: Record<string, string>): GitRunner {
 export function mainRepoGitOutputs(root: string): Record<string, string> {
 	return {
 		["git rev-parse --show-toplevel"]: `${root}\n`,
+		["git rev-parse --git-dir"]: ".git\n",
+		["git rev-parse --git-common-dir"]: `${join(root, ".git")}\n`,
+		["git rev-parse --show-superproject-working-tree"]: "\n",
 		["git worktree list --porcelain"]: `worktree ${root}
 HEAD abc
 branch refs/heads/main
@@ -189,6 +194,12 @@ export function linkedRepoGitOutputs(
 	const branch = options.branch ?? "feat/x";
 	return {
 		...mainRepoGitOutputs(root),
+		["git rev-parse --git-dir"]: `${join(
+			root,
+			".git",
+			"worktrees",
+			basename(linked),
+		)}\n`,
 		["git worktree list --porcelain"]: `worktree ${root}
 HEAD abc
 branch refs/heads/main

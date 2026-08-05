@@ -7,7 +7,7 @@ import {
 	realpathSync,
 	rmSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
@@ -99,7 +99,9 @@ function expectStringArrayContaining(
 function gitOutput(cwd: string, args: readonly string[]): string {
 	const result = spawnSync("git", [...args], {
 		cwd,
-		env: process.env,
+		// Isolate temp repos from global/system git config (gpgsign, hooksPath,
+		// templates); explicit `git config` calls inside the repos still apply.
+		env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
 		encoding: "utf8",
 		timeout: SPAWN_TIMEOUT_MS,
 		killSignal: KILL_SIGNAL,
@@ -149,6 +151,32 @@ async function withTempRepo<T>(
 		git(["commit", "--allow-empty", "-m", "chore: seed repo"]);
 		git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
 		git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+
+		return body(repo);
+	});
+}
+
+async function withTempRepoAndOrigin<T>(
+	prefix: string,
+	body: (repo: string) => Promise<T>,
+): Promise<T> {
+	return withTempRoot(prefix, async (root) => {
+		const originPath = join(root, "origin");
+		mkdirSync(originPath, { recursive: true });
+		const origin = realpathSync(originPath);
+		gitOutput(origin, ["init", "--initial-branch=main"]);
+		gitOutput(origin, ["config", "user.name", "worktree Integration Test"]);
+		gitOutput(origin, ["config", "user.email", "worktree-integration@example.test"]);
+		gitOutput(origin, ["commit", "--allow-empty", "-m", "chore: seed origin"]);
+		gitOutput(origin, ["branch", "feat/attached"]);
+		gitOutput(origin, ["update-ref", "refs/pull/7/head", "refs/heads/main"]);
+
+		const repoPath = join(root, "repo");
+		gitOutput(root, ["clone", origin, repoPath]);
+		const repo = realpathSync(repoPath);
+		gitOutput(repo, ["config", "user.name", "worktree Integration Test"]);
+		gitOutput(repo, ["config", "user.email", "worktree-integration@example.test"]);
+		gitOutput(repo, ["branch", "feat/attached", "origin/feat/attached"]);
 
 		return body(repo);
 	});
@@ -275,6 +303,48 @@ describe("WorkTree package entrypoint integration", () => {
 					existsSync(workspacePathFor(repo)),
 					describeCliProcessRun(remove),
 				).toBe(true);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"attach and PR attach create real linked worktrees and re-render",
+		async () => {
+			await withTempRepoAndOrigin("attach", async (repo) => {
+				const branchPath = join(repo, ".worktrees", "feat-attached");
+				const prPath = join(repo, ".worktrees", "pr-7");
+
+				const branch = await runWtPackage(
+					["attach", "feat/attached", "--repo", repo, "--json"],
+					"worktree attach branch --json real repo",
+				);
+				const branchData = expectOkAction(branch, "attach", {
+					changedState: "complete",
+				});
+				expect(branchData.render_status, describeCliProcessRun(branch)).toBe("written");
+				expect(existsSync(branchPath), describeCliProcessRun(branch)).toBe(true);
+				expect(
+					gitOutput(repo, ["worktree", "list", "--porcelain"]),
+					describeCliProcessRun(branch),
+				).toContain("branch refs/heads/feat/attached");
+
+				const pr = await runWtPackage(
+					["attach", "--pr", "7", "--repo", repo, "--json"],
+					"worktree attach PR --json local origin",
+				);
+				const prData = expectOkAction(pr, "attach", {
+					changedState: "complete",
+				});
+				expect(prData).toMatchObject({
+					mode: "pr",
+					target_path: prPath,
+					render_status: "written",
+				});
+				expect(existsSync(prPath), describeCliProcessRun(pr)).toBe(true);
+				expect(gitOutput(repo, ["rev-parse", "pr-7"]), describeCliProcessRun(pr)).toBe(
+					gitOutput(repo, ["rev-parse", "origin/main"]),
+				);
 			});
 		},
 		TEST_TIMEOUT_MS,

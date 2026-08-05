@@ -47,7 +47,10 @@ import {
 } from "../browser-use-runbook";
 import type { BrowserUseRunbook } from "../browser-use-runbook-model";
 import { createSharedRun } from "../browser-use-runs";
-import { deriveConformanceSentinel } from "../browser-use-secret-scan";
+import {
+	deriveConformanceSentinel,
+	deriveSentinelSet,
+} from "../browser-use-secret-scan";
 import {
 	assertContainmentBeforeRelease,
 	beginSensitiveRunGuard,
@@ -201,7 +204,9 @@ const context: AgentBrowserAuthDeliveryContext = {
 	tokenRetrieval,
 	deliver: async (input) => {
 		writes += 1;
-		record("delivery:bounded-write");
+		// Per-field write event (U7): the journal proves exactly ONE bounded write
+		// per delivered field, not merely one write overall.
+		record(`delivery:bounded-write:${input.field}`);
 		// The bounded write "types" the sentinel value; it never leaves the helper.
 		const value = SENTINEL_VALUE;
 		return { ok: true, shape: { field: input.field, byte_length: value.length } };
@@ -210,7 +215,7 @@ const context: AgentBrowserAuthDeliveryContext = {
 		proven: true,
 		observed_digest: target.target_proof_digest,
 	}),
-	field_by_ref: { "@e1": "password" },
+	field_by_binding_slug: { oncore_password: "password" },
 };
 
 const seam: BrowserUseRunbookAuthDelivery = async (seamInput) => {
@@ -304,12 +309,21 @@ async function main(): Promise<void> {
 	// the executor's delivery evidence.
 	const shapes = outcome.result.delivery?.delivered_shapes ?? [];
 	if (shapes.length !== 1) throw new Error("missing delivered shape");
+	// RE-KEYED containment context (U7): the sentinel set is re-derived from the
+	// delivered shapes under the run-scoped nonce — never carried forward as the
+	// original value binding — and the loop must close: the re-keyed marker IS
+	// the delivered value, so the sweep hunts exactly what the helper typed.
+	const rekeyed = deriveSentinelSet(shapes, nonce);
+	if (!rekeyed.ok) {
+		throw new Error(`sentinel re-key refused: ${rekeyed.rejection.code}`);
+	}
+	if (!rekeyed.sentinels.includes(SENTINEL_VALUE)) {
+		throw new Error("re-keyed sentinel set did not close the delivered-value loop");
+	}
+	record("containment:sentinels-rekeyed");
 	const marked = markRunSensitive(baseGuard.guard, {
 		trigger: "confidential-field-delivery",
-		sentinels: [
-			// The registered sentinel is the derived marker (== the delivered value).
-			SENTINEL_VALUE,
-		],
+		sentinels: rekeyed.sentinels,
 	});
 	if (!marked.ok) throw new Error(`mark refused: ${marked.rejection.code}`);
 

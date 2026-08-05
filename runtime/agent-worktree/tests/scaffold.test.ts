@@ -171,6 +171,9 @@ describe("agent-worktree scaffold", () => {
 				cwd: () => "/repo",
 				run: fakeGitRunner({
 					["git rev-parse --show-toplevel"]: "/repo\n",
+					["git rev-parse --git-dir"]: ".git\n",
+					["git rev-parse --git-common-dir"]: "/repo/.git\n",
+					["git rev-parse --show-superproject-working-tree"]: "\n",
 					["git worktree list --porcelain"]:
 						"worktree /repo\nHEAD abc\nbranch refs/heads/main\n",
 					["git branch --show-current"]: "main\n",
@@ -189,6 +192,7 @@ describe("agent-worktree scaffold", () => {
 		expect(envelope.data?.summary).toMatchObject({
 			status: "ok",
 			repo_root: "/repo",
+			isolation: "main",
 		});
 		expect(envelope.data?.mutation_readiness).toBe("ready");
 		expect(envelope.data?.blockers).toEqual([]);

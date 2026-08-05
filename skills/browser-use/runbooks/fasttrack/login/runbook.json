@@ -1,0 +1,28 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "fasttrack",
+  "flow_id": "login",
+  "flow_name": "login",
+  "version": "1",
+  "summary": "Open the FastTrack candidate portal and enter the generic interactive login transaction. Chain fill-week after a confirmed sign-in.",
+  "allowed_origins": [
+    "https://manpowergroup.fasttrack360.com.au"
+  ],
+  "auth_context_ref": "interactive-login",
+  "inputs": [],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": true
+    }
+  ]
+}

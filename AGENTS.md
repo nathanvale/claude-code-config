@@ -48,7 +48,7 @@
 - For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
-- For plans and terminology, use `grill-with-docs`.
+- For plans and terminology, use `grilling` with `domain-modeling`.
 - After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
 
 ## Skill Authoring
@@ -72,13 +72,13 @@
 
 ## Tools
 
-- Search with `rg`; edit manually with `apply_patch`.
-- Parallel independent reads/checks: `multi_tool_use.parallel`.
+- Search with `rg`; edit manually with `apply_patch`; parallel independent reads/checks with `multi_tool_use.parallel`.
 - Research tools: use `$HOME/code/claude-code-config/context/search-tools.md`; Context7 for library/framework/API docs.
 - Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers, not ambient shell env; for auth checks never source `.env` or print key prefixes, check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
 - Tests/lint/types: prefer MCP runners; see `$HOME/code/claude-code-config/context/bun-runner.md`.
 - Homebrew additions/removals: edit `$HOME/code/dotfiles/config/brew/Brewfile` first; install with `brew bundle` and remove with previewed `brew bundle cleanup`; never run direct `brew install`, `brew uninstall`, or `brew tap`, because they create untracked machine drift; verify with `brew bundle check`. Homebrew 6.0+ refuses non-official taps until `brew trust <tap>` is run once for a newly added tap. Full workflow: `$HOME/code/dotfiles/AGENTS.md`.
 - Mac Mini server SSH (connect, flaky/dropped SSH, dedicated key, durable cmux/tmux): use the `mac-mini-ssh` skill.
+- Long unattended local runs (ce-work, lfg, workflows, ce-doc-review, ce-code-review, long suites) on a sleep-capable laptop: launch under `caffeinate -dimsu <command>` (or `caffeinate -dimsu -w <pid> &` in-flight), else idle sleep suspends the run mid-transaction and loses work (timeouts, interrupted output). `caffeinate` blocks idle sleep only, not clamshell/battery lid-close, so keep the lid open or on AC. Check: still running after a >=15-min idle span and finishes with complete output.
 
 ## External Data
 
@@ -93,10 +93,10 @@
 ## Context And Git
 
 - Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
-- New durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`.
-- Legacy storage framework lives under `$HOME/code/claude-code-config/context/archive/legacy-memory-framework/`.
-- Repos own operational truth; context folders own durable recall and synthesis.
+- Durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`; repos own operational truth.
+- Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
+- Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.

@@ -43,7 +43,7 @@ describe("Xero migration — active extraction + staged financial writes (U6, R2
 		expect(migrated.extract.runbook).toMatchObject({
 			service_id: "xero-api-explorer",
 			flow_id: "extract-bankstatementsplus",
-			auth_context_ref: "xero-session",
+			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://api-explorer.xero.com"],
 		});
 		expect(migrated.extract.runbook.inputs.map((i) => [i.id, i.schema.kind])).toEqual([
