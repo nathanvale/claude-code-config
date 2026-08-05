@@ -1,16 +1,43 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { devNull, tmpdir } from "node:os"
 import { resolve } from "node:path"
-import { COMMANDS, HELP_TEXT } from "./command-contract.ts"
+import {
+	COMMANDS,
+	EXTRACT_DEFAULT_LIMIT,
+	HELP_TEXT,
+	SCAN_DEFAULT_LIMIT,
+} from "./command-contract.ts"
 import { parseArgs, runCli } from "./cli.ts"
 
 const cleanup: string[] = []
+const gitEnvironment = {
+	global: process.env.GIT_CONFIG_GLOBAL,
+	system: process.env.GIT_CONFIG_SYSTEM,
+	noSystem: process.env.GIT_CONFIG_NOSYSTEM,
+}
 const rootEnvironment = {
 	claude: process.env.DOMAIN_RETRO_CLAUDE_ROOT,
 	codex: process.env.DOMAIN_RETRO_CODEX_ROOT,
 	archive: process.env.DOMAIN_RETRO_CODEX_ARCHIVE_ROOT,
 }
+
+beforeAll(() => {
+	process.env.GIT_CONFIG_GLOBAL = devNull
+	process.env.GIT_CONFIG_SYSTEM = devNull
+	process.env.GIT_CONFIG_NOSYSTEM = "1"
+})
+
+afterAll(() => {
+	for (const [name, value] of [
+		["GIT_CONFIG_GLOBAL", gitEnvironment.global],
+		["GIT_CONFIG_SYSTEM", gitEnvironment.system],
+		["GIT_CONFIG_NOSYSTEM", gitEnvironment.noSystem],
+	] as const) {
+		if (value === undefined) delete process.env[name]
+		else process.env[name] = value
+	}
+})
 
 afterEach(async () => {
 	for (const path of cleanup.splice(0)) {
@@ -86,6 +113,9 @@ describe("domain retrospective CLI contract", () => {
 		expect(parseArgs([])).toMatchObject({ help: true })
 		for (const command of COMMANDS) expect(HELP_TEXT).toContain(`  ${command}`)
 		expect(HELP_TEXT).toContain("--json")
+		expect(HELP_TEXT).toContain(
+			`default: scan ${SCAN_DEFAULT_LIMIT}; extract ${EXTRACT_DEFAULT_LIMIT}`,
+		)
 		expect(HELP_TEXT).toContain("Exit codes:")
 	})
 
@@ -124,21 +154,23 @@ describe("domain retrospective CLI contract", () => {
 			command: "extract",
 			session: "codex:session",
 			offset: 5,
+			limit: EXTRACT_DEFAULT_LIMIT,
 		})
+		expect(parseArgs(["scan", "--repo", "/repo"]).limit).toBe(SCAN_DEFAULT_LIMIT)
 	})
 
 	test("parser rejects invalid command combinations and numeric values", () => {
-		for (const args of [
-			["scan"],
-			["scan", "--repo", "/repo", "--limit", "0"],
-			["scan", "--repo", "/repo", "--unknown", "value"],
-			["scan", "--repo", "/repo", "--session", "codex:id"],
-			["scan", "--repo", "/repo", "--offset", "0"],
-			["scan", "--repo", "/repo", "--max-message-chars", "500"],
-			["extract", "--repo", "/repo"],
-			["extract", "--repo", "/repo", "--session", "codex:id", "--term", "Plugin"],
-		]) {
-			expect(() => parseArgs(args)).toThrow()
+		for (const [args, message] of [
+			[["scan"], "--repo is required"],
+			[["scan", "--repo", "/repo", "--limit", "0"], "--limit requires a positive integer"],
+			[["scan", "--repo", "/repo", "--unknown", "value"], "Unknown option: --unknown"],
+			[["scan", "--repo", "/repo", "--session", "codex:id"], "--session is valid only for extract"],
+			[["scan", "--repo", "/repo", "--offset", "0"], "--offset is valid only for extract"],
+			[["scan", "--repo", "/repo", "--max-message-chars", "500"], "--max-message-chars is valid only for extract"],
+			[["extract", "--repo", "/repo"], "--session is required for extract"],
+			[["extract", "--repo", "/repo", "--session", "codex:id", "--term", "Plugin"], "--term is valid only for scan"],
+		] as const) {
+			expect(() => parseArgs([...args])).toThrow(message)
 		}
 		expect(parseArgs(["scan", "--help"])).toMatchObject({ help: true })
 		expect(
@@ -234,6 +266,17 @@ describe("domain retrospective CLI contract", () => {
 			data: { action: "scan", strong_candidates: 1 },
 		})
 
+		let explicitScanOutput = ""
+		const explicitScanExit = await runCli(
+			["scan", "--repo", repo, "--term", "Plugin", "--limit", String(SCAN_DEFAULT_LIMIT), "--json"],
+			{
+				stdout: (text) => { explicitScanOutput += text },
+				stderr: () => {},
+			},
+		)
+		expect(explicitScanExit).toBe(0)
+		expect(JSON.parse(explicitScanOutput).data).toEqual(scan.data)
+
 		let extractOutput = ""
 		const extractExit = await runCli(
 			["extract", "--repo", repo, "--session", "codex:cli-session"],
@@ -244,6 +287,48 @@ describe("domain retrospective CLI contract", () => {
 		)
 		expect(extractExit).toBe(0)
 		expect(extractOutput).toContain("[0] user: We decided Plugin")
+	})
+
+	test("extract explains an empty human page while preserving JSON continuation data", async () => {
+		const { repo } = await cliFixture()
+		const args = [
+			"extract",
+			"--repo",
+			repo,
+			"--session",
+			"codex:cli-session",
+			"--offset",
+			"99",
+		]
+		let humanOutput = ""
+		const humanExit = await runCli(args, {
+			stdout: (text) => { humanOutput += text },
+			stderr: () => {},
+		})
+
+		expect(humanExit).toBe(0)
+		expect(humanOutput).toContain(
+			"No messages returned at offset 99; the session contains 3 messages.",
+		)
+		expect(humanOutput).toContain("Reconcile explicit domain evidence")
+
+		let jsonOutput = ""
+		const jsonExit = await runCli([...args, "--json"], {
+			stdout: (text) => { jsonOutput += text },
+			stderr: () => {},
+		})
+		const result = JSON.parse(jsonOutput)
+
+		expect(jsonExit).toBe(0)
+		expect(result).toMatchObject({
+			status: "ok",
+			data: {
+				offset: 99,
+				limit: EXTRACT_DEFAULT_LIMIT,
+				messages: [],
+				next_safe_action: "Reconcile explicit domain evidence against the current repository.",
+			},
+		})
 	})
 
 	test("extract JSON preserves pagination and text-budget contracts", async () => {
@@ -327,7 +412,7 @@ describe("domain retrospective CLI contract", () => {
 		expect(stderr).toBe("")
 		expect(result.status).toBe("error")
 		expect(result.error.category).toBe("invalid_usage")
-		expect(result.error.retry_safe).toBe(true)
+		expect(result.error.retry_safe).toBe(false)
 		expect(result.error.next_action).toContain("--help")
 	})
 
@@ -340,6 +425,7 @@ describe("domain retrospective CLI contract", () => {
 		const result = JSON.parse(stdout)
 		expect(exitCode).toBe(3)
 		expect(result.error.category).toBe("invalid_repo")
+		expect(result.error.retry_safe).toBe(true)
 		expect(result.error.next_action).toContain("Repair")
 	})
 

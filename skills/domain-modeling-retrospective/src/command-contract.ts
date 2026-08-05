@@ -4,6 +4,10 @@ export const COMMAND_NAME = "domain-retrospective"
 export const CONTRACT_ID = "domain-modeling-retrospective.sessions"
 /** Version of the machine-readable success payload. */
 export const SCHEMA_VERSION = "1"
+/** Default number of ranked sessions returned by scan. */
+export const SCAN_DEFAULT_LIMIT = 100
+/** Default number of messages returned by extract. */
+export const EXTRACT_DEFAULT_LIMIT = 40
 
 /** Maintainer-authored discovery text for the public command surface. */
 export const HELP_TEXT = `Usage: domain-retrospective <command> [options]
@@ -27,7 +31,7 @@ Options:
   --term <text>               Current domain term to match; repeatable
   --session <source:id>       Opaque session id returned by scan
   --offset <n>                Message offset for extract (default: 0)
-  --limit <n>                 Scan result or extracted-message limit
+  --limit <n>                 Result limit (default: scan ${SCAN_DEFAULT_LIMIT}; extract ${EXTRACT_DEFAULT_LIMIT})
   --max-message-chars <n>     Per-message text limit (default: 2000)
   --json                      Emit a stable JSON result envelope
   -h, --help                  Show help

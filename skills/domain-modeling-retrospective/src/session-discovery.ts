@@ -1,8 +1,12 @@
-import { existsSync } from "node:fs"
+import { type Dirent, existsSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
-import { CONTRACT_ID, SCHEMA_VERSION } from "./command-contract.ts"
+import {
+	CONTRACT_ID,
+	SCAN_DEFAULT_LIMIT,
+	SCHEMA_VERSION,
+} from "./command-contract.ts"
 import { parseNormalizedMessage, readJsonLines, readMetadata } from "./session-parser.ts"
 import type {
 	RepositoryMatchKind,
@@ -88,7 +92,14 @@ async function listJsonl(root: string): Promise<string[]> {
 	while (pending.length > 0) {
 		const current = pending.pop()
 		if (!current) continue
-		const entries = await readdir(current, { withFileTypes: true })
+		let entries: Dirent[]
+		try {
+			entries = await readdir(current, { withFileTypes: true })
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code === "EACCES" || code === "EPERM") continue
+			throw error
+		}
 		for (const entry of entries) {
 			const path = resolve(current, entry.name)
 			if (entry.isDirectory()) pending.push(path)
@@ -168,9 +179,7 @@ function matchRepository(
 	}
 
 	const nameMatches = metadata.cwd
-		? resolve(metadata.cwd)
-				.split(sep)
-				.some((part) => part.toLowerCase() === repo.name)
+		? basename(resolve(metadata.cwd)).toLowerCase() === repo.name
 		: false
 
 	if (metadata.cwd && existsSync(metadata.cwd)) {
@@ -341,7 +350,7 @@ export async function discoverRepositorySessions(options: {
 		if (left.score !== right.score) return right.score - left.score
 		return String(right.started_at ?? "").localeCompare(String(left.started_at ?? ""))
 	})
-	const limit = options.limit ?? 100
+	const limit = options.limit ?? SCAN_DEFAULT_LIMIT
 	const returned = candidates.slice(0, limit)
 
 	return {

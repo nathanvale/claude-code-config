@@ -1,9 +1,15 @@
-import { CONTRACT_ID, SCHEMA_VERSION } from "./command-contract.ts"
+import {
+	CONTRACT_ID,
+	EXTRACT_DEFAULT_LIMIT,
+	SCHEMA_VERSION,
+} from "./command-contract.ts"
 import { resolveRepositorySession } from "./session-discovery.ts"
 import { parseNormalizedMessage, readJsonLines } from "./session-parser.ts"
 import type { ExtractResult, SessionRoots } from "./session-model.ts"
 
 const SECRET_PATTERNS: RegExp[] = [
+	/-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g,
+	/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
 	/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
 	/\bsk-[A-Za-z0-9_-]{20,}\b/g,
 	/\bAKIA[A-Z0-9]{16}\b/g,
@@ -57,7 +63,7 @@ export async function extractRepositorySession(options: {
 		roots: options.roots,
 	})
 	const offset = options.offset ?? 0
-	const limit = options.limit ?? 40
+	const limit = options.limit ?? EXTRACT_DEFAULT_LIMIT
 	const maxMessageChars = options.maxMessageChars ?? 2000
 	let totalMessages = 0
 	let redactions = 0

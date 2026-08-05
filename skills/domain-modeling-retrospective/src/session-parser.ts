@@ -143,14 +143,13 @@ export async function* readJsonLines(path: string): AsyncGenerator<unknown> {
 		if (!line.trim()) continue
 		try {
 			yield JSON.parse(line)
-		} catch {
-			continue
-		}
+		} catch {}
 	}
 }
 
 /**
- * Read a bounded file prefix to locate session metadata without scanning prose.
+ * Read the first 32 lines of the first 256 KiB to locate session metadata.
+ * Metadata appearing after either bound is ignored.
  *
  * @param path - Session JSONL path
  * @param source - Runtime format to interpret
@@ -167,9 +166,7 @@ export async function readMetadata(
 		try {
 			const metadata = parseSessionMetadata(JSON.parse(line), source, path)
 			if (metadata) return metadata
-		} catch {
-			continue
-		}
+		} catch {}
 	}
 	return undefined
 }

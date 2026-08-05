@@ -1,7 +1,13 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto"
-import { COMMANDS, COMMAND_NAME, HELP_TEXT } from "./command-contract.ts"
+import {
+	COMMANDS,
+	COMMAND_NAME,
+	EXTRACT_DEFAULT_LIMIT,
+	HELP_TEXT,
+	SCAN_DEFAULT_LIMIT,
+} from "./command-contract.ts"
 import {
 	discoverRepositorySessions,
 	SessionDiscoveryError,
@@ -103,6 +109,11 @@ export function parseArgs(args: string[]): ParsedArgs {
 			if (present) throw new UsageError(`${option} is valid only for extract`)
 		}
 	}
+	if (!parsed.help && parsed.limit === undefined) {
+		parsed.limit = parsed.command === "scan"
+			? SCAN_DEFAULT_LIMIT
+			: EXTRACT_DEFAULT_LIMIT
+	}
 	return parsed
 }
 
@@ -155,12 +166,15 @@ export async function runCli(args: string[], io: CliIo = {
 			limit: parsed.limit,
 			maxMessageChars: parsed.maxMessageChars,
 		})
+		const humanPage = result.messages.length === 0
+			? `No messages returned at offset ${result.offset}; the session contains ${result.total_messages} messages.`
+			: result.messages
+				.map((message) => `[${message.index}] ${message.role}: ${message.text}`)
+				.join("\n\n")
 		io.stdout(
 			parsed.json
 				? jsonEnvelope("ok", runId, result)
-				: result.messages
-					.map((message) => `[${message.index}] ${message.role}: ${message.text}`)
-					.join("\n\n") + `\n\n${result.next_safe_action}\n`,
+				: `${humanPage}\n\n${result.next_safe_action}\n`,
 		)
 		return 0
 	} catch (error) {
@@ -174,7 +188,7 @@ export async function runCli(args: string[], io: CliIo = {
 		const details = {
 			category,
 			message,
-			retry_safe: true,
+			retry_safe: !usage,
 			next_action: usage
 				? `Run ${COMMAND_NAME} --help and correct the arguments.`
 				: "Repair the named repository or session source, then retry with the same input.",

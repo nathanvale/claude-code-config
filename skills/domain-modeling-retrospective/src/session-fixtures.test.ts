@@ -1,12 +1,38 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
+import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises"
+import { devNull, tmpdir } from "node:os"
 import { resolve } from "node:path"
 import { discoverRepositorySessions } from "./session-discovery.ts"
-import { extractRepositorySession } from "./session-extraction.ts"
+import {
+	extractRepositorySession,
+	redactSessionText,
+} from "./session-extraction.ts"
 import type { SessionRoots } from "./session-model.ts"
 
 const cleanup: string[] = []
+const gitConfigKeys = [
+	"GIT_CONFIG_GLOBAL",
+	"GIT_CONFIG_SYSTEM",
+	"GIT_CONFIG_NOSYSTEM",
+] as const
+const priorGitConfig = new Map<string, string | undefined>()
+
+beforeAll(() => {
+	for (const key of gitConfigKeys) priorGitConfig.set(key, process.env[key])
+	Object.assign(process.env, {
+		GIT_CONFIG_GLOBAL: devNull,
+		GIT_CONFIG_SYSTEM: devNull,
+		GIT_CONFIG_NOSYSTEM: "1",
+	})
+})
+
+afterAll(() => {
+	for (const key of gitConfigKeys) {
+		const value = priorGitConfig.get(key)
+		if (value === undefined) delete process.env[key]
+		else process.env[key] = value
+	}
+})
 
 afterEach(async () => {
 	for (const path of cleanup.splice(0)) {
@@ -130,6 +156,11 @@ async function fixture(): Promise<{
 describe("repository session discovery", () => {
 	test("scans all sources and ranks only repository-associated sessions", async () => {
 		const { repo, roots } = await fixture()
+		const privateSessionPath = resolve(
+			roots.claude,
+			"agent-plugin-template",
+			"claude-session.jsonl",
+		)
 		const result = await discoverRepositorySessions({
 			repoPath: repo,
 			roots,
@@ -148,10 +179,16 @@ describe("repository session discovery", () => {
 			"Harness",
 			"Plugin Payload",
 		])
+		expect(JSON.stringify(result)).not.toContain(privateSessionPath)
 	})
 
 	test("extracts only normalized messages and redacts credentials", async () => {
 		const { repo, roots } = await fixture()
+		const privateSessionPath = resolve(
+			roots.claude,
+			"agent-plugin-template",
+			"claude-session.jsonl",
+		)
 		const result = await extractRepositorySession({
 			repoPath: repo,
 			opaqueId: "claude:claude-one",
@@ -165,6 +202,62 @@ describe("repository session discovery", () => {
 		expect(result.messages[0]?.text).not.toContain("ghp_")
 		expect(result.messages[1]?.text).toBe("Recorded the domain decision.")
 		expect(JSON.stringify(result)).not.toContain("ignored-secret-tool")
+		expect(JSON.stringify(result)).not.toContain(privateSessionPath)
+		expect(JSON.stringify(result)).not.toContain(roots.claude)
+	})
+
+	test("redacts compact JWTs and PEM private keys without removing surrounding text", () => {
+		const jwt =
+			"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
+		const privateKey = [
+			"-----BEGIN PRIVATE KEY-----",
+			"cHJpdmF0ZSBrZXkgbWF0ZXJpYWw=",
+			"-----END PRIVATE KEY-----",
+		].join("\n")
+		const result = redactSessionText(
+			`JWT before ${jwt} after.\nKey before\n${privateKey}\nKey after.`,
+		)
+
+		expect(result.redactions).toBe(2)
+		expect(result.text).toBe(
+			"JWT before [REDACTED] after.\nKey before\n[REDACTED]\nKey after.",
+		)
+		expect(result.text).not.toContain("eyJ")
+		expect(result.text).not.toContain("PRIVATE KEY")
+	})
+
+	test("skips unreadable directories while scanning remaining session files", async () => {
+		const { repo, roots } = await fixture()
+		const unreadable = resolve(roots.codexActive, "unreadable")
+		await mkdir(unreadable)
+		await Bun.write(
+			resolve(unreadable, "private.jsonl"),
+			JSON.stringify({
+				type: "session_meta",
+				payload: { id: "private", cwd: repo },
+			}),
+		)
+		await chmod(unreadable, 0)
+
+		try {
+			const result = await discoverRepositorySessions({ repoPath: repo, roots })
+			expect(result.scanned_sessions).toBe(3)
+			expect(result.candidates.map((candidate) => candidate.session)).not.toContain(
+				"codex:private",
+			)
+		} finally {
+			await chmod(unreadable, 0o700)
+		}
+	})
+
+	test("propagates non-permission directory errors", async () => {
+		const { repo, roots } = await fixture()
+		await rm(roots.codexArchived, { recursive: true })
+		await Bun.write(roots.codexArchived, "not a directory")
+
+		await expect(
+			discoverRepositorySessions({ repoPath: repo, roots }),
+		).rejects.toMatchObject({ code: "ENOTDIR" })
 	})
 
 	test("rejects a session from another repository", async () => {
@@ -279,6 +372,28 @@ describe("repository session discovery", () => {
 			extractRepositorySession({
 				repoPath: repo,
 				opaqueId: "claude:claude-same-name-no-remote",
+				roots,
+			}),
+		).rejects.toMatchObject({ category: "session_not_found" })
+	})
+
+	test("rejects a missing working directory whose ancestor matches the repository name", async () => {
+		const { repo, roots } = await fixture()
+		await Bun.write(
+			resolve(roots.codexArchived, "ancestor-name-session.jsonl"),
+			JSON.stringify({
+				type: "session_meta",
+				payload: {
+					id: "codex-ancestor-name",
+					cwd: "/deleted/agent-plugin-template/unrelated-repository",
+				},
+			}),
+		)
+
+		await expect(
+			extractRepositorySession({
+				repoPath: repo,
+				opaqueId: "codex:codex-ancestor-name",
 				roots,
 			}),
 		).rejects.toMatchObject({ category: "session_not_found" })
