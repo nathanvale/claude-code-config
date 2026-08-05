@@ -36,10 +36,32 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
+import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import {
+	BROWSER_USE_APPROVAL_BROKER_ENV,
+	type BrowserUseHumanIdentityAttestationDriver,
+	createNativeHumanIdentityAttestationDriver,
+} from "./browser-use-human-identity-attestation";
+import {
+	type BrowserUseReviewedActionApprovalVerifier,
+	type BrowserUseReviewedActionVerifierIdentity,
+	REVIEWED_ACTION_VERIFIER_CONTRACT,
+	REVIEWED_ACTION_VERIFIER_FILE,
+	REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION,
+	createP256ReviewedActionApprovalVerifier,
+	reviewedActionVerifierIdentityIsValid,
+} from "./browser-use-reviewed-action-approval";
+import type { BrowserUseCdpObserverRequest } from "./browser-use-cdp-observer";
+import type { BrowserUseDevToolsRequest } from "./browser-use-target-proof";
 import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	fullFsyncDurableFile,
+	inspectBrowserUseRoot,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
 import { createEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
@@ -562,7 +584,132 @@ function environmentTokenRetrievalOf(
 		supervisorPath: deps.supervisorPath,
 		opPath: deps.opPath,
 		configRoot: deps.configRoot,
+		realpath: (path) => runtime.platformFs.realpath(path),
 	});
+}
+
+type BrowserUseReviewedActionApprovalVerifierIssue = {
+	code:
+		| "action_promotion_verifier_store_unsafe"
+		| "action_promotion_verifier_identity_invalid";
+	message: string;
+};
+
+type BrowserUseReviewedActionApprovalVerifierResolution =
+	| {
+			status: "ready";
+			verifier: BrowserUseReviewedActionApprovalVerifier;
+			identity: BrowserUseReviewedActionVerifierIdentity;
+	  }
+	| { status: "absent" }
+	| { status: "rejected"; issue: BrowserUseReviewedActionApprovalVerifierIssue };
+
+async function productionReviewedActionApprovalVerifierOf(
+	runtime: BrowserUseRuntime,
+): Promise<BrowserUseReviewedActionApprovalVerifierResolution> {
+	const resolved = resolveBrowserUsePaths(runtime.env);
+	if (!resolved.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be resolved safely.",
+			},
+		};
+	}
+	const configRoot = resolved.resolution.roots.config;
+	const inspected = await inspectBrowserUseRoot(runtime.platformFs, {
+		kind: "config",
+		path: configRoot,
+	});
+	if (!inspected.ok) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root is not private and owner-controlled.",
+			},
+		};
+	}
+	if (!inspected.exists) return { status: "absent" };
+	const canonicalConfigRoot = await runtime.platformFs.realpath(configRoot);
+	if (canonicalConfigRoot === undefined) {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_store_unsafe",
+				message: "the Reviewed Action verifier config root could not be canonicalized.",
+			},
+		};
+	}
+	const path = join(canonicalConfigRoot, REVIEWED_ACTION_VERIFIER_FILE);
+	try {
+		const stat = await runtime.platformFs.lstat(path);
+		if (stat === undefined) return { status: "absent" };
+		const processUid = process.getuid?.();
+		if (
+			stat.kind !== "file" ||
+			(stat.mode & 0o077) !== 0 ||
+			(processUid !== undefined && stat.uid !== processUid)
+		) {
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_store_unsafe",
+					message: "the Reviewed Action verifier pin is not an owner-only regular file.",
+				},
+			};
+		}
+		const parsed = JSON.parse(
+			await runtime.platformFs.readTextFile(path),
+		) as Record<string, unknown>;
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed) ||
+			Object.keys(parsed).sort().join("\0") !==
+				["contract", "key_id", "public_key", "schema_version"]
+					.sort()
+					.join("\0") ||
+			parsed.contract !== REVIEWED_ACTION_VERIFIER_CONTRACT ||
+			parsed.schema_version !== REVIEWED_ACTION_VERIFIER_SCHEMA_VERSION ||
+			typeof parsed.key_id !== "string" ||
+			typeof parsed.public_key !== "string"
+		) {
+			return {
+				status: "rejected",
+				issue: {
+					code: "action_promotion_verifier_identity_invalid",
+					message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+				},
+			};
+		}
+		const identity = {
+			key_id: parsed.key_id,
+			public_key: parsed.public_key,
+		};
+		return reviewedActionVerifierIdentityIsValid(identity)
+			? {
+					status: "ready",
+					verifier: createP256ReviewedActionApprovalVerifier(identity),
+					identity,
+				}
+			: {
+					status: "rejected",
+					issue: {
+						code: "action_promotion_verifier_identity_invalid",
+						message: "the Reviewed Action verifier pin is malformed or carries an invalid identity.",
+					},
+				};
+	} catch {
+		return {
+			status: "rejected",
+			issue: {
+				code: "action_promotion_verifier_identity_invalid",
+				message: "the Reviewed Action verifier pin could not be parsed.",
+			},
+		};
+	}
 }
 
 type EnvironmentTokenSupervisorDeps = {
@@ -1046,6 +1193,8 @@ export const __authTokenSupervisorForTest = {
 export type BrowserUseRuntime = {
 	env: Record<string, string | undefined>;
 	now: () => number;
+	/** Explicit setup-owned source root; null models packaged invocation in tests. */
+	sourceCheckoutRoot?: string | null;
 	// Structured, shell-free command runner the shared mcporter transport drives
 	// (plan U4). Same shape Browser Adapter Proof uses, so both surfaces run the
 	// command vector identically.
@@ -1080,6 +1229,38 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Test/composition seam for an already approved binding catalog owner. */
+	runbookApprovedBindingResolver?: (input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}) => Promise<BrowserUseItemBinding | null>;
+	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
+	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
+	/** Present but rejected production verifier pin; absent means not provisioned. */
+	reviewedActionApprovalVerifierIssue?: BrowserUseReviewedActionApprovalVerifierIssue;
+	/** Fresh auth-owned session proof. Absence fails runbook auth closed. */
+	runbookAuthenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
+	runbookHumanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
+	/** Endpoint-bound auth transport override for hermetic process-route tests. */
+	runbookAuthTransport?: () => {
+		transport: {
+			request(
+				request:
+					| BrowserUseDevToolsRequest
+					| BrowserUseCdpObserverRequest
+					| {
+							method: "Page.navigate";
+							sessionId: string;
+							params: { url: string };
+						  },
+			): Promise<unknown>;
+		};
+		close(): void;
+	};
 	/**
 	 * Native token lifecycle boundary. The default child inherits stdin
 	 * directly for install, so token bytes never enter the TypeScript process.
@@ -1173,6 +1354,34 @@ export async function createProductionBrowserUseRuntime(
 	}
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
+	}
+	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
+	if (
+		runtime.reviewedActionApprovalVerifier === undefined ||
+		runtime.runbookHumanIdentityAttestation === undefined
+	) {
+		const resolution = await productionReviewedActionApprovalVerifierOf(runtime);
+		if (resolution.status === "ready") {
+			reviewedActionVerifierIdentity = resolution.identity;
+			if (runtime.reviewedActionApprovalVerifier === undefined) {
+				runtime.reviewedActionApprovalVerifier = resolution.verifier;
+			}
+		} else if (resolution.status === "rejected") {
+			runtime.reviewedActionApprovalVerifierIssue = resolution.issue;
+		}
+	}
+	const brokerPath = runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV];
+	if (
+		runtime.runbookHumanIdentityAttestation === undefined &&
+		brokerPath !== undefined &&
+		brokerPath !== "" &&
+		reviewedActionVerifierIdentity !== undefined
+	) {
+		runtime.runbookHumanIdentityAttestation =
+			createNativeHumanIdentityAttestationDriver(
+				brokerPath,
+				reviewedActionVerifierIdentity,
+			);
 	}
 	return runtime;
 }

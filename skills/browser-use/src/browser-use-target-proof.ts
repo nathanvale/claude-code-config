@@ -55,6 +55,8 @@ export type BrowserUseVerifiedField = {
  * preserves the AX-to-DOM identity without changing that stable contract.
  */
 export type BrowserUseMintedVerifiedTarget = BrowserUseVerifiedTarget & {
+	/** Fresh observed URL used by exact-target delivery after same-origin redirects. */
+	top_level_url: string;
 	field: BrowserUseVerifiedField;
 };
 
@@ -79,6 +81,126 @@ export type BrowserUseTargetProofInput = {
 export type BrowserUseTargetProofRefusalCause =
 	| "origin-mismatch"
 	| "target-proof-invalid";
+
+/**
+ * Browser-level target identity resolved independently of an adapter's tab id.
+ */
+export type BrowserUseCdpTargetIdentity = {
+	target_id: string;
+	top_level_url: string;
+	top_level_origin?: string;
+};
+
+/**
+ * Resolve the CDP identity that backs one adapter-selected page.
+ *
+ * Adapter tab ids are deliberately absent. Resolution uses fresh browser-level
+ * URL evidence and fails closed when that evidence is not unique.
+ *
+ * @param transport - Verified browser-level DevTools transport
+ * @param input - Current page URL, allowed origins, and optional prior CDP identity
+ * @returns One CDP target identity or a typed proof refusal
+ * @throws Never. Transport failures become `target-proof-invalid`.
+ *
+ * @example
+ * ```typescript
+ * const resolved = await resolveBrowserUseCdpTargetIdentity(transport, {
+ *   expected_url: 'https://portal.example/login',
+ *   allowed_origins: ['https://portal.example'],
+ * })
+ * ```
+ */
+export async function resolveBrowserUseCdpTargetIdentity(
+	transport: BrowserUseDevToolsTransport,
+	input: {
+		expected_url: string;
+		allowed_origins: readonly string[];
+		preferred_target_id?: string;
+	},
+): Promise<
+	| { ok: true; target: BrowserUseCdpTargetIdentity }
+	| { ok: false; cause: BrowserUseTargetProofRefusalCause }
+> {
+	try {
+		const expectedUrl = normalizedUrl(input.expected_url);
+		if (expectedUrl === undefined) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const targetsResponse = asObject(
+			await transport.request({ method: "Target.getTargets" }),
+		);
+		const targetInfos = targetsResponse?.targetInfos;
+		if (!Array.isArray(targetInfos)) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const pageTargets = targetInfos.flatMap((value): JsonObject[] => {
+			const target = asObject(value);
+			return target?.type === "page" &&
+				typeof target.targetId === "string" &&
+				typeof target.url === "string"
+				? [target]
+				: [];
+		});
+		const exactUrlMatches = pageTargets.filter(
+			(target) =>
+				typeof target.url === "string" &&
+				normalizedUrl(target.url) === expectedUrl,
+		);
+		const expectedOrigin = originOf(expectedUrl);
+		const exactOriginMatches = pageTargets.filter(
+			(target) =>
+				expectedOrigin !== undefined &&
+				typeof target.url === "string" &&
+				originOf(target.url) === expectedOrigin,
+		);
+		const matches =
+			exactUrlMatches.length > 0
+				? exactUrlMatches
+				: exactOriginMatches.length > 0
+					? exactOriginMatches
+					: pageTargets.filter(
+							(target) => target.targetId === input.preferred_target_id,
+						);
+		if (matches.length !== 1) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const targetId = matches[0]?.targetId;
+		const topLevelUrl = matches[0]?.url;
+		if (typeof targetId !== "string" || typeof topLevelUrl !== "string") {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		const normalizedTopLevelUrl = normalizedUrl(topLevelUrl);
+		const topLevelOrigin = originOf(topLevelUrl);
+		if (expectedUrl === "about:blank") {
+			if (normalizedTopLevelUrl !== expectedUrl) {
+				return { ok: false, cause: "target-proof-invalid" };
+			}
+			return {
+				ok: true,
+				target: { target_id: targetId, top_level_url: expectedUrl },
+			};
+		}
+		const allowedOrigins = new Set(
+			input.allowed_origins.flatMap((origin) => {
+				const normalized = originOf(origin);
+				return normalized === undefined ? [] : [normalized];
+			}),
+		);
+		if (topLevelOrigin === undefined || !allowedOrigins.has(topLevelOrigin)) {
+			return { ok: false, cause: "origin-mismatch" };
+		}
+		return {
+			ok: true,
+			target: {
+				target_id: targetId,
+				top_level_url: normalizedTopLevelUrl ?? topLevelUrl,
+				top_level_origin: topLevelOrigin,
+			},
+		};
+	} catch {
+		return { ok: false, cause: "target-proof-invalid" };
+	}
+}
 
 /**
  * Mint outcome with a closure that repeats the same fresh observation.
@@ -197,55 +319,17 @@ async function observe(
 	| { ok: false; cause: BrowserUseTargetProofRefusalCause }
 > {
 	try {
-		const expectedUrl = normalizedUrl(input.expected_url);
-		if (expectedUrl === undefined) {
-			return { ok: false, cause: "target-proof-invalid" };
-		}
-		const targetsResponse = asObject(
-			await transport.request({ method: "Target.getTargets" }),
-		);
-		const targetInfos = targetsResponse?.targetInfos;
-		if (!Array.isArray(targetInfos)) {
-			return { ok: false, cause: "target-proof-invalid" };
-		}
-		const pageTargets = targetInfos.flatMap((value): JsonObject[] => {
-			const target = asObject(value);
-			return target?.type === "page" &&
-				typeof target.targetId === "string" &&
-				typeof target.url === "string"
-				? [target]
-				: [];
+		const resolution = await resolveBrowserUseCdpTargetIdentity(transport, {
+			expected_url: input.expected_url,
+			allowed_origins: input.allowed_origins,
+			...(preferredTargetId === undefined
+				? {}
+				: { preferred_target_id: preferredTargetId }),
 		});
-		const exactUrlMatches = pageTargets.filter(
-			(target) =>
-				typeof target.url === "string" &&
-				normalizedUrl(target.url) === expectedUrl,
-		);
-		const expectedOrigin = originOf(expectedUrl);
-		const exactOriginMatches = pageTargets.filter(
-			(target) =>
-				expectedOrigin !== undefined &&
-				typeof target.url === "string" &&
-				originOf(target.url) === expectedOrigin,
-		);
-		const matches =
-			exactUrlMatches.length > 0
-				? exactUrlMatches
-				: exactOriginMatches.length > 0
-					? exactOriginMatches
-					: pageTargets.filter(
-							(target) => target.targetId === preferredTargetId,
-						);
-		if (matches.length !== 1) {
-			return { ok: false, cause: "target-proof-invalid" };
-		}
-		const target = matches[0];
-		const targetId = target?.targetId;
-		const topLevelUrl = target?.url;
-		if (typeof targetId !== "string" || typeof topLevelUrl !== "string") {
-			return { ok: false, cause: "target-proof-invalid" };
-		}
-		const topLevelOrigin = originOf(topLevelUrl);
+		if (!resolution.ok) return resolution;
+		const targetId = resolution.target.target_id;
+		const topLevelUrl = resolution.target.top_level_url;
+		const topLevelOrigin = resolution.target.top_level_origin;
 		const allowedOrigins = new Set(
 			input.allowed_origins.flatMap((origin) => {
 				const normalized = originOf(origin);
@@ -398,6 +482,7 @@ export async function mintBrowserUseVerifiedTarget(
 	const target: BrowserUseMintedVerifiedTarget = {
 		lane_id: input.lane_id,
 		run_id: input.run_id,
+		top_level_url: observed.identity.top_level_url,
 		top_level_origin: observed.identity.top_level_origin,
 		frame_origin: observed.identity.frame_origin,
 		target_id: observed.identity.target_id,

@@ -30,11 +30,18 @@ async ({ inputs }) => {
     row.querySelector("[ng-model='rxg.attendanceTypeId']")
   );
   const rowDate = (row) => {
-    // The row's own rxg.startDateTime input is authoritative: a generic
-    // date-shaped cell can be a shared period/processed-date column repeated
-    // on every row, which would collapse all rows onto one date. Read the
-    // input's date half first; fall back to a date-shaped cell only when the
-    // input carries no date.
+    // The row's own per-day work-date model (rxg.workDate1) is authoritative and
+    // is present whether the grid is empty or filled. Read it first: once the
+    // grid is filled, rxg.startDateTime holds a time-of-day ("09:00") with no
+    // date, so relying on it made every filled row's date unreadable and refused
+    // the save.
+    const workDateEl = row.querySelector("[ng-model='rxg.workDate1']") || row.querySelector("[ng-model*='workDate']") || row.querySelector("[ng-model*='itemDate']");
+    if (workDateEl) {
+      const wdRaw = normalize(workDateEl.value || workDateEl.getAttribute?.("value") || workDateEl.innerText || workDateEl.textContent || "");
+      const wdMatch = wdRaw && wdRaw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const wdParsed = wdMatch && parseDate(wdMatch[0]);
+      if (wdParsed) return dmy(wdParsed);
+    }
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
     const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
     const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
@@ -134,13 +141,15 @@ async ({ inputs }) => {
     } else {
       result = scope.saveTimesheet();
     }
+    const promiseLike = Boolean(result && typeof result.then === "function");
+    if (promiseLike) await result;
     await sleep(2500);
     return {
       ok: true,
       mode: "scope.saveTimesheet",
       source,
       resultType: typeof result,
-      promiseLike: Boolean(result && typeof result.then === "function"),
+      promiseLike,
       beforeUrl,
       afterUrl: window.location.href,
       title: document.title,

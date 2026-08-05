@@ -6,8 +6,8 @@
   "flow_name": "verify-timesheet-loaded",
   "version": "2",
   "summary": "Read-only Oncore proof: navigate to the timesheet portal, observe fresh structure, and verify the timesheet surface is present. Dispatches no mutation.",
-  "allowed_origins": ["https://oncoreservices.expr365.com.au"],
-  "auth_context_ref": "oncore-portal-session",
+  "allowed_origins": ["https://iteraterecruitment.oncoreservices.com"],
+  "auth_context_ref": "interactive-login",
   "inputs": [
     {
       "id": "week_ending",
@@ -19,10 +19,10 @@
   "steps": [
     {
       "kind": "open",
-      "url": "https://oncoreservices.expr365.com.au/timesheets",
+      "url": "https://iteraterecruitment.oncoreservices.com/timesheets",
       "postcondition": {
         "kind": "url-equals",
-        "url": "https://oncoreservices.expr365.com.au/timesheets"
+        "url": "https://iteraterecruitment.oncoreservices.com/timesheets"
       }
     },
     { "kind": "snapshot", "interactive": true }

@@ -471,6 +471,38 @@ describe("redaction admission on durable write (R13 backstop)", () => {
 });
 
 describe("casUpdateSharedRun (R13, R27)", () => {
+	test("the owned cancel write refuses after mutation dispatch", async () => {
+		const clock = fixedClock();
+		const deps = await makeSharedDeps(clock.now);
+		const run = await createOk(
+			deps,
+			blockedRun("run-cancel-dispatched-store", {
+				mutation_dispatched: true,
+				environment_profile: {
+					environment: "agent-chrome",
+					profile: "cancel-dispatched-store",
+				},
+			}),
+		);
+		const lease = await acquireClaim(deps, run, "cancel-writer");
+		const before = await rawRecordOf(deps, run.run_id);
+		const updated = await casUpdateSharedRun(deps, {
+			runId: run.run_id,
+			expectedRevision: run.revision,
+			lease,
+			authFragmentAction: "cancel",
+			mutate: (current) => {
+				const { continuation: _continuation, ...rest } = current;
+				return { ...rest, state: "not-achieved" };
+			},
+		});
+		expect(updated).toMatchObject({
+			ok: false,
+			code: "run_cancel_mutation_dispatched",
+		});
+		expect(await rawRecordOf(deps, run.run_id)).toBe(before);
+	});
+
 	test("a leased update mutates purely, bumps the revision, and keeps created_at", async () => {
 		const clock = fixedClock();
 		const deps = await makeSharedDeps(clock.now);

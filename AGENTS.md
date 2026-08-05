@@ -48,7 +48,7 @@
 - For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
-- For plans and terminology, use `grill-with-docs`.
+- For plans and terminology, use `grilling` with `domain-modeling`.
 - After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
 
 ## Skill Authoring
@@ -93,8 +93,8 @@
 ## Context And Git
 
 - Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
-- New durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`.
-- Repos own operational truth; context folders own durable recall and synthesis.
+- Durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`; repos own operational truth.
+- Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
 - Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.

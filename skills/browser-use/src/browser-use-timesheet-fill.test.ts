@@ -465,24 +465,41 @@ describe("FastTrack timesheet fill (R16, AE8)", () => {
 
 	test("registry digest identity matches the shipped action bytes", async () => {
 		const actionBytes = await readFile(ACTION_PATH);
-		const digest = createHash("sha256").update(actionBytes).digest("hex");
 		const registry = JSON.parse(await readFile(REGISTRY_PATH, "utf8")) as {
 			actions: Array<{
 				asset_path: string;
 				record: {
+					action_id: string;
 					asset_id: string;
 					expected_digest: string;
-					promotion_receipt: { approved_digest: string };
+					promotion_receipt: {
+						approved_digest: string;
+						disposition: "approved";
+						presence_backed: true;
+					};
 				};
+				promotion_history: Array<{ approved_digest: string }>;
 			}>;
 		};
 		const entry = registry.actions.find(
-			(candidate) => candidate.asset_path === "fasttrack/fill-week.js",
+			(candidate) => candidate.record.action_id === "fasttrack-fill-week",
 		);
 
 		expect(entry).toBeDefined();
+		const shippedBytes = await readFile(
+			join(import.meta.dir, "..", "actions", entry?.asset_path ?? ""),
+		);
+		const digest = createHash("sha256").update(shippedBytes).digest("hex");
+		expect(shippedBytes.toString("utf8")).toBe(
+			actionBytes.toString("utf8").trimEnd(),
+		);
 		expect(entry?.record.asset_id).toBe(digest);
 		expect(entry?.record.expected_digest).toBe(digest);
-		expect(entry?.record.promotion_receipt.approved_digest).toBe(digest);
+		expect(entry?.record.promotion_receipt).toMatchObject({
+			approved_digest: digest,
+			disposition: "approved",
+			presence_backed: true,
+		});
+		expect(entry?.promotion_history.at(-1)?.approved_digest).toBe(digest);
 	});
 });

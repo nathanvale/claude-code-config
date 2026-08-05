@@ -307,6 +307,11 @@ export async function deliverConfidentialFields(
 		const fetched = await input.tokenRetrieval.fetchCredentialField({
 			binding: input.binding,
 			field,
+			// The successful re-proof freshly reproduced the verified target's
+			// digest. That digest covers frame_origin, so both reservation inputs
+			// come from the proven target state rather than page-supplied data.
+			target_digest: reproof.observed_digest,
+			observed_origin: input.target.frame_origin,
 		});
 		if (!fetched.ok) {
 			return blockedOf(blockedCauseForRejection(fetched.rejection.code), false, false);

@@ -155,6 +155,31 @@ function parse(stdout: string): Record<string, unknown> {
 }
 
 describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE15)", () => {
+	test("Runbook authoring schema is discoverable from a neutral process", async () => {
+		const result = await spawnBrowserUse(["runbook", "schema", "--json"]);
+		expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(parse(result.stdout)).toMatchObject({
+			status: "ok",
+			data: {
+				contract_id: "browser-use.runbook-authoring",
+				schema_version: "1",
+				command: "runbook-schema",
+				result: {
+					model_owner: "parseRunbookRecord + validateRunbook",
+					document_contract: "browser-use.runbook",
+				},
+			},
+		});
+	}, TEST_TIMEOUT_MS);
+
+	test("Reviewed Action schema is discoverable from a neutral process", async () => {
+		const result = await spawnBrowserUse(["action", "schema", "--json"]);
+		expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+		const envelope = parse(result.stdout);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({ contract_id: "browser-use.reviewed-action-authoring", schema_version: "1", command: "action-schema", result: { wrapper_shape: "async ({ inputs }) => <result>", fields: { origin: { required: true }, effect_class: { derived: true }, input_schema: { required: true }, result_schema: { required: true }, postcondition: { required_for_effect: "mutation" } } } });
+	}, TEST_TIMEOUT_MS);
+
 	test(
 		"run status lists receipts with each blocked run's continuation",
 		async () => {
@@ -250,13 +275,10 @@ describe("U2 process-boundary proof — neutral CWD, JSON-only discovery (V4/AE1
 				"run-live",
 				"--json",
 			]);
-			expect(result.exitCode).toBe(0);
+			expect(result.exitCode).toBe(20);
 			const envelope = parse(result.stdout);
-			const data = envelope.data as Record<string, unknown>;
-			expect((data.run as Record<string, unknown>).state).toBe("unknown");
-			expect(data.cancellation).toEqual({
-				external_effect: "unknown",
-				rolled_back: false,
+			expect(envelope.error).toMatchObject({
+				code: "run_cancel_mutation_dispatched",
 			});
 			expect(
 				(envelope.continuation as Record<string, unknown>).next_action_id,

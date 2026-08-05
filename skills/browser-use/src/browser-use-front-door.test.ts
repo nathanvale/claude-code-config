@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	type BrowserUseFamily,
 } from "./command-contract";
+import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -239,6 +242,132 @@ describe("front door: machine discovery stays parseable (D7)", () => {
 		const result = await runForTest(["lanes", "list", "--json"], makeRuntime());
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("agent-browser");
+	});
+
+	test("runbook and action schema handlers emit their structured result contracts", async () => {
+		const cases = [
+			{
+				argv: ["runbook", "schema", "--json"],
+				command: "runbook-schema",
+				contractId: BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+			},
+			{
+				argv: ["action", "schema", "--json"],
+				command: "action-schema",
+				contractId: BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
+			},
+		] as const;
+
+		for (const { argv, command, contractId } of cases) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).toBe(0);
+			const envelope = parseJson(result.stdout);
+			expect(envelope.status).toBe("ok");
+			expect(envelope.data).toMatchObject({
+				contract_id: contractId,
+				schema_version: "1",
+				command,
+				result: expect.any(Object),
+			});
+		}
+	});
+
+	test("every remaining runbook and action leaf reaches a typed handler diagnostic", async () => {
+		const agentBrowserHandoff = verifiedHandoffEnvelope((envelope) => {
+			envelope.data.attachment.adapter_id = "agent-browser";
+			envelope.data.attachment.probe_executable =
+				"/opt/browser-connect/agent-browser";
+		});
+		const runtime = makeRuntime({
+			sourceCheckoutRoot: null,
+			readTextFile: async (path) => {
+				if (path === "handoff.json") return agentBrowserHandoff;
+				throw new Error("fixture file is deliberately unavailable");
+			},
+		});
+		const digest = "a".repeat(64);
+		const cases = [
+			{
+				argv: ["runbook", "validate", "--file", "draft.json", "--json"],
+				command: "runbook-validate",
+				code: "runbook_document_unreadable",
+			},
+			{
+				argv: ["runbook", "apply", "--file", "draft.json", "--json"],
+				command: "runbook-apply",
+				code: "runbook_source_checkout_required",
+			},
+			{
+				argv: [
+					"runbook", "delete", "--service", "service", "--flow", "flow", "--json",
+				],
+				command: "runbook-delete",
+				code: "runbook_source_checkout_required",
+			},
+			{
+				argv: ["runbook", "list", "--json"],
+				command: "runbook-list",
+				code: "xdg_root_relative",
+			},
+			{
+				argv: [
+					"runbook", "show", "--service", "service", "--flow", "flow", "--json",
+				],
+				command: "runbook-show",
+				code: "xdg_root_relative",
+			},
+			{
+				argv: [
+					"runbook", "activate", "--catalog-digest", digest,
+					"--expected-epoch", "0", "--json",
+				],
+				command: "runbook-activate",
+				code: "catalog_source_unavailable",
+			},
+			{
+				argv: [
+					"runbook", "run", "--service", "service", "--flow", "flow",
+					"--handoff", "handoff.json", "--json",
+				],
+				command: "runbook-run",
+				code: "xdg_root_relative",
+			},
+			{
+				argv: ["action", "validate", "--file", "candidate.json", "--json"],
+				command: "action-validate",
+				code: "action_document_unreadable",
+			},
+			{
+				argv: ["action", "apply", "--file", "candidate.json", "--json"],
+				command: "action-apply",
+				code: "action_document_unreadable",
+			},
+			{
+				argv: ["action", "status", "--id", "action-id", "--json"],
+				command: "action-status",
+				code: "action_source_checkout_required",
+			},
+			{
+				argv: [
+					"action", "promote", "--id", "action-id",
+					"--approval-reference", "review-1", "--json",
+				],
+				command: "action-promote",
+				code: "action_source_checkout_required",
+			},
+		] as const;
+
+		for (const { argv, command, code } of cases) {
+			const result = await runForTest(argv, runtime);
+			expect(result.exitCode).toBe(20);
+			const envelope = parseJson(result.stdout);
+			expect(envelope.status).toBe("error");
+			expect(envelope.data).toMatchObject({ command });
+			expect(envelope.error).toMatchObject({ code });
+			expect(envelope.error).not.toMatchObject({
+				code: "browser_use_not_implemented",
+			});
+		}
 	});
 });
 

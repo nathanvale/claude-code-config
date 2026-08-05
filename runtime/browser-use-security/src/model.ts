@@ -116,7 +116,7 @@ export function isMintedBundleId(value: BundleId): boolean {
  * @defaultValue "com.side-quest.browser-use-security"
  */
 export const PRODUCT_BUNDLE_PREFIX =
-	"com.side-quest.browser-use-security" as const;
+	"com.nathanvow.browser-use-security" as const;
 
 /**
  * Minted, literal bundle identities per target, keyed by

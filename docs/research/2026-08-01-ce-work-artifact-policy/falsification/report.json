@@ -1,0 +1,586 @@
+{
+  "checks": [
+    {
+      "check": "verify-run passes with disclosure",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "outcome disclosed divergence",
+      "detail": "VERIFIED_WITH_REGENERABLE_DIVERGENCE",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "receipt does not claim preservation",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "precious restored: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "precious restored: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "precious restored: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "regenerable change kept (not restored)",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "regenerable delete kept",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "regenerable introduction preserved (no unowned delete)",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "symlink payload restored is NOT claimed (regenerable)",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "bun owns node_modules repair",
+      "detail": "[{'action': 'regenerate', 'argv': ['bun', 'run', 'build'], 'cwd': '.', 'owner': 'project-build', 'root': 'dist', 'source': 'repo-override'}, {'action': 'regenerate', 'argv': ['bun', 'install', '--frozen-lockfile'], 'cwd': '.', 'owner': 'bun', 'root': 'node_modules', 'source': 'built-in:bun.lock'}]",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "project-build owns dist repair",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "lock released",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "exactly one receipt",
+      "detail": "",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "system dispatchable afterwards",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "baseline-bun-linkfarm"
+    },
+    {
+      "check": "hard crash observed",
+      "detail": "rc=21 word=",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "lock retained by crash (recovery state exists)",
+      "detail": "{'nonce': '312c7523e8c4131b4ce1162c00e3b4c8cbcfddda76e7ae48', 'path': '/private/tmp/ica-artifact-policy-falsify.f72092/state/crash-p1-after-reclassify/.locks/integration-a68916340fb1f844c3eb08a4cc9650364e73dfe074d189067b510f448e22509c.json', 'phase': 'held', 'unit_id': 'u1'}",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "resume completes",
+      "detail": "word=ARTIFACT_RESUMED err=",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "lock released after resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "precious intact after resume: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "precious intact after resume: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "precious intact after resume: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "no phantom receipt for a txn that never verified",
+      "detail": "n=0",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "repo untouched",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "resume idempotent (second run adds nothing)",
+      "detail": "word=ARTIFACT_RESUMED",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "no orphan custody debris",
+      "detail": "[]",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "fresh verify-run succeeds after recovery",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "crash-p1-after-reclassify"
+    },
+    {
+      "check": "hard crash observed",
+      "detail": "rc=21 word=",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "lock retained by crash (recovery state exists)",
+      "detail": "{'nonce': '2793dd6f9190920ccc14a7abc89920eb9bc1ea8f275cf507', 'path': '/private/tmp/ica-artifact-policy-falsify.f72092/state/crash-p2-during-capture/.locks/integration-b9d89d2ce1abd97117ce09b61c193814b3375f6540bcc7349de205c0e6d8a479.json', 'phase': 'held', 'unit_id': 'u1'}",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "resume completes",
+      "detail": "word=ARTIFACT_RESUMED err=",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "lock released after resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "precious intact after resume: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "precious intact after resume: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "precious intact after resume: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "no phantom receipt for a txn that never verified",
+      "detail": "n=0",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "repo untouched",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "resume idempotent (second run adds nothing)",
+      "detail": "word=ARTIFACT_RESUMED",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "no orphan custody debris",
+      "detail": "[]",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "fresh verify-run succeeds after recovery",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "crash-p2-during-capture"
+    },
+    {
+      "check": "hard crash observed",
+      "detail": "rc=21 word=",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "lock retained by crash (recovery state exists)",
+      "detail": "{'nonce': '08fe9b1728a999c1774a590e02c03fc1e09a794aaaaa2b08', 'path': '/private/tmp/ica-artifact-policy-falsify.f72092/state/crash-p3-before-restore/.locks/integration-bae44aaeec2a3416198389ed137db5d3612cc9dfa6a279aec4dbdf730529e0e1.json', 'phase': 'held', 'unit_id': 'u1'}",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "resume completes",
+      "detail": "word=ARTIFACT_RESUMED err=",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "lock released after resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "precious intact after resume: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "precious intact after resume: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "precious intact after resume: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "exactly one receipt for crashed txn",
+      "detail": "n=1",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "no false preservation claim",
+      "detail": "preserved=False diverged=True",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "verification mutations not deleted by resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "resume idempotent (second run adds nothing)",
+      "detail": "word=ARTIFACT_RESUMED",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "no orphan custody debris",
+      "detail": "[]",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "fresh verify-run succeeds after recovery",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "crash-p3-before-restore"
+    },
+    {
+      "check": "hard crash observed",
+      "detail": "rc=21 word=",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "lock retained by crash (recovery state exists)",
+      "detail": "{'nonce': 'f508273b100b0abfa76c5e7be16bea2029ce3150d35bc34a', 'path': '/private/tmp/ica-artifact-policy-falsify.f72092/state/crash-p4-after-restore-before-receipt/.locks/integration-81e7de12d2c08705ad9971af953a437996650ecaee1d13a3341abc6e0052dd8a.json', 'phase': 'held', 'unit_id': 'u1'}",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "resume completes",
+      "detail": "word=ARTIFACT_RESUMED err=",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "lock released after resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "precious intact after resume: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "precious intact after resume: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "precious intact after resume: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "exactly one receipt for crashed txn",
+      "detail": "n=1",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "no false preservation claim",
+      "detail": "preserved=False diverged=True",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "verification mutations not deleted by resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "resume idempotent (second run adds nothing)",
+      "detail": "word=ARTIFACT_RESUMED",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "no orphan custody debris",
+      "detail": "[]",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "fresh verify-run succeeds after recovery",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "crash-p4-after-restore-before-receipt"
+    },
+    {
+      "check": "hard crash observed",
+      "detail": "rc=21 word=",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "lock retained by crash (recovery state exists)",
+      "detail": "{'nonce': 'c133b9a688f8ea0b24704455a346d688d84759577391e6bf', 'path': '/private/tmp/ica-artifact-policy-falsify.f72092/state/crash-p5-after-receipt-before-release/.locks/integration-36d5b43b88eb9525ad59475d562d0d25f10ce6b35700c13a90831d38d1c112d4.json', 'phase': 'held', 'unit_id': 'u1'}",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "resume completes",
+      "detail": "word=ARTIFACT_RESUMED err=",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "lock released after resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "precious intact after resume: .local-state/config.json",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "precious intact after resume: node_modules/local.db",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "precious intact after resume: packages/app/node_modules/dep/index.js",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "exactly one receipt for crashed txn",
+      "detail": "n=1",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "no false preservation claim",
+      "detail": "preserved=False diverged=True",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "verification mutations not deleted by resume",
+      "detail": "",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "resume idempotent (second run adds nothing)",
+      "detail": "word=ARTIFACT_RESUMED",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "no orphan custody debris",
+      "detail": "[]",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "fresh verify-run succeeds after recovery",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "crash-p5-after-receipt-before-release"
+    },
+    {
+      "check": "regenerable pnpm hardlinks admitted",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "pnpm-hardlinks"
+    },
+    {
+      "check": "precious external hardlink refused",
+      "detail": "rc=1 word=REFUSED",
+      "ok": true,
+      "scenario": "pnpm-hardlinks"
+    },
+    {
+      "check": "refusal names hardlink topology",
+      "detail": "}, \"policy_digest\": \"757adc8dac3e93bf92f7e6e9ad1b07f3f563cadefae9ccadf0cc680de19b7c13\", \"repair_actions\": [{\"action\": \"review-artifact-classification-or-reduce-precious-state\", \"paths\": [\"data/blob.bin\"], \"reason\": \"precious-hardlink-topology-unsupported\"}], \"schema\": \"artifact-policy.preflight.v1\"}",
+      "ok": true,
+      "scenario": "pnpm-hardlinks"
+    },
+    {
+      "check": "nothing mutated by refusal",
+      "detail": "",
+      "ok": true,
+      "scenario": "pnpm-hardlinks"
+    },
+    {
+      "check": "lock released after refusal",
+      "detail": "",
+      "ok": true,
+      "scenario": "pnpm-hardlinks"
+    },
+    {
+      "check": "opaque precious directory refused",
+      "detail": "rc=1 word=REFUSED err=unit-workspace: artifact policy refused authoritative verification: artifact policy preflight refused dispatch or verification\n",
+      "ok": true,
+      "scenario": "opaque-nested-repo"
+    },
+    {
+      "check": "refusal names unsupported entry type",
+      "detail": "po.v1\"}, \"policy_digest\": \"116b5237ecb113082c6b4d2f225857cc390ddaaf1c8187727b3c165ec8c747bd\", \"repair_actions\": [{\"action\": \"review-artifact-classification-or-reduce-precious-state\", \"paths\": [\"vendor/opaque/\"], \"reason\": \"precious-entry-type-unsupported\"}], \"schema\": \"artifact-policy.preflight.v1\"}",
+      "ok": true,
+      "scenario": "opaque-nested-repo"
+    },
+    {
+      "check": "nested repository untouched",
+      "detail": "",
+      "ok": true,
+      "scenario": "opaque-nested-repo"
+    },
+    {
+      "check": "lock released after refusal",
+      "detail": "",
+      "ok": true,
+      "scenario": "opaque-nested-repo"
+    },
+    {
+      "check": "authoritative run passes",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "gitignore-change"
+    },
+    {
+      "check": "advisory did not see generated/ as ignored",
+      "detail": "{\"entries\": 1, \"regular_bytes\": 4, \"types\": {\"directory\": 0, \"other\": 0, \"regular\": 1, \"symlink\": 0}}",
+      "ok": true,
+      "scenario": "gitignore-change"
+    },
+    {
+      "check": "authoritative reclassification captured generated/",
+      "detail": "{\"precious_captured\": 1, \"precious_restored\": [\"generated/cache.bin\"]}",
+      "ok": true,
+      "scenario": "gitignore-change"
+    },
+    {
+      "check": "reclassified precious restored exactly",
+      "detail": "",
+      "ok": true,
+      "scenario": "gitignore-change"
+    },
+    {
+      "check": "introduced unknown precious blocks",
+      "detail": "rc=1 word=BLOCKED body=ved-introduced-precious-state\", \"paths\": [\".local-state/new-data.bin\"], \"reason\": \"not present at transaction start; controller refused destructive cleanup\"}], \"verification_log\": \"/private/tmp/ica-artifact-policy-falsify.f72092/state/introduced-precious/run1/jobs/run-verification-7b68ba55e721.log\"}",
+      "ok": true,
+      "scenario": "introduced-precious"
+    },
+    {
+      "check": "introduced state preserved, never auto-deleted",
+      "detail": "",
+      "ok": true,
+      "scenario": "introduced-precious"
+    },
+    {
+      "check": "receipt recorded and truthful",
+      "detail": "",
+      "ok": true,
+      "scenario": "introduced-precious"
+    },
+    {
+      "check": "lock released after receipted block",
+      "detail": "",
+      "ok": true,
+      "scenario": "introduced-precious"
+    },
+    {
+      "check": "dispatchable after owner inspection",
+      "detail": "word=RUN_VERIFIED err=",
+      "ok": true,
+      "scenario": "introduced-precious"
+    }
+  ],
+  "summary": {
+    "checks": 96,
+    "failed": 0,
+    "failures": [],
+    "falsified": false
+  }
+}

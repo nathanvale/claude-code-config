@@ -22,6 +22,7 @@
 
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { cancelAuthFragmentSlot } from "./browser-use-auth";
 import { redactUnsafeText } from "./browser-use-core";
 import {
 	type LeaseWriteClaim,
@@ -105,7 +106,7 @@ function runFailure(code: string, message: string): RunFailure {
 // payload for sensitive key names and secret-shaped values (op:// refs, raw
 // ws(s):// endpoints) an adapter error might echo; the opaque
 // `auth_fragment.fragment` subtree is skipped by the walker's design (it is
-// gated at auth-commit time by `validateSecretFreeFragment`). A denylist
+// gated by its auth-owned commit or cancel reducer). A denylist
 // safety net, not the privacy mechanism — a violation refuses the write with
 // `run_record_invalid` and NOTHING is persisted.
 function admitRedactionClean(
@@ -343,7 +344,9 @@ export async function createSharedRun(
  * lease validation -> pure `mutate` -> auth-fragment boundary ->
  * `validateSharedRun` -> durable write at `revision + 1`. The generic seam
  * cannot create, replace, or remove `auth_fragment`/`auth_attestation`, or
- * transition into `ready`; the auth integration Port owns those changes. Run
+ * transition into `ready`; the auth integration Port owns those changes.
+ * `authFragmentAction: "cancel"` is the sole exception: it invokes the
+ * auth-owned reducer inside the same fenced write. Run
  * execution bindings enter only at creation and stay immutable. Item-batch
  * changes must preserve the code-owned checkpoint transition rules. A
  * rejected update writes nothing.
@@ -359,6 +362,10 @@ export async function casUpdateSharedRun(
 		expectedRevision: number;
 		lease: LeaseWriteClaim;
 		mutate: (run: BrowserUseSharedRun) => BrowserUseSharedRun;
+		/** Close an existing auth fragment through its owner during terminal cancel. */
+		authFragmentAction?: "cancel";
+		/** Approval-owner transition; absent generic mutations cannot mint approval. */
+		approvalAction?: "record" | "mark-dispatch";
 	},
 ): Promise<{ ok: true; run: BrowserUseSharedRun } | RunFailure> {
 	const path = deps.paths.state.runFile(input.runId);
@@ -394,7 +401,7 @@ export async function casUpdateSharedRun(
 				// The callback contract is pure. Give it a defensive copy so even a
 				// violating in-place mutation cannot rewrite the durable "before"
 				// state that every ownership and checkpoint guard compares against.
-				const mutated = input.mutate(structuredClone(loaded.run));
+				let mutated = input.mutate(structuredClone(loaded.run));
 				if (
 					JSON.stringify(mutated.auth_fragment) !==
 					JSON.stringify(loaded.run.auth_fragment)
@@ -403,6 +410,21 @@ export async function casUpdateSharedRun(
 						"run_auth_fragment_forbidden",
 						"generic run mutation cannot create, replace, or remove auth_fragment; use the auth integration port.",
 					);
+				}
+				if (input.authFragmentAction === "cancel") {
+					if (loaded.run.mutation_dispatched || mutated.state !== "not-achieved") {
+						return runFailure(
+							"run_cancel_mutation_dispatched",
+							"auth cancellation requires a pre-dispatch run transitioning to terminal not-achieved.",
+						);
+					}
+					if (loaded.run.auth_fragment !== undefined) {
+						const cancelled = cancelAuthFragmentSlot(loaded.run.auth_fragment);
+						if (!cancelled.ok) {
+							return runFailure(cancelled.code, cancelled.message);
+						}
+						mutated = { ...mutated, auth_fragment: cancelled.fragment };
+					}
 				}
 				if (
 					JSON.stringify(mutated.auth_attestation) !==
@@ -453,6 +475,56 @@ export async function casUpdateSharedRun(
 					return runFailure(
 						itemBatchTransition.code,
 						itemBatchTransition.message,
+					);
+				}
+				const priorApprovals = loaded.run.approvals ?? [];
+				const nextApprovals = mutated.approvals ?? [];
+				const approvalsChanged = !isDeepStrictEqual(
+					priorApprovals,
+					nextApprovals,
+				);
+				if (approvalsChanged && input.approvalAction === undefined) {
+					return runFailure(
+						"run_approval_owner_required",
+						"generic run mutation cannot record approval or start its dispatch; use the explicit approval owner.",
+					);
+				}
+				if (
+					input.approvalAction === "record" &&
+					(nextApprovals.length !== priorApprovals.length + 1 ||
+						priorApprovals.some(
+							(approval, index) =>
+								!isDeepStrictEqual(approval, nextApprovals[index]),
+						))
+				) {
+					return runFailure(
+						"run_approval_record_invalid",
+						"explicit approval must append exactly one record without changing standing approvals.",
+					);
+				}
+				if (
+					input.approvalAction === "mark-dispatch" &&
+					(nextApprovals.length === 0 ||
+						nextApprovals.length !== priorApprovals.length ||
+						priorApprovals.some((approval, index) => {
+							const nextApproval = nextApprovals[index];
+							if (nextApproval === undefined) return true;
+							if (isDeepStrictEqual(approval, nextApproval)) return false;
+							const {
+								dispatch_started_at_epoch_ms: _dispatchStarted,
+								...nextApprovalBeforeDispatch
+							} = nextApproval;
+							return !(
+								index === priorApprovals.length - 1 &&
+								approval.dispatch_started_at_epoch_ms === undefined &&
+								nextApproval.dispatch_started_at_epoch_ms !== undefined &&
+								isDeepStrictEqual(approval, nextApprovalBeforeDispatch)
+							);
+						}))
+				) {
+					return runFailure(
+						"run_approval_dispatch_marker_invalid",
+						"approval dispatch may add one write-ahead marker to the latest standing approval only.",
 					);
 				}
 				const priorBinding = loaded.run.runbook_target_binding;

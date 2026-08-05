@@ -694,7 +694,25 @@ describe("openBrowserUsePaths + runtime fallback (R11; S19, AE4)", () => {
 				probesDir: join(cacheRoot, "probes"),
 			});
 			expect(opened.paths.config.root).toBe(opened.paths.resolution.roots.config);
-			expect(opened.paths.data.root).toBe(opened.paths.resolution.roots.data);
+			const dataRoot = opened.paths.resolution.roots.data;
+			expect(opened.paths.data).toEqual({
+				root: dataRoot,
+				runbookGenerationsDir: join(
+					dataRoot,
+					"runbook-generations",
+					"generations",
+				),
+				runbookGenerationAuthorityFile: join(
+					dataRoot,
+					"runbook-generations",
+					"active.json",
+				),
+				runbookGenerationCutoverFile: join(
+					dataRoot,
+					"runbook-generations",
+					"cutover.json",
+				),
+			});
 		} finally {
 			scoped.dispose();
 		}

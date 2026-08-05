@@ -1,0 +1,27 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "unifi",
+  "flow_id": "login-screen-verify",
+  "flow_name": "verify-login-screen",
+  "version": "1",
+  "summary": "Read-only UniFi proof: open the observed login URL, verify it, and capture a fresh interactive snapshot.",
+  "allowed_origins": [
+    "https://192.168.1.1"
+  ],
+  "inputs": [],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://192.168.1.1/login",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://192.168.1.1/login"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": true
+    }
+  ]
+}

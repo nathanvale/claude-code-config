@@ -274,13 +274,13 @@ describe("U7 operation gates", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	test("screenshot is refused before transport when the adapter does not authorize screenshot_media", async () => {
+	test("agent-browser screenshot dispatches through screenshot_media", async () => {
 		const { runtime, calls } = operationRuntime({
-			files: {
-				"/h.json": verifiedHandoffEnvelope((envelope) => {
-					envelope.data.attachment.adapter_id = "agent-browser";
-				}),
-			},
+			adapter: "agent-browser",
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: { selected: true } })),
+				okCommand(JSON.stringify({ success: true, data: { path: "shot.png" } })),
+			],
 		});
 		const result = await runForTest(
 			[
@@ -294,11 +294,13 @@ describe("U7 operation gates", () => {
 			],
 			runtime,
 		);
-		expect(result.exitCode).toBe(20);
-		expect(parseJson(result.stdout).error).toMatchObject({
-			code: "browser_operation_capability_unauthorized",
-		});
-		expect(calls).toHaveLength(0);
+		expect(result.exitCode, result.stdout).toBe(0);
+		expect(calls.some((call) => call.args.includes("screenshot"))).toBe(true);
+		expect(
+			calls.some((call) =>
+				call.args.some((argument) => argument.endsWith("shot.png")),
+			),
+		).toBe(true);
 	});
 
 	test("screenshot requires --out before transport", async () => {
