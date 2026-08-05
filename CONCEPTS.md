@@ -5,33 +5,37 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 ## Browser identity and authority
 
 ### Authenticated-State Proof Candidate
-Fresh page structure that is eligible for identity proof after a pre-existing-session or post-submit observation; it is recognition evidence only and grants no authenticated authority by itself.
+Page structure that suggests an authenticated state after a pre-existing-session or post-submit observation. It is recognition evidence, not identity proof.
 
 ### Browser Target Candidate
-A display-safe projection of an open page used for human- or agent-readable selection; it carries an envelope-scoped public handle and redacted page facts, never raw adapter or CDP identifiers.
+A display-safe projection of an open page for human or agent selection. It carries a public handle and redacted page facts rather than adapter or CDP identifiers.
 
 ### Adapter Page Handle
-An adapter-owned transient reference for a page or tab. It identifies a page only inside that adapter's namespace and cannot substitute for a browser-level CDP target identity.
+An adapter-owned transient reference for a page or tab. Its namespace is distinct from Chrome's browser-level target identity.
 
 ### CDP Target Identity
-Chrome's browser-level identity for one target, resolved from fresh browser evidence independently of an adapter page handle and consumed at the Chrome DevTools Protocol boundary.
+Chrome's browser-level identity for one target, separate from an adapter page handle.
 
 ### Verified Browser Target
-Protocol-sensitive evidence that binds one lane and run to a current CDP target, expected principal, origin, frame, field, and proof digest, with fresh reproof before confidential delivery; unlike a Runbook Target Binding it is not a durable adapter reference, and unlike Session Identity Proof it does not establish the authenticated human or account.
+Protocol-sensitive evidence connecting a lane and run to a current CDP target and delivery context. Unlike a Runbook Target Binding, it is not a durable adapter reference; unlike Session Identity Proof, it does not identify the authenticated human or account.
 
 ### Runbook Target Binding
-An opaque durable reference that keeps one run tied to the same adapter-resolved target across authentication and resume without persisting the adapter's transient page handle.
+An opaque durable reference connecting one run to the same adapter-resolved target across authentication and resume, without persisting the adapter's transient page handle.
 
 ### Identity Basis
-The single evidence form by which one Browser Use authentication outcome attributes the current session to a human: either Session Identity Proof or Human Identity Attestation.
+The category of evidence by which a Browser Use authentication outcome attributes the current session to a human, such as Session Identity Proof or Human Identity Attestation.
 
 ### Production Authority Boundary
-The required composition boundary that keeps caller-controlled inputs and test substitutes from selecting Browser Use credential, approval, identity-proof, or native-admission owners in a production artifact.
-
-A complete boundary covers every production-reachable constructor, runner, export, configuration source, and environment source; absence of an approved owner produces a typed no-effect continuation.
+The composition boundary separating production Browser Use authority owners from caller-controlled inputs and test substitutes.
 
 ### Session Identity Proof
-Machine-readable evidence carrying redacted subject, account, and tenant references for the current browser session; its consumer binds the proof to the current target and allowed origin.
+Machine-readable evidence relating a current browser session to redacted subject, account, and tenant references.
 
 ### Human Identity Attestation
-A presence-backed signed claim for one Browser Use run, bound to its handoff, lane, target, origin, execution policy, and redacted identity references, then verified and consumed once before authenticated state is admitted.
+A presence-backed signed human claim about the identity and mutation target associated with a Browser Use run. It is distinct from machine Session Identity Proof.
+
+## Authoritative owners
+- Authentication recognition and admission: [`browser-use-login-engine.ts`](skills/browser-use/src/browser-use-login-engine.ts) and [`browser-use-runbook-auth.ts`](skills/browser-use/src/browser-use-runbook-auth.ts); checks: [`browser-use-login-engine.test.ts`](skills/browser-use/src/browser-use-login-engine.test.ts) and [`browser-use-runbook-auth.test.ts`](skills/browser-use/src/browser-use-runbook-auth.test.ts).
+- Target identity, proof, and binding: [`browser-use-target-proof.ts`](skills/browser-use/src/browser-use-target-proof.ts) and [`browser-use-auth-bindings.ts`](skills/browser-use/src/browser-use-auth-bindings.ts); check: [`browser-use-target-proof.test.ts`](skills/browser-use/src/browser-use-target-proof.test.ts).
+- Production composition: [`browser-use.ts`](skills/browser-use/src/browser-use.ts); check: [`browser-use-package-authority-boundary.test.ts`](skills/browser-use/src/browser-use-package-authority-boundary.test.ts).
+- Design rationale: [browser identity boundaries](docs/solutions/architecture-patterns/browser-identity-boundaries-require-separate-resolution-and-proof.md), [authenticated-state proof](docs/solutions/architecture-patterns/authentication-is-proven-state-not-successful-navigation.md), and [human identity attestation](docs/adr/0026-human-identity-attestation-is-one-run-only.md).

@@ -194,7 +194,7 @@ This assumes the public handle, adapter handle, CDP target ID, authenticated tar
 const candidate = selectDisplaySafeCandidate(envelope, candidateOrdinal);
 
 const adapterTarget = await adapter.resolveTarget({
-  candidateBinding: candidate.privateBinding,
+  candidateBinding: candidate.candidate_id,
 });
 if (!adapterTarget.ok) return blocked(adapterTarget.cause);
 
@@ -212,7 +212,7 @@ const identity = await proveSessionIdentity({
 if (!identity.proven) return blocked(identity.cause);
 
 const currentAdapterTarget = await adapter.resolveTarget({
-  candidateBinding: candidate.privateBinding,
+  candidateBinding: candidate.candidate_id,
 });
 if (!currentAdapterTarget.ok) return blocked(currentAdapterTarget.cause);
 if (currentAdapterTarget.binding !== adapterTarget.binding) {

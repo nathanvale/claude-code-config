@@ -37,7 +37,7 @@ A four-week Browser Use session survey found this pattern across six different b
 - An unlocked SQLite fixture did not reproduce Chrome holding `Default/Login Data` open. The first credential-count fix passed tests but failed live with `SQLITE_BUSY`. The owner now rejects a pre-existing non-empty WAL, attempts a transactionally consistent SQLite backup, and falls back to a stable locked-file snapshot when backup cannot complete (`runtime/browser-use-environment-auth/Sources/BrowserUseEnvironmentOpSupervisor/main.swift:678`, `runtime/browser-use-environment-auth/Sources/BrowserUseEnvironmentOpSupervisor/main.swift:704`, `runtime/browser-use-environment-auth/Sources/BrowserUseEnvironmentOpSupervisor/main.swift:756`). Tests keep real exclusive locks across the check and cover unsafe and benign WAL races (`runtime/browser-use-environment-auth/Tests/BrowserUseEnvironmentAuthTests/ProfilePolicyLoginDataTests.swift:260`, `runtime/browser-use-environment-auth/Tests/BrowserUseEnvironmentAuthTests/ProfilePolicyLoginDataTests.swift:278`, `runtime/browser-use-environment-auth/Tests/BrowserUseEnvironmentAuthTests/ProfilePolicyLoginDataTests.swift:310`, `runtime/browser-use-environment-auth/Tests/BrowserUseEnvironmentAuthTests/ProfilePolicyLoginDataTests.swift:326`).
 - A username-first accessibility fixture hid a live form that exposed password before username. The classifier now chooses semantic credential order independently of node order (`skills/browser-use/src/browser-use-login-engine.ts:308`), with a password-first regression (`skills/browser-use/src/browser-use-runbook-auth.test.ts:405`).
 - A current promotion receipt was tested without legacy audit history. The registry now models current authority and history separately (`skills/browser-use/src/browser-use-reviewed-action-authoring.ts:86`, `skills/browser-use/src/browser-use-reviewed-action-authoring.ts:92`), and replacement tests preserve history while clearing current promotion (`skills/browser-use/src/browser-use-reviewed-action-authoring.test.ts:220`).
-- A fresh approved-run fixture did not exercise resume after authority expiry. The model covers expiry and adapter drift, while an approved-submit regression now proves that an expired session attestation is renewed before exactly one dispatch (`skills/browser-use/src/browser-use-runbook-auth.ts:620`, `skills/browser-use/src/browser-use-timesheet-submit.test.ts`).
+- A current approved-run fixture did not exercise resume after authority expiry. The model covers expiry and adapter drift, while the approved-submit regression proves both renewal paths before exactly one dispatch: an expired `session-identity-proof` is replaced from a new authenticated-state proof, and an expired `human-identity-attestation` is replaced by completing human attestation again (`skills/browser-use/src/browser-use-runbook-auth.ts:619`, `skills/browser-use/src/browser-use-wave3-dispatch.test.ts:1217`).
 - A search-page fixture stood in for every successful submit result. A live portal instead landed on a submitted detail page, so the real mutation was reported as not achieved. The verifier now treats submitted-detail and submitted-list shapes as separate evidence paths, refuses incomplete and wrong-period detail pages, and returns the observation source (`skills/browser-use/actions/fasttrack/verify-submitted.js:59`, `skills/browser-use/src/browser-use-timesheet-verify-submitted.test.ts:137`).
 
 These were separate defects. Their common cause was loss of production distinctions inside otherwise plausible hermetic tests.
@@ -50,7 +50,7 @@ Treat boundary-faithful test modeling as part of the product contract. A double 
 
 ### Give each identity namespace its own fixture value
 
-Never reuse one string because two systems both call it an ID. Name the namespace at the boundary and make fixture values visibly incompatible.
+Never reuse one string because two systems both call it an ID. Name the namespace at the boundary and make fixture values visibly incompatible. This small example is an ID-translation-only guard:
 
 ```ts
 const adapterTabId = "adapter-tab-t1";
@@ -65,7 +65,7 @@ fakeCdp.attachToTarget.mockImplementation((targetId) => {
 });
 ```
 
-The fake transport must reject the adapter value when a CDP method expects the browser value. This turns accidental aliasing into a red test instead of a production-only failure.
+The fake transport must reject the adapter value when a CDP method expects the browser value. This turns accidental aliasing into a red test instead of a production-only failure. It is not full target-proof coverage. The full target-selection, ambiguity, allowed-origin, and fresh-binding drift regressions belong to `skills/browser-use/src/browser-use-agent-browser.test.ts`.
 
 ### Reproduce operating-system state, not only file contents
 
@@ -92,7 +92,12 @@ Authority-bearing and resumable artifacts need lifecycle cases, not one structur
 | History | none, legacy entry, multiple generations |
 | Run phase | initial dispatch, blocked, approved resume, post-dispatch retry |
 | Persistence | in-memory result, durable state, interrupted write |
-| Identity | same adapter and handoff, changed adapter, changed handoff |
+| Adapter identity | same adapter, changed adapter, unavailable or unsupported adapter |
+| CDP target | same target, changed or replaced target, zero candidates, multiple candidates |
+| Origin | same allowed origin, same-origin URL drift, origin outside the allowed set |
+| Account or tenant | same expected references, changed account or tenant, missing or conflicting references |
+| Identity basis | same current basis, expired basis renewed by its owner, unsupported or mismatched basis |
+| Handoff | same evidence, changed evidence, missing or unverifiable evidence |
 
 Assert both action and non-action: whether dispatch occurred, whether a marker was written before dispatch, whether a second resume redispatched, and whether blocked state persisted.
 
@@ -179,17 +184,21 @@ The test keeps the production-relevant lock alive while the owner reads the data
 
 ```ts
 for (const scenario of [
-  { authority: "fresh", expected: "dispatch-once" },
-  { authority: "expired", expected: "renew-or-block-durably" },
-  { authority: "adapter-changed", expected: "block" },
-  { authority: "handoff-changed", expected: "block" },
-  { authority: "already-dispatched", expected: "never-redispatch" },
+  { authority: "current", renewal: "not-needed", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-session-identity-proof", renewal: "available", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-session-identity-proof", renewal: "unavailable", durableState: "approved-pre-dispatch", expectedOutcome: "session-identity-proof-unavailable", expectedDispatches: 0 },
+  { authority: "expired-human-identity-attestation", renewal: "available", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-human-identity-attestation", renewal: "unavailable", durableState: "approved-pre-dispatch", expectedOutcome: "human-identity-attestation-required", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "adapter-changed", expectedOutcome: "attestation_lane_changed", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "handoff-changed", expectedOutcome: "attestation_handoff_changed", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "confirmed", expectedOutcome: "confirmed", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "unknown", expectedOutcome: "unknown", expectedDispatches: 0 },
 ]) {
   await assertResumeContract(scenario);
 }
 ```
 
-The transaction assertion must cover authority, persistence, and dispatch count together.
+The transaction assertion must name the authority state, whether renewal is available, the durable state before resume, the exact returned outcome, and the dispatch count together.
 
 ## Related
 

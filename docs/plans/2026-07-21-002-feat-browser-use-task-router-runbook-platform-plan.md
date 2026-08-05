@@ -18,7 +18,7 @@ last_updated: 2026-08-05
 
 The shared platform substrate is shipped: facade-backed task and Runbook routes, XDG durable runs, leases, artifacts, opaque target bindings, Verified Handoff Envelopes, immutable Runbook Generations, code-owned authoring/activation, Agent Browser execution, typed continuation truth, and retained-generation resume. PR #303 closed the Runbook front door; PR #300 exercised signed actions and approval-gated execution.
 
-The original all-lane platform vision remains partial. Agent Browser is the operational Runbook lane. Playwright and Chrome DevTools have bounded operation paths but lack equivalent authenticated Runbook execution and current live acceptance. Scheduling remains explicitly deferred. Production Session Identity Proof, broader golden journeys, cross-repository isolation, and sustained-use evidence remain acceptance-ledger work rather than missing platform-substrate implementation.
+The original all-lane platform vision remains partial. Agent Browser is the operational Runbook lane. Playwright and Chrome DevTools have bounded operation paths but lack equivalent authenticated Runbook execution and current live acceptance. Scheduling remains explicitly deferred. Production Session Identity Proof and automated expected subject, account, and tenant verification remain unowned implementation work. Broader golden journeys, cross-repository isolation, and sustained-use evidence remain acceptance-ledger work rather than missing platform-substrate implementation.
 
 ## Goal Capsule
 
