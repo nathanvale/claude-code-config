@@ -11,7 +11,7 @@ import {
 	unlink,
 } from "node:fs/promises"
 import type { FileHandle } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, hostname } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 
 const SCHEMA_VERSION = 1
@@ -56,6 +56,7 @@ interface ParsedArguments {
 	ledgerPath: string
 	quarter?: string
 	input?: string
+	lockDigest?: string
 	help: boolean
 }
 
@@ -64,6 +65,120 @@ interface OptionState {
 	ledgerPath: string
 	quarter?: string
 	input?: string
+	lockDigest?: string
+	seenOptions: Set<OptionName>
+}
+
+const optionDefinitions = {
+	"--json": {
+		kind: "boolean",
+		summary: "Emit the machine-readable response envelope.",
+	},
+	"--ledger": {
+		kind: "value",
+		valueName: "ABSOLUTE_PATH",
+		summary: "Override the private ledger path.",
+	},
+	"--quarter": {
+		kind: "value",
+		valueName: "QUARTER",
+		summary: "Filter status to one quarter.",
+	},
+	"--input": {
+		kind: "value",
+		valueName: "ABSOLUTE_PATH|-",
+		summary: "Read one event from a file or stdin.",
+	},
+	"--lock-digest": {
+		kind: "value",
+		valueName: "SHA256",
+		summary: "Require the exact digest observed by lock-status.",
+	},
+} as const
+
+type OptionName = keyof typeof optionDefinitions
+
+const commandContracts = {
+	commands: {
+		usage: "commands [--json]",
+		summary: "Discover the current command catalog and side effects.",
+		options: ["--json"],
+		requiredOptions: [],
+		sideEffects: { local: "none", external: "none" },
+		retrySafety: "same_input_safe",
+	},
+	status: {
+		usage:
+			"status [--quarter FY26-Q2] [--ledger ABSOLUTE_PATH] [--json]",
+		summary: "Read redacted quarter lifecycle status.",
+		options: ["--json", "--ledger", "--quarter"],
+		requiredOptions: [],
+		sideEffects: { local: "read", external: "none" },
+		retrySafety: "same_input_safe",
+	},
+	record: {
+		usage:
+			"record --input ABSOLUTE_PATH|- [--ledger ABSOLUTE_PATH] [--json]",
+		summary: "Append one verified evidence event idempotently.",
+		options: ["--json", "--ledger", "--input"],
+		requiredOptions: ["--input"],
+		sideEffects: { local: "write", external: "none" },
+		retrySafety: "same_input_safe",
+	},
+	"lock-status": {
+		usage: "lock-status [--ledger ABSOLUTE_PATH] [--json]",
+		summary: "Inspect lock ownership without changing it.",
+		options: ["--json", "--ledger"],
+		requiredOptions: [],
+		sideEffects: { local: "read", external: "none" },
+		retrySafety: "same_input_safe",
+	},
+	"lock-repair": {
+		usage:
+			"lock-repair --lock-digest SHA256 [--ledger ABSOLUTE_PATH] [--json]",
+		summary: "Remove a digest-matched lock whose same-host PID is dead.",
+		options: ["--json", "--ledger", "--lock-digest"],
+		requiredOptions: ["--lock-digest"],
+		sideEffects: { local: "write", external: "none" },
+		retrySafety: "inspect_before_retry",
+	},
+} as const satisfies Record<
+	string,
+	{
+		usage: string
+		summary: string
+		options: readonly OptionName[]
+		requiredOptions: readonly OptionName[]
+		sideEffects: { local: string; external: string }
+		retrySafety: string
+	}
+>
+
+type CommandName = keyof typeof commandContracts
+type ChangeOutcome = boolean | "unknown"
+
+interface MutationOutcome {
+	changed: ChangeOutcome
+}
+
+interface LedgerLockOwner {
+	schemaVersion: number
+	lockId: string
+	pid: number
+	hostname: string
+	createdAt: string
+}
+
+type LockOwnerState = "active" | "dead" | "unverifiable"
+
+interface LockObservation {
+	state: "unlocked" | "locked"
+	digest: string | null
+	owner: LedgerLockOwner | null
+	ownerState: LockOwnerState | "absent"
+	repairable: boolean
+	reason: string
+	nextSafeAction: string
 }
 
 class LedgerError extends Error {
@@ -73,6 +188,7 @@ class LedgerError extends Error {
 		readonly exitCode: number,
 		readonly safeToRetrySameInput: boolean,
 		readonly nextSafeAction: string,
+		readonly changed: ChangeOutcome = false,
 	) {
 		super(message)
 		this.name = "LedgerError"
@@ -89,17 +205,19 @@ function defaultLedgerPath(): string {
 }
 
 function helpText(): string {
+	const usage = Object.values(commandContracts)
+		.map((contract) => `  bun quarter-ledger.ts ${contract.usage}`)
+		.join("\n")
+	const commands = Object.entries(commandContracts)
+		.map(([id, contract]) => `  ${id.padEnd(12)} ${contract.summary}`)
+		.join("\n")
 	return `quarter-ledger commands
 
 Usage:
-  bun quarter-ledger.ts commands --json
-  bun quarter-ledger.ts status [--quarter FY26-Q2] [--ledger ABSOLUTE_PATH] --json
-  bun quarter-ledger.ts record --input ABSOLUTE_PATH|- [--ledger ABSOLUTE_PATH] --json
+${usage}
 
 Commands:
-  commands  Discover the current command catalog and side effects.
-  status    Read redacted lifecycle status from the private ledger.
-  record    Append one evidence-backed quarter event idempotently.
+${commands}
 
 The default private ledger is under XDG_DATA_HOME, or ~/.local/share when
 XDG_DATA_HOME is unset. Use --ledger only with an absolute path.
@@ -124,32 +242,39 @@ function requiredOptionValue(
 	throw invalidUsage(`${argument} requires a value`)
 }
 
-function applyBooleanOption(argument: string, state: OptionState): boolean {
-	if (argument !== "--json") return false
-	state.json = true
-	return true
-}
-
 function parseOptions(argumentsList: string[], state: OptionState): void {
-	const valueOptions: Record<string, (value: string) => void> = {
-		"--ledger": (value) => {
-			state.ledgerPath = value
-		},
-		"--quarter": (value) => {
-			state.quarter = value
-		},
-		"--input": (value) => {
-			state.input = value
-		},
-	}
-
 	for (let index = 1; index < argumentsList.length; index += 1) {
 		const argument = argumentsList[index] as string
-		if (applyBooleanOption(argument, state)) continue
-		const setValue = valueOptions[argument]
-		if (!setValue) throw invalidUsage(`Unknown argument: ${argument}`)
-		setValue(requiredOptionValue(argumentsList, index, argument))
+		if (!(argument in optionDefinitions)) {
+			throw invalidUsage(`Unknown argument: ${argument}`)
+		}
+		const option = argument as OptionName
+		state.seenOptions.add(option)
+		if (option === "--json") {
+			state.json = true
+			continue
+		}
+		const value = requiredOptionValue(argumentsList, index, argument)
+		if (option === "--ledger") state.ledgerPath = value
+		if (option === "--quarter") state.quarter = value
+		if (option === "--input") state.input = value
+		if (option === "--lock-digest") state.lockDigest = value
 		index += 1
+	}
+}
+
+function validateCommandOptions(command: string, state: OptionState): void {
+	if (!(command in commandContracts)) return
+	const contract = commandContracts[command as CommandName]
+	for (const option of state.seenOptions) {
+		if (!contract.options.includes(option as never)) {
+			throw invalidUsage(`${command} does not accept ${option}`)
+		}
+	}
+	for (const option of contract.requiredOptions) {
+		if (!state.seenOptions.has(option)) {
+			throw invalidUsage(`${command} requires ${option}`)
+		}
 	}
 }
 
@@ -167,11 +292,14 @@ function parseArguments(argumentsList: string[]): ParsedArguments {
 	const state: OptionState = {
 		json: false,
 		ledgerPath: defaultLedgerPath(),
+		seenOptions: new Set(),
 	}
 	parseOptions(argumentsList, state)
+	validateCommandOptions(command, state)
 	assertAbsoluteLedgerPath(state.ledgerPath)
 
-	return { command, ...state, help: false }
+	const { seenOptions: _seenOptions, ...parsedOptions } = state
+	return { command, ...parsedOptions, help: false }
 }
 
 function invalidUsage(message: string): LedgerError {
@@ -466,10 +594,25 @@ function eventsForQuarter(
 	return events.filter((event) => event.quarter === quarter)
 }
 
-function statusNextSafeAction(quarterCount: number): string {
-	return quarterCount === 0
-		? "record_verified_evidence"
-		: "inspect_oldest_incomplete_quarter"
+function isOperationallyComplete(
+	quarter: ReturnType<typeof deriveQuarterStatus>,
+): boolean {
+	return (
+		quarter.reconciled &&
+		quarter.workpaperExported &&
+		quarter.sentToAccountant &&
+		quarter.lodged
+	)
+}
+
+function statusNextSafeAction(
+	quarters: ReturnType<typeof deriveQuarterStatus>[],
+): string {
+	if (quarters.length === 0) return "record_verified_evidence"
+	if (quarters.some((quarter) => !isOperationallyComplete(quarter))) {
+		return "inspect_oldest_incomplete_quarter"
+	}
+	return "monitor_payment_and_next_quarter"
 }
 
 function statusData(events: StoredLedgerEvent[], quarter?: string) {
@@ -488,7 +631,7 @@ function statusData(events: StoredLedgerEvent[], quarter?: string) {
 
 	return {
 		quarters,
-		nextSafeAction: statusNextSafeAction(quarters.length),
+		nextSafeAction: statusNextSafeAction(quarters),
 	}
 }
 
@@ -496,20 +639,20 @@ function commandCatalog() {
 	return {
 		contractId: CONTRACT_ID,
 		schemaVersion: SCHEMA_VERSION,
-		actions: [
-			{
-				id: "status",
-				summary: "Read redacted quarter lifecycle status.",
-				sideEffects: { local: "read", external: "none" },
-				retrySafety: "same_input_safe",
-			},
-			{
-				id: "record",
-				summary: "Append one verified evidence event idempotently.",
-				sideEffects: { local: "write", external: "none" },
-				retrySafety: "same_input_safe",
-			},
-		],
+		actions: (["status", "record", "lock-status", "lock-repair"] as const).map((id) => {
+			const contract = commandContracts[id]
+			return {
+				id,
+				summary: contract.summary,
+				options: contract.options.map((option) => ({
+					id: option,
+					required: contract.requiredOptions.includes(option as never),
+					...optionDefinitions[option],
+				})),
+				sideEffects: contract.sideEffects,
+				retrySafety: contract.retrySafety,
+			}
+		}),
 	}
 }
 
@@ -542,7 +685,7 @@ function emitError(error: LedgerError, json: boolean): never {
 		error: {
 			code: error.code,
 			message: error.message,
-			changed: false,
+			changed: error.changed,
 			safeToRetrySameInput: error.safeToRetrySameInput,
 			nextSafeAction: error.nextSafeAction,
 		},
@@ -550,6 +693,47 @@ function emitError(error: LedgerError, json: boolean): never {
 	if (json) process.stdout.write(`${JSON.stringify(output)}\n`)
 	else process.stderr.write(`${error.message}\nNext: ${error.nextSafeAction}\n`)
 	process.exit(error.exitCode)
+}
+
+function runtimeFailure(changed: ChangeOutcome): LedgerError {
+	if (changed === "unknown") {
+		return new LedgerError(
+			"RUNTIME_FAILURE",
+			"Quarter ledger write outcome is uncertain",
+			1,
+			false,
+			"inspect_ledger_before_retrying",
+			changed,
+		)
+	}
+	if (changed) {
+		return new LedgerError(
+			"RUNTIME_FAILURE",
+			"Quarter ledger failed after persisting the event",
+			1,
+			false,
+			"inspect_recorded_event_before_retrying",
+			changed,
+		)
+	}
+	return new LedgerError(
+		"RUNTIME_FAILURE",
+		"Quarter ledger failed without changing verified state",
+		1,
+		false,
+		"inspect_diagnostics_and_retry_after_repair",
+	)
+}
+
+function injectTestFault(
+	point: "before_chmod" | "append_started" | "append_synced",
+): void {
+	if (
+		process.env.NODE_ENV === "test" &&
+		process.env.XERO_QUARTER_LEDGER_TEST_FAULT === point
+	) {
+		throw new Error(`Injected ${point} fault`)
+	}
 }
 
 async function validatedInputFromPath(inputPath: string): Promise<LedgerEventInput> {
@@ -561,18 +745,222 @@ async function validatedInputFromPath(inputPath: string): Promise<LedgerEventInp
 	}
 }
 
-async function acquireLedgerLock(lockPath: string): Promise<FileHandle> {
+function lockPathFor(ledgerPath: string): string {
+	return `${ledgerPath}.lock`
+}
+
+function parseLockOwner(contents: string): LedgerLockOwner | null {
 	try {
-		return await open(lockPath, "wx", 0o600)
+		const candidate = JSON.parse(contents) as Partial<LedgerLockOwner>
+		if (
+			candidate.schemaVersion !== SCHEMA_VERSION ||
+			typeof candidate.lockId !== "string" ||
+			candidate.lockId.length === 0 ||
+			!Number.isSafeInteger(candidate.pid) ||
+			(candidate.pid ?? 0) <= 0 ||
+			typeof candidate.hostname !== "string" ||
+			candidate.hostname.length === 0 ||
+			typeof candidate.createdAt !== "string" ||
+			Number.isNaN(new Date(candidate.createdAt).valueOf())
+		) {
+			return null
+		}
+		return candidate as LedgerLockOwner
+	} catch {
+		return null
+	}
+}
+
+function localOwnerState(owner: LedgerLockOwner): LockOwnerState {
+	if (owner.hostname !== hostname()) return "unverifiable"
+	try {
+		process.kill(owner.pid, 0)
+		return "active"
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code
+		if (code === "ESRCH") return "dead"
+		if (code === "EPERM") return "active"
+		return "unverifiable"
+	}
+}
+
+async function inspectLedgerLock(ledgerPath: string): Promise<LockObservation> {
+	const lockPath = lockPathFor(ledgerPath)
+	let metadata: Stats
+	try {
+		metadata = await lstat(lockPath)
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return {
+				state: "unlocked",
+				digest: null,
+				owner: null,
+				ownerState: "absent",
+				repairable: false,
+				reason: "lock_absent",
+				nextSafeAction: "continue_or_record_verified_evidence",
+			}
+		}
+		throw error
+	}
+
+	if (metadata.isSymbolicLink() || !metadata.isFile()) {
+		return {
+			state: "locked",
+			digest: null,
+			owner: null,
+			ownerState: "unverifiable",
+			repairable: false,
+			reason: "lock_not_regular_file",
+			nextSafeAction: "inspect_lock_manually",
+		}
+	}
+
+	let contents: string
+	try {
+		contents = await readFile(lockPath, "utf8")
+	} catch {
+		return {
+			state: "locked",
+			digest: null,
+			owner: null,
+			ownerState: "unverifiable",
+			repairable: false,
+			reason: "lock_unreadable",
+			nextSafeAction: "inspect_lock_manually",
+		}
+	}
+
+	const lockDigest = digest(contents)
+	const owner = parseLockOwner(contents)
+	if (!owner) {
+		return {
+			state: "locked",
+			digest: lockDigest,
+			owner: null,
+			ownerState: "unverifiable",
+			repairable: false,
+			reason: "owner_metadata_invalid",
+			nextSafeAction: "inspect_lock_manually",
+		}
+	}
+
+	const ownerState = localOwnerState(owner)
+	return {
+		state: "locked",
+		digest: lockDigest,
+		owner,
+		ownerState,
+		repairable: ownerState === "dead",
+		reason:
+			ownerState === "dead"
+				? "same_host_owner_pid_dead"
+				: ownerState === "active"
+					? "owner_pid_active"
+					: "owner_host_or_pid_unverifiable",
+		nextSafeAction:
+			ownerState === "dead"
+				? "run_lock_repair_with_observed_digest"
+				: ownerState === "active"
+					? "wait_for_owner_to_finish"
+					: "inspect_lock_owner_manually",
+	}
+}
+
+function lockRepairRefusal(observation: LockObservation): LedgerError {
+	if (observation.ownerState === "active") {
+		return new LedgerError(
+			"LOCK_OWNER_ACTIVE",
+			"Refusing to remove a lock whose owner PID is active",
+			8,
+			false,
+			"wait_for_owner_to_finish",
+		)
+	}
+	return new LedgerError(
+		"LOCK_OWNER_UNVERIFIABLE",
+		"Refusing to remove a lock whose owner cannot be verified dead on this host",
+		8,
+		false,
+		"inspect_lock_owner_manually",
+	)
+}
+
+async function repairLedgerLock(ledgerPath: string, observedDigest: string) {
+	const observation = await inspectLedgerLock(ledgerPath)
+	if (observation.state === "unlocked") {
+		throw new LedgerError(
+			"LOCK_NOT_FOUND",
+			"No ledger lock exists",
+			2,
+			false,
+			"continue_without_lock_repair",
+		)
+	}
+	if (observation.digest !== observedDigest) {
+		throw new LedgerError(
+			"LOCK_IDENTITY_CHANGED",
+			"Ledger lock does not match the observed digest",
+			8,
+			false,
+			"run_lock_status_again",
+		)
+	}
+	if (!observation.repairable) throw lockRepairRefusal(observation)
+
+	const rechecked = await inspectLedgerLock(ledgerPath)
+	if (
+		rechecked.digest !== observedDigest ||
+		rechecked.ownerState !== "dead" ||
+		!rechecked.repairable
+	) {
+		throw new LedgerError(
+			"LOCK_IDENTITY_CHANGED",
+			"Ledger lock identity or owner state changed during repair",
+			8,
+			false,
+			"run_lock_status_again",
+		)
+	}
+
+	await unlink(lockPathFor(ledgerPath))
+	return {
+		changed: true,
+		removedDigest: observedDigest,
+		nextSafeAction: "retry_blocked_record_once",
+	}
+}
+
+async function acquireLedgerLock(lockPath: string): Promise<FileHandle> {
+	let lockHandle: FileHandle
+	try {
+		lockHandle = await open(lockPath, "wx", 0o600)
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
 		throw new LedgerError(
 			"LEDGER_BUSY",
 			"Another ledger writer holds the lock",
 			8,
-			true,
-			"retry_after_current_writer_finishes",
+			false,
+			"run_lock_status",
 		)
+	}
+
+	const owner: LedgerLockOwner = {
+		schemaVersion: SCHEMA_VERSION,
+		lockId: randomUUID(),
+		pid: process.pid,
+		hostname: hostname(),
+		createdAt: new Date().toISOString(),
+	}
+	try {
+		await lockHandle.writeFile(`${JSON.stringify(owner)}\n`)
+		await lockHandle.sync()
+		return lockHandle
+	} catch (error) {
+		await lockHandle.close().catch(() => undefined)
+		await unlink(lockPath).catch(() => undefined)
+		throw error
 	}
 }
 
@@ -599,59 +987,78 @@ function assertStablePeriod(
 async function appendEvent(
 	ledgerPath: string,
 	event: StoredLedgerEvent,
+	mutation: MutationOutcome,
 ): Promise<void> {
 	const ledgerHandle = await open(ledgerPath, "a", 0o600)
 	try {
+		injectTestFault("before_chmod")
+		await ledgerHandle.chmod(0o600)
+		mutation.changed = "unknown"
+		injectTestFault("append_started")
 		await ledgerHandle.writeFile(`${JSON.stringify(event)}\n`)
 		await ledgerHandle.sync()
+		mutation.changed = true
+		injectTestFault("append_synced")
 	} finally {
 		await ledgerHandle.close()
 	}
-	await chmod(ledgerPath, 0o600)
 }
 
 async function recordEvent(
 	ledgerPath: string,
 	inputPath: string,
 ): Promise<{ duplicate: boolean; eventId: string; quarter: ReturnType<typeof deriveQuarterStatus> }> {
-	const input = await validatedInputFromPath(inputPath)
-	const eventId = digest(canonicalEvent(input))
-	const lockPath = `${ledgerPath}.lock`
-	await mkdir(dirname(ledgerPath), { recursive: true, mode: 0o700 })
-	await chmod(dirname(ledgerPath), 0o700)
-
-	const lockHandle = await acquireLedgerLock(lockPath)
-
+	const mutation: MutationOutcome = { changed: false }
 	try {
-		const events = await readEvents(ledgerPath)
-		assertStablePeriod(events, input)
-		const duplicate = events.some((event) => event.eventId === eventId)
-		if (!duplicate) {
-			const stored: StoredLedgerEvent = {
-				...input,
-				schemaVersion: SCHEMA_VERSION,
-				eventId,
-				recordedAt: new Date().toISOString(),
+		const input = await validatedInputFromPath(inputPath)
+		const eventId = digest(canonicalEvent(input))
+		const lockPath = lockPathFor(ledgerPath)
+		await mkdir(dirname(ledgerPath), { recursive: true, mode: 0o700 })
+		await chmod(dirname(ledgerPath), 0o700)
+
+		const lockHandle = await acquireLedgerLock(lockPath)
+
+		try {
+			const events = await readEvents(ledgerPath)
+			assertStablePeriod(events, input)
+			const duplicate = events.some((event) => event.eventId === eventId)
+			if (!duplicate) {
+				const stored: StoredLedgerEvent = {
+					...input,
+					schemaVersion: SCHEMA_VERSION,
+					eventId,
+					recordedAt: new Date().toISOString(),
+				}
+				await appendEvent(ledgerPath, stored, mutation)
+				events.push(stored)
 			}
-			await appendEvent(ledgerPath, stored)
-			events.push(stored)
+			return {
+				duplicate,
+				eventId,
+				quarter: deriveQuarterStatus(
+					events.filter((event) => event.quarter === input.quarter),
+				),
+			}
+		} finally {
+			await lockHandle.close()
+			await unlink(lockPath).catch(() => undefined)
 		}
-		return {
-			duplicate,
-			eventId,
-			quarter: deriveQuarterStatus(
-				events.filter((event) => event.quarter === input.quarter),
-			),
-		}
-	} finally {
-		await lockHandle.close()
-		await unlink(lockPath).catch(() => undefined)
+	} catch (error) {
+		if (error instanceof LedgerError && mutation.changed === false) throw error
+		throw runtimeFailure(mutation.changed)
 	}
 }
 
 function requiredRecordInput(parsed: ParsedArguments): string {
 	if (parsed.input) return parsed.input
 	throw invalidUsage("record requires --input")
+}
+
+function requiredLockDigest(parsed: ParsedArguments): string {
+	if (parsed.lockDigest && /^[a-f0-9]{64}$/.test(parsed.lockDigest)) {
+		return parsed.lockDigest
+	}
+	throw invalidUsage("lock-repair requires a lowercase SHA-256 --lock-digest")
 }
 
 async function executeCommand(parsed: ParsedArguments): Promise<void> {
@@ -670,6 +1077,21 @@ async function executeCommand(parsed: ParsedArguments): Promise<void> {
 			emitData(
 				"record",
 				await recordEvent(parsed.ledgerPath, requiredRecordInput(parsed)),
+				parsed.json,
+			),
+		"lock-status": async () =>
+			emitData(
+				"lock-status",
+				await inspectLedgerLock(parsed.ledgerPath),
+				parsed.json,
+			),
+		"lock-repair": async () =>
+			emitData(
+				"lock-repair",
+				await repairLedgerLock(
+					parsed.ledgerPath,
+					requiredLockDigest(parsed),
+				),
 				parsed.json,
 			),
 	}
@@ -691,12 +1113,6 @@ try {
 	await main()
 } catch (error) {
 	if (error instanceof LedgerError) emitError(error, Bun.argv.includes("--json"))
-	const wrapped = new LedgerError(
-		"RUNTIME_FAILURE",
-		"Quarter ledger failed without changing verified state",
-		1,
-		false,
-		"inspect_diagnostics_and_retry_after_repair",
-	)
+	const wrapped = runtimeFailure(false)
 	emitError(wrapped, Bun.argv.includes("--json"))
 }
