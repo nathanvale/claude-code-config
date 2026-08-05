@@ -93,6 +93,7 @@ export interface DiscoveryIssue {
 	/** Stable issue code. */
 	code:
 		| "git_root_failed"
+		| "isolation_detection_failed"
 		| "worktree_list_failed"
 		| "current_branch_failed"
 		| "default_branch_unknown"
@@ -102,6 +103,11 @@ export interface DiscoveryIssue {
 	/** Short machine-safe summary. */
 	summary: string;
 }
+
+/**
+ * Git repository isolation for the invocation directory.
+ */
+export type RepoIsolation = "main" | "linked_worktree" | "submodule";
 
 /**
  * Repo and worktree map used by doctor and lifecycle commands.
@@ -116,6 +122,8 @@ export interface RepoDiscovery {
 	requestedRoot: string;
 	/** Git top-level root, when readable. */
 	gitRoot?: string;
+	/** Git repository isolation for the requested cwd, when classifiable. */
+	isolation?: RepoIsolation;
 	/** Main durable worktree root. */
 	mainOwnerRoot?: string;
 	/** Active worktree root for the requested cwd. */
@@ -217,13 +225,39 @@ export async function discoverRepo(
 	}
 
 	const gitRoot = gitRootResult.stdout.trim();
-	const [worktreeResult, branchResult, defaultBranchResult] = await Promise.all([
+	const [
+		worktreeResult,
+		branchResult,
+		defaultBranchResult,
+		gitDirResult,
+		commonGitDirResult,
+		superprojectResult,
+	] = await Promise.all([
 		run(["git", "worktree", "list", "--porcelain"], { cwd: gitRoot }),
 		run(["git", "branch", "--show-current"], { cwd: requestedRoot }),
 		run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
 			cwd: gitRoot,
 		}),
+		run(["git", "rev-parse", "--git-dir"], { cwd: requestedRoot }),
+		run(["git", "rev-parse", "--git-common-dir"], { cwd: requestedRoot }),
+		run(["git", "rev-parse", "--show-superproject-working-tree"], {
+			cwd: requestedRoot,
+		}),
 	]);
+
+	const isolation = classifyRepoIsolation({
+		requestedRoot,
+		gitDirResult,
+		commonGitDirResult,
+		superprojectResult,
+	});
+	if (!isolation) {
+		issues.push({
+			code: "isolation_detection_failed",
+			status: "unknown",
+			summary: "Git isolation could not be classified.",
+		});
+	}
 
 	let worktrees: readonly DiscoveredWorktree[] = [];
 	if (worktreeResult.ok) {
@@ -274,6 +308,7 @@ export async function discoverRepo(
 	return {
 		requestedRoot,
 		gitRoot,
+		isolation,
 		mainOwnerRoot,
 		activeWorktree,
 		worktrees,
@@ -284,6 +319,30 @@ export async function discoverRepo(
 		storeRoot: join(mainOwnerRoot, ".agent-worktree"),
 		issues,
 	};
+}
+
+function classifyRepoIsolation(input: {
+	requestedRoot: string;
+	gitDirResult: GitRunResult;
+	commonGitDirResult: GitRunResult;
+	superprojectResult: GitRunResult;
+}): RepoIsolation | undefined {
+	const gitDir = input.gitDirResult.stdout.trim();
+	const commonGitDir = input.commonGitDirResult.stdout.trim();
+	if (
+		!input.gitDirResult.ok ||
+		!input.commonGitDirResult.ok ||
+		!input.superprojectResult.ok ||
+		!gitDir ||
+		!commonGitDir
+	) {
+		return undefined;
+	}
+	if (input.superprojectResult.stdout.trim()) return "submodule";
+	return resolve(input.requestedRoot, gitDir) ===
+		resolve(input.requestedRoot, commonGitDir)
+		? "main"
+		: "linked_worktree";
 }
 
 /**

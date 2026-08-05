@@ -1,0 +1,274 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "fasttrack",
+  "flow_id": "fill-week",
+  "flow_name": "fill-week",
+  "version": "2",
+  "summary": "Fill and verify one FastTrack week, then save it as a draft. Final Submit stays human-controlled.",
+  "allowed_origins": [
+    "https://manpowergroup.fasttrack360.com.au"
+  ],
+  "auth_context_ref": "interactive-login",
+  "inputs": [
+    {
+      "id": "timesheet_run",
+      "summary": "The selected week, expected hours, and FastTrack row values.",
+      "required": true,
+      "schema": {
+        "kind": "object",
+        "fields": {
+          "envelope": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "target_account": {
+                  "required": true,
+                  "schema": {
+                    "kind": "string",
+                    "min_length": 1,
+                    "max_length": 256
+                  }
+                },
+                "period_start": {
+                  "required": true,
+                  "schema": {
+                    "kind": "date"
+                  }
+                },
+                "period_end": {
+                  "required": true,
+                  "schema": {
+                    "kind": "date"
+                  }
+                },
+                "selected_work_dates": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 31,
+                    "items": {
+                      "kind": "date"
+                    }
+                  }
+                },
+                "expected_aggregate": {
+                  "required": true,
+                  "schema": {
+                    "kind": "object",
+                    "fields": {
+                      "unit": {
+                        "required": true,
+                        "schema": {
+                          "kind": "enum",
+                          "values": [
+                            "hours"
+                          ]
+                        }
+                      },
+                      "value": {
+                        "required": true,
+                        "schema": {
+                          "kind": "number",
+                          "minimum": 0,
+                          "maximum": 168
+                        }
+                      }
+                    }
+                  }
+                },
+                "mutation_mode": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "prepare-draft"
+                    ]
+                  }
+                },
+                "final_action": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "human-submit"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "payload": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "portal": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "fasttrack"
+                    ]
+                  }
+                },
+                "rows": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 7,
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "date": {
+                          "required": true,
+                          "schema": {
+                            "kind": "date"
+                          }
+                        },
+                        "day": {
+                          "required": true,
+                          "schema": {
+                            "kind": "enum",
+                            "values": [
+                              "Mon",
+                              "Tue",
+                              "Wed",
+                              "Thu",
+                              "Fri",
+                              "Sat",
+                              "Sun"
+                            ]
+                          }
+                        },
+                        "start_time": {
+                          "required": true,
+                          "schema": {
+                            "kind": "string",
+                            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                          }
+                        },
+                        "end_time": {
+                          "required": true,
+                          "schema": {
+                            "kind": "string",
+                            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                          }
+                        },
+                        "attendance_type": {
+                          "required": true,
+                          "schema": {
+                            "kind": "enum",
+                            "values": [
+                              "Standard",
+                              "Public Holiday Worked"
+                            ]
+                          }
+                        },
+                        "breaks": {
+                          "required": false,
+                          "schema": {
+                            "kind": "array",
+                            "max_items": 4,
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "start_time": {
+                                  "required": true,
+                                  "schema": {
+                                    "kind": "string",
+                                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                                  }
+                                },
+                                "end_time": {
+                                  "required": true,
+                                  "schema": {
+                                    "kind": "string",
+                                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00",
+      "postcondition": {
+        "kind": "url-starts-with",
+        "url": "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal#/VGltZUFuZEF0dGVuZGFuY2U00"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-fill-week",
+      "expected_digest": "f9df669f19812f1276b4d8f06bb465db50ceabf4c370f2e9955d3d8f44989342",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-filled-week",
+      "expected_digest": "0cf30bac5a848bde7c6db40b647021c8cd31e4c7d26dac307d922444dd7ef9e6",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-save-draft",
+      "expected_digest": "ceb82764fadff1d4ad8741984858c5bf2eca023520d542333551633e9d199355",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "fasttrack-verify-saved-draft",
+      "expected_digest": "9320d30f7fb0d8b68b27df5ecf0ca65db2ddc09c08bf1555abb439e1d3b1e0cb",
+      "inputs": {
+        "week_start": "{{timesheet_run.envelope.period_start}}",
+        "week_end": "{{timesheet_run.envelope.period_end}}",
+        "rows": "{{timesheet_run.payload.rows}}",
+        "expected_total_hours": "{{timesheet_run.envelope.expected_aggregate.value}}"
+      }
+    }
+  ]
+}

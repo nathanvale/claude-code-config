@@ -26,6 +26,15 @@ export const BROWSER_USE_AUTH_CONTEXTS = ["interactive-login"] as const;
 /** Auth context union. */
 export type BrowserUseAuthContext = (typeof BROWSER_USE_AUTH_CONTEXTS)[number];
 
+export function isBrowserUseAuthContext(
+	value: unknown,
+): value is BrowserUseAuthContext {
+	return (
+		typeof value === "string" &&
+		(BROWSER_USE_AUTH_CONTEXTS as readonly string[]).includes(value)
+	);
+}
+
 /**
  * CLI-retrievable binding auth methods only; passkey/user-presence is
  * unrepresentable here by construction (R13).
@@ -557,10 +566,9 @@ export function validateVaultItemEvidenceShape(
 			issues.push(issue);
 			continue;
 		}
-		// matchItemBinding copies evidence ids verbatim into minted bindings,
-		// which feed op argv positions; a leading '-' would let tampered
-		// evidence reshape the op invocation. Fail closed (same guard as
-		// validateItemBindingShape).
+		// Selection projects evidence ids for a later binding-approval flow.
+		// A leading '-' would let an approved value reshape the eventual op
+		// invocation. Fail closed (same guard as validateItemBindingShape).
 		if ((value[field] as string).startsWith("-")) {
 			issues.push({
 				code: "evidence_field_invalid",
@@ -773,23 +781,22 @@ export type BrowserUseBindingMatchInput = {
 	> | null;
 };
 
-/** Match result: bound, missing-item, ambiguous, or a typed refusal. */
+/** Match result: approval required, missing item, or a typed refusal. */
 export type BrowserUseBindingMatchResult =
-	| { kind: "bound"; binding: BrowserUseItemBinding }
+	| {
+			kind: "binding-approval-required";
+			blocked_cause: Extract<
+				BrowserUseAuthBlockedCause,
+				"binding-approval-required"
+			>;
+			continuation: BrowserUseAuthContinuation;
+			selection: readonly BrowserUseRedactedSelectionOption[];
+	  }
 	| {
 			kind: "missing-item";
 			blocked_cause: Extract<BrowserUseAuthBlockedCause, "revoked-binding">;
 			continuation: BrowserUseAuthContinuation;
 			repair_hint: BrowserUseBindingRepairHint;
-	  }
-	| {
-			kind: "ambiguous-selection";
-			blocked_cause: Extract<
-				BrowserUseAuthBlockedCause,
-				"ambiguous-binding-selection"
-			>;
-			continuation: BrowserUseAuthContinuation;
-			selection: readonly BrowserUseRedactedSelectionOption[];
 	  }
 	| {
 			kind: "refused";
@@ -826,14 +833,14 @@ function loginPathScore(
 
 /**
  * The single-owner match/selection policy: fresh discovery AND import both
- * call it. Exactly one deterministic live-evidence match binds with zero
- * prompts; zero matches block revoked-binding with the legacy repair hint
- * carried beside (never inside) the continuation (SD6); 2+ matches block
- * ambiguous-binding-selection with a redacted ranked list — the hint ranks
- * but never collapses a tie to a bind (SD1).
+ * call it. One or more live-evidence matches require binding approval with a
+ * redacted ranked list; discovery never stamps request-owned service/auth
+ * dimensions onto an approved Item Binding. Zero matches block revoked-binding
+ * with the legacy repair hint carried beside the continuation (SD6). The hint
+ * ranks but never authorizes or collapses a selection to a bind (SD1).
  *
  * @param input - Match input; the R8 vault proof must precede this call
- * @returns Bound binding, typed blocked result, or a typed refusal
+ * @returns Approval-required or missing-item block, or a typed refusal
  */
 export function matchItemBinding(
 	input: BrowserUseBindingMatchInput,
@@ -883,23 +890,6 @@ export function matchItemBinding(
 		};
 	}
 
-	const single = eligible[0];
-	if (eligible.length === 1 && single !== undefined) {
-		return {
-			kind: "bound",
-			binding: {
-				service_id: input.service_id,
-				auth_context: input.auth_context,
-				allowed_origins: [...single.item.origins],
-				allowed_login_paths: [...single.item.login_paths],
-				vault_id: single.item.vault_id,
-				item_id: single.item.item_id,
-				allowed_auth_methods: [...single.item.supported_methods],
-				binding_revision: 1,
-			},
-		};
-	}
-
 	const hintItemId = input.hint?.hint_item_id ?? null;
 	const ranked = eligible
 		.map((entry) => ({
@@ -913,9 +903,9 @@ export function matchItemBinding(
 			return a.item.item_id < b.item.item_id ? -1 : 1;
 		});
 	return {
-		kind: "ambiguous-selection",
-		blocked_cause: "ambiguous-binding-selection",
-		continuation: continuationOf("ambiguous-binding-selection"),
+		kind: "binding-approval-required",
+		blocked_cause: "binding-approval-required",
+		continuation: continuationOf("binding-approval-required"),
 		selection: ranked.map((entry, index) => ({
 			item_id: entry.item.item_id,
 			rank: index + 1,
@@ -936,15 +926,16 @@ export type BrowserUseOriginProposal = {
 
 /** Per-candidate import disposition. */
 export type BrowserUseCandidateImportDisposition =
-	| {
-			kind: "bound";
-			binding: BrowserUseItemBinding;
-			/** Legacy-only origins land here, never in allowed_origins (SD2). */
+	| (Extract<
+			BrowserUseBindingMatchResult,
+			{ kind: "binding-approval-required" }
+	  > & {
+			/** Legacy origins remain proposals; import never approves them (SD2). */
 			origin_proposals: readonly BrowserUseOriginProposal[];
-	  }
+	  })
 	| Extract<
 			BrowserUseBindingMatchResult,
-			{ kind: "missing-item" } | { kind: "ambiguous-selection" }
+			{ kind: "missing-item" }
 	  >;
 
 /** One result per input candidate, order preserved. */
@@ -1051,22 +1042,19 @@ export function importCandidates(input: {
 				},
 			};
 		}
-		if (match.kind === "bound") {
-			const proposals = normalizedOrigins
-				.filter((origin) => !match.binding.allowed_origins.includes(origin))
-				.map(
-					(origin): BrowserUseOriginProposal => ({
-						origin,
-						provenance: "legacy-import",
-						requires_grant: true,
-					}),
-				);
+		if (match.kind === "binding-approval-required") {
+			const proposals = normalizedOrigins.map(
+				(origin): BrowserUseOriginProposal => ({
+					origin,
+					provenance: "legacy-import",
+					requires_grant: true,
+				}),
+			);
 			return {
 				candidate_id: candidate.candidate_id,
 				ok: true,
 				disposition: {
-					kind: "bound",
-					binding: match.binding,
+					...match,
 					origin_proposals: proposals,
 				},
 			};

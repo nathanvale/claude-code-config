@@ -44,7 +44,7 @@ describe("FastTrack save-draft staged migration (U5, R19/R26/AE6/AE8)", () => {
 		expect(migrated.runbook).toMatchObject({
 			service_id: "fasttrack",
 			flow_id: "fill-week",
-			auth_context_ref: "fasttrack-session",
+			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://portal.example.com"],
 		});
 		expect(migrated.runbook.steps).toEqual([

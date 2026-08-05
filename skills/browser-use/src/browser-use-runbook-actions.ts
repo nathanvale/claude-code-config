@@ -51,6 +51,10 @@ import {
 	type BrowserUseRunStructuredResult,
 } from "./browser-use-run-model";
 import type { BrowserUseRunbookPostcondition } from "./browser-use-runbook-model";
+import {
+	type BrowserUseReviewedActionPromotionReceipt,
+	reviewedActionPromotionReceiptIsValid,
+} from "./browser-use-reviewed-action-approval";
 
 // --- Content addressing ------------------------------------------------------
 
@@ -133,42 +137,22 @@ const OBSERVATIONAL_ACTION_PROOFS: readonly RegExp[] = [
 	/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>\s*JSON\s*\.\s*parse\s*\(\s*document\s*\.\s*querySelector\s*\(\s*(?:'[^'\\]*'|"[^"\\]*")\s*\)\s*\.\s*textContent\s*\)\s*;?\s*$/,
 ];
 
-/**
- * Exact reviewed Oncore draft-verification action.
- *
- * Its byte identity is the mechanical read proof: any edit falls back to the
- * conservative mutation audit until reviewed and represented here again. The
- * action emits only a schema-pinned sentinel after exact draft semantics pass.
- */
-export const ONCORE_DRAFT_VERIFICATION_ACTION_BYTES =
-	`async ({ inputs }) => {
-		const raw = document.querySelector('#draft-proof')?.textContent;
-		let proof;
-		try {
-			proof = JSON.parse(raw ?? '');
-		} catch {
-			throw new Error('draft verification failed');
-		}
-		const expectedKeys = inputs.item_keys;
-		const expectedTotal = inputs.entries.reduce((total, entry) => total + entry.units, 0);
-		const exactShape =
-			proof !== null &&
-			typeof proof === 'object' &&
-			!Array.isArray(proof) &&
-			Object.keys(proof).sort().join(',') === 'editable,persisted_entries,submitted,total_units';
-		const orderedKeysMatch =
-			Array.isArray(proof?.persisted_entries) &&
-			proof.persisted_entries.length === expectedKeys.length &&
-			proof.persisted_entries.every((key, index) => key === expectedKeys[index]);
-		const valid =
-			exactShape &&
-			orderedKeysMatch &&
-			proof.total_units === expectedTotal &&
-			proof.editable === true &&
-			proof.submitted === false;
-		if (!valid) throw new Error('draft verification failed');
-		return { verification: 'oncore-draft-preserved-v1' };
-	}`;
+const OBSERVATIONAL_ESCAPE_FINGERPRINTS: readonly RegExp[] = [
+	/\b(?:eval|Function|WebAssembly|Worker|SharedWorker|BroadcastChannel)\b/,
+	/\b(?:globalThis|window)\b/,
+	/\b(?:import|require)\s*\(/,
+	/\bObject\s*\.\s*(?:assign|defineProperty|defineProperties|setPrototypeOf)\s*\(/,
+	/\bReflect\s*\.\s*(?:set|defineProperty|deleteProperty|setPrototypeOf)\s*\(/,
+	/(?:\.\s*[A-Za-z_$][\w$]*|\[[^\]]+\])\s*(?:\+\+|--|=(?!=)|[+\-*/%]=)/,
+];
+
+function observationalActionMechanicsProven(bytes: string): boolean {
+	return (
+		/^\s*async\s*\(\s*\{\s*inputs\s*\}\s*\)\s*=>/.test(bytes) &&
+		/\bdocument\s*\.\s*querySelector(?:All)?\s*\(/.test(bytes) &&
+		!OBSERVATIONAL_ESCAPE_FINGERPRINTS.some((pattern) => pattern.test(bytes))
+	);
+}
 
 /**
  * Audit one action asset's bytes for mutation behavior (R19/KTD7). Returns the
@@ -184,8 +168,8 @@ export function auditActionEffectClass(bytes: string): BrowserUseActionEffectCla
 	if (MUTATION_BEHAVIOR_FINGERPRINTS.some((pattern) => pattern.test(bytes))) {
 		return "mutation";
 	}
-	return bytes === ONCORE_DRAFT_VERIFICATION_ACTION_BYTES ||
-		OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes))
+	return OBSERVATIONAL_ACTION_PROOFS.some((pattern) => pattern.test(bytes)) ||
+		observationalActionMechanicsProven(bytes)
 		? "read"
 		: "mutation";
 }
@@ -416,6 +400,11 @@ function isValueSchema(value: unknown): value is BrowserUseActionValueSchema {
 	}
 }
 
+/** Prove one authored action schema uses the model-owned bounded vocabulary. */
+export function actionValueSchemaIsValid(value: unknown): value is BrowserUseActionValueSchema {
+	return isValueSchema(value);
+}
+
 function stringValueMatches(
 	value: unknown,
 	schema: Extract<BrowserUseActionValueSchema, { kind: "string" }>,
@@ -540,10 +529,11 @@ export type BrowserUseActionContainmentPolicy =
 // --- Promotion receipt (R17, R42) --------------------------------------------
 
 /**
- * Promotion-receipt dispositions (R42). Only `approved` authorizes execution;
- * `rejected`, `withdrawn`, and `invalidated` are DURABLE dispositions a record
- * keeps so a previously-approved action cannot silently re-enable. A required
- * active action lacking a current `approved` receipt blocks activation.
+ * Promotion dispositions (R42). Only an `approved` signed receipt authorizes
+ * execution; legacy evidence never does. `rejected`, `withdrawn`, and
+ * `invalidated` are DURABLE dispositions a record keeps so a previously-approved
+ * action cannot silently re-enable. A required active action lacking current
+ * signed authority blocks activation.
  */
 export const BROWSER_USE_PROMOTION_DISPOSITIONS = [
 	"approved",
@@ -557,13 +547,13 @@ export type BrowserUsePromotionDisposition =
 	(typeof BROWSER_USE_PROMOTION_DISPOSITIONS)[number];
 
 /**
- * An operator-approved promotion RECEIPT (R17). It binds an approval to the
- * EXACT asset digest (an approval for other bytes never carries over) plus the
- * exact allowed origin and audited effect class the operator approved. A
- * runbook can never author this — it is generation/registry-owned (KTD5).
+ * Retained unsigned approval evidence from the legacy registry shape.
+ *
+ * It remains readable for inspection and migration, but never authorizes
+ * execution. Fresh operator promotion must produce signed authority first.
  */
-export type BrowserUsePromotionReceipt = {
-	/** The exact asset digest this receipt approved; must match the record. */
+export type BrowserUseLegacyPromotionEvidence = {
+	/** The exact asset digest named by the historical approval claim. */
 	approved_digest: string;
 	disposition: BrowserUsePromotionDisposition;
 	/** The exact origin the operator approved this action for. */
@@ -573,6 +563,11 @@ export type BrowserUsePromotionReceipt = {
 	/** Opaque operator identity; audit only, never an authority branch. */
 	approver_ref: string;
 };
+
+/** Signed production receipt or retained unsigned legacy evidence. */
+export type BrowserUsePromotionReceipt =
+	| BrowserUseLegacyPromotionEvidence
+	| BrowserUseReviewedActionPromotionReceipt;
 
 // --- Reviewed action registry record (R16-R18) -------------------------------
 
@@ -593,6 +588,8 @@ export type BrowserUseReviewedActionRecord = {
 	allowed_origin: string;
 	/** Audited effect class (R19); MUST match the asset audit at resolution. */
 	effect_class: BrowserUseActionEffectClass;
+	/** Closed capabilities re-derived before signed promotion is accepted. */
+	audited_capabilities?: readonly string[];
 	/** Enforced containment policy (R23); an unenforceable claim is refused. */
 	containment: BrowserUseActionContainmentPolicy;
 	/** Typed input schema (R17); the runbook's substituted inputs must satisfy it. */
@@ -605,8 +602,8 @@ export type BrowserUseReviewedActionRecord = {
 	required_postcondition?: BrowserUseRunbookPostcondition;
 	/** Source provenance (R17); the migrated source lineage, never bytes. */
 	source_provenance: string;
-	/** The operator-approved promotion receipt (R17); a runbook can't author it. */
-	promotion_receipt: BrowserUsePromotionReceipt;
+	/** Signed execution authority or retained legacy evidence; a runbook can't author either. */
+	promotion_receipt: BrowserUsePromotionReceipt | null;
 };
 
 // --- Resolution seam (R16, R38) ----------------------------------------------
@@ -632,6 +629,11 @@ export type BrowserUseActionGenerationSeam = {
 		| { ok: true; bytes: string }
 		| { ok: false; reason: "bytes_unavailable" }
 	>;
+	verifyPromotion?(input: {
+		actionId: string;
+		record: BrowserUseReviewedActionRecord;
+		assetBytes: string;
+	}): Promise<{ ok: true } | { ok: false; code: string }>;
 };
 
 // --- Typed refusal (every pre-dispatch fail-closed path) ---------------------
@@ -657,7 +659,10 @@ export type BrowserUseReviewedActionRefusalCode =
 	| "action_receipt_not_approved"
 	| "action_receipt_digest_mismatch"
 	| "action_receipt_origin_mismatch"
-	| "action_receipt_effect_mismatch";
+	| "action_receipt_effect_mismatch"
+	| "action_promotion_authority_missing"
+	| "action_promotion_verifier_unavailable"
+	| "action_promotion_invalid";
 
 /** One typed reviewed-action refusal. Never carries asset bytes or a value. */
 export type BrowserUseReviewedActionRefusal = {
@@ -672,7 +677,7 @@ function refuse(
 	return { ok: false, refusal: { code, message: redactUnsafeText(message) } };
 }
 
-function exactOriginValid(value: string): boolean {
+export function exactOriginValid(value: string): boolean {
 	try {
 		const url = new URL(value);
 		return (
@@ -685,11 +690,64 @@ function exactOriginValid(value: string): boolean {
 }
 
 function postconditionValid(postcondition: AgentBrowserPostcondition): boolean {
-	if (postcondition.kind === "url-equals") return postcondition.url.length > 0;
-	return (
+	if (
+		postcondition.kind === "url-equals" ||
+		postcondition.kind === "url-starts-with"
+	) {
+		return typeof postcondition.url === "string" && postcondition.url.length > 0;
+	}
+	if (postcondition.kind !== "element-visible") return false;
+	return typeof postcondition.selector === "string" &&
 		!postcondition.selector.startsWith("@") &&
-		postcondition.selector.trim().length > 0
-	);
+		postcondition.selector.trim().length > 0;
+}
+
+export function reviewedActionRecordIsValid(value: unknown): value is BrowserUseReviewedActionRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	const receipt = record.promotion_receipt;
+	if (
+		typeof record.action_id !== "string" ||
+		!SAFE_ACTION_ID.test(record.action_id) ||
+		typeof record.asset_id !== "string" ||
+		typeof record.expected_digest !== "string" ||
+		!actionDigestIsValid(record.asset_id) ||
+		record.asset_id !== record.expected_digest ||
+		typeof record.allowed_origin !== "string" ||
+		!exactOriginValid(record.allowed_origin) ||
+		!(BROWSER_USE_ACTION_EFFECT_CLASSES as readonly unknown[]).includes(record.effect_class) ||
+		!(BROWSER_USE_ACTION_CONTAINMENT_POLICIES as readonly unknown[]).includes(record.containment) ||
+		!isValueSchema(record.input_schema) ||
+		!isValueSchema(record.result_schema) ||
+		(record.result_sensitivity !== "low" && record.result_sensitivity !== "high") ||
+		typeof record.source_provenance !== "string" || record.source_provenance === "" ||
+		(record.effect_class === "mutation" &&
+			(typeof record.required_postcondition !== "object" ||
+				record.required_postcondition === null ||
+				!postconditionValid(record.required_postcondition as BrowserUseRunbookPostcondition))) ||
+		(receipt !== null && (typeof receipt !== "object" || Array.isArray(receipt)))
+	) return false;
+	if (record.audited_capabilities !== undefined &&
+		(!Array.isArray(record.audited_capabilities) ||
+			record.audited_capabilities.length === 0 ||
+			!record.audited_capabilities.every((entry) => typeof entry === "string"))) return false;
+	if (receipt === null) return true;
+	if (reviewedActionPromotionReceiptIsValid(receipt)) {
+		return receipt.action_id === record.action_id &&
+			receipt.approved_digest === record.expected_digest &&
+			receipt.approved_origin === record.allowed_origin &&
+			receipt.approved_effect === record.effect_class &&
+			Array.isArray(record.audited_capabilities);
+	}
+	const promotion = receipt as Record<string, unknown>;
+	if (
+		promotion.approved_digest !== record.expected_digest ||
+		!(BROWSER_USE_PROMOTION_DISPOSITIONS as readonly unknown[]).includes(promotion.disposition) ||
+		promotion.approved_origin !== record.allowed_origin ||
+		promotion.approved_effect !== record.effect_class ||
+		typeof promotion.approver_ref !== "string" || promotion.approver_ref === ""
+	) return false;
+	return true;
 }
 
 /**
@@ -752,10 +810,22 @@ export async function resolveReviewedAction(input: {
 	// Receipt disposition FIRST: a runbook can never grant its own approval, and
 	// a candidate/rejected/withdrawn/invalidated receipt is non-executable (R18,
 	// R42) regardless of anything else.
+	if (record.promotion_receipt === null) {
+		return refuse(
+			"action_receipt_not_approved",
+			"the Reviewed Action candidate has no external-human promotion receipt.",
+		);
+	}
 	if (record.promotion_receipt.disposition !== "approved") {
 		return refuse(
 			"action_receipt_not_approved",
 			`the promotion receipt disposition is ${record.promotion_receipt.disposition}; only an operator-approved action is executable.`,
+		);
+	}
+	if (!reviewedActionPromotionReceiptIsValid(record.promotion_receipt)) {
+		return refuse(
+			"action_promotion_authority_missing",
+			"the Reviewed Action has legacy promotion evidence but no signed execution authority; fresh operator promotion is required.",
 		);
 	}
 
@@ -906,6 +976,23 @@ export async function resolveReviewedAction(input: {
 		return refuse(
 			"action_receipt_effect_mismatch",
 			"the promotion receipt approved a different effect class than the record's.",
+		);
+	}
+	if (input.seam.verifyPromotion === undefined) {
+		return refuse(
+			"action_promotion_verifier_unavailable",
+			"the active generation has no offline Reviewed Action promotion verifier.",
+		);
+	}
+	const verified = await input.seam.verifyPromotion({
+		actionId: input.actionId,
+		record,
+		assetBytes: assetBytes.bytes,
+	});
+	if (!verified.ok) {
+		return refuse(
+			"action_promotion_invalid",
+			"the sealed Reviewed Action promotion authority did not verify.",
 		);
 	}
 

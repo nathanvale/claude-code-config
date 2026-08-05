@@ -11,7 +11,10 @@ import {
 	executeAgentBrowserTask,
 } from "./browser-use-agent-browser";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
-import { createBrowserUseAuthProvider } from "./browser-use-auth-provider";
+import {
+	createBrowserUseAuthProvider,
+	sensitiveIntervalLeaseKeyForRun,
+} from "./browser-use-auth-provider";
 import type {
 	BrowserUseDeliveryHook,
 	BrowserUseTargetReproof,
@@ -35,6 +38,7 @@ import {
 import {
 	type RunStoreDeps,
 	createSharedRun,
+	leaseKeyForRun,
 	loadSharedRun,
 } from "./browser-use-runs";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
@@ -44,6 +48,10 @@ import {
 	type BrowserUseGovernedSurface,
 	markRunSensitive,
 } from "./browser-use-sensitive-run";
+import type {
+	BrowserUseDevToolsRequest,
+	BrowserUseDevToolsTransport,
+} from "./browser-use-target-proof";
 import { makeRuntime } from "./browser-use-test-helpers";
 import { __confidentialDeliveryDriverForTest } from "./browser-use";
 
@@ -68,6 +76,9 @@ const {
 	collectRunGovernedSurfaces,
 	sentinelRegistrationWithheldFailure,
 	recordTaskRunOutcome,
+	emitSubmitApprovalGate,
+	buildRunbookAuthDelivery,
+	environmentDeliveryHook,
 } = __confidentialDeliveryDriverForTest;
 
 const disposables: { dispose(): void }[] = [];
@@ -136,6 +147,9 @@ const BINDING: BrowserUseItemBinding = {
 	binding_revision: 1,
 };
 
+const resolveApprovedBinding = async (): Promise<BrowserUseItemBinding> =>
+	BINDING;
+
 function verifiedTarget(runId: string): BrowserUseVerifiedTarget {
 	return {
 		lane_id: "agent-browser",
@@ -147,6 +161,51 @@ function verifiedTarget(runId: string): BrowserUseVerifiedTarget {
 		frame_id: "frame-1",
 		account_ref: "acct-ref-redacted",
 		target_proof_digest: "d".repeat(32),
+	};
+}
+
+function stableProofTransport(): BrowserUseDevToolsTransport {
+	return {
+		request: async (request: BrowserUseDevToolsRequest): Promise<unknown> => {
+			switch (request.method) {
+				case "Target.getTargets":
+					return {
+						targetInfos: [
+							{
+								targetId: "cdp-target-7",
+								type: "page",
+								url: "https://oncore.test/login",
+							},
+						],
+					};
+				case "Target.attachToTarget":
+					return { sessionId: "session-1" };
+				case "Page.getFrameTree":
+					return {
+						frameTree: {
+							frame: {
+								id: "top-frame",
+								url: "https://oncore.test/login",
+							},
+						},
+					};
+				case "Accessibility.getFullAXTree":
+					return {
+						nodes: [
+							{
+								backendDOMNodeId: 41,
+								frameId: "top-frame",
+								role: { value: "textbox" },
+								name: { value: "Password" },
+							},
+						],
+					};
+				case "DOM.resolveNode":
+					return { object: { objectId: "object-41" } };
+				case "Target.detachFromTarget":
+					return {};
+			}
+		},
 	};
 }
 
@@ -201,6 +260,89 @@ async function makeStore(): Promise<{
 	return { env: xdg.env, deps: { fs, paths: opened.paths, clock: fixedClock().now } };
 }
 
+function liveSeamInput(runId: string) {
+	return {
+		pendingItemBindings: ["oncore_password"],
+		serviceId: "oncore",
+		allowedOrigins: ["https://oncore.test"],
+		expectedTargetUrl: "https://oncore.test/login",
+		confidentialFields: [
+			{
+				bindingSlug: "oncore_password",
+				credentialField: "password" as const,
+				target: { role: "textbox", name: "Password" },
+			},
+		],
+		handoff: HANDOFF,
+		runId,
+		targetTabId: "t1",
+	};
+}
+
+function activeVaultPort(
+	overrides: Partial<BrowserUseTokenRetrievalPort> = {},
+): BrowserUseTokenRetrievalPort {
+	return {
+		listVaults: async () => ({
+			ok: true,
+			vaults: [{ vault_id: "vault-1", name: "Browser Automation" }],
+		}),
+		listLoginItems: async () => ({
+			ok: true,
+			items: [
+				{
+					item_id: "item-1",
+					vault_id: "vault-1",
+					origins: ["https://oncore.test"],
+					login_paths: ["/login"],
+					supported_methods: ["password"] as const,
+					state: "active",
+				},
+			],
+		}),
+		getLoginItem: async () => ({
+			ok: true,
+			item: {
+				item_id: "item-1",
+				vault_id: "vault-1",
+				origins: ["https://oncore.test"],
+				login_paths: ["/login"],
+				supported_methods: ["password", "otp"],
+				state: "active",
+			},
+		}),
+		fetchCredentialField: fakePort.fetchCredentialField,
+		...overrides,
+	};
+}
+
+type ApprovedBindingResolver = NonNullable<
+	Parameters<
+		typeof buildRunbookAuthDelivery
+	>[1]["resolveApprovedBinding"]
+>;
+
+function buildApprovedAuthDelivery(
+	store: RunStoreDeps,
+	port: BrowserUseTokenRetrievalPort,
+	deps: Omit<
+		Parameters<typeof buildRunbookAuthDelivery>[1],
+		"tokenRetrieval" | "resolveApprovedBinding"
+	>,
+	resolver: ApprovedBindingResolver = resolveApprovedBinding,
+) {
+	const provider = createBrowserUseAuthProvider({
+		store,
+		tokenRetrieval: port,
+		attestationByDigest: () => undefined,
+	});
+	return buildRunbookAuthDelivery(provider, {
+		...deps,
+		tokenRetrieval: port,
+		resolveApprovedBinding: resolver,
+	});
+}
+
 // Build the delivery context through the REAL provider builder (wiring_spec
 // item 3): the transaction supplies the VerifiedTarget; the provider supplies
 // the TokenRetrievalPort. `in_sensitive_interval` gates whether the lane routes
@@ -221,7 +363,10 @@ function buildContext(
 		target: verifiedTarget(runId),
 		deliver: hook,
 		reproveTarget: reproveOk,
-		field_by_ref: { "@e2": "password", "@e3": "otp-current" },
+		field_by_binding_slug: {
+			oncore_password: "password",
+			oncore_otp_current: "otp-current",
+		},
 		in_sensitive_interval: inSensitiveInterval,
 	});
 }
@@ -250,6 +395,610 @@ function attachAndSnapshot(): { exitCode?: number; stdout?: string }[] {
 }
 
 describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
+	test("live seam delivers to the observed target URL after a same-origin redirect", async () => {
+		const store = await makeStore();
+		let deliveryCalls = 0;
+		const port = {
+			...activeVaultPort(),
+			fetchCredentialField: async (
+				request: Parameters<
+					BrowserUseTokenRetrievalPort["fetchCredentialField"]
+				>[0],
+			): Promise<{ ok: true; handle: BrowserUseSecretHandle }> => {
+				const targetBound = request as typeof request & {
+					target_digest?: string;
+					observed_origin?: string;
+				};
+				expect(targetBound.target_digest).toMatch(/^[a-f0-9]{64}$/);
+				expect(targetBound.observed_origin).toBe("https://oncore.test");
+				return {
+					ok: true,
+					handle: {
+						handle_id: "live-handle-password",
+						field: "password",
+						expires_at_epoch_ms: 9_999_999,
+					},
+				};
+			},
+			redeemCredentialField: async (request: {
+				handle: BrowserUseSecretHandle;
+				target_digest: string;
+				ws_url: string;
+				target_url: string;
+				target_origin: string;
+				field: { role: string; accessible_name: string };
+			}) => {
+				deliveryCalls += 1;
+				expect(request.handle.handle_id).toBe("live-handle-password");
+				expect(request.target_digest).toMatch(/^[a-f0-9]{64}$/);
+				expect(request.ws_url).toBe(HANDOFF.endpoint.ws);
+				expect(request.target_url).toBe("https://oncore.test/login");
+				expect(request.target_origin).toBe("https://oncore.test");
+				expect(request.field).toEqual({
+					role: "textbox",
+					accessible_name: "Password",
+				});
+				return {
+					ok: true as const,
+					shape: { field: "password" as const, byte_length: 12 },
+				};
+			},
+		};
+		let transportClosed = 0;
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
+			createTargetTransport: () => ({
+				transport: stableProofTransport(),
+				close: () => {
+					transportClosed += 1;
+				},
+			}),
+			createDeliveryHook: environmentDeliveryHook,
+		});
+		const outcome = await seam({
+			...liveSeamInput("run-live-seam"),
+			expectedTargetUrl: "https://oncore.test/candidate",
+		});
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.context.in_sensitive_interval).toBe(true);
+		expect(outcome.context.binding.item_id).toBe("item-1");
+		expect(outcome.context.target.target_id).toBe("cdp-target-7");
+		expect(outcome.context.field_by_binding_slug).toEqual({
+			oncore_password: "password",
+		});
+		const executed = await executeAgentBrowserTask(
+			runtimeFor([
+				...attachAndSnapshot(),
+				{ stdout: adapterSuccess({ value: "•••" }) },
+			]),
+			{
+				handoff: HANDOFF,
+				run_id: "run-live-seam",
+				target_tab_id: "t1",
+				allowed_origins: ["https://oncore.test"],
+				auth_delivery: outcome.context,
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "fill",
+						ref: "@e2",
+						item_binding: "oncore_password",
+						value: "",
+						sensitivity: "confidential",
+						postcondition: {
+							kind: "value-equals",
+							selector: "input[name=password]",
+							value: "•••",
+						},
+					},
+				],
+			},
+		);
+		expect(executed.ok).toBe(true);
+		expect(deliveryCalls).toBe(1);
+		await outcome.release?.();
+		expect(transportClosed).toBe(1);
+	});
+
+	test("U7/R2/R12: the LIVE composition delivers a conformance sentinel with clean lane argv, no fill dispatch, and clean on-disk run bytes through the containment gate", async () => {
+		const RUN = "run-live-seam-sentinel";
+		const store = await makeStore();
+
+		// Sentinel minted under the driver's OWN run-scoped nonce so the marker
+		// markGuardForDeliveryOutcome registers EQUALS the delivered value — the
+		// argv/on-disk sweeps below hunt for the exact bytes the helper typed.
+		const nonce = runScopedSentinelNonce(RUN);
+		const PASS = deriveConformanceSentinel("password", nonce);
+		expect(PASS.ok).toBe(true);
+		if (!PASS.ok) return;
+
+		const helperObserved: string[] = [];
+		const port = {
+			...activeVaultPort(),
+			redeemCredentialField: async (request: {
+				handle: BrowserUseSecretHandle;
+				target_digest: string;
+				ws_url: string;
+				target_url: string;
+				target_origin: string;
+				field: { role: string; accessible_name: string };
+			}) => {
+				// The disposable helper stand-in "types" the sentinel bytes; only the
+				// non-secret shape leaves this boundary (byte_length == value length).
+				helperObserved.push(PASS.value);
+				expect(request.handle.handle_id.length).toBeGreaterThan(0);
+				return {
+					ok: true as const,
+					shape: {
+						field: "password" as const,
+						byte_length: PASS.shape.byte_length,
+					},
+				};
+			},
+		};
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
+			createTargetTransport: () => ({
+				transport: stableProofTransport(),
+				close: () => {},
+			}),
+			createDeliveryHook: environmentDeliveryHook,
+		});
+		const built = await seam(liveSeamInput(RUN));
+		expect(built.ok).toBe(true);
+		if (!built.ok) return;
+
+		const runtime = runtimeFor([
+			...attachAndSnapshot(),
+			{ stdout: adapterSuccess({ value: "•••" }) },
+		]);
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: RUN,
+			target_tab_id: "t1",
+			allowed_origins: ["https://oncore.test"],
+			auth_delivery: built.context,
+			steps: [
+				{ kind: "snapshot", interactive: true },
+				{
+					kind: "fill",
+					ref: "@e2",
+					item_binding: "oncore_password",
+					value: "",
+					sensitivity: "confidential",
+					postcondition: {
+						kind: "value-equals",
+						selector: "input[name=password]",
+						value: "•••",
+					},
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		// The delivery genuinely completed (the helper saw the sentinel bytes), so
+		// a clean lane sweep below is meaningful, not vacuous.
+		expect(helperObserved).toContain(PASS.value);
+		expect(result.delivery?.delivered_shapes).toEqual([
+			{ field: "password", byte_length: PASS.value.length },
+		]);
+
+		// The existing argv-leak assertion holds against the LIVE composition: no
+		// adapter argv carried the delivered value, and the executor dispatched no
+		// native fill for the confidential step.
+		expect(JSON.stringify(runtime.calls)).not.toContain(PASS.value);
+		expect(runtime.calls.some((call) => call.includes("fill"))).toBe(false);
+
+		// Driver guard seam over REAL on-disk run bytes: mark from the live result,
+		// prove the registered sentinel IS the delivered value, then release clean.
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: "seed",
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+		const baseGuardResult = beginSensitiveRunGuard(RUN);
+		expect(baseGuardResult.ok).toBe(true);
+		if (!baseGuardResult.ok) return;
+		const marked = markGuardForDeliveryOutcome(baseGuardResult.guard, result);
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+		const guard = marked.guard;
+		expect(guard?.sensitive).toBe(true);
+		if (guard === undefined) return;
+		// Loop closed by construction: what was delivered is exactly what is hunted.
+		expect(guard.sentinels).toContain(PASS.value);
+
+		const surfaces = await collectRunGovernedSurfaces(store.deps, RUN);
+		expect(surfaces.some((s) => s.kind === "run-store-file")).toBe(true);
+		for (const surface of surfaces) {
+			expect(surface.content).not.toContain(PASS.value);
+		}
+		const gate = assertContainmentBeforeRelease(guard, surfaces);
+		expect(gate.release).toBe(true);
+
+		// Non-vacuous flip: the SAME guard withholds when a run surface carries the
+		// delivered value, proving the clean release above is a real verdict.
+		const planted = assertContainmentBeforeRelease(guard, [
+			...surfaces,
+			{
+				kind: "run-store-file",
+				label: "planted-live-leak",
+				content: `{"leaked":"${PASS.value}"}`,
+			},
+		]);
+		expect(planted.release).toBe(false);
+		if (planted.release) return;
+		expect(planted.reason).toBe("containment_failed");
+		await built.release?.();
+	});
+
+	test("token absence refuses before target proof and names the install-token continuation chain", async () => {
+		const store = await makeStore();
+		const port = activeVaultPort({
+			listVaults: async () => ({
+				ok: false,
+				rejection: {
+					code: "token-invalid",
+					message: "token unavailable",
+				},
+			}),
+		});
+		const provider = createBrowserUseAuthProvider({
+			store: store.deps,
+			tokenRetrieval: port,
+			attestationByDigest: () => undefined,
+		});
+		let transportCalls = 0;
+		const seam = buildRunbookAuthDelivery(provider, {
+			tokenRetrieval: port,
+			createTargetTransport: () => {
+				transportCalls += 1;
+				return { transport: stableProofTransport(), close: () => {} };
+			},
+			createDeliveryHook: () => undefined,
+		});
+		const outcome = await seam(liveSeamInput("run-token-absent"));
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) return;
+		expect(outcome.message).toContain("missing-token");
+		expect(outcome.message).toContain("auth install-token");
+		expect(transportCalls).toBe(0);
+	});
+
+	test("zero, one, and many vault matches block typed before target proof or handle mint", async () => {
+		const store = await makeStore();
+		for (const scenario of ["zero", "single", "ambiguous"] as const) {
+			let handleMints = 0;
+			let transportCalls = 0;
+			const matchingItems = [
+				{
+					item_id: "item-a",
+					vault_id: "vault-1",
+					origins: ["https://oncore.test"],
+					login_paths: ["/login"],
+					supported_methods: ["password"] as const,
+					state: "active" as const,
+				},
+				{
+					item_id: "item-b",
+					vault_id: "vault-1",
+					origins: ["https://oncore.test"],
+					login_paths: ["/login"],
+					supported_methods: ["password"] as const,
+					state: "active" as const,
+				},
+			];
+			const port = activeVaultPort({
+				listLoginItems: async () => ({
+					ok: true,
+					items:
+						scenario === "zero"
+							? []
+							: matchingItems.slice(0, scenario === "single" ? 1 : 2),
+				}),
+				fetchCredentialField: async (request) => {
+					handleMints += 1;
+					return await fakePort.fetchCredentialField(request);
+				},
+			});
+			const provider = createBrowserUseAuthProvider({
+				store: store.deps,
+				tokenRetrieval: port,
+				attestationByDigest: () => undefined,
+			});
+			const seam = buildRunbookAuthDelivery(provider, {
+				tokenRetrieval: port,
+				createTargetTransport: () => {
+					transportCalls += 1;
+					return { transport: stableProofTransport(), close: () => {} };
+				},
+				createDeliveryHook: () => undefined,
+			});
+			const outcome = await seam(liveSeamInput(`run-match-${scenario}`));
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) continue;
+			expect(outcome.message).toContain(
+				scenario === "zero"
+					? "revoked-binding"
+					: "binding-approval-required",
+			);
+			if (scenario !== "zero") {
+				expect(outcome.message).toContain("rank 1 item item-a");
+			}
+			expect(handleMints).toBe(0);
+			expect(transportCalls).toBe(0);
+		}
+	});
+
+	test("two slugs of one Item Binding proceed; two distinct Item Bindings refuse single-binding-v1 (R10)", async () => {
+		const store = await makeStore();
+		const twoSlugInput = (runId: string) => ({
+			...liveSeamInput(runId),
+			pendingItemBindings: ["oncore_password", "oncore_username"],
+			confidentialFields: [
+				{
+					bindingSlug: "oncore_password",
+					credentialField: "password" as const,
+					target: { role: "textbox", name: "Password" },
+				},
+				{
+					bindingSlug: "oncore_username",
+					credentialField: "username" as const,
+					target: { role: "textbox", name: "Username" },
+				},
+			],
+		});
+
+		// Positive: both slugs resolve to the SAME item — one distinct Item
+		// Binding — so the real seam builds the context with both mappings, and
+		// the REAL environmentDeliveryHook redeems EACH field with ITS OWN node
+		// descriptor — the username redemption must never carry the password
+		// field's descriptor (a constant descriptor would write the password
+		// into the username node).
+		{
+			const redeemedDescriptors: {
+				field: BrowserUseOpCredentialField;
+				descriptor: { role: string; accessible_name: string };
+			}[] = [];
+			const port = {
+				...activeVaultPort(),
+				redeemCredentialField: async (request: {
+					handle: BrowserUseSecretHandle;
+					target_digest: string;
+					ws_url: string;
+					target_url: string;
+					target_origin: string;
+					field: { role: string; accessible_name: string };
+				}) => {
+					redeemedDescriptors.push({
+						field: request.handle.field,
+						descriptor: request.field,
+					});
+					return {
+						ok: true as const,
+						shape: { field: request.handle.field, byte_length: 1 },
+					};
+				},
+			};
+			const seam = buildApprovedAuthDelivery(store.deps, port, {
+				createTargetTransport: () => ({
+					transport: stableProofTransport(),
+					close: () => {},
+				}),
+				createDeliveryHook: environmentDeliveryHook,
+			});
+			const built = await seam(twoSlugInput("run-r10-one-item"));
+			expect(built.ok).toBe(true);
+			if (built.ok) {
+				expect(built.context.field_by_binding_slug).toEqual({
+					oncore_password: "password",
+					oncore_username: "username",
+				});
+				// Redeem BOTH fields through the REAL hook the seam built.
+				for (const field of ["password", "username"] as const) {
+					const delivered = await built.context.deliver({
+						handle: {
+							handle_id: `handle-${field}`,
+							field,
+							expires_at_epoch_ms: 9_999_999,
+						},
+						field,
+						target: built.context.target,
+					});
+					expect(delivered.ok).toBe(true);
+				}
+				expect(redeemedDescriptors).toEqual([
+					{
+						field: "password",
+						descriptor: { role: "textbox", accessible_name: "Password" },
+					},
+					{
+						field: "username",
+						descriptor: { role: "textbox", accessible_name: "Username" },
+					},
+				]);
+				// The username redemption must NOT receive the password descriptor.
+				expect(redeemedDescriptors[1]?.descriptor.accessible_name).not.toBe(
+					"Password",
+				);
+				await built.release?.();
+			}
+		}
+
+		// Negative: the slugs resolve to TWO distinct items — the real seam
+		// refuses single-binding-v1 before any target proof or handle mint.
+		{
+			let handleMints = 0;
+			let transportCalls = 0;
+			const itemFor = (itemId: string) => ({
+				item_id: itemId,
+				vault_id: "vault-1",
+				origins: ["https://oncore.test"],
+				login_paths: ["/login"],
+				supported_methods: ["password" as const],
+				state: "active" as const,
+			});
+			const port = activeVaultPort({
+				getLoginItem: async ({ item_id }) => ({
+					ok: true,
+					item: itemFor(item_id),
+				}),
+				fetchCredentialField: async (request) => {
+					handleMints += 1;
+					return await fakePort.fetchCredentialField(request);
+				},
+			});
+			const seam = buildApprovedAuthDelivery(
+				store.deps,
+				port,
+				{
+					createTargetTransport: () => {
+						transportCalls += 1;
+						return { transport: stableProofTransport(), close: () => {} };
+					},
+					createDeliveryHook: () => undefined,
+				},
+				async ({ binding_ref }) => ({
+					...BINDING,
+					item_id:
+						binding_ref === "oncore_password" ? "item-a" : "item-b",
+				}),
+			);
+			const outcome = await seam(twoSlugInput("run-r10-two-items"));
+			expect(outcome.ok).toBe(false);
+			if (!outcome.ok) {
+				expect(outcome.message).toContain("single-binding-v1");
+			}
+			expect(handleMints).toBe(0);
+			expect(transportCalls).toBe(0);
+		}
+	});
+
+	test("target digest drift blocks before handle mint or bounded delivery", async () => {
+		const store = await makeStore();
+		let handleMints = 0;
+		let deliveryCalls = 0;
+		let observation = 0;
+		const stable = stableProofTransport();
+		const driftingTransport: BrowserUseDevToolsTransport = {
+			request: async (request) => {
+				if (request.method === "Target.getTargets") observation += 1;
+				if (request.method === "Target.getTargets" && observation > 1) {
+					return {
+						targetInfos: [
+							{
+								targetId: "cdp-target-7",
+								type: "page",
+								url: "https://oncore.test/login?changed=1",
+							},
+						],
+					};
+				}
+				if (request.method === "Page.getFrameTree" && observation > 1) {
+					return {
+						frameTree: {
+							frame: {
+								id: "top-frame",
+								url: "https://oncore.test/login?changed=1",
+							},
+						},
+					};
+				}
+				return await stable.request(request);
+			},
+		};
+		const port = activeVaultPort({
+			fetchCredentialField: async (request) => {
+				handleMints += 1;
+				return await fakePort.fetchCredentialField(request);
+			},
+		});
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
+			createTargetTransport: () => ({
+				transport: driftingTransport,
+				close: () => {},
+			}),
+			createDeliveryHook: () => async ({ field }) => {
+				deliveryCalls += 1;
+				return { ok: true, shape: { field, byte_length: 12 } };
+			},
+		});
+		const built = await seam(liveSeamInput("run-target-drift"));
+		expect(built.ok).toBe(true);
+		if (!built.ok) return;
+		const result = await executeAgentBrowserTask(
+			runtimeFor([
+				...attachAndSnapshot(),
+				{ stdout: adapterSuccess({ value: "•••" }) },
+			]),
+			{
+				handoff: HANDOFF,
+				run_id: "run-target-drift",
+				target_tab_id: "t1",
+				allowed_origins: ["https://oncore.test"],
+				auth_delivery: built.context,
+				steps: [
+					{ kind: "snapshot", interactive: true },
+					{
+						kind: "fill",
+						ref: "@e2",
+						item_binding: "oncore_password",
+						value: "",
+						sensitivity: "confidential",
+						postcondition: {
+							kind: "value-equals",
+							selector: "input[name=password]",
+							value: "•••",
+						},
+					},
+				],
+			},
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("agent_browser_confidential_delivery_blocked");
+		}
+		expect(handleMints).toBe(0);
+		expect(deliveryCalls).toBe(0);
+		await built.release?.();
+	});
+
+	test("sensitive lease contention blocks the second run and its key cannot collide with dispatch", async () => {
+		const store = await makeStore();
+		const port = activeVaultPort();
+		const seam = buildApprovedAuthDelivery(store.deps, port, {
+			createTargetTransport: () => ({
+				transport: stableProofTransport(),
+				close: () => {},
+			}),
+			createDeliveryHook: () => async ({ field }) => ({
+				ok: true,
+				shape: { field, byte_length: 12 },
+			}),
+		});
+		const first = await seam(liveSeamInput("run-lease-first"));
+		expect(first.ok).toBe(true);
+		const second = await seam(liveSeamInput("run-lease-second"));
+		expect(second.ok).toBe(false);
+		if (!second.ok) expect(second.message).toContain("lease-unavailable");
+		const runIdentity = {
+			environment_profile: {
+				environment: HANDOFF.environment.name,
+				profile: HANDOFF.environment.profile,
+			},
+		};
+		expect(sensitiveIntervalLeaseKeyForRun(runIdentity)).not.toBe(
+			leaseKeyForRun(runIdentity),
+		);
+		if (first.ok) await first.release?.();
+	});
+
 	test("delivery context inside the sensitive interval routes a confidential fill through the choreography and marks the run sensitive over clean on-disk bytes", async () => {
 		const NONCE_RUN = "run-cfd-seam-ok";
 		const store = await makeStore();
@@ -285,6 +1034,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -369,6 +1119,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "sentinel-secret",
 					sensitivity: "confidential",
 					postcondition: {
@@ -405,6 +1156,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -441,6 +1193,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -486,6 +1239,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -533,6 +1287,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -597,6 +1352,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				{
 					kind: "fill",
 					ref: "@e2",
+					item_binding: "oncore_password",
 					value: "",
 					sensitivity: "confidential",
 					postcondition: {
@@ -749,6 +1505,71 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 		// The leaking envelope was withheld: the sentinel never reached the real
 		// streams; what WAS emitted is the containment refusal.
 		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).toContain("containment failed");
+	});
+
+	test("the submit approval gate withholds its envelope when persisted run containment fails", async () => {
+		const RUN = "run-cfd-seam-approval-gate";
+		const SENTINEL = "sentinel-approval-gate-000333";
+		const store = await makeStore();
+		const created = await createSharedRun(store.deps, {
+			run_id: RUN,
+			state: "running",
+			task_intent: "runbook-execution",
+			environment_profile: { environment: "agent-chrome", profile: "default" },
+			adapter_id: "agent-browser",
+			handoff_evidence_id: SENTINEL,
+			mutation_dispatched: true,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+
+		const baseGuard = beginSensitiveRunGuard(RUN);
+		expect(baseGuard.ok).toBe(true);
+		if (!baseGuard.ok) return;
+		const marked = markRunSensitive(baseGuard.guard, {
+			trigger: "confidential-field-delivery",
+			sentinels: [SENTINEL],
+		});
+		expect(marked.ok).toBe(true);
+		if (!marked.ok) return;
+
+		const parsed = parseBrowserUseArgv([
+			"task",
+			"run",
+			"--handoff",
+			"handoff.json",
+			"--intent",
+			"scrape",
+			"--json",
+		]);
+		expect(parsed.kind).toBe("command");
+		if (parsed.kind !== "command") return;
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const command = {
+			parsed,
+			runtime: makeRuntime(),
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+			runId: "cli-run-approval-gate",
+			caller: { label: null },
+			durationMs: () => 1,
+		};
+
+		const exitCode = await emitSubmitApprovalGate({
+			command,
+			deps: store.deps,
+			run: created.run,
+			continuationId: "complete-submit-approval",
+			artifactId: "submit-approval-2.png",
+			guard: marked.guard,
+		});
+		expect(exitCode).toBe(BINDING_FAIL_CLOSED_EXIT_CODE);
+		const emitted = stdoutChunks.join("") + stderrChunks.join("");
+		expect(emitted).not.toContain(SENTINEL);
+		expect(emitted).not.toContain("approval_review");
 		expect(emitted).toContain("containment failed");
 	});
 
@@ -1164,23 +1985,35 @@ describe("(H) hermetic real-process runbook confidential delivery (U13)", () => 
 			expect(stdout).toContain("runbook-delivery-complete");
 
 			// The journal proves the phase ORDER: quarantine raised BEFORE the op
-			// executor was asked for a secret, then lease, one bounded write, release.
+			// executor was asked for a secret, then lease, one bounded write per
+			// field, re-keyed containment, release.
 			const journal = JSON.parse(
 				await readFile(journalPath, "utf8"),
 			) as string[];
 			expect(journal[0]).toBe("quarantine:raised");
 			expect(journal).toContain("lease:acquired:oncore_password");
 			expect(journal).toContain("op-execute:secret-acquired");
-			expect(journal).toContain("delivery:bounded-write");
+			expect(journal).toContain("delivery:bounded-write:password");
+			expect(journal).toContain("containment:sentinels-rekeyed");
 			expect(journal[journal.length - 1]).toBe("cleanup:released");
-			// Quarantine strictly precedes secret acquisition.
-			expect(journal.indexOf("quarantine:raised")).toBeLessThan(
-				journal.indexOf("op-execute:secret-acquired"),
-			);
-			// Exactly one bounded write occurred.
+			// Strict phase order: quarantine < lease < secret acquisition < the
+			// bounded write < re-keyed containment < release.
+			const order = [
+				"quarantine:raised",
+				"lease:acquired:oncore_password",
+				"op-execute:secret-acquired",
+				"delivery:bounded-write:password",
+				"containment:sentinels-rekeyed",
+				"cleanup:released",
+			].map((event) => journal.indexOf(event));
+			for (let i = 1; i < order.length; i += 1) {
+				expect(order[i - 1]).toBeLessThan(order[i] ?? -1);
+			}
+			// Exactly one bounded write occurred, and it was PER FIELD: one write
+			// for the single delivered field, none for any other field.
 			expect(
-				journal.filter((e) => e === "delivery:bounded-write"),
-			).toHaveLength(1);
+				journal.filter((e) => e.startsWith("delivery:bounded-write:")),
+			).toEqual(["delivery:bounded-write:password"]);
 
 			// Zero-sentinel sweep over EVERY real governed surface: run-store bytes
 			// (and every state file), stdout, stderr, and any artifacts.

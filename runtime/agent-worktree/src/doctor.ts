@@ -30,6 +30,7 @@ export const DOCTOR_CHECK_IDS = [
 	"contracts",
 	"dependencies",
 	"mutations",
+	"isolation",
 	"current_branch",
 	"default_branch",
 	"stale_dirs",
@@ -42,6 +43,7 @@ export type DoctorCheckId = (typeof DOCTOR_CHECK_IDS)[number];
 
 const DISCOVERY_ISSUE_CHECK_IDS = {
 	git_root_failed: "repo",
+	isolation_detection_failed: "isolation",
 	worktree_list_failed: "worktrees",
 	current_branch_failed: "current_branch",
 	default_branch_unknown: "default_branch",
@@ -98,6 +100,8 @@ export interface DoctorMap {
 export interface DoctorRepoSummary {
 	/** Git top-level root, when available. */
 	gitRoot?: string;
+	/** Git repository isolation for the invocation cwd. */
+	isolation?: RepoDiscovery["isolation"];
 	/** Main owner root where `.agent-worktree` lives. */
 	mainOwnerRoot?: string;
 	/** Active worktree path for the current cwd. */
@@ -184,6 +188,7 @@ function doctorMapFromDiscoveryWithContext(
 		...aggregate,
 		repo: {
 			gitRoot: discovery.gitRoot,
+			isolation: discovery.isolation,
 			mainOwnerRoot: discovery.mainOwnerRoot,
 			activeWorktree: discovery.activeWorktree?.path,
 			currentBranch: discovery.currentBranch,

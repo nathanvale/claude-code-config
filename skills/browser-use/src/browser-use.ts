@@ -11,7 +11,9 @@
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
 import { createHash } from "node:crypto";
-import { dirname, join, normalize } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -20,6 +22,7 @@ import {
 	CliUsageError,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCommandResultData,
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
@@ -36,23 +39,32 @@ import {
 	BROWSER_USE_ADAPTER_LANES_CONTRACT_ID,
 	BROWSER_USE_ADAPTER_LANES_SCHEMA_VERSION,
 	BROWSER_USE_ADAPTER_OPERATION_CAPABILITIES,
+	BROWSER_USE_APPROVAL_BROKER_ENV,
 	BROWSER_USE_ARTIFACT_MANIFEST_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
+	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
+	BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
 	BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
+	BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_SHARED_RUN_SCHEMA_VERSION,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_SCHEMA_VERSION,
 	BROWSER_USE_TRANSPORT_ADAPTERS,
+	type BrowserUseAuthRepairSubcommand,
 	type BrowserUseAuthSubcommand,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	type BrowserUseGuideTopic,
 	browserUseAdapterLanesFailureActions,
+	browserUseContracts,
 	browserUseAuthRepairActions,
 	browserUseAuthRepairFailureActions,
 	browserUsePlatformStoreFailureActions,
@@ -61,10 +73,21 @@ import {
 	browserUseTaskRunSuccessActions,
 } from "./command-contract";
 import {
+	type BrowserUseOpCredentialField,
+	type BrowserUseTokenRetrievalPort,
 	type BrowserUseTokenRetrievalRejection,
 	blockOfRetrievalRejection,
 	proveVaultScope,
 } from "./browser-use-op";
+import type { BrowserUseDeliveryHook } from "./browser-use-confidential-field-delivery";
+import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
+import {
+	type BrowserUseDevToolsRequest,
+	type BrowserUseDevToolsTransport,
+	type BrowserUseMintedVerifiedTarget,
+	mintBrowserUseVerifiedTarget,
+	resolveBrowserUseCdpTargetIdentity,
+} from "./browser-use-target-proof";
 import {
 	type BrowserUseAdapterLaneView,
 	createAdapterLaneRegistry,
@@ -87,13 +110,17 @@ import {
 import {
 	BROWSER_USE_TASK_INTENT_DEFINITIONS,
 	BROWSER_USE_TERMINAL_RUN_STATES,
+	type BrowserUseCancellationReport,
 	type BrowserUseCallerMetadata,
 	type BrowserUseRunState,
 	type BrowserUseRunStructuredResult,
 	type BrowserUseSharedRun,
 	type BrowserUseTaskIntent,
 	classifyCancellation,
+	revalidateAuthAttestation,
 } from "./browser-use-run-model";
+import { createBrowserUseAuthContract } from "./browser-use-auth";
+import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
 import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
@@ -113,9 +140,14 @@ import {
 	truncateText,
 } from "./browser-use-core";
 import {
+	AUTH_TOKEN_FORBIDDEN_ENV_KEYS,
+	AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
+	type AuthTokenSupervisorInput,
 	type BrowserUseRuntime,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
+	createProductionBrowserUseRuntime as createProductionBrowserUseRuntimeInternal,
+	isAuthTokenSourceReference,
+	readBoundedAuthChildOutput,
+	resolveWarmChromeProfilePath,
 } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 import {
@@ -131,11 +163,16 @@ import {
 	releaseLease,
 	withActivationEpochBarrier,
 } from "./browser-use-locks";
-import type { BrowserUseLeasePayload } from "./browser-use-schemas";
+import type {
+	BrowserUseArtifactManifestPayload,
+	BrowserUseLeasePayload,
+} from "./browser-use-schemas";
 import {
+	artifactBytesPath,
 	deleteArtifact,
 	listPendingTombstones,
 	readArtifactStatus,
+	writeArtifactManifest,
 } from "./browser-use-retention";
 import type {
 	BrowserUseMigrationFailure,
@@ -164,6 +201,14 @@ import {
 	type BrowserUseAuthProvider,
 	createBrowserUseAuthProvider,
 } from "./browser-use-auth-provider";
+import type {
+	BrowserUseAuthContext,
+	BrowserUseItemBinding,
+} from "./browser-use-auth-bindings";
+import {
+	type BrowserUseCdpObserverRequest,
+	createBrowserUseCdpObserver,
+} from "./browser-use-cdp-observer";
 import {
 	listOrphanTempFiles,
 	readDurableFile,
@@ -204,11 +249,48 @@ import {
 	executePreparedRunbook,
 	listRunbooks,
 	prepareRunbookExecution,
+	readPrivateStructuredInput,
 	showRunbook,
 } from "./browser-use-runbook";
+import { runBrowserUseRunbookAuth } from "./browser-use-runbook-auth";
+import { loadPrivateRunbookCatalogFromGit } from "./browser-use-private-runbook-catalog";
 import {
+	applyRunbookDraft,
+	deleteRunbookDraft,
+	parseRunbookDraftDocument,
+	readRunbookSourceCatalog,
+	runbookAuthoringSchema,
+	validateRunbookDraftForSource,
+} from "./browser-use-runbook-authoring";
+import {
+	applyReviewedActionCandidate,
+	type BrowserUseAuthoredReviewedActionRecord,
+	parseReviewedActionCandidate,
+	readReviewedActionSourceState,
+	reviewedActionAuthoringSchema,
+	validateReviewedActionCandidate,
+	verifyAuthoredReviewedActionPromotion,
+} from "./browser-use-reviewed-action-authoring";
+import {
+	createNativeReviewedActionOperatorBroker,
+	runReviewedActionPromotionFrontDoor,
+} from "./browser-use-reviewed-action-promotion";
+import {
+	activateRunbookGeneration,
+	createSelectedGenerationActionSeam,
+	createSelectedGenerationRunbookSeam,
+	projectRunbookGenerationSynchronization,
+	resolveRetainedRunbookGeneration,
+	resolveSelectedRunbookGeneration,
+	withRunbookGenerationSelectionBarrier,
+} from "./browser-use-runbook-generation";
+import { itemKeySequenceDigest, normalizedInputDigest } from "./browser-use-runbook-actions";
+import {
+	type BrowserUseRunbook,
+	type BrowserUseRunbookCatalogRow,
 	type BrowserUseRunbookInputs,
 	nextRunbookStepAfterExecution,
+	projectRunbookCatalogRow,
 } from "./browser-use-runbook-model";
 import {
 	type BrowserUseGovernedSurface,
@@ -227,7 +309,10 @@ import {
 	runTargetsSelect,
 	runTargetsStatus,
 } from "./browser-use-selection";
-import { runOperate } from "./browser-use-operations";
+import {
+	captureBrowserUseScreenshotMedia,
+	runOperate,
+} from "./browser-use-operations";
 import {
 	type ParsedBrowserUseCommand,
 	applyEnvRunId,
@@ -244,12 +329,45 @@ import { renderGuide } from "./browser-use-guide";
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
 
+/**
+ * Non-authority inputs admitted by production composition.
+ *
+ * Authority ports stay available only through test helpers. Production may
+ * select its process environment and setup-admitted source checkout, but it
+ * cannot replace credential, approval, native-admission, or identity-proof
+ * owners.
+ */
+export type BrowserUseProductionRuntimeOptions = {
+	/** Process environment consumed as data by production-owned adapters. */
+	env?: Record<string, string | undefined>;
+	/** Setup-admitted source root; null models a packaged installation. */
+	sourceCheckoutRoot?: string | null;
+};
+
+/**
+ * Compose the production runtime without accepting injectable authority.
+ *
+ * @param options - Explicit non-authority production inputs
+ * @returns Runtime backed only by production-owned authority discovery
+ */
+export async function createProductionBrowserUseRuntime(
+	options: BrowserUseProductionRuntimeOptions = {},
+): Promise<BrowserUseRuntime> {
+	return await createProductionBrowserUseRuntimeInternal({
+		...(options.env === undefined ? {} : { env: options.env }),
+		...(options.sourceCheckoutRoot === undefined
+			? {}
+			: { sourceCheckoutRoot: options.sourceCheckoutRoot }),
+	});
+}
+
 export async function runBrowserUseCli(
 	argv: readonly string[],
 	options: {
 		runtime?: BrowserUseRuntime;
 		stdout?: CliWriter;
 		stderr?: CliWriter;
+		authDoctor?: AuthDoctorOrchestrationDeps;
 	} = {},
 ): Promise<number> {
 	const runtime =
@@ -285,8 +403,20 @@ export async function runBrowserUseCli(
 
 	const outputMode = errorOutputMode(diagnosticArgv.argv);
 	let parsed: ParsedBrowserUseCommand;
+	let fixScope: AuthDoctorFixScope;
 	try {
-		parsed = parseBrowserUseArgv(diagnosticArgv.argv);
+		const fixRequest = extractAuthDoctorFixRequest(diagnosticArgv.argv);
+		fixScope = fixRequest.fixScope;
+		parsed = parseBrowserUseArgv(fixRequest.argv);
+		if (fixRequest.fixScope !== undefined && parsed.kind === "command") {
+			parsed = {
+				...parsed,
+				flagValues: {
+					...parsed.flagValues,
+					"--fix": "",
+				},
+			};
+		}
 	} catch (error) {
 		return emitWithDiagnostics({
 			categoryRoot: "browser-use.cli",
@@ -355,6 +485,10 @@ export async function runBrowserUseCli(
 					runIdExplicit,
 					diagnosticVerbose: diagnosticArgv.options.verbose,
 					durationMs,
+					...(fixScope === undefined ? {} : { fixScope }),
+					...(options.authDoctor === undefined
+						? {}
+						: { authDoctor: options.authDoctor }),
 				});
 			} catch (error) {
 				return emitCliError({
@@ -372,6 +506,40 @@ export async function runBrowserUseCli(
 	}
 }
 
+type AuthDoctorFixScope = "all" | "profile" | undefined;
+
+function extractAuthDoctorFixRequest(argv: readonly string[]): {
+	argv: readonly string[];
+	fixScope: AuthDoctorFixScope;
+} {
+	if (argv[0] !== "auth" || argv[1] !== "doctor") {
+		return { argv, fixScope: undefined };
+	}
+	const stripped = [...argv];
+	const fixIndexes: number[] = [];
+	let inlineFix = false;
+	for (let index = 2; index < stripped.length; index += 1) {
+		if (stripped[index] === "--caller") {
+			index += 1;
+			continue;
+		}
+		if (stripped[index] === "--fix") fixIndexes.push(index);
+		if (stripped[index]?.startsWith("--fix=") === true) inlineFix = true;
+	}
+	if (fixIndexes.length === 0) {
+		if (inlineFix) {
+			throw usageError("--fix does not take a value; use optional profile after it.");
+		}
+		return { argv, fixScope: undefined };
+	}
+	if (fixIndexes.length !== 1) throw usageError("--fix may be supplied once.");
+	const index = fixIndexes[0] ?? -1;
+	stripped.splice(index, 1);
+	const profileOnly = stripped[index] === "profile";
+	if (profileOnly) stripped.splice(index, 1);
+	return { argv: stripped, fixScope: profileOnly ? "profile" : "all" };
+}
+
 // One family -> result kind mapping for the mock/not-implemented envelopes.
 const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	// guide-show is a pure bundled-content render and never reaches the mock or
@@ -383,6 +551,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	lanes: "adapter_lanes",
 	run: "shared_run",
 	runbook: "runbook_catalog",
+	action: "reviewed_action",
 	migration: "migration_status",
 	artifact: "artifact_manifest",
 	repair: "repair_status",
@@ -417,6 +586,8 @@ async function executeCommand(input: {
 	runIdExplicit: boolean;
 	diagnosticVerbose: boolean;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 }): Promise<number> {
 	const { parsed, runtime } = input;
 	// Version-matched bundled guidance (D3): a pure render of the guide content
@@ -544,6 +715,26 @@ async function executeCommand(input: {
 		});
 	}
 
+	if (parsed.family === "action" && !parsed.dryRun) {
+		const actionInput: PlatformCommandInput = {
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			caller,
+			durationMs: input.durationMs,
+		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitReviewedActionFailure(
+				actionInput,
+				runtime.reviewedActionApprovalVerifierIssue.code,
+				runtime.reviewedActionApprovalVerifierIssue.message,
+			);
+		}
+		return runReviewedActionCommand(actionInput);
+	}
+
 	// Browser Runbook family (platform plan U4): list/show project the discovered
 	// runbook catalog and one validated definition; run compiles a runbook and
 	// dispatches it through the agent-browser lane via the shared run-store
@@ -559,8 +750,24 @@ async function executeCommand(input: {
 			caller,
 			durationMs: input.durationMs,
 		};
+		if (runtime.reviewedActionApprovalVerifierIssue !== undefined) {
+			return emitPlatformStoreFailure(runbookInput, {
+				code: runtime.reviewedActionApprovalVerifierIssue.code,
+				message: runtime.reviewedActionApprovalVerifierIssue.message,
+				actionId: "activate_runbook_catalog",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		if (
+			parsed.command === "runbook-schema" ||
+			parsed.command === "runbook-validate" ||
+			parsed.command === "runbook-apply" ||
+			parsed.command === "runbook-delete"
+		) return runRunbookAuthoringCommand(runbookInput);
 		if (parsed.command === "runbook-list") return runRunbookList(runbookInput);
 		if (parsed.command === "runbook-show") return runRunbookShow(runbookInput);
+		if (parsed.command === "runbook-activate") return runRunbookActivate(runbookInput);
 		return runRunbookRun(runbookInput);
 	}
 
@@ -572,6 +779,7 @@ async function executeCommand(input: {
 	if (
 		(parsed.command === "run-status" ||
 			parsed.command === "run-resume" ||
+			parsed.command === "run-approve" ||
 			parsed.command === "run-cancel" ||
 			parsed.command === "artifact-list" ||
 			parsed.command === "repair-status" ||
@@ -589,6 +797,7 @@ async function executeCommand(input: {
 		};
 		if (parsed.command === "run-status") return runRunStatus(platformInput);
 		if (parsed.command === "run-resume") return runRunResume(platformInput);
+		if (parsed.command === "run-approve") return runRunApprove(platformInput);
 		if (parsed.command === "run-cancel") return runRunCancel(platformInput);
 		if (parsed.command === "artifact-list") return runArtifactList(platformInput);
 		if (parsed.command === "repair-status") return runRepairStatus(platformInput);
@@ -611,10 +820,34 @@ async function executeCommand(input: {
 		});
 	}
 
-	// R27 auth repair surface (auth plan U3a): the blocked-cause continuations
-	// as live check commands. Native custody absence is a typed evaluation,
-	// never a crash; dry-run keeps the mock envelope below.
-	if (parsed.family === "auth" && !parsed.dryRun) {
+	// Auth repair continuations plus ADR 0030 environment-token lifecycle.
+	if (
+		parsed.family === "auth" &&
+		!parsed.dryRun
+	) {
+		if (
+			parsed.subcommand === "install-token" ||
+			parsed.subcommand === "remove-token" ||
+			parsed.subcommand === "status" ||
+			parsed.subcommand === "doctor" ||
+			parsed.subcommand === "reload"
+		) {
+			return runAuthTokenLifecycle({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+				...(input.fixScope === undefined
+					? {}
+					: { fixScope: input.fixScope }),
+				...(input.authDoctor === undefined
+					? {}
+					: { authDoctor: input.authDoctor }),
+			});
+		}
 		return runAuthReadiness({
 			parsed,
 			runtime,
@@ -1140,6 +1373,8 @@ type PlatformCommandInput = {
 	runId: string;
 	caller: BrowserUseCallerMetadata;
 	durationMs: () => number;
+	fixScope?: AuthDoctorFixScope;
+	authDoctor?: AuthDoctorOrchestrationDeps;
 };
 
 const platformStoreActions = [
@@ -1470,6 +1705,11 @@ function writeRunPlain(
 			`artifact=${artifact.artifact_id} sensitivity=${artifact.sensitivity} retention=${artifact.retention}\n`,
 		);
 	}
+	for (const approval of run.approvals ?? []) {
+		stdout.write(
+			`approval=${approval.continuation_id} artifact=${approval.artifact_id} approved_at=${approval.approved_at_epoch_ms}\n`,
+		);
+	}
 	for (const result of run.structured_results ?? []) {
 		stdout.write(
 			result.ok
@@ -1699,11 +1939,111 @@ async function runRunResume(input: PlatformCommandInput): Promise<number> {
 	}
 }
 
+/** Record explicit operator approval without dispatching any browser action. */
+async function runRunApprove(input: PlatformCommandInput): Promise<number> {
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const runId = stringField(input.parsed.flagValues["--run"]) ?? "";
+	const continuationId =
+		stringField(input.parsed.flagValues["--continuation"]) ?? "";
+	const artifactId = stringField(input.parsed.flagValues["--artifact"]) ?? "";
+	const loaded = await loadSharedRun(store.deps, runId);
+	if (!loaded.ok) {
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(loaded.code, loaded.message),
+		);
+	}
+	if (
+		loaded.run.state !== "awaiting-approval" ||
+		loaded.run.continuation?.next_action_id !== "complete-submit-approval" ||
+		continuationId !== loaded.run.continuation.next_action_id
+	) {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_continuation_mismatch",
+			message:
+				"the run is not waiting on the exact submit-approval continuation supplied by the operator.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	if (!loaded.run.artifacts.some((artifact) => artifact.artifact_id === artifactId)) {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_artifact_mismatch",
+			message:
+				"the supplied review artifact is not attached to this awaiting-approval run.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const approvalArtifact = await readArtifactStatus(store.deps, {
+		runId,
+		artifactId,
+	});
+	if (approvalArtifact.status !== "present") {
+		return emitPlatformStoreFailure(input, {
+			code: "run_approval_artifact_unavailable",
+			message:
+				"the supplied review artifact bytes are not present; approval was refused.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const approvedAt = input.runtime.now();
+	const updated = await persistRunbookPrivateState(
+		store.deps,
+		loaded.run,
+		(current) => {
+			const { continuation: _continuation, ...rest } = current;
+			const progress = current.runbook_progress;
+			return {
+				...rest,
+				state: "running",
+				...(progress === undefined
+					? {}
+					: {
+							runbook_progress: {
+								...progress,
+								next_step: progress.next_step + 1,
+							},
+						}),
+				approvals: [
+					...(current.approvals ?? []),
+					{
+						continuation_id: continuationId,
+						artifact_id: artifactId,
+						approved_at_epoch_ms: approvedAt,
+					},
+				],
+			};
+		},
+		undefined,
+		"record",
+	);
+	if (!updated.ok) return emitPlatformStoreFailure(input, updated.failure);
+	return emitSharedRunSuccess({
+		command: input,
+		run: updated.run,
+		continuationId: "resume_runbook_execution",
+		dataExtra: {
+			approval: {
+				continuation_id: continuationId,
+				artifact_id: artifactId,
+				approved_at_epoch_ms: approvedAt,
+			},
+		},
+		plainExtra: ["approval=recorded", `artifact=${artifactId}`],
+	});
+}
+
 /**
- * `run cancel` (R37, AE15). Terminal-truth mapping through the U1 classifier:
- * external effect `none` -> terminal `not-achieved`, `unknown` -> terminal
- * `unknown`; `rolled_back` is ALWAYS the literal false. Cancelling an
- * already-terminal run is an idempotent projection of the standing truth —
+ * `run cancel` (R37, AE15). A pre-dispatch run becomes terminal
+ * `not-achieved`; a dispatched run refuses because external write truth may
+ * be unresolved. `rolled_back` is ALWAYS the literal false. Cancelling an
+ * already-terminal run is an idempotent projection of the standing truth:
  * no write, no revision bump.
  *
  * @param input - Store-backed command input
@@ -1720,24 +2060,40 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 			platformStoreFailureOf(loaded.code, loaded.message),
 		);
 	}
-	const report = classifyCancellation(loaded.run);
-	const cancellationExtra = {
-		dataExtra: { cancellation: report },
+	const cancellationExtra = (
+		outcome: "cancelled" | "already-terminal",
+		report: BrowserUseCancellationReport,
+	) => ({
+		dataExtra: { cancellation: { outcome, ...report } },
 		plainExtra: [
+			`cancellation=${outcome}`,
 			`external_effect=${report.external_effect}`,
 			`rolled_back=${report.rolled_back}`,
 		],
-	};
+	});
 	if (isTerminalRunState(loaded.run.state)) {
 		return emitSharedRunSuccess({
 			command: input,
 			run: loaded.run,
 			continuationId: "inspect_shared_run",
-			...cancellationExtra,
+			...cancellationExtra("already-terminal", {
+				external_effect: "none",
+				rolled_back: false,
+			}),
 		});
 	}
-	const targetState: BrowserUseRunState =
-		report.external_effect === "none" ? "not-achieved" : "unknown";
+	const classification = classifyCancellation(loaded.run);
+	if (!classification.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: classification.code,
+			message: `run ${loaded.run.run_id}: ${classification.message}`,
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const { report } = classification;
+	const targetState: BrowserUseRunState = "not-achieved";
 	const acquired = await acquireLease(store.deps, {
 		key: leaseKeyForRun(loaded.run),
 		holderId: `cancel-${runFlag}`,
@@ -1764,6 +2120,7 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 			runId: runFlag,
 			expectedRevision: loaded.run.revision,
 			lease: claim,
+			authFragmentAction: "cancel",
 			mutate: (run) => {
 				// Terminal truth carries no blocked-state continuation; everything
 				// else (artifacts, attestation reference, dispatch truth) survives.
@@ -1784,7 +2141,7 @@ async function runRunCancel(input: PlatformCommandInput): Promise<number> {
 		command: input,
 		run: updated.run,
 		continuationId: "inspect_shared_run",
-		...cancellationExtra,
+		...cancellationExtra("cancelled", report),
 	});
 }
 
@@ -1946,6 +2303,29 @@ type TaskRunSemanticClick = {
 	visibleSelector: string;
 };
 
+// Compile the public task-run semantic input once so target admission and
+// execution prove the same exact step sequence.
+function baselineAgentBrowserSteps(
+	semanticClick: TaskRunSemanticClick | undefined,
+): AgentBrowserTask["steps"] {
+	return [
+		{ kind: "snapshot", interactive: true },
+		...(semanticClick === undefined
+			? []
+			: [
+					{
+						kind: "click-semantic" as const,
+						role: semanticClick.role,
+						name: semanticClick.name,
+						postcondition: {
+							kind: "element-visible" as const,
+							selector: semanticClick.visibleSelector,
+						},
+					},
+				]),
+	];
+}
+
 // The Agent Browser task the front door dispatches for a routed intent (F1):
 // one fresh interactive snapshot, optionally followed by one semantic click
 // resolved from that snapshot and one structural postcondition. Raw refs never
@@ -1955,8 +2335,9 @@ function baselineAgentBrowserTask(input: {
 	rawHandoff: unknown;
 	runId: string;
 	targetTabId: string;
+	expectedTargetUrl?: string;
 	allowedOrigin: string;
-	semanticClick?: TaskRunSemanticClick;
+	steps: AgentBrowserTask["steps"];
 }): AgentBrowserTask {
 	return {
 		// The executor re-validates the handoff shape itself; the driver passes the
@@ -1964,23 +2345,11 @@ function baselineAgentBrowserTask(input: {
 		handoff: input.rawHandoff as AgentBrowserTask["handoff"],
 		run_id: input.runId,
 		target_tab_id: input.targetTabId,
+		...(input.expectedTargetUrl !== undefined
+			? { expected_target_url: input.expectedTargetUrl }
+			: {}),
 		allowed_origins: [input.allowedOrigin],
-		steps: [
-			{ kind: "snapshot", interactive: true },
-			...(input.semanticClick === undefined
-				? []
-				: [
-						{
-							kind: "click-semantic" as const,
-							role: input.semanticClick.role,
-							name: input.semanticClick.name,
-							postcondition: {
-								kind: "element-visible" as const,
-								selector: input.semanticClick.visibleSelector,
-							},
-						},
-					]),
-		],
+		steps: input.steps,
 	};
 }
 
@@ -2534,7 +2903,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 
 	const runFlag = stringField(flags["--run"]);
-	const targetTabId = stringField(flags["--tab"]) ?? "task-tab";
+	const requestedTabId = stringField(flags["--tab"]);
 	const allowedOrigin = stringField(flags["--allowed-origin"]);
 
 	// Resolve the run to route: an existing run to resume (R23) loads and re-proves
@@ -2759,6 +3128,41 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 	// a numeric tab index, enforces the allowed origin, and runs the intent via
 	// baselinePlaywrightTask.
 	if (route.lane_id === "agent-browser") {
+		const steps = baselineAgentBrowserSteps(semanticClick);
+		let targetTabId = requestedTabId;
+		let expectedTargetUrl: string | undefined;
+		if (targetTabId === undefined) {
+			const targetEnvelopeId = targetEnvelopeIdOf({
+				runId: run.run_id,
+				mode: "handoff-bound",
+				adapter: "agent-browser",
+				handoffEvidenceId: handoff.handoffEvidenceId,
+			});
+			const targetResolution = await resolveAgentBrowserTaskTarget(
+				{ runCommand: input.runtime.runCommand },
+				{
+					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+					run_id: run.run_id,
+					allowed_origins: [allowedOrigin],
+					steps,
+					target: { kind: "auto", target_envelope_id: targetEnvelopeId },
+				},
+			);
+			if (!targetResolution.ok) {
+				return await recordTaskRunOutcome(
+					input,
+					store.deps,
+					run,
+					route,
+					mapAgentBrowserOutcome(targetResolution),
+					{
+						...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+					},
+				);
+			}
+			targetTabId = targetResolution.target_tab_id;
+			expectedTargetUrl = targetResolution.target_url;
+		}
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		const result = await executeAgentBrowserTask(
@@ -2783,8 +3187,9 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 				rawHandoff: rawHandoffData,
 				runId: run.run_id,
 				targetTabId,
+				...(expectedTargetUrl !== undefined ? { expectedTargetUrl } : {}),
 				allowedOrigin,
-				...(semanticClick !== undefined ? { semanticClick } : {}),
+				steps,
 			}),
 		);
 		if (mutationMarkerFailure !== undefined) {
@@ -2973,12 +3378,57 @@ async function persistTaskRunMutationDispatch(
 	);
 }
 
+async function persistRunbookMutationDispatch(
+	deps: RunStoreDeps,
+	run: BrowserUseSharedRun,
+	atEpochMs: number,
+	heldClaim: LeaseWriteClaim,
+): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	const approvals = run.approvals ?? [];
+	const latestApproval = approvals.at(-1);
+	if (latestApproval === undefined) {
+		return await persistTaskRunMutationDispatch(deps, run, heldClaim);
+	}
+	if (latestApproval.dispatch_started_at_epoch_ms !== undefined) {
+		return {
+			ok: false,
+			failure: {
+				code: "run_approved_dispatch_already_started",
+				message:
+					"the approved submit dispatch already crossed write-ahead; inspect its outcome before any redispatch.",
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			},
+		};
+	}
+	return await persistRunbookPrivateState(
+		deps,
+		run,
+		(current) => ({
+			...current,
+			mutation_dispatched: true,
+			approvals: (current.approvals ?? []).map((approval, index, currentApprovals) =>
+				index === currentApprovals.length - 1
+					? { ...approval, dispatch_started_at_epoch_ms: atEpochMs }
+					: approval,
+			),
+		}),
+		heldClaim,
+		"mark-dispatch",
+	);
+}
+
 async function persistFencedSharedRun(
 	deps: RunStoreDeps,
 	run: BrowserUseSharedRun,
 	holderId: string,
 	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
 	heldClaim?: LeaseWriteClaim,
+	approvalAction?: "record" | "mark-dispatch",
 ): Promise<
 	| { ok: true; run: BrowserUseSharedRun }
 	| { ok: false; failure: PlatformStoreFailure }
@@ -2989,6 +3439,7 @@ async function persistFencedSharedRun(
 			expectedRevision: run.revision,
 			lease: heldClaim,
 			mutate,
+			...(approvalAction === undefined ? {} : { approvalAction }),
 		});
 		return updated.ok
 			? { ok: true, run: updated.run }
@@ -3025,6 +3476,7 @@ async function persistFencedSharedRun(
 			expectedRevision: run.revision,
 			lease: claim,
 			mutate,
+			...(approvalAction === undefined ? {} : { approvalAction }),
 		});
 	} finally {
 		await releaseLease(deps, acquired.lease);
@@ -3043,6 +3495,7 @@ async function persistRunbookPrivateState(
 	run: BrowserUseSharedRun,
 	mutate: (current: BrowserUseSharedRun) => BrowserUseSharedRun,
 	heldClaim?: LeaseWriteClaim,
+	approvalAction?: "record" | "mark-dispatch",
 ): Promise<
 	| { ok: true; run: BrowserUseSharedRun }
 	| { ok: false; failure: PlatformStoreFailure }
@@ -3053,7 +3506,247 @@ async function persistRunbookPrivateState(
 		`runbook-state-${run.run_id}`,
 		mutate,
 		heldClaim,
+		approvalAction,
 	);
+}
+
+async function enterSubmitApprovalGate(input: {
+	command: PlatformCommandInput;
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	handoff: HandoffFacts;
+	targetTabId: string;
+	targetUrl: string;
+	gateStepIndex: number;
+	heldClaim: LeaseWriteClaim;
+	structuredResults?: readonly BrowserUseRunStructuredResult[];
+	guard?: BrowserUseSensitiveRunGuard;
+}): Promise<number> {
+	let checkpointedRun = input.run;
+	if (checkpointedRun.runbook_progress?.next_step !== input.gateStepIndex) {
+		const checkpointed = await persistRunbookPrivateState(
+			input.deps,
+			checkpointedRun,
+			(current) => {
+				const structuredResults = [
+					...(current.structured_results ?? []),
+					...(input.structuredResults ?? []),
+				];
+				return {
+					...current,
+					state: "running",
+					runbook_progress:
+						current.runbook_progress === undefined
+							? undefined
+							: {
+									...current.runbook_progress,
+									next_step: input.gateStepIndex,
+								},
+					...(structuredResults.length === 0
+						? {}
+						: { structured_results: structuredResults }),
+				};
+			},
+			input.heldClaim,
+		);
+		if (!checkpointed.ok) {
+			return emitPlatformStoreFailure(input.command, checkpointed.failure);
+		}
+		checkpointedRun = checkpointed.run;
+	}
+
+	let target: URL;
+	try {
+		target = new URL(input.targetUrl);
+	} catch {
+		return emitPlatformStoreFailure(input.command, {
+			code: "run_approval_target_invalid",
+			message: "the approval screenshot target is not a valid URL.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	if (target.protocol !== "https:" && target.protocol !== "http:") {
+		return emitPlatformStoreFailure(input.command, {
+			code: "run_approval_target_invalid",
+			message: "the approval screenshot target is not an http(s) page.",
+			actionId: "inspect_shared_run",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+
+	const artifactId = `submit-approval-${input.gateStepIndex}.png`;
+	const existing = await readArtifactStatus(input.deps, {
+		runId: checkpointedRun.run_id,
+		artifactId,
+	});
+	if (existing.status === "corrupt" || existing.status === "deleted") {
+		return emitPlatformStoreFailure(
+			input.command,
+			platformStoreFailureOf(
+				"artifact_corrupt",
+				"the approval screenshot artifact is unavailable; inspect retention state before approval.",
+			),
+		);
+	}
+	if (existing.status === "missing") {
+		const artifactRoot = input.deps.paths.state.artifactDir(
+			checkpointedRun.run_id,
+		);
+		const artifactPath = artifactBytesPath(
+			input.deps.paths,
+			checkpointedRun.run_id,
+			artifactId,
+		);
+		const captured = await captureBrowserUseScreenshotMedia({
+			runtime: input.command.runtime,
+			handoff: input.handoff,
+			adapterPageRef: input.targetTabId,
+			artifact: {
+				path: artifactPath,
+				relativePath: artifactId,
+				root: artifactRoot,
+				format: "png",
+				fullPage: true,
+			},
+		});
+		if (!captured.ok) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(captured.code, captured.message),
+			);
+		}
+		let contentHash: string;
+		try {
+			contentHash = await input.deps.fs.hashFile(artifactPath);
+		} catch (error) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(
+					"artifact_hash_failed",
+					`the approval screenshot bytes could not be hashed (${platformErrorCode(error)}).`,
+				),
+			);
+		}
+		const manifest: BrowserUseArtifactManifestPayload = {
+			artifact_id: artifactId,
+			run_id: checkpointedRun.run_id,
+			task_intent: "runbook-execution",
+			adapter_id: input.handoff.adapter,
+			adapter_version: "verified-handoff-v2",
+			sanitized_target: {
+				origin: target.origin,
+				path_shape: target.pathname,
+			},
+			producer_capability: "screenshot_media",
+			content_hash: contentHash,
+			sensitivity: "high",
+			retention: "ephemeral",
+			outcome_ref: `approval:${checkpointedRun.run_id}`,
+			created_at_epoch_ms: input.command.runtime.now(),
+			export_receipt: null,
+		};
+		const written = await writeArtifactManifest(input.deps, manifest);
+		if (!written.ok) {
+			return emitPlatformStoreFailure(
+				input.command,
+				platformStoreFailureOf(written.code, written.message),
+			);
+		}
+	}
+
+	const blocked = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["submit-approval-required"];
+	const awaiting = await persistRunbookPrivateState(
+		input.deps,
+		checkpointedRun,
+		(current) => ({
+			...current,
+			state: blocked.run_state,
+			continuation: structuredClone(blocked.continuation),
+			artifacts: current.artifacts.some(
+				(artifact) => artifact.artifact_id === artifactId,
+			)
+				? current.artifacts
+				: [
+						...current.artifacts,
+						{
+							artifact_id: artifactId,
+							sensitivity: "high",
+							retention: "ephemeral",
+						},
+					],
+		}),
+		input.heldClaim,
+	);
+	if (!awaiting.ok) {
+		return emitPlatformStoreFailure(input.command, awaiting.failure);
+	}
+	return await emitSubmitApprovalGate({
+		command: input.command,
+		deps: input.deps,
+		run: awaiting.run,
+		continuationId: blocked.continuation.next_action_id,
+		artifactId,
+		...(input.guard === undefined ? {} : { guard: input.guard }),
+	});
+}
+
+async function emitSubmitApprovalGate(input: {
+	command: PlatformCommandInput;
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	continuationId: string;
+	artifactId: string;
+	guard?: BrowserUseSensitiveRunGuard;
+}): Promise<number> {
+	const emitApprovalGate = (target: PlatformCommandInput): number =>
+		emitSharedRunSuccess({
+			command: target,
+			run: input.run,
+			continuationId: input.continuationId,
+			dataExtra: {
+				approval_review: {
+					artifact_id: input.artifactId,
+					producer_capability: "screenshot_media",
+				},
+			},
+			plainExtra: [
+				`approval_artifact=${input.artifactId}`,
+				"producer_capability=screenshot_media",
+			],
+		});
+	if (input.guard?.sensitive) {
+		const stdoutChunks: string[] = [];
+		const stderrChunks: string[] = [];
+		const exitCode = emitApprovalGate({
+			...input.command,
+			stdout: { write: (chunk: string) => stdoutChunks.push(chunk) },
+			stderr: { write: (chunk: string) => stderrChunks.push(chunk) },
+		});
+		const release = assertContainmentBeforeRelease(input.guard, [
+			...(await collectRunGovernedSurfaces(input.deps, input.run.run_id)),
+			{
+				kind: "stdout-envelope",
+				label: `approval-gate-envelope:${input.run.run_id}`,
+				content: stdoutChunks.join("") + stderrChunks.join(""),
+			},
+		]);
+		if (!release.release) {
+			return emitTaskRunFailure(input.command, input.run.run_id, {
+				code: "task_run_lane_refused",
+				message: `sensitive run containment failed (${release.reason}); approval outputs were withheld and a human repair path is preserved.`,
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "repair_state",
+			});
+		}
+		for (const chunk of stdoutChunks) input.command.stdout.write(chunk);
+		for (const chunk of stderrChunks) input.command.stderr.write(chunk);
+		return exitCode;
+	}
+	return emitApprovalGate(input.command);
 }
 
 // Persist the dispatch outcome onto the shared run (its terminal or blocked
@@ -3247,6 +3940,432 @@ async function recordTaskRunOutcome(
 // plan; this driver seam owns store I/O, handoff reads, and envelope emission.
 // ---------------------------------------------------------------------------
 
+type RunbookAuthoringCommandPayload = {
+	command: string;
+	result: unknown;
+	caller: BrowserUseCallerMetadata;
+};
+
+function emitRunbookAuthoringSuccess(
+	input: PlatformCommandInput,
+	result: unknown,
+): number {
+	const payload: RunbookAuthoringCommandPayload = {
+		command: input.parsed.command,
+		result,
+		caller: input.caller,
+	};
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(
+				BROWSER_USE_RUNBOOK_AUTHORING_CONTRACT_ID,
+				input.caller,
+				[`command=${input.parsed.command}`],
+			),
+		);
+		input.stdout.write(`${JSON.stringify(result)}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: createCommandResultData(
+				browserUseContracts[input.parsed.command],
+				payload,
+			),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+function emitRunbookAuthoringFailure(
+	input: PlatformCommandInput,
+	code: string,
+	message: string,
+	data: Record<string, unknown> = {},
+): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(
+			`browser_use ${code}: ${safeMessage} (run_id=${input.runId})\n`,
+		);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+				...data,
+			},
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code,
+				message: safeMessage,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability(
+					code.endsWith("_stale") ? "change_input" : "repair_state",
+				),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+async function readRunbookDocumentFile(
+	input: PlatformCommandInput,
+): Promise<{ ok: true; bytes: string } | { ok: false; exitCode: number }> {
+	try {
+		return {
+			ok: true,
+			bytes: await input.runtime.readTextFile(
+				stringField(input.parsed.flagValues["--file"]) ?? "",
+			),
+		};
+	} catch {
+		return {
+			ok: false,
+			exitCode: emitRunbookAuthoringFailure(
+				input,
+				"runbook_document_unreadable",
+				"the Runbook document file could not be read.",
+			),
+		};
+	}
+}
+
+async function runRunbookAuthoringCommand(
+	input: PlatformCommandInput,
+): Promise<number> {
+	if (input.parsed.command === "runbook-schema") {
+		return emitRunbookAuthoringSuccess(input, runbookAuthoringSchema());
+	}
+	const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+	if (input.parsed.command === "runbook-delete") {
+		if (sourceRoot === undefined) {
+			return emitRunbookAuthoringFailure(
+				input,
+				"runbook_source_checkout_required",
+				"packaged runtime cannot mutate private Runbook source; use the setup-owned source checkout front door.",
+			);
+		}
+		const deleted = await deleteRunbookDraft({
+			sourceRoot,
+			serviceId: stringField(input.parsed.flagValues["--service"]) ?? "",
+			flowId: stringField(input.parsed.flagValues["--flow"]) ?? "",
+			...(stringField(input.parsed.flagValues["--expected-record-digest"]) === undefined
+				? {}
+				: {
+						expectedRecordDigest: stringField(
+							input.parsed.flagValues["--expected-record-digest"],
+						) as string,
+					}),
+		});
+		return deleted.ok
+			? emitRunbookAuthoringSuccess(input, deleted)
+			: emitRunbookAuthoringFailure(input, deleted.code, deleted.message, {
+					...(deleted.current_record_digest === undefined
+						? {}
+						: { current_record_digest: deleted.current_record_digest }),
+				});
+	}
+	if (input.parsed.command === "runbook-apply" && sourceRoot === undefined) {
+		return emitRunbookAuthoringFailure(
+			input,
+			"runbook_source_checkout_required",
+			"packaged runtime cannot mutate private Runbook source; use the setup-owned source checkout front door.",
+		);
+	}
+	const loaded = await readRunbookDocumentFile(input);
+	if (!loaded.ok) return loaded.exitCode;
+	if (input.parsed.command === "runbook-validate") {
+		const parsed = parseRunbookDraftDocument(loaded.bytes);
+		if (!parsed.ok) {
+			return emitRunbookAuthoringFailure(input, parsed.code, parsed.message, {
+				issues: parsed.issues,
+				repair: parsed.repair,
+			});
+		}
+		const hasActions = parsed.runbook.steps.some(
+			(step) => step.kind === "action" || step.kind === "iterate",
+		);
+		if (!hasActions) {
+			return emitRunbookAuthoringSuccess(input, {
+				ok: true,
+				record_digest: parsed.record_digest,
+			});
+		}
+		if (sourceRoot === undefined) {
+			return emitRunbookAuthoringFailure(
+				input,
+				"runbook_source_checkout_required",
+				"packaged validation cannot resolve the private Reviewed Action closure; use the setup-owned source checkout front door.",
+			);
+		}
+		const validated = await validateRunbookDraftForSource({
+			sourceRoot,
+			bytes: loaded.bytes,
+			...(input.runtime.reviewedActionApprovalVerifier === undefined
+				? {}
+				: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+		});
+		return validated.ok
+			? emitRunbookAuthoringSuccess(input, {
+					ok: true,
+					record_digest: validated.record_digest,
+				})
+			: emitRunbookAuthoringFailure(input, validated.code, validated.message);
+	}
+	const applied = await applyRunbookDraft({
+		sourceRoot: sourceRoot as string,
+		bytes: loaded.bytes,
+		...(stringField(input.parsed.flagValues["--expected-record-digest"]) === undefined
+			? {}
+			: {
+					expectedRecordDigest: stringField(
+						input.parsed.flagValues["--expected-record-digest"],
+					) as string,
+				}),
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+	});
+	return applied.ok
+		? emitRunbookAuthoringSuccess(input, applied)
+		: emitRunbookAuthoringFailure(input, applied.code, applied.message, {
+				...(applied.current_record_digest === undefined
+					? {}
+					: { current_record_digest: applied.current_record_digest }),
+			});
+}
+
+function owningSourceCheckoutRoot(runtime: BrowserUseRuntime): string | undefined {
+	if (runtime.sourceCheckoutRoot !== undefined) {
+		return runtime.sourceCheckoutRoot === null
+			? undefined
+			: normalize(runtime.sourceCheckoutRoot);
+	}
+	const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+	if (basename(moduleDirectory) !== "src") return undefined;
+	return normalize(join(moduleDirectory, "..", "..", ".."));
+}
+
+async function nonterminalMutationRunIds(
+	deps: RunStoreDeps,
+	_activeGenerationId: string | null,
+): Promise<readonly string[]> {
+	const stat = await deps.fs.lstat(deps.paths.state.runsDir);
+	if (stat === undefined || stat.kind !== "directory") return [];
+	const blockers: string[] = [];
+	for (const runId of await deps.fs.readDirectory(deps.paths.state.runsDir)) {
+		const loaded = await loadSharedRun(deps, runId);
+		if (!loaded.ok) {
+			blockers.push(runId);
+			continue;
+		}
+		if (isTerminalRunState(loaded.run.state)) continue;
+		if (loaded.run.mutation_dispatched) {
+			blockers.push(runId);
+			continue;
+		}
+		const binding = loaded.run.run_execution_binding;
+		if (binding !== undefined) {
+			const retained = await resolveRetainedRunbookGeneration(deps, binding);
+			if (!retained.ok) {
+				blockers.push(runId);
+				continue;
+			}
+			const shown = await createSelectedGenerationRunbookSeam(deps, retained).loadRunbook({
+				serviceId: binding.service_id,
+				flowId: binding.flow_id,
+			});
+			if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+			continue;
+		}
+		const progress = loaded.run.runbook_progress;
+		if (progress === undefined) continue;
+		const shown = await showRunbook(deps.fs, deps.paths.data.root, { serviceId: progress.service_id, flowId: progress.flow_id });
+		if (!shown.ok || projectRunbookCatalogRow(shown.runbook, shown.health).effect_class === "mutation") blockers.push(runId);
+	}
+	return blockers.sort();
+}
+
+
+
+function emitReviewedActionSuccess(input: PlatformCommandInput, result: unknown): number {
+	const payload: RunbookAuthoringCommandPayload = { command: input.parsed.command, result, caller: input.caller };
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(platformPlainHeader(BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID, input.caller, [`command=${input.parsed.command}`]));
+		input.stdout.write(`${JSON.stringify(result)}\n`);
+		return 0;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeSuccessEnvelope({ run_id: input.runId, data: createCommandResultData(browserUseContracts[input.parsed.command], payload) }), { runId: input.runId, durationMs: input.durationMs() });
+	return 0;
+}
+
+function emitReviewedActionFailure(input: PlatformCommandInput, code: string, message: string, exitCode = BINDING_FAIL_CLOSED_EXIT_CODE): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(`browser_use ${code}: ${safeMessage} (run_id=${input.runId})\n`);
+		return exitCode;
+	}
+	writeJsonEnvelope(input.stdout, createCliRuntimeErrorEnvelope({
+		run_id: input.runId, process_exit_code: exitCode,
+		data: { command: input.parsed.command, result_kind: "reviewed_action", caller: input.caller },
+		error: createCliRuntimeError({ run_id: input.runId, code, message: safeMessage, exit_code: exitCode, severity: "error", ...retryabilityForRecoverability(code === "action_replacement_digest_stale" ? "change_input" : "repair_state"), failure_domain: "browser_use" }),
+	}), { runId: input.runId, durationMs: input.durationMs() });
+	return exitCode;
+}
+
+async function readActionCandidateFile(input: PlatformCommandInput): Promise<
+	| { ok: true; candidate: ReturnType<typeof parseReviewedActionCandidate> & { ok: true } }
+	| { ok: false; exitCode: number }
+> {
+	const file = stringField(input.parsed.flagValues["--file"]) ?? "";
+	let raw: string;
+	try { raw = await input.runtime.readTextFile(file); } catch {
+		return { ok: false, exitCode: emitReviewedActionFailure(input, "action_document_unreadable", "the Reviewed Action candidate file could not be read.") };
+	}
+	const parsed = parseReviewedActionCandidate(raw);
+	if (!parsed.ok) return { ok: false, exitCode: emitReviewedActionFailure(input, parsed.code, parsed.message) };
+	return { ok: true, candidate: parsed };
+}
+
+async function runReviewedActionCommand(input: PlatformCommandInput): Promise<number> {
+	if (input.parsed.command === "action-schema") return emitReviewedActionSuccess(input, reviewedActionAuthoringSchema());
+	if (input.parsed.command === "action-status") {
+		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot read private source promotion state; use the setup-owned source checkout front door.");
+		const state = await readReviewedActionSourceState({ sourceRoot, actionId: stringField(input.parsed.flagValues["--id"]) ?? "" });
+		return state.ok ? emitReviewedActionSuccess(input, state) : emitReviewedActionFailure(input, state.code, state.message);
+	}
+	if (input.parsed.command === "action-promote") {
+		const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+		if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+		const brokerPath = stringField(input.runtime.env[BROWSER_USE_APPROVAL_BROKER_ENV]);
+		if (brokerPath === undefined) return emitReviewedActionFailure(input, "action_promotion_broker_unavailable", `${BROWSER_USE_APPROVAL_BROKER_ENV} must name the absolute signed ApprovalBroker executable.`);
+		const promoted = await runReviewedActionPromotionFrontDoor({
+			sourceRoot,
+			actionId: stringField(input.parsed.flagValues["--id"]) ?? "",
+			approvalReference: stringField(input.parsed.flagValues["--approval-reference"]) ?? "",
+			env: input.runtime.env,
+			broker: createNativeReviewedActionOperatorBroker(brokerPath),
+		});
+		return promoted.ok ? emitReviewedActionSuccess(input, promoted) : emitReviewedActionFailure(input, promoted.code, promoted.message);
+	}
+	const loaded = await readActionCandidateFile(input);
+	if (!loaded.ok) return loaded.exitCode;
+	if (input.parsed.command === "action-validate") {
+		const validated = validateReviewedActionCandidate(loaded.candidate.candidate);
+		return validated.ok ? emitReviewedActionSuccess(input, validated) : emitReviewedActionFailure(input, validated.issues[0]?.code ?? "action_candidate_invalid", validated.repair);
+	}
+	const sourceRoot = owningSourceCheckoutRoot(input.runtime);
+	if (sourceRoot === undefined) return emitReviewedActionFailure(input, "action_source_checkout_required", "packaged runtime cannot mutate Reviewed Action source; use the setup-owned source checkout front door.");
+	const expectedRecordDigest = stringField(input.parsed.flagValues["--expected-record-digest"]);
+	const applied = await applyReviewedActionCandidate({ sourceRoot, candidate: loaded.candidate.candidate, ...(expectedRecordDigest === undefined ? {} : { expectedRecordDigest }) });
+	return applied.ok ? emitReviewedActionSuccess(input, applied) : emitReviewedActionFailure(input, applied.code, applied.message);
+}
+
+async function runRunbookActivate(input: PlatformCommandInput): Promise<number> {
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	if (repoRoot === undefined) {
+		return emitPlatformStoreFailure(input, {
+			code: "catalog_source_unavailable",
+			message:
+				"packaged runtime cannot mutate or activate the private source catalog; use the setup-owned source checkout front door.",
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	// Validate caller-correctable flags up front so a malformed epoch/digest is a
+	// change_input usage error, not an activation repair_state failure that points
+	// the operator at catalog repair.
+	const rawCatalogDigest = stringField(input.parsed.flagValues["--catalog-digest"]) ?? "";
+	const rawExpectedEpoch = stringField(input.parsed.flagValues["--expected-epoch"]);
+	if (!/^[0-9a-f]{64}$/.test(rawCatalogDigest)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--catalog-digest must be 64 lowercase hex characters (the reviewed whole-catalog digest).", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
+	if (rawExpectedEpoch === undefined || !/^(0|[1-9][0-9]*)$/.test(rawExpectedEpoch)) {
+		return emitPlatformStoreFailure(input, { code: "activation_flag_invalid", message: "--expected-epoch must be a non-negative integer.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "change_input" });
+	}
+	const catalog = await loadPrivateRunbookCatalogFromGit({
+		repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined ? {} : { promotionVerifier: { verify: async (verification) => {
+			const result = verifyAuthoredReviewedActionPromotion({ commit: verification.commit, record: verification.record as BrowserUseAuthoredReviewedActionRecord, assetBytes: verification.assetBytes, promotionHistory: verification.promotionHistory, verifier: input.runtime.reviewedActionApprovalVerifier as NonNullable<BrowserUseRuntime["reviewedActionApprovalVerifier"]> });
+			return result.ok ? { ok: true as const } : result;
+		} } }),
+	});
+	if (!catalog.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: catalog.code,
+			message: catalog.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	const store = await openPlatformStore(input, "write");
+	if (!store.ok) return store.exitCode;
+	const activated = await activateRunbookGeneration({
+		...store.deps,
+		nonterminalMutationRuns: (activeGenerationId) =>
+			nonterminalMutationRunIds(store.deps, activeGenerationId),
+	}, {
+		catalog: catalog.catalog,
+		reviewedCatalogDigest: rawCatalogDigest,
+		expectedEpoch: Number.parseInt(rawExpectedEpoch, 10),
+	});
+	if (!activated.ok) {
+		return emitPlatformStoreFailure(input, {
+			code: activated.code,
+			message: activated.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			platformPlainHeader(BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID, input.caller, [
+				`changed=${activated.changed}`,
+				`generation=${activated.generation_id}`,
+				`catalog_digest=${activated.catalog_digest}`,
+				`epoch=${activated.epoch}`,
+				`previous=${activated.previous_generation_id ?? "none"}`,
+			]),
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_RUNBOOK_ACTIVATION_CONTRACT_ID,
+				schema_version: BROWSER_USE_RUNBOOK_ACTIVATION_SCHEMA_VERSION,
+				changed: activated.changed,
+				generation_id: activated.generation_id,
+				previous_generation_id: activated.previous_generation_id,
+				catalog_digest: activated.catalog_digest,
+				epoch: activated.epoch,
+				caller: input.caller,
+			},
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
 /**
  * `runbook list` (R35). Projects every discovered valid runbook as a redacted
  * catalog row under the runbook-catalog contract. Discovery is read-only, so
@@ -3258,7 +4377,49 @@ async function recordTaskRunOutcome(
 async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 	const store = await openPlatformStore(input);
 	if (!store.ok) return store.exitCode;
-	const rows = await listRunbooks(store.deps.fs, store.deps.paths.data.root);
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	const source = repoRoot === undefined ? undefined : await readRunbookSourceCatalog({
+		sourceRoot: repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
+	});
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const legacyRows = !activeResult.ok && activeResult.code === "pre_cutover_unavailable" ? await listRunbooks(store.deps.fs, store.deps.paths.data.root) : [];
+	const separatedIds = new Set(source?.ok === true ? source.catalog.separated.map((entry) => entry.record_id) : []);
+	const sourceRecords = source?.ok === true ? Object.fromEntries(source.catalog.records.flatMap((record) => record.record_digest === null || separatedIds.has(record.id) ? [] : [[record.id, record.record_digest]])) : {};
+	const activeRecords = active === undefined ? {} : Object.fromEntries(active.manifest.runbooks.map((record) => [`${record.service_id}/${record.flow_id}`, record.record_digest]));
+	const synchronizationBase = projectRunbookGenerationSynchronization(
+		source?.ok === true ? { available: true, catalog_digest: source.catalog.catalog_digest, records: sourceRecords } : { available: false },
+		active === undefined ? { available: false } : { available: true, catalog_digest: active.catalog_digest, generation_id: active.generation_id, epoch: active.epoch, records: activeRecords },
+	);
+	const synchronization =
+		source?.ok === true && source.catalog.activation_blockers.length > 0
+			? { ...synchronizationBase, catalog_status: "activation-required" as const }
+			: synchronizationBase;
+	const rowById = new Map<string, BrowserUseRunbookCatalogRow & { record_digest: string }>();
+	if (source?.ok === true) for (const record of source.catalog.records) {
+		if (record.runbook !== undefined && record.record_digest !== null) rowById.set(record.id, { ...projectRunbookCatalogRow(record.runbook, record.activation_blocker === undefined ? "healthy" : "stale"), record_digest: record.record_digest });
+	}
+	if (active !== undefined) {
+		const seam = createSelectedGenerationRunbookSeam(store.deps, active);
+		for (const record of active.manifest.runbooks) {
+			const id = `${record.service_id}/${record.flow_id}`;
+			if (rowById.has(id)) continue;
+			const loaded = await seam.loadRunbook({ serviceId: record.service_id, flowId: record.flow_id });
+			if (!loaded.ok) return emitPlatformStoreFailure(input, runbookFailureOf("failure" in loaded ? loaded.failure.code : "runbook_record_corrupt", "failure" in loaded ? loaded.failure.message : "active generation Runbook is missing."));
+			rowById.set(id, { ...projectRunbookCatalogRow(loaded.runbook, loaded.health), record_digest: record.record_digest });
+		}
+	}
+	for (const row of legacyRows) {
+		const id = `${row.service_id}/${row.flow_id}`;
+		if (!rowById.has(id)) rowById.set(id, { ...row, record_digest: createHash("sha256").update(JSON.stringify(row)).digest("hex") });
+	}
+	const statusById = new Map(synchronization.records.map((record) => [record.id, record.status]));
+	const rows = [...rowById.entries()].map(([id, row]) => ({ ...row, synchronization_status: separatedIds.has(id) ? "separated" : statusById.get(id) ?? "new-pending-activation" })).sort((left, right) => `${left.service_id}/${left.flow_id}`.localeCompare(`${right.service_id}/${right.flow_id}`));
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID, input.caller, [
@@ -3267,8 +4428,14 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 		);
 		for (const row of rows) {
 			input.stdout.write(
-				`service=${row.service_id} flow=${row.flow_id} health=${row.health} ${row.summary}\n`,
+				`service=${row.service_id} flow=${row.flow_id} health=${row.health} sync=${row.synchronization_status} ${row.summary}\n`,
 			);
+		}
+		if (source?.ok === true) for (const blocker of source.catalog.activation_blockers) {
+			input.stdout.write(`blocker=${blocker.id} code=${blocker.code}\n`);
+		}
+		if (source?.ok === true) for (const separated of source.catalog.separated) {
+			input.stdout.write(`separated=${separated.record_id} code=${separated.code}\n`);
 		}
 		return 0;
 	}
@@ -3278,9 +4445,14 @@ async function runRunbookList(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_CATALOG_SCHEMA_VERSION,
 				runbook_count: rows.length,
 				runbooks: rows,
+				activation_blockers:
+					source?.ok === true ? source.catalog.activation_blockers : [],
+				separated: source?.ok === true ? source.catalog.separated : [],
+				...synchronization,
+				source_view: source?.ok === true ? "available" : "source_unavailable",
 				caller: input.caller,
 			},
 		}),
@@ -3328,7 +4500,10 @@ function runbookFailureOf(
 			// named in the message.
 			return {
 				code,
-				message,
+				message:
+					code === "runbook_confidential_native_capability_absent"
+						? `${message} Continue with browser-use auth install-token, then browser-use auth status --json, then re-run this command.`
+						: message,
 				actionId: "inspect_shared_run",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "repair_state",
@@ -3349,16 +4524,43 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 	if (!store.ok) return store.exitCode;
 	const serviceId = stringField(input.parsed.flagValues["--service"]) ?? "";
 	const flowId = stringField(input.parsed.flagValues["--flow"]) ?? "";
-	const shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, {
-		serviceId,
-		flowId,
+	const id = `${serviceId}/${flowId}`;
+	const repoRoot = owningSourceCheckoutRoot(input.runtime);
+	const source = repoRoot === undefined ? undefined : await readRunbookSourceCatalog({
+		sourceRoot: repoRoot,
+		...(input.runtime.reviewedActionApprovalVerifier === undefined
+			? {}
+			: { approvalVerifier: input.runtime.reviewedActionApprovalVerifier }),
 	});
-	if (!shown.ok) {
-		return emitPlatformStoreFailure(
-			input,
-			runbookFailureOf(shown.failure.code, shown.failure.message),
-		);
+	if (source !== undefined && !source.ok) return emitPlatformStoreFailure(input, { code: source.code, message: source.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const activeResult = await resolveSelectedRunbookGeneration(store.deps);
+	if (!activeResult.ok && activeResult.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: activeResult.code, message: activeResult.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	const active = activeResult.ok ? activeResult : undefined;
+	const sourceRecord = source?.ok === true ? source.catalog.records.find((record) => record.id === id) : undefined;
+	const sourceSeparation = source?.ok === true ? source.catalog.separated.find((entry) => entry.record_id === id) : undefined;
+	const activeRecord = active?.manifest.runbooks.find((record) => record.service_id === serviceId && record.flow_id === flowId);
+	if (sourceRecord?.activation_blocker !== undefined && sourceSeparation === undefined) {
+		return emitPlatformStoreFailure(input, {
+			code: sourceRecord.activation_blocker.code,
+			message: sourceRecord.activation_blocker.message,
+			actionId: "activate_runbook_catalog",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
 	}
+	let shown: { ok: true; runbook: BrowserUseRunbook; health: "healthy" | "degrading" | "stale" } | { ok: false; failure: { code: string; message: string } };
+	if (sourceRecord?.runbook !== undefined) shown = { ok: true, runbook: sourceRecord.runbook, health: sourceSeparation === undefined ? "healthy" : "stale" };
+	else if (active !== undefined && activeRecord !== undefined) {
+		const loaded = await createSelectedGenerationRunbookSeam(store.deps, active).loadRunbook({ serviceId, flowId });
+		shown = loaded.ok ? loaded : { ok: false, failure: "failure" in loaded ? loaded.failure : { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
+	} else if (active === undefined && !activeResult.ok && activeResult.code === "pre_cutover_unavailable") shown = await showRunbook(store.deps.fs, store.deps.paths.data.root, { serviceId, flowId });
+	else shown = { ok: false, failure: { code: "runbook_not_found", message: `no runbook is defined for ${serviceId}/${flowId}.` } };
+	if (!shown.ok) {
+		return emitPlatformStoreFailure(input, runbookFailureOf(shown.failure.code, shown.failure.message));
+	}
+	const sourceDigest = source?.ok === true ? source.catalog.catalog_digest : null;
+	const recordStatus = sourceSeparation !== undefined ? "separated" : sourceRecord !== undefined && activeRecord?.record_digest === sourceRecord.record_digest ? "in-sync" : sourceRecord !== undefined ? "new-pending-activation" : activeRecord !== undefined ? "deletion-pending-activation" : "new-pending-activation";
+	const catalogStatus = source === undefined ? "source-unavailable" : active?.catalog_digest === sourceDigest ? "in-sync" : "activation-required";
 	if (input.parsed.outputMode === "plain") {
 		input.stdout.write(
 			platformPlainHeader(
@@ -3368,11 +4570,13 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 					`service=${shown.runbook.service_id}`,
 					`flow=${shown.runbook.flow_id}`,
 					`health=${shown.health}`,
+					`catalog_sync=${catalogStatus}`,
+					`record_sync=${recordStatus}`,
 				],
 			),
 		);
 		input.stdout.write(
-			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}\n`,
+			`version=${shown.runbook.version} steps=${shown.runbook.steps.length}${sourceSeparation === undefined ? "" : ` separated=${sourceSeparation.code}`}\n`,
 		);
 		return 0;
 	}
@@ -3382,9 +4586,18 @@ async function runRunbookShow(input: PlatformCommandInput): Promise<number> {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_RUNBOOK_DEFINITION_CONTRACT_ID,
-				schema_version: PLATFORM_STORE_SCHEMA_VERSION,
+				schema_version: BROWSER_USE_RUNBOOK_DEFINITION_SCHEMA_VERSION,
 				runbook: shown.runbook,
 				health: shown.health,
+				record_digest: sourceRecord?.record_digest ?? activeRecord?.record_digest ?? null,
+				synchronization_status: recordStatus,
+				separated: sourceSeparation ?? null,
+				catalog_status: catalogStatus,
+				source_catalog_digest: sourceDigest,
+				active_catalog_digest: active?.catalog_digest ?? null,
+				active_generation_id: active?.generation_id ?? null,
+				active_epoch: active?.epoch ?? null,
+				source_view: source === undefined ? "source_unavailable" : "available",
 				caller: input.caller,
 			},
 		}),
@@ -3415,6 +4628,68 @@ function parseRunbookInputs(
 	return { ok: true, inputs };
 }
 
+type PrivateRunbookInputBinding = {
+	inputId: string;
+	filePath: string;
+};
+
+function parsePrivateRunbookInputBindings(
+	pairs: readonly string[],
+):
+	| { ok: true; bindings: readonly PrivateRunbookInputBinding[] }
+	| { ok: false; code: string; message: string } {
+	const inputIds = new Set<string>();
+	const bindings: PrivateRunbookInputBinding[] = [];
+	for (const pair of pairs) {
+		const equals = pair.indexOf("=");
+		if (equals <= 0 || equals === pair.length - 1) {
+			return {
+				ok: false,
+				code: "private_input_shape_invalid",
+				message:
+					"each --input-file must be <id>=<absolute-path>; private paths and values are withheld.",
+			};
+		}
+		const inputId = pair.slice(0, equals);
+		if (inputIds.has(inputId)) {
+			return {
+				ok: false,
+				code: "private_input_shape_invalid",
+				message: "a private input id may be supplied only once.",
+			};
+		}
+		inputIds.add(inputId);
+		bindings.push({ inputId, filePath: pair.slice(equals + 1) });
+	}
+	return { ok: true, bindings };
+}
+
+async function readPrivateRunbookInputs(
+	bindings: readonly PrivateRunbookInputBinding[],
+	inputRoot: string,
+): Promise<
+	| { ok: true; inputs: BrowserUseRunbookInputs }
+	| { ok: false; code: string; message: string }
+> {
+	const inputs: Record<string, unknown> = {};
+	for (const binding of bindings) {
+		const read = await readPrivateStructuredInput({
+			inputId: binding.inputId,
+			inputRoot,
+			filePath: binding.filePath,
+		});
+		if (!read.ok) {
+			return {
+				ok: false,
+				code: read.refusal.code,
+				message: read.refusal.message,
+			};
+		}
+		Object.assign(inputs, read.inputs);
+	}
+	return { ok: true, inputs };
+}
+
 // Redact an --input pair for an error message: never echo the value bytes (a
 // confidential value could ride in), only the id portion.
 function sanitizeInputPairForError(pair: string): string {
@@ -3422,29 +4697,542 @@ function sanitizeInputPairForError(pair: string): string {
 	return eq > 0 ? `${pair.slice(0, eq)}=[redacted]` : "[redacted]";
 }
 
-// Auth-delivery seam for `runbook run` (auth plan U11). Built ONLY when a native
-// Token Retrieval Port exists; the provider is the sole credential capability
-// (R7/R16). The provider composes into the sensitive-interval delivery context
-// via `buildAgentBrowserDeliveryContext`, but that context also needs a live
-// VERIFIED TARGET proof, the disposable delivery hook, and the target-reproof
-// closure — all produced by the live sensitive-interval transaction that a later
-// unit drives end-to-end for the runbook lane. Until that transaction is wired
-// here, this seam returns a typed `blocked` outcome (never a fabricated target,
-// never an unauthenticated fill): the run stays fail-closed with a repair
-// pointer even when the native capability is present. The engine consults the
-// seam with the plan's pending bindings, so the composition is proven live; only
-// the live-target assembly remains for the transaction unit.
+type CloseableTargetTransport = {
+	transport: {
+		request(
+			request:
+				| BrowserUseDevToolsRequest
+				| BrowserUseCdpObserverRequest
+				| {
+						method: "Page.navigate";
+						sessionId: string;
+						params: { url: string };
+					  },
+		): Promise<unknown>;
+	};
+	close(): void;
+};
+
+async function navigateRunbookAuthTarget(
+	transport: CloseableTargetTransport["transport"],
+	input: { target_id: string; url: string },
+): Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }> {
+	let sessionId: string | undefined;
+	try {
+		const attached = await transport.request({
+			method: "Target.attachToTarget",
+			params: { targetId: input.target_id, flatten: true },
+		});
+		sessionId =
+			typeof attached === "object" &&
+			attached !== null &&
+			"sessionId" in attached &&
+			typeof attached.sessionId === "string"
+				? attached.sessionId
+				: undefined;
+		if (sessionId === undefined) {
+			return { ok: false, cause: "target-proof-invalid" };
+		}
+		await transport.request({
+			method: "Page.navigate",
+			sessionId,
+			params: { url: input.url },
+		});
+		return { ok: true };
+	} catch {
+		return { ok: false, cause: "target-proof-invalid" };
+	} finally {
+		if (sessionId !== undefined) {
+			try {
+				await transport.request({
+					method: "Target.detachFromTarget",
+					params: { sessionId },
+				});
+			} catch {
+				// Navigation already dispatched once. Later proof fails closed on drift.
+			}
+		}
+	}
+}
+
+type RunbookAuthDeliveryBuilderDeps = {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	resolveApprovedBinding?(input: {
+		binding_ref: string;
+		service_id: string;
+		auth_context: BrowserUseAuthContext;
+		environment: string;
+		profile: string;
+	}): Promise<BrowserUseItemBinding | null>;
+	createTargetTransport(
+		handoff: AgentBrowserVerifiedHandoff,
+	): CloseableTargetTransport;
+	createDeliveryHook(input: {
+		tokenRetrieval: BrowserUseTokenRetrievalPort;
+		handoff: AgentBrowserVerifiedHandoff;
+		expectedTargetUrl: string;
+		target: BrowserUseMintedVerifiedTarget;
+		descriptorByField?: Readonly<
+			Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			>
+		>;
+	}): BrowserUseDeliveryHook | undefined;
+};
+
+function preparationRefusalMessage(
+	outcome: Extract<
+		Awaited<ReturnType<BrowserUseAuthProvider["prepareSecretFree"]>>,
+		{ ok: false }
+	>,
+): string {
+	const selection =
+		outcome.detail.kind === "selection"
+			? ` Ranked redacted candidates: ${outcome.detail.selection
+					.map(
+						(candidate) =>
+							`rank ${candidate.rank} item ${candidate.item_id}`,
+					)
+					.join(", ")}.`
+			: "";
+	const tokenSetup =
+		outcome.event.cause === "missing-token"
+			? " Continue with browser-use auth install-token, then browser-use auth status --json, then rerun."
+			: "";
+	return `binding resolution blocked (${outcome.event.cause}); continuation ${outcome.continuation.next_action_id}: ${outcome.continuation.summary}${selection}${tokenSetup}`;
+}
+
+function bindingIdentity(binding: {
+	vault_id: string;
+	item_id: string;
+	binding_revision: number;
+}): string {
+	return `${binding.vault_id}\0${binding.item_id}\0${binding.binding_revision}`;
+}
+
+function fieldMethod(
+	field: BrowserUseOpCredentialField,
+): "password" | "otp" {
+	return field === "otp-current" ? "otp" : "password";
+}
+
+function runbookLoginPathOf(expectedTargetUrl: string): string | null {
+	try {
+		return new URL(expectedTargetUrl).pathname;
+	} catch {
+		return null;
+	}
+}
+
+async function prepareApprovedRunbookBinding(input: {
+	provider: BrowserUseAuthProvider;
+	deps: RunbookAuthDeliveryBuilderDeps;
+	request: Parameters<BrowserUseRunbookAuthDelivery>[0];
+	bindingRef: string;
+	field: Parameters<BrowserUseRunbookAuthDelivery>[0]["confidentialFields"][number];
+	loginPath: string | null;
+}) {
+	const approvedBinding =
+		(await input.deps.resolveApprovedBinding?.({
+			binding_ref: input.bindingRef,
+			service_id: input.request.serviceId,
+			auth_context: "interactive-login",
+			environment: input.request.handoff.environment.name,
+			profile: input.request.handoff.environment.profile,
+		})) ?? null;
+	return await input.provider.prepareSecretFree({
+		service_id: input.request.serviceId,
+		auth_context: "interactive-login",
+		target_origins: input.request.allowedOrigins,
+		login_path: input.loginPath,
+		method: fieldMethod(input.field.credentialField),
+		binding: approvedBinding,
+		candidate_hint: {
+			hint_item_id: input.bindingRef,
+			legacy_vault_name: null,
+		},
+	});
+}
+
+function environmentDeliveryHook(input: {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	handoff: AgentBrowserVerifiedHandoff;
+	expectedTargetUrl: string;
+	target: BrowserUseMintedVerifiedTarget;
+	descriptorByField?: Readonly<
+		Partial<
+			Record<
+				BrowserUseOpCredentialField,
+				{ role: string; accessible_name: string }
+			>
+		>
+	>;
+}): BrowserUseDeliveryHook | undefined {
+	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
+	if (typeof port.redeemCredentialField !== "function") return undefined;
+	return async ({ handle, target }) => {
+		// Each redemption re-resolves its node in the delivery child from THIS
+		// descriptor, so it must name the field being redeemed — a constant
+		// first-field descriptor would write a later secret into the wrong node.
+		const descriptor = input.descriptorByField?.[handle.field] ?? {
+			role: input.target.field.role,
+			accessible_name: input.target.field.accessible_name,
+		};
+		const delivered = await port.redeemCredentialField?.({
+			handle,
+			target_digest: target.target_proof_digest,
+			ws_url: input.handoff.endpoint.ws,
+			target_url: input.target.top_level_url,
+			target_origin: target.frame_origin,
+			field: {
+				role: descriptor.role,
+				accessible_name: descriptor.accessible_name,
+			},
+		});
+		if (delivered?.ok) return delivered;
+		const rejection = delivered?.rejection.code;
+		const targetDrift =
+			rejection === "target-digest-mismatch" ||
+			rejection === "origin-mismatch" ||
+			rejection === "target-proof-invalid";
+		return {
+			ok: false,
+			reason: targetDrift
+				? "target-drift"
+				: delivered?.external_effect_possible === true
+					? "helper-crash"
+					: "helper-unavailable",
+			field_cleared: delivered?.field_cleared ?? false,
+		};
+	};
+}
+
+function environmentLoginDeliveryHook(input: {
+	tokenRetrieval: BrowserUseTokenRetrievalPort;
+	handoff: AgentBrowserVerifiedHandoff;
+}): BrowserUseDeliveryHook | undefined {
+	const port = input.tokenRetrieval as Partial<BrowserUseEnvironmentTokenRetrievalPort>;
+	if (typeof port.redeemCredentialField !== "function") return undefined;
+	return async ({ handle, target }) => {
+		const mintedTarget = target as Partial<BrowserUseMintedVerifiedTarget>;
+		const field = mintedTarget.field;
+		if (field === undefined || typeof mintedTarget.top_level_url !== "string") {
+			return { ok: false, reason: "target-drift", field_cleared: false };
+		}
+		const delivered = await port.redeemCredentialField?.({
+			handle,
+			target_digest: target.target_proof_digest,
+			ws_url: input.handoff.endpoint.ws,
+			target_url: mintedTarget.top_level_url,
+			target_origin: target.frame_origin,
+			field: {
+				role: field.role,
+				accessible_name: field.accessible_name,
+			},
+		});
+		if (delivered?.ok) return delivered;
+		const rejection = delivered?.rejection.code;
+		return {
+			ok: false,
+			reason:
+				rejection === "target-digest-mismatch" ||
+				rejection === "origin-mismatch" ||
+				rejection === "target-proof-invalid"
+					? "target-drift"
+					: delivered?.external_effect_possible === true
+						? "helper-crash"
+						: "helper-unavailable",
+			field_cleared: delivered?.field_cleared ?? false,
+		};
+	};
+}
+
+function createWebSocketTargetTransport(
+	handoff: AgentBrowserVerifiedHandoff,
+): CloseableTargetTransport {
+	const socket = new WebSocket(handoff.endpoint.ws);
+	const pending = new Map<
+		number,
+		{
+			resolve(value: unknown): void;
+			reject(reason: Error): void;
+			timer: ReturnType<typeof setTimeout>;
+		}
+	>();
+	let nextId = 1;
+	let closed = false;
+	const opened = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error("DevTools transport open timed out.")),
+			10_000,
+		);
+		socket.addEventListener(
+			"open",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+		socket.addEventListener(
+			"error",
+			() => {
+				clearTimeout(timer);
+				reject(new Error("DevTools transport could not open."));
+			},
+			{ once: true },
+		);
+	});
+	socket.addEventListener("message", (event) => {
+		if (typeof event.data !== "string") return;
+		let response: unknown;
+		try {
+			response = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+		if (
+			typeof response !== "object" ||
+			response === null ||
+			!("id" in response) ||
+			typeof response.id !== "number"
+		) {
+			return;
+		}
+		const waiter = pending.get(response.id);
+		if (waiter === undefined) return;
+		pending.delete(response.id);
+		clearTimeout(waiter.timer);
+		if ("error" in response) {
+			waiter.reject(new Error("DevTools request was refused."));
+			return;
+		}
+		waiter.resolve("result" in response ? response.result : undefined);
+	});
+	const rejectPending = () => {
+		closed = true;
+		for (const waiter of pending.values()) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error("DevTools transport closed."));
+		}
+		pending.clear();
+	};
+	socket.addEventListener("close", rejectPending);
+	return {
+		transport: {
+			async request(
+				request: BrowserUseDevToolsRequest | BrowserUseCdpObserverRequest,
+			): Promise<unknown> {
+				await opened;
+				if (closed) throw new Error("DevTools transport is closed.");
+				const id = nextId;
+				nextId += 1;
+				return await new Promise<unknown>((resolve, reject) => {
+					const timer = setTimeout(() => {
+						pending.delete(id);
+						reject(new Error("DevTools request timed out."));
+					}, 10_000);
+					pending.set(id, { resolve, reject, timer });
+					socket.send(JSON.stringify({ id, ...request }));
+				});
+			},
+		},
+		close() {
+			if (closed) return;
+			rejectPending();
+			socket.close();
+		},
+	};
+}
+
+// Auth-delivery seam for `runbook run`. Built only when a Token Retrieval Port
+// exists. Every refusal carries the blocking cause and its repair continuation.
 function buildRunbookAuthDelivery(
 	provider: BrowserUseAuthProvider,
+	deps: RunbookAuthDeliveryBuilderDeps,
 ): BrowserUseRunbookAuthDelivery {
-	// Reference the provider so the sole credential capability is captured here
-	// and a miswiring that drops it is a type error, not a silent bypass.
-	void provider;
-	return async () => ({
-		ok: false,
-		message:
-			"the native Browser Authentication capability is present, but the runbook lane's live sensitive-interval delivery (verified-target proof and confidential-field hook) is not wired here yet. Complete the authentication transaction for this runbook lane before running a confidential runbook.",
-	});
+	return async (input) => {
+		let closeable: CloseableTargetTransport | undefined;
+		let lease:
+			| Extract<
+					Awaited<
+						ReturnType<BrowserUseAuthProvider["acquireSensitiveIntervalLease"]>
+					>,
+					{ granted: true }
+			  >["lease"]
+			| undefined;
+		const release = async () => {
+			if (lease !== undefined) {
+				await provider.releaseSensitiveIntervalLease({ lease });
+				lease = undefined;
+			}
+			closeable?.close();
+			closeable = undefined;
+		};
+		try {
+			const fieldBySlug = new Map(
+				input.confidentialFields.map((field) => [
+					field.bindingSlug,
+					field,
+				]),
+			);
+			const preparedBindings = [];
+			const loginPath = runbookLoginPathOf(input.expectedTargetUrl);
+			for (const slug of input.pendingItemBindings) {
+				const field = fieldBySlug.get(slug);
+				if (field === undefined) {
+					return {
+						ok: false,
+						message:
+							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: the runbook binding has no confidential field plan.",
+					};
+				}
+				const prepared = await prepareApprovedRunbookBinding({
+					provider,
+					deps,
+					request: input,
+					bindingRef: slug,
+					field,
+					loginPath,
+				});
+				if (!prepared.ok) {
+					return { ok: false, message: preparationRefusalMessage(prepared) };
+				}
+				if (prepared.binding === null) {
+					return {
+						ok: false,
+						message:
+							"binding resolution blocked (capability-loss); continuation inspect-auth-capability: confidential delivery produced no Item Binding.",
+					};
+				}
+				preparedBindings.push(prepared.binding);
+			}
+			const binding = preparedBindings[0];
+			if (binding === undefined) {
+				return {
+					ok: false,
+					message:
+						"binding resolution blocked (capability-loss); continuation inspect-auth-capability: no pending Item Binding was supplied.",
+				};
+			}
+			if (
+				new Set(preparedBindings.map((candidate) => bindingIdentity(candidate)))
+					.size !== 1
+			) {
+				return {
+					ok: false,
+					message:
+						"binding resolution blocked (single-binding-v1); continuation split-confidential-runbook: pending slugs resolved to more than one distinct Item Binding.",
+				};
+			}
+
+			const firstField = input.confidentialFields[0];
+			if (firstField === undefined) {
+				return {
+					ok: false,
+					message:
+						"target proof blocked (target-proof-invalid); continuation refresh-runbook-target: no confidential field target was supplied.",
+				};
+			}
+			closeable = deps.createTargetTransport(input.handoff);
+			const proof = await mintBrowserUseVerifiedTarget(closeable.transport, {
+				lane_id: "agent-browser",
+				run_id: input.runId,
+				expected_url: input.expectedTargetUrl,
+				allowed_origins: input.allowedOrigins,
+				binding,
+				field: {
+					role: firstField.target.role,
+					accessible_name: firstField.target.name,
+				},
+			});
+			if (!proof.ok) {
+				await release();
+				return {
+					ok: false,
+					message: `target proof blocked (${proof.cause}); continuation refresh-runbook-target: refresh the verified handoff target, then rerun.`,
+				};
+			}
+
+			const acquired = await provider.acquireSensitiveIntervalLease({
+				run: {
+					environment_profile: {
+						environment: input.handoff.environment.name,
+						profile: input.handoff.environment.profile,
+					},
+				},
+				holder_id: `runbook-sensitive-${input.runId}`,
+				ttl_ms: 30_000,
+				scope: { target_id: proof.target.target_id },
+				key_family: "sensitive-interval",
+			});
+			if (!acquired.granted) {
+				await release();
+				return {
+					ok: false,
+					message: `sensitive interval blocked (${acquired.blocked_cause}); continuation ${acquired.continuation.next_action_id}: ${acquired.continuation.summary}`,
+				};
+			}
+			lease = acquired.lease;
+			// Per-field node descriptors from the runbook's confidential field plan:
+			// each redemption selects ITS OWN descriptor, never the first field's.
+			const descriptorByField: Partial<
+				Record<
+					BrowserUseOpCredentialField,
+					{ role: string; accessible_name: string }
+				>
+			> = {};
+			for (const field of input.confidentialFields) {
+				descriptorByField[field.credentialField] ??= {
+					role: field.target.role,
+					accessible_name: field.target.name,
+				};
+			}
+			const deliver = deps.createDeliveryHook({
+				tokenRetrieval: deps.tokenRetrieval,
+				handoff: input.handoff,
+				expectedTargetUrl: input.expectedTargetUrl,
+				target: proof.target,
+				descriptorByField,
+			});
+			if (deliver === undefined) {
+				await release();
+				return {
+					ok: false,
+					message:
+						"sensitive interval blocked (capability-loss); continuation install-token: the active credential lane cannot redeem a confidential delivery handle.",
+				};
+			}
+			const field_by_binding_slug = Object.fromEntries(
+				input.confidentialFields.map((field) => [
+					field.bindingSlug,
+					field.credentialField,
+				]),
+			);
+			return {
+				ok: true,
+				context: provider.buildAgentBrowserDeliveryContext({
+					binding,
+					target: proof.target,
+					deliver,
+					reproveTarget: proof.reproveTarget,
+					field_by_binding_slug,
+					in_sensitive_interval: true,
+				}),
+				release,
+			};
+		} catch {
+			await release();
+			return {
+				ok: false,
+				message:
+					"sensitive interval blocked (capability-loss); continuation inspect-auth-capability: live confidential delivery composition failed closed.",
+			};
+		}
+	};
 }
 
 /**
@@ -3457,7 +5245,10 @@ function buildRunbookAuthDelivery(
  * @param input - Store-backed command input
  * @returns Process exit code
  */
-async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
+async function runRunbookRun(
+	input: PlatformCommandInput,
+	generationConflictRetries = 1,
+): Promise<number> {
 	const flags = input.parsed.flagValues;
 	const serviceId = stringField(flags["--service"]) ?? "";
 	const flowId = stringField(flags["--flow"]) ?? "";
@@ -3497,9 +5288,51 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			recoverability: "change_input",
 		});
 	}
+	const privateInputBindings = parsePrivateRunbookInputBindings(
+		input.parsed.repeatedFlagValues["--input-file"] ?? [],
+	);
+	if (!privateInputBindings.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: privateInputBindings.code,
+			message: privateInputBindings.message,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const publicInputIds = new Set(Object.keys(parsedInputs.inputs));
+	const conflictingInput = privateInputBindings.bindings.find((binding) =>
+		publicInputIds.has(binding.inputId),
+	);
+	if (conflictingInput !== undefined) {
+		return emitTaskRunFailure(input, undefined, {
+			code: "runbook_input_source_conflict",
+			message: `runbook input ${conflictingInput.inputId} may use either --input or --input-file, not both.`,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
 
 	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
+	const privateInputs = await readPrivateRunbookInputs(
+		privateInputBindings.bindings,
+		join(store.deps.paths.resolution.roots.runtime, "private-inputs"),
+	);
+	if (!privateInputs.ok) {
+		return emitTaskRunFailure(input, undefined, {
+			code: privateInputs.code,
+			message: privateInputs.message,
+			actionId: "change_task_run_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const runbookInputs: BrowserUseRunbookInputs = {
+		...parsedInputs.inputs,
+		...privateInputs.inputs,
+	};
 
 	const runFlag = stringField(flags["--run"]);
 	const explicitTabId = stringField(flags["--tab"]);
@@ -3569,9 +5402,40 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				},
 			});
 		}
+		if (
+			loaded.run.state === "awaiting-approval" &&
+			loaded.run.continuation?.next_action_id ===
+				"complete-submit-approval"
+		) {
+			const approvalArtifact = loaded.run.artifacts.at(-1);
+			return emitSharedRunSuccess({
+				command: input,
+				run: loaded.run,
+				continuationId: "complete-submit-approval",
+				...(approvalArtifact === undefined
+					? {}
+					: {
+							dataExtra: {
+								approval_review: {
+									artifact_id: approvalArtifact.artifact_id,
+									producer_capability: "screenshot_media",
+								},
+							},
+						}),
+			});
+		}
 		run = loaded.run;
 		resumeFromStep = runbookResumeCursorOf(loaded.run);
 	}
+
+	const generationResolution = run?.run_execution_binding !== undefined
+		? await resolveRetainedRunbookGeneration(store.deps, run.run_execution_binding)
+		: await resolveSelectedRunbookGeneration(store.deps);
+	const selectedGeneration = generationResolution.ok ? generationResolution : undefined;
+	if (!generationResolution.ok && generationResolution.code !== "pre_cutover_unavailable") return emitPlatformStoreFailure(input, { code: generationResolution.code, message: generationResolution.message, actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	if (run !== undefined && run.run_execution_binding === undefined && selectedGeneration !== undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the retained run has no immutable generation binding and cannot acquire current authority during resume.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	if (run?.run_execution_binding?.normalized_input_digest !== undefined && run.run_execution_binding.normalized_input_digest !== normalizedInputDigest(runbookInputs)) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the resumed input does not match the immutable run execution binding.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 
 	const prepared = await prepareRunbookExecution(
 		store.deps.fs,
@@ -3579,8 +5443,16 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		{
 			serviceId,
 			flowId,
-			inputs: parsedInputs.inputs,
+			inputs: runbookInputs,
 			resumeFromStep,
+			...(selectedGeneration !== undefined ? {
+				actionSeam: createSelectedGenerationActionSeam(
+					store.deps,
+					selectedGeneration,
+					input.runtime.reviewedActionApprovalVerifier,
+				),
+			} : {}),
+			...(selectedGeneration !== undefined ? { runbookSeam: createSelectedGenerationRunbookSeam(store.deps, selectedGeneration) } : {}),
 		},
 	);
 	if (!prepared.ok) {
@@ -3605,6 +5477,12 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		);
 	}
 	const plan = prepared.plan;
+	// A binding needs a real runbook_digest to detect resume drift. If the selected
+	// generation manifest holds no record for this plan, generation and plan
+	// disagree (already inconsistent); fail closed rather than persist an empty,
+	// unverifiable digest. (Must sit after `plan` is declared.)
+	const boundRunbookDigest = selectedGeneration?.manifest.runbooks.find((record) => record.service_id === plan.service_id && record.flow_id === plan.flow_id)?.record_digest;
+	if (selectedGeneration !== undefined && boundRunbookDigest === undefined) return emitPlatformStoreFailure(input, { code: "activation_generation_corrupt", message: "the selected generation has no record for this Runbook; the generation and plan disagree.", actionId: "activate_runbook_catalog", exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, recoverability: "repair_state" });
 	if (
 		run?.runbook_progress !== undefined &&
 		(run.runbook_progress.service_id !== plan.service_id ||
@@ -3621,10 +5499,50 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			recoverability: "repair_state",
 		});
 	}
+	if (run?.mutation_dispatched) {
+		const latestApproval = run.approvals?.at(-1);
+		const gateCapturePending =
+			plan.steps.length === 0 &&
+			plan.approval_gate?.runbook_step_index === resumeFromStep;
+		const approvedDispatchPending =
+			run.state === "running" &&
+			latestApproval !== undefined &&
+			latestApproval.dispatch_started_at_epoch_ms === undefined;
+		if (!gateCapturePending && !approvedDispatchPending) {
+			return emitTaskRunFailure(input, run.run_id, {
+				code: "task_run_effect_unknown",
+				message:
+					"the prior process ended after business write-ahead; inspect outcome before any redispatch.",
+				actionId: "inspect_task_run_result",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+				dataExtra: { external_effect: "unknown" },
+			});
+		}
+	}
+	if (
+		plan.auth_context_ref !== undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined &&
+		input.runtime.runbookHumanIdentityAttestation === undefined
+	) {
+		return emitTaskRunFailure(input, run?.run_id ?? handoff.runId, {
+			code: "human-identity-attestation-required",
+			message:
+				"runbook authentication requires an approved fresh identity-proof owner before any browser dispatch.",
+			actionId: "inspect_task_run_result",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: { external_effect: "none" },
+		});
+	}
 
 	// A nonterminal crash residue may already have confirmed every step. Close it
 	// without resolving a browser target or entering auth again.
-	if (run !== undefined && plan.steps.length === 0) {
+	if (
+		run !== undefined &&
+		plan.steps.length === 0 &&
+		plan.approval_gate === undefined
+	) {
 		return await recordTaskRunOutcome(
 			input,
 			store.deps,
@@ -3753,7 +5671,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		binding_id: targetResolution.binding.target_candidate_id,
 	} as const;
 	if (run === undefined) {
-		const created = await createSharedRun(store.deps, {
+		const create = async () => await createSharedRun(store.deps, {
 			run_id: handoff.runId,
 			state: "running",
 			task_intent: "runbook-execution",
@@ -3765,10 +5683,37 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff_evidence_id: handoff.handoffEvidenceId,
 			runbook_target_binding: durableTargetBinding,
 			runbook_progress: progress,
+			...(selectedGeneration !== undefined ? {
+				run_execution_binding: {
+					schema_version: "1" as const,
+					generation_id: selectedGeneration.generation_id,
+					activation_epoch: selectedGeneration.epoch,
+					service_id: plan.service_id,
+					flow_id: plan.flow_id,
+					runbook_version: plan.version,
+					runbook_digest: boundRunbookDigest ?? "",
+					action_registry_digest: selectedGeneration.action_registry_digest,
+					normalized_input_digest: normalizedInputDigest(runbookInputs),
+					item_key_digest: itemKeySequenceDigest([]),
+					target_scope: plan.allowed_origins[0] ?? "",
+					postcondition: { id: `${plan.service_id}/${plan.flow_id}`, summary: "Runbook completion postcondition." },
+				},
+			} : {}),
 			mutation_dispatched: false,
 			artifacts: [],
 		});
+		const created = selectedGeneration === undefined ? await create() : await withRunbookGenerationSelectionBarrier(store.deps, selectedGeneration, create);
 		if (!created.ok) {
+			// Target preparation is read-only. If activation wins before the fresh
+			// run commits its immutable binding, restart the public command once and
+			// prepare wholly against the newly selected manifest + epoch. Never carry
+			// the prior plan, target proof, or generation facts into the retry.
+			if (
+				created.code === "activation_epoch_conflict" &&
+				generationConflictRetries > 0
+			) {
+				return await runRunbookRun(input, generationConflictRetries - 1);
+			}
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(created.code, created.message),
@@ -3845,6 +5790,213 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 					attestationByDigest: attestationByDigestFrom(store.deps),
 				})
 			: undefined;
+	const authExpectedTargetUrl =
+		plan.auth_context_ref !== undefined &&
+		targetResolution.target_url === "about:blank" &&
+		plan.steps[0]?.kind === "open"
+			? plan.steps[0].url
+			: targetResolution.target_url;
+	let executionExpectedTargetUrl = targetResolution.target_url;
+
+	if (plan.auth_context_ref !== undefined) {
+		const actionPolicyHash =
+			run.run_execution_binding?.action_registry_digest ??
+			run.run_execution_binding?.runbook_digest;
+		if (authProvider === undefined || tokenRetrieval === undefined) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				{ lane_id: "agent-browser", source: "intent-preferred", intent: "runbook-execution" },
+				{
+					kind: "blocked",
+					state: "awaiting-auth",
+					continuation: {
+						next_action_id: "enroll-browser-automation-token",
+						summary: "Enroll or repair the Browser Automation service-account token.",
+					},
+					mutationDispatched: false,
+					failure: {
+						code: "runbook_auth_capability_absent",
+						message: "runbook authentication requires the native Token Retrieval capability.",
+						actionId: "inspect_task_run_result",
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "repair_state",
+					},
+				},
+				{ runbookNextStep: resumeFromStep, heldClaim: dispatchClaim },
+			);
+		}
+		const authTransport =
+			input.runtime.runbookAuthTransport?.() ??
+			createWebSocketTargetTransport(
+				rawHandoffData as AgentBrowserVerifiedHandoff,
+			);
+		try {
+			const authTarget = await resolveBrowserUseCdpTargetIdentity(
+				authTransport.transport,
+				{
+					expected_url: targetResolution.target_url,
+					allowed_origins: plan.allowed_origins,
+				},
+			);
+			if (!authTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						authTarget.cause,
+						"the adapter-selected page could not be resolved to one browser-level CDP target.",
+					),
+				);
+			}
+			const deliver = environmentLoginDeliveryHook({
+				tokenRetrieval,
+				handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+			});
+			if (deliver === undefined) {
+				return emitPlatformStoreFailure(input, {
+					code: "runbook_auth_delivery_unavailable",
+					message: "the native credential lane cannot redeem a generic login field.",
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			const authenticated = await runBrowserUseRunbookAuth(
+				{
+					store: store.deps,
+					provider: authProvider,
+					implementation_integrity_key: "agent-browser:verified-handoff-v2",
+					...(input.runtime.runbookApprovedBindingResolver === undefined
+						? {}
+						: {
+								resolveApprovedBinding:
+									input.runtime.runbookApprovedBindingResolver,
+							}),
+					...(input.runtime.runbookHumanIdentityAttestation === undefined
+						? {}
+						: {
+								humanIdentityAttestation:
+									input.runtime.runbookHumanIdentityAttestation,
+							}),
+					login: {
+						observer: createBrowserUseCdpObserver(authTransport.transport),
+						proveTarget: async (proofInput) =>
+							await mintBrowserUseVerifiedTarget(authTransport.transport, proofInput),
+						tokenRetrieval,
+						deliver,
+						waitForPostActivation: async () =>
+							await new Promise<void>((resolve) => setTimeout(resolve, 50)),
+						...(input.runtime.runbookAuthenticatedStateProof !== undefined
+							? { proveAuthenticatedState: input.runtime.runbookAuthenticatedStateProof }
+							: {}),
+					},
+					navigateToDeclaredTarget: async (navigation) =>
+						await navigateRunbookAuthTarget(
+							authTransport.transport,
+							navigation,
+						),
+				},
+				{
+					run,
+					dispatch_claim: dispatchClaim,
+					service_id: plan.service_id,
+					flow_id: plan.flow_id,
+					action_policy_hash: actionPolicyHash ?? null,
+					auth_context_ref: plan.auth_context_ref as BrowserUseAuthContext,
+					allowed_origins: plan.allowed_origins,
+					expected_url: authExpectedTargetUrl,
+					observed_url: targetResolution.target_url,
+					target_id: authTarget.target.target_id,
+				},
+			);
+			if (!authenticated.ok) {
+				if ("blocked" in authenticated) {
+					return emitSharedRunSuccess({
+						command: input,
+						run: authenticated.run,
+						continuationId: authenticated.blocked.continuation.next_action_id,
+						dataExtra: { selected_lane: "agent-browser", external_effect: "none" },
+					});
+				}
+				return emitPlatformStoreFailure(
+					input,
+					platformStoreFailureOf(
+						authenticated.failure.code,
+						authenticated.failure.message,
+					),
+				);
+			}
+			run = authenticated.run;
+			const attestation = await revalidateAuthAttestation(
+				run,
+				{
+					at_epoch_ms: input.runtime.now(),
+					adapter_id: "agent-browser",
+					handoff_evidence_id: handoff.handoffEvidenceId,
+				},
+				createBrowserUseAuthContract({
+					attestationByDigest: attestationByDigestFrom(store.deps),
+				}),
+			);
+			if (!attestation.valid) {
+				return emitPlatformStoreFailure(input, {
+					code: attestation.code,
+					message: attestation.message,
+					actionId: "inspect_shared_run",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				});
+			}
+			const postAuthTarget = await resolveAgentBrowserTaskTarget(
+				{ runCommand: input.runtime.runCommand },
+				{
+					handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
+					run_id: run.run_id,
+					allowed_origins: plan.allowed_origins,
+					steps: plan.steps,
+					target: {
+						kind: "exact",
+						tab_id: targetResolution.target_tab_id,
+						target_envelope_id: targetEnvelopeId,
+					},
+				},
+			);
+			if (!postAuthTarget.ok) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(postAuthTarget.code, postAuthTarget.message),
+				);
+			}
+			if (
+				postAuthTarget.binding.target_candidate_id !==
+				targetResolution.binding.target_candidate_id
+			) {
+				return emitPlatformStoreFailure(
+					input,
+					runbookFailureOf(
+						"agent_browser_target_moved",
+						"the authenticated target no longer matches the runbook target binding.",
+					),
+				);
+			}
+			executionExpectedTargetUrl = postAuthTarget.target_url;
+		} finally {
+			authTransport.close();
+		}
+	}
+	if (plan.steps.length === 0 && plan.approval_gate !== undefined) {
+		return await enterSubmitApprovalGate({
+			command: input,
+			deps: store.deps,
+			run,
+			handoff,
+			targetTabId: targetResolution.target_tab_id,
+			targetUrl: executionExpectedTargetUrl,
+			gateStepIndex: plan.approval_gate.runbook_step_index,
+			heldClaim: dispatchClaim,
+		});
+	}
 
 	let dispatchRun = run;
 	let mutationMarkerFailure: PlatformStoreFailure | undefined;
@@ -3854,9 +6006,10 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				runCommand: input.runtime.runCommand,
 				beforeMutationDispatch: async ({ run_id }) => {
 					if (run_id !== dispatchRun.run_id) return { ok: false };
-					const marked = await persistTaskRunMutationDispatch(
+					const marked = await persistRunbookMutationDispatch(
 						store.deps,
 						dispatchRun,
+						input.runtime.now(),
 						dispatchClaim,
 					);
 					if (!marked.ok) {
@@ -3868,7 +6021,16 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 				},
 			},
 			...(authProvider !== undefined
-				? { authDelivery: buildRunbookAuthDelivery(authProvider) }
+				? {
+						authDelivery: buildRunbookAuthDelivery(authProvider, {
+							tokenRetrieval:
+								tokenRetrieval as BrowserUseTokenRetrievalPort,
+							resolveApprovedBinding:
+								input.runtime.runbookApprovedBindingResolver,
+							createTargetTransport: createWebSocketTargetTransport,
+							createDeliveryHook: environmentDeliveryHook,
+						}),
+					}
 				: {}),
 			afterNeutralOpen: async (nextStep) => {
 				const checkpointed = await persistRunbookPrivateState(
@@ -3895,7 +6057,7 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
 			runId: run.run_id,
 			targetTabId: targetResolution.target_tab_id,
-			expectedTargetUrl: targetResolution.target_url,
+			expectedTargetUrl: executionExpectedTargetUrl,
 		},
 	);
 	if (mutationMarkerFailure !== undefined) {
@@ -3932,6 +6094,22 @@ async function runRunbookRun(input: PlatformCommandInput): Promise<number> {
 		outcome.plan,
 		outcome.result.executed_steps,
 	);
+	if (mapping.kind === "confirmed" && outcome.plan.approval_gate !== undefined) {
+		return await enterSubmitApprovalGate({
+			command: input,
+			deps: store.deps,
+			run: dispatchRun,
+			handoff,
+			targetTabId: targetResolution.target_tab_id,
+			targetUrl: executionExpectedTargetUrl,
+			gateStepIndex: outcome.plan.approval_gate.runbook_step_index,
+			heldClaim: dispatchClaim,
+			structuredResults: outcome.structured_results ?? [],
+			...(dispatchGuard.guard !== undefined
+				? { guard: dispatchGuard.guard }
+				: {}),
+		});
+	}
 	return await recordTaskRunOutcome(
 		input,
 		store.deps,
@@ -4510,16 +6688,1167 @@ type AuthReadinessEvaluation = {
 	continuationId: AuthActionId;
 };
 
+const AUTH_TOKEN_SUPERVISOR_STATES = new Set([
+	"ready",
+	"installed",
+	"replaced",
+	"removed",
+	"removed-sync-unproven",
+	"missing",
+	"cleanup-required",
+	"blocked",
+]);
+export const AUTH_TOKEN_SUPERVISOR_CAUSES = [
+	"invalid-arguments",
+	"unsafe-ancestry",
+	"unsafe-config-root",
+	"unsafe-custody-directory",
+	"backup-exclusion-unproven",
+	"sync-exclusion-unproven",
+	"token-missing",
+	"token-already-installed",
+	"token-unsafe",
+	"staging-residue",
+	"removal-residue",
+	"input-cancelled",
+	"input-invalid",
+	"write-failed",
+	"invalid-service-account",
+	"invalid-vault-scope",
+	"validation-failed",
+	"validation-timeout",
+	"validation-unavailable",
+	"path-identity-changed",
+	"atomic-replace-failed",
+	"cleanup-failed",
+	"parent-sync-failed",
+	"core-dump-disable-failed",
+	"op-path-not-absolute",
+	"op-path-unapproved",
+	"op-path-unavailable",
+	"op-path-unsafe",
+	"op-path-not-executable",
+	"op-binary-untrusted",
+	"op-staging-failed",
+	"op-version-invalid",
+	"op-version-unsupported",
+	"op-session-unavailable",
+	"token-invalid",
+	"timeout",
+	"output-too-large",
+	"process-failed",
+	"process-signalled",
+	"io-failure",
+	"output-shape-invalid",
+	"item-missing",
+	"validator-protocol-invalid",
+	"profile-policy-unproven",
+	"profile-policy-unsafe",
+	"source-file-unsafe",
+	"source-fetch-failed",
+	"source-missing",
+	"source-reference-invalid",
+	"source-write-failed",
+	"token-supervisor-unavailable",
+	"token-supervisor-output-too-large",
+] as const;
+export type AuthTokenSupervisorCause =
+	(typeof AUTH_TOKEN_SUPERVISOR_CAUSES)[number];
+const AUTH_TOKEN_SUPERVISOR_CAUSE_SET = new Set<string>(
+	AUTH_TOKEN_SUPERVISOR_CAUSES,
+);
+
+export const AUTH_TOKEN_GATE_ORDER = [
+	"token_file",
+	"op",
+	"token",
+	"vault_scope",
+	"profile_policy",
+] as const;
+export type AuthTokenCustodyGate = (typeof AUTH_TOKEN_GATE_ORDER)[number];
+export type AuthTokenDoctorGate = "runtime" | AuthTokenCustodyGate;
+export type AuthTokenRepairPosture = "auto-fixable" | "manual-only";
+export type AuthTokenRepairPath = {
+	repairCommand: string;
+	posture: AuthTokenRepairPosture;
+	successSignal: string;
+	stopCondition: string;
+};
+
+const BUILD_TOKEN_SUPERVISOR_REPAIR = {
+	repairCommand:
+		"bun --cwd runtime/browser-use-environment-auth run build:release",
+	posture: "manual-only",
+	successSignal:
+		"The runtime gate can start the supervisor built from this worktree.",
+	stopCondition:
+		"Stop if the build fails or the release artifact does not belong to this worktree.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSTALL_OP_CLI_REPAIR = {
+	repairCommand:
+		'brew bundle --file "$HOME/code/dotfiles/config/brew/Brewfile"',
+	posture: "manual-only",
+	successSignal: "The runtime gate resolves an approved executable OP CLI path.",
+	stopCondition:
+		"Stop if the resolved OP CLI path remains missing, unsafe, or untrusted.",
+} as const satisfies AuthTokenRepairPath;
+
+const AUTHENTICATE_OP_SESSION = {
+	repairCommand: "op signin",
+	posture: "manual-only",
+	successSignal: "The operator OP session passes the bounded identity check.",
+	stopCondition: "Stop if the operator session remains locked or unavailable.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_CONFIG_ROOT = {
+	repairCommand: "browser-use auth install-token",
+	posture: "manual-only",
+	successSignal:
+		"The browser-use configuration root resolves as an owner-only real directory.",
+	stopCondition:
+		"Stop if the configuration root ancestry remains missing, linked, or unsafe.",
+} as const satisfies AuthTokenRepairPath;
+
+const INSPECT_AUTH_STATUS = {
+	repairCommand: "browser-use auth status --json",
+	posture: "manual-only",
+	successSignal: "The status envelope reports a known cause and typed action.",
+	stopCondition:
+		"Stop if status remains invalid or does not report a code-owned cause.",
+} as const satisfies AuthTokenRepairPath;
+
+const REINSTALL_TOKEN = {
+	repairCommand: "browser-use auth install-token --replace",
+	posture: "manual-only",
+	successSignal: "The token file gate reports ready after atomic replacement.",
+	stopCondition:
+		"Stop if native validation fails or the prior admitted token cannot be preserved.",
+} as const satisfies AuthTokenRepairPath;
+
+const RELOAD_TOKEN = {
+	repairCommand: "browser-use auth reload",
+	posture: "auto-fixable",
+	successSignal: "The token and token file gates both report ready.",
+	stopCondition:
+		"Stop if the admitted source is absent, invalid, interactive, or still rejected.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_VAULT_GRANT = {
+	repairCommand: "browser-use auth repair-vault-grant",
+	posture: "manual-only",
+	successSignal: "The vault scope gate reports exactly one visible vault.",
+	stopCondition:
+		"Stop if the grant still exposes zero or multiple vaults after re-proof.",
+} as const satisfies AuthTokenRepairPath;
+
+const REPAIR_PROFILE_POLICY = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "auto-fixable",
+	successSignal: "The profile policy gate reports ready after owner verification.",
+	stopCondition:
+		"Stop if the profile owner refuses the path, live state, or saved-login state.",
+} as const satisfies AuthTokenRepairPath;
+
+const RECREATE_UNSAFE_PROFILE = {
+	repairCommand: "browser-use auth doctor --fix profile",
+	posture: "manual-only",
+	successSignal: "A fresh dedicated profile passes the profile policy gate.",
+	stopCondition:
+		"Stop before deleting, scrubbing, or rewriting an unsafe existing profile.",
+} as const satisfies AuthTokenRepairPath;
+
+export const AUTH_TOKEN_REPAIR_PATHS = {
+	"invalid-arguments": INSPECT_AUTH_STATUS,
+	"unsafe-ancestry": REINSTALL_TOKEN,
+	"unsafe-config-root": REPAIR_CONFIG_ROOT,
+	"unsafe-custody-directory": REINSTALL_TOKEN,
+	"backup-exclusion-unproven": REINSTALL_TOKEN,
+	"sync-exclusion-unproven": REINSTALL_TOKEN,
+	"token-missing": RELOAD_TOKEN,
+	"token-already-installed": INSPECT_AUTH_STATUS,
+	"token-unsafe": REINSTALL_TOKEN,
+	"staging-residue": REINSTALL_TOKEN,
+	"removal-residue": REINSTALL_TOKEN,
+	"input-cancelled": REINSTALL_TOKEN,
+	"input-invalid": REINSTALL_TOKEN,
+	"write-failed": REINSTALL_TOKEN,
+	"invalid-service-account": RELOAD_TOKEN,
+	"invalid-vault-scope": REPAIR_VAULT_GRANT,
+	"validation-failed": RELOAD_TOKEN,
+	"validation-timeout": RELOAD_TOKEN,
+	"validation-unavailable": INSTALL_OP_CLI_REPAIR,
+	"path-identity-changed": REINSTALL_TOKEN,
+	"atomic-replace-failed": REINSTALL_TOKEN,
+	"cleanup-failed": REINSTALL_TOKEN,
+	"parent-sync-failed": REINSTALL_TOKEN,
+	"core-dump-disable-failed": REINSTALL_TOKEN,
+	"op-path-not-absolute": INSTALL_OP_CLI_REPAIR,
+	"op-path-unapproved": INSTALL_OP_CLI_REPAIR,
+	"op-path-unavailable": INSTALL_OP_CLI_REPAIR,
+	"op-path-unsafe": INSTALL_OP_CLI_REPAIR,
+	"op-path-not-executable": INSTALL_OP_CLI_REPAIR,
+	"op-binary-untrusted": INSTALL_OP_CLI_REPAIR,
+	"op-staging-failed": INSTALL_OP_CLI_REPAIR,
+	"op-version-invalid": INSTALL_OP_CLI_REPAIR,
+	"op-version-unsupported": INSTALL_OP_CLI_REPAIR,
+	"op-session-unavailable": AUTHENTICATE_OP_SESSION,
+	"token-invalid": RELOAD_TOKEN,
+	timeout: RELOAD_TOKEN,
+	"output-too-large": RELOAD_TOKEN,
+	"process-failed": RELOAD_TOKEN,
+	"process-signalled": RELOAD_TOKEN,
+	"io-failure": RELOAD_TOKEN,
+	"output-shape-invalid": INSTALL_OP_CLI_REPAIR,
+	"item-missing": REINSTALL_TOKEN,
+	"validator-protocol-invalid": INSTALL_OP_CLI_REPAIR,
+	"profile-policy-unproven": REPAIR_PROFILE_POLICY,
+	"profile-policy-unsafe": RECREATE_UNSAFE_PROFILE,
+	"source-file-unsafe": REINSTALL_TOKEN,
+	"source-fetch-failed": REINSTALL_TOKEN,
+	"source-missing": REINSTALL_TOKEN,
+	"source-reference-invalid": REINSTALL_TOKEN,
+	"source-write-failed": REINSTALL_TOKEN,
+	"token-supervisor-unavailable": BUILD_TOKEN_SUPERVISOR_REPAIR,
+	"token-supervisor-output-too-large": BUILD_TOKEN_SUPERVISOR_REPAIR,
+} as const satisfies Record<AuthTokenSupervisorCause, AuthTokenRepairPath>;
+
+const AUTH_TOKEN_EXPLAIN_PATHS = {
+	runtime: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The runtime gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped runtime cause before attempting repair.",
+	},
+	token_file: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token file gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token file cause before attempting repair.",
+	},
+	op: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The OP gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped OP cause before attempting repair.",
+	},
+	token: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The token gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped token cause before attempting repair.",
+	},
+	vault_scope: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The vault scope gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped vault scope cause before attempting repair.",
+	},
+	profile_policy: {
+		repairCommand: "browser-use auth status --json",
+		posture: "manual-only",
+		successSignal: "The profile policy gate reports a code-owned cause.",
+		stopCondition:
+			"Stop and explain the unmapped profile policy cause before attempting repair.",
+	},
+} as const satisfies Record<AuthTokenDoctorGate, AuthTokenRepairPath>;
+
+export function authTokenRepairPathFor(
+	cause: string,
+	gate: AuthTokenDoctorGate,
+): AuthTokenRepairPath {
+	return Object.hasOwn(AUTH_TOKEN_REPAIR_PATHS, cause)
+		? AUTH_TOKEN_REPAIR_PATHS[cause as AuthTokenSupervisorCause]
+		: AUTH_TOKEN_EXPLAIN_PATHS[gate];
+}
+const AUTH_TOKEN_SUPERVISOR_ACTIONS = new Set<AuthActionId>([
+	"auth-status",
+	"rerun-confidential-command",
+	"repair-token-custody",
+	"repair-op-admission",
+	"build-token-supervisor",
+	"install-op-cli",
+	"authenticate-op-session",
+	"repair-config-root",
+	"repair-vault-grant",
+	"create-credential-clean-profile",
+	"revoke-service-account-token-remotely",
+	"install-token",
+]);
+const AUTH_TOKEN_CHECK_STATUSES = new Set([
+	"ready",
+	"blocked",
+	"missing",
+	"unproven",
+]);
+
+type AuthTokenSupervisorProjection = {
+	ok: boolean;
+	state: string;
+	cause?: string;
+	nextAction: AuthActionId;
+	detail?: Record<string, unknown>;
+};
+
+type AuthDoctorOwnerSpawnInput = {
+	argv: readonly string[];
+	env: Record<string, string | undefined>;
+	timeoutMs: number;
+};
+
+type AuthDoctorOwnerResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	timedOut: boolean;
+	failureReason?: "owner_output_too_large" | "owner_spawn_failed";
+};
+
+type AuthDoctorOrchestrationDeps = {
+	spawnOwner?: (
+		input: AuthDoctorOwnerSpawnInput,
+	) => Promise<AuthDoctorOwnerResult>;
+	warmChromeEntrypoint?: string | null;
+};
+
+const AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS = 10_000;
+const AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS = 10_000;
+
+async function spawnAuthDoctorOwner(
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	const child = Bun.spawn([...input.argv], {
+		env: input.env,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: input.timeoutMs,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		readBoundedAuthChildOutput(child.stdout, child),
+		readBoundedAuthChildOutput(child.stderr, child),
+		child.exited,
+	]);
+	if (!stdout.ok || !stderr.ok) {
+		return {
+			exitCode,
+			stdout: "",
+			stderr: "",
+			timedOut: child.signalCode !== null,
+			failureReason: "owner_output_too_large",
+		};
+	}
+	return {
+		exitCode,
+		stdout: stdout.text,
+		stderr: stderr.text,
+		// SIGTERM from timeout or external kill; both surface as owner_timeout.
+		timedOut: child.signalCode !== null,
+	};
+}
+
+export const __authDoctorOwnerForTest = {
+	spawn: spawnAuthDoctorOwner,
+} as const;
+
+function authDoctorOwnerEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const allowed = [
+		"HOME",
+		"PATH",
+		"LANG",
+		"LC_ALL",
+		"TMPDIR",
+		"XDG_CONFIG_HOME",
+		"WARM_CHROME_PROFILE_DIR",
+		"OP_ACCOUNT",
+	] as const;
+	const childEnv: Record<string, string | undefined> = {
+		PATH: env.PATH ?? "/usr/bin:/bin",
+	};
+	for (const key of allowed) {
+		if (env[key] !== undefined) childEnv[key] = env[key];
+	}
+	for (const [key, value] of Object.entries(env)) {
+		if (key.startsWith("OP_SESSION_") && value !== undefined) {
+			childEnv[key] = value;
+		}
+	}
+	for (const key of AUTH_TOKEN_FORBIDDEN_ENV_KEYS) delete childEnv[key];
+	return childEnv;
+}
+
+function defaultWarmChromeEntrypoint(): string | undefined {
+	const entrypoint = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+		"..",
+		"runtime",
+		"warm-chrome",
+		"src",
+		"cli.ts",
+	);
+	return existsSync(entrypoint) ? entrypoint : undefined;
+}
+
+function authDoctorCheck(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): Record<string, unknown> | undefined {
+	return recordField(recordField(projection.detail?.checks)?.[gate]);
+}
+
+function authDoctorGateIsRed(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): boolean {
+	return stringField(authDoctorCheck(projection, gate)?.status) !== "ready";
+}
+
+function authDoctorGateCause(
+	projection: AuthTokenSupervisorProjection,
+	gate: AuthTokenCustodyGate,
+): string {
+	return stringField(authDoctorCheck(projection, gate)?.cause) ?? "unknown";
+}
+
+function authDoctorOwnerFailure(result: AuthDoctorOwnerResult): string {
+	if (result.failureReason !== undefined) return result.failureReason;
+	if (result.timedOut) return "owner_timeout";
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const code = stringField(recordField(envelope?.error)?.code);
+		if (code !== undefined) return code;
+	} catch {
+		// Owner output is only interpreted when it is a structured envelope.
+	}
+	return `owner_exit_${result.exitCode}`;
+}
+
+function authDoctorOwnerManualStep(
+	result: AuthDoctorOwnerResult,
+	fallback: string,
+): string {
+	try {
+		const envelope = recordField(JSON.parse(result.stdout));
+		const reason = stringField(recordField(envelope?.data)?.reason);
+		const message = stringField(recordField(envelope?.error)?.message);
+		if (reason !== undefined && message !== undefined) {
+			return `reason=${reason}; ${message.replaceAll(/\s+/g, " ").trim()}`;
+		}
+	} catch {
+		// Only a typed owner refusal may replace the fallback repair command.
+	}
+	return fallback;
+}
+
+async function runBoundedAuthDoctorOwner(
+	spawnOwner: NonNullable<AuthDoctorOrchestrationDeps["spawnOwner"]>,
+	input: AuthDoctorOwnerSpawnInput,
+): Promise<AuthDoctorOwnerResult> {
+	try {
+		return await spawnOwner(input);
+	} catch {
+		return {
+			exitCode: RUNTIME_FAILURE_EXIT_CODE,
+			stdout: "",
+			stderr: "",
+			timedOut: false,
+			failureReason: "owner_spawn_failed",
+		};
+	}
+}
+
+async function readAuthDoctorProjection(
+	input: PlatformCommandInput,
+): Promise<AuthTokenSupervisorProjection> {
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? { exitCode: BINDING_FAIL_CLOSED_EXIT_CODE, stdout: "", stderr: "" }
+			: await input.runtime.runAuthTokenSupervisor({ mode: "status" });
+	return (
+		parseAuthTokenSupervisorResult(result.stdout, result.exitCode) ?? {
+			ok: false,
+			state: "blocked",
+			cause: "token-supervisor-unavailable",
+			nextAction: "repair-op-admission",
+		}
+	);
+}
+
+async function runAuthDoctorFix(input: PlatformCommandInput): Promise<number> {
+	const initial = await readAuthDoctorProjection(input);
+	const notes: string[] = [];
+	const spawnOwner = input.authDoctor?.spawnOwner ?? spawnAuthDoctorOwner;
+	const ownerEnv = authDoctorOwnerEnv(input.runtime.env);
+	const browserUseEntrypoint = fileURLToPath(import.meta.url);
+	const profileOnly = input.fixScope === "profile";
+	let vaultReproofAttempted = false;
+
+	if (recordField(initial.detail?.checks) === undefined) {
+		const cause = initial.cause ?? "unknown";
+		notes.push(
+			`fix runtime: refused; manual: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+	} else {
+		let tokenDependencyBlocked = false;
+		const delegatedCommands = new Set<string>();
+		if (!profileOnly) {
+			for (const gate of ["token_file", "op", "token"] as const) {
+				if (!authDoctorGateIsRed(initial, gate)) continue;
+				const cause = authDoctorGateCause(initial, gate);
+				const repair = authTokenRepairPathFor(cause, gate);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix ${gate}: skipped; manual: ${repair.repairCommand}`,
+					);
+					continue;
+				}
+				if (repair.posture === "manual-only") {
+					notes.push(
+						`fix ${gate}: refused; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+					continue;
+				}
+				if (delegatedCommands.has(repair.repairCommand)) continue;
+				delegatedCommands.add(repair.repairCommand);
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						browserUseEntrypoint,
+						"auth",
+						"reload",
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_TOKEN_SOURCE_RELOAD_OWNER_TIMEOUT_MS,
+				});
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push(`fix ${gate}: delegated`);
+				} else {
+					notes.push(
+						`fix ${gate}: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+					tokenDependencyBlocked = true;
+				}
+			}
+
+			if (authDoctorGateIsRed(initial, "vault_scope")) {
+				const repair = authTokenRepairPathFor(
+					authDoctorGateCause(initial, "vault_scope"),
+					"vault_scope",
+				);
+				if (tokenDependencyBlocked) {
+					notes.push(
+						`fix vault_scope: skipped; manual: ${repair.repairCommand}`,
+					);
+				} else {
+					vaultReproofAttempted = true;
+					const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+						argv: [
+							process.execPath,
+							browserUseEntrypoint,
+							"auth",
+							"repair-vault-grant",
+							"--json",
+							"--quiet",
+						],
+						env: ownerEnv,
+						timeoutMs: AUTH_DOCTOR_VAULT_OWNER_TIMEOUT_MS,
+					});
+					notes.push(
+						result.exitCode === 0 && !result.timedOut
+							? "fix vault_scope: re-proved"
+							: `fix vault_scope: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${repair.repairCommand}`,
+					);
+				}
+			}
+		}
+
+		if (authDoctorGateIsRed(initial, "profile_policy")) {
+			const cause = authDoctorGateCause(initial, "profile_policy");
+			const repair = authTokenRepairPathFor(cause, "profile_policy");
+			const profilePath = resolveWarmChromeProfilePath(input.runtime.env);
+			const configuredEntrypoint = input.authDoctor?.warmChromeEntrypoint;
+			const warmChromeEntrypoint =
+				configuredEntrypoint === null
+					? undefined
+					: configuredEntrypoint ?? defaultWarmChromeEntrypoint();
+			const manualCommand =
+				profilePath === undefined
+					? repair.repairCommand
+					: `warm-chrome repair --profile-only --profile ${JSON.stringify(profilePath)}`;
+			if (
+				profilePath === undefined ||
+				warmChromeEntrypoint === undefined
+			) {
+				notes.push(`fix profile_policy: refused; manual: ${manualCommand}`);
+			} else {
+				const result = await runBoundedAuthDoctorOwner(spawnOwner, {
+					argv: [
+						process.execPath,
+						warmChromeEntrypoint,
+						"repair",
+						"--profile-only",
+						"--profile",
+						profilePath,
+						"--json",
+						"--quiet",
+					],
+					env: ownerEnv,
+					timeoutMs: AUTH_DOCTOR_PROFILE_OWNER_TIMEOUT_MS,
+				});
+				if (result.exitCode === 0 && !result.timedOut) {
+					notes.push("fix profile_policy: delegated");
+				} else {
+					const manualStep = authDoctorOwnerManualStep(result, manualCommand);
+					notes.push(
+						`fix profile_policy: owner_failed reason=${authDoctorOwnerFailure(result)}; manual: ${manualStep}`,
+					);
+				}
+			}
+		}
+	}
+
+	const finalProjection = await readAuthDoctorProjection(input);
+	if (
+		vaultReproofAttempted &&
+		authDoctorGateIsRed(finalProjection, "vault_scope")
+	) {
+		notes.push(
+			"fix vault_scope: refused; manual: Grant the service account access to exactly one vault in 1Password, then rerun browser-use auth repair-vault-grant",
+		);
+	}
+	if (input.parsed.outputMode === "plain") {
+		if (notes.length > 0) input.stdout.write(`${notes.join("\n")}\n`);
+		input.stdout.write(renderAuthTokenDoctor(finalProjection));
+		return finalProjection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	return emitAuthTokenLifecycleResult(
+		input,
+		finalProjection,
+		"auth_token_supervisor_failed",
+	);
+}
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function safeAuthTokenCause(value: unknown): string | undefined {
+	return typeof value === "string" && AUTH_TOKEN_SUPERVISOR_CAUSE_SET.has(value)
+		? value
+		: undefined;
+}
+
+function safeAuthTokenCheck(value: unknown): Record<string, unknown> | undefined {
+	const check = recordField(value);
+	if (
+		check === undefined ||
+		typeof check.status !== "string" ||
+		!AUTH_TOKEN_CHECK_STATUSES.has(check.status)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(check.cause);
+	if (check.cause !== undefined && cause === undefined) return undefined;
+	const visibleCount = check.visible_count;
+	if (
+		visibleCount !== undefined &&
+		(!Number.isSafeInteger(visibleCount) || (visibleCount as number) < 0)
+	) {
+		return undefined;
+	}
+	return {
+		status: check.status,
+		...(cause === undefined ? {} : { cause }),
+		...(visibleCount === undefined ? {} : { visible_count: visibleCount }),
+	};
+}
+
+function parseAuthTokenSupervisorResult(
+	stdout: string,
+	exitCode: number,
+): AuthTokenSupervisorProjection | undefined {
+	let value: unknown;
+	try {
+		value = JSON.parse(stdout);
+	} catch {
+		return undefined;
+	}
+	const object = recordField(value);
+	if (
+		object === undefined ||
+		object.schema_version !== 1 ||
+		typeof object.ok !== "boolean" ||
+		typeof object.state !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_STATES.has(object.state) ||
+		typeof object.next_action !== "string" ||
+		!AUTH_TOKEN_SUPERVISOR_ACTIONS.has(object.next_action as AuthActionId) ||
+		(object.ok ? exitCode !== 0 : exitCode !== BINDING_FAIL_CLOSED_EXIT_CODE)
+	) {
+		return undefined;
+	}
+	const cause = safeAuthTokenCause(object.cause);
+	if (object.cause !== undefined && cause === undefined) return undefined;
+	const detail: Record<string, unknown> = {};
+	const lane = recordField(object.lane);
+	const checks = recordField(object.checks);
+	if (lane !== undefined || checks !== undefined) {
+		if (
+			lane?.selected !== "environment-injected-op" ||
+			typeof lane.status !== "string" ||
+			!AUTH_TOKEN_CHECK_STATUSES.has(lane.status) ||
+			checks === undefined
+		) {
+			return undefined;
+		}
+		const safeChecks = {
+			token_file: safeAuthTokenCheck(checks.token_file),
+			op: safeAuthTokenCheck(checks.op),
+			token: safeAuthTokenCheck(checks.token),
+			vault_scope: safeAuthTokenCheck(checks.vault_scope),
+			profile_policy: safeAuthTokenCheck(checks.profile_policy),
+		};
+		if (Object.values(safeChecks).some((check) => check === undefined)) {
+			return undefined;
+		}
+		detail.lane = { selected: lane.selected, status: lane.status };
+		detail.checks = safeChecks;
+	}
+	if (object.remote_authority === "may-remain-live") {
+		detail.remote_authority = "may-remain-live";
+	}
+	return {
+		ok: object.ok,
+		state: object.state,
+		...(cause === undefined ? {} : { cause }),
+		nextAction: object.next_action as AuthActionId,
+		...(Object.keys(detail).length === 0 ? {} : { detail }),
+	};
+}
+
+function renderAuthTokenDoctor(
+	projection: AuthTokenSupervisorProjection,
+): string {
+	const lane = recordField(projection.detail?.lane);
+	const checks = recordField(projection.detail?.checks);
+	const lines = [
+		"browser-use auth doctor",
+		`lane: ${stringField(lane?.selected) ?? "unknown"}`,
+		`${"gate".padEnd(16)}${"verdict".padEnd(9)}state`,
+	];
+	let green = 0;
+	let red = 0;
+	let unknown = 0;
+
+	if (checks === undefined) {
+		const cause = projection.cause ?? "unknown";
+		lines.push(
+			`${"runtime".padEnd(16)}${"red".padEnd(9)}${projection.state} cause=${cause}`,
+			`  repair: ${authTokenRepairPathFor(cause, "runtime").repairCommand}`,
+		);
+		red += 1;
+		for (const gate of AUTH_TOKEN_GATE_ORDER) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+		}
+		lines.push(`summary: ${red} red, ${unknown} unknown`);
+		return `${lines.join("\n")}\n`;
+	}
+
+	for (const gate of AUTH_TOKEN_GATE_ORDER) {
+		const check = recordField(checks[gate]);
+		const status = stringField(check?.status);
+		if (status === undefined) {
+			lines.push(`${gate.padEnd(16)}${"unknown".padEnd(9)}unknown`);
+			unknown += 1;
+			continue;
+		}
+		const verdict = status === "ready" ? "green" : "red";
+		if (verdict === "green") green += 1;
+		else red += 1;
+		const cause = stringField(check?.cause);
+		const visibleCount = check?.visible_count;
+		lines.push(
+			`${gate.padEnd(16)}${verdict.padEnd(9)}${status}${
+				visibleCount === undefined ? "" : ` visible_count=${visibleCount}`
+			}${cause === undefined ? "" : ` cause=${cause}`}`,
+		);
+		if (verdict === "red") {
+			lines.push(
+				`  repair: ${authTokenRepairPathFor(cause ?? "unknown", gate).repairCommand}`,
+			);
+		}
+	}
+
+	lines.push(
+		unknown === 0
+			? `summary: ${green} green, ${red} red`
+			: `summary: ${green} green, ${red} red, ${unknown} unknown`,
+	);
+	return `${lines.join("\n")}\n`;
+}
+
+function emitAuthTokenLifecycleResult(
+	input: PlatformCommandInput,
+	projection: AuthTokenSupervisorProjection,
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
+): number {
+	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	if (subcommand === "doctor" && input.parsed.outputMode === "plain") {
+		input.stdout.write(renderAuthTokenDoctor(projection));
+		return 0;
+	}
+	const evaluation = {
+		status: projection.state,
+		...(projection.cause === undefined
+			? {}
+			: { blocked_cause: projection.cause }),
+		...(projection.detail === undefined ? {} : { detail: projection.detail }),
+	};
+	if (input.parsed.outputMode === "plain") {
+		const line = [
+			`action=${subcommand}`,
+			`status=${projection.state}`,
+			`continuation=${projection.nextAction}`,
+			...(projection.cause === undefined
+				? []
+				: [`blocked_cause=${projection.cause}`]),
+		].join(" ");
+		const writer = projection.ok ? input.stdout : input.stderr;
+		writer.write(
+			`${platformPlainHeader(BROWSER_USE_AUTH_READINESS_CONTRACT_ID, input.caller)}${line}\n`,
+		);
+		return projection.ok ? 0 : BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	const envelopeInput = {
+		run_id: input.runId,
+		data: {
+			contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+			schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+			action: subcommand === "doctor" ? "status" : subcommand,
+			evaluation,
+			caller: input.caller,
+		},
+		runtime_actions: [authAction(projection.nextAction)],
+		continuation: { next_action_id: projection.nextAction },
+	};
+	if (projection.ok) {
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope(envelopeInput),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			...envelopeInput,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code: errorCode,
+				message: authTokenLifecycleErrorMessage(errorCode),
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+function authTokenLifecycleErrorMessage(
+	errorCode:
+		| "auth_token_input_rejected"
+		| "auth_token_source_invalid"
+		| "auth_token_source_auth_required"
+		| "auth_token_source_missing"
+		| "auth_token_source_unavailable"
+		| "auth_token_source_unsafe"
+		| "auth_token_source_write_failed"
+		| "auth_token_supervisor_failed",
+): string {
+	switch (errorCode) {
+		case "auth_token_input_rejected":
+			return "token input through process environment is forbidden; use native hidden input or --stdin.";
+		case "auth_token_source_invalid":
+			return "the source reference is invalid or conflicts with standard input; use one OP item field reference.";
+		case "auth_token_source_auth_required":
+			return "the operator OP session is unavailable; follow the typed continuation before retrying.";
+		case "auth_token_source_missing":
+			return "no recorded source is available and standard input is not interactive; use the manual install step.";
+		case "auth_token_source_unavailable":
+			return "the recorded source could not be fetched; use the manual install step before retrying.";
+		case "auth_token_source_unsafe":
+			return "the recorded source failed owner-only file validation; use the manual install step.";
+		case "auth_token_source_write_failed":
+			return "the token changed but its reload source could not be recorded; repeat the source install after inspecting custody.";
+		case "auth_token_supervisor_failed":
+			return "native token custody operation was blocked; follow the typed continuation.";
+	}
+}
+
+function authProjectionWithSourcePresence(
+	projection: AuthTokenSupervisorProjection,
+	sourcePresent: boolean,
+): AuthTokenSupervisorProjection {
+	return {
+		...projection,
+		detail: {
+			...(projection.detail ?? {}),
+			source_present: sourcePresent,
+		},
+	};
+}
+
+function authTokenLifecycleErrorForProjection(
+	projection: AuthTokenSupervisorProjection | undefined,
+):
+	| "auth_token_source_auth_required"
+	| "auth_token_source_unavailable"
+	| "auth_token_supervisor_failed" {
+	if (projection?.cause === "op-session-unavailable") {
+		return "auth_token_source_auth_required";
+	}
+	if (projection?.cause === "source-fetch-failed") {
+		return "auth_token_source_unavailable";
+	}
+	return "auth_token_supervisor_failed";
+}
+
+function buildNativeSupervisorInput(
+	input: PlatformCommandInput,
+	sourceRef: string | undefined,
+): AuthTokenSupervisorInput {
+	const subcommand = input.parsed.subcommand;
+	if (subcommand === "install-token" || subcommand === "reload") {
+		if (sourceRef !== undefined) {
+			return {
+				mode: "install",
+				input: "source",
+				replace:
+					subcommand === "reload" ||
+					input.parsed.flagValues["--replace"] !== undefined,
+				sourceRef,
+			};
+		}
+		return {
+			mode: "install",
+			input:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--stdin"] === undefined
+					? "prompt"
+					: "stdin",
+			replace:
+				subcommand === "reload" ||
+				input.parsed.flagValues["--replace"] !== undefined,
+		};
+	}
+	if (subcommand === "remove-token") return { mode: "remove" };
+	return { mode: "status" };
+}
+
+async function runAuthTokenLifecycle(
+	input: PlatformCommandInput,
+): Promise<number> {
+	let sourceRef = stringField(input.parsed.flagValues["--from"]);
+	let sourcePresence: boolean | undefined;
+	if (
+		input.parsed.subcommand === "install-token" &&
+		sourceRef !== undefined &&
+		(!isAuthTokenSourceReference(sourceRef) ||
+			input.parsed.flagValues["--stdin"] !== undefined)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_source_invalid",
+		);
+	}
+	if (
+		AUTH_TOKEN_FORBIDDEN_ENV_KEYS.some(
+			(key) => input.runtime.env[key] !== undefined,
+		)
+	) {
+		return emitAuthTokenLifecycleResult(
+			input,
+			{
+				ok: false,
+				state: "blocked",
+				cause: "input-invalid",
+				nextAction: "install-token",
+			},
+			"auth_token_input_rejected",
+		);
+	}
+	if (
+		input.parsed.subcommand === "doctor" &&
+		input.parsed.flagValues["--fix"] !== undefined
+	) {
+		return runAuthDoctorFix(input);
+	}
+	if (input.parsed.subcommand === "reload") {
+		const stored =
+			input.runtime.readAuthTokenSource === undefined
+				? ({ status: "blocked", cause: "source-file-unsafe" } as const)
+				: await input.runtime.readAuthTokenSource();
+		if (stored.status === "blocked") {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: stored.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				stored.cause === "source-reference-invalid"
+					? "auth_token_source_invalid"
+					: "auth_token_source_unsafe",
+			);
+		}
+		if (stored.status === "missing") {
+			sourcePresence = false;
+			if (input.runtime.stdinIsTTY?.() !== true) {
+				return emitAuthTokenLifecycleResult(
+					input,
+					{
+						ok: false,
+						state: "blocked",
+						cause: "source-missing",
+						nextAction: "install-token",
+						detail: { source_present: false },
+					},
+					"auth_token_source_missing",
+				);
+			}
+		} else {
+			sourceRef = stored.sourceRef;
+			sourcePresence = true;
+		}
+	}
+	const subcommand = input.parsed.subcommand;
+	const nativeInput = buildNativeSupervisorInput(input, sourceRef);
+	const result =
+		input.runtime.runAuthTokenSupervisor === undefined
+			? {
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					stdout: "",
+					stderr: "",
+				}
+			: await input.runtime.runAuthTokenSupervisor(nativeInput);
+	const projection = parseAuthTokenSupervisorResult(
+		result.stdout,
+		result.exitCode,
+	);
+	if (subcommand === "install-token" && sourceRef !== undefined && projection?.ok) {
+		const persisted =
+			input.runtime.writeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.writeAuthTokenSource(sourceRef);
+		if (!persisted.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: persisted.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				persisted.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			authProjectionWithSourcePresence(projection, true),
+			"auth_token_supervisor_failed",
+		);
+	}
+	if (subcommand === "install-token" && sourceRef === undefined && projection?.ok) {
+		const removed =
+			input.runtime.removeAuthTokenSource === undefined
+				? ({ ok: false, cause: "source-write-failed" } as const)
+				: await input.runtime.removeAuthTokenSource();
+		if (!removed.ok) {
+			return emitAuthTokenLifecycleResult(
+				input,
+				{
+					ok: false,
+					state: "blocked",
+					cause: removed.cause,
+					nextAction: "install-token",
+					detail: { source_present: false },
+				},
+				removed.cause === "source-write-failed"
+					? "auth_token_source_write_failed"
+					: "auth_token_source_unsafe",
+			);
+		}
+		return emitAuthTokenLifecycleResult(
+			input,
+			projection,
+			"auth_token_supervisor_failed",
+		);
+	}
+	return emitAuthTokenLifecycleResult(
+		input,
+		projection === undefined
+			? {
+					ok: false,
+					state: "blocked",
+					cause: "token-supervisor-unavailable",
+					nextAction: "repair-op-admission",
+				}
+			: sourcePresence === undefined
+				? projection
+				: authProjectionWithSourcePresence(projection, sourcePresence),
+		authTokenLifecycleErrorForProjection(projection),
+	);
+}
+
 // Map a retrieval block back onto the ONE repair command that discharges it;
 // causes outside the four dispatchable continuations route to inspection.
 function authContinuationForCause(cause: string): AuthActionId {
 	switch (cause) {
 		case "missing-token":
-			return "enroll-browser-automation-token";
+			return "install-token";
 		case "invalid-vault-scope":
 			return "repair-vault-grant";
 		case "revoked-binding":
 			return "repair-item-binding";
+		case "binding-approval-required":
 		case "ambiguous-binding-selection":
 			return "request-binding-selection-grant";
 		default:
@@ -4530,7 +7859,7 @@ function authContinuationForCause(cause: string): AuthActionId {
 const NATIVE_CAPABILITY_ABSENT: AuthReadinessEvaluation = {
 	status: "native-capability-absent",
 	blocked_cause: "missing-token",
-	continuationId: "acquire-native-capability",
+	continuationId: "install-token",
 };
 
 // Retrieval blocked before the evaluation could answer: report the block's
@@ -4548,7 +7877,7 @@ function retrievalBlockedEvaluation(
 }
 
 async function evaluateAuthReadiness(
-	subcommand: BrowserUseAuthSubcommand,
+	subcommand: BrowserUseAuthRepairSubcommand,
 	input: PlatformCommandInput,
 ): Promise<AuthReadinessEvaluation> {
 	const port = input.runtime.authTokenRetrieval;
@@ -4565,7 +7894,7 @@ async function evaluateAuthReadiness(
 					status: "token-rejected",
 					blocked_cause: block.blocked_cause,
 					detail: { rejection_code: vaults.rejection.code },
-					continuationId: "acquire-native-capability",
+					continuationId: "install-token",
 				};
 			}
 			return {
@@ -4701,7 +8030,7 @@ function emitAuthContinuationMismatch(
  * @returns Process exit code
  */
 async function runAuthReadiness(input: PlatformCommandInput): Promise<number> {
-	const subcommand = input.parsed.subcommand as BrowserUseAuthSubcommand;
+	const subcommand = input.parsed.subcommand as BrowserUseAuthRepairSubcommand;
 	const runFlag = stringField(input.parsed.flagValues["--run"]);
 	let runBinding:
 		| { run_id: string; state: BrowserUseRunState; continuation_id: string }
@@ -4806,21 +8135,36 @@ function emitCliError(input: {
 		);
 		return exitCode;
 	}
+	// The last-resort emitter must be total. redactUnsafeText scrubs VALUES
+	// (op:// refs, sensitive --flags, paths) while the envelope leak-guard
+	// bans VOCABULARY, so a message can pass the scrub and still be rejected
+	// (e.g. an upstream CliRuntimeContractError whose issue text quotes a
+	// banned label). Withhold the message rather than crash with a stack trace.
+	const buildError = (message: string) =>
+		createCliRuntimeError({
+			run_id: input.runId,
+			code: isUsage ? "usage_error" : "runtime_error",
+			message,
+			exit_code: exitCode,
+			severity: isUsage ? "error" : "fatal",
+			recoverability: isUsage ? "change_input" : "none",
+			retryable: false,
+			failure_domain: isUsage ? "input" : "runtime_diagnostics",
+		});
+	let structuredError: ReturnType<typeof buildError>;
+	try {
+		structuredError = buildError(safeMessage);
+	} catch {
+		structuredError = buildError(
+			"runtime error message withheld: it did not pass the runtime-contract text safety gate.",
+		);
+	}
 	writeJsonEnvelope(
 		input.stdout,
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: createCliRuntimeError({
-				run_id: input.runId,
-				code: isUsage ? "usage_error" : "runtime_error",
-				message: safeMessage,
-				exit_code: exitCode,
-				severity: isUsage ? "error" : "fatal",
-				recoverability: isUsage ? "change_input" : "none",
-				retryable: false,
-				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-			}),
+			error: structuredError,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -4845,10 +8189,16 @@ class BufferWriter implements CliWriter {
 export async function runForTest(
 	argv: readonly string[],
 	runtime: BrowserUseRuntime,
+	authDoctor?: AuthDoctorOrchestrationDeps,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const stdout = new BufferWriter();
 	const stderr = new BufferWriter();
-	const exitCode = await runBrowserUseCli(argv, { runtime, stdout, stderr });
+	const exitCode = await runBrowserUseCli(argv, {
+		runtime,
+		stdout,
+		stderr,
+		...(authDoctor === undefined ? {} : { authDoctor }),
+	});
 	return { exitCode, stdout: stdout.toString(), stderr: stderr.toString() };
 }
 
@@ -4866,9 +8216,6 @@ export {
 } from "./browser-use-transport";
 export {
 	type BrowserUseRuntime,
-	type BrowserUseSecuritySeam,
-	createDefaultBrowserUseRuntime,
-	createProductionBrowserUseRuntime,
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {
@@ -4891,6 +8238,9 @@ export const __confidentialDeliveryDriverForTest = {
 	collectRunGovernedSurfaces,
 	sentinelRegistrationWithheldFailure,
 	recordTaskRunOutcome,
+	emitSubmitApprovalGate,
+	buildRunbookAuthDelivery,
+	environmentDeliveryHook,
 } as const;
 
 if (import.meta.main) {

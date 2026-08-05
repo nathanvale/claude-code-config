@@ -492,6 +492,122 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		]);
 	});
 
+	test("routine automation auto-resolves one admissible tab before a semantic click", async () => {
+		const store = await makeStore();
+		const listedTab = {
+			tabId: "t7",
+			active: true,
+			type: "page",
+			url: "https://example.test/",
+		};
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{ stdout: adapterSuccess({ tabs: [listedTab] }) },
+			{ stdout: adapterSuccess({ tabs: [listedTab] }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{
+				stdout: adapterSuccess({
+					snapshot: "@e1 button Save",
+					refs: { e1: { role: "button", name: "Save" } },
+				}),
+			},
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({}) },
+			{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+			{ stdout: adapterSuccess({ visible: true }) },
+		]);
+
+		const result = await runForTest(
+			[
+				"task", "run",
+				"--intent", "routine-automation",
+				"--handoff", store.handoffPath,
+				"--allowed-origin", "https://example.test",
+				"--click-role", "button",
+				"--click-name", "Save",
+				"--postcondition-id", "saved",
+				"--expect-visible", "[data-persisted='true']",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, unknown>;
+		expect(data.run).toMatchObject({
+			state: "confirmed",
+			mutation_dispatched: true,
+		});
+		expect(calls.slice(0, 3).map((call) => call.slice(-3))).toEqual([
+			["tab", "list", "--json"],
+			["tab", "list", "--json"],
+			["tab", "t7", "--json"],
+		]);
+		expect(calls.map((call) => call.slice(-3))).toContainEqual([
+			"click",
+			"@e1",
+			"--json",
+		]);
+	});
+
+	test.each([
+		[
+			"zero",
+			[
+				{ tabId: "t7", active: true, type: "page", url: "https://other.test/" },
+			],
+			"agent_browser_target_unavailable",
+		],
+		[
+			"multiple",
+			[
+				{ tabId: "t7", active: true, type: "page", url: "https://example.test/one" },
+				{ tabId: "t8", active: false, type: "page", url: "https://example.test/two" },
+			],
+			"agent_browser_target_ambiguous",
+		],
+	] as const)(
+		"routine automation without a tab fails closed for %s exact-origin matches",
+		async (_matchCount, tabs, laneOutcome) => {
+			const store = await makeStore();
+			const { runtime, calls } = taskRunRuntime(store.env, [
+				{ stdout: adapterSuccess({ tabs }) },
+			]);
+			const result = await runForTest(
+				[
+					"task", "run",
+					"--intent", "routine-automation",
+					"--handoff", store.handoffPath,
+					"--allowed-origin", "https://example.test",
+					"--click-role", "button",
+					"--click-name", "Save",
+					"--postcondition-id", "saved",
+					"--expect-visible", "[data-persisted='true']",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			const data = parseJson(result.stdout).data as Record<string, unknown>;
+			expect(data).toMatchObject({
+				lane_outcome: laneOutcome,
+				external_effect: "none",
+			});
+			const loaded = await loadSharedRun(store.deps, "run-task-run-1");
+			expect(loaded.ok).toBe(true);
+			if (loaded.ok) {
+				expect(loaded.run).toMatchObject({
+					state: "not-achieved",
+					mutation_dispatched: false,
+				});
+			}
+			expect(calls.map((call) => call.slice(-3))).toEqual([
+				["tab", "list", "--json"],
+			]);
+		},
+	);
+
 	test("the shared run records mutation dispatch before the adapter receives the click", async () => {
 		const store = await makeStore();
 		let markerObservedBeforeClick = false;

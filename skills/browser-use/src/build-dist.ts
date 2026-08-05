@@ -1,18 +1,20 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
 import { chmod, cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 const skillRoot = join(import.meta.dir, "..");
 const distRoot = join(skillRoot, "dist");
-// The shipped runbook catalog. Published tarballs include only `dist/` (see
-// package.json `files`), and the packaged bin runs from `dist/browser-use.js`,
-// so the shipped catalog must travel INSIDE dist as `dist/runbooks/` — a
-// sibling `<skill>/runbooks/` exists only in the repo checkout, never in an
-// install. `shippedRunbooksRoot()` (browser-use-runbook.ts) probes the
-// dist-adjacent copy first, then the repo-local `../runbooks` fallback.
-const shippedRunbooksSource = join(skillRoot, "runbooks");
-const shippedRunbooksDist = join(distRoot, "runbooks");
+const nativeAuthRoot = join(
+	skillRoot,
+	"..",
+	"..",
+	"runtime",
+	"browser-use-environment-auth",
+);
+const nativeBinDist = join(distRoot, "bin");
+const nativeSupervisorName = "browser-use-op-supervisor";
 const entrypoints = [
 	"browser-use.ts",
 ].map((entrypoint) => join(import.meta.dir, entrypoint));
@@ -46,32 +48,64 @@ if (!build.success) {
 	process.exit(1);
 }
 
-// Copy the shipped runbook catalog into dist so it travels with the packaged
-// bin. Fail closed if the source is missing — a build that dropped the seed
-// catalog would ship a `browser-use` whose `runbook list` is silently empty.
-const shippedSourceStat = await stat(shippedRunbooksSource).catch(() => null);
-if (shippedSourceStat === null || !shippedSourceStat.isDirectory()) {
-	throw new Error(
-		`Shipped runbook catalog missing at ${relative(skillRoot, shippedRunbooksSource)}; expected a directory to copy into dist.`,
-	);
+await verifyPrivatePayloadExclusion();
+
+const nativeBuild = Bun.spawn(
+	["swift", "build", "-c", "release", "--disable-sandbox"],
+	{ cwd: nativeAuthRoot, stdout: "inherit", stderr: "inherit" },
+);
+if ((await nativeBuild.exited) !== 0) {
+	throw new Error("Native environment-token proof build failed.");
 }
-await cp(shippedRunbooksSource, shippedRunbooksDist, { recursive: true });
+await mkdir(nativeBinDist, { recursive: true });
+await cp(
+	join(nativeAuthRoot, ".build", "release", nativeSupervisorName),
+	join(nativeBinDist, nativeSupervisorName),
+);
 
 await verifyDist();
 
+async function collectFiles(root: string): Promise<readonly string[]> {
+	const files: string[] = [];
+	for (const entry of await readdir(root, { withFileTypes: true })) {
+		const path = join(root, entry.name);
+		if (entry.isDirectory()) files.push(...(await collectFiles(path)));
+		else if (entry.isFile()) files.push(path);
+	}
+	return files;
+}
+
+async function verifyPrivatePayloadExclusion(): Promise<void> {
+	const privateFiles = [
+		...(await collectFiles(join(skillRoot, "runbooks"))),
+		...(await collectFiles(join(skillRoot, "actions"))),
+	];
+	const payloadFiles = await collectFiles(distRoot);
+	for (const privateFile of privateFiles) {
+		const privateBytes = await readFile(privateFile);
+		const digestBytes = Buffer.from(createHash("sha256").update(privateBytes).digest("hex"));
+		for (const payloadFile of payloadFiles) {
+			const payload = await readFile(payloadFile);
+			if ((privateBytes.length > 0 && payload.indexOf(privateBytes) !== -1) || payload.indexOf(digestBytes) !== -1) {
+				throw new Error("Browser Use payload embeds private catalog bytes or a known private digest.");
+			}
+		}
+	}
+}
+
 async function verifyDist(): Promise<void> {
-	// The compiled entrypoints plus the copied shipped-runbook catalog directory.
-	const SHIPPED_RUNBOOKS_DIRNAME = "runbooks";
+	const NATIVE_BIN_DIRNAME = "bin";
 	const distEntries = await readdir(distRoot);
 	const unexpected = distEntries.filter(
 		(entry) =>
-			!expectedDistFiles.has(entry) && entry !== SHIPPED_RUNBOOKS_DIRNAME,
+			!expectedDistFiles.has(entry) &&
+			entry !== NATIVE_BIN_DIRNAME,
 	);
 	const missing = [...expectedDistFiles].filter(
 		(entry) => !distEntries.includes(entry),
 	);
-	if (!distEntries.includes(SHIPPED_RUNBOOKS_DIRNAME)) {
-		missing.push(SHIPPED_RUNBOOKS_DIRNAME);
+	if (!distEntries.includes(NATIVE_BIN_DIRNAME)) {
+		missing.push(NATIVE_BIN_DIRNAME);
 	}
 
 	if (missing.length > 0 || unexpected.length > 0) {
@@ -80,23 +114,22 @@ async function verifyDist(): Promise<void> {
 		);
 	}
 
-	// Prove the copied catalog actually carries the shipped seed runbook, so a
-	// packaged `runbook list` finds it rather than scanning an empty directory.
-	const seedRunbook = join(
-		shippedRunbooksDist,
-		"oncore",
-		"timesheet-snapshot-verify",
-		"runbook.json",
-	);
-	const seedStat = await stat(seedRunbook).catch(() => null);
-	if (seedStat === null || !seedStat.isFile()) {
-		throw new Error(
-			`Shipped seed runbook missing from dist at ${relative(skillRoot, seedRunbook)}.`,
-		);
+	const nativeSupervisor = join(nativeBinDist, nativeSupervisorName);
+	const nativeSupervisorStat = await stat(nativeSupervisor).catch(() => null);
+	if (
+		nativeSupervisorStat === null ||
+		!nativeSupervisorStat.isFile() ||
+		(nativeSupervisorStat.mode & 0o111) === 0
+	) {
+		throw new Error("Native environment-token proof executable is missing.");
 	}
 
 	for (const entry of distEntries) {
-		if (entry === SHIPPED_RUNBOOKS_DIRNAME) continue;
+		if (
+			entry === NATIVE_BIN_DIRNAME
+		) {
+			continue;
+		}
 		const distPath = join(distRoot, entry);
 		const stats = await stat(distPath);
 

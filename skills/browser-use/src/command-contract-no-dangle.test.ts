@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
+	BROWSER_USE_ACTION_SUBCOMMANDS,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
@@ -99,6 +100,23 @@ function offendersIn(corpus: Array<{ path: string; text: string }>): string[] {
 }
 
 describe("R4 no-dangle sweep — deleted command surfaces", () => {
+	test("operator-only Reviewed Action promotion stays discoverable and human-gated", () => {
+		expect(BROWSER_USE_ACTION_SUBCOMMANDS).toEqual([
+			"schema",
+			"validate",
+			"apply",
+			"status",
+			"promote",
+		]);
+		expect(Object.keys(browserUseContracts)).toContain("action-promote");
+		expect(renderHelp("action")).toMatch(/^\s+promote(?:\s|$)/m);
+		expect(browserUseContracts["action-promote"]).toMatchObject({
+			audience: "operator",
+			interactivity: "required",
+			sideEffects: ["check", "auth", "write"],
+		});
+	});
+
 	// Canary: the sweep itself must be able to fail. A matcher regression that
 	// silently stops matching (case handling, prose forms) would otherwise turn
 	// every test below into a vacuous pass.

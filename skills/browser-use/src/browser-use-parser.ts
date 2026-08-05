@@ -207,10 +207,24 @@ export function parseBrowserUseArgv(
 	// flag check and the dry-run/live split — so an unregistered enum value fails
 	// closed for dry-run and live alike (R27, api-contract parity).
 	validateEnumFlagValues(flagValues, flags);
-	if (command === "run-resume" || command === "run-cancel") {
+	if (
+		command === "run-resume" ||
+		command === "run-approve" ||
+		command === "run-cancel"
+	) {
 		const runId = stringField(flagValues["--run"]);
 		if (!runId || runId.startsWith("--")) {
 			throw usageError(`${command.replace("-", " ")} requires --run <id>.`);
+		}
+	}
+	if (command === "run-approve") {
+		const continuation = stringField(flagValues["--continuation"]);
+		const artifact = stringField(flagValues["--artifact"]);
+		if (!continuation || continuation.startsWith("--")) {
+			throw usageError("run approve requires --continuation <id>.");
+		}
+		if (!artifact || artifact.startsWith("--")) {
+			throw usageError("run approve requires --artifact <id>.");
 		}
 	}
 	if (command === "lanes-show") {
@@ -253,6 +267,79 @@ export function parseBrowserUseArgv(
 					`${command.replace("-", " ")} requires ${flag} <id>.`,
 				);
 			}
+		}
+	}
+	if (command === "runbook-validate" || command === "runbook-apply") {
+		const file = stringField(flagValues["--file"]);
+		if (file === undefined || file.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --file <path>.`);
+		}
+	}
+	if (command === "runbook-apply") {
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"runbook apply --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
+	if (command === "runbook-delete") {
+		for (const flag of ["--service", "--flow"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (value === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) {
+				throw usageError(`runbook delete requires ${flag} <id> as a safe slug.`);
+			}
+		}
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"runbook delete --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
+	if (command === "runbook-activate") {
+		const digest = stringField(flagValues["--catalog-digest"]);
+		if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest)) {
+			throw usageError(
+				"runbook activate requires --catalog-digest <sha256> as 64 lowercase hex characters.",
+			);
+		}
+		const epoch = stringField(flagValues["--expected-epoch"]);
+		if (epoch === undefined || !/^(?:0|[1-9]\d*)$/.test(epoch)) {
+			throw usageError(
+				"runbook activate requires --expected-epoch <n> as a non-negative integer.",
+			);
+		}
+	}
+	if (command === "action-validate" || command === "action-apply") {
+		const file = stringField(flagValues["--file"]);
+		if (file === undefined || file.startsWith("--")) {
+			throw usageError(`${command.replace("-", " ")} requires --file <path>.`);
+		}
+	}
+	if (command === "action-apply") {
+		const expected = stringField(flagValues["--expected-record-digest"]);
+		if (expected !== undefined && !/^[0-9a-f]{64}$/.test(expected)) {
+			throw usageError(
+				"action apply --expected-record-digest must be 64 lowercase hex characters.",
+			);
+		}
+	}
+	if (command === "action-status" || command === "action-promote") {
+		const actionId = stringField(flagValues["--id"]);
+		if (actionId === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(actionId)) {
+			throw usageError(`${command.replace("-", " ")} requires --id <action-id> as a safe slug.`);
+		}
+	}
+	if (command === "action-promote") {
+		const approvalReference = stringField(flagValues["--approval-reference"]);
+		if (
+			approvalReference === undefined ||
+			!/^[a-z0-9][a-z0-9-]{0,127}$/.test(approvalReference)
+		) {
+			throw usageError(
+				"action promote requires --approval-reference <reference> as an opaque safe identifier.",
+			);
 		}
 	}
 	// `runbook run` attaches through the agent-browser lane; --handoff is the
@@ -571,7 +658,10 @@ const ROOT_HELP_GROUPS: ReadonlyArray<{
 	heading: string;
 	families: readonly BrowserUseFamily[];
 }> = [
-	{ heading: "Everyday work:", families: ["task", "run", "runbook", "artifact"] },
+	{
+		heading: "Everyday work:",
+		families: ["task", "run", "runbook", "action", "artifact"],
+	},
 	{ heading: "Recovery:", families: ["repair", "auth"] },
 	{
 		heading: "Advanced (platform internals):",
@@ -605,6 +695,7 @@ function renderRootHelp(): string {
 		"  browser-use guide                Core workflow, copy-paste loop (version-matched)",
 		"  browser-use task list --json     Discover code-owned Task Intents",
 		"  browser-use runbook list --json  Discover service runbooks",
+		"  browser-use runbook activate --catalog-digest <sha256> --expected-epoch <n> --json  Select a reviewed immutable generation",
 		"",
 		...groupLines,
 		"Global flags:",

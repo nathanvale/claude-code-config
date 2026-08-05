@@ -63,14 +63,19 @@ import {
 import {
 	actionAssetDigest,
 	actionValueMatchesSchema,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	recordItemCheckpoint,
 } from "./browser-use-runbook-actions";
+import {
+	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+	ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE,
+} from "./fixtures/oncore-draft-verification-action-fixture";
+import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import type {
 	BrowserUseActionGenerationSeam,
 	BrowserUseItemBatchState,
 	BrowserUseReviewedActionRecord,
 } from "./browser-use-runbook-actions";
+import type { BrowserUseReviewedActionPromotionReceipt } from "./browser-use-reviewed-action-approval";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -133,6 +138,49 @@ function json(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
 }
 
+function testPromotionReceipt(input: {
+	actionId: string;
+	digest: string;
+	origin: string;
+	effect: "read" | "mutation";
+	containment: "none" | "read-only-observation";
+}): BrowserUseReviewedActionPromotionReceipt {
+	const auditedCapabilities = input.effect === "read"
+		? ["dom-query", "dom-read"]
+		: ["dom-query", "dom-write"];
+	return {
+		contract: "browser-use.reviewed-action-promotion",
+		schema_version: "1",
+		receipt_id: `receipt-${input.actionId}`,
+		disposition: "approved",
+		source_commit: "1".repeat(40),
+		action_id: input.actionId,
+		approved_digest: input.digest,
+		approved_origin: input.origin,
+		approved_effect: input.effect,
+		audited_capabilities: auditedCapabilities,
+		containment: input.containment,
+		input_schema_digest: "2".repeat(64),
+		result_schema_digest: "3".repeat(64),
+		postcondition_digest: input.effect === "mutation" ? "4".repeat(64) : null,
+		approval_reference: "test-review",
+		presence_backed: true,
+		issued_at_epoch_ms: 1,
+		verifier_key_id: "test-key",
+		signature: "TEST-SIGNATURE",
+	};
+}
+
+function expectPreparedActionRefusal(
+	prepared: Awaited<ReturnType<typeof prepareRunbookExecution>>,
+	actionCode: string,
+): void {
+	expect(prepared.ok).toBe(false);
+	if (prepared.ok) return;
+	expect(prepared.refusal.code).toBe("runbook_action_refused");
+	expect(prepared.refusal.message).toContain(actionCode);
+}
+
 function runtimeFor(
 	responses: readonly { stdout?: string; exitCode?: number }[],
 ): AgentBrowserExecutionRuntime & { calls: Array<readonly string[]> } {
@@ -187,6 +235,26 @@ describe("runbook model validation (v2)", () => {
 		expect(validateRunbook(baseRunbook())).toEqual([]);
 	});
 
+	test("an open url-starts-with postcondition validates and round-trips", () => {
+		const raw = JSON.parse(JSON.stringify(baseRunbook())) as Record<string, unknown>;
+		raw.steps = [
+			{
+				kind: "open",
+				url: "https://portal.example.com/timesheets",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.com/timesheets",
+				},
+			},
+		];
+
+		const parsed = parseRunbookRecord(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(validateRunbook(parsed.runbook)).toEqual([]);
+		expect(JSON.parse(JSON.stringify(parsed.runbook))).toEqual(raw);
+	});
+
 	test("rejects a non-v2 schema version", () => {
 		const issues = validateRunbook(
 			baseRunbook({ schema_version: "1" as unknown as "2" }),
@@ -204,6 +272,17 @@ describe("runbook model validation (v2)", () => {
 			baseRunbook({ allowed_origins: ["https://portal.example.com/path"] }),
 		);
 		expect(issues.map((i) => i.code)).toContain("runbook_origin_invalid");
+	});
+
+	test("rejects an auth_context_ref outside the auth-owned vocabulary", () => {
+		const issues = validateRunbook(
+			baseRunbook({ auth_context_ref: "portal-specific-login" }),
+		);
+		expect(issues).toContainEqual({
+			code: "runbook_auth_context_invalid",
+			message:
+				"auth_context_ref must name an auth-owned context vocabulary member.",
+		});
 	});
 
 	test("rejects an open step outside the allowed origins", () => {
@@ -529,6 +608,54 @@ describe("runbook total parsing (drop-v1)", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+
+	test("rejects unknown fields at every parsed Runbook layer", () => {
+		const fixtures = [
+			{ ...JSON.parse(JSON.stringify(baseRunbook())), approval: true },
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				inputs: [
+					{
+						id: "v",
+						summary: "s",
+						required: true,
+						schema: { kind: "array", items: { kind: "string", script: true } },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "click",
+						target: { role: "button", name: "Continue", selector: "#hidden" },
+						postcondition: { kind: "element-visible", selector: ".done" },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "open",
+						url: "https://portal.example.com/",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://portal.example.com/",
+							script: true,
+						},
+					},
+				],
+			},
+		];
+		for (const fixture of fixtures) {
+			const result = parseRunbookRecord(fixture);
+			expect(result).toMatchObject({
+				ok: false,
+				issue: { code: "runbook_shape_invalid" },
+			});
+		}
 	});
 });
 
@@ -876,7 +1003,7 @@ describe("runbook catalog projection (R13/R35)", () => {
 
 	test("flags requires_auth for a confidential runbook", () => {
 		const row = projectRunbookCatalogRow(
-			baseRunbook({ auth_context_ref: "oncore-session" }),
+			baseRunbook({ auth_context_ref: "interactive-login" }),
 			"healthy",
 		);
 		expect(row.requires_auth).toBe(true);
@@ -934,6 +1061,21 @@ describe("runbook discovery over the XDG data root", () => {
 			// `runbook list` never reports catalog_count=0 out of the box.
 			expect(rows).toEqual([
 				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "fill-week",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "login",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "submit",
+					health: "healthy",
+				}),
+				expect.objectContaining({
 					service_id: "matest",
 					flow_id: "development-snapshot-verify",
 					health: "healthy",
@@ -941,6 +1083,20 @@ describe("runbook discovery over the XDG data root", () => {
 				expect.objectContaining({
 					service_id: "oncore",
 					flow_id: "timesheet-snapshot-verify",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login",
+					step_count: 2,
+					effect_class: "read-only",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login-screen-verify",
+					step_count: 2,
+					effect_class: "read-only",
 					health: "healthy",
 				}),
 			]);
@@ -1085,7 +1241,145 @@ describe("runbook discovery over the XDG data root", () => {
 
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
+const FASTTRACK_TIMESHEET_RUN = {
+	envelope: {
+		target_account: "self",
+		period_start: "2026-08-03",
+		period_end: "2026-08-09",
+		selected_work_dates: [
+			"2026-08-03",
+			"2026-08-04",
+			"2026-08-05",
+			"2026-08-06",
+			"2026-08-07",
+		],
+		expected_aggregate: { unit: "hours", value: 35 },
+		mutation_mode: "prepare-draft",
+		final_action: "human-submit",
+	},
+	payload: {
+		portal: "fasttrack",
+		rows: [
+			{
+				date: "2026-08-03",
+				day: "Mon",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-04",
+				day: "Tue",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-05",
+				day: "Wed",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-06",
+				day: "Thu",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-07",
+				day: "Fri",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+		],
+	},
+};
+
 describe("shipped runbooks root resolution", () => {
+	test("ships exactly the seven daily-driver runbooks", async () => {
+		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
+		try {
+			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
+			expect(
+				rows.map((row) => `${row.service_id}/${row.flow_id}`).sort(),
+			).toEqual([
+				"fasttrack/fill-week",
+				"fasttrack/login",
+				"fasttrack/submit",
+				"matest/development-snapshot-verify",
+				"oncore/timesheet-snapshot-verify",
+				"unifi/login",
+				"unifi/login-screen-verify",
+			]);
+		} finally {
+			rmSync(dataRoot, { recursive: true, force: true });
+		}
+	});
+	test("retains shipped legacy action evidence but refuses execution authority", async () => {
+		const prepared = await prepareRunbookExecution(
+			createDefaultPlatformFs(),
+			mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
+			{
+				serviceId: "fasttrack",
+				flowId: "fill-week",
+				inputs: { timesheet_run: FASTTRACK_TIMESHEET_RUN },
+				resumeFromStep: 0,
+				actionSeam: createBrowserUseShippedActionSeam(
+					createDefaultPlatformFs(),
+				),
+			},
+		);
+
+		expectPreparedActionRefusal(
+			prepared,
+			"action_promotion_verifier_unavailable",
+		);
+	});
+
+	test("rejects malformed FastTrack input before Reviewed Action resolution", async () => {
+		const malformedInputs = [
+			{ timesheet_run: { timesheet_run: FASTTRACK_TIMESHEET_RUN } },
+			{
+				timesheet_run: {
+					...FASTTRACK_TIMESHEET_RUN,
+					envelope: {
+						...FASTTRACK_TIMESHEET_RUN.envelope,
+						period_start: "2026-02-30",
+					},
+				},
+			},
+		];
+
+		for (const inputs of malformedInputs) {
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
+				{
+					serviceId: "fasttrack",
+					flowId: "fill-week",
+					inputs,
+					resumeFromStep: 0,
+					actionSeam: createBrowserUseShippedActionSeam(
+						createDefaultPlatformFs(),
+					),
+				},
+			);
+
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) continue;
+			expect(prepared.refusal.code).toBe("runbook_input_rejected");
+		}
+	});
+
 	test("resolves to an existing directory containing the shipped runbooks", () => {
 		const root = shippedRunbooksRoot();
 		expect(existsSync(root)).toBe(true);
@@ -1119,7 +1413,7 @@ describe("shipped runbooks root resolution", () => {
 		expect(parsedMatest.flow_id).toBe("development-snapshot-verify");
 		expect(parsedMatest).toMatchObject({
 			allowed_origins: ["https://experience-test.elluciancloud.com.au"],
-			auth_context_ref: "matest-experience-session",
+			auth_context_ref: "interactive-login",
 			inputs: [],
 			steps: [
 				{
@@ -1598,7 +1892,7 @@ describe("runbook execution binding to the agent-browser lane (R30, F7)", () => 
 					proven: true,
 					observed_digest: "d".repeat(32),
 				}),
-				field_by_ref: {},
+				field_by_binding_slug: {},
 			};
 			const seamCalls: Array<readonly string[]> = [];
 			// tab list + select, then the interactive snapshot yields the @e1 ref
@@ -1824,7 +2118,7 @@ function confidentialSeam(
 			tokenRetrieval: confidentialFakePort,
 			deliver: hook,
 			reproveTarget: confidentialReproveOk,
-			field_by_ref: { "@e1": "password" },
+			field_by_binding_slug: { oncore_password: "password" },
 		};
 		return { ok: true, context };
 	};
@@ -1832,6 +2126,100 @@ function confidentialSeam(
 }
 
 describe("(C) runbook-run confidential path — wired delivery seam", () => {
+	test(
+		"a multi-slug plan reaches the seam with every pending slug and its per-step field mapping; a blocked seam maps to the typed delivery-unavailable refusal",
+		withDataRoot(async (dataRoot) => {
+			// U6: multiple binding SLUGS are legal at the engine (a login flow's
+			// username + password slugs resolve to one login item). R10's
+			// single-binding v1 gate lives in the auth-delivery seam, which refuses
+			// typed when the slugs resolve to more than one DISTINCT Item Binding.
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "multiple-bindings",
+					steps: [
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "Password" },
+							sensitivity: "confidential",
+							item_binding: "oncore_password",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "One-time code" },
+							sensitivity: "confidential",
+							item_binding: "oncore_otp_current",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			const seamInputs: Array<{
+				slugs: readonly string[];
+				fields: readonly { bindingSlug: string; credentialField: string }[];
+			}> = [];
+			const runtime = runtimeFor([]);
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						seamInputs.push({
+							slugs: seamInput.pendingItemBindings,
+							fields: seamInput.confidentialFields.map((field) => ({
+								bindingSlug: field.bindingSlug,
+								credentialField: field.credentialField,
+							})),
+						});
+						return {
+							ok: false,
+							message:
+								"binding resolution blocked (single-binding-v1); pending slugs resolved to more than one distinct Item Binding.",
+						};
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "multiple-bindings",
+					handoff: HANDOFF,
+					runId: "run-multiple-bindings",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			// The seam saw BOTH slugs and the per-step slug -> field pairing (KTD5).
+			expect(seamInputs).toEqual([
+				{
+					slugs: ["oncore_password", "oncore_otp_current"],
+					fields: [
+						{ bindingSlug: "oncore_password", credentialField: "password" },
+						{
+							bindingSlug: "oncore_otp_current",
+							credentialField: "otp-current",
+						},
+					],
+				},
+			]);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			expect(outcome.refusal.message).toContain("single-binding-v1");
+			// The seam's refusal fired BEFORE any browser effect.
+			expect(runtime.calls).toHaveLength(0);
+		}),
+	);
+
 	test(
 		"Seam A: an in-interval seam routes a confidential field through deliverConfidentialFields instead of refusing",
 		withDataRoot(async (dataRoot) => {
@@ -1892,6 +2280,70 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 	);
 
 	test(
+		"a throwing auth-delivery release never replaces the confirmed execution result",
+		withDataRoot(async (dataRoot) => {
+			// The release runs in the engine's `finally`; if its rejection escaped it
+			// would REPLACE the returned result — losing executed-steps and
+			// mutation-dispatched truth for a run that already dispatched browser
+			// effects. Release failure is contained: the lease self-expires by TTL.
+			const RUN = "run-c-release-throws";
+			writeRunbook(dataRoot, CONFIDENTIAL_RUNBOOK);
+			const PASS = deriveConformanceSentinel("password", "runcrelthr1");
+			expect(PASS.ok).toBe(true);
+			if (!PASS.ok) return;
+			const sentinelValue: Record<BrowserUseOpCredentialField, string> = {
+				username: PASS.value,
+				password: PASS.value,
+				"otp-current": PASS.value,
+			};
+			const { hook } = confidentialLeakHelper(sentinelValue);
+			const { seam } = confidentialSeam(RUN, hook, true);
+			let releaseCalls = 0;
+			const runtime = confidentialRuntime();
+
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async (seamInput) => {
+						const built = await seam(seamInput);
+						if (!built.ok) return built;
+						return {
+							...built,
+							release: async () => {
+								releaseCalls += 1;
+								throw new Error("lease release transport closed unexpectedly");
+							},
+						};
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "with-secret",
+					handoff: HANDOFF as AgentBrowserVerifiedHandoff,
+					runId: RUN,
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+
+			// The release was reached AND rejected, yet the confirmed execution
+			// result survives verbatim — not the release's rejection.
+			expect(releaseCalls).toBe(1);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			expect(outcome.result.ok).toBe(true);
+			if (!outcome.result.ok) return;
+			expect(outcome.result.executed_steps).toBe(2);
+			expect(outcome.result.delivery?.method_step_events).toEqual([
+				"fill-password",
+			]);
+		}),
+	);
+
+	test(
 		"Seam B: compact/pretty serialization of the seam-built context carries no delivered value (port-boundary parity)",
 		withDataRoot(async (dataRoot) => {
 			const RUN = "run-c-seam-b";
@@ -1915,7 +2367,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 					tokenRetrieval: confidentialFakePort,
 					deliver: hook,
 					reproveTarget: confidentialReproveOk,
-					field_by_ref: { "@e1": "password" },
+					field_by_binding_slug: { oncore_password: "password" },
 				};
 				expect(seamInput.pendingItemBindings).toEqual(["oncore_password"]);
 				captured = context;
@@ -1943,7 +2395,7 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 				in_sensitive_interval: captured.in_sensitive_interval,
 				binding: captured.binding,
 				target: captured.target,
-				field_by_ref: captured.field_by_ref,
+				field_by_binding_slug: captured.field_by_binding_slug,
 			};
 			const compact = JSON.stringify(dataOnly);
 			const pretty = JSON.stringify(dataOnly, null, 2);
@@ -1951,7 +2403,9 @@ describe("(C) runbook-run confidential path — wired delivery seam", () => {
 			expect(compact).not.toContain(sentinelValue.password);
 			expect(pretty).not.toContain(sentinelValue.password);
 			// The field mapping names the field kind only, no value.
-			expect(captured.field_by_ref).toEqual({ "@e1": "password" });
+			expect(captured.field_by_binding_slug).toEqual({
+				oncore_password: "password",
+			});
 		}),
 	);
 
@@ -2537,6 +2991,9 @@ function actionSeam(
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes: found };
 		},
+		async verifyPromotion() {
+			return { ok: true };
+		},
 	};
 }
 
@@ -2555,13 +3012,14 @@ function approvedReadRecord(): BrowserUseReviewedActionRecord {
 		},
 		result_sensitivity: "low",
 		source_provenance: "oncore/diagnose-grid-state.js",
-		promotion_receipt: {
-			approved_digest: ACTION_READ_DIGEST,
-			disposition: "approved",
-			approved_origin: ACTION_ORIGIN,
-			approved_effect: "read",
-			approver_ref: "operator-1",
-		},
+		audited_capabilities: ["dom-query", "dom-read"],
+		promotion_receipt: testPromotionReceipt({
+			actionId: "diagnose-grid",
+			digest: ACTION_READ_DIGEST,
+			origin: ACTION_ORIGIN,
+			effect: "read",
+			containment: "read-only-observation",
+		}),
 	};
 }
 
@@ -2680,18 +3138,18 @@ describe("engine reviewed-action step resolution (U3)", () => {
 						{
 							...record,
 							promotion_receipt: {
-								...record.promotion_receipt,
+								approved_digest: record.expected_digest,
 								disposition: "rejected",
+								approved_origin: record.allowed_origin,
+								approved_effect: record.effect_class,
+								approver_ref: "operator-1",
 							},
 						},
 						{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },
 					),
 				},
 			);
-			expect(prepared.ok).toBe(false);
-			if (prepared.ok) return;
-			expect(prepared.refusal.code).toBe("runbook_action_refused");
-			expect(prepared.refusal.message).toContain("action_receipt_not_approved");
+			expectPreparedActionRefusal(prepared, "action_receipt_not_approved");
 		}),
 	);
 
@@ -2772,15 +3230,21 @@ describe("engine reviewed-action step resolution (U3)", () => {
 		"iterate validates a non-empty bounded unique stable-key sequence before action resolution",
 		withDataRoot(async (dataRoot) => {
 			writeRunbook(dataRoot, iterateRunbook());
-			const invalidInputs: readonly unknown[] = [
-				undefined,
-				"item-1",
-				[],
-				[""],
-				[1],
-				["bad key"],
-				["item-1", "item-1"],
-				Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+			const invalidInputs: readonly (readonly [
+				unknown,
+				"runbook_input_missing" | "runbook_input_rejected" | "runbook_action_refused",
+			])[] = [
+				[undefined, "runbook_input_missing"],
+				["item-1", "runbook_input_rejected"],
+				[[], "runbook_input_rejected"],
+				[[""], "runbook_input_rejected"],
+				[[1], "runbook_input_rejected"],
+				[["bad key"], "runbook_action_refused"],
+				[["item-1", "item-1"], "runbook_action_refused"],
+				[
+					Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+					"runbook_input_rejected",
+				],
 			];
 			const mustNotResolve: BrowserUseActionGenerationSeam = {
 				async loadActionRecord() {
@@ -2790,7 +3254,7 @@ describe("engine reviewed-action step resolution (U3)", () => {
 					throw new Error("invalid iteration reached asset resolution");
 				},
 			};
-			for (const items of invalidInputs) {
+			for (const [items, expectedCode] of invalidInputs) {
 				const prepared = await prepareRunbookExecution(
 					createDefaultPlatformFs(),
 					dataRoot,
@@ -2804,8 +3268,10 @@ describe("engine reviewed-action step resolution (U3)", () => {
 				);
 				expect(prepared.ok).toBe(false);
 				if (prepared.ok) continue;
-				expect(prepared.refusal.code).toBe("runbook_action_refused");
-				expect(prepared.refusal.message).toContain("action_input_rejected");
+				expect(prepared.refusal.code).toBe(expectedCode);
+				if (expectedCode === "runbook_action_refused") {
+					expect(prepared.refusal.message).toContain("action_input_rejected");
+				}
 			}
 		}),
 	);
@@ -3267,13 +3733,20 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 		required_postcondition?: BrowserUseReviewedActionRecord["required_postcondition"],
 	): BrowserUseReviewedActionRecord => {
 		const digest = actionAssetDigest(bytes);
+		const containment = effect_class === "read"
+			? "read-only-observation"
+			: "none";
+		const auditedCapabilities = effect_class === "read"
+			? ["dom-query", "dom-read"]
+			: ["dom-query", "dom-write"];
 		return {
 			action_id,
 			asset_id: digest,
 			expected_digest: digest,
 			allowed_origin: ONCORE_STAGED_ORIGIN,
 			effect_class,
-			containment: effect_class === "read" ? "read-only-observation" : "none",
+			audited_capabilities: auditedCapabilities,
+			containment,
 			input_schema,
 			result_schema,
 			result_sensitivity: "low",
@@ -3281,13 +3754,13 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 				? { required_postcondition }
 				: {}),
 			source_provenance: `oncore/${action_id}.js`,
-			promotion_receipt: {
-				approved_digest: digest,
-				disposition: "approved",
-				approved_origin: ONCORE_STAGED_ORIGIN,
-				approved_effect: effect_class,
-				approver_ref: "synthetic-staged-proof",
-			},
+			promotion_receipt: testPromotionReceipt({
+				actionId: action_id,
+				digest,
+				origin: ONCORE_STAGED_ORIGIN,
+				effect: effect_class,
+				containment,
+			}),
 		};
 	};
 	return [
@@ -3384,6 +3857,9 @@ function oncoreActionSeam(): BrowserUseActionGenerationSeam {
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes };
 		},
+		async verifyPromotion() {
+			return { ok: true };
+		},
 	};
 }
 
@@ -3414,7 +3890,7 @@ async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
 	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
 	const action = new Function(
 		"document",
-		`return (${ONCORE_DRAFT_VERIFICATION_ACTION_BYTES});`,
+		`return (${ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE});`,
 	)({
 		querySelector: (selector: string) =>
 			selector === "#draft-proof" ? { textContent: rawProof } : null,
@@ -3807,6 +4283,117 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 				mutation_dispatched: true,
 			});
 			expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+		}),
+	);
+});
+
+// --- (U6) FastTrack login runbook — generic auth entry -----------------------
+//
+// The shipped document owns portal entry only. The Browser Authentication
+// Transaction owns username, password, and submit choreography.
+describe("(U6) FastTrack login runbook", () => {
+	test("ships fasttrack/login as a healthy read-only entry into generic auth", async () => {
+		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
+		try {
+			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
+			const login = rows.find(
+				(row) => row.service_id === "fasttrack" && row.flow_id === "login",
+			);
+			expect(login).toBeDefined();
+			if (login === undefined) return;
+			expect(login.health).toBe("healthy");
+			expect(login.requires_auth).toBe(true);
+			expect(login.effect_class).toBe("read-only");
+		} finally {
+			rmSync(dataRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("the shipped login runbook carries no secret, endpoint, or vault UUID (R11)", () => {
+		const raw = readFileSync(
+			join(shippedRunbooksRoot(), "fasttrack", "login", "runbook.json"),
+			"utf8",
+		);
+		// No op secret references, no vault/item UUIDs, no ws/cdp endpoints.
+		expect(raw).not.toMatch(/op:\/\//i);
+		expect(raw).not.toMatch(
+			/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+		);
+		expect(raw).not.toMatch(/ws:\/\/|127\.0\.0\.1|devtools/i);
+		const parsed = JSON.parse(raw) as BrowserUseRunbook;
+		expect(validateRunbook(parsed)).toEqual([]);
+		expect(parsed.allowed_origins).toEqual([
+			"https://manpowergroup.fasttrack360.com.au",
+		]);
+		expect(parsed.auth_context_ref).toBe("interactive-login");
+		expect(parsed.steps).toEqual([
+			expect.objectContaining({
+				kind: "open",
+				url: "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+			}),
+			{ kind: "snapshot", interactive: true },
+		]);
+		expect(parsed.steps.some((step) => step.kind === "fill")).toBe(false);
+		expect(parsed.steps.some((step) => step.kind === "click")).toBe(false);
+	});
+
+	test(
+		"a confidential step with an unknown binding slug refuses typed before the seam or any browser effect",
+		withDataRoot(async (dataRoot) => {
+			writeRunbook(
+				dataRoot,
+				baseRunbook({
+					flow_id: "login-unknown-slug",
+					steps: [
+						{ kind: "snapshot", interactive: true },
+						{
+							kind: "fill",
+							target: { role: "textbox", name: "Security PIN" },
+							sensitivity: "confidential",
+							// No supported credential-field suffix: not _username,
+							// _password, _otp, or _otp_current.
+							item_binding: "fasttrack_pin",
+							postcondition: {
+								kind: "element-visible",
+								selector: ".signed-in",
+							},
+						},
+					],
+				}),
+			);
+			let seamCalls = 0;
+			const runtime = runtimeFor([]);
+			const outcome = await runRunbook(
+				{
+					fs: createDefaultPlatformFs(),
+					runtime,
+					dataRoot,
+					authDelivery: async () => {
+						seamCalls += 1;
+						return { ok: false, message: "must not resolve" };
+					},
+				},
+				{
+					serviceId: "oncore",
+					flowId: "login-unknown-slug",
+					handoff: HANDOFF,
+					runId: "run-unknown-slug",
+					targetTabId: "t1",
+					inputs: {},
+					resumeFromStep: 0,
+				},
+			);
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) return;
+			expect(outcome.refusal.code).toBe(
+				"runbook_confidential_delivery_unavailable",
+			);
+			expect(outcome.refusal.message).toContain(
+				"supported credential field",
+			);
+			// The refusal fired BEFORE the seam and before any browser effect.
+			expect(seamCalls).toBe(0);
+			expect(runtime.calls).toHaveLength(0);
 		}),
 	);
 });
