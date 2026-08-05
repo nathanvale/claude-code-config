@@ -19,10 +19,10 @@ skill and its `fasttrack/fill-week` + `fasttrack/submit` runbooks.
 
 - Never guess the week or the hours. If either is unstated or ambiguous, ask one
   question with a sensible default before building the input.
-- Before the first live fill, explain that it changes a portal draft but does
-  not submit, summarize the week, hours, and defaults, then obtain explicit
-  confirmation. A draft remains editable before submission; it is not
-  read-only.
+- Immediately before every live fill, explain that it changes a portal draft
+  but does not submit, summarize the week, hours, and defaults, then obtain
+  explicit confirmation. Repeat this gate before retries or later fills. A
+  draft remains editable before submission; it is not read-only.
 - Never submit without BOTH: a screenshot of the filled timesheet shown to the
   user, AND the user's explicit approval after seeing it. Treat submit as an
   externally consequential action.
@@ -37,8 +37,9 @@ skill and its `fasttrack/fill-week` + `fasttrack/submit` runbooks.
 ## Gather (ask only what is missing)
 
 Collect, in order, using defaults; ask one question per genuinely missing/ambiguous item:
-- **Week** — the Mon–Sun the timesheet covers. "this week" / "last week" resolve
-  from today's date. Default: the current week.
+- **Week** — the Mon–Sun the timesheet covers. Accept a named week or an explicit
+  relative phrase such as "this week" / "last week", resolved from today's
+  date. If absent, ask and wait.
 - **Work days + hours** — per day start/end. Default: Mon–Fri 09:00–17:00.
 - **Breaks** — default: one 12:00–13:00 lunch (confirm if it matters to the total).
 - **Attendance type** — default: "Standard".
@@ -50,11 +51,11 @@ State the assumed defaults you used; do not silently invent non-default values.
 ## Build the input
 
 Write the `timesheet_run` input file the fill action reads. Its exact shape is
-owned by the runbook input schema — read it live (`browser-use runbook schema` /
-the fill-week runbook's declared inputs), do not restate fields here (they drift).
-Write the file under the runtime private-input root as an owner-only file. Compute
-dates from the named week; map "9 to 5" → 09:00/17:00. If unsure of the shape,
-copy the structure of the last committed `timesheet_run.json` example.
+owned by the runbook input schema — read it live with `browser-use runbook show
+--service fasttrack --flow fill-week --json`; do not restate fields here (they
+drift). If the active schema is unavailable, stop without writing inputs. Write
+the file under the runtime private-input root as an owner-only file. Compute
+dates from the named week; map "9 to 5" → 09:00/17:00.
 
 ## Run card
 
@@ -97,5 +98,7 @@ approve/continuation commands; do not duplicate them here.
 ## First safe action
 
 Resolve the target week from the user's words + today's date, list the defaults
-you will assume, ask one question only if the week or hours are missing/ambiguous,
-then build the input and run the fill card. Do not submit in the same step as fill.
+you will assume, and ask one question only if the week or hours are
+missing/ambiguous. Build the input, then obtain explicit confirmation immediately
+before running the fill card. Repeat that confirmation before every retry or
+later fill. Do not submit in the same step as fill.

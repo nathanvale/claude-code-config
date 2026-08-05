@@ -13,8 +13,11 @@ Use `ghh`. Never call `gh auth switch`; it changes shared state and races with c
 
 1. Require the exact GitHub account.
 2. Verify it with `ghh check --account <account> --json`.
-3. Run GitHub CLI work with `ghh exec --account <account> -- <gh arguments...>`.
-4. Pin the repository with `-R <owner>/<repo>` when the current directory does not prove the target.
+3. Classify the forwarded command before execution. For a repository write,
+   require `-R <owner>/<repo>` when supported or prove the exact target matches
+   `git remote get-url origin`. For a destructive operation, obtain explicit
+   confirmation before execution.
+4. Run GitHub CLI work with `ghh exec --account <account> -- <gh arguments...>`.
 5. Verify the returned owner, actor, or repository when the operation is identity-sensitive.
 
 Example:
@@ -30,9 +33,13 @@ ghh exec --account nathanvale -- pr view 309 -R nathanvale/claude-code-config
 Before a Git network write:
 
 1. Inspect the exact fetch or push URL the operation will use.
-2. For SSH, run `ssh -T -o BatchMode=yes git@<host>` and require `Hi <account>!`.
-3. Accept exit `1` only when the GitHub greeting names the exact account; GitHub provides no shell.
-4. For HTTPS, stop unless another owner proves the credential identity.
+2. For SSH, resolve aliases with `ssh -G <host>` and require the resulting
+   hostname to match a user-approved GitHub or enterprise host. Stop on any
+   other destination.
+3. Run `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes git@<host>` and
+   require `Hi <account>!`.
+4. Accept exit `1` only when the GitHub greeting names the exact account; GitHub provides no shell.
+5. For HTTPS, stop unless another owner proves the credential identity.
 
 Never rewrite a remote as part of account selection.
 
