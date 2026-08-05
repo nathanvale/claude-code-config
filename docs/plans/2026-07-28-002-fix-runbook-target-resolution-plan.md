@@ -8,9 +8,18 @@ artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
 deepened: 2026-07-28
+status: completed
+completed: 2026-07-28
+last_updated: 2026-08-05
 ---
 
 # Browser Use runbook target resolution - Plan
+
+## Current Status
+
+Completed by PR #268 and retained through `285b4948`. Omitted targets resolve exactly one admissible Agent Browser page, persist an opaque binding before effects, independently resolve the CDP target for authentication, re-resolve the adapter binding before business dispatch, and refuse ambiguity, drift, legacy-unbound resume, and concurrent redispatch. Current regression owners are `browser-use-agent-browser.test.ts`, `browser-use-run-model.test.ts`, `browser-use-wave3-dispatch.test.ts`, and `browser-use-platform-process-boundary.test.ts`.
+
+The operator-gated live proof was recorded separately in the Daily Driver Acceptance Ledger. Production Session Identity Proof remains outside this target-resolution plan.
 
 ## Goal Capsule
 
@@ -275,10 +284,10 @@ sequenceDiagram
 
 **Done**
 
-- [ ] Resolution is deterministic and fresh.
-- [ ] Raw ids remain input-only and absent from durable state, discovery, and public projections.
-- [ ] Neutral admission is runbook-specific and narrow.
-- [ ] Binding re-resolution never selects a replacement.
+- [x] Resolution is deterministic and fresh.
+- [x] Raw ids remain input-only and absent from durable state, discovery, and public projections.
+- [x] Neutral admission is runbook-specific and narrow.
+- [x] Binding re-resolution never selects a replacement.
 
 ### U2. Persist target identity and order target, auth, and execution
 
@@ -335,11 +344,11 @@ sequenceDiagram
 
 **Done**
 
-- [ ] Binding persists privately before effects.
-- [ ] Progress persists independently from repair.
-- [ ] Resume retains exact target identity.
-- [ ] Target proof precedes auth and mutation.
-- [ ] Every failure records inspectable run truth and one next safe action.
+- [x] Binding persists privately before effects.
+- [x] Progress persists independently from repair.
+- [x] Resume retains exact target identity.
+- [x] Target proof precedes auth and mutation.
+- [x] Every failure records inspectable run truth and one next safe action.
 
 ### U3. Align CLI contracts and prove the real process boundary
 
@@ -374,9 +383,9 @@ sequenceDiagram
 
 **Done**
 
-- [ ] CLI surfaces describe actual semantics.
-- [ ] The prior false-green test cannot pass on exit 20.
-- [ ] Process-boundary proof covers omission and repair failures.
+- [x] CLI surfaces describe actual semantics.
+- [x] The prior false-green test cannot pass on exit 20.
+- [x] Process-boundary proof covers omission and repair failures.
 
 ---
 
@@ -476,24 +485,24 @@ sequenceDiagram
 
 ## Definition of Done
 
-- [ ] Omitted `--tab` auto-resolves exactly one admissible target.
-- [ ] Explicit `--tab` remains an exact adapter-id override.
-- [ ] Fresh `about:blank` works only for a first remaining allowed `open`.
-- [ ] Zero and multiple candidates fail before auth or mutation.
-- [ ] Opaque target identity persists privately before effects.
-- [ ] Runbook progress persists independently from repair continuation.
-- [ ] New success creates bound state; initial cardinality failure creates no run.
-- [ ] Legacy unbound nonterminal runs fail closed.
-- [ ] Concurrent resumes produce one dispatch.
-- [ ] Resume reuses the same target and never substitutes.
-- [ ] Race, disappearance, and origin drift fail closed.
-- [ ] Completed resume bypasses target and auth work.
-- [ ] Confidential auth follows destination proof and never enters durable or public output.
-- [ ] Target resolution through execution retains the same handoff evidence and immutable target mode.
-- [ ] Initial target failures return one retry continuation; bound-run failures record one repair continuation.
-- [ ] Raw adapter ids remain explicit input only and never enter durable state, discovery, or projections.
-- [ ] Old binaries reject the new target/progress payload format before execution.
-- [ ] CLI metadata, help, parser, runtime, and process tests agree.
-- [ ] The permissive exit 0 or 20 assertion is removed.
-- [ ] Focused, package, workspace, and available live gates pass.
-- [ ] No dead experimental code or unrelated refactor remains.
+- [x] Omitted `--tab` auto-resolves exactly one admissible target.
+- [x] Explicit `--tab` remains an exact adapter-id override.
+- [x] Fresh `about:blank` works only for a first remaining allowed `open`.
+- [x] Zero and multiple candidates fail before auth or mutation.
+- [x] Opaque target identity persists privately before effects.
+- [x] Runbook progress persists independently from repair continuation.
+- [x] New success creates bound state; initial cardinality failure creates no run.
+- [x] Legacy unbound nonterminal runs fail closed.
+- [x] Concurrent resumes produce one dispatch.
+- [x] Resume reuses the same target and never substitutes.
+- [x] Race, disappearance, and origin drift fail closed.
+- [x] Completed resume bypasses target and auth work.
+- [x] Confidential auth follows destination proof and never enters durable or public output.
+- [x] Target resolution through execution retains the same handoff evidence and immutable target mode.
+- [x] Initial target failures return one retry continuation; bound-run failures record one repair continuation.
+- [x] Raw adapter ids remain explicit input only and never enter durable state, discovery, or projections.
+- [x] Old binaries reject the new target/progress payload format before execution.
+- [x] CLI metadata, help, parser, runtime, and process tests agree.
+- [x] The permissive exit 0 or 20 assertion is removed.
+- [x] Focused, package, workspace, and available live gates pass.
+- [x] No dead experimental code or unrelated refactor remains.

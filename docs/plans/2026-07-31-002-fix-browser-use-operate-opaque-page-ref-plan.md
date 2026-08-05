@@ -6,9 +6,18 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
+status: completed
+completed: 2026-07-31
+last_updated: 2026-08-05
 ---
 
 # Browser Use operate opaque adapter page ref - Plan
+
+## Current Status
+
+Completed by PR #284 at `eb043b53`. The harness carries adapter page refs opaquely, lane owners interpret their own identifiers, and the Agent Browser executor accepts its native string tab handle without teaching shared code its shape. Raw adapter refs remain transient and absent from public and durable projections; CDP-sensitive work still resolves a separate browser-level target identity.
+
+The operator-gated Agent Browser snapshot proof and hermetic lane matrix are recorded in the Daily Driver Acceptance Ledger. This plan has no remaining implementation work.
 
 ## Goal Capsule
 
