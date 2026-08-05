@@ -164,8 +164,8 @@ function patternHasUnsafeBacktrackingShape(pattern: string): boolean {
  */
 export type BrowserUseRunbookValueSchema =
 	| { kind: "string"; min_length?: number; max_length?: number; pattern?: string; default?: string }
-	| { kind: "number"; minimum?: number; maximum?: number; integer?: boolean; default?: number }
-	| { kind: "boolean"; default?: boolean }
+	| { kind: "number"; minimum?: number; exclusive_minimum?: number; maximum?: number; integer?: boolean; default?: number }
+	| { kind: "boolean"; constant?: boolean; default?: boolean }
 	| { kind: "enum"; values: readonly string[]; default?: string }
 	| { kind: "date"; default?: string }
 	| { kind: "uuid"; default?: string }
@@ -505,6 +505,16 @@ function validateValueSchema(
 		}
 		case "number": {
 			if (
+				[schema.minimum, schema.exclusive_minimum, schema.maximum].some(
+					(bound) => bound !== undefined && !Number.isFinite(bound),
+				)
+			) {
+				issues.push({
+					code: "runbook_input_schema_invalid",
+					message: `${at}: number schema bounds must be finite.`,
+				});
+			}
+			if (
 				schema.minimum !== undefined &&
 				schema.maximum !== undefined &&
 				schema.minimum > schema.maximum
@@ -512,6 +522,16 @@ function validateValueSchema(
 				issues.push({
 					code: "runbook_input_schema_invalid",
 					message: `${at}: number schema minimum exceeds its maximum.`,
+				});
+			}
+			if (
+				schema.exclusive_minimum !== undefined &&
+				schema.maximum !== undefined &&
+				schema.exclusive_minimum >= schema.maximum
+			) {
+				issues.push({
+					code: "runbook_input_schema_invalid",
+					message: `${at}: number schema exclusive_minimum leaves no value at or below maximum.`,
 				});
 			}
 			if (schema.default !== undefined && !valueMatchesSchema(schema.default, schema)) {
@@ -523,10 +543,20 @@ function validateValueSchema(
 			return;
 		}
 		case "boolean": {
-			if (schema.default !== undefined && typeof schema.default !== "boolean") {
+			if (schema.constant !== undefined && typeof schema.constant !== "boolean") {
+				issues.push({
+					code: "runbook_input_schema_invalid",
+					message: `${at}: boolean constant is not a boolean.`,
+				});
+			}
+			if (
+				schema.default !== undefined &&
+				(typeof schema.default !== "boolean" ||
+					(schema.constant !== undefined && schema.default !== schema.constant))
+			) {
 				issues.push({
 					code: "runbook_input_default_invalid",
-					message: `${at}: boolean default is not a boolean.`,
+					message: `${at}: boolean default does not satisfy its own schema.`,
 				});
 			}
 			return;
@@ -655,11 +685,15 @@ export function valueMatchesSchema(
 			if (typeof value !== "number" || !Number.isFinite(value)) return false;
 			if (schema.integer === true && !Number.isInteger(value)) return false;
 			if (schema.minimum !== undefined && value < schema.minimum) return false;
+			if (schema.exclusive_minimum !== undefined && value <= schema.exclusive_minimum) return false;
 			if (schema.maximum !== undefined && value > schema.maximum) return false;
 			return true;
 		}
 		case "boolean":
-			return typeof value === "boolean";
+			return (
+				typeof value === "boolean" &&
+				(schema.constant === undefined || value === schema.constant)
+			);
 		case "enum":
 			return typeof value === "string" && schema.values.includes(value);
 		case "date":
@@ -1095,8 +1129,8 @@ function inspectSchemaKeys(value: unknown, path: string, issues: BrowserUseRunbo
 	if (!isPlainObject(value) || typeof value.kind !== "string") return;
 	const byKind: Readonly<Record<string, readonly string[]>> = {
 		string: ["kind", "min_length", "max_length", "pattern", "default"],
-		number: ["kind", "minimum", "maximum", "integer", "default"],
-		boolean: ["kind", "default"],
+		number: ["kind", "minimum", "exclusive_minimum", "maximum", "integer", "default"],
+		boolean: ["kind", "constant", "default"],
 		enum: ["kind", "values", "default"],
 		date: ["kind", "default"],
 		uuid: ["kind", "default"],
@@ -1186,7 +1220,7 @@ function parseValueSchema(
 	const optNumber = (v: unknown): number | undefined =>
 		v === undefined ? undefined : typeof v === "number" ? v : Number.NaN;
 	const badNum = (v: number | undefined): boolean =>
-		v !== undefined && Number.isNaN(v);
+		v !== undefined && !Number.isFinite(v);
 	switch (kind) {
 		case "string": {
 			if (!hasOnlyKeys(raw, ["kind", "min_length", "max_length", "pattern", "default"])) return undefined;
@@ -1204,25 +1238,29 @@ function parseValueSchema(
 			};
 		}
 		case "number": {
-			if (!hasOnlyKeys(raw, ["kind", "minimum", "maximum", "integer", "default"])) return undefined;
+			if (!hasOnlyKeys(raw, ["kind", "minimum", "exclusive_minimum", "maximum", "integer", "default"])) return undefined;
 			const min = optNumber(raw.minimum);
+			const exclusiveMin = optNumber(raw.exclusive_minimum);
 			const max = optNumber(raw.maximum);
-			if (badNum(min) || badNum(max)) return undefined;
+			if (badNum(min) || badNum(exclusiveMin) || badNum(max)) return undefined;
 			if (raw.integer !== undefined && typeof raw.integer !== "boolean") return undefined;
 			if (raw.default !== undefined && typeof raw.default !== "number") return undefined;
 			return {
 				kind: "number",
 				...(min !== undefined ? { minimum: min } : {}),
+				...(exclusiveMin !== undefined ? { exclusive_minimum: exclusiveMin } : {}),
 				...(max !== undefined ? { maximum: max } : {}),
 				...(typeof raw.integer === "boolean" ? { integer: raw.integer } : {}),
 				...(typeof raw.default === "number" ? { default: raw.default } : {}),
 			};
 		}
 		case "boolean": {
-			if (!hasOnlyKeys(raw, ["kind", "default"])) return undefined;
+			if (!hasOnlyKeys(raw, ["kind", "constant", "default"])) return undefined;
+			if (raw.constant !== undefined && typeof raw.constant !== "boolean") return undefined;
 			if (raw.default !== undefined && typeof raw.default !== "boolean") return undefined;
 			return {
 				kind: "boolean",
+				...(typeof raw.constant === "boolean" ? { constant: raw.constant } : {}),
 				...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
 			};
 		}
