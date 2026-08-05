@@ -21,8 +21,8 @@ Source: Browser Use four-week survey compounds, PR #303 merge commit `41a0b606`,
 - [x] Review `CONCEPTS.md`.
 - [x] Review the AGENTS discoverability change.
 - [x] Run compound validators again.
-- [ ] Create a dedicated documentation branch or PR.
-- [ ] Commit and publish only after approval.
+- [x] Create a dedicated documentation branch or PR.
+- [x] Commit and publish only after approval.
 
 ## 2. Close completed plans
 
@@ -108,4 +108,4 @@ Source: Browser Use four-week survey compounds, PR #303 merge commit `41a0b606`,
 - [x] Confirm plans, ledger, concepts, and solutions agree.
 - [x] Run skill-feedback closeout.
 - [x] Review the final diff.
-- [ ] Request commit and publication approval.
+- [x] Request commit and publication approval.
