@@ -1,0 +1,234 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "oncore",
+  "flow_id": "fill",
+  "flow_name": "fill",
+  "version": "1",
+  "summary": "Open, fill, and verify one OnCore week as persisted draft rows. For seven rows, the fill action can wait approximately 175 seconds in the worst case; set the outer timeout accordingly. Final approval stays human-controlled.",
+  "allowed_origins": [
+    "https://iteraterecruitment.oncoreservices.com"
+  ],
+  "auth_context_ref": "interactive-login",
+  "inputs": [
+    {
+      "id": "timesheet_run",
+      "summary": "The selected OnCore week, target timesheet, and expected rows.",
+      "required": true,
+      "schema": {
+        "kind": "object",
+        "fields": {
+          "envelope": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "target_account": {
+                  "required": true,
+                  "schema": {
+                    "kind": "string",
+                    "min_length": 1,
+                    "max_length": 256
+                  }
+                },
+                "timesheet_id": {
+                  "required": true,
+                  "schema": {
+                    "kind": "string",
+                    "min_length": 1,
+                    "max_length": 32,
+                    "pattern": "^\\d{1,32}$"
+                  }
+                },
+                "period_start": {
+                  "required": true,
+                  "schema": {
+                    "kind": "date"
+                  }
+                },
+                "period_end": {
+                  "required": true,
+                  "schema": {
+                    "kind": "date"
+                  }
+                },
+                "selected_work_dates": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 7,
+                    "items": {
+                      "kind": "date"
+                    }
+                  }
+                },
+                "expected_aggregate": {
+                  "required": true,
+                  "schema": {
+                    "kind": "object",
+                    "fields": {
+                      "unit": {
+                        "required": true,
+                        "schema": {
+                          "kind": "enum",
+                          "values": [
+                            "units"
+                          ]
+                        }
+                      },
+                      "value": {
+                        "required": true,
+                        "schema": {
+                          "kind": "number",
+                          "minimum": 0,
+                          "maximum": 7
+                        }
+                      }
+                    }
+                  }
+                },
+                "mutation_mode": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "prepare-draft"
+                    ]
+                  }
+                },
+                "final_action": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "human-submit"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "payload": {
+            "required": true,
+            "schema": {
+              "kind": "object",
+              "fields": {
+                "portal": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "oncore"
+                    ]
+                  }
+                },
+                "rate_value": {
+                  "required": true,
+                  "schema": {
+                    "kind": "enum",
+                    "values": [
+                      "45548822362"
+                    ]
+                  }
+                },
+                "require_empty_grid": {
+                  "required": true,
+                  "schema": {
+                    "kind": "boolean",
+                    "constant": true
+                  }
+                },
+                "rows": {
+                  "required": true,
+                  "schema": {
+                    "kind": "array",
+                    "min_items": 1,
+                    "max_items": 7,
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "date": {
+                          "required": true,
+                          "schema": {
+                            "kind": "date"
+                          }
+                        },
+                        "units": {
+                          "required": true,
+                          "schema": {
+                            "kind": "number",
+                            "exclusive_minimum": 0,
+                            "maximum": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://iteraterecruitment.oncoreservices.com/pages/ContractorSummary.aspx",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://iteraterecruitment.oncoreservices.com/pages/ContractorSummary.aspx"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "oncore-open-week",
+      "expected_digest": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
+      "inputs": {
+        "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
+        "period_start": "{{timesheet_run.envelope.period_start}}",
+        "period_end": "{{timesheet_run.envelope.period_end}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "oncore-fill-week",
+      "expected_digest": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
+      "inputs": {
+        "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
+        "period_start": "{{timesheet_run.envelope.period_start}}",
+        "period_end": "{{timesheet_run.envelope.period_end}}",
+        "rate_value": "{{timesheet_run.payload.rate_value}}",
+        "require_empty_grid": "{{timesheet_run.payload.require_empty_grid}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": false
+    },
+    {
+      "kind": "action",
+      "action_id": "oncore-verify-filled",
+      "expected_digest": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
+      "inputs": {
+        "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
+        "period_start": "{{timesheet_run.envelope.period_start}}",
+        "period_end": "{{timesheet_run.envelope.period_end}}",
+        "rate_value": "{{timesheet_run.payload.rate_value}}",
+        "expected_total_units": "{{timesheet_run.envelope.expected_aggregate.value}}",
+        "rows": "{{timesheet_run.payload.rows}}"
+      }
+    }
+  ]
+}

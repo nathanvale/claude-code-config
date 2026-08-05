@@ -463,6 +463,99 @@ describe("v2 typed-input value schemas (R9)", () => {
 		).toBe(false);
 	});
 
+	test("valueMatchesSchema enforces exclusive numeric minima and boolean constants", () => {
+		const units = {
+			kind: "number" as const,
+			exclusive_minimum: 0,
+			maximum: 1,
+		};
+		expect(valueMatchesSchema(0, units)).toBe(false);
+		expect(valueMatchesSchema(0.5, units)).toBe(true);
+		expect(valueMatchesSchema(1, units)).toBe(true);
+		expect(valueMatchesSchema(false, { kind: "boolean", constant: true })).toBe(
+			false,
+		);
+		expect(valueMatchesSchema(true, { kind: "boolean", constant: true })).toBe(
+			true,
+		);
+	});
+
+	test("accepts constraint-satisfying defaults", () => {
+		expect(
+			validateRunbook(
+				inputSchema({
+					kind: "object",
+					fields: {
+						units: {
+							required: false,
+							schema: {
+								kind: "number",
+								exclusive_minimum: 0,
+								maximum: 1,
+								default: 0.5,
+							},
+						},
+						empty: {
+							required: false,
+							schema: { kind: "boolean", constant: true, default: true },
+						},
+					},
+				}),
+			),
+		).toEqual([]);
+	});
+
+	test("parses exclusive numeric minima and boolean constants without dropping them", () => {
+		const raw = JSON.parse(
+			JSON.stringify(
+				inputSchema({
+					kind: "object",
+					fields: {
+						units: {
+							required: true,
+							schema: {
+								kind: "number",
+								exclusive_minimum: 0,
+								maximum: 1,
+							},
+						},
+						empty: {
+							required: true,
+							schema: { kind: "boolean", constant: true },
+						},
+					},
+				}),
+			),
+		);
+		const parsed = parseRunbookRecord(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.runbook.inputs[0]?.schema).toEqual(raw.inputs[0].schema);
+	});
+
+	test.each([
+		[
+			"non-finite exclusive minimum",
+			{ kind: "number", exclusive_minimum: Number.POSITIVE_INFINITY },
+			"runbook_input_schema_invalid",
+		],
+		[
+			"empty exclusive range",
+			{ kind: "number", exclusive_minimum: 1, maximum: 1 },
+			"runbook_input_schema_invalid",
+		],
+		[
+			"constant-mismatched default",
+			{ kind: "boolean", constant: true, default: false },
+			"runbook_input_default_invalid",
+		],
+	] as const)("rejects malformed constraints: %s", (_label, schema, code) => {
+		const issues = validateRunbook(
+			inputSchema(schema as BrowserUseRunbookValueSchema),
+		);
+		expect(issues.map((issue) => issue.code)).toContain(code);
+	});
+
 	test("valueMatchesSchema resolves a discriminated union by its discriminant", () => {
 		const schema: BrowserUseRunbookValueSchema = {
 			kind: "discriminated-union",
@@ -1082,6 +1175,11 @@ describe("runbook discovery over the XDG data root", () => {
 				}),
 				expect.objectContaining({
 					service_id: "oncore",
+					flow_id: "fill",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "oncore",
 					flow_id: "timesheet-snapshot-verify",
 					health: "healthy",
 				}),
@@ -1305,7 +1403,7 @@ const FASTTRACK_TIMESHEET_RUN = {
 };
 
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the seven daily-driver runbooks", async () => {
+	test("ships exactly the eight daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1316,6 +1414,7 @@ describe("shipped runbooks root resolution", () => {
 				"fasttrack/login",
 				"fasttrack/submit",
 				"matest/development-snapshot-verify",
+				"oncore/fill",
 				"oncore/timesheet-snapshot-verify",
 				"unifi/login",
 				"unifi/login-screen-verify",

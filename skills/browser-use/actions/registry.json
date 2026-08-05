@@ -1572,6 +1572,503 @@
           "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
         }
       ]
+    },
+    {
+      "asset_path": "assets/26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e.js",
+      "record": {
+        "action_id": "oncore-fill-week",
+        "asset_id": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
+        "expected_digest": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "framework-runtime"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "rate_value": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "45548822362"
+                ]
+              }
+            },
+            "require_empty_grid": {
+              "required": true,
+              "schema": {
+                "kind": "boolean",
+                "constant": true
+              }
+            },
+            "rows": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "min_items": 1,
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10,
+                        "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "exclusive_minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "inserted_days": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "date_str": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "row_count_after_each_insert": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "row_count": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "integer": true,
+                        "minimum": 0,
+                        "maximum": 7
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "row_count": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "integer": true,
+                "minimum": 0,
+                "maximum": 7
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "tr.rgRow, tr.rgAltRow"
+        },
+        "source_provenance": "authored:oncore-fill-week",
+        "promotion_receipt": null
+      }
+    },
+    {
+      "asset_path": "assets/3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8.js",
+      "record": {
+        "action_id": "oncore-open-week",
+        "asset_id": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
+        "expected_digest": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "mutation",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read",
+          "dom-write",
+          "dom-events",
+          "same-origin-navigation"
+        ],
+        "containment": "none",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "ok": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "mode": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "already_open",
+                  "timesheet_link_clicked"
+                ]
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "#ctl00_MainContent_TimesheetWorkGrid_ctl00"
+        },
+        "source_provenance": "authored:oncore-open-week",
+        "promotion_receipt": null
+      }
+    },
+    {
+      "asset_path": "assets/b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16.js",
+      "record": {
+        "action_id": "oncore-verify-filled",
+        "asset_id": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
+        "expected_digest": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
+        "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
+        "effect_class": "read",
+        "audited_capabilities": [
+          "dom-query",
+          "dom-read"
+        ],
+        "containment": "read-only-observation",
+        "input_schema": {
+          "kind": "object",
+          "fields": {
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32,
+                "pattern": "\\d{1,32}"
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10,
+                "pattern": "\\d{4}-\\d{2}-\\d{2}"
+              }
+            },
+            "rate_value": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "45548822362"
+                ]
+              }
+            },
+            "expected_total_units": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
+            "rows": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "min_items": 1,
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10,
+                        "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "exclusive_minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "result_schema": {
+          "kind": "object",
+          "fields": {
+            "proof_schema": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "OncoreFillTimesheetProofV1"
+                ]
+              }
+            },
+            "timesheet_id": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 32
+              }
+            },
+            "period_start": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "period_end": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 10
+              }
+            },
+            "row_count": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "integer": true,
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
+            "total_units": {
+              "required": true,
+              "schema": {
+                "kind": "number",
+                "minimum": 0,
+                "maximum": 7
+              }
+            },
+            "entries": {
+              "required": true,
+              "schema": {
+                "kind": "array",
+                "max_items": 7,
+                "items": {
+                  "kind": "object",
+                  "fields": {
+                    "date": {
+                      "required": true,
+                      "schema": {
+                        "kind": "string",
+                        "max_length": 10
+                      }
+                    },
+                    "rate_value": {
+                      "required": true,
+                      "schema": {
+                        "kind": "enum",
+                        "values": [
+                          "45548822362"
+                        ]
+                      }
+                    },
+                    "units": {
+                      "required": true,
+                      "schema": {
+                        "kind": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "submitted": {
+              "required": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            },
+            "editable_state": {
+              "required": true,
+              "schema": {
+                "kind": "enum",
+                "values": [
+                  "editable"
+                ]
+              }
+            },
+            "proof_observed_at": {
+              "required": true,
+              "schema": {
+                "kind": "string",
+                "max_length": 64
+              }
+            }
+          }
+        },
+        "result_sensitivity": "low",
+        "required_postcondition": {
+          "kind": "element-visible",
+          "selector": "tr.rgRow, tr.rgAltRow"
+        },
+        "source_provenance": "authored:oncore-verify-filled",
+        "promotion_receipt": null
+      }
     }
   ]
 }
