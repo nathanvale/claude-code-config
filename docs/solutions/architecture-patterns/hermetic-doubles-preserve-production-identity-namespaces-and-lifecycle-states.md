@@ -184,21 +184,26 @@ The test keeps the production-relevant lock alive while the owner reads the data
 
 ```ts
 for (const scenario of [
-  { authority: "current", renewal: "not-needed", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
-  { authority: "expired-session-identity-proof", renewal: "available", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
-  { authority: "expired-session-identity-proof", renewal: "unavailable", durableState: "approved-pre-dispatch", expectedOutcome: "session-identity-proof-unavailable", expectedDispatches: 0 },
-  { authority: "expired-human-identity-attestation", renewal: "available", durableState: "approved-pre-dispatch", expectedOutcome: "confirmed", expectedDispatches: 1 },
-  { authority: "expired-human-identity-attestation", renewal: "unavailable", durableState: "approved-pre-dispatch", expectedOutcome: "human-identity-attestation-required", expectedDispatches: 0 },
-  { authority: "current", renewal: "not-needed", durableState: "adapter-changed", expectedOutcome: "attestation_lane_changed", expectedDispatches: 0 },
-  { authority: "current", renewal: "not-needed", durableState: "handoff-changed", expectedOutcome: "attestation_handoff_changed", expectedDispatches: 0 },
-  { authority: "current", renewal: "not-needed", durableState: "confirmed", expectedOutcome: "confirmed", expectedDispatches: 0 },
-  { authority: "current", renewal: "not-needed", durableState: "unknown", expectedOutcome: "unknown", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "ready", bindingMismatch: null, expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-session-identity-proof", renewal: "available", durableState: "ready", bindingMismatch: null, expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-session-identity-proof", renewal: "unavailable", durableState: "ready", bindingMismatch: null, expectedOutcome: "session-identity-proof-unavailable", expectedDispatches: 0 },
+  { authority: "expired-human-identity-attestation", renewal: "available", durableState: "ready", bindingMismatch: null, expectedOutcome: "confirmed", expectedDispatches: 1 },
+  { authority: "expired-human-identity-attestation", renewal: "unavailable", durableState: "ready", bindingMismatch: null, expectedOutcome: "human-identity-attestation-required", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "ready", bindingMismatch: "attestation_lane_changed", expectedOutcome: "attestation_lane_changed", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", durableState: "ready", bindingMismatch: "attestation_handoff_changed", expectedOutcome: "attestation_handoff_changed", expectedDispatches: 0 },
 ]) {
   await assertResumeContract(scenario);
 }
+
+for (const scenario of [
+  { authority: "current", renewal: "not-needed", taskTerminalState: "confirmed", externalEffect: "none", expectedOutcome: "confirmed", expectedDispatches: 0 },
+  { authority: "current", renewal: "not-needed", taskTerminalState: "unknown", externalEffect: "unknown", expectedOutcome: "unknown", expectedDispatches: 0 },
+]) {
+  await assertTerminalTaskResumeIsNoop(scenario);
+}
 ```
 
-The transaction assertion must name the authority state, whether renewal is available, the durable state before resume, the exact returned outcome, and the dispatch count together.
+The authentication assertion must name the authority state, whether renewal is available, the persisted auth-summary state before resume, any binding mismatch, the exact returned outcome, and the dispatch count together. Terminal task truth is a separate no-op contract: `unknown` means a mutation may have taken effect, so resume must not retry it.
 
 ## Related
 

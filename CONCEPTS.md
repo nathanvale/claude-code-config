@@ -32,7 +32,7 @@ The composition boundary separating production Browser Use authority owners from
 Machine-readable evidence relating a current browser session to redacted subject, account, and tenant references.
 
 ### Human Identity Attestation
-A presence-backed signed human claim about the identity and mutation target associated with a Browser Use run. It is distinct from machine Session Identity Proof.
+A presence-backed signed human claim about the identity and mutation target for one Browser Use run, not reusable across runs. It is distinct from machine Session Identity Proof.
 
 ## Authoritative owners
 - Authentication recognition and admission: [`browser-use-login-engine.ts`](skills/browser-use/src/browser-use-login-engine.ts) and [`browser-use-runbook-auth.ts`](skills/browser-use/src/browser-use-runbook-auth.ts); checks: [`browser-use-login-engine.test.ts`](skills/browser-use/src/browser-use-login-engine.test.ts) and [`browser-use-runbook-auth.test.ts`](skills/browser-use/src/browser-use-runbook-auth.test.ts).
