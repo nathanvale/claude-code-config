@@ -60,7 +60,9 @@ export function parseArgs(args: string[]): ParsedArgs {
 			continue
 		}
 		const value = args[index + 1]
-		if (!value) throw new UsageError(`${arg} requires a value`)
+		if (!value || value.startsWith("-")) {
+			throw new UsageError(`${arg} requires a value`)
+		}
 		index += 1
 		switch (arg) {
 			case "--repo":
@@ -89,7 +91,7 @@ export function parseArgs(args: string[]): ParsedArgs {
 	if (!parsed.help && parsed.command === "extract" && !parsed.session) {
 		throw new UsageError("--session is required for extract")
 	}
-	if (parsed.command === "extract" && parsed.terms.length > 0) {
+	if (!parsed.help && parsed.command === "extract" && parsed.terms.length > 0) {
 		throw new UsageError("--term is valid only for scan")
 	}
 	return parsed

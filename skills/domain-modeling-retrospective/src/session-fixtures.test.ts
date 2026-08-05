@@ -169,10 +169,78 @@ describe("repository session discovery", () => {
 
 	test("rejects a session from another repository", async () => {
 		const { repo, roots } = await fixture()
-		expect(
+		await expect(
 			extractRepositorySession({
 				repoPath: repo,
 				opaqueId: "codex:codex-unrelated",
+				roots,
+			}),
+		).rejects.toMatchObject({ category: "session_not_found" })
+	})
+
+	test("rejects an existing same-name repository with a different remote", async () => {
+		const { repo, roots } = await fixture()
+		const otherRepo = resolve(
+			resolve(repo, ".."),
+			"other-owner",
+			"agent-plugin-template",
+		)
+		await mkdir(otherRepo, { recursive: true })
+		const init = Bun.spawnSync(["git", "init", "-q", otherRepo])
+		expect(init.exitCode).toBe(0)
+		const remote = Bun.spawnSync([
+			"git",
+			"-C",
+			otherRepo,
+			"remote",
+			"add",
+			"origin",
+			"git@github.com:other-owner/agent-plugin-template.git",
+		])
+		expect(remote.exitCode).toBe(0)
+		await Bun.write(
+			resolve(roots.claude, "agent-plugin-template", "same-name-session.jsonl"),
+			JSON.stringify({
+				type: "user",
+				sessionId: "claude-same-name-other-remote",
+				cwd: otherRepo,
+				message: { role: "user", content: "We decided on a different model." },
+			}),
+		)
+
+		await expect(
+			extractRepositorySession({
+				repoPath: repo,
+				opaqueId: "claude:claude-same-name-other-remote",
+				roots,
+			}),
+		).rejects.toMatchObject({ category: "session_not_found" })
+	})
+
+	test("rejects an existing same-name repository without a remote", async () => {
+		const { repo, roots } = await fixture()
+		const otherRepo = resolve(
+			resolve(repo, ".."),
+			"no-remote-owner",
+			"agent-plugin-template",
+		)
+		await mkdir(otherRepo, { recursive: true })
+		const init = Bun.spawnSync(["git", "init", "-q", otherRepo])
+		expect(init.exitCode).toBe(0)
+		await Bun.write(
+			resolve(roots.claude, "agent-plugin-template", "no-remote-session.jsonl"),
+			JSON.stringify({
+				type: "user",
+				sessionId: "claude-same-name-no-remote",
+				cwd: otherRepo,
+				message: { role: "user", content: "We decided on a separate model." },
+			}),
+		)
+
+		await expect(
+			extractRepositorySession({
+				repoPath: repo,
+				opaqueId: "claude:claude-same-name-no-remote",
 				roots,
 			}),
 		).rejects.toMatchObject({ category: "session_not_found" })

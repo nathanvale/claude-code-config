@@ -1,8 +1,5 @@
 import { CONTRACT_ID, SCHEMA_VERSION } from "./command-contract.ts"
-import {
-	resolveRepositoryRoot,
-	resolveRepositorySession,
-} from "./session-discovery.ts"
+import { resolveRepositorySession } from "./session-discovery.ts"
 import { parseNormalizedMessage, readJsonLines } from "./session-parser.ts"
 import type { ExtractResult, SessionRoots } from "./session-model.ts"
 
@@ -54,7 +51,7 @@ export async function extractRepositorySession(options: {
 	maxMessageChars?: number
 	roots?: SessionRoots
 }): Promise<ExtractResult> {
-	const metadata = await resolveRepositorySession({
+	const { metadata, repoRoot } = await resolveRepositorySession({
 		repoPath: options.repoPath,
 		opaqueId: options.opaqueId,
 		roots: options.roots,
@@ -91,7 +88,7 @@ export async function extractRepositorySession(options: {
 		: null
 	return {
 		action: "extract",
-		repo_root: resolveRepositoryRoot(options.repoPath),
+		repo_root: repoRoot,
 		side_effect: "none",
 		session: metadata.opaqueId,
 		source: metadata.source,

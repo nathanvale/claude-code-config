@@ -58,6 +58,22 @@ async function cliFixture(): Promise<{ repo: string }> {
 					content: [{ type: "input_text", text: "We decided Plugin is the domain term." }],
 				},
 			},
+			{
+				type: "response_item",
+				payload: {
+					type: "message",
+					role: "assistant",
+					content: [{ type: "output_text", text: "Plugin Payload is the canonical domain term." }],
+				},
+			},
+			{
+				type: "response_item",
+				payload: {
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "Record it." }],
+				},
+			},
 		]
 			.map((line) => JSON.stringify(line))
 			.join("\n"),
@@ -135,6 +151,34 @@ describe("domain retrospective CLI contract", () => {
 		).toMatchObject({ maxMessageChars: 500 })
 	})
 
+	test("missing flag values fail through the public CLI runtime", async () => {
+		let stdout = ""
+		const exitCode = await runCli(["scan", "--repo", "--json"], {
+			stdout: (text) => { stdout += text },
+			stderr: () => {},
+		})
+
+		expect(exitCode).toBe(2)
+		expect(JSON.parse(stdout)).toMatchObject({
+			status: "error",
+			error: {
+				category: "invalid_usage",
+				message: "--repo requires a value",
+			},
+		})
+	})
+
+	test("extract help ignores command-specific term validation", async () => {
+		let stdout = ""
+		const exitCode = await runCli(["extract", "--term", "Plugin", "--help"], {
+			stdout: (text) => { stdout += text },
+			stderr: () => {},
+		})
+
+		expect(exitCode).toBe(0)
+		expect(stdout).toBe(HELP_TEXT)
+	})
+
 	test("scan and extract succeed through the public CLI runtime", async () => {
 		const { repo } = await cliFixture()
 		let scanOutput = ""
@@ -162,6 +206,70 @@ describe("domain retrospective CLI contract", () => {
 		)
 		expect(extractExit).toBe(0)
 		expect(extractOutput).toContain("[0] user: We decided Plugin")
+	})
+
+	test("extract JSON preserves pagination and text-budget contracts", async () => {
+		const { repo } = await cliFixture()
+		const runExtract = async (offset: number): Promise<{
+			status: string
+			run_id: string
+			data: {
+				offset: number
+				next_offset: number | null
+				messages: Array<{ index: number; text: string; truncated: boolean }>
+				next_safe_action: string
+			}
+		}> => {
+			let stdout = ""
+			const exitCode = await runCli([
+				"extract",
+				"--repo",
+				repo,
+				"--session",
+				"codex:cli-session",
+				"--offset",
+				String(offset),
+				"--limit",
+				"2",
+				"--max-message-chars",
+				"12",
+				"--json",
+			], {
+				stdout: (text) => { stdout += text },
+				stderr: () => {},
+			})
+			expect(exitCode).toBe(0)
+			return JSON.parse(stdout)
+		}
+
+		const firstPage = await runExtract(0)
+		expect(firstPage).toMatchObject({
+			status: "ok",
+			data: {
+				offset: 0,
+				next_offset: 2,
+				messages: [
+					{ index: 0, truncated: true },
+					{ index: 1, truncated: true },
+				],
+			},
+		})
+		expect(firstPage.run_id).toBeString()
+		expect(firstPage.data.messages[0]?.text).toHaveLength(13)
+		expect(firstPage.data.messages[0]?.text.endsWith("…")).toBe(true)
+		expect(firstPage.data.next_safe_action).toContain("--offset 2")
+
+		const secondPage = await runExtract(firstPage.data.next_offset as number)
+		expect(secondPage).toMatchObject({
+			status: "ok",
+			data: {
+				offset: 2,
+				next_offset: null,
+				messages: [{ index: 2, text: "Record it.", truncated: false }],
+			},
+		})
+		expect(secondPage.run_id).toBeString()
+		expect(secondPage.data.next_safe_action).toContain("Reconcile explicit domain evidence")
 	})
 
 	test("usage failures are structured and repairable", async () => {

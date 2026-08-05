@@ -143,12 +143,11 @@ function matchRepository(
 		return metadataSlug === repo.remoteSlug ? "repository_url" : undefined
 	}
 
-	if (metadata.cwd) {
-		const components = resolve(metadata.cwd)
-			.split(sep)
-			.map((part) => part.toLowerCase())
-		if (components.includes(repo.name)) return "repository_name"
-	}
+	const nameMatches = metadata.cwd
+		? resolve(metadata.cwd)
+				.split(sep)
+				.some((part) => part.toLowerCase() === repo.name)
+		: false
 
 	if (metadata.cwd && existsSync(metadata.cwd)) {
 		let identity = gitIdentityCache.get(metadata.cwd)
@@ -165,20 +164,21 @@ function matchRepository(
 			gitIdentityCache.set(metadata.cwd, identity)
 		}
 		if (identity.commonDir && repo.commonDir) {
-			if (identity.commonDir === repo.commonDir) {
-				return "git_common_dir"
-			}
+			return identity.commonDir === repo.commonDir
+				? "git_common_dir"
+				: undefined
 		}
 		if (
 			identity.remoteSlug &&
-			repo.remoteSlug &&
-			identity.remoteSlug === repo.remoteSlug
+			repo.remoteSlug
 		) {
-			return "repository_url"
+			return identity.remoteSlug === repo.remoteSlug
+				? "repository_url"
+				: undefined
 		}
 	}
 
-	return undefined
+	return nameMatches ? "repository_name" : undefined
 }
 
 function countMatches(text: string, pattern: RegExp): number {
@@ -303,9 +303,14 @@ export async function discoverRepositorySessions(options: {
 	}
 
 	const candidates: SessionCandidate[] = []
-	for (const match of matches) {
+	for (let index = 0; index < matches.length; index += 8) {
+		const batch = matches.slice(index, index + 8)
 		candidates.push(
-			await scoreSession(match.metadata, match.matchKind, options.terms ?? []),
+			...await Promise.all(
+				batch.map((match) =>
+					scoreSession(match.metadata, match.matchKind, options.terms ?? []),
+				),
+			),
 		)
 	}
 	candidates.sort((left, right) => {
@@ -336,7 +341,7 @@ export async function discoverRepositorySessions(options: {
  * Resolve one opaque selector only when it belongs to the requested repository.
  *
  * @param options - Repository, opaque session selector, and optional test roots
- * @returns Private session metadata for bounded extraction
+ * @returns Private session metadata and the already-resolved repository root
  * @throws {SessionDiscoveryError} When the selector is absent or belongs elsewhere
  * @internal
  */
@@ -344,7 +349,7 @@ export async function resolveRepositorySession(options: {
 	repoPath: string
 	opaqueId: string
 	roots?: SessionRoots
-}): Promise<SessionMetadata> {
+}): Promise<{ metadata: SessionMetadata; repoRoot: string }> {
 	const repo = repositoryIdentity(options.repoPath)
 	const roots = options.roots ?? defaultSessionRoots()
 	const { files } = await sourceFiles(roots)
@@ -355,7 +360,9 @@ export async function resolveRepositorySession(options: {
 	for (const file of files) {
 		const metadata = await readMetadata(file.path, file.source)
 		if (!metadata || metadata.opaqueId !== options.opaqueId) continue
-		if (matchRepository(metadata, repo, gitIdentityCache)) return metadata
+		if (matchRepository(metadata, repo, gitIdentityCache)) {
+			return { metadata, repoRoot: repo.root }
+		}
 		break
 	}
 	throw new SessionDiscoveryError(
