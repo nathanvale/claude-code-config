@@ -67,7 +67,9 @@ Check in this order:
 2. Exact repository in the Codex GitHub App installation.
 3. Codex cloud setup for the repository.
 4. Code review enabled for the repository.
-5. Exact `@codex review` comment on the intended open PR.
-6. Automatic-review event matches the live trigger policy.
+5. Manual route: retained trigger comment ID and expected author on the intended
+   open PR.
+6. Manual route: Codex-authored eyes reaction or posted review.
+7. Automatic route: review event matches the live trigger policy.
 
 Keep diagnosis read-only. Name the first failed gate and the smallest repair.
