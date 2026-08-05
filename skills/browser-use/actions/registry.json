@@ -1636,6 +1636,7 @@
               "required": true,
               "schema": {
                 "kind": "array",
+                "min_items": 1,
                 "max_items": 7,
                 "items": {
                   "kind": "object",
@@ -1767,18 +1768,19 @@
       }
     },
     {
-      "asset_path": "assets/2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f.js",
+      "asset_path": "assets/3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8.js",
       "record": {
         "action_id": "oncore-open-week",
-        "asset_id": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
-        "expected_digest": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
+        "asset_id": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
+        "expected_digest": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
         "allowed_origin": "https://iteraterecruitment.oncoreservices.com",
         "effect_class": "mutation",
         "audited_capabilities": [
           "dom-query",
           "dom-read",
           "dom-write",
-          "dom-events"
+          "dom-events",
+          "same-origin-navigation"
         ],
         "containment": "none",
         "input_schema": {
@@ -1922,6 +1924,7 @@
               "required": true,
               "schema": {
                 "kind": "array",
+                "min_items": 1,
                 "max_items": 7,
                 "items": {
                   "kind": "object",

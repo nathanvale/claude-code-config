@@ -193,7 +193,12 @@ export type BrowserUseActionValueSchema =
 	  }
 	| { kind: "boolean"; constant?: boolean }
 	| { kind: "enum"; values: readonly string[] }
-	| { kind: "array"; items: BrowserUseActionValueSchema; max_items?: number }
+	| {
+			kind: "array";
+			items: BrowserUseActionValueSchema;
+			min_items?: number;
+			max_items?: number;
+	  }
 	| {
 			kind: "object";
 			fields: Readonly<
@@ -327,8 +332,12 @@ function arraySchemaIsValid(
 	state: ActionValueSchemaValidationState,
 ): boolean {
 	return (
-		objectHasOnlyKeys(record, ["kind", "items", "max_items"]) &&
+		objectHasOnlyKeys(record, ["kind", "items", "min_items", "max_items"]) &&
+		optionalBoundedInteger(record.min_items, ACTION_VALUE_MAX_ARRAY_LENGTH) &&
 		optionalBoundedInteger(record.max_items, ACTION_VALUE_MAX_ARRAY_LENGTH) &&
+		!((record.min_items as number | undefined) !== undefined &&
+			(record.max_items as number | undefined) !== undefined &&
+			(record.min_items as number) > (record.max_items as number)) &&
 		isValueSchemaNode(record.items, depth + 1, state)
 	);
 }
@@ -462,6 +471,9 @@ function arrayValueMatches(
 	schema: Extract<BrowserUseActionValueSchema, { kind: "array" }>,
 ): boolean {
 	if (!Array.isArray(value) || value.length > ACTION_VALUE_MAX_ARRAY_LENGTH) {
+		return false;
+	}
+	if (schema.min_items !== undefined && value.length < schema.min_items) {
 		return false;
 	}
 	if (schema.max_items !== undefined && value.length > schema.max_items) {

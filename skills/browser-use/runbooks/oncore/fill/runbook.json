@@ -189,7 +189,7 @@
     {
       "kind": "action",
       "action_id": "oncore-open-week",
-      "expected_digest": "2b59248581ff4666ee0fb81563b62f2d55fa5d0041d81652273ff032f321519f",
+      "expected_digest": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
       "inputs": {
         "timesheet_id": "{{timesheet_run.envelope.timesheet_id}}",
         "period_start": "{{timesheet_run.envelope.period_start}}",

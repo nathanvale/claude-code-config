@@ -809,6 +809,13 @@ describe("OnCore fill assets and runbook", () => {
 					id === "verify-filled" ? "read-only-observation" : "none",
 				result_sensitivity: "low",
 			});
+			if (id !== "open-week") {
+				expect(candidate).toMatchObject({
+					input_schema: {
+						fields: { rows: { schema: { min_items: 1, max_items: 7 } } },
+					},
+				});
+			}
 		}
 	});
 

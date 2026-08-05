@@ -154,6 +154,20 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			}) as never,
 		);
 		expect(boundedEntryKeys).toMatchObject({ ok: true, effect_class: "mutation" });
+		const anchorClick = validateReviewedActionCandidate(
+			candidate({
+				containment: "none",
+				required_postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.test/",
+				},
+				source: "async ({ inputs }) => { const targets = Array.from(document.querySelectorAll('a[href]')); const target = targets[0]; target.click(); return { ok: true } }",
+			}) as never,
+		);
+		expect(anchorClick).toMatchObject({
+			ok: true,
+			audited_capabilities: expect.arrayContaining(["same-origin-navigation"]),
+		});
 
 		const rejected: Array<[string, string]> = [
 			["bare local dynamic key", "async ({ inputs }) => { const payload = {}; const k = 'row'; payload[k] = document.querySelector('.row')?.textContent; return payload }"],
@@ -168,6 +182,7 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 			["transitive inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs; const entries = context; for (const [key, value] of Object.entries(entries)) entries[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
 			["transformed inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs.rows; const entries = context; for (const [key, value] of Object.entries(entries)) entries[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
 			["arbitrary entries key used on another object", "async ({ inputs }) => { const payload = {}; const context = getContext(); for (const [key, value] of Object.entries(context)) payload[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
+			["bounded entries key used on browser authority", "async ({ inputs }) => { const context = { defaultView: 1 }; for (const [key, value] of Object.entries(context)) document[key].location.href = value; return { rows: document.querySelectorAll('.row').length } }"],
 			["selected-index name spoof", "async ({ inputs }) => { const payload = { selectedIndex: 'row' }; return { value: payload[payload.selectedIndex], rows: document.querySelectorAll('.row').length } }"],
 			["inputs-derived alias", "async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }"],
 			["inputs-derived destructuring", "async ({ inputs }) => { const payload = {}; const { key } = inputs; payload[key] = document.querySelector('.row')?.textContent; return payload }"],

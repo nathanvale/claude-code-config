@@ -56,10 +56,26 @@ describe("action value schema constraints", () => {
 		expect(actionValueMatchesSchema(false, schema)).toBe(false);
 	});
 
+	test("array item bounds reject empty and oversized values", () => {
+		const schema = {
+			kind: "array" as const,
+			items: { kind: "string" as const },
+			min_items: 1,
+			max_items: 2,
+		};
+		expect(actionValueSchemaIsValid(schema)).toBe(true);
+		expect(actionValueMatchesSchema([], schema)).toBe(false);
+		expect(actionValueMatchesSchema(["one"], schema)).toBe(true);
+		expect(actionValueMatchesSchema(["one", "two", "three"], schema)).toBe(
+			false,
+		);
+	});
+
 	test.each([
 		["non-finite exclusive minimum", { kind: "number", exclusive_minimum: Number.POSITIVE_INFINITY }],
 		["empty exclusive range", { kind: "number", exclusive_minimum: 1, maximum: 1 }],
 		["non-boolean constant", { kind: "boolean", constant: "true" }],
+		["inverted array bounds", { kind: "array", items: { kind: "string" }, min_items: 2, max_items: 1 }],
 	])("rejects malformed constraints: %s", (_label, schema) => {
 		expect(actionValueSchemaIsValid(schema)).toBe(false);
 	});

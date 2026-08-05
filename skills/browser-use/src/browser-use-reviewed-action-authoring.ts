@@ -401,9 +401,12 @@ function computedPropertyCodeWithProvenIndexes(source: string): string {
 
 	code = code.replace(/for\s*\(\s*const\s*\[\s*([A-Za-z_$][\w$]*)\s*,[^\]]+\]\s*of\s*Object\s*\.\s*entries\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\)\s*(?:\{[\s\S]*?\}|[^;]+;)/g, (statement, key: string, container: string) => {
 		if (inputAliases.has(container)) return statement;
-		return boundedEntryContainers.has(container)
-			? replaceComputedIdentifier(statement, key)
-			: replaceSameContainerComputedIdentifier(statement, container, key);
+		const authorityComputedKey = new RegExp(
+			`\\b(?:document|window|globalThis|self|navigator|parent|top|frames)\\b[^;{}]*\\[\\s*${escapeRegex(key)}\\s*\\]`,
+		).test(statement);
+		if (boundedEntryContainers.has(container) && !authorityComputedKey)
+			return replaceComputedIdentifier(statement, key);
+		return replaceSameContainerComputedIdentifier(statement, container, key);
 	});
 
 	code = code.replace(/Object\s*\.\s*keys\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\.\s*filter\s*\(\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*=>[^;]+;/gs, (statement, objectName: string, key: string) => {
@@ -539,7 +542,13 @@ function auditedCapabilities(source: string, effect: BrowserUseActionEffectClass
 	if (effect === "mutation") capabilities.push("dom-write");
 	if (/\.(?:dispatchEvent|click)\s*\(/.test(source)) capabilities.push("dom-events");
 	if (/\bwindow\s*\.\s*angular\b|\bsaveTimesheet\b|\bObject\s*\.\s*getOwnPropertyDescriptor\b/.test(source)) capabilities.push("framework-runtime");
-	if (/(?:window\s*\.\s*)?location\s*\.\s*href\s*=/.test(source)) capabilities.push("same-origin-navigation");
+	if (
+		/(?:window\s*\.\s*)?location\s*\.\s*href\s*=/.test(source) ||
+		(/\bdocument\s*\.\s*querySelectorAll\s*\(\s*["']a\[href\]["']\s*\)/.test(
+			source,
+		) && /\.click\s*\(/.test(source))
+	)
+		capabilities.push("same-origin-navigation");
 	return capabilities;
 }
 
