@@ -235,7 +235,7 @@ function buildExtractRunbook(
 		summary:
 			"Extract a bounded BankStatementsPlus response envelope over a validated date range.",
 		allowed_origins: [origin],
-		auth_context_ref: "xero-session",
+		auth_context_ref: "interactive-login",
 		inputs: [
 			{
 				id: "bank_account_id",
@@ -287,7 +287,7 @@ function buildPostBankTransactionRunbook(
 		summary:
 			"Staged-inactive: submit a caller-owned bank-transaction body (financial write).",
 		allowed_origins: [origin],
-		auth_context_ref: "xero-session",
+		auth_context_ref: "interactive-login",
 		inputs: [
 			{
 				id: "body",
@@ -323,7 +323,7 @@ function buildReconcileBatchRunbook(
 		summary:
 			"Staged-inactive: reconcile a bounded batch of discriminated line entries (financial write).",
 		allowed_origins: [origin],
-		auth_context_ref: "xero-session",
+		auth_context_ref: "interactive-login",
 		inputs: [
 			{
 				id: "item_keys",

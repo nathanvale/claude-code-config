@@ -57,6 +57,51 @@ export type BrowserUseLoginTargetProof = (
 	input: BrowserUseTargetProofInput,
 ) => Promise<BrowserUseTargetProofResult>;
 
+export type BrowserUseAuthenticatedStateProofRecord = {
+	target_id: string;
+	page_id: string;
+	frame_id: string;
+	origin: string;
+	subject_reference: string;
+	account_reference: string;
+	tenant_reference: string;
+	identity_basis_digest: string;
+};
+
+export type BrowserUseAuthenticatedStateProof = (input: {
+	lane_id: string;
+	run_id: string;
+	target_id: string;
+	expected_url: string;
+	allowed_origins: readonly string[];
+	binding: BrowserUseItemBinding;
+	snapshot: BrowserUseAccessibilitySnapshot;
+	transition: "pre-existing-session" | "post-submit";
+}) => Promise<
+	| { proven: true; proof: BrowserUseAuthenticatedStateProofRecord }
+	| {
+			proven: false;
+			cause:
+				| "human-identity-attestation-required"
+				| "session-identity-proof-unavailable"
+				| "origin-mismatch"
+				| "target-proof-invalid";
+	  }
+>;
+
+export type BrowserUseLoginLifecycleEvent =
+	| { type: "credential-delivered"; field: BrowserUseOpCredentialField }
+	| { type: "username-advance-dispatching" }
+	| { type: "credential-submit-dispatching" }
+	| { type: "submit-outcome-observed"; outcome: "success" | "otp-required" | "timeout-unknown" };
+
+export type BrowserUseLoginLifecycleJournal = (
+	event: BrowserUseLoginLifecycleEvent,
+) => Promise<
+	| { ok: true }
+	| { ok: false; cause: BrowserUseAuthBlockedCause }
+>;
+
 /**
  * Secret-free and custody boundaries required by the generic loop.
  */
@@ -69,6 +114,12 @@ export type BrowserUseLoginEngineDeps = {
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
 	/** One-shot disposable delivery-child boundary. */
 	deliver: BrowserUseDeliveryHook;
+	/** Fresh auth-owned proof. Signed-in words alone never authorize `ready`. */
+	proveAuthenticatedState?: BrowserUseAuthenticatedStateProof;
+	/** Durable auth journal. Dispatching events run before control activation. */
+	journal?: BrowserUseLoginLifecycleJournal;
+	/** Bounded observation wait after trusted control activation. */
+	waitForPostActivation?: () => Promise<void>;
 };
 
 /**
@@ -80,8 +131,12 @@ export type BrowserUseLoginEngineInput = {
 	run_id: string;
 	target_id: string;
 	expected_url: string;
+	/** Fresh target URL observed before the engine starts. */
+	observed_url?: string;
 	allowed_origins: readonly string[];
 	binding: BrowserUseItemBinding;
+	/** Allow an installed presence-backed owner to resolve an explicit proof fallback. */
+	allow_human_identity_attestation?: boolean;
 	/** Bounded no-progress guard. @defaultValue 16 */
 	max_iterations?: number;
 };
@@ -103,6 +158,8 @@ export type BrowserUseLoginEngineResult =
 	| {
 			ok: true;
 			signed_in: true;
+			authenticated_state: "pre-existing-session" | "post-submit";
+			proof: BrowserUseAuthenticatedStateProofRecord;
 			trace: readonly BrowserUseLoginTraceEntry[];
 	  }
 	| {
@@ -214,6 +271,7 @@ function structuralField(
  *
  * @param snapshot - Fresh full accessibility-tree projection
  * @param deliveredBackendNodeIds - Fields already delivered on this unchanged screen
+ * @param deliveredCredentialFields - Credential kinds already delivered in this transaction
  * @returns One confident credential/control/challenge class, or `unknown`
  *
  * @example
@@ -227,6 +285,7 @@ function structuralField(
 export function classifyBrowserUseLoginStep(
 	snapshot: BrowserUseAccessibilitySnapshot,
 	deliveredBackendNodeIds: ReadonlySet<number> = new Set(),
+	deliveredCredentialFields: ReadonlySet<BrowserUseOpCredentialField> = new Set(),
 ): BrowserUseLoginClassification {
 	const challenge = challengedBy(snapshot);
 	if (challenge !== undefined) return { step: "challenge", challenge };
@@ -246,7 +305,12 @@ export function classifyBrowserUseLoginStep(
 		field,
 		credential: credentialFieldOf(field.accessible_name),
 	}));
-	const named = classified.filter(
+	const available = classified.filter(
+		(item) =>
+			item.credential === undefined ||
+			!deliveredCredentialFields.has(item.credential),
+	);
+	const named = available.filter(
 		(
 			item,
 		): item is {
@@ -255,13 +319,14 @@ export function classifyBrowserUseLoginStep(
 		} => item.credential !== undefined,
 	);
 	if (named.length > 0) {
-		const first = named.at(0);
+		const first =
+			named.find((candidate) => candidate.credential === "username") ??
+			named.find((candidate) => candidate.credential === "password") ??
+			named.find((candidate) => candidate.credential === "otp-current");
 		if (first === undefined) return { step: "unknown" };
 		if (
-			named.some(
-				(candidate, index) =>
-					index > 0 && candidate.credential === first.credential,
-			)
+			named.filter((candidate) => candidate.credential === first.credential)
+				.length > 1
 		) {
 			return { step: "unknown" };
 		}
@@ -271,10 +336,15 @@ export function classifyBrowserUseLoginStep(
 			field_node: first.field,
 		};
 	}
-	if (fields.length > 0) {
-		const structural = structuralField(snapshot, fields);
-		const field = fields.at(0);
-		if (structural === undefined || field === undefined) {
+	const availableFields = available.map((item) => item.field);
+	if (availableFields.length > 0) {
+		const structural = structuralField(snapshot, availableFields);
+		const field = availableFields.at(0);
+		if (
+			structural === undefined ||
+			field === undefined ||
+			deliveredCredentialFields.has(structural)
+		) {
 			return { step: "unknown" };
 		}
 		return {
@@ -291,7 +361,11 @@ export function classifyBrowserUseLoginStep(
 		: { step: "submit", control_node: control };
 }
 
-function signedIn(snapshot: BrowserUseAccessibilitySnapshot): boolean {
+function authenticatedStateCandidate(
+	snapshot: BrowserUseAccessibilitySnapshot,
+	submitted: boolean,
+	input: BrowserUseLoginEngineInput,
+): boolean {
 	const hasCredentialField = snapshot.nodes.some(
 		(node) =>
 			!node.ignored &&
@@ -299,14 +373,81 @@ function signedIn(snapshot: BrowserUseAccessibilitySnapshot): boolean {
 				node.role.toLowerCase() === "searchbox") &&
 			credentialFieldOf(node.accessible_name) !== undefined,
 	);
-	if (hasCredentialField || advanceControls(snapshot).length > 0) return false;
-	return snapshot.nodes.some(
+	const hasAdvanceAffordance = snapshot.nodes.some(
+		(node) =>
+			!node.ignored &&
+			["button", "link"].includes(node.role.toLowerCase()) &&
+			ADVANCE_NAME.test(node.accessible_name.trim()) &&
+			node.properties.disabled !== true,
+	);
+	if (
+		hasCredentialField ||
+		hasAdvanceAffordance ||
+		challengedBy(snapshot) !== undefined
+	) {
+		return false;
+	}
+	if (submitted) return true;
+	const hasSignedInMarker = snapshot.nodes.some(
 		(node) =>
 			!node.ignored &&
 			["heading", "status", "link", "button"].includes(
 				node.role.toLowerCase(),
 			) &&
 			SIGNED_IN_NAME.test(node.accessible_name),
+	);
+	if (hasSignedInMarker) return true;
+
+	const observedOrigin =
+		input.observed_url === undefined
+			? undefined
+			: normalizedOrigin(input.observed_url);
+	const allowedOrigins = new Set(
+		input.allowed_origins.flatMap((origin) => {
+			const normalized = normalizedOrigin(origin);
+			return normalized === undefined ? [] : [normalized];
+		}),
+	);
+	if (
+		snapshot.target_id !== input.target_id ||
+		observedOrigin === undefined ||
+		!allowedOrigins.has(observedOrigin)
+	) {
+		return false;
+	}
+
+	const appStructure = snapshot.nodes.filter(
+		(node) =>
+			!node.ignored &&
+			node.accessible_name.trim().length > 0 &&
+			["heading", "link", "button"].includes(node.role.toLowerCase()),
+	);
+	return (
+		appStructure.length >= 2 &&
+		appStructure.some((node) => node.role.toLowerCase() === "heading") &&
+		appStructure.some((node) => node.role.toLowerCase() !== "heading")
+	);
+}
+
+function markerlessPostSubmitCandidate(
+	snapshot: BrowserUseAccessibilitySnapshot,
+): boolean {
+	const visibleFields = snapshot.nodes.filter(
+		(node) =>
+			!node.ignored &&
+			(node.role.toLowerCase() === "textbox" ||
+				node.role.toLowerCase() === "searchbox"),
+	);
+	const classification = classifyBrowserUseLoginStep(snapshot);
+	const hasCredentialField =
+		classification.step === "username" ||
+		classification.step === "password" ||
+		classification.step === "otp" ||
+		visibleFields.some((field) => field.accessible_name.trim() === "");
+	return (
+		!hasCredentialField &&
+		advanceControls(snapshot).length === 0 &&
+		challengedBy(snapshot) === undefined
 	);
 }
 
@@ -407,15 +548,35 @@ export async function runBrowserUseLoginEngine(
 		return failed("blocked", "origin-mismatch", trace);
 	}
 	const deliveredBackendNodeIds = new Set<number>();
+	const deliveredCredentialFields = new Set<BrowserUseOpCredentialField>();
 	let activationFingerprint: string | undefined;
+	let awaitingActivationTransition = false;
+	let postActivationWaits = 0;
+	let submitted = false;
+	let awaitingSubmitOutcome = false;
+	const deliveredSinceActivation = new Set<BrowserUseOpCredentialField>();
 	const maxIterations = input.max_iterations ?? 16;
+	const waitForActivationTransition = async (): Promise<boolean> => {
+		if (
+			!awaitingActivationTransition ||
+			postActivationWaits >= 10 ||
+			deps.waitForPostActivation === undefined
+		) {
+			return false;
+		}
+		postActivationWaits += 1;
+		await deps.waitForPostActivation();
+		return true;
+	};
 
 	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
 		const observed = await deps.observer.snapshot({
 			target_id: input.target_id,
 		});
 		if (!observed.ok) {
-			return failed("blocked", "target-proof-invalid", trace);
+			return submitted
+				? failed("no-progress", "unknown-post-submit-state", trace)
+				: failed("blocked", "target-proof-invalid", trace);
 		}
 		// Serialized only when a prior submit set a fingerprint to compare
 		// against, or when a submit is about to record one (below).
@@ -423,25 +584,119 @@ export async function runBrowserUseLoginEngine(
 			activationFingerprint === undefined
 				? undefined
 				: fingerprint(observed.snapshot);
-		if (signedIn(observed.snapshot)) {
-			return { ok: true, signed_in: true, trace };
+		const changedSinceActivation =
+			activationFingerprint !== undefined &&
+			activationFingerprint !== currentFingerprint;
+		const structuralAuthenticatedCandidate = authenticatedStateCandidate(
+			observed.snapshot,
+			false,
+			input,
+		);
+		const markerlessAuthenticatedCandidate =
+			submitted &&
+			changedSinceActivation &&
+			markerlessPostSubmitCandidate(observed.snapshot);
+		const proofCandidate =
+			challengedBy(observed.snapshot) === undefined &&
+			(structuralAuthenticatedCandidate || markerlessAuthenticatedCandidate);
+		if (proofCandidate) {
+			const transition = submitted ? "post-submit" : "pre-existing-session";
+			const proof = await deps.proveAuthenticatedState?.({
+				lane_id: input.lane_id,
+				run_id: input.run_id,
+				target_id: input.target_id,
+				expected_url: input.expected_url,
+				allowed_origins: input.allowed_origins,
+				binding: input.binding,
+				snapshot: observed.snapshot,
+				transition,
+			});
+			if (proof?.proven !== true) {
+				const humanFallbackAvailable =
+					proof?.cause === "human-identity-attestation-required" &&
+					input.allow_human_identity_attestation === true &&
+					(structuralAuthenticatedCandidate || markerlessAuthenticatedCandidate);
+				if (transition === "post-submit" && !humanFallbackAvailable) {
+					return failed("no-progress", "unknown-post-submit-state", trace);
+				}
+				if (awaitingSubmitOutcome) {
+					const journaled = await deps.journal?.({
+						type: "submit-outcome-observed",
+						outcome: "success",
+					});
+					if (journaled?.ok === false) {
+						return failed("blocked", journaled.cause, trace);
+					}
+					awaitingSubmitOutcome = false;
+				}
+				return failed(
+					"human-challenge",
+					proof?.cause ?? "human-identity-attestation-required",
+					trace,
+				);
+			}
+			if (awaitingSubmitOutcome) {
+				const journaled = await deps.journal?.({
+					type: "submit-outcome-observed",
+					outcome: "success",
+				});
+				if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+				awaitingSubmitOutcome = false;
+			}
+			return {
+				ok: true,
+				signed_in: true,
+				authenticated_state: transition,
+				proof: proof.proof,
+				trace,
+			};
 		}
 		if (
 			activationFingerprint !== undefined &&
 			activationFingerprint === currentFingerprint
 		) {
-			return failed(
-				"no-progress",
-				"human-identity-attestation-required",
-				trace,
-			);
+			await waitForActivationTransition();
+			continue;
 		}
 		activationFingerprint = undefined;
 
 		const classification = classifyBrowserUseLoginStep(
 			observed.snapshot,
 			deliveredBackendNodeIds,
+			deliveredCredentialFields,
 		);
+		if (
+			awaitingActivationTransition &&
+			(classification.step === "unknown" || classification.step === "submit")
+		) {
+			if (await waitForActivationTransition()) continue;
+			return submitted
+				? failed("no-progress", "unknown-post-submit-state", trace)
+				: failed(
+						"no-progress",
+						"human-identity-attestation-required",
+						trace,
+					);
+		}
+		awaitingActivationTransition = false;
+		if (
+			awaitingSubmitOutcome &&
+			classification.step === "otp"
+		) {
+			const journaled = await deps.journal?.({
+				type: "submit-outcome-observed",
+				outcome: "otp-required",
+			});
+			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
+			awaitingSubmitOutcome = false;
+		}
+		if (
+			awaitingSubmitOutcome &&
+			classification.step !== "otp" &&
+			classification.step !== "challenge"
+		) {
+			return failed("no-progress", "unknown-post-submit-state", trace);
+		}
 		if (classification.step === "challenge") {
 			return failed("human-challenge", "user-presence-required", trace);
 		}
@@ -453,6 +708,15 @@ export async function runBrowserUseLoginEngine(
 			);
 		}
 		if (classification.step === "submit") {
+			const credentialSubmit =
+				deliveredSinceActivation.has("password") ||
+				deliveredSinceActivation.has("otp-current");
+			const journaled = await deps.journal?.({
+				type: credentialSubmit
+					? "credential-submit-dispatching"
+					: "username-advance-dispatching",
+			});
+			if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
 			const activated = await deps.observer.activateControl({
 				target_id: input.target_id,
 				backend_node_id: classification.control_node.backend_node_id,
@@ -464,9 +728,14 @@ export async function runBrowserUseLoginEngine(
 				step: "submit",
 				backend_node_id: classification.control_node.backend_node_id,
 			});
+			submitted ||= credentialSubmit;
+			awaitingSubmitOutcome = credentialSubmit;
+			deliveredSinceActivation.clear();
 			deliveredBackendNodeIds.clear();
 			activationFingerprint =
 				currentFingerprint ?? fingerprint(observed.snapshot);
+			awaitingActivationTransition = true;
+			postActivationWaits = 0;
 			continue;
 		}
 
@@ -511,6 +780,13 @@ export async function runBrowserUseLoginEngine(
 		deliveredBackendNodeIds.add(
 			classification.field_node.backend_node_id,
 		);
+		deliveredCredentialFields.add(classification.field);
+		deliveredSinceActivation.add(classification.field);
+		const journaled = await deps.journal?.({
+			type: "credential-delivered",
+			field: classification.field,
+		});
+		if (journaled?.ok === false) return failed("blocked", journaled.cause, trace);
 		trace.push({
 			step: classification.step,
 			field: classification.field,
@@ -518,9 +794,7 @@ export async function runBrowserUseLoginEngine(
 		});
 	}
 
-	return failed(
-		"no-progress",
-		"human-identity-attestation-required",
-		trace,
-	);
+	return submitted
+		? failed("no-progress", "unknown-post-submit-state", trace)
+		: failed("no-progress", "human-identity-attestation-required", trace);
 }

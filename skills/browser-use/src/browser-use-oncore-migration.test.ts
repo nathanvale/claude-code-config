@@ -36,7 +36,7 @@ describe("Oncore save-draft staged migration (U4, R25/AE7)", () => {
 		expect(migrated.runbook).toMatchObject({
 			service_id: "oncore",
 			flow_id: "fill-timesheet",
-			auth_context_ref: "oncore-session",
+			auth_context_ref: "interactive-login",
 			allowed_origins: ["https://portal.example.com"],
 		});
 		expect(migrated.runbook.steps).toEqual([

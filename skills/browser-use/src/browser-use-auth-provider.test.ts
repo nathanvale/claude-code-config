@@ -319,6 +319,28 @@ function expectPreparationBlocked(outcome: BrowserUseSecretFreePreparationOutcom
 	return outcome;
 }
 
+function expectBindingApprovalRequired(
+	outcome: BrowserUseSecretFreePreparationOutcome,
+	selection: readonly {
+		item_id: string;
+		rank: number;
+		hinted: boolean;
+		matched_origin: string;
+	}[],
+) {
+	const blocked = expectPreparationBlocked(outcome);
+	expect(blocked.event).toEqual({
+		type: "blocked",
+		cause: "binding-approval-required",
+	});
+	expect(blocked.continuation).toEqual(
+		BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["binding-approval-required"]
+			.continuation,
+	);
+	expect(blocked.detail).toEqual({ kind: "selection", selection });
+	return blocked;
+}
+
 // --- Lease result -> transaction event mapping -------------------------------
 
 describe("acquireSensitiveIntervalLease (lease -> event mapping)", () => {
@@ -827,43 +849,37 @@ describe("prepareSecretFree gate order", () => {
 // --- prepareSecretFree Gate 5: first bind (SD1/SD6 at the provider seam) -----
 
 describe("prepareSecretFree first bind (Gate 5)", () => {
-	test("one discovery with one matching item binds and completes", async () => {
+	test("one matching item blocks for binding approval with a redacted candidate", async () => {
 		const { provider, calls } = await makeProvider({
 			listLoginItems: { ok: true, items: [baseEvidence()] },
 		});
-		const outcome = await provider.prepareSecretFree(basePreparationInput());
-		expect(outcome.ok).toBe(true);
-		if (outcome.ok) {
-			expect(outcome.event).toEqual({ type: "preparation-complete" });
-			expect(outcome.binding?.item_id).toBe("item-1");
-			expect(outcome.binding?.vault_id).toBe("vault-1");
-		}
+		expectBindingApprovalRequired(
+			await provider.prepareSecretFree(basePreparationInput()),
+			[
+				{
+					item_id: "item-1",
+					rank: 1,
+					hinted: false,
+					matched_origin: "https://portal.example.com",
+				},
+			],
+		);
 		expect(calls.listVaults).toBe(1);
 		expect(calls.listLoginItems).toBe(1);
 		expect(calls.getLoginItem).toBe(0);
+		expect(calls.fetchCredentialField).toBe(0);
 	});
 
-	test("two matching items block ambiguous-binding-selection with the redacted ranked list", async () => {
+	test("two matching items block binding-approval-required with the redacted ranked list", async () => {
 		const { provider, calls } = await makeProvider({
 			listLoginItems: {
 				ok: true,
 				items: [baseEvidence(), baseEvidence({ item_id: "item-2" })],
 			},
 		});
-		const outcome = expectPreparationBlocked(
+		expectBindingApprovalRequired(
 			await provider.prepareSecretFree(basePreparationInput()),
-		);
-		expect(outcome.event).toEqual({
-			type: "blocked",
-			cause: "ambiguous-binding-selection",
-		});
-		expect(outcome.continuation).toEqual(
-			BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE["ambiguous-binding-selection"]
-				.continuation,
-		);
-		expect(outcome.detail).toEqual({
-			kind: "selection",
-			selection: [
+			[
 				{
 					item_id: "item-1",
 					rank: 1,
@@ -877,8 +893,9 @@ describe("prepareSecretFree first bind (Gate 5)", () => {
 					matched_origin: "https://portal.example.com",
 				},
 			],
-		});
+		);
 		expect(calls.listLoginItems).toBe(1);
+		expect(calls.fetchCredentialField).toBe(0);
 	});
 
 	test("zero matches block revoked-binding carrying the legacy hint outside the continuation (SD6)", async () => {
@@ -909,7 +926,7 @@ describe("prepareSecretFree first bind (Gate 5)", () => {
 		expect(calls.listLoginItems).toBe(1);
 	});
 
-	test("a matched binding that excludes the requested method blocks unsupported-method", async () => {
+	test("binding approval precedes method admission for first-bind discovery", async () => {
 		const { provider, calls } = await makeProvider({
 			listLoginItems: {
 				ok: true,
@@ -921,10 +938,11 @@ describe("prepareSecretFree first bind (Gate 5)", () => {
 		);
 		expect(outcome.event).toEqual({
 			type: "blocked",
-			cause: "unsupported-method",
+			cause: "binding-approval-required",
 		});
-		expect(outcome.detail).toEqual({ kind: "method" });
+		expect(outcome.detail).toMatchObject({ kind: "selection" });
 		expect(calls.listLoginItems).toBe(1);
+		expect(calls.fetchCredentialField).toBe(0);
 	});
 
 	test("a discovery rejection routes through the op blocked mapping", async () => {

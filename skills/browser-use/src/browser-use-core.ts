@@ -43,6 +43,7 @@ export type ResultKind =
 	| "adapter_lanes"
 	| "shared_run"
 	| "runbook_catalog"
+	| "reviewed_action"
 	| "migration_status"
 	| "artifact_manifest"
 	| "repair_status"
@@ -82,6 +83,27 @@ export function safeJsonObject(raw: string): Record<string, unknown> | undefined
 
 export function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Key-sorted canonical JSON that drops undefined-valued entries so optional
+// fields never shift a digest. Receipt signing over fully-typed facts must NOT
+// use this: absent-vs-undefined distinctions there are part of the signed bytes.
+//
+// Total and host-independent: key order uses codepoint comparison (localeCompare
+// depends on ICU/host locale, so it can produce a different digest per machine),
+// and every non-serializable leaf (a top-level or in-array `undefined`, function,
+// or symbol) collapses to `null` so the result is always a string and `[undefined]`
+// never collides with `[]`.
+export function canonicalJsonStable(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJsonStable).join(",")}]`;
+	if (typeof value === "object" && value !== null)
+		return `{${Object.entries(value as Record<string, unknown>)
+			.filter(([, entry]) => entry !== undefined)
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonStable(entry)}`)
+			.join(",")}}`;
+	const serialized = JSON.stringify(value);
+	return serialized === undefined ? "null" : serialized;
 }
 
 // --- Privacy redaction gate (R32) ------------------------------------------

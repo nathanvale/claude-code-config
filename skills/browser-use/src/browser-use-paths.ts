@@ -34,6 +34,7 @@ import {
 	readFile as fsReadFile,
 	realpath as fsRealpath,
 	rename as fsRename,
+	rm as fsRm,
 	unlink as fsUnlink,
 	writeFile as fsWriteFile,
 	open,
@@ -205,6 +206,8 @@ export type BrowserUsePlatformFs = {
 	linkFileNoReplace(existingPath: string, newPath: string): Promise<void>;
 	/** ENOENT tolerated by callers. */
 	unlink(path: string): Promise<void>;
+	/** Recursively remove a directory tree; missing path is a no-op. */
+	removeDirectoryRecursive(path: string): Promise<void>;
 	/** fsync the directory fd (open + fsync + close). */
 	syncDirectory(path: string): Promise<void>;
 	/** O_CREAT|O_EXCL create; throws `{ code: "EEXIST" }` when present. */
@@ -290,6 +293,9 @@ export function createDefaultPlatformFs(): BrowserUsePlatformFs {
 		},
 		async unlink(path) {
 			await fsUnlink(path);
+		},
+		async removeDirectoryRecursive(path) {
+			await fsRm(path, { recursive: true, force: true });
 		},
 		async syncDirectory(path) {
 			const handle = await open(path, "r");
@@ -699,12 +705,15 @@ export async function admitBrowserUseRoot(
  * stores; existing roots retain the symlink, owner, type, and mode checks.
  * No directory creation, chmod, write probe, or ignore probe occurs.
  */
-async function inspectBrowserUseRoot(
+export async function inspectBrowserUseRoot(
 	fs: BrowserUsePlatformFs,
 	input: { kind: BrowserUseRootKind; path: string },
-): Promise<{ ok: true } | { ok: false; refusal: BrowserUsePathRefusal }> {
+): Promise<
+	| { ok: true; exists: boolean }
+	| { ok: false; refusal: BrowserUsePathRefusal }
+> {
 	const validated = await validateExistingBrowserUseRoot(fs, input);
-	return validated.ok ? { ok: true } : validated;
+	return validated;
 }
 
 // --- The Target XDG Shape -----------------------------------------------------
@@ -740,7 +749,15 @@ export type BrowserUseAdmittedPaths = {
 	/** Under the runtime root OR the warned fallback (R11). */
 	runtime: { locksDir: string; socketsDir: string };
 	config: { root: string };
-	data: { root: string };
+	data: {
+		root: string;
+		/** Immutable Runbook Generation store. */
+		runbookGenerationsDir: string;
+		/** Atomic generation plus epoch authority. */
+		runbookGenerationAuthorityFile: string;
+		/** Post-bootstrap marker that disables every retired resolver root. */
+		runbookGenerationCutoverFile: string;
+	};
 };
 
 // Ids become single path segments under the state root; a separator or dot
@@ -813,7 +830,24 @@ function deriveAdmittedPaths(
 			socketsDir: join(roots.runtime, "sockets"),
 		},
 		config: { root: roots.config },
-		data: { root: roots.data },
+		data: {
+			root: roots.data,
+			runbookGenerationsDir: join(
+				roots.data,
+				"runbook-generations",
+				"generations",
+			),
+			runbookGenerationAuthorityFile: join(
+				roots.data,
+				"runbook-generations",
+				"active.json",
+			),
+			runbookGenerationCutoverFile: join(
+				roots.data,
+				"runbook-generations",
+				"cutover.json",
+			),
+		},
 	};
 }
 

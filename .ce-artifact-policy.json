@@ -3,6 +3,16 @@
  "precious_roots": [],
  "regenerable_roots": [
   {
+   "owner": "swiftpm",
+   "repair_argv": [
+    "swift",
+    "build",
+    "--package-path",
+    "runtime/browser-use-environment-auth"
+   ],
+   "root": "runtime/browser-use-environment-auth/.build"
+  },
+  {
    "owner": "bun",
    "repair_argv": [
     "bun",

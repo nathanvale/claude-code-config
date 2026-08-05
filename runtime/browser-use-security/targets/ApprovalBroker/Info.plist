@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>ApprovalBroker</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.side-quest.browser-use-security.approval-broker</string>
+	<string>com.nathanvow.browser-use-security.approval-broker</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

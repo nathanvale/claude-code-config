@@ -43,6 +43,16 @@ async ({ inputs }) => {
     await sleep(1000);
     return true;
   };
+  const requireTab = async (keyword) => {
+    if (await clickTab(keyword)) return;
+    fail("missing_tab", {
+      tab: keyword,
+      available_tabs: tabs()
+        .map((tab) => normalize(tab.innerText || tab.textContent))
+        .filter(Boolean)
+        .slice(0, 20),
+    });
+  };
   const decodeTimesheetId = (href) => {
     if (!href) return "";
     const raw = String(href).split("/").pop() || "";
@@ -114,7 +124,7 @@ async ({ inputs }) => {
   // Check the Submitted pane first: if the target week appears there, it has
   // been submitted and the draft proof must fail closed rather than emit a
   // hardcoded submitted:false.
-  await clickTab("Submitted");
+  await requireTab("Submitted");
   if (await waitForTarget()) {
     fail("submitted_state_observed", {
       reason: "target week appears under the Submitted tab; not an un-submitted draft",
@@ -122,10 +132,10 @@ async ({ inputs }) => {
       targetEnd,
     });
   }
-  await clickTab("Incomplete");
+  await requireTab("Incomplete");
   const target = await waitForTarget();
   if (!target) {
-    await clickTab("Available");
+    await requireTab("Available");
     if (await waitForTarget()) fail("missing_saved_state", { targetStart, targetEnd });
     fail("wrong_week_open", { targetStart, targetEnd, title: document.title, url: location.href });
   }

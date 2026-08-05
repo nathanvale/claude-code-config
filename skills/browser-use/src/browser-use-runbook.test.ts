@@ -6,8 +6,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readdirSync,
-	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -65,15 +63,19 @@ import {
 import {
 	actionAssetDigest,
 	actionValueMatchesSchema,
-	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
 	recordItemCheckpoint,
 } from "./browser-use-runbook-actions";
+import {
+	ONCORE_DRAFT_VERIFICATION_ACTION_BYTES,
+	ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE,
+} from "./fixtures/oncore-draft-verification-action-fixture";
 import { createBrowserUseShippedActionSeam } from "./browser-use-shipped-actions";
 import type {
 	BrowserUseActionGenerationSeam,
 	BrowserUseItemBatchState,
 	BrowserUseReviewedActionRecord,
 } from "./browser-use-runbook-actions";
+import type { BrowserUseReviewedActionPromotionReceipt } from "./browser-use-reviewed-action-approval";
 import { deriveConformanceSentinel } from "./browser-use-secret-scan";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -136,6 +138,49 @@ function json(data: unknown): string {
 	return JSON.stringify({ success: true, data, error: null });
 }
 
+function testPromotionReceipt(input: {
+	actionId: string;
+	digest: string;
+	origin: string;
+	effect: "read" | "mutation";
+	containment: "none" | "read-only-observation";
+}): BrowserUseReviewedActionPromotionReceipt {
+	const auditedCapabilities = input.effect === "read"
+		? ["dom-query", "dom-read"]
+		: ["dom-query", "dom-write"];
+	return {
+		contract: "browser-use.reviewed-action-promotion",
+		schema_version: "1",
+		receipt_id: `receipt-${input.actionId}`,
+		disposition: "approved",
+		source_commit: "1".repeat(40),
+		action_id: input.actionId,
+		approved_digest: input.digest,
+		approved_origin: input.origin,
+		approved_effect: input.effect,
+		audited_capabilities: auditedCapabilities,
+		containment: input.containment,
+		input_schema_digest: "2".repeat(64),
+		result_schema_digest: "3".repeat(64),
+		postcondition_digest: input.effect === "mutation" ? "4".repeat(64) : null,
+		approval_reference: "test-review",
+		presence_backed: true,
+		issued_at_epoch_ms: 1,
+		verifier_key_id: "test-key",
+		signature: "TEST-SIGNATURE",
+	};
+}
+
+function expectPreparedActionRefusal(
+	prepared: Awaited<ReturnType<typeof prepareRunbookExecution>>,
+	actionCode: string,
+): void {
+	expect(prepared.ok).toBe(false);
+	if (prepared.ok) return;
+	expect(prepared.refusal.code).toBe("runbook_action_refused");
+	expect(prepared.refusal.message).toContain(actionCode);
+}
+
 function runtimeFor(
 	responses: readonly { stdout?: string; exitCode?: number }[],
 ): AgentBrowserExecutionRuntime & { calls: Array<readonly string[]> } {
@@ -190,6 +235,26 @@ describe("runbook model validation (v2)", () => {
 		expect(validateRunbook(baseRunbook())).toEqual([]);
 	});
 
+	test("an open url-starts-with postcondition validates and round-trips", () => {
+		const raw = JSON.parse(JSON.stringify(baseRunbook())) as Record<string, unknown>;
+		raw.steps = [
+			{
+				kind: "open",
+				url: "https://portal.example.com/timesheets",
+				postcondition: {
+					kind: "url-starts-with",
+					url: "https://portal.example.com/timesheets",
+				},
+			},
+		];
+
+		const parsed = parseRunbookRecord(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(validateRunbook(parsed.runbook)).toEqual([]);
+		expect(JSON.parse(JSON.stringify(parsed.runbook))).toEqual(raw);
+	});
+
 	test("rejects a non-v2 schema version", () => {
 		const issues = validateRunbook(
 			baseRunbook({ schema_version: "1" as unknown as "2" }),
@@ -207,6 +272,17 @@ describe("runbook model validation (v2)", () => {
 			baseRunbook({ allowed_origins: ["https://portal.example.com/path"] }),
 		);
 		expect(issues.map((i) => i.code)).toContain("runbook_origin_invalid");
+	});
+
+	test("rejects an auth_context_ref outside the auth-owned vocabulary", () => {
+		const issues = validateRunbook(
+			baseRunbook({ auth_context_ref: "portal-specific-login" }),
+		);
+		expect(issues).toContainEqual({
+			code: "runbook_auth_context_invalid",
+			message:
+				"auth_context_ref must name an auth-owned context vocabulary member.",
+		});
 	});
 
 	test("rejects an open step outside the allowed origins", () => {
@@ -387,6 +463,99 @@ describe("v2 typed-input value schemas (R9)", () => {
 		).toBe(false);
 	});
 
+	test("valueMatchesSchema enforces exclusive numeric minima and boolean constants", () => {
+		const units = {
+			kind: "number" as const,
+			exclusive_minimum: 0,
+			maximum: 1,
+		};
+		expect(valueMatchesSchema(0, units)).toBe(false);
+		expect(valueMatchesSchema(0.5, units)).toBe(true);
+		expect(valueMatchesSchema(1, units)).toBe(true);
+		expect(valueMatchesSchema(false, { kind: "boolean", constant: true })).toBe(
+			false,
+		);
+		expect(valueMatchesSchema(true, { kind: "boolean", constant: true })).toBe(
+			true,
+		);
+	});
+
+	test("accepts constraint-satisfying defaults", () => {
+		expect(
+			validateRunbook(
+				inputSchema({
+					kind: "object",
+					fields: {
+						units: {
+							required: false,
+							schema: {
+								kind: "number",
+								exclusive_minimum: 0,
+								maximum: 1,
+								default: 0.5,
+							},
+						},
+						empty: {
+							required: false,
+							schema: { kind: "boolean", constant: true, default: true },
+						},
+					},
+				}),
+			),
+		).toEqual([]);
+	});
+
+	test("parses exclusive numeric minima and boolean constants without dropping them", () => {
+		const raw = JSON.parse(
+			JSON.stringify(
+				inputSchema({
+					kind: "object",
+					fields: {
+						units: {
+							required: true,
+							schema: {
+								kind: "number",
+								exclusive_minimum: 0,
+								maximum: 1,
+							},
+						},
+						empty: {
+							required: true,
+							schema: { kind: "boolean", constant: true },
+						},
+					},
+				}),
+			),
+		);
+		const parsed = parseRunbookRecord(raw);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.runbook.inputs[0]?.schema).toEqual(raw.inputs[0].schema);
+	});
+
+	test.each([
+		[
+			"non-finite exclusive minimum",
+			{ kind: "number", exclusive_minimum: Number.POSITIVE_INFINITY },
+			"runbook_input_schema_invalid",
+		],
+		[
+			"empty exclusive range",
+			{ kind: "number", exclusive_minimum: 1, maximum: 1 },
+			"runbook_input_schema_invalid",
+		],
+		[
+			"constant-mismatched default",
+			{ kind: "boolean", constant: true, default: false },
+			"runbook_input_default_invalid",
+		],
+	] as const)("rejects malformed constraints: %s", (_label, schema, code) => {
+		const issues = validateRunbook(
+			inputSchema(schema as BrowserUseRunbookValueSchema),
+		);
+		expect(issues.map((issue) => issue.code)).toContain(code);
+	});
+
 	test("valueMatchesSchema resolves a discriminated union by its discriminant", () => {
 		const schema: BrowserUseRunbookValueSchema = {
 			kind: "discriminated-union",
@@ -532,6 +701,54 @@ describe("runbook total parsing (drop-v1)", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.issue.code).toBe("runbook_shape_invalid");
+	});
+
+	test("rejects unknown fields at every parsed Runbook layer", () => {
+		const fixtures = [
+			{ ...JSON.parse(JSON.stringify(baseRunbook())), approval: true },
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				inputs: [
+					{
+						id: "v",
+						summary: "s",
+						required: true,
+						schema: { kind: "array", items: { kind: "string", script: true } },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "click",
+						target: { role: "button", name: "Continue", selector: "#hidden" },
+						postcondition: { kind: "element-visible", selector: ".done" },
+					},
+				],
+			},
+			{
+				...JSON.parse(JSON.stringify(baseRunbook())),
+				steps: [
+					{
+						kind: "open",
+						url: "https://portal.example.com/",
+						postcondition: {
+							kind: "url-equals",
+							url: "https://portal.example.com/",
+							script: true,
+						},
+					},
+				],
+			},
+		];
+		for (const fixture of fixtures) {
+			const result = parseRunbookRecord(fixture);
+			expect(result).toMatchObject({
+				ok: false,
+				issue: { code: "runbook_shape_invalid" },
+			});
+		}
 	});
 });
 
@@ -879,7 +1096,7 @@ describe("runbook catalog projection (R13/R35)", () => {
 
 	test("flags requires_auth for a confidential runbook", () => {
 		const row = projectRunbookCatalogRow(
-			baseRunbook({ auth_context_ref: "oncore-session" }),
+			baseRunbook({ auth_context_ref: "interactive-login" }),
 			"healthy",
 		);
 		expect(row.requires_auth).toBe(true);
@@ -947,13 +1164,37 @@ describe("runbook discovery over the XDG data root", () => {
 					health: "healthy",
 				}),
 				expect.objectContaining({
+					service_id: "fasttrack",
+					flow_id: "submit",
+					health: "healthy",
+				}),
+				expect.objectContaining({
 					service_id: "matest",
 					flow_id: "development-snapshot-verify",
 					health: "healthy",
 				}),
 				expect.objectContaining({
 					service_id: "oncore",
+					flow_id: "fill",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "oncore",
 					flow_id: "timesheet-snapshot-verify",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login",
+					step_count: 2,
+					effect_class: "read-only",
+					health: "healthy",
+				}),
+				expect.objectContaining({
+					service_id: "unifi",
+					flow_id: "login-screen-verify",
+					step_count: 2,
+					effect_class: "read-only",
 					health: "healthy",
 				}),
 			]);
@@ -1098,8 +1339,71 @@ describe("runbook discovery over the XDG data root", () => {
 
 // --- Shipped catalog resolution (packaging invariant) ------------------------
 
+const FASTTRACK_TIMESHEET_RUN = {
+	envelope: {
+		target_account: "self",
+		period_start: "2026-08-03",
+		period_end: "2026-08-09",
+		selected_work_dates: [
+			"2026-08-03",
+			"2026-08-04",
+			"2026-08-05",
+			"2026-08-06",
+			"2026-08-07",
+		],
+		expected_aggregate: { unit: "hours", value: 35 },
+		mutation_mode: "prepare-draft",
+		final_action: "human-submit",
+	},
+	payload: {
+		portal: "fasttrack",
+		rows: [
+			{
+				date: "2026-08-03",
+				day: "Mon",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-04",
+				day: "Tue",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-05",
+				day: "Wed",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-06",
+				day: "Thu",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+			{
+				date: "2026-08-07",
+				day: "Fri",
+				start_time: "09:00",
+				end_time: "17:00",
+				attendance_type: "Standard",
+				breaks: [{ start_time: "12:00", end_time: "13:00" }],
+			},
+		],
+	},
+};
+
 describe("shipped runbooks root resolution", () => {
-	test("ships exactly the four daily-driver runbooks", async () => {
+	test("ships exactly the eight daily-driver runbooks", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -1108,46 +1412,25 @@ describe("shipped runbooks root resolution", () => {
 			).toEqual([
 				"fasttrack/fill-week",
 				"fasttrack/login",
+				"fasttrack/submit",
 				"matest/development-snapshot-verify",
+				"oncore/fill",
 				"oncore/timesheet-snapshot-verify",
+				"unifi/login",
+				"unifi/login-screen-verify",
 			]);
 		} finally {
 			rmSync(dataRoot, { recursive: true, force: true });
 		}
 	});
-
-	test("prepares FastTrack from shipped reviewed actions without Submit", async () => {
+	test("retains shipped legacy action evidence but refuses execution authority", async () => {
 		const prepared = await prepareRunbookExecution(
 			createDefaultPlatformFs(),
 			mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
 			{
 				serviceId: "fasttrack",
 				flowId: "fill-week",
-				inputs: {
-					timesheet_run: {
-						envelope: {
-							target_account: "primary",
-							period_start: "2026-07-27",
-							period_end: "2026-08-02",
-							selected_work_dates: ["2026-07-27"],
-							expected_aggregate: { unit: "hours", value: 8 },
-							mutation_mode: "prepare-draft",
-							final_action: "human-submit",
-						},
-						payload: {
-							portal: "fasttrack",
-							rows: [
-								{
-									date: "2026-07-27",
-									day: "Mon",
-									start_time: "09:00",
-									end_time: "17:00",
-									attendance_type: "Standard",
-								},
-							],
-						},
-					},
-				},
+				inputs: { timesheet_run: FASTTRACK_TIMESHEET_RUN },
 				resumeFromStep: 0,
 				actionSeam: createBrowserUseShippedActionSeam(
 					createDefaultPlatformFs(),
@@ -1155,19 +1438,45 @@ describe("shipped runbooks root resolution", () => {
 			},
 		);
 
-		expect(prepared.ok).toBe(true);
-		if (!prepared.ok) return;
-		expect(prepared.plan.steps).toHaveLength(7);
-		expect(
-			prepared.plan.steps.filter((step) => step.kind === "evaluate"),
-		).toHaveLength(4);
-		expect(
-			prepared.plan.steps.some(
-				(step) =>
-					step.kind === "evaluate" &&
-					step.action_id.toLowerCase().includes("submit"),
-			),
-		).toBe(false);
+		expectPreparedActionRefusal(
+			prepared,
+			"action_promotion_verifier_unavailable",
+		);
+	});
+
+	test("rejects malformed FastTrack input before Reviewed Action resolution", async () => {
+		const malformedInputs = [
+			{ timesheet_run: { timesheet_run: FASTTRACK_TIMESHEET_RUN } },
+			{
+				timesheet_run: {
+					...FASTTRACK_TIMESHEET_RUN,
+					envelope: {
+						...FASTTRACK_TIMESHEET_RUN.envelope,
+						period_start: "2026-02-30",
+					},
+				},
+			},
+		];
+
+		for (const inputs of malformedInputs) {
+			const prepared = await prepareRunbookExecution(
+				createDefaultPlatformFs(),
+				mkdtempSync(join(tmpdir(), "browser-use-empty-data-")),
+				{
+					serviceId: "fasttrack",
+					flowId: "fill-week",
+					inputs,
+					resumeFromStep: 0,
+					actionSeam: createBrowserUseShippedActionSeam(
+						createDefaultPlatformFs(),
+					),
+				},
+			);
+
+			expect(prepared.ok).toBe(false);
+			if (prepared.ok) continue;
+			expect(prepared.refusal.code).toBe("runbook_input_rejected");
+		}
 	});
 
 	test("resolves to an existing directory containing the shipped runbooks", () => {
@@ -1203,7 +1512,7 @@ describe("shipped runbooks root resolution", () => {
 		expect(parsedMatest.flow_id).toBe("development-snapshot-verify");
 		expect(parsedMatest).toMatchObject({
 			allowed_origins: ["https://experience-test.elluciancloud.com.au"],
-			auth_context_ref: "matest-experience-session",
+			auth_context_ref: "interactive-login",
 			inputs: [],
 			steps: [
 				{
@@ -2781,6 +3090,9 @@ function actionSeam(
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes: found };
 		},
+		async verifyPromotion() {
+			return { ok: true };
+		},
 	};
 }
 
@@ -2799,13 +3111,14 @@ function approvedReadRecord(): BrowserUseReviewedActionRecord {
 		},
 		result_sensitivity: "low",
 		source_provenance: "oncore/diagnose-grid-state.js",
-		promotion_receipt: {
-			approved_digest: ACTION_READ_DIGEST,
-			disposition: "approved",
-			approved_origin: ACTION_ORIGIN,
-			approved_effect: "read",
-			approver_ref: "operator-1",
-		},
+		audited_capabilities: ["dom-query", "dom-read"],
+		promotion_receipt: testPromotionReceipt({
+			actionId: "diagnose-grid",
+			digest: ACTION_READ_DIGEST,
+			origin: ACTION_ORIGIN,
+			effect: "read",
+			containment: "read-only-observation",
+		}),
 	};
 }
 
@@ -2924,18 +3237,18 @@ describe("engine reviewed-action step resolution (U3)", () => {
 						{
 							...record,
 							promotion_receipt: {
-								...record.promotion_receipt,
+								approved_digest: record.expected_digest,
 								disposition: "rejected",
+								approved_origin: record.allowed_origin,
+								approved_effect: record.effect_class,
+								approver_ref: "operator-1",
 							},
 						},
 						{ [ACTION_READ_DIGEST]: ACTION_READ_BYTES },
 					),
 				},
 			);
-			expect(prepared.ok).toBe(false);
-			if (prepared.ok) return;
-			expect(prepared.refusal.code).toBe("runbook_action_refused");
-			expect(prepared.refusal.message).toContain("action_receipt_not_approved");
+			expectPreparedActionRefusal(prepared, "action_receipt_not_approved");
 		}),
 	);
 
@@ -3016,15 +3329,21 @@ describe("engine reviewed-action step resolution (U3)", () => {
 		"iterate validates a non-empty bounded unique stable-key sequence before action resolution",
 		withDataRoot(async (dataRoot) => {
 			writeRunbook(dataRoot, iterateRunbook());
-			const invalidInputs: readonly unknown[] = [
-				undefined,
-				"item-1",
-				[],
-				[""],
-				[1],
-				["bad key"],
-				["item-1", "item-1"],
-				Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+			const invalidInputs: readonly (readonly [
+				unknown,
+				"runbook_input_missing" | "runbook_input_rejected" | "runbook_action_refused",
+			])[] = [
+				[undefined, "runbook_input_missing"],
+				["item-1", "runbook_input_rejected"],
+				[[], "runbook_input_rejected"],
+				[[""], "runbook_input_rejected"],
+				[[1], "runbook_input_rejected"],
+				[["bad key"], "runbook_action_refused"],
+				[["item-1", "item-1"], "runbook_action_refused"],
+				[
+					Array.from({ length: 513 }, (_unused, index) => `item-${index}`),
+					"runbook_input_rejected",
+				],
 			];
 			const mustNotResolve: BrowserUseActionGenerationSeam = {
 				async loadActionRecord() {
@@ -3034,7 +3353,7 @@ describe("engine reviewed-action step resolution (U3)", () => {
 					throw new Error("invalid iteration reached asset resolution");
 				},
 			};
-			for (const items of invalidInputs) {
+			for (const [items, expectedCode] of invalidInputs) {
 				const prepared = await prepareRunbookExecution(
 					createDefaultPlatformFs(),
 					dataRoot,
@@ -3048,8 +3367,10 @@ describe("engine reviewed-action step resolution (U3)", () => {
 				);
 				expect(prepared.ok).toBe(false);
 				if (prepared.ok) continue;
-				expect(prepared.refusal.code).toBe("runbook_action_refused");
-				expect(prepared.refusal.message).toContain("action_input_rejected");
+				expect(prepared.refusal.code).toBe(expectedCode);
+				if (expectedCode === "runbook_action_refused") {
+					expect(prepared.refusal.message).toContain("action_input_rejected");
+				}
 			}
 		}),
 	);
@@ -3511,13 +3832,20 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 		required_postcondition?: BrowserUseReviewedActionRecord["required_postcondition"],
 	): BrowserUseReviewedActionRecord => {
 		const digest = actionAssetDigest(bytes);
+		const containment = effect_class === "read"
+			? "read-only-observation"
+			: "none";
+		const auditedCapabilities = effect_class === "read"
+			? ["dom-query", "dom-read"]
+			: ["dom-query", "dom-write"];
 		return {
 			action_id,
 			asset_id: digest,
 			expected_digest: digest,
 			allowed_origin: ONCORE_STAGED_ORIGIN,
 			effect_class,
-			containment: effect_class === "read" ? "read-only-observation" : "none",
+			audited_capabilities: auditedCapabilities,
+			containment,
 			input_schema,
 			result_schema,
 			result_sensitivity: "low",
@@ -3525,13 +3853,13 @@ function oncoreActionRecords(): readonly BrowserUseReviewedActionRecord[] {
 				? { required_postcondition }
 				: {}),
 			source_provenance: `oncore/${action_id}.js`,
-			promotion_receipt: {
-				approved_digest: digest,
-				disposition: "approved",
-				approved_origin: ONCORE_STAGED_ORIGIN,
-				approved_effect: effect_class,
-				approver_ref: "synthetic-staged-proof",
-			},
+			promotion_receipt: testPromotionReceipt({
+				actionId: action_id,
+				digest,
+				origin: ONCORE_STAGED_ORIGIN,
+				effect: effect_class,
+				containment,
+			}),
 		};
 	};
 	return [
@@ -3628,6 +3956,9 @@ function oncoreActionSeam(): BrowserUseActionGenerationSeam {
 				? { ok: false, reason: "bytes_unavailable" }
 				: { ok: true, bytes };
 		},
+		async verifyPromotion() {
+			return { ok: true };
+		},
 	};
 }
 
@@ -3658,7 +3989,7 @@ async function runOncoreVerificationAction(rawProof: string): Promise<unknown> {
 	// Execute ONCORE_DRAFT_VERIFICATION_ACTION_BYTES against this test-owned document stub.
 	const action = new Function(
 		"document",
-		`return (${ONCORE_DRAFT_VERIFICATION_ACTION_BYTES});`,
+		`return (${ONCORE_DRAFT_VERIFICATION_EVALUATOR_FIXTURE});`,
 	)({
 		querySelector: (selector: string) =>
 			selector === "#draft-proof" ? { textContent: rawProof } : null,
@@ -4055,46 +4386,12 @@ describe("Oncore staged save-draft flow (U4, R25/AE7)", () => {
 	);
 });
 
-// --- (U6) FastTrack login runbook — shipped catalog + hermetic end-to-end ----
+// --- (U6) FastTrack login runbook — generic auth entry -----------------------
 //
-// The shipped `fasttrack/login` flow exercises the WHOLE confidential-delivery
-// path hermetically through the real engine with fixture transports (R11): the
-// runbook file carries only binding slugs + allowed origins (KTD4), the seam is
-// consulted with the plan's pending slugs, the sensitive interval spans exactly
-// two bounded writes (username then password), the sign-in postcondition is a
-// fresh structural observation, and the on-disk run record sweeps clean for the
-// derived conformance sentinels. See fixtures/fasttrack-login-runbook-fixture.ts.
-
-const LOGIN_FIXTURE = join(
-	import.meta.dir,
-	"fixtures",
-	"fasttrack-login-runbook-fixture.ts",
-);
-const LOGIN_NONCE = "u6ftlogin01";
-
-async function waitForLoginJournal(path: string, event: string): Promise<void> {
-	const deadline = Date.now() + 15_000;
-	while (Date.now() < deadline) {
-		try {
-			const parsed = JSON.parse(readFileSync(path, "utf8")) as string[];
-			if (parsed.includes(event)) return;
-		} catch {
-			// journal not written yet
-		}
-		await Bun.sleep(25);
-	}
-	throw new Error(`login fixture journal never reached event: ${event}`);
-}
-
-function loginFilesUnder(root: string): string[] {
-	if (!existsSync(root)) return [];
-	return readdirSync(root, { recursive: true, encoding: "utf8" })
-		.map((entry) => join(root, entry))
-		.filter((path) => statSync(path).isFile());
-}
-
+// The shipped document owns portal entry only. The Browser Authentication
+// Transaction owns username, password, and submit choreography.
 describe("(U6) FastTrack login runbook", () => {
-	test("ships fasttrack/login and lists it healthy with confidential auth", async () => {
+	test("ships fasttrack/login as a healthy read-only entry into generic auth", async () => {
 		const dataRoot = mkdtempSync(join(tmpdir(), "browser-use-empty-data-"));
 		try {
 			const rows = await listRunbooks(createDefaultPlatformFs(), dataRoot);
@@ -4105,7 +4402,7 @@ describe("(U6) FastTrack login runbook", () => {
 			if (login === undefined) return;
 			expect(login.health).toBe("healthy");
 			expect(login.requires_auth).toBe(true);
-			expect(login.effect_class).toBe("mutation");
+			expect(login.effect_class).toBe("read-only");
 		} finally {
 			rmSync(dataRoot, { recursive: true, force: true });
 		}
@@ -4127,111 +4424,17 @@ describe("(U6) FastTrack login runbook", () => {
 		expect(parsed.allowed_origins).toEqual([
 			"https://manpowergroup.fasttrack360.com.au",
 		]);
-		const bindings = parsed.steps.flatMap((step) =>
-			step.kind === "fill" && step.sensitivity === "confidential"
-				? [step.item_binding]
-				: [],
-		);
-		expect(bindings).toEqual(["fasttrack_username", "fasttrack_password"]);
+		expect(parsed.auth_context_ref).toBe("interactive-login");
+		expect(parsed.steps).toEqual([
+			expect.objectContaining({
+				kind: "open",
+				url: "https://manpowergroup.fasttrack360.com.au/RecruitmentManager/CandidatePortal",
+			}),
+			{ kind: "snapshot", interactive: true },
+		]);
+		expect(parsed.steps.some((step) => step.kind === "fill")).toBe(false);
+		expect(parsed.steps.some((step) => step.kind === "click")).toBe(false);
 	});
-
-	test(
-		"hermetic end-to-end: the real engine drives binding mint, sensitive interval, two bounded writes, postcondition, and a clean run-record sweep",
-		async () => {
-			// realpath the temp base: macOS tmpdirs sit behind /var -> /private/var
-			// and the XDG root guard refuses a symlinked ancestor.
-			const root = realpathSync(
-				mkdtempSync(join(tmpdir(), "browser-use-ft-login-")),
-			);
-			const dataRoot = join(root, "data");
-			const stateRoot = join(root, "state");
-			const journalPath = join(root, "journal.json");
-
-			const usernameSentinel = deriveConformanceSentinel(
-				"username",
-				LOGIN_NONCE,
-			);
-			const passwordSentinel = deriveConformanceSentinel(
-				"password",
-				LOGIN_NONCE,
-			);
-			expect(usernameSentinel.ok).toBe(true);
-			expect(passwordSentinel.ok).toBe(true);
-			if (!usernameSentinel.ok || !passwordSentinel.ok) return;
-
-			try {
-				const child = Bun.spawn(
-					[
-						process.execPath,
-						LOGIN_FIXTURE,
-						dataRoot,
-						stateRoot,
-						journalPath,
-						LOGIN_NONCE,
-					],
-					{ cwd: root, stdout: "pipe", stderr: "pipe" },
-				);
-				await waitForLoginJournal(journalPath, "cleanup:released");
-				const [exitCode, stdout, stderr] = await Promise.all([
-					child.exited,
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-				]);
-
-				// The real run confirmed and released.
-				expect(stderr).toBe("");
-				expect(exitCode).toBe(0);
-				expect(stdout).toContain("fasttrack-login-delivery-complete");
-
-				// The journal proves the phase ORDER: quarantine raised BEFORE any
-				// secret acquisition; the seam consulted with BOTH pending slugs;
-				// username delivered before password; postcondition confirmed; release.
-				const journal = JSON.parse(
-					readFileSync(journalPath, "utf8"),
-				) as string[];
-				expect(journal[0]).toBe("quarantine:raised");
-				expect(journal).toContain(
-					"lease:acquired:fasttrack_username,fasttrack_password",
-				);
-				expect(journal.indexOf("quarantine:raised")).toBeLessThan(
-					journal.indexOf("op-execute:secret-acquired:username"),
-				);
-				expect(
-					journal.indexOf("delivery:bounded-write:username"),
-				).toBeLessThan(journal.indexOf("delivery:bounded-write:password"));
-				// Exactly TWO bounded writes — one per credential field.
-				expect(
-					journal.filter((event) =>
-						event.startsWith("delivery:bounded-write:"),
-					),
-				).toEqual([
-					"delivery:bounded-write:username",
-					"delivery:bounded-write:password",
-				]);
-				expect(journal).toContain("postcondition:confirmed");
-				expect(journal[journal.length - 1]).toBe("cleanup:released");
-
-				// Zero-sentinel sweep over every real governed surface the process
-				// produced: run-store bytes (and every state file), stdout, stderr.
-				const stateFiles = loginFilesUnder(stateRoot);
-				expect(
-					stateFiles.filter((file) => file.endsWith("run.json")).length,
-				).toBeGreaterThan(0);
-				const surfaces = [
-					stdout,
-					stderr,
-					...stateFiles.map((file) => readFileSync(file, "utf8")),
-				];
-				for (const surface of surfaces) {
-					expect(surface).not.toContain(usernameSentinel.value);
-					expect(surface).not.toContain(passwordSentinel.value);
-				}
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
-		},
-		20_000,
-	);
 
 	test(
 		"a confidential step with an unknown binding slug refuses typed before the seam or any browser effect",

@@ -28,6 +28,8 @@ async ({ inputs }) => {
   };
   const dmy = (date) =>
     `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
+  const iso = (date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const weekStart = parseDate(inputs.week_start || inputs.period_start);
   if (!weekStart) fail("invalid_week_start", { week_start: inputs.week_start });
   const weekEnd = parseDate(inputs.week_end || inputs.period_end) || addDays(weekStart, 6);
@@ -38,16 +40,20 @@ async ({ inputs }) => {
   const defaultAttendance = String(inputs.attendance_type || inputs.attendanceType || "Standard");
   const requestedRows = Array.isArray(inputs.rows) && inputs.rows.length > 0
     ? inputs.rows.map((row) => ({
+        date: String(row.date || ""),
         day: row.day,
         startTime: String(row.start_time || row.startTime || defaultStart),
         endTime: String(row.end_time || row.endTime || defaultEnd),
         attendanceType: String(row.attendance_type || row.attendanceType || defaultAttendance),
+        breaks: Array.isArray(row.breaks) ? row.breaks : [],
       }))
     : (Array.isArray(inputs.workDays) ? inputs.workDays : ["Mon", "Tue", "Wed", "Thu", "Fri"]).map((day) => ({
+        date: "",
         day,
         startTime: defaultStart,
         endTime: defaultEnd,
         attendanceType: defaultAttendance,
+        breaks: [],
       }));
   const toDayIndex = (entry) =>
     typeof entry === "number" ? entry : dayNameToIndex[String(entry).toLowerCase()] ?? -1;
@@ -57,11 +63,17 @@ async ({ inputs }) => {
     row.querySelector("[ng-model='rxg.attendanceTypeId']")
   );
   const rowDate = (row) => {
-    // The row's own rxg.startDateTime input is authoritative: a generic
-    // date-shaped cell can be a shared period/processed-date column repeated
-    // on every row, which would collapse all rows onto one date. Read the
-    // input's date half first; fall back to a date-shaped cell only when the
-    // input carries no date.
+    // The row's own per-day work-date model (rxg.workDate1) is authoritative and
+    // is present whether the grid is empty or filled. Read it first: once the
+    // grid is filled, rxg.startDateTime holds a time-of-day ("09:00") with no
+    // date, so relying on it made every filled row's date unreadable.
+    const workDateEl = row.querySelector("[ng-model='rxg.workDate1']") || row.querySelector("[ng-model*='workDate']") || row.querySelector("[ng-model*='itemDate']");
+    if (workDateEl) {
+      const wdRaw = normalize(workDateEl.value || workDateEl.getAttribute?.("value") || workDateEl.innerText || workDateEl.textContent || "");
+      const wdMatch = wdRaw && wdRaw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+      const wdParsed = wdMatch && parseDate(wdMatch[0]);
+      if (wdParsed) return dmy(wdParsed);
+    }
     const startInput = row.querySelector("[ng-model='rxg.startDateTime']");
     const raw = startInput && String(startInput.value || startInput.getAttribute("value") || "");
     const inputMatch = raw && raw.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
@@ -202,9 +214,27 @@ async ({ inputs }) => {
   }
   const results = [];
   for (const requested of requestedRows) {
+    if (requested.breaks.length > 0) {
+      fail("break_readback_unavailable", {
+        day: requested.day,
+        date: requested.date,
+        break_count: requested.breaks.length,
+        results,
+      });
+    }
     const dayIndex = toDayIndex(requested.day);
     if (dayIndex < 0 || dayIndex > 6) fail("invalid_day", { day: requested.day, results });
-    const expectedDate = dmy(addDays(weekStart, dayIndex));
+    const expectedRowDate = addDays(weekStart, dayIndex);
+    const expectedDate = dmy(expectedRowDate);
+    const expectedInputDate = iso(expectedRowDate);
+    if (requested.date !== expectedInputDate) {
+      fail("row_date_mismatch", {
+        day: requested.day,
+        supplied_date: requested.date,
+        expected_date: expectedInputDate,
+        results,
+      });
+    }
     const row = rowsByDate.get(expectedDate);
     if (!row) {
       fail("row_date_mismatch", {

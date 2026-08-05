@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>ConfidentialFieldDeliveryXPC</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.side-quest.browser-use-security.confidential-field-delivery</string>
+	<string>com.nathanvow.browser-use-security.confidential-field-delivery</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -30,7 +30,7 @@
 		<string>dispatch_main</string>
 		<key>_AllowedClients</key>
 		<array>
-			<string>com.side-quest.browser-use-security.token-retrieval-launcher</string>
+			<string>com.nathanvow.browser-use-security.token-retrieval-launcher</string>
 		</array>
 	</dict>
 </dict>
