@@ -126,11 +126,14 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 				const fallback = [context["requested"], "second"];
 				const rows = ["first", "second"];
 				const cells = ["first", "second"];
+				const arr = ["first", "second"];
 				const i = 0;
 				const index = 1;
 				const n = 0;
+				const [destructuredIndex] = [1];
+				const foundIndex = arr.findIndex((value) => value === "second");
 				const [x, y] = fallback;
-				return { rows: document.querySelectorAll('.row').length, text: match ? match[1] : fallback[0], values: [rows[index], cells[n], fallback[i], x, y] };
+				return { rows: document.querySelectorAll('.row').length, text: match ? match[1] : fallback[0], values: [rows[index], cells[n], fallback[i], arr[i], arr[i + 1], arr[0], arr[destructuredIndex], arr[foundIndex], x, y] };
 			}`,
 			}) as never,
 		);
@@ -140,6 +143,16 @@ describe("Reviewed Action schema and mechanical capability audit", () => {
 		});
 
 		const rejected: Array<[string, string]> = [
+			["bare local dynamic key", "async ({ inputs }) => { const payload = {}; const k = 'row'; payload[k] = document.querySelector('.row')?.textContent; return payload }"],
+			["index-named string key", "async ({ inputs }) => { const payload = {}; const index = 'row'; payload[index] = document.querySelector('.row')?.textContent; return payload }"],
+			["semicolonless local key", "async ({ inputs }) => { const payload = {}\nconst localKey = 'row'\npayload[localKey] = document.querySelector('.row')?.textContent\nreturn payload }"],
+			["local alias key", "async ({ inputs }) => { const payload = {}; const localKey = 'row'; const key = localKey; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
+			["comment binding spoof", "async ({ inputs }) => { /* const key = 0 */ const payload = {}; const key = 'row'; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
+			["regex binding spoof", "async ({ inputs }) => { /const key = 0/; const payload = {}; const key = 'row'; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
+			["shadowed numeric index", "async ({ inputs }) => { const payload = {}; const i = 0; const read = (i) => payload[i]; return { value: read('row'), rows: document.querySelectorAll('.row').length } }"],
+			["template expression key", `async ({ inputs }) => { const payload = {}; const key = 'row'; return { value: \`\${payload[key]}\`, rows: document.querySelectorAll('.row').length } }`],
+			["inputs-derived entries key", "async ({ inputs }) => { const payload = {}; const context = inputs; for (const [key, value] of Object.entries(context)) payload[key] = value; return { payload, rows: document.querySelectorAll('.row').length } }"],
+			["selected-index name spoof", "async ({ inputs }) => { const payload = { selectedIndex: 'row' }; return { value: payload[payload.selectedIndex], rows: document.querySelectorAll('.row').length } }"],
 			["inputs-derived alias", "async ({ inputs }) => { const payload = {}; const userInput = String(inputs.key); payload[userInput] = document.querySelector('.row')?.textContent; return payload }"],
 			["inputs-derived destructuring", "async ({ inputs }) => { const payload = {}; const { key } = inputs; payload[key] = document.querySelector('.row')?.textContent; return payload }"],
 			["direct inputs key", "async ({ inputs }) => { const payload = {}; payload[inputs.key] = document.querySelector('.row')?.textContent; return payload }"],

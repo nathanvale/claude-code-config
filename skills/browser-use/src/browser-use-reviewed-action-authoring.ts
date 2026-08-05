@@ -35,7 +35,7 @@ const SAFE_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const ACTIONS_RELATIVE_ROOT = "skills/browser-use/actions";
 const REGISTRY_FILE = "registry.json";
 const LOCK_FILE = ".reviewed-action-authoring.lock";
-const UNSAFE_COMPUTED_PROPERTY_ACCESS = /(?:\b(?:document|window|globalThis|self|navigator|parent|top|frames)\s*(?:\?\.\s*)?\[|\)\s*(?:\?\.\s*)?\[|(?:\b(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*\binputs(?:\s*\.|\s*\[)[^;\n]*;[\s\S]*?\[[^\]\n]*\b\1\b[^\]\n]*\]|\b(?:const|let|var)\s*\{[^}\n]*\b([A-Za-z_$][\w$]*)\b[^}\n]*\}\s*=\s*inputs\s*;[\s\S]*?\[[^\]\n]*\b\2\b[^\]\n]*\]|(?:(?<![\w$])(?!(?:async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|let|new|of|return|switch|throw|try|typeof|var|void|while|with|yield)\b)[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*(?:\?\.\s*)?\[\s*(?!(?:\d+|''|""|[A-Za-z_$][\w$]*(?:\s*[+-]\s*\d+)?|[A-Za-z_$][\w$]*\s*=\s*(?:''|"")|String\s*\(\s*[A-Za-z_$][\w$]*\s*\)\s*\.\s*toLowerCase\s*\(\s*\))\s*\]))/;
+const UNSAFE_COMPUTED_PROPERTY_ACCESS = /(?:\b(?:document|window|globalThis|self|navigator|parent|top|frames)(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*)*\s*(?:\?\.\s*)?\[|\)\s*(?:\?\.\s*)?\[|(?:\b(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*\binputs(?:\s*\.|\s*\[)[^;\n]*;[\s\S]*?\[[^\]\n]*\b\1\b[^\]\n]*\]|\b(?:const|let|var)\s*\{[^}\n]*\b([A-Za-z_$][\w$]*)\b[^}\n]*\}\s*=\s*inputs\s*;[\s\S]*?\[[^\]\n]*\b\2\b[^\]\n]*\]|(?:(?<![\w$])(?!(?:async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|let|new|of|return|switch|throw|try|typeof|var|void|while|with|yield)\b)[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*(?:\?\.\s*)?\[\s*(?!(?:\d+|''|"")\s*\]))/;
 
 /** Closed capabilities emitted by the mechanical action audit. */
 export type BrowserUseReviewedActionCapability =
@@ -170,6 +170,213 @@ function sourceWithoutStringsAndComments(source: string): string {
 	return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n\r]*/g, " ").replace(/'(?:\\.|[^'\\])*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
 
+function computedPropertyAuditSource(source: string): string {
+	let offset = 0;
+	const regexPrefixKeywords = new Set(["await", "case", "delete", "in", "instanceof", "new", "of", "return", "throw", "typeof", "void", "yield"]);
+
+	const scanString = (quote: "'" | '"'): string => {
+		offset += 1;
+		while (offset < source.length) {
+			if (source[offset] === "\\") {
+				offset += 2;
+				continue;
+			}
+			if (source[offset] === quote) {
+				offset += 1;
+				break;
+			}
+			offset += 1;
+		}
+		return `${quote}${quote}`;
+	};
+
+	const scanRegex = (): string => {
+		offset += 1;
+		let characterClass = false;
+		while (offset < source.length) {
+			const character = source[offset];
+			if (character === "\\") {
+				offset += 2;
+				continue;
+			}
+			if (character === "[") characterClass = true;
+			else if (character === "]") characterClass = false;
+			else if (character === "/" && !characterClass) {
+				offset += 1;
+				while (/[A-Za-z]/.test(source[offset] ?? "")) offset += 1;
+				break;
+			}
+			offset += 1;
+		}
+		return " ";
+	};
+
+	const scanComment = (block: boolean): string => {
+		let output = "";
+		offset += 2;
+		if (!block) {
+			while (offset < source.length && source[offset] !== "\n" && source[offset] !== "\r") offset += 1;
+			return output;
+		}
+		while (offset < source.length && !(source[offset] === "*" && source[offset + 1] === "/")) {
+			if (source[offset] === "\n" || source[offset] === "\r") output += source[offset];
+			offset += 1;
+		}
+		offset = Math.min(offset + 2, source.length);
+		return output;
+	};
+
+	const scanIdentifier = (): { text: string; regexMayFollow: boolean } => {
+		const start = offset;
+		offset += 1;
+		while (/[\w$]/.test(source[offset] ?? "")) offset += 1;
+		const text = source.slice(start, offset);
+		return { text, regexMayFollow: regexPrefixKeywords.has(text) };
+	};
+
+	const scanNumber = (): string => {
+		const start = offset;
+		offset += 1;
+		while (/[\w.]/.test(source[offset] ?? "")) offset += 1;
+		return source.slice(start, offset);
+	};
+
+	function scanTemplate(): string {
+		let output = "`";
+		while (offset < source.length) {
+			const character = source[offset] ?? "";
+			if (character === "\\") {
+				offset += 2;
+				continue;
+			}
+			if (character === "`") {
+				offset += 1;
+				return `${output}\``;
+			}
+			if (character === "$" && source[offset + 1] === "{") {
+				offset += 2;
+				output += `\${${scanCode(true)}`;
+				continue;
+			}
+			offset += 1;
+		}
+		return output;
+	}
+
+	function scanCode(templateExpression = false): string {
+		let output = "";
+		let braceDepth = 0;
+		let canStartRegex = true;
+		while (offset < source.length) {
+			const character = source[offset] ?? "";
+			const next = source[offset + 1] ?? "";
+			if (templateExpression && character === "}" && braceDepth === 0) {
+				offset += 1;
+				return `${output}}`;
+			}
+			if (character === "'" || character === '"') {
+				output += scanString(character);
+				canStartRegex = false;
+				continue;
+			}
+			if (character === "`") {
+				offset += 1;
+				output += scanTemplate();
+				canStartRegex = false;
+				continue;
+			}
+			if (character === "/" && (next === "/" || next === "*")) {
+				output += scanComment(next === "*");
+				continue;
+			}
+			if (character === "/" && canStartRegex) {
+				output += scanRegex();
+				canStartRegex = false;
+				continue;
+			}
+			if (/[A-Za-z_$]/.test(character)) {
+				const identifier = scanIdentifier();
+				output += identifier.text;
+				canStartRegex = identifier.regexMayFollow;
+				continue;
+			}
+			if (/\d/.test(character)) {
+				output += scanNumber();
+				canStartRegex = false;
+				continue;
+			}
+			output += character;
+			offset += 1;
+			if (templateExpression && character === "{") braceDepth += 1;
+			else if (templateExpression && character === "}") braceDepth -= 1;
+			if (!/\s/.test(character)) canStartRegex = /[([{,:;=!?&|+*%^~<>-]/.test(character);
+		}
+		return output;
+	}
+
+	return scanCode();
+}
+
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function replaceComputedIdentifier(source: string, identifier: string): string {
+	const escaped = escapeRegex(identifier);
+	return source.replace(new RegExp(`\\[\\s*${escaped}\\s*(?:[+-]\\s*\\d+)?\\s*\\]`, "g"), "[0]");
+}
+
+function computedPropertyCodeWithProvenIndexes(source: string): string {
+	let code = computedPropertyAuditSource(source);
+	const numericIdentifiers = new Set<string>();
+	for (const match of code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[^;\n]*\.\s*(?:findIndex|indexOf)\s*\()/g)) {
+		numericIdentifiers.add(match[1] ?? "");
+	}
+	for (const match of code.matchAll(/\bconst\s*\[\s*([A-Za-z_$][\w$]*)\s*(?:,[^\]]*)?\]\s*=\s*\[\s*[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g)) {
+		numericIdentifiers.add(match[1] ?? "");
+	}
+	for (const identifier of numericIdentifiers) {
+		if (identifier.length === 0) continue;
+		const escaped = escapeRegex(identifier);
+		const declarations = code.match(new RegExp(`\\b(?:const|let|var)\\s+(?:\\[\\s*)?${escaped}\\b`, "g")) ?? [];
+		const parameterShadow = new RegExp(`(?:\\(|,)\\s*${escaped}\\s*(?:,|\\))\\s*=>|\\bfunction\\b[^()]*\\([^)]*\\b${escaped}\\b`).test(code);
+		if (declarations.length === 1 && !parameterShadow) code = replaceComputedIdentifier(code, identifier);
+	}
+
+	code = code.replace(/for\s*\(\s*const\s*\[\s*([A-Za-z_$][\w$]*)\s*,[^\]]+\]\s*of\s*Object\s*\.\s*entries\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\)\s*(?:\{[\s\S]*?\}|[^;]+;)/g, (statement, key: string, container: string) => {
+		const escapedContainer = escapeRegex(container);
+		if (container === "inputs" || new RegExp(`\\b(?:const|let|var)\\s+${escapedContainer}\\s*=\\s*[^;\\n]*\\binputs\\b`).test(code)) return statement;
+		return replaceComputedIdentifier(statement, key);
+	});
+
+	code = code.replace(/Object\s*\.\s*keys\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\.\s*filter\s*\(\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*=>[^;]+;/gs, (statement, objectName: string, key: string) => {
+		const escapedObject = escapeRegex(objectName);
+		if (objectName === "inputs" || new RegExp(`\\b(?:const|let|var)\\s+${escapedObject}\\s*=\\s*[^;\\n]*\\binputs\\b`).test(code)) return statement;
+		const sameObjectAccess = new RegExp(`${escapeRegex(objectName)}\\s*\\[\\s*${escapeRegex(key)}\\s*\\]`).test(statement);
+		return sameObjectAccess ? replaceComputedIdentifier(statement, key) : statement;
+	});
+
+	const staticNumericMaps = new Set<string>();
+	for (const match of code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^{}]*)\}\s*;/g)) {
+		const body = match[2] ?? "";
+		if (/^\s*(?:(?:[A-Za-z_$][\w$]*|''|"")\s*:\s*[+-]?\d+(?:\.\d+)?\s*,?\s*)*$/.test(body)) staticNumericMaps.add(match[1] ?? "");
+	}
+	for (const mapName of staticNumericMaps) {
+		if (mapName.length === 0) continue;
+		const escaped = escapeRegex(mapName);
+		code = code.replace(new RegExp(`${escaped}\\s*\\[\\s*String\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*\\)\\s*\\.\\s*toLowerCase\\s*\\(\\s*\\)\\s*\\]`, "g"), `${mapName}[0]`);
+	}
+
+	code = code.replace(/\b([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*(?:\?\.\s*)?\[\s*([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\.\s*selectedIndex\s*\]/g, (access, collection: string, select: string) => {
+		const authority = /^(?:document|window|globalThis|self|navigator|parent|top|frames)\b/;
+		const selectRoot = select.trim().match(/^[A-Za-z_$][\w$]*/)?.[0] ?? "";
+		const selectBinding = selectRoot.length > 0 && new RegExp(`\\bconst\\s+${escapeRegex(selectRoot)}\\s*=\\s*[^;\\n]*\\bquerySelector\\s*\\(`).test(code);
+		return authority.test(collection.trim()) || authority.test(select.trim()) || !selectBinding ? access : `${collection}[0]`;
+	});
+
+	return code;
+}
+
 function sourceCarriesSecretShapedMaterial(source: string): boolean {
 	const secretShapedValues =
 		source.match(
@@ -209,7 +416,10 @@ function capabilityIssue(candidate: BrowserUseReviewedActionCandidate): BrowserU
 		["action_capability_global_escape", /(?<![.$])\b(?:globalThis|self|navigator|parent|top|frames)\s*\./, "global browser authority is outside the Reviewed Action vocabulary"],
 	];
 	for (const [ruleCode, pattern, message] of rules) {
-		if (pattern.test(code)) return issue(ruleCode, "source", message);
+		const auditedSource = ruleCode === "action_capability_computed_property"
+			? computedPropertyCodeWithProvenIndexes(source)
+			: code;
+		if (pattern.test(auditedSource)) return issue(ruleCode, "source", message);
 	}
 	if (/\.dispatchEvent\s*\(\s*new\s+(?:Custom)?Event\s*\(\s*(['"])submit\1/i.test(source)) return issue("action_capability_form_submission", "source", "form submission is prohibited");
 	if (/querySelector(?:All)?\s*\(\s*(['"])[^'"]*(?:password|passcode|username|otp)[^'"]*\1\s*\)\s*(?:\?\.|\.)\s*(?:value|textContent|innerText|getAttribute)\b/i.test(source)) return issue("action_capability_credential_field", "source", "credential field values belong to generic login");
