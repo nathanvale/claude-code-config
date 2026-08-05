@@ -94,6 +94,15 @@ export function parseArgs(args: string[]): ParsedArgs {
 	if (!parsed.help && parsed.command === "extract" && parsed.terms.length > 0) {
 		throw new UsageError("--term is valid only for scan")
 	}
+	if (!parsed.help && parsed.command === "scan") {
+		for (const [option, present] of [
+			["--session", parsed.session !== undefined],
+			["--offset", parsed.offset !== undefined],
+			["--max-message-chars", parsed.maxMessageChars !== undefined],
+		] as const) {
+			if (present) throw new UsageError(`${option} is valid only for extract`)
+		}
+	}
 	return parsed
 }
 

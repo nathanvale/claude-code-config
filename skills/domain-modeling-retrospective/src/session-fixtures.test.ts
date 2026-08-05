@@ -178,6 +178,44 @@ describe("repository session discovery", () => {
 		).rejects.toMatchObject({ category: "session_not_found" })
 	})
 
+	test("preserves remote authority across supported repository URL forms", async () => {
+		const { repo, roots } = await fixture()
+		const repositoryUrls = [
+			["scp", "git@GITHUB.com:myagentdojo/agent-plugin-template.git"],
+			["ssh", "ssh://git@github.com:22/myagentdojo/agent-plugin-template.git"],
+			["http", "http://github.com/myagentdojo/agent-plugin-template"],
+			["https", "https://github.com/myagentdojo/agent-plugin-template.git/"],
+			["cross-host", "https://git.example.com/myagentdojo/agent-plugin-template.git"],
+		] as const
+
+		for (const [id, repositoryUrl] of repositoryUrls) {
+			await Bun.write(
+				resolve(roots.codexArchived, `${id}.jsonl`),
+				JSON.stringify({
+					type: "session_meta",
+					payload: {
+						id: `url-${id}`,
+						cwd: `/deleted/${id}`,
+						git: { repository_url: repositoryUrl },
+					},
+				}),
+			)
+		}
+
+		const result = await discoverRepositorySessions({ repoPath: repo, roots })
+		const urlSessions = result.candidates
+			.map((candidate) => candidate.session)
+			.filter((session) => session.startsWith("codex:url-"))
+			.sort()
+
+		expect(urlSessions).toEqual([
+			"codex:url-http",
+			"codex:url-https",
+			"codex:url-scp",
+			"codex:url-ssh",
+		])
+	})
+
 	test("rejects an existing same-name repository with a different remote", async () => {
 		const { repo, roots } = await fixture()
 		const otherRepo = resolve(

@@ -39,18 +39,40 @@ function git(path: string, args: string[]): string | undefined {
 	return new TextDecoder().decode(result.stdout).trim() || undefined
 }
 
-function repositorySlug(url: string | undefined): string | undefined {
+function canonicalRepositoryIdentity(url: string | undefined): string | undefined {
 	if (!url) return undefined
-	const normalized = url
-		.trim()
-		.replace(/^git@[^:]+:/, "")
-		.replace(/^ssh:\/\/git@[^/]+\//, "")
-		.replace(/^https?:\/\/[^/]+\//, "")
-		.replace(/\.git$/, "")
-		.replace(/\/$/, "")
-	const parts = normalized.split("/").filter(Boolean)
+	const value = url.trim()
+	let authority: string
+	let pathname: string
+
+	if (value.includes("://")) {
+		let parsed: URL
+		try {
+			parsed = new URL(value)
+		} catch {
+			return undefined
+		}
+		if (!["http:", "https:", "ssh:"].includes(parsed.protocol)) {
+			return undefined
+		}
+		const port = parsed.protocol === "ssh:" && parsed.port === "22"
+			? ""
+			: parsed.port
+		authority = `${parsed.hostname}${port ? `:${port}` : ""}`
+		pathname = parsed.pathname
+	} else {
+		const scp = value.match(/^(?:[^@/:\s]+@)?(\[[^\]]+\]|[^/:\s]+):(.+)$/)
+		if (!scp?.[1] || !scp[2]) return undefined
+		authority = scp[1]
+		pathname = scp[2]
+	}
+
+	const normalizedPath = pathname
+		.replace(/^\/+|\/+$/g, "")
+		.replace(/\.git$/i, "")
+	const parts = normalizedPath.split("/").filter(Boolean)
 	return parts.length >= 2
-		? parts.slice(-2).join("/").toLowerCase()
+		? `${authority}/${parts.slice(-2).join("/")}`.toLowerCase()
 		: undefined
 }
 
@@ -98,7 +120,7 @@ interface RepositoryIdentity {
 	root: string
 	name: string
 	commonDir?: string
-	remoteSlug?: string
+	remoteIdentity?: string
 }
 
 function repositoryIdentity(repoPath: string): RepositoryIdentity {
@@ -115,7 +137,9 @@ function repositoryIdentity(repoPath: string): RepositoryIdentity {
 		root,
 		name: basename(root).toLowerCase(),
 		commonDir: common ? resolve(root, common) : undefined,
-		remoteSlug: repositorySlug(git(root, ["remote", "get-url", "origin"])),
+		remoteIdentity: canonicalRepositoryIdentity(
+			git(root, ["remote", "get-url", "origin"]),
+		),
 	}
 }
 
@@ -134,13 +158,13 @@ export function resolveRepositoryRoot(repoPath: string): string {
 function matchRepository(
 	metadata: SessionMetadata,
 	repo: RepositoryIdentity,
-	gitIdentityCache: Map<string, { commonDir?: string; remoteSlug?: string }>,
+	gitIdentityCache: Map<string, { commonDir?: string; remoteIdentity?: string }>,
 ): RepositoryMatchKind | undefined {
 	if (metadata.cwd && pathInside(resolve(metadata.cwd), repo.root)) return "path"
 
-	const metadataSlug = repositorySlug(metadata.repositoryUrl)
-	if (metadataSlug) {
-		return metadataSlug === repo.remoteSlug ? "repository_url" : undefined
+	const metadataIdentity = canonicalRepositoryIdentity(metadata.repositoryUrl)
+	if (metadataIdentity) {
+		return metadataIdentity === repo.remoteIdentity ? "repository_url" : undefined
 	}
 
 	const nameMatches = metadata.cwd
@@ -157,7 +181,7 @@ function matchRepository(
 			identity = {
 				commonDir:
 					common && candidateRoot ? resolve(candidateRoot, common) : undefined,
-				remoteSlug: repositorySlug(
+				remoteIdentity: canonicalRepositoryIdentity(
 					git(metadata.cwd, ["remote", "get-url", "origin"]),
 				),
 			}
@@ -169,10 +193,10 @@ function matchRepository(
 				: undefined
 		}
 		if (
-			identity.remoteSlug &&
-			repo.remoteSlug
+			identity.remoteIdentity &&
+			repo.remoteIdentity
 		) {
-			return identity.remoteSlug === repo.remoteSlug
+			return identity.remoteIdentity === repo.remoteIdentity
 				? "repository_url"
 				: undefined
 		}
@@ -288,7 +312,7 @@ export async function discoverRepositorySessions(options: {
 	const { states, files } = await sourceFiles(roots)
 	const gitIdentityCache = new Map<
 		string,
-		{ commonDir?: string; remoteSlug?: string }
+		{ commonDir?: string; remoteIdentity?: string }
 	>()
 	const matches: Array<{
 		metadata: SessionMetadata
@@ -355,7 +379,7 @@ export async function resolveRepositorySession(options: {
 	const { files } = await sourceFiles(roots)
 	const gitIdentityCache = new Map<
 		string,
-		{ commonDir?: string; remoteSlug?: string }
+		{ commonDir?: string; remoteIdentity?: string }
 	>()
 	for (const file of files) {
 		const metadata = await readMetadata(file.path, file.source)

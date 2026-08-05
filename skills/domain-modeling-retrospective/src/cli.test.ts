@@ -132,12 +132,27 @@ describe("domain retrospective CLI contract", () => {
 			["scan"],
 			["scan", "--repo", "/repo", "--limit", "0"],
 			["scan", "--repo", "/repo", "--unknown", "value"],
+			["scan", "--repo", "/repo", "--session", "codex:id"],
+			["scan", "--repo", "/repo", "--offset", "0"],
+			["scan", "--repo", "/repo", "--max-message-chars", "500"],
 			["extract", "--repo", "/repo"],
 			["extract", "--repo", "/repo", "--session", "codex:id", "--term", "Plugin"],
 		]) {
 			expect(() => parseArgs(args)).toThrow()
 		}
 		expect(parseArgs(["scan", "--help"])).toMatchObject({ help: true })
+		expect(
+			parseArgs([
+				"scan",
+				"--session",
+				"codex:id",
+				"--offset",
+				"0",
+				"--max-message-chars",
+				"500",
+				"--help",
+			]),
+		).toMatchObject({ help: true })
 		expect(
 			parseArgs([
 				"extract",
@@ -149,6 +164,29 @@ describe("domain retrospective CLI contract", () => {
 				"500",
 			]),
 		).toMatchObject({ maxMessageChars: 500 })
+	})
+
+	test("scan rejects extract-only options through the public CLI runtime", async () => {
+		for (const [option, value] of [
+			["--session", "codex:id"],
+			["--offset", "0"],
+			["--max-message-chars", "500"],
+		] as const) {
+			let stdout = ""
+			const exitCode = await runCli(["scan", "--repo", "/repo", option, value, "--json"], {
+				stdout: (text) => { stdout += text },
+				stderr: () => {},
+			})
+
+			expect(exitCode).toBe(2)
+			expect(JSON.parse(stdout)).toMatchObject({
+				status: "error",
+				error: {
+					category: "invalid_usage",
+					message: `${option} is valid only for extract`,
+				},
+			})
+		}
 	})
 
 	test("missing flag values fail through the public CLI runtime", async () => {
