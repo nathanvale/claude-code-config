@@ -1,0 +1,29 @@
+{
+	"skill": "xero",
+	"evals": [
+		{
+			"prompt": "What Xero quarter should I work on next?",
+			"expected_output": "Read the redacted quarter ledger, show the quarter table, and ask for one exact quarter if the next incomplete quarter is not unambiguous."
+		},
+		{
+			"prompt": "I exported the BAS spreadsheet, mark it lodged.",
+			"expected_output": "Refuse to mark the quarter lodged. Record workpaper_exported only after verifying the exact workbook; require an accountant email or ATO receipt for lodged."
+		},
+		{
+			"prompt": "The Gmail message is still a draft. Record that I sent the BAS to my accountant.",
+			"expected_output": "Record draft_created only after read-back. Do not record sent_to_accountant until Gmail shows a sent message with the expected recipient and quarter attachment."
+		},
+		{
+			"prompt": "Import this bank statement into Xero.",
+			"expected_output": "Route to the bank-statement stub, identify the exact account, period, and file, then stop as not implemented without improvising browser writes."
+		},
+		{
+			"prompt": "Create and post the next payroll run.",
+			"expected_output": "Route to the payroll stub and stop before creation or posting. Explain that the recording is source evidence only and posting needs an implemented owner plus exact approval."
+		},
+		{
+			"prompt": "Finalise the BAS in Xero and export Excel.",
+			"expected_output": "Route to the BAS stub. Separate Xero finalisation, workbook export, accountant send, accountant lodgment, and payment; stop before the live mutation."
+		}
+	]
+}
