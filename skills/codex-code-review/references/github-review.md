@@ -43,7 +43,8 @@ event occurred after setup.
 
 1. Require the exact open PR and explicit authority to create a GitHub comment.
 2. Confirm the PR belongs to the proven repository.
-3. Post this exact PR comment:
+3. Post this exact PR comment. Retain the created comment ID and author from the
+   result:
 
    ```text
    @codex review
@@ -51,8 +52,11 @@ event occurred after setup.
 
 4. For a one-off focus explicitly supplied by the user, append it after
    `@codex review`, for example `@codex review for security regressions`.
-5. Verify the comment exists on the exact PR. Then check for the Codex eyes
-   reaction or posted review. Report `requested, pending` when processing is
+5. Verify that exact comment ID and expected author on the exact PR. If it cannot
+   be verified, report the request as failed.
+6. Check for an eyes reaction or posted review authored by the Codex app account.
+   Ignore reactions and reviews from other actors. Report `requested, pending`
+   only after the exact new comment is verified and Codex processing remains
    asynchronous; never claim the review completed from comment creation alone.
 
 ## Troubleshoot
