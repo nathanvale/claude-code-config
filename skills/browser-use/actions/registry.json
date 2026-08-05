@@ -1764,7 +1764,33 @@
           "selector": "tr.rgRow, tr.rgAltRow"
         },
         "source_provenance": "authored:oncore-fill-week",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "oncore-fill-week",
+          "approval_reference": "oncore-fill-activation-2026-08-05",
+          "approved_digest": "26eb2e187ae1f1cc02e668f4ec1217d7dea798d856db5848762e28e7a55bd11e",
+          "approved_effect": "mutation",
+          "approved_origin": "https://iteraterecruitment.oncoreservices.com",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "framework-runtime"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "7da88ea211962e738af527af9e6f36ae31164983c4b57f7410d02b5c2b51d466",
+          "issued_at_epoch_ms": 1785919369130,
+          "postcondition_digest": "2b3deb3844b5b7f6e5e2c0518150fb7a240550db1b0b118626ee9131c613f043",
+          "presence_backed": true,
+          "receipt_id": "receipt-3fe55f60-d6a6-4034-8df2-838b29ba852c",
+          "result_schema_digest": "96353c7dd4559f2077211fdbbcaa038c2b10901c25f6207a6622fd1572f9af1d",
+          "schema_version": "1",
+          "signature": "MEUCIQCIebjoBvXaXj84PcbEUMMhX8eUl8P+Ua6yB+jqZFbpyAIga5PaDDIzglLWn6GBv8dyOdO96D4VgAaY22P/Qlu0hDE=",
+          "source_commit": "06dd40b9a3fc0f4a589b7b1fae913dd260afa41c",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       }
     },
     {
@@ -1860,7 +1886,33 @@
           "selector": "#ctl00_MainContent_TimesheetWorkGrid_ctl00"
         },
         "source_provenance": "authored:oncore-open-week",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "oncore-open-week",
+          "approval_reference": "oncore-fill-activation-2026-08-05",
+          "approved_digest": "3e9b811e7b3cca275719800b6f56724d7139d92c617d638f888b6fb32a3152c8",
+          "approved_effect": "mutation",
+          "approved_origin": "https://iteraterecruitment.oncoreservices.com",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read",
+            "dom-write",
+            "dom-events",
+            "same-origin-navigation"
+          ],
+          "containment": "none",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "33d460267c21c74a086f497b9dbfa91b608b59e93085841a29d0273860dafb8d",
+          "issued_at_epoch_ms": 1785919357393,
+          "postcondition_digest": "eca6499eb4d4649fd87c46dc807ae94fb887562e9f8eebf12c897ca811b5ce1b",
+          "presence_backed": true,
+          "receipt_id": "receipt-cbdec3ed-a873-4f8d-abad-9312268651ff",
+          "result_schema_digest": "59ef2945e6120f7d3889b419a21136eee0859e75e2ca4a2ce0563c8cee8179b4",
+          "schema_version": "1",
+          "signature": "MEUCIQCuWa717qMFcPJsa3ldJ9mqphKkWP4aYjIdUvRmaRHEdQIgAjuwgWmrin/QyvoydW3sAzAf43al1SIHSqE6K0NApjA=",
+          "source_commit": "06dd40b9a3fc0f4a589b7b1fae913dd260afa41c",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       }
     },
     {
@@ -2067,7 +2119,30 @@
           "selector": "tr.rgRow, tr.rgAltRow"
         },
         "source_provenance": "authored:oncore-verify-filled",
-        "promotion_receipt": null
+        "promotion_receipt": {
+          "action_id": "oncore-verify-filled",
+          "approval_reference": "oncore-fill-activation-2026-08-05",
+          "approved_digest": "b2cc409177197d83742f333a273a20657a2537d02ce7a96b6f0d0d9f8ea6fa16",
+          "approved_effect": "read",
+          "approved_origin": "https://iteraterecruitment.oncoreservices.com",
+          "audited_capabilities": [
+            "dom-query",
+            "dom-read"
+          ],
+          "containment": "read-only-observation",
+          "contract": "browser-use.reviewed-action-promotion",
+          "disposition": "approved",
+          "input_schema_digest": "96a93199e5b4d5e930e45a4e8db1217096eae44bc14be9231da0098313136fbe",
+          "issued_at_epoch_ms": 1785919380014,
+          "postcondition_digest": "2b3deb3844b5b7f6e5e2c0518150fb7a240550db1b0b118626ee9131c613f043",
+          "presence_backed": true,
+          "receipt_id": "receipt-7e200644-3c2e-4ee6-999d-d793a3bc7442",
+          "result_schema_digest": "729ceaf16dcebbbab36167639c79aaa4d1337e6d7dd4fb46de33e2c154c12835",
+          "schema_version": "1",
+          "signature": "MEQCIBqxi7IBxD39qk4wyB3S0sGsuu3frJYkrrcTDU3nhYHtAiB/CPklhigPy8UbNB631Cg/urnsJakvLTHfm4jVsTS8Yg==",
+          "source_commit": "06dd40b9a3fc0f4a589b7b1fae913dd260afa41c",
+          "verifier_key_id": "2689643f40ec7223bc4c995fab884d6a41aef75cb99e01bef9bbbd164d8eb11e"
+        }
       }
     }
   ]
