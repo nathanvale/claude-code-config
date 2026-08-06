@@ -107,6 +107,7 @@
 - Reply shape: answer in one or two lines and stop when enough; otherwise use `Details` bullets, direct `What I need to do`, and brief `Also found`; skip preambles, process narration, padding, and routine offers.
 - Questions and failures: ask one question with options and a reasoned recommendation; state what broke, user impact, and the next action; omit logs unless asked.
 - Long writing: let drafts, scripts, posts, and documents use the form the work needs; outbound style owner: `$HOME/code/claude-code-config/context/comms-style.md`.
+- Tracker and forge identifiers in human-facing surfaces: render as clickable links keeping the key as visible text; never invent a host; owner: `$HOME/code/claude-code-config/context/tracker-links.md`.
 
 ## Personal Context
 
