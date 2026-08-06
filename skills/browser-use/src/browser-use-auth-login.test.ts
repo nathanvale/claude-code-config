@@ -96,7 +96,7 @@ function authTransport(origin: string) {
 
 function tokenPort(
 	origin: string,
-	counts: { vaults: number; fetches: number; redeems: number },
+	counts: { vaults: number; items: number; fetches: number; redeems: number },
 ) {
 	const item = {
 		item_id: "item-fixture",
@@ -111,8 +111,14 @@ function tokenPort(
 			counts.vaults += 1;
 			return { ok: true as const, vaults: [{ vault_id: "vault-fixture" }] };
 		},
-		listLoginItems: async () => ({ ok: true as const, items: [item] }),
-		getLoginItem: async () => ({ ok: true as const, item }),
+		listLoginItems: async () => {
+			counts.items += 1;
+			return { ok: true as const, items: [item] };
+		},
+		getLoginItem: async () => {
+			counts.items += 1;
+			return { ok: true as const, item };
+		},
 		fetchCredentialField: async ({ field }) => {
 			counts.fetches += 1;
 			return {
@@ -210,7 +216,7 @@ describe("auth login CLI", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		const port = tokenPort(origin, counts);
 		const transport = authTransport(origin);
 		let releaseCalls = 0;
@@ -291,8 +297,9 @@ describe("auth login CLI", () => {
 		expect(allFileText(xdg.base)).not.toContain(ambientSentinel);
 	});
 
-	test("every terminal run refuses auth re-entry before access acquisition", async () => {
-		for (const state of ["confirmed", "not-achieved", "unknown"] as const) {
+	test.each(["confirmed", "not-achieved", "unknown"] as const)(
+		"a terminal run (%s) refuses auth re-entry before access acquisition",
+		async (state) => {
 			const xdg = makeTempXdgEnv();
 			disposables.push(xdg);
 			const runId = `freeform-auth-terminal-${state}`;
@@ -337,8 +344,8 @@ describe("auth login CLI", () => {
 				next_action_id: "inspect_shared_run",
 			});
 			expect(accessCalls).toBe(0);
-		}
-	});
+		},
+	);
 
 	test("target resolution refusal persists the auth-owned recovery before returning", async () => {
 		const xdg = makeTempXdgEnv();
@@ -357,7 +364,7 @@ describe("auth login CLI", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		const transport = authTransport("https://wrong-origin.example");
 		let releaseCalls = 0;
 		const runtime = makeRuntime({
@@ -393,7 +400,7 @@ describe("auth login CLI", () => {
 			state: "awaiting-auth",
 			continuation: { next_action_id: "reprove-target-and-restart" },
 		});
-		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(counts).toEqual({ vaults: 0, items: 0, fetches: 0, redeems: 0 });
 		expect(releaseCalls).toBe(1);
 		expect(transport.closeCalls()).toBe(1);
 	});
@@ -415,7 +422,7 @@ describe("auth login CLI", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		const completePort = tokenPort(origin, counts);
 		const tokenRetrieval = {
 			listVaults: completePort.listVaults,
@@ -455,10 +462,10 @@ describe("auth login CLI", () => {
 			state: "needs-human",
 			continuation: { next_action_id: "inspect-capability-loss" },
 		});
-		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(counts).toEqual({ vaults: 0, items: 0, fetches: 0, redeems: 0 });
 	});
 
-	test("auth transaction failure cannot leave a running run ownerless", async () => {
+	test("a malformed persisted auth fragment refuses before credential access", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const origin = "https://github.example";
@@ -504,7 +511,7 @@ describe("auth login CLI", () => {
 			}),
 			0o600,
 		);
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		const transport = authTransport(origin);
 		const runtime = makeRuntime({
 			env: xdg.env,
@@ -537,7 +544,7 @@ describe("auth login CLI", () => {
 			state: "needs-human",
 			continuation: { next_action_id: "inspect-capability-loss" },
 		});
-		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(counts).toEqual({ vaults: 0, items: 0, fetches: 0, redeems: 0 });
 	});
 
 	test("access cleanup refusal preserves the result and releases dispatch authority", async () => {
@@ -557,7 +564,7 @@ describe("auth login CLI", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		let releaseCalls = 0;
 		const runtime = makeRuntime({
 			env: xdg.env,
@@ -601,14 +608,12 @@ describe("auth login CLI", () => {
 			}),
 			authTransport: authTransport(origin).factory,
 		});
-		const argv = [
-			"auth", "login", "--run", runId, "--handoff", handoffPath,
+		const baseArgv = [
+			"auth", "login", "--handoff", handoffPath,
 			"--service", "github", "--allowed-origin", origin, "--json",
 		];
-		const first = await runForTest(
-			argv.filter((value) => value !== "--run" && value !== runId),
-			runtime,
-		);
+		const argv = ["auth", "login", "--run", runId, ...baseArgv.slice(2)];
+		const first = await runForTest(baseArgv, runtime);
 		expect(first.exitCode).toBe(0);
 		const second = await runForTest(argv, runtime);
 		expect(second.exitCode).toBe(0);
@@ -633,7 +638,7 @@ describe("auth login CLI", () => {
 			{ mode: 0o600 },
 		);
 		const sentinel = "REFUSED_USER_PRESENCE_SECRET_MUST_STAY_INERT";
-		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
 		let managedCalls = 0;
 		let userPresentCalls = 0;
 		let transportCalls = 0;
@@ -674,7 +679,7 @@ describe("auth login CLI", () => {
 		expect(managedCalls).toBe(1);
 		expect(userPresentCalls).toBe(1);
 		expect(transportCalls).toBe(0);
-		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(counts).toEqual({ vaults: 0, items: 0, fetches: 0, redeems: 0 });
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
 		expect(allFileText(xdg.base)).not.toContain(sentinel);
 	});

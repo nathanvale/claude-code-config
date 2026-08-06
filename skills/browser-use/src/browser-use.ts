@@ -5097,35 +5097,34 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 	const store = await openPlatformStore(input, "write");
 	if (!store.ok) return store.exitCode;
 	let run: BrowserUseSharedRun;
-	if (runFlag !== undefined) {
-		const loaded = await loadSharedRun(store.deps, runFlag);
-		if (!loaded.ok) {
-			return emitPlatformStoreFailure(
-				input,
-				platformStoreFailureOf(loaded.code, loaded.message),
-			);
-		}
-		if (isTerminalRunState(loaded.run.state)) {
+	// Resume when a run id is supplied, and also — because the run id is fully
+	// determined by the handoff — when a bare retry lands on a run a prior blocked
+	// attempt already persisted. Both cases load and re-validate the same run;
+	// only a fresh run id creates.
+	const resumeFlag = runFlag ?? handoff.runId;
+	const existing = await loadSharedRun(store.deps, resumeFlag);
+	if (existing.ok) {
+		if (isTerminalRunState(existing.run.state)) {
 			return emitPlatformStoreFailure(input, {
 				code: "run_terminal_truth",
-				message: `run ${loaded.run.run_id} holds terminal truth ${loaded.run.state}; terminal truth never re-enters execution.`,
+				message: `run ${existing.run.run_id} holds terminal truth ${existing.run.state}; terminal truth never re-enters execution.`,
 				actionId: "inspect_shared_run",
 				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 				recoverability: "none",
 			});
 		}
 		const mismatch = checkSameLaneResumeForTaskRun(
-			loaded.run,
+			existing.run,
 			handoff.adapter,
 			handoff,
 		);
 		if (
 			mismatch !== undefined ||
-			loaded.run.handoff_evidence_id !== handoff.handoffEvidenceId
+			existing.run.handoff_evidence_id !== handoff.handoffEvidenceId
 		) {
 			return emitTaskRunFailure(
 				input,
-				runFlag,
+				resumeFlag,
 				mismatch ?? {
 					code: "task_run_handoff_lane_mismatch",
 					message:
@@ -5136,7 +5135,13 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 				},
 			);
 		}
-		run = loaded.run;
+		run = existing.run;
+	} else if (runFlag !== undefined) {
+		// An explicit --run that does not resolve is a caller error, not a create.
+		return emitPlatformStoreFailure(
+			input,
+			platformStoreFailureOf(existing.code, existing.message),
+		);
 	} else {
 		const created = await createSharedRun(store.deps, {
 			run_id: handoff.runId,
@@ -5267,7 +5272,7 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 				input,
 				platformStoreFailureOf(
 					target.cause,
-					"the current login wall could not be resolved to one browser target on the allowed origin.",
+					"the current login wall could not be resolved to exactly one browser target on the allowed origin; close any duplicate tabs open on this origin so a single login target remains, then retry.",
 				),
 			);
 		}
@@ -5345,6 +5350,14 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 		);
 		if (!authenticated.ok) {
 			if ("blocked" in authenticated) {
+				// A block reached after the login engine dispatched a credential
+				// submit (unknown-post-submit-state) means the real portal may
+				// already hold a submission — report the effect as unknown, never
+				// none, so a retrying caller does not double-submit.
+				const blockedExternalEffect =
+					authenticated.blocked.blocked_cause === "unknown-post-submit-state"
+						? "unknown"
+						: "none";
 				return emitSharedRunSuccess({
 					command: input,
 					run: authenticated.run,
@@ -5354,7 +5367,7 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 						entry_mode: "freeform",
 						auth_access_path: accessLease.access_path,
 						selected_lane: handoff.adapter,
-						external_effect: "none",
+						external_effect: blockedExternalEffect,
 					},
 				});
 			}

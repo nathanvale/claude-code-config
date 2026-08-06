@@ -405,8 +405,11 @@ export function parseBrowserUseArgv(
 		if (allowedOrigin !== undefined) {
 			try {
 				const parsedOrigin = new URL(allowedOrigin);
+				// https only: freeform auth login delivers real credentials into the
+				// page with no reviewed origin gate, so a cleartext http origin would
+				// expose the secret to on-path capture.
 				exactOrigin =
-					(parsedOrigin.protocol === "http:" || parsedOrigin.protocol === "https:") &&
+					parsedOrigin.protocol === "https:" &&
 					parsedOrigin.origin === allowedOrigin;
 			} catch {
 				exactOrigin = false;
@@ -414,7 +417,7 @@ export function parseBrowserUseArgv(
 		}
 		if (!exactOrigin) {
 			throw usageError(
-				"auth login requires --allowed-origin <origin> as an exact HTTP(S) origin.",
+				"auth login requires --allowed-origin <origin> as an exact https origin.",
 			);
 		}
 	}
