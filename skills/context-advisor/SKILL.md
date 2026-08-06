@@ -22,6 +22,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 ## Dependencies
 
 - `references/storage-routing.md`: bundled reference, hard dependency.
+- `~/.config/context/vault.md`: optional configured external context owner.
 - `skills/skill-author/SKILL.md`: optional handoff for skill-authoring routes.
 - `skills/cli-author/SKILL.md`: optional handoff for CLI-contract routes.
 - `skills/record-decision/SKILL.md`: optional handoff for accepted decision capture.
@@ -32,15 +33,16 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 ## Workflow
 
 1. Read `references/storage-routing.md`.
-2. Name the context owner.
-3. Name the context kind.
-4. Name mutability.
-5. Name sensitivity.
-6. Name privacy boundary.
-7. Name query, retention, deletion, and recovery need.
-8. Name write actor and review gate.
-9. Recommend the smallest matching owner path.
-10. Name rejected nearby stores and the next safe action.
+2. Read `~/.config/context/vault.md` when a configured external owner may apply.
+3. Name the context owner.
+4. Name the context kind.
+5. Name mutability.
+6. Name sensitivity.
+7. Name privacy boundary.
+8. Name query, retention, deletion, and recovery need.
+9. Name write actor and review gate.
+10. Recommend the smallest matching owner path.
+11. Name rejected nearby stores and the next safe action.
 
 ## Output
 
@@ -58,8 +60,10 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 
 - Do not store secrets in repo docs.
 - Do not store project tracker state in skill files, context files, or decision logs.
-- Do not let worker agents write durable context directly.
-- Route durable writes through a curator, skill driver, or accepted owner workflow.
+- Allow a scoped foreground write only when the user explicitly requested it
+  and the selected owner permits it.
+- Let delegated, background, or ambiguous agents propose durable changes unless
+  their handoff explicitly grants owner-scoped write authority.
 - Treat logs, JSON, SQLite, projections, backups, and embeddings as durable sensitive stores.
 - Use `skill-author` runtime-backed guidance when storage introduces or changes helper commands, machine-readable output, durable writes, side effects, privacy, durability, status, refresh, repair, retry, or runtime recovery.
 

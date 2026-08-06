@@ -91,8 +91,8 @@
 
 ## Context And Git
 
-- Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
-- Durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`; repos own operational truth.
+- Durable knowledge: read `~/.config/context/vault.md`; use `context-advisor` for placement.
+- Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
 - Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
 - Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.
