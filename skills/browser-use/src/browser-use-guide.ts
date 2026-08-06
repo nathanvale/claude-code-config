@@ -115,9 +115,11 @@ Common states:
   automatically); with a caller-managed envelope, re-mint it first.
 
 A login wall reached after a healthy attach is an authentication transaction,
-not a connection failure. Keep the verified handoff, run this discovery command,
-then follow its typed continuation:
+not a connection failure. Keep the verified handoff and use help only to
+discover the contract and required invocation:
   browser-use auth login --help
+Then invoke the admitted browser-use auth login command with those inputs and
+follow its typed continuation. Never create a Runbook only to access auth.
 `;
 
 const AUTH_GUIDE = `browser-use guide — auth boundary

@@ -29,6 +29,7 @@ import {
 import { dirname, join, parse, sep } from "node:path";
 import {
 	type AdmissionRuntime,
+	type ProductAdmissionResult,
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
 import {
@@ -561,23 +562,27 @@ function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
 	};
 }
 
-/**
- * Construct the runtime's Token Retrieval Port ONLY when the native seam admits
- * the product. Any non-`admitted` verdict (including the default
- * `native-capability-absent`) leaves the port undefined so the auth command
- * keeps returning the typed absent state. Never throws: a seam probe that
- * rejects — whether the admission probe, `createTokenExecutor()`, or port
- * construction — is treated as absence, fail-closed. Executor/port construction
- * stays inside the guard so an admitted seam whose `createTokenExecutor()`
- * throws (the exact miswiring the native-absent seam's typed throw surfaces)
- * yields absence, never an escaping rejection the CLI awaits unguarded.
- */
-async function resolveAuthTokenRetrieval(
+/** Verify the native auth owner once. A rejected probe is typed absence. */
+async function verifyNativeAuthAdmission(
 	seam: BrowserUseSecuritySeam,
-): Promise<BrowserUseTokenRetrievalPort | undefined> {
+): Promise<ProductAdmissionResult | undefined> {
 	try {
-		const verdict = await seam.admission.verifyProduct();
-		if (verdict.verdict !== "admitted") return undefined;
+		return await seam.admission.verifyProduct();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Construct the Token Retrieval Port only from the shared admitted verdict.
+ * Executor or port construction failure remains fail-closed.
+ */
+function resolveAuthTokenRetrieval(
+	seam: BrowserUseSecuritySeam,
+	admission: ProductAdmissionResult | undefined,
+): BrowserUseTokenRetrievalPort | undefined {
+	try {
+		if (admission?.verdict !== "admitted") return undefined;
 		const { execute, token_handle_id } = seam.createTokenExecutor();
 		return createOpTokenRetrievalPort({ execute, token_handle_id });
 	} catch {
@@ -591,13 +596,13 @@ async function resolveAuthTokenRetrieval(
  * store workflow. Provider construction failure is treated as absence so the
  * transaction returns its typed recovery continuation.
  */
-async function resolveUserPresentAuthAccess(
+function resolveUserPresentAuthAccess(
 	seam: BrowserUseSecuritySeam,
-): Promise<BrowserUseAuthAccessProvider | undefined> {
+	admission: ProductAdmissionResult | undefined,
+): BrowserUseAuthAccessProvider | undefined {
 	if (seam.createUserPresentAccessProvider === undefined) return undefined;
 	try {
-		const verdict = await seam.admission.verifyProduct();
-		if (verdict.verdict !== "admitted") return undefined;
+		if (admission?.verdict !== "admitted") return undefined;
 		return seam.createUserPresentAccessProvider();
 	} catch {
 		return undefined;
@@ -1388,17 +1393,25 @@ export async function createProductionBrowserUseRuntime(
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
 	const securitySeam = seam ?? createNativeAbsentSecuritySeam();
+	const tokenNeedsResolution = runtime.authTokenRetrieval === undefined;
+	const userPresentNeedsResolution =
+		runtime.authUserPresentAccess === undefined &&
+		securitySeam.createUserPresentAccessProvider !== undefined;
+	const authAdmission =
+		tokenNeedsResolution || userPresentNeedsResolution
+			? await verifyNativeAuthAdmission(securitySeam)
+			: undefined;
 	// Honor an explicitly injected port; otherwise let the seam decide. Absence
 	// leaves the field undefined so the auth command reports typed absence.
-	if (runtime.authTokenRetrieval === undefined) {
-		const port = await resolveAuthTokenRetrieval(securitySeam);
+	if (tokenNeedsResolution) {
+		const port = resolveAuthTokenRetrieval(securitySeam, authAdmission);
 		if (port !== undefined) runtime.authTokenRetrieval = port;
 	}
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
 	}
-	if (runtime.authUserPresentAccess === undefined) {
-		const provider = await resolveUserPresentAuthAccess(securitySeam);
+	if (userPresentNeedsResolution) {
+		const provider = resolveUserPresentAuthAccess(securitySeam, authAdmission);
 		if (provider !== undefined) runtime.authUserPresentAccess = provider;
 	}
 	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;

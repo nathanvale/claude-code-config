@@ -394,9 +394,10 @@ describe("runbook auth route", () => {
 		expect(delivered).toEqual(["username", "password"]);
 	});
 
-	test("freeform mode never invokes the runbook biometric fallback", async () => {
+	test("freeform strips runtime-only runbook attestation while preserving its metadata", async () => {
 		const { result, humanIdentityCalls } = await fixture({
 			entryMode: "freeform",
+			laneId: "playwright-cdp",
 			proof: false,
 			humanIdentityAttestation: async () => {
 				throw new Error("freeform must not invoke runbook human attestation");
@@ -404,6 +405,10 @@ describe("runbook auth route", () => {
 		});
 		expect(result).toMatchObject({
 			ok: false,
+			run: {
+				task_intent: "routine-automation",
+				adapter_id: "playwright-cdp",
+			},
 			blocked: { blocked_cause: "unknown-post-submit-state" },
 		});
 		expect(humanIdentityCalls).toBe(0);

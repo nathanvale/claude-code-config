@@ -237,6 +237,12 @@ describe("front door: error identity (D6)", () => {
 		expect(result.stdout).not.toContain("--vault-id");
 		expect(result.stdout).not.toContain("--item-id");
 		expect(browserUseContracts["auth-login"].interactivity).toBe("optional");
+		expect(browserUseContracts["auth-login"].sideEffects).toEqual([
+			"check",
+			"auth",
+			"browser",
+			"write",
+		]);
 	});
 });
 

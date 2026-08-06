@@ -8,9 +8,23 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
+import { parseHandoffFacts } from "./browser-use-discovery";
 import type { BrowserUseEnvironmentTokenRetrievalPort } from "./browser-use-environment-op";
-import { createDefaultPlatformFs } from "./browser-use-paths";
-import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
+import {
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import {
+	fixedClock,
+	makeTempXdgEnv,
+} from "./browser-use-platform-test-helpers";
+import type { BrowserUseRunState } from "./browser-use-run-model";
+import {
+	type RunStoreDeps,
+	createSharedRun,
+	loadSharedRun,
+} from "./browser-use-runs";
+import { encodeDurableRecord } from "./browser-use-schemas";
 import { runForTest } from "./browser-use";
 import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 
@@ -80,7 +94,10 @@ function authTransport(origin: string) {
 	};
 }
 
-function tokenPort(origin: string, counts: { vaults: number; redeems: number }) {
+function tokenPort(
+	origin: string,
+	counts: { vaults: number; fetches: number; redeems: number },
+) {
 	const item = {
 		item_id: "item-fixture",
 		vault_id: "vault-fixture",
@@ -96,14 +113,17 @@ function tokenPort(origin: string, counts: { vaults: number; redeems: number }) 
 		},
 		listLoginItems: async () => ({ ok: true as const, items: [item] }),
 		getLoginItem: async () => ({ ok: true as const, item }),
-		fetchCredentialField: async ({ field }) => ({
-			ok: true as const,
-			handle: {
-				handle_id: `opaque-${field}`,
-				field,
-				expires_at_epoch_ms: 60_000,
-			},
-		}),
+		fetchCredentialField: async ({ field }) => {
+			counts.fetches += 1;
+			return {
+				ok: true as const,
+				handle: {
+					handle_id: `opaque-${field}`,
+					field,
+					expires_at_epoch_ms: 60_000,
+				},
+			};
+		},
 		redeemCredentialField: async ({ handle }) => {
 			counts.redeems += 1;
 			return {
@@ -127,6 +147,52 @@ function allFileText(root: string): string {
 	return chunks.join("\n");
 }
 
+async function openTestStore(
+	env: Record<string, string | undefined>,
+): Promise<RunStoreDeps> {
+	const fs = createDefaultPlatformFs();
+	const opened = await openBrowserUsePaths(fs, env);
+	if (!opened.ok) throw new Error(`paths refused: ${opened.refusal.code}`);
+	return { fs, paths: opened.paths, clock: fixedClock().now };
+}
+
+async function createTerminalRun(input: {
+	deps: RunStoreDeps;
+	rawHandoff: string;
+	state: Extract<BrowserUseRunState, "confirmed" | "not-achieved" | "unknown">;
+}): Promise<void> {
+	const parsed = parseHandoffFacts(input.rawHandoff);
+	if (!parsed.ok || parsed.kind !== "verified") {
+		throw new Error("verified handoff fixture refused");
+	}
+	const created = await createSharedRun(input.deps, {
+		run_id: parsed.facts.runId,
+		state: input.state,
+		task_intent: "routine-automation",
+		environment_profile: {
+			environment: parsed.facts.environmentName,
+			profile: parsed.facts.environmentProfile,
+		},
+		adapter_id: parsed.facts.adapter,
+		handoff_evidence_id: parsed.facts.handoffEvidenceId,
+		mutation_dispatched: input.state === "unknown",
+		artifacts: [],
+	});
+	expect(created.ok).toBe(true);
+}
+
+async function runStatus(
+	runtime: ReturnType<typeof makeRuntime>,
+	runId: string,
+): Promise<Record<string, unknown>> {
+	const result = await runForTest(
+		["run", "status", "--run", runId, "--json"],
+		runtime,
+	);
+	expect(result.exitCode).toBe(0);
+	return (parseJson(result.stdout).data as { run: Record<string, unknown> }).run;
+}
+
 describe("auth login CLI", () => {
 	test("freeform login uses one bounded user-present authority and opaque delivery", async () => {
 		const xdg = makeTempXdgEnv();
@@ -144,7 +210,7 @@ describe("auth login CLI", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		const counts = { vaults: 0, redeems: 0 };
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
 		const port = tokenPort(origin, counts);
 		const transport = authTransport(origin);
 		let releaseCalls = 0;
@@ -223,6 +289,394 @@ describe("auth login CLI", () => {
 		expect(argv.join(" ")).not.toContain(ambientSentinel);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain(ambientSentinel);
 		expect(allFileText(xdg.base)).not.toContain(ambientSentinel);
+	});
+
+	test("every terminal run refuses auth re-entry before access acquisition", async () => {
+		for (const state of ["confirmed", "not-achieved", "unknown"] as const) {
+			const xdg = makeTempXdgEnv();
+			disposables.push(xdg);
+			const runId = `freeform-auth-terminal-${state}`;
+			const handoffPath = join(xdg.base, `${runId}-handoff.json`);
+			const rawHandoff = verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			});
+			writeFileSync(handoffPath, rawHandoff, { mode: 0o600 });
+			await createTerminalRun({
+				deps: await openTestStore(xdg.env),
+				rawHandoff,
+				state,
+			});
+			let accessCalls = 0;
+			const result = await runForTest(
+				[
+					"auth", "login", "--run", runId, "--handoff", handoffPath,
+					"--service", "github", "--allowed-origin", "https://github.example",
+					"--json",
+				],
+				makeRuntime({
+					env: xdg.env,
+					platformFs: createDefaultPlatformFs(),
+					readTextFile: async (path) => readFileSync(path, "utf8"),
+					authManagedAccess: async () => {
+						accessCalls += 1;
+						return { ok: false, cause: "authority-unavailable" };
+					},
+				}),
+			);
+			expect(result.exitCode).toBe(20);
+			const envelope = parseJson(result.stdout);
+			expect(envelope.error).toMatchObject({
+				code: "run_terminal_truth",
+				retryable: false,
+			});
+			expect(envelope.continuation).toMatchObject({
+				next_action_id: "inspect_shared_run",
+			});
+			expect(accessCalls).toBe(0);
+		}
+	});
+
+	test("target resolution refusal persists the auth-owned recovery before returning", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-target-refused";
+		const handoffPath = join(xdg.base, "handoff.json");
+		writeFileSync(
+			handoffPath,
+			verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			}),
+			{ mode: 0o600 },
+		);
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const transport = authTransport("https://wrong-origin.example");
+		let releaseCalls = 0;
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: async (path) => readFileSync(path, "utf8"),
+			authUserPresentAccess: async () => ({
+				ok: true,
+				lease: {
+					access_path: "user-present-desktop",
+					required_vault_scope: "exactly-one-vault",
+					expires_at_epoch_ms: 31_000,
+					token_retrieval: tokenPort(origin, counts),
+					release: async () => {
+						releaseCalls += 1;
+					},
+				},
+			}),
+			authTransport: transport.factory,
+		});
+		const result = await runForTest(
+			[
+				"auth", "login", "--handoff", handoffPath,
+				"--service", "github", "--allowed-origin", origin, "--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target-proof-invalid",
+		});
+		expect(await runStatus(runtime, runId)).toMatchObject({
+			state: "awaiting-auth",
+			continuation: { next_action_id: "reprove-target-and-restart" },
+		});
+		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(releaseCalls).toBe(1);
+		expect(transport.closeCalls()).toBe(1);
+	});
+
+	test("missing confidential delivery persists capability-loss recovery", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-delivery-missing";
+		const handoffPath = join(xdg.base, "handoff.json");
+		writeFileSync(
+			handoffPath,
+			verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			}),
+			{ mode: 0o600 },
+		);
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const completePort = tokenPort(origin, counts);
+		const tokenRetrieval = {
+			listVaults: completePort.listVaults,
+			listLoginItems: completePort.listLoginItems,
+			getLoginItem: completePort.getLoginItem,
+			fetchCredentialField: completePort.fetchCredentialField,
+		};
+		const transport = authTransport(origin);
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: async (path) => readFileSync(path, "utf8"),
+			authUserPresentAccess: async () => ({
+				ok: true,
+				lease: {
+					access_path: "user-present-desktop",
+					required_vault_scope: "exactly-one-vault",
+					expires_at_epoch_ms: 31_000,
+					token_retrieval: tokenRetrieval,
+					release: async () => {},
+				},
+			}),
+			authTransport: transport.factory,
+		});
+		const result = await runForTest(
+			[
+				"auth", "login", "--handoff", handoffPath,
+				"--service", "github", "--allowed-origin", origin, "--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "auth_delivery_unavailable",
+		});
+		expect(await runStatus(runtime, runId)).toMatchObject({
+			state: "needs-human",
+			continuation: { next_action_id: "inspect-capability-loss" },
+		});
+		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+	});
+
+	test("auth transaction failure cannot leave a running run ownerless", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-transaction-failed";
+		const handoffPath = join(xdg.base, "handoff.json");
+		const rawHandoff = verifiedHandoffEnvelope((envelope) => {
+			envelope.run_id = runId;
+			envelope.data.attachment.adapter_id = "playwright-cdp";
+			envelope.data.attachment.route = "explicit-cdp";
+			envelope.data.attachment.probe_executable =
+				"/opt/browser-connect/playwright-cdp";
+		});
+		writeFileSync(handoffPath, rawHandoff, { mode: 0o600 });
+		const parsed = parseHandoffFacts(rawHandoff);
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("verified handoff fixture refused");
+		}
+		const deps = await openTestStore(xdg.env);
+		const created = await createSharedRun(deps, {
+			run_id: runId,
+			state: "running",
+			task_intent: "routine-automation",
+			environment_profile: {
+				environment: parsed.facts.environmentName,
+				profile: parsed.facts.environmentProfile,
+			},
+			adapter_id: parsed.facts.adapter,
+			handoff_evidence_id: parsed.facts.handoffEvidenceId,
+			mutation_dispatched: false,
+			artifacts: [],
+		});
+		expect(created.ok).toBe(true);
+		const loaded = await loadSharedRun(deps, runId);
+		if (!loaded.ok) throw new Error("created run could not be loaded");
+		await deps.fs.writeFileDurable(
+			deps.paths.state.runFile(runId),
+			encodeDurableRecord("shared-run", {
+				...loaded.payload,
+				auth_fragment: {
+					schema_version: "1",
+					fragment: { malformed: true },
+				},
+			}),
+			0o600,
+		);
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		const transport = authTransport(origin);
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: async (path) => readFileSync(path, "utf8"),
+			authUserPresentAccess: async () => ({
+				ok: true,
+				lease: {
+					access_path: "user-present-desktop",
+					required_vault_scope: "exactly-one-vault",
+					expires_at_epoch_ms: 31_000,
+					token_retrieval: tokenPort(origin, counts),
+					release: async () => {},
+				},
+			}),
+			authTransport: transport.factory,
+		});
+		const result = await runForTest(
+			[
+				"auth", "login", "--run", runId, "--handoff", handoffPath,
+				"--service", "github", "--allowed-origin", origin, "--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "auth_fragment_invalid",
+		});
+		expect(await runStatus(runtime, runId)).toMatchObject({
+			state: "needs-human",
+			continuation: { next_action_id: "inspect-capability-loss" },
+		});
+		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+	});
+
+	test("access cleanup refusal preserves the result and releases dispatch authority", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-cleanup-refused";
+		const handoffPath = join(xdg.base, "handoff.json");
+		writeFileSync(
+			handoffPath,
+			verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			}),
+			{ mode: 0o600 },
+		);
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		let releaseCalls = 0;
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: async (path) => readFileSync(path, "utf8"),
+			authUserPresentAccess: async () => ({
+				ok: true,
+				lease: {
+					access_path: "user-present-desktop",
+					required_vault_scope: "exactly-one-vault",
+					expires_at_epoch_ms: 31_000,
+					token_retrieval: tokenPort(origin, counts),
+					release: async () => {
+						releaseCalls += 1;
+						throw new Error("fixture cleanup refusal");
+					},
+				},
+			}),
+			authApprovedBindingResolver: async () => ({
+				service_id: "github",
+				auth_context: "interactive-login",
+				allowed_origins: [origin],
+				allowed_login_paths: ["/login"],
+				vault_id: "vault-fixture",
+				item_id: "item-fixture",
+				allowed_auth_methods: ["password"],
+				binding_revision: 1,
+			}),
+			authenticatedStateProof: async ({ target_id }) => ({
+				proven: true,
+				proof: {
+					target_id,
+					page_id: "page-authenticated",
+					frame_id: "frame-auth-login",
+					origin,
+					subject_reference: "subject-ref",
+					account_reference: "account-ref",
+					tenant_reference: "tenant-ref",
+					identity_basis_digest: "proof-digest",
+				},
+			}),
+			authTransport: authTransport(origin).factory,
+		});
+		const argv = [
+			"auth", "login", "--run", runId, "--handoff", handoffPath,
+			"--service", "github", "--allowed-origin", origin, "--json",
+		];
+		const first = await runForTest(
+			argv.filter((value) => value !== "--run" && value !== runId),
+			runtime,
+		);
+		expect(first.exitCode).toBe(0);
+		const second = await runForTest(argv, runtime);
+		expect(second.exitCode).toBe(0);
+		expect(releaseCalls).toBe(2);
+	});
+
+	test("refused user-present authority returns enrollment recovery without credential access", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-user-presence-refused";
+		const handoffPath = join(xdg.base, "handoff.json");
+		writeFileSync(
+			handoffPath,
+			verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			}),
+			{ mode: 0o600 },
+		);
+		const sentinel = "REFUSED_USER_PRESENCE_SECRET_MUST_STAY_INERT";
+		const counts = { vaults: 0, fetches: 0, redeems: 0 };
+		let managedCalls = 0;
+		let userPresentCalls = 0;
+		let transportCalls = 0;
+		const result = await runForTest(
+			[
+				"auth", "login", "--handoff", handoffPath,
+				"--service", "github", "--allowed-origin", origin, "--json",
+			],
+			makeRuntime({
+				env: { ...xdg.env, OP_SERVICE_ACCOUNT_TOKEN: sentinel },
+				platformFs: createDefaultPlatformFs(),
+				readTextFile: async (path) => readFileSync(path, "utf8"),
+				authTokenRetrieval: tokenPort(origin, counts),
+				authManagedAccess: async () => {
+					managedCalls += 1;
+					return { ok: false, cause: "authority-unavailable" };
+				},
+				authUserPresentAccess: async () => {
+					userPresentCalls += 1;
+					return { ok: false, cause: "user-presence-refused" };
+				},
+				authTransport: () => {
+					transportCalls += 1;
+					return authTransport(origin).factory();
+				},
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseJson(result.stdout) as {
+			data: {
+				run: { state: string; continuation: { next_action_id: string } };
+			};
+		};
+		expect(envelope.data.run).toMatchObject({
+			state: "awaiting-auth",
+			continuation: { next_action_id: "enroll-browser-automation-token" },
+		});
+		expect(managedCalls).toBe(1);
+		expect(userPresentCalls).toBe(1);
+		expect(transportCalls).toBe(0);
+		expect(counts).toEqual({ vaults: 0, fetches: 0, redeems: 0 });
+		expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
+		expect(allFileText(xdg.base)).not.toContain(sentinel);
 	});
 
 	test("ambient OP authority cannot substitute for either bounded access path", async () => {

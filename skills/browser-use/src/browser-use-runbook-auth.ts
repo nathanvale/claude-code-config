@@ -884,7 +884,11 @@ export async function runBrowserUseFreeformAuth(
 	deps: Omit<BrowserUseRunbookAuthDeps, "humanIdentityAttestation">,
 	input: BrowserUseFreeformAuthInput,
 ): Promise<BrowserUseRunbookAuthResult> {
-	return await runBrowserUseAuthTransaction(deps, {
+	const {
+		humanIdentityAttestation: _humanIdentityAttestation,
+		...freeformDeps
+	} = deps as BrowserUseRunbookAuthDeps;
+	return await runBrowserUseAuthTransaction(freeformDeps, {
 		...input,
 		entry_mode: "freeform",
 		flow_id: null,

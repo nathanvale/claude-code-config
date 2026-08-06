@@ -52,6 +52,25 @@ describe("Browser Authentication access authority", () => {
 		expect(userPresentCalls).toBe(0);
 	});
 
+	test("accepts a managed lease issued from a later clock instant", async () => {
+		const clock = [10_000, 10_005, 10_006] as const;
+		let clockReads = 0;
+		const now = () =>
+			clock[Math.min(clockReads++, clock.length - 1)] as number;
+		const result = await acquireBrowserUseAuthAccess({
+			now,
+			request,
+			managed: managedBrowserUseAuthAccessProvider({ tokenRetrieval, now }),
+		});
+		expect(result).toMatchObject({
+			ok: true,
+			lease: {
+				access_path: "managed-service-token",
+				expires_at_epoch_ms: 40_005,
+			},
+		});
+	});
+
 	test("falls back to one bounded user-present desktop lease", async () => {
 		const result = await acquireBrowserUseAuthAccess({
 			now: () => 10_000,

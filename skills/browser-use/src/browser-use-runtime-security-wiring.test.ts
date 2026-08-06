@@ -78,12 +78,21 @@ function capturingExecutor(): {
 function presentSeam(): {
 	seam: BrowserUseSecuritySeam;
 	specs: BrowserUseOpCommandSpec[];
+	admissionCalls: number;
 	executorCalls: number;
 } {
 	const captured = capturingExecutor();
+	const admission = createInMemoryAdmissionRuntime({ installed: MINTED });
+	let admissionCalls = 0;
 	let executorCalls = 0;
 	const seam: BrowserUseSecuritySeam = {
-		admission: createInMemoryAdmissionRuntime({ installed: MINTED }),
+		admission: {
+			verifyProduct: async () => {
+				admissionCalls += 1;
+				return await admission.verifyProduct();
+			},
+			verifyTarget: admission.verifyTarget.bind(admission),
+		},
 		createTokenExecutor: () => {
 			executorCalls += 1;
 			return { execute: captured.execute, token_handle_id: "handle-native" };
@@ -92,6 +101,9 @@ function presentSeam(): {
 	return {
 		seam,
 		specs: captured.specs,
+		get admissionCalls() {
+			return admissionCalls;
+		},
 		get executorCalls() {
 			return executorCalls;
 		},
@@ -154,10 +166,13 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 		expect(executorAsked).toBe(false);
 	});
 
-	test("a seam probe that throws is treated as absence, never crashes", async () => {
+	test("one throwing seam probe leaves every native auth surface absent", async () => {
+		let admissionCalls = 0;
+		let userPresentFactoryCalls = 0;
 		const throwingSeam: BrowserUseSecuritySeam = {
 			admission: {
 				verifyProduct: async () => {
+					admissionCalls += 1;
 					throw new Error("seam probe boom");
 				},
 				verifyTarget: async () => {
@@ -167,12 +182,19 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 			createTokenExecutor: () => {
 				throw new Error("must not be reached");
 			},
+			createUserPresentAccessProvider: () => {
+				userPresentFactoryCalls += 1;
+				return async () => ({ ok: false, cause: "authority-unavailable" });
+			},
 		};
 		const runtime = await createProductionBrowserUseRuntimeForTest(
 			EMPTY_OVERRIDES,
 			throwingSeam,
 		);
 		expect(runtime.authTokenRetrieval).toBeUndefined();
+		expect(runtime.authUserPresentAccess).toBeUndefined();
+		expect(admissionCalls).toBe(1);
+		expect(userPresentFactoryCalls).toBe(0);
 	});
 
 	test("an admitted seam whose createTokenExecutor throws yields absence, no unhandled rejection", async () => {
@@ -201,6 +223,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 			present.seam,
 		);
 		expect(runtime.authTokenRetrieval).toBeDefined();
+		expect(present.admissionCalls).toBe(1);
 		expect(present.executorCalls).toBe(1);
 
 		// The constructed port drives the injected executor and projects the
@@ -217,8 +240,9 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 		expect(present.specs[0]?.env.token_handle_id).toBe("handle-native");
 	});
 
-	test("an explicit override port is honored and the seam is not probed", async () => {
+	test("explicit auth surface overrides are honored and the seam is not probed", async () => {
 		let probed = false;
+		let userPresentFactoryAsked = false;
 		const seam: BrowserUseSecuritySeam = {
 			admission: {
 				verifyProduct: async () => {
@@ -230,22 +254,42 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 			createTokenExecutor: () => {
 				throw new Error("must not be reached");
 			},
+			createUserPresentAccessProvider: () => {
+				userPresentFactoryAsked = true;
+				throw new Error("must not be reached");
+			},
 		};
 		const explicitPort = { marker: "explicit" } as never;
+		const explicitUserPresentAccess = async () =>
+			({ ok: false, cause: "authority-unavailable" }) as const;
 		const runtime = await createProductionBrowserUseRuntimeForTest(
-			{ env: {}, authTokenRetrieval: explicitPort },
+			{
+				env: {},
+				authTokenRetrieval: explicitPort,
+				authUserPresentAccess: explicitUserPresentAccess,
+			},
 			seam,
 		);
 		expect(runtime.authTokenRetrieval).toBe(explicitPort);
+		expect(runtime.authUserPresentAccess).toBe(explicitUserPresentAccess);
 		expect(probed).toBe(false);
+		expect(userPresentFactoryAsked).toBe(false);
 	});
 
 	test("an admitted security owner wires one bounded user-present access provider", async () => {
 		const provider = async () =>
 			({ ok: false, cause: "authority-unavailable" }) as const;
+		const admission = createInMemoryAdmissionRuntime({ installed: MINTED });
+		let admissionCalls = 0;
 		let providerFactoryCalls = 0;
 		const seam: BrowserUseSecuritySeam = {
-			admission: createInMemoryAdmissionRuntime({ installed: MINTED }),
+			admission: {
+				verifyProduct: async () => {
+					admissionCalls += 1;
+					return await admission.verifyProduct();
+				},
+				verifyTarget: admission.verifyTarget.bind(admission),
+			},
 			createTokenExecutor: () => {
 				throw new Error("managed authority is unavailable");
 			},
@@ -262,6 +306,7 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 
 		expect(runtime.authTokenRetrieval).toBeUndefined();
 		expect(runtime.authUserPresentAccess).toBe(provider);
+		expect(admissionCalls).toBe(1);
 		expect(providerFactoryCalls).toBe(1);
 	});
 

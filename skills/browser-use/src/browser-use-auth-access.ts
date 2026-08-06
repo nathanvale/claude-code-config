@@ -115,11 +115,11 @@ async function acquireFromProvider(input: {
 		};
 	}
 	const lease = result.lease;
+	const observedNow = Math.max(input.startedAtEpochMs, input.now());
 	const expiresWithinRequest =
 		Number.isSafeInteger(lease.expires_at_epoch_ms) &&
-		lease.expires_at_epoch_ms > input.now() &&
-		lease.expires_at_epoch_ms <=
-			input.startedAtEpochMs + input.request.ttl_ms;
+		lease.expires_at_epoch_ms > observedNow &&
+		lease.expires_at_epoch_ms <= observedNow + input.request.ttl_ms;
 	if (
 		lease.access_path !== input.expectedPath ||
 		lease.required_vault_scope !== "exactly-one-vault" ||

@@ -26,6 +26,7 @@ import {
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	emitCliDiagnostic,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	resetCliDiagnostics,
@@ -119,7 +120,10 @@ import {
 	revalidateAuthAttestation,
 } from "./browser-use-run-model";
 import { createBrowserUseAuthContract } from "./browser-use-auth";
-import { BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE } from "./browser-use-auth-model";
+import {
+	type BrowserUseAuthBlockedCause,
+	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
+} from "./browser-use-auth-model";
 import {
 	acquireBrowserUseAuthAccess,
 	managedBrowserUseAuthAccessProvider,
@@ -5101,6 +5105,15 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 				platformStoreFailureOf(loaded.code, loaded.message),
 			);
 		}
+		if (isTerminalRunState(loaded.run.state)) {
+			return emitPlatformStoreFailure(input, {
+				code: "run_terminal_truth",
+				message: `run ${loaded.run.run_id} holds terminal truth ${loaded.run.state}; terminal truth never re-enters execution.`,
+				actionId: "inspect_shared_run",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "none",
+			});
+		}
 		const mismatch = checkSameLaneResumeForTaskRun(
 			loaded.run,
 			handoff.adapter,
@@ -5243,6 +5256,13 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 			{ expected_url: allowedOrigin, allowed_origins: [allowedOrigin] },
 		);
 		if (!target.ok) {
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run,
+				claim: dispatchClaim,
+				cause: target.cause,
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(
@@ -5256,6 +5276,13 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 			handoff: rawHandoffData as AgentBrowserVerifiedHandoff,
 		});
 		if (deliver === undefined) {
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run,
+				claim: dispatchClaim,
+				cause: "capability-loss",
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
 			return emitPlatformStoreFailure(input, {
 				code: "auth_delivery_unavailable",
 				message:
@@ -5331,6 +5358,13 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 					},
 				});
 			}
+			const blocked = await persistFreeformAuthBlock({
+				deps: store.deps,
+				run: authenticated.run,
+				claim: dispatchClaim,
+				cause: "capability-loss",
+			});
+			if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
 			return emitPlatformStoreFailure(
 				input,
 				platformStoreFailureOf(
@@ -5351,9 +5385,51 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 			},
 		});
 	} finally {
-		authTransport?.close();
-		await accessLease?.release();
-		await releaseLease(store.deps, dispatchLease.lease);
+		await settleAuthCleanup("freeform-auth-transport", () =>
+			authTransport?.close(),
+		);
+		await settleAuthCleanup("freeform-auth-access-lease", async () =>
+			await accessLease?.release(),
+		);
+		await settleAuthCleanup("freeform-auth-dispatch-lease", async () =>
+			await releaseLease(store.deps, dispatchLease.lease),
+		);
+	}
+}
+
+async function persistFreeformAuthBlock(input: {
+	deps: RunStoreDeps;
+	run: BrowserUseSharedRun;
+	claim: LeaseWriteClaim;
+	cause: BrowserUseAuthBlockedCause;
+}): Promise<
+	| { ok: true; run: BrowserUseSharedRun }
+	| { ok: false; failure: PlatformStoreFailure }
+> {
+	const blocked = BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[input.cause];
+	return await persistFencedSharedRun(
+		input.deps,
+		input.run,
+		`freeform-auth-blocked-${input.run.run_id}`,
+		(current) => ({
+			...current,
+			state: blocked.run_state,
+			continuation: structuredClone(blocked.continuation),
+		}),
+		input.claim,
+	);
+}
+
+async function settleAuthCleanup(
+	label: string,
+	cleanup: () => unknown | Promise<unknown>,
+): Promise<void> {
+	try {
+		await cleanup();
+	} catch {
+		emitCliDiagnostic("browser-use.cli", "debug", "auth-cleanup-refused", {
+			cleanup: label,
+		});
 	}
 }
 
@@ -6512,9 +6588,13 @@ async function runRunbookRun(
 		},
 	);
 		} finally {
-			await runbookAccessLease?.release();
-			const currentDispatchLease = await dispatchHeartbeat.stop();
-		await releaseLease(store.deps, currentDispatchLease);
+			await settleAuthCleanup("runbook-auth-access-lease", async () =>
+				await runbookAccessLease?.release(),
+			);
+			await settleAuthCleanup("runbook-auth-dispatch-lease", async () => {
+				const currentDispatchLease = await dispatchHeartbeat.stop();
+				await releaseLease(store.deps, currentDispatchLease);
+			});
 	}
 }
 

@@ -2732,7 +2732,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			json: true,
 			audience: "agent",
 			mutation: "browser",
-			sideEffects: ["check", "browser", "write"],
+			sideEffects: ["check", "auth", "browser", "write"],
 			executionModes: ["normal"],
 			previewExemption: {
 				reason:

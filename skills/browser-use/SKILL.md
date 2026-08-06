@@ -19,8 +19,9 @@ attachment.
   connectable adapter from its evidence, then run
   `browser-connect connect <adapter> --json`.
 - Open-ended login wall: keep the verified handoff and run
-  `browser-use auth login --help`. This starts the freeform Browser
-  Authentication Transaction; never create a Runbook only to access auth.
+  `browser-use auth login --help` only to discover the contract and required
+  invocation. Then invoke the admitted `browser-use auth login` command and
+  follow its typed continuation; never create a Runbook only to access auth.
 - Read the selected adapter's native help or tool schema. Use that surface to
   perform and prove the requested outcome. Return only bounded outcome and
   artifact references through Browser Use.
