@@ -156,6 +156,7 @@ declare -a REGISTERED_OWNER_PATHS=(
 	"context/personal.md"
 	"context/vault.md"
 	"context/comms-style.md"
+	"context/tracker-links.md"
 	"docs/git/conventions.md"
 	"docs/git/workflows.md"
 	"docs/git/worktree.md"
