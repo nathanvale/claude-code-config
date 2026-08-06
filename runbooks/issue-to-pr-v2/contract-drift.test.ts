@@ -1,0 +1,3767 @@
+/**
+ * Issue #81 — runtime contract drift check, batch 1 (contract-fact loader).
+ *
+ * These tests pin the `loadContractFacts()` loader against the LIVE CLI
+ * surface. They never hardcode the expected route ids, slice names, packet
+ * roles, or field paths — instead each test spawns `cli.ts` itself and
+ * compares the loader's facts to what the CLI just emitted. That is the
+ * whole point of the loader (AC2/AC5): the docs check must source its
+ * source-of-truth from the running CLI, not a duplicated list.
+ */
+
+import { afterAll, describe, expect, test } from "bun:test";
+import { statSync } from "node:fs";
+import { execPath } from "node:process";
+import { join } from "node:path";
+
+import {
+  type DocClaims,
+  type DriftFinding,
+  checkContractDrift,
+  checkFailStopWorkflowLearningScan,
+  checkGeneratedScaffoldBlocksDrift,
+  checkGotchasRelationship,
+  checkLedgerLifecycleFieldDrift,
+  checkScaffoldInventoryDrift,
+  checkWorkflowLearningScanRelationship,
+  compareClaimsToFacts,
+  extractDocClaims,
+  finiteChildKeys,
+  loadContractFacts,
+  scaffoldInventoryClassifications,
+  scaffoldIdsCoveredBySurfaces,
+} from "./contract-drift";
+import { SCAFFOLD_IDS } from "./lib/scaffolds";
+
+const cliPath = join(import.meta.dir, "cli.ts");
+
+/**
+ * Local spawn helper mirroring cli-smoke.test.ts. Used ONLY by the tests to
+ * independently fetch the live CLI surface for comparison — the loader under
+ * test must spawn the CLI on its own.
+ */
+async function runCli(args: string[]): Promise<{
+  stdout: string;
+  exitCode: number;
+  data: Record<string, unknown>;
+}> {
+  const proc = Bun.spawn([execPath, cliPath, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, , exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  const firstLine = stdout.split("\n").find((l) => l.length > 0) ?? "{}";
+  const envelope = JSON.parse(firstLine) as Record<string, unknown>;
+  return {
+    stdout,
+    exitCode,
+    data: (envelope.data ?? {}) as Record<string, unknown>,
+  };
+}
+
+describe("AC2: loadContractFacts derives names from the live CLI", () => {
+  test("route ids match `contract route_ids --json` data.values exactly", async () => {
+    const facts = await loadContractFacts();
+    const live = await runCli(["contract", "route_ids", "--json"]);
+    const liveRouteIds = live.data.values as string[];
+
+    expect(Array.isArray(liveRouteIds)).toBe(true);
+    expect(liveRouteIds.length).toBeGreaterThan(0);
+    expect(facts.routeIds).toEqual(liveRouteIds);
+  });
+
+  test("command names match `--help --json` data.commands[].name", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const liveNames = (help.data.commands as { name: string }[]).map(
+      (c) => c.name,
+    );
+
+    expect(liveNames.length).toBeGreaterThan(0);
+    expect(facts.commandNames).toEqual(liveNames);
+  });
+
+  test("contract slice names match `--help --json` data.contract_slices", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const liveSlices = help.data.contract_slices as string[];
+
+    expect(Array.isArray(liveSlices)).toBe(true);
+    expect(liveSlices.length).toBeGreaterThan(0);
+    expect(facts.contractSlices).toEqual(liveSlices);
+  });
+
+  test("packet roles match `contract packet_roles --json` data.values", async () => {
+    const facts = await loadContractFacts();
+    const live = await runCli(["contract", "packet_roles", "--json"]);
+    const liveRoles = live.data.values as string[];
+
+    expect(Array.isArray(liveRoles)).toBe(true);
+    expect(liveRoles.length).toBeGreaterThan(0);
+    expect(facts.packetRoles).toEqual(liveRoles);
+  });
+
+  test("scaffold ids match `--help --json` data.scaffold_ids", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const liveScaffoldIds = help.data.scaffold_ids as string[];
+
+    expect(Array.isArray(liveScaffoldIds)).toBe(true);
+    expect(liveScaffoldIds.length).toBeGreaterThan(0);
+    expect(facts.scaffoldIds).toEqual(liveScaffoldIds);
+  });
+
+  test("ledger schema pointer slices match their runtime catalog", async () => {
+    const facts = await loadContractFacts();
+    const live = await runCli([
+      "contract",
+      "ledger_schema_pointer_slices",
+      "--json",
+    ]);
+    const liveSlices = live.data.values as string[];
+
+    expect(Array.isArray(liveSlices)).toBe(true);
+    expect(liveSlices.length).toBeGreaterThan(0);
+    expect(facts.ledgerSchemaPointerSlices).toEqual(liveSlices);
+  });
+});
+
+describe("AC3: response field paths derived from the live help payload", () => {
+  test("every top-level state shape key becomes a data.K path", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const stateShape = help.data.state_response_shape as Record<
+      string,
+      unknown
+    >;
+
+    for (const key of Object.keys(stateShape)) {
+      expect(facts.responseFieldPaths.state).toContain(`data.${key}`);
+    }
+  });
+
+  test("every top-level diagnose shape key becomes a data.K path", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const diagnoseShape = help.data.diagnose_response_shape as Record<
+      string,
+      unknown
+    >;
+
+    for (const key of Object.keys(diagnoseShape)) {
+      expect(facts.responseFieldPaths.diagnose).toContain(`data.${key}`);
+    }
+  });
+
+  test("finite brace-set children are flattened one level (state digest_drift)", async () => {
+    const facts = await loadContractFacts();
+    // digest_drift advertises a finite `{ acceptance_criteria, batch_contract,
+    // digests, any }` set, so the loader must emit the child paths.
+    expect(facts.responseFieldPaths.state).toContain(
+      "data.digest_drift.acceptance_criteria",
+    );
+    expect(facts.responseFieldPaths.state).toContain("data.digest_drift.any");
+  });
+
+  test("cross-referenced finite shape resolves (diagnose drift.digest_drift.*)", async () => {
+    const facts = await loadContractFacts();
+    // drift advertises `{ digest_drift: same shape as
+    // state_response_shape.digest_drift, findings_table_drift: null }`. The
+    // cross-reference must resolve to digest_drift's finite children.
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.drift.digest_drift",
+    );
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.drift.digest_drift.acceptance_criteria",
+    );
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.drift.findings_table_drift",
+    );
+  });
+
+  test("non-finite nested shapes stop at the nearest known parent (blocking_gates)", async () => {
+    const facts = await loadContractFacts();
+    // blocking_gates describes an array of union objects, not a finite child
+    // set: the loader must stop at data.blocking_gates and invent no children.
+    expect(facts.responseFieldPaths.state).toContain("data.blocking_gates");
+    const inventedChild = facts.responseFieldPaths.state.some((p) =>
+      p.startsWith("data.blocking_gates."),
+    );
+    expect(inventedChild).toBe(false);
+  });
+
+  test("finite brace set with a trailing array-typed sibling still yields children (installed_artifact_presence)", async () => {
+    const facts = await loadContractFacts();
+    // installed_artifact_presence is genuinely finite:
+    //   "{ references, templates, cli_ts, lib_dir, all_present } booleans +
+    //    missing: ('references' | ...)[]"
+    // The trailing `missing: (...)[]` array sibling must NOT suppress the
+    // finite brace set's five children. Verify each one resolves under both
+    // shapes (state holds it directly; diagnose via cross-reference).
+    for (const child of [
+      "references",
+      "templates",
+      "cli_ts",
+      "lib_dir",
+      "all_present",
+    ]) {
+      expect(facts.responseFieldPaths.state).toContain(
+        `data.installed_artifact_presence.${child}`,
+      );
+    }
+    // The cross-referenced diagnose copy resolves to the same children.
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.installed_artifact_presence.references",
+    );
+  });
+});
+
+describe("AC3 (F10): finiteChildKeys rejects single-brace array / union shapes", () => {
+  test("single-brace array-of-objects `{ a, b, c }[]` returns null", () => {
+    // The `[]` sits OUTSIDE the brace group, so the inner-scoped guard misses
+    // it. The whole thing is an element shape, not a fixed data.K.child set:
+    // children must NOT be invented.
+    expect(finiteChildKeys("{ a, b, c }[]")).toBeNull();
+  });
+
+  test("single-brace union `string or { a, b }` returns null", () => {
+    // The `or` marks a description-level union; the brace is only one arm, so
+    // its keys are not guaranteed `data.K.child` paths.
+    expect(finiteChildKeys("string or { a, b }")).toBeNull();
+    expect(finiteChildKeys("{ a, b } or string")).toBeNull();
+  });
+
+  test("genuine finite CLI shapes still resolve (regression)", async () => {
+    // Re-assert against the LIVE shapes: the F10 guard must not over-correct
+    // and strip children from genuinely finite sets.
+    const help = await runCli(["--help", "--json"]);
+    const state = help.data.state_response_shape as Record<string, string>;
+
+    // installed_artifact_presence: 5 boolean children + a trailing
+    // `missing: (...)[]` array SIBLING whose `[]` is NOT right after the brace.
+    expect(finiteChildKeys(state.installed_artifact_presence)).toEqual([
+      "references",
+      "templates",
+      "cli_ts",
+      "lib_dir",
+      "all_present",
+    ]);
+
+    // digest_drift: 4 boolean children, no array/union markers.
+    expect(finiteChildKeys(state.digest_drift)).toEqual([
+      "acceptance_criteria",
+      "batch_contract",
+      "digests",
+      "any",
+    ]);
+
+    // confirmation_state: 3 children, "one of" must NOT trip the `\bor\b` guard.
+    expect(finiteChildKeys(state.confirmation_state)).toEqual([
+      "acceptance_criteria",
+      "batch_contract",
+      "digests",
+    ]);
+
+    // blocking_gates: union with two brace groups → still null.
+    expect(finiteChildKeys(state.blocking_gates)).toBeNull();
+  });
+});
+
+describe("AC5: the loader holds no duplicate source-of-truth lists", () => {
+  test("source file contains no literal route id, slice name, packet role, or field path", async () => {
+    const source = await Bun.file(join(import.meta.dir, "contract-drift.ts")).text();
+
+    // Pull the real contract values from the live CLI, then assert none of
+    // them appear as a hardcoded literal in the loader source. If a future
+    // edit pastes a list in, this fails loudly.
+    const routeIds = (await runCli(["contract", "route_ids", "--json"])).data
+      .values as string[];
+    const packetRoles = (await runCli(["contract", "packet_roles", "--json"]))
+      .data.values as string[];
+    const help = await runCli(["--help", "--json"]);
+    const slices = help.data.contract_slices as string[];
+
+    // AC5 also covers response-shape FIELD PATHS: a future hardcoded
+    // `digest_drift` / `data.drift.digest_drift` literal would otherwise slip
+    // through. Derive both the dotted paths and their distinctive leaf keys
+    // from the live facts and forbid them too. (Source the paths from the
+    // loader itself so this scan tracks whatever the CLI actually advertises.)
+    const facts = await loadContractFacts();
+    const fieldPaths = [
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ];
+    const fieldPathLeaves = fieldPaths.flatMap((p) =>
+      p.split(".").filter((seg) => seg !== "data"),
+    );
+
+    // ALLOWED read-coordinates: these are help-payload field NAMES (which CLI
+    // fields to read) and slice *argument* names, NOT duplicated contract
+    // values. They may legitimately appear in the source.
+    const allowedReadCoordinates = new Set([
+      "route_ids",
+      "packet_roles",
+      "ledger_schema_pointer_slices",
+      "commands",
+      "contract_slices",
+      "scaffold_ids",
+      "state_response_shape",
+      "diagnose_response_shape",
+    ]);
+
+    const forbidden = [
+      ...routeIds,
+      ...packetRoles,
+      ...slices,
+      ...fieldPaths,
+      ...fieldPathLeaves,
+    ].filter((v) => !allowedReadCoordinates.has(v));
+
+    for (const value of new Set(forbidden)) {
+      expect(source.includes(`"${value}"`)).toBe(false);
+      expect(source.includes(`'${value}'`)).toBe(false);
+    }
+  });
+});
+
+describe("AC6: read-only loader, hard errors on CLI failure", () => {
+  test("returns a fully populated fact set (never silently empty)", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.routeIds.length).toBeGreaterThan(0);
+    expect(facts.commandNames.length).toBeGreaterThan(0);
+    expect(facts.contractSlices.length).toBeGreaterThan(0);
+    expect(facts.packetRoles.length).toBeGreaterThan(0);
+    expect(facts.scaffoldIds.length).toBeGreaterThan(0);
+    expect(facts.ledgerSchemaPointerSlices.length).toBeGreaterThan(0);
+    expect(facts.responseFieldPaths.state.length).toBeGreaterThan(0);
+    expect(facts.responseFieldPaths.diagnose.length).toBeGreaterThan(0);
+  });
+
+  test("throws a clear error naming the failing command when the CLI is missing", async () => {
+    await expect(
+      loadContractFacts({ cliPath: join(import.meta.dir, "does-not-exist.ts") }),
+    ).rejects.toThrow();
+  });
+
+  test("throws when the CLI returns an error envelope (status !== ok)", async () => {
+    // Inject a fake CLI path that emits an error envelope for one of the
+    // expected invocations to prove the loader never accepts a non-ok status.
+    const errorEnvelope = JSON.stringify({
+      status: "error",
+      error: { code: "boom", message: "synthetic failure" },
+    });
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-contract-drift-${process.pid}`,
+    );
+    const fakeCli = join(dir, "fake-cli.ts");
+    await Bun.write(fakeCli, `console.log(${JSON.stringify(errorEnvelope)});`);
+    try {
+      // Pin to the literal phrase readCliData emits — `/fake-cli|error|ok|...`
+      // matched almost any message and would silently survive a contract
+      // regression that changed the rejection phrasing.
+      await expect(
+        loadContractFacts({ cliPath: fakeCli }),
+      ).rejects.toThrow("returned a non-ok envelope");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("rejects with a deadline error and kills the subprocess when the CLI hangs past the deadline", async () => {
+    // Spawn a fake CLI that sleeps for far longer than the injected deadline
+    // and never writes to stdout. The loader's Promise.race against the
+    // setTimeout deadline must reject with the deadline-naming message AND
+    // call proc.kill() — otherwise an interactively-stalled cli.ts would
+    // wedge every pre-stage gate trigger. The fake script also installs a
+    // SIGTERM handler that, if not killed promptly, would write a sentinel
+    // line; observing the deadline error before that sentinel proves the
+    // kill path runs.
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-contract-drift-deadline-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const fakeCli = join(dir, "hanging-cli.ts");
+    await Bun.write(
+      fakeCli,
+      [
+        "// Hang past the loader's deadline to drive the timeout race.",
+        "await new Promise(() => {});",
+      ].join("\n"),
+    );
+    try {
+      const before = Date.now();
+      await expect(
+        loadContractFacts({ cliPath: fakeCli, readCliDeadlineMs: 50 }),
+      ).rejects.toThrow(/exceeded\s+50ms\s+deadline; killed/);
+      const elapsed = Date.now() - before;
+      // The deadline is 50ms; the loader's own startup overhead bounds the
+      // upper edge. An order-of-magnitude bound proves the timeout actually
+      // fired rather than the test waiting on the natural 10s default.
+      expect(elapsed).toBeLessThan(5_000);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
+describe("AC6: exit-0 processes with unusable stdout are hard errors", () => {
+  const dir = join(import.meta.dir, `../../.tmp-contract-stdout-${process.pid}`);
+
+  /** Write a fake CLI whose body is `scriptBody` and load through it. */
+  async function loadWithScript(
+    scriptBody: string,
+  ): Promise<ReturnType<typeof expect>["rejects"]> {
+    const fakeCli = join(dir, `fake-${Math.random().toString(36).slice(2)}.ts`);
+    await Bun.write(fakeCli, scriptBody);
+    return expect(loadContractFacts({ cliPath: fakeCli })).rejects;
+  }
+
+  afterAll(async () => {
+    await Bun.$`rm -rf ${dir}`.quiet();
+  });
+
+  test("(a) exit-0 process emitting non-JSON stdout throws", async () => {
+    // The CLI exits 0 but prints prose, not JSON: JSON.parse must throw and
+    // the loader must surface it (AC6 names "unparseable stdout" explicitly).
+    const rejects = await loadWithScript(`console.log("not json at all");`);
+    await rejects.toThrow(/non-JSON|parse|unparseable|stdout/i);
+  });
+
+  test("(b) exit-0 process emitting empty stdout / no envelope throws", async () => {
+    // Prints nothing on stdout — no parseable first line at all.
+    const rejects = await loadWithScript(`process.exit(0);`);
+    await rejects.toThrow(/no parseable envelope|envelope|empty|stdout/i);
+  });
+
+  test("(c) exit-0 ok envelope with NO data object throws", async () => {
+    const okNoData = JSON.stringify({ status: "ok" });
+    const rejects = await loadWithScript(`console.log(${JSON.stringify(okNoData)});`);
+    // Pin the distinctive no-data-object message only. A loose `/data/i`
+    // alternative also matched the downstream "--help data.commands is not an
+    // array" throw, so deleting the no-data-object branch left this test green
+    // (passing for the wrong reason). Match the exact branch message instead.
+    await rejects.toThrow(/no data object/i);
+  });
+});
+
+/**
+ * Build a fake CLI script body that dispatches on argv and emits a
+ * well-formed `{"status":"ok","data":{...}}` envelope per command. Each
+ * `data` value is supplied by the caller, letting a test inject EMPTY or
+ * partial fact sets to prove the loader hard-errors on them (AC6). The
+ * script writes exactly one JSON line and exits 0, so the failure under test
+ * is purely "ok envelope, empty facts", never a process/parse failure.
+ */
+function fakeCliScript(parts: {
+  help: Record<string, unknown>;
+  routeIds: unknown;
+  packetRoles: unknown;
+  contractValues?: Record<string, unknown>;
+}): string {
+  const help = JSON.stringify({ status: "ok", data: parts.help });
+  const contractValues = JSON.stringify({
+    route_ids: parts.routeIds,
+    packet_roles: parts.packetRoles,
+    ledger_schema_pointer_slices: ["candidate_batch_fields"],
+    ...(parts.contractValues ?? {}),
+  });
+  // process.argv: [bun, scriptPath, ...cliArgs]. The loader invokes
+  // `--help`, `contract route_ids`, `contract packet_roles`, and ledger schema
+  // slices used by the pointer drift check.
+  return [
+    `const argv = process.argv.slice(2);`,
+    `if (argv.includes("--help")) { console.log(${JSON.stringify(help)}); }`,
+    `else if (argv[0] === "contract") { const values = ${contractValues}[argv[1]]; console.log(JSON.stringify({ status: "ok", data: { values } })); }`,
+    `else { console.log(${JSON.stringify(JSON.stringify({ status: "ok", data: {} }))}); }`,
+  ].join("\n");
+}
+
+/**
+ * A fully populated, minimally valid help payload. Tests clone this and zero
+ * out one field at a time to prove each empty fact set is hard-errored
+ * individually (rather than only catching a wholly-empty payload).
+ */
+function validHelpPayload(): Record<string, unknown> {
+  return {
+    commands: [{ name: "state" }, { name: "diagnose" }],
+    contract_slices: ["route_ids", "packet_roles"],
+    scaffold_ids: ["ce-plan-candidate-batch"],
+    state_response_shape: { ledger_path: "string", route_id: "one of route_ids" },
+    diagnose_response_shape: {
+      ledger_path: "string",
+      inferred_route_id: "one of route_ids",
+    },
+  };
+}
+
+describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
+  const dir = join(import.meta.dir, `../../.tmp-contract-empty-${process.pid}`);
+
+  async function loadWith(parts: {
+    help: Record<string, unknown>;
+    routeIds: unknown;
+    packetRoles: unknown;
+    contractValues?: Record<string, unknown>;
+  }): Promise<{ rejects: ReturnType<typeof expect>["rejects"] }> {
+    const fakeCli = join(dir, `fake-${Math.random().toString(36).slice(2)}.ts`);
+    await Bun.write(fakeCli, fakeCliScript(parts));
+    return { rejects: expect(loadContractFacts({ cliPath: fakeCli })).rejects };
+  }
+
+  afterAll(async () => {
+    await Bun.$`rm -rf ${dir}`.quiet();
+  });
+
+  test("empty route_ids data.values is a hard error", async () => {
+    const { rejects } = await loadWith({
+      help: validHelpPayload(),
+      routeIds: [],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/route_ids|empty/i);
+  });
+
+  test("empty packet_roles data.values is a hard error", async () => {
+    const { rejects } = await loadWith({
+      help: validHelpPayload(),
+      routeIds: ["blocked-x"],
+      packetRoles: [],
+    });
+    await rejects.toThrow(/packet_roles|empty/i);
+  });
+
+  test("empty commands array is a hard error", async () => {
+    const help = validHelpPayload();
+    help.commands = [];
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/commands|empty/i);
+  });
+
+  test("empty scaffold_ids is a hard error", async () => {
+    const help = validHelpPayload();
+    help.scaffold_ids = [];
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/scaffold_ids|empty/i);
+  });
+
+  test("empty ledger schema pointer catalog is a hard error", async () => {
+    const { rejects } = await loadWith({
+      help: validHelpPayload(),
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+      contractValues: { ledger_schema_pointer_slices: [] },
+    });
+    await rejects.toThrow(/ledger_schema_pointer_slices|empty/i);
+  });
+
+  test("empty contract_slices is a hard error", async () => {
+    const help = validHelpPayload();
+    help.contract_slices = [];
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/contract_slices|empty/i);
+  });
+
+  test("empty state_response_shape (no derivable paths) is a hard error", async () => {
+    const help = validHelpPayload();
+    help.state_response_shape = {};
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/state|response|shape|empty|path/i);
+  });
+
+  test("empty diagnose_response_shape (no derivable paths) is a hard error", async () => {
+    const help = validHelpPayload();
+    help.diagnose_response_shape = {};
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/diagnose|response|shape|empty|path/i);
+  });
+
+  test("partial: one populated slice + empty route_ids still hard-errors", async () => {
+    // Mirrors the real partial case: contract_slices/commands populated but a
+    // values: [] envelope sneaks through. Must still reject, not return a
+    // partially-empty fact set.
+    const { rejects } = await loadWith({
+      help: validHelpPayload(),
+      routeIds: [],
+      packetRoles: ["builder", "validator"],
+    });
+    await rejects.toThrow(/route_ids|empty/i);
+  });
+});
+
+/**
+ * Issue #81 — batch 2 (doc-claim extractor).
+ *
+ * `extractDocClaims(docText, docPath)` parses ONE scoped operator doc's text
+ * and returns the contract-token CLAIMS it makes — route ids, command names,
+ * contract slice names, packet roles, `data.*` field paths, and scoped
+ * recovery/control-plane links. It holds no expected contract VALUES of its
+ * own (AC5): it reads bounded structural markers and reports what the doc
+ * says. The comparator (batch 3) and orchestrator (batch 4) consume these.
+ *
+ * Fixtures below are small real snippets from the scoped docs so the
+ * extractor's patterns stay grounded in the actual prose.
+ */
+
+/** Collect just the token strings from a claim array, for terse assertions. */
+function tokens(claims: { token: string }[]): string[] {
+  return claims.map((c) => c.token);
+}
+
+describe("AC1: route-ID claims from explicit route-ID positions", () => {
+  test("extracts a quoted `route_id: \"...\"` value", () => {
+    const claims = extractDocClaims(
+      'route_id: "blocked-stage-3".',
+      "doc.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-stage-3");
+  });
+
+  test("extracts backtick-quoted kebab tokens from route-catalog bullets", () => {
+    const doc = [
+      "**Blocked routes**",
+      "",
+      "- `blocked-frontmatter-blocked-reason`: surface the reason.",
+      "- `blocked-acceptance-criteria-stale`: return to Stage 1.",
+      "- `no-ledger` and `pick-issue`: enter Stage 1.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "SKILL.md").routeIds);
+    expect(got).toContain("blocked-frontmatter-blocked-reason");
+    expect(got).toContain("blocked-acceptance-criteria-stale");
+    expect(got).toContain("no-ledger");
+    expect(got).toContain("pick-issue");
+  });
+
+  test("extracts the `inferred_route_id: \"...\"` diagnose form", () => {
+    const claims = extractDocClaims(
+      'with `inferred_route_id: "blocked-digests-stale"` proves drift.',
+      "first-run-gotchas.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-digests-stale");
+  });
+
+  test("extracts a backtick `blocked-*` route id from prose", () => {
+    const claims = extractDocClaims(
+      "read the `blocked-digests-stale` recipe (Part 2.3).",
+      "first-run-gotchas.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-digests-stale");
+  });
+
+  test("does NOT treat `git status` or a filename as a route id", () => {
+    const doc =
+      "prose backtick like `git status`, and the file `first-run-gotchas.md` is linked.";
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("git status");
+    expect(got).not.toContain("first-run-gotchas.md");
+    expect(got).not.toContain("status");
+  });
+
+  test("carries a line number for each route-ID claim", () => {
+    const doc = ["line one", '`route_id: "shipped"`'].join("\n");
+    const claim = extractDocClaims(doc, "doc.md").routeIds.find(
+      (c) => c.token === "shipped",
+    );
+    expect(claim?.line).toBe(2);
+  });
+});
+
+describe("AC2: command, slice, and packet-role claims from cli.ts positions", () => {
+  test("extracts the command token following `cli.ts `", () => {
+    const doc = [
+      "Run `bun runbooks/issue-to-pr-v2/cli.ts state {ledger} --json`",
+      "and `cli.ts diagnose <ledger> --json`.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").commands);
+    expect(got).toContain("state");
+    expect(got).toContain("diagnose");
+  });
+
+  test("skips `--json`/`--help` flags and `<placeholder>` command args", () => {
+    const got = tokens(
+      extractDocClaims("`cli.ts diagnose <ledger> --json`", "doc.md").commands,
+    );
+    expect(got).toEqual(["diagnose"]);
+    expect(got).not.toContain("<ledger>");
+    expect(got).not.toContain("--json");
+  });
+
+  test("extracts the slice token following `cli.ts contract ` only", () => {
+    const doc = [
+      "`cli.ts contract route_ids --json`",
+      "`cli.ts contract packet_roles --json`",
+      "`cli.ts contract route_required_references --json`",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(tokens(claims.slices)).toEqual([
+      "route_ids",
+      "packet_roles",
+      "route_required_references",
+    ]);
+    // `contract` is itself a command; the slice is the NEXT token, not a
+    // duplicate command claim of the slice name.
+    expect(tokens(claims.commands)).toContain("contract");
+  });
+
+  test("does NOT emit a slice claim for the literal `<slice>` placeholder", () => {
+    const claims = extractDocClaims("`cli.ts contract <slice> --json`", "doc.md");
+    expect(tokens(claims.slices)).not.toContain("<slice>");
+    expect(claims.slices.length).toBe(0);
+  });
+
+  test("extracts packet-role token from `cli.ts packet <role>` command position", () => {
+    const doc = [
+      "`cli.ts packet builder --ledger <ledger> --json`",
+      "`cli.ts packet validator --ledger <path> --persona <skill> --json`",
+      "`cli.ts packet proposer --ledger <path> --finding <id> --json`",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").packetRoles);
+    expect(got).toContain("builder");
+    expect(got).toContain("validator");
+    expect(got).toContain("proposer");
+  });
+
+  test("extracts visible scaffold ids from `cli.ts scaffold <id>` positions", () => {
+    const doc = [
+      "`cli.ts scaffold builder-return-envelope --json`",
+      "Resolve that command before writing the concrete shape.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").scaffoldCommands);
+    expect(got).toEqual(["builder-return-envelope"]);
+  });
+
+  test("ignores `cli.ts scaffold` positions inside HTML comments", () => {
+    const doc = [
+      "`cli.ts scaffold builder-return-envelope --json`",
+      "Visible prose <!-- `cli.ts scaffold hidden-inline --json` --> continues.",
+      "<!--",
+      "`cli.ts scaffold hidden-multiline --json`",
+      "-->",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "doc.md");
+
+    expect(tokens(claims.scaffoldCommands)).toEqual([
+      "builder-return-envelope",
+    ]);
+    expect(tokens(claims.commands).filter((token) => token === "scaffold"))
+      .toHaveLength(1);
+  });
+
+  test("does NOT extract a packet role from a template filename or prose noun", () => {
+    const doc = [
+      "the `builder-work-packet.md` template renders for the Builder.",
+      "Validators run against the batch; the Builder dispatches.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").packetRoles);
+    expect(got).not.toContain("builder-work-packet.md");
+    expect(got).not.toContain("Builder");
+    expect(got).not.toContain("Validators");
+    expect(got.length).toBe(0);
+  });
+
+  test("packet-role placeholder `<role>` is skipped", () => {
+    const got = tokens(
+      extractDocClaims(
+        "`cli.ts packet <role> --ledger <path> [...] --json`",
+        "doc.md",
+      ).packetRoles,
+    );
+    expect(got.length).toBe(0);
+  });
+});
+
+describe("AC3: data.* field-path claims with brace expansion", () => {
+  test("expands a single-line `{a, b, c}` brace set into individual paths", () => {
+    const claims = extractDocClaims(
+      "`data.confirmation_state.{acceptance_criteria, batch_contract, digests}`",
+      "first-run-gotchas.md",
+    );
+    const got = tokens(claims.fieldPaths);
+    expect(got).toContain("data.confirmation_state.acceptance_criteria");
+    expect(got).toContain("data.confirmation_state.batch_contract");
+    expect(got).toContain("data.confirmation_state.digests");
+    expect(got).not.toContain("data.confirmation_state");
+  });
+
+  test("expands a MULTILINE brace set into individual paths", () => {
+    const doc = [
+      "`data.drift.digest_drift.{acceptance_criteria,",
+      "batch_contract, digests, any}`.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").fieldPaths);
+    expect(got).toContain("data.drift.digest_drift.acceptance_criteria");
+    expect(got).toContain("data.drift.digest_drift.batch_contract");
+    expect(got).toContain("data.drift.digest_drift.digests");
+    expect(got).toContain("data.drift.digest_drift.any");
+  });
+
+  test("extracts plain `data.<dotted.path>` claims from prose", () => {
+    const doc =
+      "inspect `data.route_id`, `data.plan_path`, and `data.has_batches`.";
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").fieldPaths);
+    expect(got).toContain("data.route_id");
+    expect(got).toContain("data.plan_path");
+    expect(got).toContain("data.has_batches");
+  });
+
+  test("skips `<placeholder>` segments inside a data.* path", () => {
+    const got = tokens(
+      extractDocClaims("`data.drift.digest_drift.<axis>`", "doc.md").fieldPaths,
+    );
+    for (const p of got) {
+      expect(p).not.toContain("<axis>");
+    }
+  });
+
+  test("a bare field name without the `data.` prefix is NOT a claim", () => {
+    const got = tokens(
+      extractDocClaims(
+        "the field `installed_artifact_presence.all_present` is checked.",
+        "doc.md",
+      ).fieldPaths,
+    );
+    expect(got).not.toContain("installed_artifact_presence.all_present");
+    expect(got.length).toBe(0);
+  });
+
+  test("enum prose `matched | missing` produces no field-path claim", () => {
+    const got = tokens(
+      extractDocClaims(
+        "`runbook_version_skew` (`matched | missing | mismatched`)",
+        "doc.md",
+      ).fieldPaths,
+    );
+    expect(got.length).toBe(0);
+  });
+});
+
+describe("doc-claim extractor scans fenced code blocks too", () => {
+  test("a `cli.ts` command inside a fenced block IS extracted", () => {
+    const doc = [
+      "Run:",
+      "```",
+      "bun runbooks/issue-to-pr-v2/cli.ts state {ledger} --json",
+      "```",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").commands);
+    expect(got).toContain("state");
+  });
+
+  test("a stale `data.*` path inside a fenced block IS extracted", () => {
+    const doc = ["```", "data.confirmation_state.stale_axis", "```"].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").fieldPaths);
+    expect(got).toContain("data.confirmation_state.stale_axis");
+  });
+
+  test("`decompose.ts --validate-ledger-batches` yields no cli.ts command claim", () => {
+    const doc = [
+      "```",
+      "bun runbooks/issue-to-pr-v2/decompose.ts --validate-ledger-batches {ledger}",
+      "```",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "first-run-gotchas.md");
+    expect(claims.commands.length).toBe(0);
+    expect(tokens(claims.commands)).not.toContain("decompose.ts");
+    expect(tokens(claims.commands)).not.toContain("--validate-ledger-batches");
+  });
+});
+
+describe("scoped-link claims for control-plane / recovery docs", () => {
+  test("extracts a markdown link to first-run-gotchas.md with resolved target", () => {
+    const doc =
+      "use [first-run-gotchas.md](first-run-gotchas.md) for recipes.";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const link = claims.scopedLinks.find(
+      (l) => l.token === "first-run-gotchas.md",
+    );
+    expect(link).toBeDefined();
+    expect(link?.resolvedTarget).toBe(
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+  });
+
+  test("resolves a relative-up link target against the doc path", () => {
+    const doc = "see the [README](../README.md#file-map).";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    const link = claims.scopedLinks.find((l) => l.token === "README");
+    expect(link?.resolvedTarget).toBe("runbooks/issue-to-pr-v2/README.md");
+  });
+
+  test("ignores external http(s) links", () => {
+    const doc = "see [docs](https://example.com/page) online.";
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(claims.scopedLinks.length).toBe(0);
+  });
+});
+
+describe("AC5: extractor emits claims only, holds no contract values", () => {
+  test("source has no hardcoded route id / slice / role / field-path literal beyond extraction markers", async () => {
+    const source = await Bun.file(
+      join(import.meta.dir, "contract-drift.ts"),
+    ).text();
+
+    // Pull the real contract values from the live CLI and forbid them as
+    // literals in the SOURCE. Reading structural markers (`route_id:`,
+    // `cli.ts `, `data.`, the `blocked-` prefix) is allowed; pasting a
+    // contract VALUE the extractor compares against is not.
+    const routeIds = (await runCli(["contract", "route_ids", "--json"])).data
+      .values as string[];
+    const packetRoles = (await runCli(["contract", "packet_roles", "--json"]))
+      .data.values as string[];
+    const help = await runCli(["--help", "--json"]);
+    const slices = help.data.contract_slices as string[];
+    const facts = await loadContractFacts();
+    const fieldPathLeaves = [
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ].flatMap((p) => p.split(".").filter((seg) => seg !== "data"));
+
+    // `route_ids` / `packet_roles` are slice ARGUMENT names (read-coordinates),
+    // not duplicated contract values, so they may appear in the source.
+    const allowedReadCoordinates = new Set([
+      "route_ids",
+      "packet_roles",
+      "ledger_schema_pointer_slices",
+      "scaffold_ids",
+    ]);
+
+    const forbidden = [
+      ...routeIds,
+      ...packetRoles,
+      ...slices,
+      ...fieldPathLeaves,
+    ].filter((v) => !allowedReadCoordinates.has(v));
+
+    for (const value of new Set(forbidden)) {
+      expect(source.includes(`"${value}"`)).toBe(false);
+      expect(source.includes(`'${value}'`)).toBe(false);
+    }
+  });
+
+  test("extractor returns ONLY what the doc text contains (no injected values)", () => {
+    const claims = extractDocClaims("plain prose with no contract tokens.", "doc.md");
+    expect(claims.routeIds.length).toBe(0);
+    expect(claims.commands.length).toBe(0);
+    expect(claims.slices.length).toBe(0);
+    expect(claims.packetRoles.length).toBe(0);
+    expect(claims.scaffoldCommands.length).toBe(0);
+    expect(claims.fieldPaths.length).toBe(0);
+    expect(claims.scopedLinks.length).toBe(0);
+  });
+
+  test("carries docPath through so the orchestrator can attribute claims", () => {
+    const claims = extractDocClaims('`route_id: "shipped"`', "some/doc.md");
+    expect(claims.docPath).toBe("some/doc.md");
+  });
+});
+
+/**
+ * Issue #81 — batch-2 repair (F11/F12/F13/F14/F16).
+ *
+ * These tests run the extractor over the REAL scoped docs and reconcile its
+ * claims with `loadContractFacts()` live output — the actual clean-pass
+ * invariant batch 3's comparator will enforce. They are the load-bearing
+ * guard (F13) that catches the route-ID over-capture (F11) and the
+ * installed_artifact_presence.missing asymmetry (F12). They never hardcode an
+ * expected route-id / field-path list (AC5): the "must include" anchors are
+ * read from the live `loadContractFacts()` facts, and the "must NOT include"
+ * anchors are conceptual subroute / field NAMES read out of the docs
+ * themselves, not contract values.
+ */
+
+const repoRoot = join(import.meta.dir, "..", "..");
+const skillDocPath = "skills/issue-to-pr/SKILL.md";
+const readmeDocPath = "runbooks/issue-to-pr-v2/README.md";
+const issueToPrDocPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
+const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
+const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
+const cePlanTemplatePath = "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const proposerTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/proposer-envelope.md";
+const patchProposalTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/patch-proposal.md";
+const builderReturnTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
+const builderWorkPacketTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/builder-work-packet.md";
+const validatorEnvelopeTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/validator-envelope.md";
+const builderDispatchPath =
+  "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
+const findingsAndValidatorsPath =
+  "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+const stage4BatchLoopPath =
+  "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
+const stage6ShipPath =
+  "runbooks/issue-to-pr-v2/references/stage-6-ship.md";
+const workflowLearningScanPath =
+  "runbooks/issue-to-pr-v2/references/workflow-learning-scan.md";
+const scopedDocRels = [
+  skillDocPath,
+  readmeDocPath,
+  issueToPrDocPath,
+  ledgerDocPath,
+  gotchasDocPath,
+] as const;
+const driftSurfaceRels = [
+  ...scopedDocRels,
+  cePlanTemplatePath,
+  proposerTemplatePath,
+  patchProposalTemplatePath,
+  builderReturnTemplatePath,
+  builderWorkPacketTemplatePath,
+  validatorEnvelopeTemplatePath,
+  builderDispatchPath,
+  findingsAndValidatorsPath,
+  stage4BatchLoopPath,
+  stage6ShipPath,
+  workflowLearningScanPath,
+] as const;
+
+/** Read one scoped doc's text by its repo-relative path. */
+async function readScopedDoc(relPath: string): Promise<string> {
+  return Bun.file(join(repoRoot, relPath)).text();
+}
+
+/**
+ * Stage a fixture repo by copying every real drift-surface doc into a temp
+ * dir. The caller may mutate individual docs via `mutations` to inject drift.
+ * Returns the absolute temp-dir path; caller is responsible for cleanup.
+ */
+async function stageDriftSurfaceFixture(
+  mutations: Partial<Record<(typeof driftSurfaceRels)[number], (text: string) => string>> = {},
+): Promise<string> {
+  const dir = join(
+    import.meta.dir,
+    `../../.tmp-cd-fixture-${process.pid}-${Math.random().toString(36).slice(2)}`,
+  );
+  for (const rel of driftSurfaceRels) {
+    const original = await readScopedDoc(rel);
+    const mutate = mutations[rel];
+    const text = mutate ? mutate(original) : original;
+    await Bun.write(join(dir, rel), text);
+  }
+  return dir;
+}
+
+describe("F11/F13: live-doc route-ID claims reconcile with loadContractFacts", () => {
+  test("SKILL.md + ledger-and-helper route-ID claims are all live route ids", async () => {
+    const facts = await loadContractFacts();
+    const liveRouteIds = new Set(facts.routeIds);
+
+    const skillClaims = extractDocClaims(
+      await readScopedDoc(skillDocPath),
+      skillDocPath,
+    );
+    const ledgerClaims = extractDocClaims(
+      await readScopedDoc(ledgerDocPath),
+      ledgerDocPath,
+    );
+
+    const docRouteIds = new Set(
+      [...skillClaims.routeIds, ...ledgerClaims.routeIds].map((c) => c.token),
+    );
+
+    // The real clean-pass invariant: every route-ID the live docs CLAIM must
+    // be a member of the live CLI's route_ids. A false positive (subroute or
+    // field name leaking in) would not be a member and would fail here.
+    for (const claimed of docRouteIds) {
+      expect(liveRouteIds.has(claimed)).toBe(true);
+    }
+  });
+
+  test("Stage 4 subroute names are NOT extracted as route ids (F11)", async () => {
+    // These are conceptual subroute names from SKILL.md's <stage_shells>
+    // section, structurally identical to route-catalog bullets but NOT route
+    // ids. They previously leaked in via the unscoped bullet heuristic.
+    const subrouteNames = [
+      "select-eligible-batch",
+      "start-batch-checkpoint",
+      "implementation-attempt",
+      "implementation-attempt-builder",
+      "implementation-attempt-inline",
+      "attempt-checkpoint",
+      "validator-wave",
+      "finding-repair",
+      "converge-batch",
+      "accepted-risk-or-reframe",
+    ];
+    const got = tokens(
+      extractDocClaims(await readScopedDoc(skillDocPath), skillDocPath)
+        .routeIds,
+    );
+    for (const name of subrouteNames) {
+      expect(got).not.toContain(name);
+    }
+  });
+
+  test("YAML field-name bullets are NOT extracted as route ids (F11)", async () => {
+    // `status` / `iterations` are ledger field-name bullets under non-route
+    // headings; they must not be mistaken for route ids.
+    const got = tokens(
+      extractDocClaims(await readScopedDoc(ledgerDocPath), ledgerDocPath)
+        .routeIds,
+    );
+    expect(got).not.toContain("status");
+    expect(got).not.toContain("iterations");
+  });
+
+  test("genuine route ids from the route catalog ARE still extracted", async () => {
+    // The happy-path and blocked-* route ids live in SKILL.md's
+    // <route_catalog>; scoping must not drop them. Anchor the "must include"
+    // set to the live facts so this is not a hardcoded expectation (AC5): we
+    // assert every live route id that the doc text literally mentions in a
+    // route-catalog bullet is captured.
+    const facts = await loadContractFacts();
+    const skillText = await readScopedDoc(skillDocPath);
+    const got = new Set(
+      tokens(extractDocClaims(skillText, skillDocPath).routeIds),
+    );
+    // Sanity floor: the catalog covers the full happy path + blocked family,
+    // so the extractor must capture the bulk of live route ids, not a handful.
+    const captured = facts.routeIds.filter((id) => got.has(id));
+    expect(captured.length).toBe(facts.routeIds.length);
+  });
+});
+
+describe("F12: installed_artifact_presence.missing reconciles loader vs extractor", () => {
+  test("loader facts now include data.installed_artifact_presence.missing", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.responseFieldPaths.state).toContain(
+      "data.installed_artifact_presence.missing",
+    );
+    // The diagnose copy resolves via cross-reference to the same children.
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.installed_artifact_presence.missing",
+    );
+  });
+
+  test("every live-doc installed_artifact_presence field claim is a known fact", async () => {
+    const facts = await loadContractFacts();
+    const knownPaths = new Set([
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ]);
+    const gotchasClaims = extractDocClaims(
+      await readScopedDoc(gotchasDocPath),
+      gotchasDocPath,
+    );
+    const iapClaims = gotchasClaims.fieldPaths
+      .map((c) => c.token)
+      .filter((p) => p.startsWith("data.installed_artifact_presence"));
+
+    // The doc's brace set expands to references/templates/cli_ts/lib_dir/
+    // all_present/missing — including the previously-asymmetric `missing`.
+    expect(iapClaims).toContain("data.installed_artifact_presence.missing");
+    for (const path of iapClaims) {
+      expect(knownPaths.has(path)).toBe(true);
+    }
+  });
+
+  test("regression: blocking_gates still yields no invented children (F7/F10)", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.responseFieldPaths.state).toContain("data.blocking_gates");
+    const invented = facts.responseFieldPaths.state.some((p) =>
+      p.startsWith("data.blocking_gates."),
+    );
+    expect(invented).toBe(false);
+  });
+});
+
+describe("U7: ledger schema docs stay aligned with emitted contract slices", () => {
+  test("real ledger/helper reference matches emitted schema facts", async () => {
+    const findings = await checkLedgerLifecycleFieldDrift({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("missing ledger schema slice pointer in ledger-and-helper.md is reported as drift", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-slice-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replaceAll(
+        "cli.ts contract orchestrator_inline_attempt_fields --json",
+        "cli.ts contract inline_attempt_fields_missing_from_reference --json",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-schema-slice-pointer",
+          claim: "orchestrator_inline_attempt_fields",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing builder attempt status pointer in ledger-and-helper.md is reported as drift", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-builder-status-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replace(
+        "- `cli.ts contract builder_attempt_statuses --json`",
+        "- `cli.ts contract builder_attempt_statuses_missing --json`",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-schema-slice-pointer",
+          claim: "builder_attempt_statuses",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("section-rename in ledger-and-helper.md surfaces a schema pointer finding instead of silently scanning the whole doc", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-schema-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replace(
+        "Runtime-owned schema facts",
+        "Runtime schema commands",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-schema-slice-pointer",
+          claim: "Runtime-owned schema facts",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("regression-matrix.md test_anchor citations resolve to real it() descriptions in their named test files", async () => {
+    const matrixRel =
+      "runbooks/issue-to-pr-v2/references/regression-matrix.md";
+    const matrix = await readScopedDoc(matrixRel);
+    // Match every `<repo-relative-test-path>: "name", "name"` citation. The
+    // leading char (backtick OR `;` joiner OR whitespace after a `;`) is NOT
+    // required to be a backtick — multi-file cells chain citations with `; `
+    // and the second/third file refs are inside the cell's single backtick
+    // range, not preceded by a fresh backtick.
+    const anchorRe =
+      /([\w/.-]+\/[\w/.-]+\.test\.ts): ((?:"[^"]+"(?:, *)?)+)/g;
+    const citations: Array<{ file: string; tests: string[] }> = [];
+    for (const m of matrix.matchAll(anchorRe)) {
+      const file = m[1] ?? "";
+      const tests = Array.from(
+        (m[2] ?? "").matchAll(/"([^"]+)"/g),
+        (mm) => mm[1] ?? "",
+      );
+      if (file && tests.length > 0) citations.push({ file, tests });
+    }
+    // Floor: every U7 + prior probe row contributes at least one citation.
+    expect(citations.length).toBeGreaterThanOrEqual(11);
+    const missing: Array<{ file: string; test: string }> = [];
+    const fileTextCache = new Map<string, string>();
+    for (const { file, tests } of citations) {
+      let body = fileTextCache.get(file);
+      if (body === undefined) {
+        body = await Bun.file(join(repoRoot, file)).text();
+        fileTextCache.set(file, body);
+      }
+      for (const t of tests) {
+        if (!body.includes(`"${t}"`)) missing.push({ file, test: t });
+      }
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `regression-matrix.md cites ${missing.length} test name(s) that no longer exist:\n` +
+          missing.map((m) => `  ${m.file}: "${m.test}"`).join("\n"),
+      );
+    }
+  });
+
+  test("checkContractDrift orchestrator surfaces ledger schema findings from the helper reference", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerDocPath]: (text) =>
+        text.replaceAll(
+          "cli.ts contract ledger_batch_lifecycle_fields --json",
+          "cli.ts contract ledger_batch_lifecycle_fields_missing --json",
+        ),
+    });
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-schema-slice-pointer",
+          claim: "ledger_batch_lifecycle_fields",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
+describe("issue 114/115/116/117: scaffold docs stay aligned with runtime renderers", () => {
+  test("real visible scaffold command pointers match runtime facts", async () => {
+    const findings = await checkGeneratedScaffoldBlocksDrift({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("real drift surfaces contain no hidden scaffold-pointer comments", async () => {
+    for (const rel of driftSurfaceRels) {
+      expect(await readScopedDoc(rel)).not.toContain("scaffold-pointer");
+    }
+  });
+
+  test("scaffold inventory carries no prose-owned-shape entries", () => {
+    const inventory = scaffoldInventoryClassifications();
+    for (const entry of inventory) {
+      expect(entry.classification).not.toBe("prose-owned-shape");
+    }
+  });
+
+  test("Proposer and Validator return envelopes are pointer-only in active templates", () => {
+    const inventory = scaffoldInventoryClassifications();
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-success-envelope",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-fail-stop-envelope",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: validatorEnvelopeTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "validator-return-envelope",
+      }),
+    );
+  });
+
+  test("inventory entry naming an unknown scaffold id is reported by drift", async () => {
+    const findings = await checkScaffoldInventoryDrift({
+      repoRoot,
+      scaffoldIds: SCAFFOLD_IDS.filter((id) => id !== "builder-attempt-compact"),
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        kind: "scaffold-inventory",
+        claim: "builder-attempt-compact",
+      }),
+    );
+  });
+
+  test("unclassified fenced YAML in an inventoried template is reported", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [proposerTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nunowned_runtime_shape:\n  field: value\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: proposerTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "unclassified-yaml-fence",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("removed dynamic packet member lists stay absent", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nbatch_contract:\n  id: <slug>\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "## Packet slots / dynamic Builder packet body",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing visible scaffold command is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        text.replace("`cli.ts scaffold builder-return-envelope --json`.", ""),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-envelope",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible wrong-but-valid scaffold command is reported in its owning section", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-attempt-compact --json`.",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-attempt-compact",
+        }),
+      );
+      expect(
+        findings.find(
+          (finding) =>
+            finding.doc === builderReturnTemplatePath &&
+            finding.kind === "scaffold-command",
+        )?.reason,
+      ).toContain("expected \"builder-return-envelope\"");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible unknown scaffold command is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-return-missing --json`.",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-missing",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible scaffold command moved outside its owning section is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        `${text.replace("\n`cli.ts scaffold builder-return-envelope --json`.\n", "\n")}\n\n## Stray commands\n\n\`cli.ts scaffold builder-return-envelope --json\`.\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-envelope",
+        }),
+      );
+      expect(
+        findings.find(
+          (finding) =>
+            finding.doc === builderWorkPacketTemplatePath &&
+            finding.kind === "scaffold-command",
+        )?.reason,
+      ).toContain("missing expected source");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("hidden scaffold-pointer comments reintroduced in source are reported", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-return-envelope --json`.\n<!-- scaffold-pointer id=builder-return-envelope source=\"cli.ts scaffold builder-return-envelope --json\" -->",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "builder-return-envelope",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("generated scaffold markers reintroduced in pointer-only source are reported by inventory", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace(
+          "Before returning output, resolve the runtime-owned candidate batch scaffold:\n`cli.ts scaffold ce-plan-candidate-batch --json`.",
+          [
+            '<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+            "```yaml",
+            "candidate_batches: []",
+            "```",
+            "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+          ].join("\n"),
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "ce-plan-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("checkContractDrift orchestrator surfaces visible scaffold command findings", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [stage4BatchLoopPath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold patch-proposal-candidate-batch --json`",
+          "`cli.ts scaffold replacement-candidate-batch --json`",
+        ),
+    });
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          doc: stage4BatchLoopPath,
+          kind: "scaffold-command",
+          claim: "replacement-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("every scaffold id is covered by at least one drift-check surface", () => {
+    // SSOT exhaustiveness: a net-new scaffold id added to lib/scaffolds.ts but
+    // not wired into the scaffold inventory would silently skip surface-level
+    // drift enforcement.
+    const covered = scaffoldIdsCoveredBySurfaces();
+    const missing = SCAFFOLD_IDS.filter((id) => !covered.has(id));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe("issue 124: contract-drift gates resist near-miss bypasses", () => {
+  const activeTemplates = [
+    cePlanTemplatePath,
+    proposerTemplatePath,
+    patchProposalTemplatePath,
+    builderReturnTemplatePath,
+    builderWorkPacketTemplatePath,
+    validatorEnvelopeTemplatePath,
+  ] as const;
+
+  describe("AC1: fenced YAML gate fires regardless of case/CRLF/info-string", () => {
+    const fenceBypasses: ReadonlyArray<{ label: string; appendix: string }> = [
+      {
+        label: "upper-case YAML language tag",
+        appendix:
+          "\n\n```YAML\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "yml language tag (short form)",
+        appendix:
+          "\n\n```yml\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "info-string suffix after yaml token",
+        appendix:
+          "\n\n```yaml:scaffold\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "CRLF line endings",
+        appendix:
+          "\r\n\r\n```yaml\r\nunowned_runtime_shape:\r\n  field: value\r\n```\r\n",
+      },
+    ];
+
+    for (const template of activeTemplates) {
+      for (const bypass of fenceBypasses) {
+        test(`${template} → ${bypass.label}`, async () => {
+          const dir = await stageDriftSurfaceFixture({
+            [template]: (text: string) => `${text}${bypass.appendix}`,
+          });
+          try {
+            const findings = await checkGeneratedScaffoldBlocksDrift({
+              repoRoot: dir,
+            });
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                doc: template,
+                kind: "scaffold-inventory",
+                claim: "unclassified-yaml-fence",
+              }),
+            );
+          } finally {
+            await Bun.$`rm -rf ${dir}`.quiet();
+          }
+        });
+      }
+    }
+  });
+
+  describe("AC2: hidden marker gate fires on case/quote/trailing-attr variants", () => {
+    const markerVariants: ReadonlyArray<{ label: string; comment: string }> = [
+      {
+        label: "lowercase canonical (control)",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "uppercase marker name",
+        comment:
+          '<!-- Scaffold-Pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "single-quoted source attribute",
+        comment:
+          "<!-- scaffold-pointer id=builder-return-envelope source='cli.ts scaffold builder-return-envelope --json' -->",
+      },
+      {
+        label: "trailing attribute soup",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" generated-by="x" -->',
+      },
+    ];
+
+    for (const variant of markerVariants) {
+      test(`scaffold-pointer marker: ${variant.label}`, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [builderReturnTemplatePath]: (text) =>
+            text.replace(
+              "`cli.ts scaffold builder-return-envelope --json`.",
+              `\`cli.ts scaffold builder-return-envelope --json\`.\n${variant.comment}`,
+            ),
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(
+            findings.some(
+              (finding) =>
+                finding.doc === builderReturnTemplatePath &&
+                finding.kind === "scaffold-inventory" &&
+                /scaffold-pointer marker reintroduced/.test(finding.reason),
+            ),
+          ).toBe(true);
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+
+    test("uppercase generated-scaffold:start marker is still reported", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [cePlanTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold ce-plan-candidate-batch --json`.",
+            [
+              '<!-- Generated-Scaffold:Start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+              "```yaml",
+              "candidate_batches: []",
+              "```",
+              "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+            ].join("\n"),
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        expect(
+          findings.some(
+            (finding) =>
+              finding.doc === cePlanTemplatePath &&
+              finding.kind === "scaffold-inventory" &&
+              /generated-scaffold marker reintroduced/.test(finding.reason),
+          ),
+        ).toBe(true);
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+
+    test("malformed marker (missing source attribute) surfaces with malformed reason", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [builderReturnTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold builder-return-envelope --json`.",
+            "`cli.ts scaffold builder-return-envelope --json`.\n<!-- scaffold-pointer id=builder-return-envelope -->",
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        const malformed = findings.find(
+          (finding) =>
+            finding.doc === builderReturnTemplatePath &&
+            finding.kind === "scaffold-inventory" &&
+            finding.reason.includes("malformed marker"),
+        );
+        expect(malformed).toBeDefined();
+        expect(malformed?.reason).toContain("missing `source=...`");
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+  });
+
+  describe("AC3: removed-surface detector catches idiomatic rewrites", () => {
+    const removedVariants: ReadonlyArray<{
+      label: string;
+      template: (typeof activeTemplates)[number];
+      coordinate: string;
+      injection: string;
+    }> = [
+      {
+        label: "single-quoted scalar for commit_ref_or_range",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: "\n\ncommit_ref_or_range: '<sha | range>'\n",
+      },
+      {
+        label: "no internal spaces in <sha|range>",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range: "<sha|range>"\n',
+      },
+      {
+        label: "tab between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:\t"<sha | range>"\n',
+      },
+      {
+        label: "double space between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:  "<sha | range>"\n',
+      },
+      {
+        label: "dynamic Builder packet body restored",
+        template: builderWorkPacketTemplatePath,
+        coordinate: "## Packet slots / dynamic Builder packet body",
+        injection: "\n\nbatch_contract:\n  id:  <slug>\n",
+      },
+      {
+        label: "dynamic Proposer packet body restored",
+        template: proposerTemplatePath,
+        coordinate: "## Packet slots / dynamic Proposer packet body",
+        injection: "\n\nfinal_finding_row:\n  id: <finding-id>\n",
+      },
+      {
+        label: "Patch Proposal final_finding fields restored",
+        template: patchProposalTemplatePath,
+        coordinate: "## Scratch file shape / dynamic final_finding member list",
+        injection: "\n\nfinal_finding\tfields:\n",
+      },
+    ];
+
+    for (const variant of removedVariants) {
+      test(variant.label, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [variant.template]: (text: string) => `${text}${variant.injection}`,
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(findings).toContainEqual(
+            expect.objectContaining({
+              doc: variant.template,
+              kind: "scaffold-inventory",
+              claim: variant.coordinate,
+            }),
+          );
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+  });
+});
+describe("F14: route-id and packet-role negative guards", () => {
+  test("a non-blocked kebab token in plain PROSE is NOT a route id", () => {
+    // No route-catalog context, not a blocked-* token, not a route_id:
+    // assignment — a backtick kebab token in prose must not be extracted.
+    const doc =
+      "The `select-eligible-batch` step runs first in normal prose, see below.";
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("select-eligible-batch");
+    expect(got.length).toBe(0);
+  });
+
+  test("a non-blocked kebab bullet OUTSIDE a route section is NOT a route id", () => {
+    // A bullet whose nearest section heading does not mention routes must not
+    // be treated as a route-catalog bullet.
+    const doc = [
+      "**Lifecycle fields**",
+      "",
+      "- `start-batch-checkpoint`: record the start.",
+      "- `converge-batch`: run the gate.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("start-batch-checkpoint");
+    expect(got).not.toContain("converge-batch");
+    expect(got.length).toBe(0);
+  });
+
+  test("a non-packet cli.ts command arg does NOT yield a packet role", () => {
+    // `cli.ts state somearg` — `state` is the command, `somearg` is its arg,
+    // NOT a packet role. Only `cli.ts packet <role>` yields a packet role.
+    const claims = extractDocClaims("`cli.ts state somearg --json`", "doc.md");
+    expect(tokens(claims.packetRoles)).not.toContain("somearg");
+    expect(claims.packetRoles.length).toBe(0);
+  });
+});
+
+describe("F16: scoped-link title and image mis-parse", () => {
+  test("strips a link title so the resolved target excludes the quoted title", () => {
+    const doc = 'see [guide](first-run-gotchas.md "the recipes") for help.';
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const link = claims.scopedLinks.find((l) => l.token === "guide");
+    expect(link).toBeDefined();
+    expect(link?.rawTarget).toBe("first-run-gotchas.md");
+    expect(link?.resolvedTarget).toBe(
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+  });
+
+  test("does NOT match the image portion of `![alt](img.png)`", () => {
+    const doc = "an inline image ![diagram](diagram.png) in prose.";
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(claims.scopedLinks.find((l) => l.token === "diagram")).toBeUndefined();
+    expect(
+      claims.scopedLinks.some((l) => l.rawTarget === "diagram.png"),
+    ).toBe(false);
+  });
+
+  test("a real link adjacent to an image still extracts (image skipped only)", () => {
+    const doc =
+      "![alt](pic.png) and then [README](../README.md) for the map.";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    expect(claims.scopedLinks.some((l) => l.rawTarget === "pic.png")).toBe(
+      false,
+    );
+    const readme = claims.scopedLinks.find((l) => l.token === "README");
+    expect(readme?.resolvedTarget).toBe("runbooks/issue-to-pr-v2/README.md");
+  });
+});
+
+/**
+ * Issue #81 — batch 3 (claim-fact comparator).
+ *
+ * `compareClaimsToFacts(claims, facts, opts?)` membership-tests each extracted
+ * claim against the corresponding live fact set and returns structured
+ * `DriftFinding[]` — never throws on a missing CLAIM target (that is drift
+ * DATA), exact-match only (no case normalization, Key Decision 6).
+ * `checkGotchasRelationship(opts?)` verifies the deterministic control-plane
+ * relationship the workflow relies on (Key Decision 7).
+ *
+ * The "must-not-drift" anchors here come from the LIVE CLI facts and the real
+ * docs, never a hardcoded contract list (AC5). Synthetic drift fixtures use
+ * tokens that provably are NOT contract values (e.g. `frobnicate`).
+ */
+
+/** Build a minimal claims object with only the fields a test cares about. */
+function claimsFrom(partial: Partial<DocClaims>): DocClaims {
+  return {
+    docPath: partial.docPath ?? "doc.md",
+    routeIds: partial.routeIds ?? [],
+    commands: partial.commands ?? [],
+    slices: partial.slices ?? [],
+    packetRoles: partial.packetRoles ?? [],
+    scaffoldCommands: partial.scaffoldCommands ?? [],
+    fieldPaths: partial.fieldPaths ?? [],
+    scopedLinks: partial.scopedLinks ?? [],
+  };
+}
+
+/** A bare DocClaim with a fixed line/context for synthetic fixtures. */
+function claim(token: string): { token: string; line: number; context: string } {
+  return { token, line: 1, context: token };
+}
+
+/** Findings of one kind, terse. */
+function findingsOfKind(
+  findings: DriftFinding[],
+  kind: DriftFinding["kind"],
+): DriftFinding[] {
+  return findings.filter((f) => f.kind === kind);
+}
+
+describe("AC1: route-ID claim membership against facts.routeIds", () => {
+  test("a route-ID claim absent from facts.routeIds produces exactly one route-id finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim("blocked-nonexistent-route")] }),
+      facts,
+    );
+    const routeFindings = findingsOfKind(findings, "route-id");
+    expect(routeFindings.length).toBe(1);
+    expect(routeFindings[0].claim).toBe("blocked-nonexistent-route");
+  });
+
+  test("a route-ID claim present in facts.routeIds produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const live = facts.routeIds[0];
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(live)] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "route-id").length).toBe(0);
+  });
+});
+
+describe("AC2: command / slice / packet-role / scaffold claim membership", () => {
+  test("an unknown command claim produces one command finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ commands: [claim("frobnicate")] }),
+      facts,
+    );
+    const commandFindings = findingsOfKind(findings, "command");
+    expect(commandFindings.length).toBe(1);
+    expect(commandFindings[0].claim).toBe("frobnicate");
+  });
+
+  test("an unknown slice claim produces one slice finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ slices: [claim("not_a_slice")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "slice").length).toBe(1);
+    expect(findingsOfKind(findings, "slice")[0].claim).toBe("not_a_slice");
+  });
+
+  test("an unknown packet-role claim produces one packet-role finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ packetRoles: [claim("buildmaster")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "packet-role").length).toBe(1);
+    expect(findingsOfKind(findings, "packet-role")[0].claim).toBe("buildmaster");
+  });
+
+  test("an unknown scaffold command claim produces one scaffold-command finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ scaffoldCommands: [claim("missing-scaffold")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "scaffold-command").length).toBe(1);
+    expect(findingsOfKind(findings, "scaffold-command")[0].claim).toBe(
+      "missing-scaffold",
+    );
+  });
+
+  test("a live command / slice / packet-role / scaffold claim produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        commands: [claim(facts.commandNames[0])],
+        slices: [claim(facts.contractSlices[0])],
+        packetRoles: [claim(facts.packetRoles[0])],
+        scaffoldCommands: [claim(facts.scaffoldIds[0])],
+      }),
+      facts,
+    );
+    expect(findings.length).toBe(0);
+  });
+
+  test("the route/reference contract slice claim is validated from live help", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.contractSlices).toContain("route_required_references");
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        commands: [claim("contract")],
+        slices: [claim("route_required_references")],
+      }),
+      facts,
+    );
+    expect(findings.length).toBe(0);
+  });
+
+  test("the hot-router route/reference pointer is validated from the real doc", async () => {
+    const docPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
+    const doc = await Bun.file(join(import.meta.dir, "issue-to-pr.md")).text();
+    const claims = extractDocClaims(doc, docPath);
+    const routeReferenceClaims = claims.slices.filter(
+      (c) => c.token === "route_required_references",
+    );
+    const contractCommandClaims = claims.commands.filter(
+      (c) => c.token === "contract",
+    );
+
+    expect(routeReferenceClaims.length).toBeGreaterThan(0);
+    expect(contractCommandClaims.length).toBeGreaterThan(0);
+
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath,
+        commands: contractCommandClaims,
+        slices: routeReferenceClaims,
+      }),
+      facts,
+    );
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("AC3: data.* field-path claim membership against response shapes", () => {
+  test("an unknown field-path claim produces one field-path finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: [claim("data.totally_made_up")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+    expect(findingsOfKind(findings, "field-path")[0].claim).toBe(
+      "data.totally_made_up",
+    );
+  });
+
+  test("a field-path that exists in EITHER state or diagnose shape is not drift", async () => {
+    const facts = await loadContractFacts();
+    // Pick a state-only and a diagnose-only path to prove the union semantics.
+    const stateOnly = facts.responseFieldPaths.state[0];
+    const diagnoseOnly = facts.responseFieldPaths.diagnose.find(
+      (p) => !facts.responseFieldPaths.state.includes(p),
+    );
+    const claims = [claim(stateOnly)];
+    if (diagnoseOnly) claims.push(claim(diagnoseOnly));
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: claims }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(0);
+  });
+});
+
+describe("Key Decision 6: exact-match comparison, no case normalization", () => {
+  test("a wrong-case route id `Blocked-Stage-3` is drift; the exact form is not", async () => {
+    const facts = await loadContractFacts();
+    // Use a known live blocked route in its exact lowercase form, then mangle
+    // the case. The facts are sourced live, so this never hardcodes a value.
+    const exact = facts.routeIds.find((id) => id.startsWith("blocked-"));
+    expect(exact).toBeDefined();
+    const exactId = exact as string;
+    const mangled = exactId
+      .split("-")
+      .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+      .join("-");
+
+    const driftFindings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(mangled)] }),
+      facts,
+    );
+    expect(findingsOfKind(driftFindings, "route-id").length).toBe(1);
+
+    const cleanFindings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(exactId)] }),
+      facts,
+    );
+    expect(findingsOfKind(cleanFindings, "route-id").length).toBe(0);
+  });
+
+  test("a wrong-case field path `data.Route_ID` is drift", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: [claim("data.Route_ID")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+  });
+});
+
+describe("AC4: scoped-link existence checking", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  test("a scoped link to a missing recovery doc produces one scoped-link finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+        scopedLinks: [
+          {
+            ...claim("missing recipe"),
+            rawTarget: "no-such-recovery-doc.md",
+            resolvedTarget:
+              "runbooks/issue-to-pr-v2/references/no-such-recovery-doc.md",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    const linkFindings = findingsOfKind(findings, "scoped-link");
+    expect(linkFindings.length).toBe(1);
+    expect(linkFindings[0].claim).toBe(
+      "runbooks/issue-to-pr-v2/references/no-such-recovery-doc.md",
+    );
+  });
+
+  test("a scoped link to an existing file produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+        scopedLinks: [
+          {
+            ...claim("first-run-gotchas.md"),
+            rawTarget: "first-run-gotchas.md",
+            resolvedTarget:
+              "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    expect(findingsOfKind(findings, "scoped-link").length).toBe(0);
+  });
+
+  test("a directory target that exists produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/some-doc.md",
+        scopedLinks: [
+          {
+            ...claim("issue-to-pr"),
+            rawTarget: "../../issue-to-pr/",
+            // Resolves to an existing directory.
+            resolvedTarget: "skills/issue-to-pr",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    expect(findingsOfKind(findings, "scoped-link").length).toBe(0);
+  });
+});
+
+describe("AC4: first-run-gotchas relationship check", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  function validSkillGotchasDoc(
+    guideRef = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ): string {
+    return [
+      "# Skill",
+      "",
+      "7. Load every reference listed in `data.required_reference_ids`.",
+      `7b. When \`data.route_id\` begins with \`blocked-\`, also load \`${guideRef}\`.`,
+      "8. Apply remaining pre-stage gates before entering a stage.",
+      "",
+      "**Runbook version skew**",
+      "",
+      "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+      "- Use `first-run-gotchas.md` recipe 2.4.",
+    ].join("\n");
+  }
+
+  function validIssueToPrGotchasDoc(): string {
+    return [
+      "# Issue to PR",
+      "",
+      "## Start every turn",
+      "",
+      "6. **Load the references listed in `data.required_reference_ids`.**",
+      "   When `data.route_id` begins with `blocked-`, also load",
+      "   [first-run-gotchas.md](references/first-run-gotchas.md)",
+      "   before any blocked-route stop.",
+      "7. **Honour remaining pre-stage gates** before entering stage work.",
+      "",
+      "### Version-skew gate",
+      "",
+      "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+    ].join("\n");
+  }
+
+  const validLedgerGotchasDoc =
+    "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n";
+
+  async function stageGotchasFixture(
+    overrides: {
+      skill?: string;
+      issueToPr?: string;
+      ledger?: string;
+      writeGuide?: boolean;
+    } = {},
+  ): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      overrides.skill ?? validSkillGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/issue-to-pr.md"),
+      overrides.issueToPr ?? validIssueToPrGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      overrides.ledger ?? validLedgerGotchasDoc,
+    );
+    if (overrides.writeGuide ?? true) {
+      await Bun.write(
+        join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+        "# First run gotchas\n",
+      );
+    }
+    return dir;
+  }
+
+  test("the real SKILL.md + issue-to-pr.md + ledger relationship produces no finding", async () => {
+    const findings = await checkGotchasRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  // F17 (load-bearing): deleting ONLY the step-7b orchestration block — while
+  // leaving the route catalog and reference-loading-policy table intact — must
+  // make signal (a) fire. This is the regression a whole-doc co-occurrence
+  // check could NOT catch: `blocked-` and the guide path both still appear
+  // elsewhere in the doc after the deletion, so the old logic returned 0
+  // findings. The structural orchestration-step anchor returns a finding.
+  test("deleting ONLY the step-7b load block (catalog + policy prose intact) produces a finding", async () => {
+    const realSkill = await Bun.file(
+      join(repoRoot, "skills/issue-to-pr/SKILL.md"),
+    ).text();
+    const lines = realSkill.split("\n");
+    const stepMarker = /^\s*\d+[a-z]?\.\s/;
+    // Locate the `7b.` orchestration step block: marker line + continuation
+    // lines up to the next step marker or a blank line.
+    const start = lines.findIndex((l) => /^7b\.\s/.test(l));
+    expect(start).toBeGreaterThanOrEqual(0);
+    let end = start + 1;
+    while (
+      end < lines.length &&
+      lines[end]?.trim() !== "" &&
+      !stepMarker.test(lines[end] ?? "")
+    ) {
+      end += 1;
+    }
+    const mutated = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+
+    // Sanity-check the mutation is surgical: route catalog and reference
+    // loading policy prose survive, so whole-doc co-occurrence would still hold.
+    expect(mutated.includes("<route_catalog>")).toBe(true);
+    expect(mutated.includes("<reference_loading_policy>")).toBe(true);
+    expect(mutated.includes("first-run-gotchas.md")).toBe(true);
+    expect(/blocked-/.test(mutated)).toBe(true);
+    // But the operative `7b.` orchestration step is gone.
+    expect(/^7b\.\s/m.test(mutated)).toBe(false);
+
+    const dir = await stageGotchasFixture({ skill: mutated });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+      expect(skillFindings[0]?.kind).toBe("scoped-link");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing 7b control-plane load in SKILL.md produces one relationship finding", async () => {
+    // Mock SKILL.md without the deterministic 7b first-run-gotchas load.
+    const dir = await stageGotchasFixture({
+      skill: "# Skill\n\nNo deterministic gotchas load here.\n",
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the SKILL.md blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "9. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a SKILL.md version-skew stop without gotchas loading produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, stop.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing hot-router blocked load produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the hot-router blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "8. When `data.route_id` begins with `blocked-`, also load [first-run-gotchas.md](references/first-run-gotchas.md).",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing ledger-and-helper link to first-run-gotchas.md produces one finding", async () => {
+    const dir = await stageGotchasFixture({
+      // ledger doc has the blocked section but NO link to the gotchas guide.
+      ledger: "### Blocked route ids\n\nNo recovery link here.\n",
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a link to a first-run-gotchas.md that does not exist on disk produces a finding", async () => {
+    const dir = await stageGotchasFixture({ writeGuide: false });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings.length).toBeGreaterThanOrEqual(1);
+      expect(findings.some((f) => f.kind === "scoped-link")).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a MISSING protected scoped doc is a hard error, not a finding", async () => {
+    // checkGotchasRelationship must read SKILL.md and ledger-and-helper.md;
+    // if a doc it is asked to read is absent, that is a hard error (throw),
+    // distinct from a missing LINK target which is a finding (Key Decision 8).
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-hard-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    // Empty dir: SKILL.md does not exist.
+    await Bun.$`mkdir -p ${dir}`.quiet();
+    try {
+      await expect(checkGotchasRelationship({ repoRoot: dir })).rejects.toThrow();
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.1: a SKILL.md whose only `blocked` token is `unblocked-...` does NOT
+  // satisfy the blocked-route trigger, so signal (a) must still fire (no real
+  // blocked-route load step exists). `unblocked-state` is a substring trap the
+  // old `/blocked-/` regex would have wrongly accepted.
+  test("an `unblocked-` token does not satisfy the blocked-route trigger", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.2: a basename-only guide reference in the step-7b construct is a
+  // legitimate load — it must NOT produce a false 'missing 7b' finding. The
+  // basename is unambiguous in this scope, so signal (a) accepts it.
+  test("a basename-only guide reference in step 7b does not produce a false finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: validSkillGotchasDoc("first-run-gotchas.md"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(0);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.3: a ledger whose guide link lives OUTSIDE the blocked-route section
+  // (e.g. in a cross-references footer) does NOT satisfy the relationship —
+  // Key Decision 7 requires the link to come FROM the blocked-route section.
+  test("a ledger guide-link outside the blocked-route section produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      // The blocked-route section has NO guide link; the link only appears
+      // under a later, unrelated heading.
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const ledgerFindings = findings.filter(
+        (f) =>
+          f.doc === "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+      );
+      expect(ledgerFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.3 (positive control): a guide link INSIDE the blocked-route section
+  // satisfies the relationship — no finding. Mirrors the live ledger layout.
+  test("a ledger guide-link inside the blocked-route section produces no finding", async () => {
+    const dir = await stageGotchasFixture({
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings).toEqual([]);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
+describe("Workflow Learning Scan relationship check", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  const validSkillScanDoc = [
+    "# Skill",
+    "",
+    "7. Load every reference listed in `data.required_reference_ids`.",
+    "7c. When PR URL confirmation has happened on `data.route_id: ship`, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+  ].join("\n");
+
+  const validIssueToPrScanDoc = [
+    "# Issue to PR",
+    "",
+    "## Start every turn",
+    "",
+    "6. **Load the references listed in `data.required_reference_ids`.**",
+    "   When PR URL confirmation has happened on the ship path, or a fail-stop exposes a workflow-level learning, load",
+    "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+  ].join("\n");
+
+  const validStageSixScanDoc = [
+    "# Stage 6",
+    "",
+    "## Actions",
+    "",
+    "1. After PR URL confirmation, run the read-only [workflow-learning-scan.md](workflow-learning-scan.md). Load it before final ship metadata.",
+    "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body.",
+    "3. Run `decompose.ts --assert-final-metadata-scope <ledger-path>` before committing.",
+    "4. Run `decompose.ts --assert-final-metadata-commit <ledger-path> HEAD` after committing.",
+    "5. On helper failure, fail-stop in Stage 6 with `local-check-failure-final-metadata-commit`.",
+    "6. Include the scan-owned final learning summary: counts plus attention items only.",
+  ].join("\n");
+
+  const validScanDoc = [
+    "# Workflow Learning Scan",
+    "",
+    "See [workflow-learnings-registry.md](workflow-learnings-registry.md) and `lib/learnings.ts`.",
+    "Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert-batch`.",
+    "Use `cli.ts scaffold workflow-learnings-empty --json`.",
+    "Do not recreate `runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.",
+    "",
+    "## Read-Only Boundary",
+    "",
+    "Do not patch skills, runbook references, CLI/source code, docs, target deliverables, or gotchas content.",
+    "Allowed writes: per-issue ledger and Workflow Learnings registry.",
+    "",
+    "## Final Learning Summary",
+    "",
+    "Counts come from `learnings-registry.ts --upsert-batch` output.",
+    "Attention items come from candidate facts, disposition, confidence, and closure context.",
+    "Exclude full registry entries. Exclude full ledger `## Workflow Learnings` entries.",
+    "",
+    "## Ship-Time Scan",
+    "",
+    "`small-fix` never blocks. High-confidence `file-follow-up` blocks only when resume, unblock, or honest closure depends on it.",
+    "",
+    "## Gotchas Relationship",
+    "",
+    "`first-run-gotchas.md` remains recovery guidance. Workflow Learnings owns cross-run dedupe lifecycle.",
+  ].join("\n");
+
+  const validFailStopSkillDoc = [
+    "# Skill",
+    "",
+    "When a fail-stop reveals a workflow-level learning, keep scan capture in the same visible fail-stop action.",
+    "Load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+    "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+  ].join("\n");
+
+  const validFailStopIssueToPrDoc = [
+    "# Issue to PR",
+    "",
+    "For any fail-stop that reveals a workflow-level learning, keep scan capture in the same visible fail-stop action.",
+    "Load [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+    "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+  ].join("\n");
+
+  const validFailStopScanDoc = [
+    "# Workflow Learning Scan",
+    "",
+    "## Fail-Stop Scan",
+    "",
+    "Resume-blocking Workflow Learning prevents safe resume.",
+    "Examples: missing helper command, ambiguous route contract, unsafe registry write target, docs contradiction.",
+    "`small-fix` records without blocking fail-stop recovery.",
+    "`needs-evidence` records as weak evidence without blocking by default.",
+    "`needs-evidence` is not a Workflow Learning attention item by default.",
+    "High-confidence `file-follow-up` records without blocking when the follow-up is not needed to resume.",
+    "Needed-to-resume `file-follow-up` is Resume-blocking and requires an ask before continuing.",
+    "Workflow Learning metadata safety failure is Resume-blocking when registry target, helper command, or helper contract cannot safely preserve evidence.",
+    "Lead with blocker and resume condition.",
+    "Include only Workflow Learning attention items.",
+    "Suppress routine counts, no-learning capture status, and weak-evidence noise.",
+    "Exclude full ledger entries, full registry entries, issue drafts, and `to-issues` invocation.",
+    "Do not repair during fail-stop scan handling.",
+    "Do not patch skills, runbook references, CLI/source code, docs, gotchas, target deliverables, or workflow contracts.",
+  ].join("\n");
+
+  async function stageScanFixture(
+    overrides: {
+      skill?: string;
+      issueToPr?: string;
+      stageSix?: string;
+      scan?: string;
+      writeScan?: boolean;
+    } = {},
+  ): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-scan-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      overrides.skill ?? validSkillScanDoc,
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/issue-to-pr.md"),
+      overrides.issueToPr ?? validIssueToPrScanDoc,
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/stage-6-ship.md"),
+      overrides.stageSix ?? validStageSixScanDoc,
+    );
+    if (overrides.writeScan ?? true) {
+      await Bun.write(
+        join(dir, "runbooks/issue-to-pr-v2/references/workflow-learning-scan.md"),
+        overrides.scan ?? validScanDoc,
+      );
+    }
+    return dir;
+  }
+
+  test("live scan relationship returns zero findings", async () => {
+    const findings = await checkWorkflowLearningScanRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("missing scan reference reports one blocking finding", async () => {
+    const dir = await stageScanFixture({ writeScan: false });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.claim).toBe("workflow-learning-scan.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing skill pointer reports one finding", async () => {
+    const dir = await stageScanFixture({ skill: "# Skill\n\nNo scan load.\n" });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.doc === "skills/issue-to-pr/SKILL.md"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing hot-router pointer reports one finding", async () => {
+    const dir = await stageScanFixture({
+      issueToPr: "# Issue to PR\n\n## Start every turn\n\nNo scan load.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing Stage 6 ship-time pointer reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: "# Stage 6\n\n## Actions\n\n1. Confirm PR URL only.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) =>
+            f.doc ===
+              "runbooks/issue-to-pr-v2/references/stage-6-ship.md" &&
+            f.claim === "workflow-learning-scan.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 scan before PR URL confirmation reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix:
+        "# Stage 6\n\n## Actions\n\n1. Run the read-only [workflow-learning-scan.md](workflow-learning-scan.md).\n2. Confirm PR URL.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) =>
+            f.doc ===
+              "runbooks/issue-to-pr-v2/references/stage-6-ship.md" &&
+            f.claim === "workflow-learning-scan.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 missing final metadata helper routing reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "3. Run `decompose.ts --assert-final-metadata-scope <ledger-path>` before committing.\n",
+        "",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "final-metadata-helper-routing"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 PR body Workflow Learnings wording reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "Never append Workflow Learnings to the PR body.",
+        "Append Workflow Learnings to the PR body.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "pr-body-omits-workflow-learnings"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 contradictory PR body Workflow Learnings wording reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body.",
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body. Append Workflow Learnings to the PR body.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "pr-body-omits-workflow-learnings"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing final-response counts and attention shape reports one finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        /## Final Learning Summary[\s\S]*?## Ship-Time Scan/,
+        "## Ship-Time Scan",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "final-learning-summary-shape"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan weakened blocking rules report one finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        "`small-fix` never blocks. High-confidence `file-follow-up` blocks only when resume, unblock, or honest closure depends on it.",
+        "`small-fix` may block. High-confidence `file-follow-up` always blocks.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "ship-time-blocking-rules"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("split ship and fail-stop scan steps pass", async () => {
+    const dir = await stageScanFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7c. When PR URL confirmation has happened on `data.route_id: ship`, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+        "7d. When a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+      ].join("\n"),
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. **Load the references listed in `data.required_reference_ids`.**",
+        "   When PR URL confirmation has happened on the ship path, load",
+        "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+        "7. When a fail-stop exposes a workflow-level learning, load",
+        "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings).toEqual([]);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing runtime helper citations reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace("Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert-batch`.", ""),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "runtime-owner-citations")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan that regresses to single-entry upsert reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(/--upsert-batch/g, "--upsert"),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "runtime-owner-citations")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing read-only boundary reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        /## Read-Only Boundary[\s\S]*?## Gotchas Relationship/,
+        "## Gotchas Relationship",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "read-only-boundary")).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan fixture with resume-aware blocking passes", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings).toEqual([]);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan weakened Resume-blocking examples reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Examples: missing helper command, ambiguous route contract, unsafe registry write target, docs contradiction.",
+        "Examples: confusing prose or future cleanup.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some(
+          (f) => f.claim === "fail-stop-resume-blocking-definition",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan that blocks weak evidence reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "`needs-evidence` records as weak evidence without blocking by default.",
+        "`needs-evidence` asks before continuing.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan additive weak-evidence contradiction reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\n- \`needs-evidence\` blocks by default during fail-stop recovery.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan that blocks non-resume file-follow-up reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "High-confidence `file-follow-up` records without blocking when the follow-up is not needed to resume.",
+        "High-confidence `file-follow-up` always blocks.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan missing needed-to-resume ask reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Needed-to-resume `file-follow-up` is Resume-blocking and requires an ask before continuing.",
+        "Needed-to-resume `file-follow-up` records quietly.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-resume-blocking-ask"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan all-of metadata safety wording reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Workflow Learning metadata safety failure is Resume-blocking when registry target, helper command, or helper contract cannot safely preserve evidence.",
+        "Workflow Learning metadata safety failure is Resume-blocking only when registry target, helper command, and helper contract are all missing.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-resume-blocking-ask"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop output shape regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Suppress routine counts, no-learning capture status, and weak-evidence noise.",
+        "Show routine counts and all capture status.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "fail-stop-output-shape")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop additive output contradiction reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\nInclude full registry entries, issue drafts, and \`to-issues\` invocation.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "fail-stop-output-shape")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop read-only boundary regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Do not repair during fail-stop scan handling.",
+        "Repair during fail-stop scan handling when the fix is obvious.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-read-only-repair-boundary"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop additive repair-boundary exception reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\nException: patch skills, runbook references, docs, or workflow contracts when the fix is obvious.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-read-only-repair-boundary"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop control-plane pointer regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc.replace(
+        "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+        "Restate the fail-stop learning judgment locally.",
+      ),
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some(
+          (f) =>
+            f.doc === "skills/issue-to-pr/SKILL.md" &&
+            f.claim === "fail-stop-control-plane-summary",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing fail-stop scan reference returns a finding", async () => {
+    const dir = await stageScanFixture({ writeScan: false });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.claim).toBe("workflow-learning-scan.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("live fail-stop scan check returns zero findings", async () => {
+    const findings = await checkFailStopWorkflowLearningScan({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+  const liveDocs = [
+    "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/README.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
+    "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ];
+
+  // F19: docs known to carry contract tokens. Their clean pass must be EARNED
+  // by real claims being extracted and matched, not vacuously satisfied by an
+  // extractor regression that returns empty claims (which would also yield 0
+  // findings). We pin a non-empty claim floor for these.
+  const tokenCarryingDocs = new Set([
+    "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
+    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ]);
+
+  /** Total claims extracted across all kinds, for the non-empty floor. */
+  const totalClaims = (c: DocClaims): number =>
+    c.routeIds.length +
+    c.commands.length +
+    c.slices.length +
+    c.packetRoles.length +
+    c.scaffoldCommands.length +
+    c.fieldPaths.length +
+    c.scopedLinks.length;
+
+  test("each scoped doc reconciles cleanly against live facts", async () => {
+    const facts = await loadContractFacts();
+    for (const rel of liveDocs) {
+      const text = await Bun.file(join(repoRoot, rel)).text();
+      const claims = extractDocClaims(text, rel);
+      // F19: token-carrying docs must extract at least one claim, so the
+      // "zero findings" assertion below proves real matching, not an empty set.
+      if (tokenCarryingDocs.has(rel)) {
+        expect(totalClaims(claims)).toBeGreaterThan(0);
+      }
+      const findings = await compareClaimsToFacts(claims, facts, { repoRoot });
+      // The clean-pass invariant batch 4 depends on: zero drift per real doc.
+      if (findings.length > 0) {
+        throw new Error(
+          `clean-pass violated for ${rel}: ${JSON.stringify(findings, null, 2)}`,
+        );
+      }
+      expect(findings.length).toBe(0);
+    }
+  });
+
+  test("the live gotchas relationship check returns zero findings", async () => {
+    const findings = await checkGotchasRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("the live Workflow Learning Scan relationship check returns zero findings", async () => {
+    const findings = await checkWorkflowLearningScanRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("comparator returns findings as DATA, never throws on claim drift", () => {
+  test("multiple drift kinds in one claims set are all reported together", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        routeIds: [claim("blocked-nope")],
+        commands: [claim("frobnicate")],
+        slices: [claim("not_a_slice")],
+        packetRoles: [claim("buildmaster")],
+        scaffoldCommands: [claim("missing-scaffold")],
+        fieldPaths: [claim("data.nope")],
+      }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "route-id").length).toBe(1);
+    expect(findingsOfKind(findings, "command").length).toBe(1);
+    expect(findingsOfKind(findings, "slice").length).toBe(1);
+    expect(findingsOfKind(findings, "packet-role").length).toBe(1);
+    expect(findingsOfKind(findings, "scaffold-command").length).toBe(1);
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+  });
+
+  test("each finding carries doc, kind, claim, and a human reason", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ docPath: "some/doc.md", routeIds: [claim("blocked-nope")] }),
+      facts,
+    );
+    const f = findings[0] as DriftFinding;
+    expect(f.doc).toBe("some/doc.md");
+    expect(f.kind).toBe("route-id");
+    expect(f.claim).toBe("blocked-nope");
+    expect(typeof f.reason).toBe("string");
+    expect(f.reason.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Issue #81 — batch 4 (orchestrator + runnable entry).
+ *
+ * `checkContractDrift(opts?)` ties the loader, extractor, comparator, and
+ * gotchas-relationship check together over the scoped operator docs and
+ * returns `{ ok, findings }`. These tests prove:
+ *  - AC7: a fixture doc with a deliberately STALE contract claim (a route id
+ *    not in the live route_ids, a removed command, a bogus data.* path, a
+ *    missing scoped link) makes the check return `ok:false` with a finding
+ *    NAMING that token — the check fails for a real mismatch (load-bearing).
+ *  - AC1: over the REAL scoped docs the check returns `ok:true` (docs in
+ *    sync), and a MISSING scoped doc is a hard error (throw), not a clean pass.
+ *  - AC6: the check (and the runnable entry) perform no filesystem writes / no
+ *    git mutations; the scoped docs are unchanged after a run.
+ *
+ * Fixture docs are written to a temp dir (test scaffolding); the CHECK under
+ * test reads them read-only. Stale tokens are provably NOT contract values
+ * (e.g. `blocked-nonexistent-route`, `frobnicate`, `data.totally_made_up`).
+ */
+describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
+  const realRepoRoot = repoRoot;
+  // Module-level `stageDriftSurfaceFixture` copies every drift-surface doc.
+  // Use the no-mutation form to stage a clean fixture; callers wrapping it
+  // here mutate one doc inline to inject drift. CLI facts come from the
+  // real sibling cli.ts (default cliPath), so the staged repo only needs the
+  // read-target docs.
+  const stageFixtureRepo = (): Promise<string> => stageDriftSurfaceFixture();
+
+  test("AC1: over the real drift surfaces the check returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("AC1: live opt-in scan relationship returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({
+      repoRoot: realRepoRoot,
+      includeWorkflowLearningScanRelationship: true,
+    });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("AC1: live opt-in fail-stop scan check returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({
+      repoRoot: realRepoRoot,
+      includeFailStopWorkflowLearningScan: true,
+    });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("workflow scan relationship opt-in does not include fail-stop semantic checks", async () => {
+    const dir = await stageFixtureRepo();
+    const scan = join(dir, workflowLearningScanPath);
+    const original = await Bun.file(scan).text();
+    await Bun.write(
+      scan,
+      original.replace(
+        "## Gotchas Relationship",
+        "- `needs-evidence` blocks by default during fail-stop recovery.\n\n## Gotchas Relationship",
+      ),
+    );
+    try {
+      const relationshipOnly = await checkContractDrift({
+        repoRoot: dir,
+        includeWorkflowLearningScanRelationship: true,
+      });
+      expect(relationshipOnly.findings.some((f) =>
+        f.claim.startsWith("fail-stop-"),
+      )).toBe(false);
+
+      const withFailStop = await checkContractDrift({
+        repoRoot: dir,
+        includeFailStopWorkflowLearningScan: true,
+      });
+      expect(withFailStop.ok).toBe(false);
+      expect(
+        withFailStop.findings.some(
+          (f) => f.claim === "fail-stop-non-blocking-scenarios",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing workflow scan with fail-stop opt-in returns findings instead of throwing", async () => {
+    const dir = await stageFixtureRepo();
+    await Bun.$`rm -f ${join(dir, workflowLearningScanPath)}`.quiet();
+    try {
+      const result = await checkContractDrift({
+        repoRoot: dir,
+        includeFailStopWorkflowLearningScan: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.doc === workflowLearningScanPath &&
+            f.claim === "workflow-learning-scan.md",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a fixture doc with a stale route-ID claim makes the check fail, naming the token", async () => {
+    const dir = await stageFixtureRepo();
+    // Inject a route_id assignment whose value is provably NOT a live route id.
+    const staleToken = "blocked-nonexistent-route";
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nStale claim: \`route_id: "${staleToken}"\` should be caught.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const named = result.findings.find(
+        (f) => f.kind === "route-id" && f.claim === staleToken,
+      );
+      expect(named).toBeDefined();
+      expect(named?.doc).toBe("runbooks/issue-to-pr-v2/README.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a removed/bogus command claim makes the check fail, naming the command", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nRun \`bun runbooks/issue-to-pr-v2/cli.ts frobnicate --json\`.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) => f.kind === "command" && f.claim === "frobnicate",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a bogus data.* field-path claim makes the check fail, naming the path", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nInspect \`data.totally_made_up\` for the result.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) => f.kind === "field-path" && f.claim === "data.totally_made_up",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a missing scoped-link target makes the check fail, naming the resolved target", async () => {
+    const dir = await stageFixtureRepo();
+    const ledger = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const original = await Bun.file(ledger).text();
+    await Bun.write(
+      ledger,
+      `${original}\n\nSee [missing recipe](./no-such-recovery-doc.md) for details.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.kind === "scoped-link" &&
+            f.claim.endsWith("no-such-recovery-doc.md"),
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC6: aggregation — drift in two different docs is collected, not short-circuited", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const gotchas = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    await Bun.write(
+      readme,
+      `${await Bun.file(readme).text()}\n\nStale: \`route_id: "blocked-nonexistent-route"\`.\n`,
+    );
+    await Bun.write(
+      gotchas,
+      `${await Bun.file(gotchas).text()}\n\nBogus: \`data.totally_made_up\`.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const docsWithFindings = new Set(result.findings.map((f) => f.doc));
+      expect(docsWithFindings.has("runbooks/issue-to-pr-v2/README.md")).toBe(
+        true,
+      );
+      expect(
+        docsWithFindings.has(
+          "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC1/KD8: a MISSING scoped doc is a hard error (throw), not a clean ok:true result", async () => {
+    // Point the doc list at a path that does not exist; the orchestrator must
+    // throw (naming the doc), never return a clean pass for an absent doc.
+    const missingRel = "runbooks/issue-to-pr-v2/does-not-exist.md";
+    await expect(
+      checkContractDrift({
+        repoRoot: realRepoRoot,
+        scopedDocs: [missingRel],
+      }),
+    ).rejects.toThrow(/does-not-exist\.md/);
+  });
+
+  test("AC6: a failed CLI load throws (hard error), never a clean result", async () => {
+    await expect(
+      checkContractDrift({
+        repoRoot: realRepoRoot,
+        cliPath: join(import.meta.dir, "does-not-exist-cli.ts"),
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("AC6: the check performs no writes — the drift-surface docs are unchanged after a run", async () => {
+    // Capture content + mtime of each real drift-surface doc, run the check, and
+    // assert nothing changed on disk (read-only invariant).
+    const before = await Promise.all(
+      driftSurfaceRels.map(async (rel) => {
+        const abs = join(realRepoRoot, rel);
+        return {
+          rel,
+          text: await Bun.file(abs).text(),
+          mtimeMs: statSync(abs).mtimeMs,
+        };
+      }),
+    );
+    await checkContractDrift({ repoRoot: realRepoRoot });
+    for (const snap of before) {
+      const abs = join(realRepoRoot, snap.rel);
+      expect(await Bun.file(abs).text()).toBe(snap.text);
+      expect(statSync(abs).mtimeMs).toBe(snap.mtimeMs);
+    }
+  });
+
+  // F21 (runtime claim floor): a doc the SCOPE marks `expectsClaims: true` that
+  // yields ZERO contract claims is drift, not a silent clean pass. This guards
+  // against a future extractor regression (or a doc rewrite stripping
+  // structural markers) silently disarming a token-carrying doc's validation.
+  // The F19 floor lived only in the TEST suite; this proves the RUNTIME check
+  // now carries it.
+  test("F21: a claim-free token-doc (expectsClaims:true) makes the check fail, not silently pass", async () => {
+    const dir = await stageFixtureRepo();
+    // Replace the (token-carrying) SKILL.md with claim-free prose: no route
+    // ids, no `cli.ts` commands, no `data.*` paths, no scoped links. Extraction
+    // yields zero contract claims, which previously still reported ok:true.
+    const skill = join(dir, "skills/issue-to-pr/SKILL.md");
+    await Bun.write(
+      skill,
+      "# Issue to PR\n\nThis is claim-free prose with no contract tokens at all.\nNothing here references the live CLI surface.\n",
+    );
+    // The default SCOPED_DOCS scope marks SKILL.md as expectsClaims:true, so the
+    // default scope must be used (pass no scopedDocs override).
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const floorFinding = result.findings.find(
+        (f) =>
+          f.kind === "claim-floor" && f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(floorFinding).toBeDefined();
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F21 (positive control): the real token-carrying docs DO extract claims, so
+  // the claim floor must NOT fire for them — the live clean pass is preserved.
+  test("F21: the real drift surfaces still pass clean — no claim-floor finding fires", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    expect(result.ok).toBe(true);
+    expect(
+      result.findings.some((f) => f.kind === "claim-floor"),
+    ).toBe(false);
+  });
+
+  // F22 (empty-scope guard): an explicitly-passed EMPTY scopedDocs array is a
+  // caller mis-wiring, not a clean result. Previously it returned ok:true having
+  // checked zero docs (the per-doc loop never ran). It must now THROW.
+  test("F22: an empty scopedDocs array throws (a caller error, not a clean pass)", async () => {
+    await expect(
+      checkContractDrift({ repoRoot: realRepoRoot, scopedDocs: [] }),
+    ).rejects.toThrow(/scopedDocs|empty|scope/i);
+  });
+
+  // F22 (default preserved): passing no opts must still use the real
+  // SCOPED_DOCS and pass clean — the empty-scope guard must not break defaults.
+  test("F22: the default (no scopedDocs) still uses the real drift surfaces and passes", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * Issue #81 — batch-4 repair F24: the runnable entry's exit-code contract.
+ *
+ * The `import.meta.main` entry is the CI gate: it must exit 0 when the real
+ * scoped docs are in sync and print an "OK" report. Spawning the file as a
+ * script pins that contract so a regression flipping the exit code (or the
+ * report) is caught. The entry takes no args/opts, so it always runs against
+ * the live repo; a drift-case exit-1 path is exercised by the orchestrator
+ * unit tests above via fixture repoRoots, which the no-arg entry cannot drive.
+ */
+describe("F24: runnable entry exit code + report", () => {
+  const scriptPath = join(import.meta.dir, "contract-drift.ts");
+
+  test("exits 0 with an OK report on the clean real repo", async () => {
+    const proc = Bun.spawn([execPath, scriptPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(
+        `expected exit 0, got ${exitCode}.\nstdout=${stdout}\nstderr=${stderr}`,
+      );
+    }
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("OK");
+  });
+});

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>TokenRetrievalLauncher</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.nathanvow.browser-use-security.token-retrieval-launcher</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Browser Use Security Token Retrieval Launcher</string>
+	<!--
+	  APPL, not a bare tool: ADR 0028 requires an app-like bundle embedding a
+	  provisioning profile (daemon-in-app's-clothing) so it can hold the
+	  restricted data-protection keychain access group.
+	-->
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSBackgroundOnly</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,3 @@
+# Per-run findings ledgers are transient resumability state, not committed.
+# See ../references/ledgers.md.
+runs/

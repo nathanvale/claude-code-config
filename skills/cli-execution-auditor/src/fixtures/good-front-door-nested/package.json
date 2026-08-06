@@ -1,0 +1,13 @@
+{
+	"name": "fixture-good-front-door-nested",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "A facade CLI with a grouped (depth-2) front door — discovery must reach src/front-doors/admin/users/command-contract.ts (adversarial finding C).",
+	"scripts": {
+		"users": "bun run src/front-doors/admin/users/users.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

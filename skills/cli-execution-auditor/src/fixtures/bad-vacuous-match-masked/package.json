@@ -1,0 +1,13 @@
+{
+	"name": "fixture-bad-vacuous-match-masked-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Masking variant of bad-vacuous-match (R11 hard case): a 'fix' that injects one dummy owner path so the resolved set is non-empty, literally satisfying a naive non-empty assertion WITHOUT restoring real coverage. Tests whether the vacuous-match clause resists the masking fix or records its limit.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	}
+}

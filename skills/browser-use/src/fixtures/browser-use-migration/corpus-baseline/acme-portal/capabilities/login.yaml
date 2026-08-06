@@ -1,0 +1,5 @@
+schema_version: 1
+kind: browse_beta_domain_capability
+service_key: acme-portal
+capability: login
+status: candidate

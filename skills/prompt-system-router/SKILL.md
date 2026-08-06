@@ -1,6 +1,7 @@
 ---
 name: prompt-system-router
-description: "Background routing brain for the multi-agent prompt system. Classifies where new guidance belongs: shared fragments, harness-specific fragments, rules, or context. Not user-invocable — loaded by prompt-system-workflow."
+description: "Classify startup-instruction changes. Routes hot rules, runtime mechanics, owner docs, and deterministic checks."
+role: advisor
 disable-model-invocation: true
 ---
 
@@ -8,70 +9,36 @@ disable-model-invocation: true
 
 ## Purpose
 
-Answer "where does this go?" for any prompt-system change without maintaining an independent routing table.
+Answer where instruction changes belong without recreating a routing table.
 
 ## Authority
 
-The routing matrix lives in the spec. This skill teaches you how to apply it — it does not replace it.
+- Decision: `docs/adr/0011-lean-startup-instructions.md`
+- Vocabulary: `CONTEXT.md`
+- Health contract: `scripts/agent-instructions.sh`
 
-Before classifying any change, read:
-1. `docs/specs/prompt-system.md` — the contract (especially "Routing Guide" and "Contract Invariants")
+## Classification
 
-## Classification Procedure
+- Startup hot rule: edit `AGENTS.md`.
+- Claude runtime mechanic: keep `CLAUDE.md` tiny, only when runtime proof requires it.
+- Codex runtime mechanic: prefer config/rules/docs; keep startup note tiny only when needed.
+- Tool workflow: edit owning `skills/*/SKILL.md`.
+- Deep reference: edit `context/`, `docs/`, or skill `references/`.
+- Deterministic contract: move to code, CLI help, generated docs, or runtime checks.
+- Repo-specific fact: keep in repo-local `docs/agents/`, not global startup.
+- Personal lookup fact: `context/personal.md` or the nearest owning `context/` file.
 
-For every proposed change, answer these questions in order:
+## Misroutes
 
-### 1. What kind of instruction is this?
+- Generated prompt artifact edited as source.
+- Workflow mechanics copied into `AGENTS.md`.
+- Repo path, issue tracker, or triage facts added to global startup.
+- Deterministic tables repeated in prose.
+- Runtime appendix used as second handbook.
 
-| Kind | Signal |
-|------|--------|
-| Startup guidance | Should be present when a session begins |
-| Auto-applied rule | Claude should enforce this every session without being asked |
-| On-demand reference | Useful when explicitly invoked, not needed at startup |
+## Output
 
-### 2. Who needs it?
-
-Identify the audience first:
-
-- all supported harnesses
-- Claude only
-- Codex only
-- a future harness only
-
-Then map that audience to the correct surface by reading the spec's:
-
-- `Routing Guide`
-- `Contract Invariants`
-- `Shared Root Structure`
-
-Do not invent or maintain a separate routing table here. The spec is the source of truth for the final surface decision.
-
-### 3. Is mirroring required?
-
-A change needs mirroring when:
-- A Claude rule expresses behavior Codex also needs
-- A shared behavior is being added only to one harness surface
-
-Mirroring means adding the same behavioral intent (not a copy-paste) to the correct shared or harness-specific fragment.
-
-## Common Misrouting Patterns
-
-Flag these when you see them:
-
-| Mistake | Why it's wrong |
-|---------|---------------|
-| Shared behavior placed only in `rules/` | Codex never sees `rules/` |
-| Claude-only invocation syntax in `prompt-fragments/shared/` | Shared content must stay harness-neutral |
-| Codex-needed behavior omitted from rendered path | Must be in `shared/` or `codex/` fragments |
-| Editing `AGENTS.md`, `CLAUDE.md`, or `generated/` directly | These are generated artifacts |
-| Using `context/` for startup behavior | Context files are on-demand, not auto-loaded |
-
-## Output Shape
-
-When classifying a change, report:
-
-- **Surface:** which directory/file
-- **Mirroring:** whether another surface needs the same behavior
-- **Render required:** yes/no
-- **Smoke required:** yes/no (yes if shared behavior or propagation logic changed)
-- **Risk:** any misrouting risk worth noting
+- **Surface** — which startup file/rule/context the change touches (`AGENTS.md`, `CLAUDE.md`, `skills/*`, `context/`, `docs/`).
+- **Owner** — what owns that surface: a skill, rule file, generated doc, code, or runtime check.
+- **Verification** — the check that proves delivery (e.g. `scripts/agent-instructions.sh`).
+- **Risk** — what breaks if the routing is wrong (drift, duplicated contract, repo-fact in global startup).

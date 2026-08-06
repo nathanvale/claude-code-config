@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: GoF Pressure Lens Skill</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ee;
+      --panel: #fffdfa;
+      --ink: #1f2933;
+      --muted: #59636f;
+      --line: #d8d0c5;
+      --teal: #0f766e;
+      --teal-soft: #e4f3f1;
+      --rose: #9f1239;
+      --rose-soft: #fbe7ee;
+      --amber: #92400e;
+      --amber-soft: #fff2cc;
+      --blue: #1d4ed8;
+      --blue-soft: #e8efff;
+      --green: #166534;
+      --green-soft: #e7f6e9;
+      --shadow: 0 20px 60px rgba(42, 35, 27, 0.08);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.16em;
+    }
+
+    .page {
+      width: min(960px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 48px;
+    }
+
+    header {
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--teal);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3 {
+      letter-spacing: 0;
+      line-height: 1.18;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: clamp(2rem, 6vw, 3rem);
+    }
+
+    h2 {
+      margin: 34px 0 14px;
+      font-size: 1.45rem;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+    }
+
+    p {
+      max-width: 74ch;
+      margin: 0 0 14px;
+    }
+
+    .meta,
+    .stats,
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--teal-soft);
+      color: #0b5f59;
+      border: 1px solid #b8dfda;
+      font-size: 0.84rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .chip.warn {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border-color: #f1d587;
+    }
+
+    .chip.rose {
+      background: var(--rose-soft);
+      color: var(--rose);
+      border-color: #f4b9ca;
+    }
+
+    .chip.blue {
+      background: var(--blue-soft);
+      color: var(--blue);
+      border-color: #c5d4ff;
+    }
+
+    section {
+      margin-top: 28px;
+      padding: 26px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .axes {
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .axis {
+      padding: 14px;
+      background: #f6fbfa;
+      border: 1px solid #cde7e3;
+      border-radius: 8px;
+      min-height: 96px;
+    }
+
+    .axis strong {
+      display: block;
+      color: var(--teal);
+      margin-bottom: 6px;
+    }
+
+    .jump-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .jump-list a {
+      display: block;
+      padding: 10px 12px;
+      background: #f4f7fb;
+      border: 1px solid #d5dfef;
+      border-radius: 8px;
+      color: #1e3a8a;
+      font-weight: 750;
+    }
+
+    article.idea {
+      padding: 20px;
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .idea-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .idea-id {
+      color: var(--teal);
+      font-weight: 900;
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.28fr) 1fr;
+      gap: 8px 14px;
+      margin: 14px 0 0;
+    }
+
+    dt {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    dd {
+      margin: 0;
+    }
+
+    pre.visual {
+      overflow-x: auto;
+      margin: 16px 0 0;
+      padding: 14px;
+      border-radius: 8px;
+      background: #17202a;
+      color: #f8fafc;
+      font: 0.88rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .callout {
+      margin-top: 16px;
+      padding: 14px;
+      background: var(--green-soft);
+      border: 1px solid #bde4c2;
+      border-radius: 8px;
+      color: #14532d;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.94rem;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+    }
+
+    code {
+      padding: 0.1em 0.28em;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100% - 20px, 960px);
+        padding-top: 20px;
+      }
+
+      header,
+      section {
+        padding: 18px;
+      }
+
+      dl {
+        grid-template-columns: 1fr;
+      }
+
+      .chip {
+        white-space: normal;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">Light ideation</p>
+      <h1>Ideation: GoF Pressure Lens Skill</h1>
+      <p>Subject: decide whether GoF pattern language deserves its own skill, an ICA overlay, or no new artifact after the claim-safe review pivot.</p>
+      <div class="meta" aria-label="Metadata">
+        <span class="chip">Date: 2026-06-13</span>
+        <span class="chip blue">Topic: gof-pressure-lens-skill</span>
+        <span class="chip warn">Mode: repo-grounded</span>
+        <span class="chip rose">Focus: light pass</span>
+      </div>
+      <div class="stats" aria-label="Ideation counts">
+        <span class="chip">18 raw candidates</span>
+        <span class="chip">6 survivors</span>
+        <span class="chip rose">12 cut</span>
+      </div>
+    </header>
+
+    <section id="grounding-context">
+      <p class="eyebrow">Basis</p>
+      <h2>Grounding Context</h2>
+      <ul>
+        <li><code>skills/skill-feedback/CONTEXT.md</code> defines <code>Pressure pattern</code>: a design-pattern name used only when concrete review pressure has already named a seam.</li>
+        <li><code>skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md</code> records KTD10: pattern names come from pressure, not cosplay.</li>
+        <li><code>ica-seam-swarm</code> owns routing, sharding, prompt packaging, synthesis, confidence filtering, and adversary review over existing reports, plans, and ADRs.</li>
+        <li><code>improve-codebase-architecture</code> owns ICA vocabulary and judgment: Module, Interface, Seam, Adapter, Depth, Leverage, Locality, and deletion test.</li>
+        <li>The review pivot already has earned labels: Facade for <code>ReviewResultData</code>, Adapter for anchor facts, Strategy for claim derivation, and fixed reducer flow for locality.</li>
+        <li>The risk is not missing GoF names. The risk is introducing a second architecture reviewer that hunts patterns before the seam pressure exists.</li>
+      </ul>
+      <div class="callout">
+        Decision pressure: preserve <code>No pressure -&gt; no pattern</code> as the gate. Any GoF artifact must translate existing pressure, not discover architecture problems from cold code.
+      </div>
+      <div class="callout">
+        Refactor-discovery addendum: when the input is existing code, run ICA first. Use a solo ICA scan or ICA Candidate Factory to find deepening pressure, then pass only surviving candidates into the GoF lens.
+      </div>
+    </section>
+
+    <section id="topic-axes">
+      <p class="eyebrow">Surface map</p>
+      <h2>Topic Axes</h2>
+      <div class="grid axes">
+        <div class="axis"><strong>Ownership Boundary</strong> Keep ICA as the source of seam pressure and deepening judgment.</div>
+        <div class="axis"><strong>Invocation</strong> Make the lens discoverable without becoming a default review step.</div>
+        <div class="axis"><strong>Anti-Cosplay</strong> Require evidence before names; reject decorative pattern labels.</div>
+        <div class="axis"><strong>Output Contract</strong> Emit kept, rejected, deferred, seam owner, proof, and next safe action.</div>
+        <div class="axis"><strong>Integration Path</strong> Let the smallest useful artifact win before authoring another skill surface.</div>
+      </div>
+    </section>
+
+    <section id="ranked-ideas">
+      <p class="eyebrow">Survivors</p>
+      <h2>Ranked Ideas</h2>
+      <ul class="jump-list" aria-label="Ranked idea index">
+        <li><a href="#idea-1">I1. Thin <code>gof-pressure-lens</code> skill</a></li>
+        <li><a href="#idea-2">I2. ICA reference overlay</a></li>
+        <li><a href="#idea-3">I3. Pattern Referee output contract</a></li>
+        <li><a href="#idea-4">I4. Anti-cosplay input gate</a></li>
+        <li><a href="#idea-5">I5. ICA Adversary GoF lane</a></li>
+        <li><a href="#idea-6">I6. No-new-skill baseline</a></li>
+      </ul>
+
+      <article class="idea" id="idea-1">
+        <div class="idea-head">
+          <h3><span class="idea-id">I1.</span> Thin <code>gof-pressure-lens</code> Skill</h3>
+          <div class="chips"><span class="chip">Conf 86%</span><span class="chip">Cx Low</span></div>
+        </div>
+        <p>Create a tiny skill whose job is to translate existing pressure into earned GoF names. Accepted inputs: ICA candidate, ICA adversary review, prototype verdict, plan pressure section, decision log entry, or existing code after an ICA scan has found deepening pressure. Rejected input: cold request to find GoF patterns in code without first identifying seam pressure.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Ownership boundary</dd>
+          <dt>Basis</dt>
+          <dd><code>direct:</code> local context already defines pressure pattern and ICA ownership; <code>reasoned:</code> a thin translator preserves ownership while giving the user the vocabulary they want.</dd>
+          <dt>Rationale</dt>
+          <dd>This makes GoF useful as naming pressure, not as another architecture review engine.</dd>
+          <dt>Downsides</dt>
+          <dd>Adds a new invocation surface; needs a hard input gate so agents do not treat it as a pattern finder.</dd>
+        </dl>
+        <pre class="visual">existing pressure artifact
+        |
+        v
+gof-pressure-lens
+        |
+        +-- earned patterns
+        +-- rejected patterns
+        +-- seam owner
+        +-- deletion-test proof
+        v
+plan / CONTEXT / decision log</pre>
+        <pre class="visual">code request
+        |
+        v
+ICA solo scan / ICA Candidate Factory
+        |
+        v
+surviving deepening candidates only
+        |
+        v
+gof-pressure-lens</pre>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <div class="idea-head">
+          <h3><span class="idea-id">I2.</span> ICA Reference Overlay</h3>
+          <div class="chips"><span class="chip">Conf 78%</span><span class="chip">Cx Low</span></div>
+        </div>
+        <p>Add a small <code>references/gof-pressure-lens.md</code> to the ICA skill family instead of creating a public skill. ICA can load it only when the user explicitly asks for GoF naming after a seam report, plan, or ADR exists.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Integration path</dd>
+          <dt>Basis</dt>
+          <dd><code>direct:</code> ICA already owns prompt mechanics and adversary review over existing artifacts.</dd>
+          <dt>Rationale</dt>
+          <dd>Lowest surface area. Keeps one review skill and one vocabulary owner.</dd>
+          <dt>Downsides</dt>
+          <dd>Less discoverable from chat. Users may keep asking for a GoF skill anyway.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <div class="idea-head">
+          <h3><span class="idea-id">I3.</span> Pattern Referee Output Contract</h3>
+          <div class="chips"><span class="chip">Conf 84%</span><span class="chip">Cx Low</span></div>
+        </div>
+        <p>Define the lens by its output, not by its pattern catalog. Every run emits kept names, rejected names, deferred names, seam owner, pressure evidence, deletion-test consequence, and next safe action.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Output contract</dd>
+          <dt>Basis</dt>
+          <dd><code>reasoned:</code> output shape is the strongest guardrail against pattern cosplay because the agent must show why each name survived deletion.</dd>
+          <dt>Rationale</dt>
+          <dd>The artifact becomes reviewable: a staff engineer can disagree with a kept or rejected label without reverse-engineering the agent's taste.</dd>
+          <dt>Downsides</dt>
+          <dd>By itself, it is not discoverable. It wants to live inside I1 or I2.</dd>
+        </dl>
+        <pre class="visual">pattern name
+  keep   - pressure exists, seam owner named, deletion test passes
+  reject - no pressure, weak seam, duplicate ICA term, premature abstraction
+  defer  - pressure exists, but second adapter / second use case has not arrived</pre>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-head">
+          <h3><span class="idea-id">I4.</span> Anti-Cosplay Input Gate</h3>
+          <div class="chips"><span class="chip">Conf 82%</span><span class="chip">Cx Low</span></div>
+        </div>
+        <p>Make the first step a gate: name the pressure artifact, seam, owner, false-positive prevented, and deletion-test consequence. If any field is absent, stop and route to ICA or decision-mode instead of inventing GoF labels.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Anti-cosplay</dd>
+          <dt>Basis</dt>
+          <dd><code>direct:</code> the plan's GoF section was useful only because claim-safety pressures already existed.</dd>
+          <dt>Rationale</dt>
+          <dd>The gate makes "No pressure -&gt; no pattern" executable as workflow, not just a slogan.</dd>
+          <dt>Downsides</dt>
+          <dd>Can feel strict in creative sessions; allow a lightweight "hypothesis only" branch that cannot write durable terms.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <div class="idea-head">
+          <h3><span class="idea-id">I5.</span> ICA Adversary GoF Lane</h3>
+          <div class="chips"><span class="chip warn">Conf 72%</span><span class="chip warn">Cx Medium</span></div>
+        </div>
+        <p>Add an optional adversary lane for already-written pattern sections. It attacks whether each GoF label is earned, whether a simpler ICA term is enough, and whether the pattern hides claim-promotion order or readiness facts.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Ownership boundary</dd>
+          <dt>Basis</dt>
+          <dd><code>direct:</code> ICA adversary mode already reviews existing plans and ADRs for weak, unsupported, overfit, duplicate, and not-worth-changing claims.</dd>
+          <dt>Rationale</dt>
+          <dd>Useful when the user has already drafted pattern language and wants a skeptical pass.</dd>
+          <dt>Downsides</dt>
+          <dd>Medium complexity because it touches ICA routing and prompts. It is overkill if I1 or I2 handles the need.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <div class="idea-head">
+          <h3><span class="idea-id">I6.</span> No-New-Skill Baseline</h3>
+          <div class="chips"><span class="chip warn">Conf 68%</span><span class="chip">Cx Low</span></div>
+        </div>
+        <p>Keep the current plan/context language only. Do not author any GoF artifact until a second real case needs pattern translation outside the skill-feedback pivot.</p>
+        <dl>
+          <dt>Axis</dt>
+          <dd>Integration path</dd>
+          <dt>Basis</dt>
+          <dd><code>reasoned:</code> one data point can be local vocabulary, not yet a skill.</dd>
+          <dt>Rationale</dt>
+          <dd>This is the simplest reliable choice if the team wants zero new surfaces right now.</dd>
+          <dt>Downsides</dt>
+          <dd>It does not help agents answer the next GoF-lens request consistently; the pattern pressure can drift back into chat memory.</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section id="rejection-summary">
+      <p class="eyebrow">Critique</p>
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Cut</th>
+            <th>Idea</th>
+            <th>Reason Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>C1.</td><td>Full independent GoF architecture review skill</td><td>Duplicates ICA and invites pattern-hunting from cold code.</td></tr>
+          <tr><td>C2.</td><td>GoF dictionary skill</td><td>Teaches taxonomy but does not protect seams, evidence, or decisions.</td></tr>
+          <tr><td>C3.</td><td>Default GoF section in every plan</td><td>Creates decorative abstraction pressure even when no pattern is needed.</td></tr>
+          <tr><td>C4.</td><td>Observer branch for skill observability</td><td>Already rejected in the v2 plan because it pulls dashboard scope before claim safety is stable.</td></tr>
+          <tr><td>C5.</td><td>Abstract Factory analysis lane</td><td>Premature until there is a second product family or real family-creation pressure.</td></tr>
+          <tr><td>C6.</td><td>Decorator lens for evidence tiers</td><td>Misframes reducer facts as wrappers.</td></tr>
+          <tr><td>C7.</td><td>Chain of Responsibility lens for reducer flow</td><td>Hides claim-promotion order and makes readiness harder to audit.</td></tr>
+          <tr><td>C8.</td><td>Automatic GoF labels in product code</td><td>Product code should own behavior and contracts, not explanatory pattern badges.</td></tr>
+          <tr><td>C9.</td><td>Multi-agent GoF swarm</td><td>Recreates the seam-swarm shape with weaker ownership.</td></tr>
+          <tr><td>C10.</td><td>Pattern flashcards or teaching guide</td><td>Useful education, but not the architectural problem here.</td></tr>
+          <tr><td>C11.</td><td>External GoF research pass</td><td>Stable background material; the local decision turns on repo workflow ownership.</td></tr>
+          <tr><td>C12.</td><td>Builder as current winner</td><td>Already deferred in the v2 plan until assembly pain dominates.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="top-pick">
+      <p class="eyebrow">Recommendation</p>
+      <h2>Top Pick</h2>
+      <p>Use I1 as the target shape: a tiny <code>gof-pressure-lens</code> skill with I3's Pattern Referee output and I4's anti-cosplay input gate.</p>
+      <p>Do not make it a sibling architecture reviewer. Make it a translator that starts only after ICA, a prototype, a plan, or a decision has already exposed concrete pressure.</p>
+      <p>Give it two explicit entrypoints: Artifact Mode consumes an existing pressure artifact and does not rerun ICA; Code Scan Mode routes to ICA first, then names GoF refactor opportunities only from kept ICA candidates.</p>
+    </section>
+
+    <section id="sources-references">
+      <p class="eyebrow">References</p>
+      <h2>Sources And References</h2>
+      <ul>
+        <li><a href="../../skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"><code>skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md</code></a></li>
+        <li><a href="../../skills/skill-feedback/CONTEXT.md"><code>skills/skill-feedback/CONTEXT.md</code></a></li>
+        <li><code>~/.agents/skills/ica-seam-swarm/SKILL.md</code></li>
+        <li><code>~/.agents/skills/improve-codebase-architecture/SKILL.md</code></li>
+        <li><code>~/.agents/skills/improve-codebase-architecture/LANGUAGE.md</code></li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-13T00:57:24Z by ce-ideate from the request: light ideation on the GoF pressure-lens skill shape.
+    </footer>
+  </main>
+</body>
+</html>

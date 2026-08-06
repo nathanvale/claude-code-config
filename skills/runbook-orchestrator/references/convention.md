@@ -4,6 +4,20 @@ The `runbook-orchestrator` skill works on any folder that follows this
 convention. The data-table-review folder is the reference implementation;
 this doc captures the rules that make it work.
 
+## Where an area can live
+
+Two valid locations, same convention:
+
+- **Repo-scope**: `<repo>/docs/runbooks/<name>/` - runbooks tied to a
+  specific codebase (e.g. `docs/runbooks/data-table-review/`).
+- **User-scope**: `~/.claude/runbooks/<name>/` - host-neutral workflow
+  runbooks that operate on a *target* repo passed in at launch
+  (e.g. `~/.claude/runbooks/issue-to-pr-v2/`).
+
+Both follow the folder shape and section requirements below. Per-run
+ledger state for user-scope runbooks lives in the target repo at
+`docs/runbooks/<name>/...`, not in the user-scope area.
+
 ## Required folder shape
 
 ```

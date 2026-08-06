@@ -1,0 +1,11 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"incremental": false,
+		"noUncheckedIndexedAccess": false,
+		"tsBuildInfoFile": "node_modules/.cache/tsconfig.tsbuildinfo",
+		"types": ["bun"]
+	},
+	"include": ["runbooks/issue-to-pr-v2/**/*.ts"],
+	"exclude": ["node_modules", ".worktrees"]
+}

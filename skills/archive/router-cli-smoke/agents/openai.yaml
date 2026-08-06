@@ -1,0 +1,4 @@
+interface:
+  display_name: "Router CLI Smoke"
+  short_description: "Run Router CLI smoke suites"
+  default_prompt: "Use $router-cli-smoke to run Browser Adapter Router CLI smoke suites and save keyed response artifacts."

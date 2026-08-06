@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: ADHD Helper Prompt Pack</title>
+  <style>
+    :root {
+      --bg: #fbfaf7;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #607080;
+      --line: #d8dee6;
+      --blue-soft: #e5f0fb;
+      --blue-text: #164b75;
+      --green-soft: #e8f4ec;
+      --green-text: #23583c;
+      --amber-soft: #f7edcf;
+      --amber-text: #684a10;
+      --coral-soft: #f6e5df;
+      --coral-text: #7a3528;
+      --violet-soft: #eee8f7;
+      --violet-text: #4b3b78;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(960px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 48px 0 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 28px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--blue-text);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 {
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 3.1rem);
+    }
+
+    h2 {
+      margin: 36px 0 14px;
+      font-size: 1.45rem;
+    }
+
+    h3 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+
+    p { max-width: 74ch; }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: #eef1f4;
+      padding: 0.08rem 0.28rem;
+      border-radius: 4px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-weight: 650;
+    }
+
+    section {
+      margin-top: 28px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .box, .idea-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .box h3 {
+      margin-bottom: 8px;
+    }
+
+    ul, ol {
+      padding-left: 1.2rem;
+    }
+
+    li + li {
+      margin-top: 0.38rem;
+    }
+
+    .axis-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .axis-list li {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 0;
+      font-weight: 650;
+    }
+
+    .jump-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 8px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .jump-list a {
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--blue-text);
+      background: var(--blue-soft);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .idea-card {
+      margin-top: 16px;
+    }
+
+    .idea-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .idea-title {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+    }
+
+    .idea-id {
+      color: var(--blue-text);
+      font-weight: 800;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--green-soft);
+      color: var(--green-text);
+      font-size: 0.8rem;
+      font-weight: 750;
+    }
+
+    .badge.med {
+      background: var(--amber-soft);
+      color: var(--amber-text);
+    }
+
+    .badge.low {
+      background: var(--coral-soft);
+      color: var(--coral-text);
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 8px 14px;
+      margin: 0;
+    }
+
+    dt {
+      color: var(--muted);
+      font-weight: 750;
+    }
+
+    dd {
+      margin: 0;
+    }
+
+    .diagram {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf8;
+      padding: 12px;
+      overflow-x: auto;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 640px;
+      height: auto;
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      background: #eef1f4;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    a { color: var(--blue-text); }
+
+    footer {
+      margin-top: 38px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 680px) {
+      main { width: min(100% - 24px, 960px); padding-top: 28px; }
+      dl { grid-template-columns: 1fr; }
+      dt { margin-top: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Ideation Artifact</p>
+      <h1>ADHD Helper Prompt Pack</h1>
+      <p>How to convert ten reusable executive-function prompts into a repo-owned skill without turning the skill into a prompt dump.</p>
+      <div class="meta">
+        <span class="pill">Date: <time datetime="2026-06-15">2026-06-15</time></span>
+        <span class="pill">Topic: adhd-helper-prompt-pack</span>
+        <span class="pill">Mode: repo-grounded</span>
+        <span class="pill">Raw ideas: 42</span>
+        <span class="pill">Survivors: 7</span>
+      </div>
+    </header>
+
+    <section id="grounding">
+      <h2>Grounding Context</h2>
+      <div class="grid">
+        <article class="box">
+          <h3>Codebase Context</h3>
+          <ul>
+            <li><code>skills/adhd-helper/SKILL.md</code> already exists as an untracked main-entry skill.</li>
+            <li>Current modes: <code>Start</code>, <code>Unstick</code>, <code>Triage</code>, <code>Resume</code>, <code>Reduce</code>, <code>Reset</code>.</li>
+            <li>Current response shape favors short bullets, next action first, time boxes, and no moral language.</li>
+            <li>Repo rules keep skills thin, move depth into one-level references, and keep contracts in owner paths.</li>
+          </ul>
+        </article>
+        <article class="box">
+          <h3>Prompt Inventory</h3>
+          <p>The X post's ten roles are useful labels: Get Me Started, Turn Chaos Into a Plan, Body Double Mode, Dopamine-Friendly Work Plan, Finish the Thing, Anti-Procrastination Reframe, Task Translator, Decision Helper, Overwhelm Reset, and 4-Hour Deep Work Sprint.</p>
+          <p>The raw prompt text is source material, not a contract.</p>
+        </article>
+        <article class="box">
+          <h3>Past Learning</h3>
+          <ul>
+            <li>Prompt bodies belong in references or templates, not startup instructions or a bloated skill entry.</li>
+            <li>Examples teach judgment; they do not own schemas or allowed values.</li>
+            <li>The parked ADHD hook work found useful closeout and mission framing, but rejected noisy hooks, rigid mission state, control tokens, and fragile JSON.</li>
+          </ul>
+        </article>
+        <article class="box">
+          <h3>External Context</h3>
+          <ul>
+            <li>Public ADHD prompt lists cluster around initiation, prioritization, time-blocking, brain dumps, resets, routines, distraction handling, and accountability.</li>
+            <li>The differentiator is routing the right support at the right moment.</li>
+            <li>Safety risks: medical boundary drift, crisis handling, over-reliance, planning as avoidance, cognitive overload, and privacy.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="axes">
+      <h2>Topic Axes</h2>
+      <ul class="axis-list">
+        <li>Pattern inventory and mode mapping</li>
+        <li>Skill boundary and owner paths</li>
+        <li>Safety and privacy boundaries</li>
+        <li>Handoffs and continuations</li>
+        <li>Response shape and low-cognitive-load examples</li>
+      </ul>
+    </section>
+
+    <section id="ideas">
+      <h2>Ranked Ideas</h2>
+      <ol class="jump-list">
+        <li><a href="#i1">I1. Mode Router With Prompt Cards</a></li>
+        <li><a href="#i2">I2. Planning Fuse</a></li>
+        <li><a href="#i3">I3. Relay Baton Continuation Card</a></li>
+        <li><a href="#i4">I4. Safety Acuity And Handoff Matrix</a></li>
+        <li><a href="#i5">I5. Stateless Body Double Loop</a></li>
+        <li><a href="#i6">I6. Tone Calibration And Anti-Examples</a></li>
+        <li><a href="#i7">I7. Decision And Task Translator Gate</a></li>
+      </ol>
+
+      <article class="idea-card" id="i1">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I1.</span><h3>Mode Router With Prompt Cards</h3></div>
+          <div class="badge-row"><span class="badge">Conf 93%</span><span class="badge med">Cx Medium</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Keep the existing six ADHD Helper modes as the canonical router. Convert the ten prompt roles into source-attributed prompt cards that map onto those modes by user moment: starting, sorting, deciding, co-working, finishing, resetting, or sprinting.</dd>
+          <dt>Axis</dt>
+          <dd>Pattern inventory and mode mapping.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> <code>adhd-helper</code> already has six modes; repo rules favor one workflow per skill, thin skill bodies, one-level references, and examples over abstract explanation. <strong>external:</strong> ADHD prompt lists cluster by executive-function moment, so routing beats copying.</dd>
+          <dt>Rationale</dt>
+          <dd>This is the highest-leverage conversion. It preserves the current skill shape, makes the X prompt names discoverable, and gives future prompt packs a place to land without rewriting the router.</dd>
+          <dt>Downsides</dt>
+          <dd>The card shape needs discipline. If each card grows into a full prompt body plus schema, the reference becomes a second bloated skill.</dd>
+        </dl>
+        <div class="diagram" aria-label="Mode router with prompt cards">
+          <svg viewBox="0 0 900 300" role="img">
+            <rect x="34" y="92" width="190" height="116" rx="8" fill="#e5f0fb" stroke="#88b6dc"/>
+            <text x="129" y="124" text-anchor="middle" font-size="17" font-weight="700" fill="#164b75">User Moment</text>
+            <text x="129" y="152" text-anchor="middle" font-size="13" fill="#164b75">stuck, overwhelmed,</text>
+            <text x="129" y="173" text-anchor="middle" font-size="13" fill="#164b75">deciding, co-working</text>
+
+            <rect x="334" y="44" width="230" height="214" rx="8" fill="#e8f4ec" stroke="#8ebca0"/>
+            <text x="449" y="76" text-anchor="middle" font-size="17" font-weight="700" fill="#23583c">Six Canonical Modes</text>
+            <text x="449" y="110" text-anchor="middle" font-size="13" fill="#23583c">Start · Unstick · Triage</text>
+            <text x="449" y="136" text-anchor="middle" font-size="13" fill="#23583c">Resume · Reduce · Reset</text>
+            <line x1="374" y1="162" x2="524" y2="162" stroke="#8ebca0"/>
+            <text x="449" y="192" text-anchor="middle" font-size="13" fill="#23583c">Router stays small</text>
+            <text x="449" y="216" text-anchor="middle" font-size="13" fill="#23583c">Cards supply depth</text>
+
+            <rect x="674" y="56" width="188" height="64" rx="8" fill="#f7edcf" stroke="#cfb46e"/>
+            <text x="768" y="94" text-anchor="middle" font-size="14" font-weight="700" fill="#684a10">Get Me Started</text>
+            <rect x="674" y="132" width="188" height="64" rx="8" fill="#f7edcf" stroke="#cfb46e"/>
+            <text x="768" y="170" text-anchor="middle" font-size="14" font-weight="700" fill="#684a10">Body Double</text>
+            <rect x="674" y="208" width="188" height="64" rx="8" fill="#f7edcf" stroke="#cfb46e"/>
+            <text x="768" y="246" text-anchor="middle" font-size="14" font-weight="700" fill="#684a10">Decision Helper</text>
+
+            <path d="M224 150 H334" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow)"/>
+            <path d="M564 106 H674" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow)"/>
+            <path d="M564 164 H674" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow)"/>
+            <path d="M564 222 H674" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow)"/>
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+                <path d="M0,0 L10,5 L0,10 Z" fill="#5f6f7c"/>
+              </marker>
+            </defs>
+          </svg>
+        </div>
+      </article>
+
+      <article class="idea-card" id="i2">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I2.</span><h3>Planning Fuse</h3></div>
+          <div class="badge-row"><span class="badge">Conf 90%</span><span class="badge">Cx Low</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Add a reference-level rule for any big-plan prompt: sort or plan only until the next visible action is possible, then stop. Use this for Turn Chaos Into a Plan, 4-Hour Deep Work Sprint, Anti-Procrastination Reframe, and any request that risks becoming planning-as-avoidance.</dd>
+          <dt>Axis</dt>
+          <dd>Response shape and low-cognitive-load examples.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> current ADHD Helper puts the chosen next action first and ends with one visible action, not a full system. <strong>external:</strong> external grounding flags planning-as-avoidance and cognitive overload as core risks.</dd>
+          <dt>Rationale</dt>
+          <dd>This prevents the skill from becoming a prettier procrastination machine. It makes every planning card answer the same question: what can start now?</dd>
+          <dt>Downsides</dt>
+          <dd>Some users genuinely need a longer plan. The rule needs an escape hatch: expand after a first action, explicit user request, or known deadline.</dd>
+        </dl>
+      </article>
+
+      <article class="idea-card" id="i3">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I3.</span><h3>Relay Baton Continuation Card</h3></div>
+          <div class="badge-row"><span class="badge">Conf 88%</span><span class="badge">Cx Low</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>End the relevant modes with a tiny continuation baton: objective, mode, blocker, next visible action, timer, stop condition, and re-entry cue. Keep it in the response by default; persist it only through an explicit handoff.</dd>
+          <dt>Axis</dt>
+          <dd>Handoffs and continuations.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> the current response example already uses next action, mode, blocker, timer, and stop condition. The parked ADHD hook notes found closeout useful but rejected noisy lifecycle machinery.</dd>
+          <dt>Rationale</dt>
+          <dd>Context loss is a named trigger for the skill. A baton gives a future agent or future self enough state to restart without adding hidden memory.</dd>
+          <dt>Downsides</dt>
+          <dd>If always printed, the baton may become clutter. Use it for resume, body double, finish, reset, and sprint flows, not every tiny start.</dd>
+        </dl>
+        <div class="diagram" aria-label="Relay baton continuation card">
+          <svg viewBox="0 0 900 210" role="img">
+            <rect x="40" y="58" width="150" height="72" rx="8" fill="#e5f0fb" stroke="#88b6dc"/>
+            <text x="115" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#164b75">Now</text>
+            <rect x="250" y="38" width="180" height="112" rx="8" fill="#f7edcf" stroke="#cfb46e"/>
+            <text x="340" y="72" text-anchor="middle" font-size="14" font-weight="700" fill="#684a10">Baton</text>
+            <text x="340" y="98" text-anchor="middle" font-size="12" fill="#684a10">done · risk · next</text>
+            <text x="340" y="119" text-anchor="middle" font-size="12" fill="#684a10">timer · stop · re-entry</text>
+            <rect x="500" y="58" width="150" height="72" rx="8" fill="#e8f4ec" stroke="#8ebca0"/>
+            <text x="575" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#23583c">Later</text>
+            <rect x="710" y="58" width="150" height="72" rx="8" fill="#eee8f7" stroke="#b5a6d8"/>
+            <text x="785" y="91" text-anchor="middle" font-size="14" font-weight="700" fill="#4b3b78">Optional</text>
+            <text x="785" y="113" text-anchor="middle" font-size="12" fill="#4b3b78">handoff</text>
+            <path d="M190 94 H250" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow2)"/>
+            <path d="M430 94 H500" stroke="#5f6f7c" stroke-width="2" marker-end="url(#arrow2)"/>
+            <path d="M650 94 H710" stroke="#5f6f7c" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow2)"/>
+            <defs>
+              <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+                <path d="M0,0 L10,5 L0,10 Z" fill="#5f6f7c"/>
+              </marker>
+            </defs>
+          </svg>
+        </div>
+      </article>
+
+      <article class="idea-card" id="i4">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I4.</span><h3>Safety Acuity And Handoff Matrix</h3></div>
+          <div class="badge-row"><span class="badge">Conf 88%</span><span class="badge med">Cx Medium</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Give every prompt card the same safety triage: green for next-action support, amber for privacy/durable-memory/external-action risk, red for clinical, medication, crisis, or self-harm route-out. Add a handoff matrix for task capture, music/body-doubling ambience, durable context, and external actions.</dd>
+          <dt>Axis</dt>
+          <dd>Safety and privacy boundaries.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> current ADHD Helper already routes clinical, medication, crisis, and self-harm requests to qualified help; it stops before external state changes and durable private context unless explicitly asked.</dd>
+          <dt>Rationale</dt>
+          <dd>This lets the skill stay useful without becoming a mental-health service, a hidden memory writer, or an automation trigger.</dd>
+          <dt>Downsides</dt>
+          <dd>The color model can become policy theater if copied into every card. Better: one matrix reference, cards cite it.</dd>
+        </dl>
+      </article>
+
+      <article class="idea-card" id="i5">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I5.</span><h3>Stateless Body Double Loop</h3></div>
+          <div class="badge-row"><span class="badge">Conf 84%</span><span class="badge med">Cx Medium</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Convert Body Double Mode into an opt-in chat loop: declare task, pick a touch point, run 8-25 minutes, return with done/blocker/next, choose continue/stop. Avoid hooks, background nudges, mission tokens, and durable state.</dd>
+          <dt>Axis</dt>
+          <dd>Handoffs and continuations.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> archived ADHD hook work rejected noise, rigid missions, control tokens, and fragile state while preserving session boundaries and closeout as useful. <strong>external:</strong> body-doubling and Pomodoro patterns support declared intent plus timed check-ins.</dd>
+          <dt>Rationale</dt>
+          <dd>This keeps the accountability benefit while matching the repo's lower-noise, user-initiated skill style.</dd>
+          <dt>Downsides</dt>
+          <dd>Chat check-ins are weaker than real human body doubling. The skill needs honest framing: support loop, not replacement accountability.</dd>
+        </dl>
+      </article>
+
+      <article class="idea-card" id="i6">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I6.</span><h3>Tone Calibration And Anti-Examples</h3></div>
+          <div class="badge-row"><span class="badge">Conf 84%</span><span class="badge">Cx Low</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Add a compact examples reference that translates moralizing, therapy-ish, diagnosis-y, or over-planning responses into neutral next-action language. Treat Anti-Procrastination Reframe as a response pass that names friction plainly and returns one reversible move.</dd>
+          <dt>Axis</dt>
+          <dd>Response shape and low-cognitive-load examples.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> the current skill bans moral language, blame, and productivity theater. ADR 0010 says examples may teach judgment but not own contracts.</dd>
+          <dt>Rationale</dt>
+          <dd>Tone is part of safety. A few before/after examples likely improve every card more than more abstract instruction.</dd>
+          <dt>Downsides</dt>
+          <dd>Too many anti-examples can make the reference feel scolding. Keep them tiny and task-family specific.</dd>
+        </dl>
+      </article>
+
+      <article class="idea-card" id="i7">
+        <div class="idea-head">
+          <div class="idea-title"><span class="idea-id">I7.</span><h3>Decision And Task Translator Gate</h3></div>
+          <div class="badge-row"><span class="badge med">Conf 80%</span><span class="badge med">Cx Medium</span></div>
+        </div>
+        <dl>
+          <dt>Description</dt>
+          <dd>Fold Decision Helper and Task Translator into one gate for ambiguous work: objective, working input, output owner, missing input, reversible default, and first action. Link the create-skill input/output gate as the owner path when the work is skill or agent-tool shaped.</dd>
+          <dt>Axis</dt>
+          <dd>Skill boundary and owner paths.</dd>
+          <dt>Basis</dt>
+          <dd><strong>direct:</strong> current ADHD Helper already offers 2-4 choices when deciding, asks at most one question, and chooses a next safe action when low-risk. The create-skill runbook already owns input/output gate vocabulary.</dd>
+          <dt>Rationale</dt>
+          <dd>This bridges personal executive-function support with agent-native work. It helps the user move without giving the skill hidden authority over external actions or durable writes.</dd>
+          <dt>Downsides</dt>
+          <dd>It risks pulling create-skill mechanics into ADHD Helper. Keep exact create-skill contracts in the owner path, and use only the shape.</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section id="rejections">
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>Ten top-level modes</td><td>Duplicates the stronger router idea and increases choice load.</td></tr>
+          <tr><td>2</td><td>Raw prompt dump in <code>SKILL.md</code></td><td>Violates thin-skill and one-level reference rules.</td></tr>
+          <tr><td>3</td><td>Capacity dial across every prompt</td><td>Verifier marked weak; useful as an optional card field, not universal machinery.</td></tr>
+          <tr><td>4</td><td>Dopamine texture matching</td><td>Plausible, but dopamine framing risks pseudo-clinical language and productivity theater.</td></tr>
+          <tr><td>5</td><td>4-hour sprint as default surface</td><td>Verifier marked weak; keep as opt-in checkpoint/body-double variant.</td></tr>
+          <tr><td>6</td><td>Compiler pipeline for chaos</td><td>Useful but covered by the mode router plus prompt cards.</td></tr>
+          <tr><td>7</td><td>Finish stop-rule design</td><td>Useful but covered by Planning Fuse and Relay Baton.</td></tr>
+          <tr><td>8</td><td>Ephemeral chaos triage</td><td>Useful but covered by Safety Acuity and Handoff Matrix.</td></tr>
+          <tr><td>9</td><td>Exact two reference filenames as contract</td><td>Implementation choice; keep as suggested shape unless the brainstorm accepts it.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="references">
+      <h2>Sources And References</h2>
+      <ul>
+        <li><code>skills/adhd-helper/SKILL.md</code></li>
+        <li><code>skills/create-skill/references/skill-design-decision-runbook.md</code></li>
+        <li><code>docs/brainstorms/adhd-coach-hooks.md</code></li>
+        <li><code>docs/adr/0010-skill-examples-teach-judgment-not-contracts.md</code></li>
+        <li><code>docs/adr/0002-runbooks-and-skills-use-prose-as-orchestrator.md</code></li>
+        <li><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Anthropic Agent Skills overview</a></li>
+        <li><a href="https://github.com/anthropics/skills">Anthropic Skills examples</a></li>
+        <li><a href="https://cancercontrol.cancer.gov/brp/research/constructs/implementation-intentions">NCI: Implementation intentions</a></li>
+        <li><a href="https://effectiveu.umn.edu/academics/adhd-executive-functioning/adhd-skills-getting-started">University of Minnesota: ADHD skills for getting started</a></li>
+        <li><a href="https://lifeskillsadvocate.com/blog/ai-for-adhd/">Life Skills Advocate: AI for ADHD prompt patterns</a></li>
+        <li><a href="https://www.astho.org/communications/blog/2026/legislative-snapshot-suicide-prevention-infrastructure-and-ai-chatbots/">ASTHO: AI chatbot policy snapshot</a></li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-15 by ce-ideate from the conversation prompt, the extracted X post prompt inventory, repo-local grounding in <code>claude-code-config</code>, and scratch evidence under <code>/tmp/compound-engineering/ce-ideate/c9968fe9</code>.
+    </footer>
+  </main>
+</body>
+</html>

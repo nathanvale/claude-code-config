@@ -1,0 +1,132 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway FastTrack look-alike. NOT the real portal. Mirrors the
+     real DOM contract read from skills/browser-use/actions/fasttrack/fill-week.js:
+     password login, CandidateLogin marker, the #/VGlt...00 timesheet hash, the
+     tr[ng-repeat] edit grid with rxg.startDateTime / rxg.endDateTime /
+     rxg.attendanceTypeId, and a real Angular-style two-way binding (model tracks
+     input/change only). Secret-free: dummy creds only. Wipe with the scratchpad. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Time - Search Timesheet</title>
+<style>
+  body{font-family:system-ui;margin:1.5rem;max-width:900px}
+  .hidden{display:none}
+  table{border-collapse:collapse;width:100%;margin-top:1rem}
+  td,th{border:1px solid #ccc;padding:4px 8px;font-size:14px}
+  input,select{font-size:14px;padding:2px 4px}
+  .nav-tabs{list-style:none;display:flex;gap:1rem;padding:0;border-bottom:2px solid #ddd}
+  .nav-tabs a{cursor:pointer;text-decoration:none;color:#06c;padding:.3rem}
+  .state{background:#f6f6f6;padding:.5rem;font-family:monospace;font-size:12px;white-space:pre-wrap;margin-top:1rem}
+  .banner{background:#fee;border:1px solid #c00;padding:.5rem;color:#900;font-weight:bold}
+</style></head>
+<body ng-app>
+  <div class="banner">PROTOTYPE FIXTURE — mimics manpowergroup.fasttrack360.com.au — NOT the real portal</div>
+
+  <!-- ===== LOGIN VIEW (mirrors CandidateLogin: username + password) ===== -->
+  <section id="loginView">
+    <h2>Candidate Login</h2>
+    <form id="loginForm" onsubmit="return false">
+      <div><label>Username <input id="username" type="text" aria-label="Username" autocomplete="off" ng-model="login.username"></label></div>
+      <div><label>Password <input id="password" type="password" aria-label="Password" autocomplete="off" ng-model="login.password"></label></div>
+      <div><label>One-time code <input id="otp" type="text" aria-label="One-time code" autocomplete="off" ng-model="login.otp"></label></div>
+      <button id="signIn" type="button" onclick="signIn()">Sign In</button>
+    </form>
+  </section>
+
+  <!-- ===== TIMESHEET VIEW (mirrors Time-and-Attendance edit grid) ===== -->
+  <section id="timesheetView" class="hidden">
+    <h2>Time - Search Timesheet</h2>
+    <ul class="nav nav-tabs top-3">
+      <li><a onclick="showTab('Available')">Available</a></li>
+      <li><a onclick="showTab('Incomplete')">Incomplete</a></li>
+      <li><a onclick="showTab('Submitted')">Submitted</a></li>
+    </ul>
+    <table><tbody id="editGrid"></tbody></table>
+    <button id="submitTimesheet" type="button" onclick="submitTimesheet()">Submit Timesheet</button>
+    <div class="banner" id="submitGuard">Submit is DISABLED in the fixture — the spike stops before this.</div>
+  </section>
+
+  <div class="state" id="stateDump"></div>
+
+  <script>
+    // ngModel-equivalent registry: model updates ONLY on real input/change,
+    // never on a raw .value write with no events — the FastTrack risk.
+    const model = { login: { username:"", password:"", otp:"" }, cells: {} };
+    let signedIn = false;
+    let submitAttempts = 0;
+
+    function bindNg(el, path){
+      el.addEventListener('input', () => setPath(path, el.value, 'input'));
+      el.addEventListener('change', () => setPath(path, el.value, 'change'));
+    }
+    function setPath(path, value, via){
+      const parts = path.split('.'); let o = model;
+      for (let i=0;i<parts.length-1;i++) o = o[parts[i]] ??= {};
+      o[parts[parts.length-1]] = value;
+      dump();
+    }
+    ['username','password','otp'].forEach(id => { bindNg(document.getElementById(id), 'login.'+id); });
+
+    function signIn(){
+      // A real login: the model must carry the values (proves insert committed
+      // via events, not a raw .value write). Dummy creds are accepted.
+      if (!model.login.username || !model.login.password){ dump('LOGIN REJECTED: model missing username/password (raw .value write would do this)'); return; }
+      signedIn = true;
+      // Navigate to the timesheet hash the real fill-week.js expects.
+      location.hash = '#/VGltZUFuZEF0dGVuZGFuY2U00';
+      document.getElementById('loginView').classList.add('hidden');
+      document.getElementById('timesheetView').classList.remove('hidden');
+      buildGrid();
+      dump('LOGIN OK -> timesheet');
+    }
+
+    // Build a Mon-Fri edit grid for the target week with the exact ng-model
+    // selectors the real action script targets.
+    function buildGrid(weekStart){
+      const grid = document.getElementById('editGrid');
+      grid.innerHTML = '';
+      const start = weekStart ? parseDMY(weekStart) : new Date(2026,7,3); // Mon 03/08/2026
+      for (let i=0;i<5;i++){
+        const d = new Date(start.getTime()); d.setDate(d.getDate()+i);
+        const dateStr = dmy(d);
+        const tr = document.createElement('tr');
+        tr.setAttribute('ng-repeat','rxg in rows');
+        tr.innerHTML =
+          `<td class="rowdate">${dateStr}</td>`+
+          `<td><input ng-model="rxg.startDateTime" aria-label="Start ${dateStr}" data-date="${dateStr}"></td>`+
+          `<td><input ng-model="rxg.endDateTime" aria-label="End ${dateStr}" data-date="${dateStr}"></td>`+
+          `<td><select ng-model="rxg.attendanceTypeId" aria-label="Attendance ${dateStr}">`+
+            `<option>Standard</option><option>Overtime</option><option>Leave</option></select></td>`;
+        grid.appendChild(tr);
+        // wire ng bindings for the row cells
+        const [s,e] = tr.querySelectorAll('input');
+        const sel = tr.querySelector('select');
+        bindCell(s, dateStr, 'start'); bindCell(e, dateStr, 'end'); bindCell(sel, dateStr, 'attendance');
+      }
+      dump();
+    }
+    function bindCell(el, date, kind){
+      const commit = () => { model.cells[date] ??= {}; model.cells[date][kind] = el.value; dump(); };
+      el.addEventListener('input', commit);
+      el.addEventListener('change', commit);
+    }
+    function parseDMY(v){ const m=String(v).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m?new Date(+m[3],+m[2]-1,+m[1]):new Date(2026,7,3); }
+    function dmy(d){ return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; }
+    function showTab(){ /* tabs present so the action's tab probe passes */ }
+
+    function submitTimesheet(){
+      // HARD STOP: the fixture refuses submit so the spike can never accidentally
+      // "submit". Records the attempt so the receipt shows we reached the button.
+      submitAttempts++;
+      dump('SUBMIT BLOCKED BY FIXTURE (attempt '+submitAttempts+') — spike stops here by design');
+    }
+
+    function dump(note){
+      document.getElementById('stateDump').textContent =
+        (note?('>> '+note+'\n'):'') + JSON.stringify({ signedIn, submitAttempts, model }, null, 2);
+    }
+    // Probe for the spike to read state (mirrors window.__spike pattern).
+    window.__ft = () => ({ signedIn, submitAttempts, model, title:document.title, href:location.href });
+    dump('fixture ready — login view');
+  </script>
+</body>
+</html>

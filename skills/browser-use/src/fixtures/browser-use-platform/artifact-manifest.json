@@ -1,0 +1,22 @@
+{
+	"record": "artifact-manifest",
+	"schema_version": "1",
+	"payload": {
+		"artifact_id": "artifact-fixture-1",
+		"run_id": "run-fixture-1",
+		"task_intent": "frontend-test",
+		"adapter_id": "playwright-cdp",
+		"adapter_version": "1.0.0",
+		"sanitized_target": {
+			"origin": "https://example.test",
+			"path_shape": "/reports/:num"
+		},
+		"producer_capability": "trace-capture",
+		"content_hash": "8bd90c8e084b0e0b74f30b553b2a773a0e1eeb2e8b9a5f3e2b1a09c8d7e6f5a4",
+		"sensitivity": "high",
+		"retention": "failure-evidence",
+		"outcome_ref": "run-receipt-fixture-1",
+		"created_at_epoch_ms": 2500,
+		"export_receipt": null
+	}
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Dashboard Screenshot Fixture</title>
+		<style>
+			body { font-family: system-ui, sans-serif; margin: 0; background: #f3f5f7; color: #17212b; }
+			header { background: #17212b; color: white; padding: 20px 28px; }
+			main { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; padding: 28px; }
+			.card { background: white; border-radius: 12px; padding: 22px; box-shadow: 0 6px 20px #17212b18; }
+			.value { font-size: 34px; font-weight: 700; margin-top: 10px; }
+			.login { max-width: 420px; margin: 80px auto; display: block; }
+		</style>
+	</head>
+	<body>
+		<script>
+			const dashboard = new URLSearchParams(location.search).get("state") !== "login";
+			document.body.innerHTML = dashboard
+				? `<header><h1>Network Dashboard</h1></header>
+					<main data-dashboard-ready="true">
+						<section class="card"><div>Internet</div><div class="value">Online</div></section>
+						<section class="card"><div>Clients</div><div class="value">27</div></section>
+						<section class="card"><div>Wi-Fi health</div><div class="value">Excellent</div></section>
+					</main>`
+				: `<main class="login"><section class="card"><h1>Sign in</h1><p>Authentication required.</p></section></main>`;
+		</script>
+	</body>
+</html>

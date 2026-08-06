@@ -1,0 +1,20 @@
+[mcp_servers.biome-runner]
+args = [
+    "--bun",
+    "@side-quest/biome-runner",
+]
+command = "bunx"
+
+[mcp_servers.bun-runner]
+args = [
+    "--bun",
+    "@side-quest/bun-runner",
+]
+command = "bunx"
+
+[mcp_servers.tsc-runner]
+args = [
+    "--bun",
+    "@side-quest/tsc-runner",
+]
+command = "bunx"

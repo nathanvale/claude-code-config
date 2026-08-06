@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>Time - Search Timesheet</title>
+	</head>
+	<body ng-app>
+		<table>
+			<tbody id="edit-grid"></tbody>
+		</table>
+		<button id="submit-timesheet" type="button">Submit Timesheet</button>
+		<script>
+			const params = new URLSearchParams(location.search);
+			const scenario = params.get("scenario") || "clean";
+			const dates = [
+				"03/08/2026",
+				"04/08/2026",
+				"05/08/2026",
+				"06/08/2026",
+				"07/08/2026",
+			];
+			if (scenario === "wrong-week") {
+				dates.push(
+					"10/08/2026",
+					"11/08/2026",
+					"12/08/2026",
+					"13/08/2026",
+					"14/08/2026",
+				);
+			}
+			if (scenario === "duplicate-date") dates[4] = dates[3];
+
+			const state = { cells: {}, submitAttempts: 0 };
+			const grid = document.querySelector("#edit-grid");
+			for (const [index, date] of dates.entries()) {
+				const readableDate = scenario === "unreadable-dates" ? "" : date;
+				const row = document.createElement("tr");
+				row.setAttribute("ng-repeat", "rxg in rows");
+				row.innerHTML = `
+					<td class="row-date">${readableDate}</td>
+					<td><input ng-model="rxg.startDateTime" value="${readableDate}"></td>
+					<td><input ng-model="rxg.endDateTime" value="${readableDate}"></td>
+					<td>
+						<select ng-model="rxg.attendanceTypeId">
+							<option>Standard</option>
+							${scenario === "attendance-absent" ? "" : "<option>Public Holiday Worked</option>"}
+						</select>
+					</td>
+				`;
+				grid.appendChild(row);
+				const key = date || `row-${index}`;
+				const [start, end] = row.querySelectorAll("input");
+				const attendance = row.querySelector("select");
+				const commit = (field, element) => {
+					const cell = state.cells[key] ?? {};
+					state.cells[key] = cell;
+					cell[field] = element.value;
+				};
+				start.addEventListener("input", () => commit("start", start));
+				end.addEventListener("input", () => commit("end", end));
+				attendance.addEventListener("change", () =>
+					commit("attendance", attendance),
+				);
+			}
+			document
+				.querySelector("#submit-timesheet")
+				.addEventListener("click", () => {
+					state.submitAttempts += 1;
+				});
+			window.__timesheetFixtureState = () => structuredClone(state);
+		</script>
+	</body>
+</html>

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation — facade dividends, round 2</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7ebf0; --muted:#9aa4b2;
+    --line:#2a2f3a; --accent:#7ee0c0; --star:#ffd479; --chip:#222732; --hot:#ff7b72;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:40px 22px 90px}
+  h1{font-size:29px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 4px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 8px}
+  .pill{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12.5px;color:var(--muted)}
+  .lead{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:16px 18px;margin:20px 0}
+  .lead strong{color:#fff}
+  .axes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:14px 0}
+  .axis{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13.5px}
+  .axis b{display:block;color:#fff;font-size:13px;margin-bottom:3px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;position:relative}
+  .card.star{border-color:#5a4d22;background:linear-gradient(180deg,#1c1a12,#171a21 60%)}
+  .card .rank{position:absolute;top:-11px;left:16px;background:var(--accent);color:#062018;font-weight:700;font-size:13px;border-radius:7px;padding:2px 9px}
+  .card.star .rank{background:var(--star);color:#2a1f02}
+  .tags{display:flex;flex-wrap:wrap;gap:7px;margin:4px 0 10px}
+  .tag{font-size:11.5px;border-radius:6px;padding:2px 8px;border:1px solid var(--line);color:var(--muted)}
+  .t-axis{color:#cdd6e0}
+  .t-conf{color:#fff;background:#222b22}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .blk{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .blk h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .blk p{font-size:13.5px;color:#d6dde6;margin:0}
+  .scenario{background:#13171f;border:1px dashed #34506e;border-radius:8px;padding:9px 12px;margin:10px 0 0;font-size:13px;color:#bcd0e6}
+  .scenario b{color:#8fc3ff}
+  .basis code{color:var(--accent)}
+  .mt{font-style:italic;color:#c9d2dc;margin-top:10px}
+  code{background:#11151c;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .reject td:first-child{color:#c9d2dc}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Facade dividends — round 2</h1>
+  <p class="sub">NEW capabilities the proven N=5 facade + mechanical oracle + cost table unlock — beyond the four already shipped.</p>
+  <div class="meta">
+    <span class="pill">2026-06-12</span>
+    <span class="pill">repo-grounded</span>
+    <span class="pill">10 survivors · 44 raw</span>
+    <span class="pill">5 axes</span>
+    <span class="pill">builds on live N=5 proof</span>
+  </div>
+
+  <div class="lead">
+    <strong>The substrate is the unlock.</strong> This session proved a working N=5 facade with a <em>mechanical</em> differential oracle (a Set diff over independent ground-truth sources — not the LLM), a measured cost table, and transparent failover. That substrate is a platform, and it has dividends nobody designed for. The four proven dividends (cost-routing, oracle, degradation, payload tiering) were just the first layer. These ten push into the surprising ones: <strong>consensus as the agent's default perception</strong>, <strong>Byzantine-fault-tolerant high-stakes actions</strong>, <strong>engines composed by strength not picked by cost</strong>, and <strong>a facade that learns from its own runs</strong>. Every one is the thinnest mechanism over data we already produce.
+  </div>
+
+  <h2>Topic axes</h2>
+  <div class="axes">
+    <div class="axis"><b>1 · Oracle generalization</b>what else can a mechanical N-engine diff verify?</div>
+    <div class="axis"><b>2 · Engine-strength composition</b>each engine doing what it's best at in one task</div>
+    <div class="axis"><b>3 · Self-improving</b>the facade learning from its own multi-engine runs</div>
+    <div class="axis"><b>4 · New agent-native</b>what a fleet + oracle lets an agent do</div>
+    <div class="axis"><b>5 · Trust / safety</b>consensus → guarantees for high-stakes actions</div>
+  </div>
+
+  <h2>Ranked ideas</h2>
+
+  <!-- 1 STAR -->
+  <div class="card star">
+    <span class="rank">★ 1</span>
+    <h3>Confidence-annotated perception — every observation carries its agreement score</h3>
+    <div class="tags"><span class="tag t-axis">New agent-native</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Instead of handing the agent one engine's DOM, the facade returns each element tagged <code>seen_by: 5/5</code> or <code>2/5</code>. The agent acts freely on consensus elements and treats contested ones as "investigate before acting." The oracle already computes who-saw-what — this promotes per-element disagreement from a one-off diff call into the <strong>default perception payload</strong>.</p>
+    <div class="scenario"><b>Scenario:</b> on the Wikipedia page, the 14 authority-control links arrive tagged <code>2/5</code> — the agent knows to re-snapshot before trusting them, instead of either missing them (single-engine) or trusting them blindly.</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>"consensus + per-element disagreement + who-saw-what" is the proven oracle output; this generalizes it from a diff call to the normal snapshot the agent already consumes.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>The agent stops trusting all observations equally — it spends caution budget only on the contested ~10% of the page. This is the oracle becoming the agent's whole way of seeing.</p></div>
+    </div>
+    <p class="mt">Meeting test: "If your snapshot told you which elements 4 engines missed, would you click them without looking twice?"</p>
+  </div>
+
+  <!-- 2 STAR -->
+  <div class="card star">
+    <span class="rank">★ 2</span>
+    <h3>Stakes dial — agent buys consensus only where it matters</h3>
+    <div class="tags"><span class="tag t-axis">New agent-native</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>One facade param: <code>snapshot(tier: cheap | consensus)</code>. <code>cheap</code> = the measured-fastest engine (40ms, single source). <code>consensus</code> = fan out all 5 + mechanical diff. The agent's planner sets the dial per step — cheap to scroll a list, consensus to confirm the right row before acting. Cost-aware confidence as a knob the agent turns, backed by the cost table.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Measured cost table exists as data; degradation chain already routes by engine — this exposes the routing knob to the agent instead of fixing it.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Consensus is 5× fan-out — not free. The dial means the agent buys correctness exactly where stakes justify it and runs cheap everywhere else. Makes ★1 affordable as a default.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Would you pay 5× latency on every scroll? No — so why is consensus all-or-nothing?"</p>
+  </div>
+
+  <!-- 3 STAR -->
+  <div class="card star">
+    <span class="rank">★ 3</span>
+    <h3>Quorum-gated irreversible actions + signed multi-witness receipt</h3>
+    <div class="tags"><span class="tag t-axis">Trust / safety</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Mark a step <code>stakes:critical</code> (pay, delete, submit). Before firing, <em>k</em> engines independently re-read the critical element (the "$4,200 to acct …891" button + amount) and must agree via the mechanical diff. Agree → commit; disagree → refuse and surface per-engine values. The commit emits a tamper-evident receipt: <code>{intent, critical_values, confirmed_by:[engines], dissent, hash, ts}</code> — paired with the redaction moat so it never leaks raw secrets.</p>
+    <div class="scenario"><b>Scenario:</b> one engine reads a late-hydrated DOM showing the wrong amount; the other two disagree; the facade refuses the transfer instead of firing on a mis-rendered page. The receipt later proves "3 engines confirmed $X before transfer."</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Verify-after-operate + redaction are named moats; the oracle already does Set-comparison consensus. Byzantine-fault-tolerance: one compromised/stale engine is outvoted. Opt-in on the commit step only (cost).</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Turns "the agent thinks it worked" into "≥3 independent ground-truth sources confirm it" for exactly the steps where being wrong is unrecoverable. A guarantee a single engine structurally cannot make — and an audit artifact that survives a dispute.</p></div>
+    </div>
+    <p class="mt">Meeting test: "For the click that spends money, trust one possibly-stale snapshot, or three engines that must agree?"</p>
+  </div>
+
+  <!-- 4 STAR -->
+  <div class="card star">
+    <span class="rank">★ 4</span>
+    <h3>Drive-observe split — robust engine drives, debug engine watches</h3>
+    <div class="tags"><span class="tag t-axis">Engine-strength composition</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>One task names the robust engine as <em>driver</em> (playwright auto-wait clicks Submit) while the debug engine <em>observes</em> on the same warm Chrome (chrome-devtools captures the network + console + perf for the request that click triggered). The facade emits one combined record: action-from-playwright, side-effects-from-chrome-devtools. Today you pick one and lose either robustness or visibility.</p>
+    <div class="scenario"><b>Scenario:</b> the single most common real failure — "the click worked but the backend call 500'd" — becomes one atomic observation instead of two engine swaps.</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>playwright = auto-wait; chrome-devtools = 44-tool network/perf. All 5 share one warm Chrome at near-zero marginal fan-out cost — so concurrent drive+observe is cheap.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Turns five engines from redundancy into specialization. The robust hand on the wheel, the debug eye on the glass, same task. No single engine gives you both.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Which engine drove and which one watched?" — a sentence anyone can say in standup.</p>
+  </div>
+
+  <!-- 5 STAR -->
+  <div class="card star">
+    <span class="rank">★ 5</span>
+    <h3>Reproduce-everywhere — "does this bug hit all 5 engines?"</h3>
+    <div class="tags"><span class="tag t-axis">Oracle generalization</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>The agent hits an anomaly (element missing, action no-ops) and issues <code>repro(intent)</code>. The facade replays that exact engine-origin-tagged intent across all 5 and returns a per-engine verdict matrix: "missing on Chrome lineage (2), present on Chromium lineage (3)." The agent instantly knows: real site bug (fails everywhere) vs engine artifact (fails on one lineage).</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>The Wikipedia divergence (N4 saw 14 links others truncated) is exactly an engine-lineage artifact this auto-classifies. The oracle generalizes to any observable.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>"Is the button gone, or does only my engine think it's gone?" is the single most expensive ambiguity in browser automation — and a single engine literally cannot resolve it. The fleet makes it a mechanical lookup.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Is the button gone, or does only your engine think it's gone? With one engine you cannot know."</p>
+  </div>
+
+  <!-- 6 -->
+  <div class="card">
+    <span class="rank">6</span>
+    <h3>Cross-engine verify-after-operate — an independent witness, not self-report</h3>
+    <div class="tags"><span class="tag t-axis">Trust / safety</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>Upgrade the postcondition floor: engine A performs the action, engine B (different lineage) reads the resulting post-state and diffs against A's claim. The guarantee shifts from "the engine that acted believes it succeeded" to "an independent engine confirms the world changed." The acting engine shares the failure mode (stale ref, cached DOM) that caused a bad action — so it's the worst possible verifier.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Verify-after-operate is a named moat; ref staleness is per-engine. Thin: reuse verify-after-operate, just bind the verify read to a different engine than the operate.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>An engine confirming its own success is the weakest evidence. An independent witness turns it into corroboration nearly for free — the natural default under the stakes dial.</p></div>
+    </div>
+    <p class="mt">Meeting test: "The acting engine said the order went through; the witness still saw an empty cart — we stopped a false success."</p>
+  </div>
+
+  <!-- 7 -->
+  <div class="card">
+    <span class="rank">7</span>
+    <h3>Cloaking / differential-serving detector — the oracle as a security signal</h3>
+    <div class="tags"><span class="tag t-axis">Trust / safety</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx S</span></div>
+    <p>Fan the same URL across engines whose lineages present different automation fingerprints and diff the content each was served. A site serving materially different DOM/links/prices to different engines trips the oracle — a red flag for bot-detection, cloaking, A/B buckets, or price discrimination, <em>before</em> the agent acts on poisoned content. Same Set diff over normalized content.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Grounding names "bot-detection serving different content per engine" and "cloaking, A/B variance." The oracle caught real divergence already; this points it at content.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>You can't trust a scrape or an automated action if the site is secretly serving your engines different pages. Cross-engine disagreement is the only free signal that the page is lying to you.</p></div>
+    </div>
+    <p class="mt">Meeting test: "The facade flagged the checkout renders differently to two engines — the site is fingerprinting us and we were scraping a decoy."</p>
+  </div>
+
+  <!-- 8 -->
+  <div class="card">
+    <span class="rank">8</span>
+    <h3>Self-healing cost table — append-only run ledger replaces the static numbers</h3>
+    <div class="tags"><span class="tag t-axis">Self-improving</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>Every run already produces per-engine latency + success + payload. Append one line per engine-run to <code>runs.ndjson</code> (engine, domain, intent, ms, ok, bytes, ts). Preflight reads the tail and computes rolling p50 + success-rate per (engine, domain) to seed routing — so the hand-measured "40ms/122ms/304ms" table becomes a live measurement that drifts with reality (a Chrome update slows an engine; the ledger catches it next run). One append + one tail-read, no DB.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Grounding: "we have a measured per-adapter cost table as DATA" and "transport kind does NOT predict latency" — a static table can't track that drift. The 2026-05-30 ideation refused heavy machinery; this stays a flat file.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>The benchmark stops being a lie the day Chrome ships an update. Routing uses last week's real numbers, not numbers measured once in May. The compounding foundation the other learning ideas build on.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Routing uses last week's real numbers, not the ones I measured once in May."</p>
+  </div>
+
+  <!-- 9 -->
+  <div class="card">
+    <span class="rank">9</span>
+    <h3>Divergence memory — the facade learns its own blind spots</h3>
+    <div class="tags"><span class="tag t-axis">Self-improving</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx S</span></div>
+    <p>Every consensus run produces a who-saw-what diff. Append each disagreement to a thin ledger keyed by URL-pattern + element-role. Next time the agent touches a known-divergent surface (Wikipedia navboxes, lineage-truncated lists), the snapshot arrives pre-annotated "engines historically disagree here — already running consensus." Over time this also down-weights an engine that is chronically the lone outlier on an observable (weighted consensus, not flat majority).</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>The Wikipedia truncation is a concrete recurring-divergence datum; the oracle emits per-element disagreement. Append + lookup is the thinnest compounding mechanism — no retraining.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Disagreement is currently rediscovered every run. Remembering it means the agent escalates to consensus proactively on known-flaky surfaces instead of getting burned first — and the oracle's vote gets sharper from its own history.</p></div>
+    </div>
+    <p class="mt">Meeting test: "The facade already knows Wikipedia navboxes make engines disagree — why rediscover that every run?"</p>
+  </div>
+
+  <!-- 10 -->
+  <div class="card">
+    <span class="rank">10</span>
+    <h3>Mid-task anomaly fan-out — automatic differential diagnosis</h3>
+    <div class="tags"><span class="tag t-axis">New agent-native</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx M</span></div>
+    <p>When a step is anomalous, instead of escalating to one debug engine, the facade fans the failed step's context to a targeted subset — chrome-devtools for "did the network 500?", playwright for "was the DOM even settled?", agent-browser for "is the interactive set empty?" — and the mechanical diff over their answers localizes the cause. Near-zero marginal cost because they share warm Chrome. The agent gets a one-shot differential diagnosis no single engine could produce.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>"5 engines on one warm Chrome = near-zero marginal fan-out." Composes the anomaly trigger with the differential oracle into root-cause localization.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Turns fan-out from a redundancy check into a debugging instrument: "DOM was settled, interactive set was fine, but the network 500'd" — the diagnosis an agent currently can't make at all.</p></div>
+    </div>
+    <p class="mt">Meeting test: "It failed, three engines weighed in, and we knew which layer broke."</p>
+  </div>
+
+  <h2>Honourable mentions (fold into survivors)</h2>
+  <table>
+    <tr><th>Idea</th><th>Where it lands</th></tr>
+    <tr><td>Network-witness / console-consensus / a11y-tree / visual-screenshot oracles</td><td>All instances of ★5/★1 oracle-generalization — each is the same Set diff over a different observable. a11y is near-free (rides existing <code>FacadeRef.role/name</code>); visual must stay a downscaled hash to honor lean.</td></tr>
+    <tr><td>Stage-typed pipeline / capability-routed step / scout-and-confirm / dry-run-then-commit</td><td>Composition variants of ★4 — per-step engine assignment by strength. Need the "warm-Chrome state baton" primitive (a tiny handoff token) to make mid-task swaps safe.</td></tr>
+    <tr><td>Codegen-from-the-cheap-run</td><td>Run on the lean engine, have playwright transcribe a replayable script — turns one agent run into regression coverage. Strong, depends on ★4's concurrent-observe.</td></tr>
+    <tr><td>Schema-drift memory / capability-drift watchdog / cost-regression tripwire / learned quorum-size</td><td>Self-improving variants riding ledger 8 — remember accepted call shapes, alarm on drift, shrink the quorum where history proves it safe.</td></tr>
+    <tr><td>Refuse-on-disagreement / freshness-guarded commit / redaction self-diff</td><td>Safety refinements of ★3 — typed abstain to human handoff, observed-at timestamps on refs, oracle pointed at raw-vs-redacted to prove no engine leaks.</td></tr>
+  </table>
+
+  <h2>Rejection summary</h2>
+  <table class="reject">
+    <tr><th>Idea</th><th>Why cut</th></tr>
+    <tr><td>The four already-proven dividends (cost-routing, oracle, degradation, payload tiering)</td><td>Out of scope by construction — this round was explicitly about NEW dividends beyond them.</td></tr>
+    <tr><td>Visual/screenshot oracle as a standalone</td><td>Folded to honourable-mention — heaviest of the oracle family; only survives if kept a downscaled perceptual hash, not a vision pipeline (steipete-lean tension).</td></tr>
+    <tr><td>"Best-observable-per-engine" composed oracle</td><td>Folded into ★4 + ★10 — it's drive-observe-split and anomaly-fan-out generalized; not distinct enough to stand alone.</td></tr>
+  </table>
+
+  <h2>Recommendation</h2>
+  <div class="lead">
+    <strong>The spine:</strong> ★8 (self-healing ledger) is the cheapest, most foundational — it makes everything cost-aware self-correcting and seeds ★9. Then the agent-perception pair ★1 + ★2 (confidence-annotated perception behind a stakes dial) — this is the one that changes how the agent <em>sees</em>, and it's the headline product story: "the agent's perception is consensus-scored, and it pays for confidence only when it matters." Then ★3 (quorum + receipt) for the high-stakes / regulated-action wedge — the guarantee no single-engine tool can make. ★4 (drive-observe split) and ★5 (reproduce-everywhere) are the developer-facing killer demos. ★7 (cloaking detection) is the surprise security angle worth a spike.
+    <br><br>
+    <strong>The throughline:</strong> every one of these is the oracle (a mechanical diff over N witnesses) or the cost table (data) applied to a new surface — perception, actions, debugging, security, learning. The platform was the product; these are what it pays out.
+  </div>
+
+  <p class="foot">
+    Generated by ce-ideate (round 2) · 44 raw candidates across 5 frames (oracle generalization, engine-strength composition, self-improving, new agent-native, trust/safety) → adversarial filter → 10 survivors + honourable mentions across 5 axes.
+    Grounding: this session's live N=5 proof (5-adapter matrix, measured cost table, mechanical oracle, 4-stage degradation). Builds on, does not re-propose, the four proven dividends.
+    Companion to <code>2026-06-12-multi-engine-facade-n5-spike-findings.md</code> and the multi-engine-facade requirements. Run 347c1ce5.
+  </p>
+
+</div>
+</body>
+</html>

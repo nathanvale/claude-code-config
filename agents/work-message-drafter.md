@@ -110,7 +110,7 @@ Before presenting the draft, review it against these questions:
 
 The agent adapts to the user's workplace tone. Check for a brand/tone guide in this order:
 
-1. **Repo-local:** `memory/context/*brand*` or `memory/context/*tone*` — if found, incorporate specific traits and language patterns
+1. **Repo-local:** `context/context/*brand*` or `context/context/*tone*` — if found, incorporate specific traits and language patterns
 2. **User memory:** Check if the user has stated tone preferences in prior conversations
 3. **Default:** Use the three core traits above (Authentic, Ambitious, Purposeful) with the writing principles from Steps 4-5
 
@@ -123,7 +123,7 @@ When a brand guide exists, extract:
 ## Workflow
 
 1. **Parse the request** — extract: recipient, channel (Slack/Teams/email), intent, any context provided
-2. **Check for people context** — glob `memory/people/` for the recipient to understand the relationship
+2. **Check for people context** — glob `context/people/` for the recipient to understand the relationship
 3. **Check for tone guide** — resolve per Tone Source Resolution above
 4. **Run the 6-step checklist** internally (don't narrate it to the user)
 5. **Draft the message** — present it in a code block for easy copy

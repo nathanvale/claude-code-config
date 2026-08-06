@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Browser Adapter Router Research</title>
+	<style>
+		:root {
+			--bg: #f6f8fb;
+			--ink: #111820;
+			--muted: #607080;
+			--line: #d9e0e7;
+			--panel: #ffffff;
+			--soft: #eef3f8;
+			--soft-green: #e9f6f1;
+			--soft-yellow: #fff6df;
+			--soft-red: #fff0ef;
+			--green: #0f7b5f;
+			--blue: #2458b8;
+			--orange: #a65f13;
+			--red: #b2362d;
+			--purple: #6f4aa8;
+			--shadow: 0 14px 34px rgba(24, 37, 54, 0.1);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			line-height: 1.45;
+		}
+
+		button {
+			font: inherit;
+		}
+
+		header {
+			display: grid;
+			gap: 12px;
+			padding: 22px clamp(16px, 4vw, 42px);
+			background: var(--panel);
+			border-bottom: 1px solid var(--line);
+		}
+
+		h1,
+		h2,
+		h3,
+		p {
+			margin: 0;
+			letter-spacing: 0;
+		}
+
+		h1 {
+			font-size: clamp(1.6rem, 3.4vw, 2.7rem);
+			line-height: 1.05;
+		}
+
+		header p {
+			max-width: 86ch;
+			color: var(--muted);
+		}
+
+		main {
+			display: grid;
+			grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
+			gap: 18px;
+			padding: 18px clamp(16px, 4vw, 42px) 32px;
+		}
+
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			box-shadow: var(--shadow);
+			min-width: 0;
+		}
+
+		.panel-head {
+			display: grid;
+			gap: 4px;
+			padding: 14px 16px;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.kicker {
+			color: var(--muted);
+			font-size: 0.78rem;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0;
+		}
+
+		.caption {
+			color: var(--muted);
+			font-size: 0.92rem;
+		}
+
+		.scenarios {
+			display: grid;
+			gap: 8px;
+			padding: 12px;
+		}
+
+		.scenario {
+			width: 100%;
+			display: grid;
+			gap: 4px;
+			text-align: left;
+			border: 1px solid var(--line);
+			background: #fbfdff;
+			border-radius: 8px;
+			padding: 10px 11px;
+			cursor: pointer;
+			color: var(--ink);
+		}
+
+		.scenario:hover {
+			border-color: #9aaabd;
+		}
+
+		.scenario.active {
+			border-color: var(--blue);
+			background: #edf4ff;
+			box-shadow: inset 0 0 0 2px rgba(36, 88, 184, 0.12);
+		}
+
+		.scenario strong {
+			font-size: 0.94rem;
+		}
+
+		.scenario span {
+			color: var(--muted);
+			font-size: 0.82rem;
+		}
+
+		.workspace {
+			display: grid;
+			gap: 18px;
+		}
+
+		.command-strip {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 12px;
+		}
+
+		.command {
+			display: grid;
+			gap: 8px;
+			padding: 14px;
+			border-radius: 8px;
+			border: 1px solid var(--line);
+			background: var(--panel);
+			min-height: 124px;
+		}
+
+		.command strong {
+			font-size: 1rem;
+		}
+
+		.command p {
+			color: var(--muted);
+			font-size: 0.9rem;
+		}
+
+		.route-grid {
+			display: grid;
+			grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+			gap: 16px;
+			padding: 16px;
+		}
+
+		.summary {
+			display: grid;
+			gap: 14px;
+		}
+
+		.summary h2 {
+			font-size: clamp(1.45rem, 3vw, 2.35rem);
+			line-height: 1.08;
+		}
+
+		.meta-grid {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.meta {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 11px;
+			background: #fbfdff;
+			display: grid;
+			gap: 4px;
+			min-height: 78px;
+		}
+
+		.meta strong {
+			font-size: 0.95rem;
+		}
+
+		.meta span {
+			color: var(--muted);
+			font-size: 0.86rem;
+		}
+
+		.flow {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 8px;
+		}
+
+		.step {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--soft);
+			padding: 10px;
+			min-height: 88px;
+			display: grid;
+			align-content: start;
+			gap: 5px;
+		}
+
+		.step strong {
+			font-size: 0.9rem;
+		}
+
+		.step span {
+			color: var(--muted);
+			font-size: 0.82rem;
+		}
+
+		.outcome {
+			border: 1px solid currentColor;
+			border-radius: 8px;
+			padding: 14px;
+			display: grid;
+			gap: 10px;
+			min-height: 100%;
+		}
+
+		.outcome.success {
+			color: var(--green);
+			background: var(--soft-green);
+		}
+
+		.outcome.warning {
+			color: var(--orange);
+			background: var(--soft-yellow);
+		}
+
+		.outcome.failure {
+			color: var(--red);
+			background: var(--soft-red);
+		}
+
+		.outcome.demo {
+			color: var(--purple);
+			background: #f5f0ff;
+		}
+
+		.outcome h3,
+		.outcome p {
+			color: var(--ink);
+		}
+
+		.outcome h3 {
+			font-size: 1.3rem;
+			line-height: 1.15;
+		}
+
+		pre {
+			margin: 0;
+			white-space: pre-wrap;
+			overflow: auto;
+			background: #101923;
+			color: #f8fbff;
+			border-radius: 8px;
+			padding: 12px;
+			font-size: 0.84rem;
+			line-height: 1.5;
+		}
+
+		.candidates {
+			display: grid;
+			gap: 12px;
+			padding: 16px;
+		}
+
+		.candidate-grid {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 12px;
+		}
+
+		.candidate {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 12px;
+			background: #fbfdff;
+			display: grid;
+			gap: 10px;
+			min-height: 210px;
+		}
+
+		.candidate.selected {
+			border-color: var(--green);
+			background: var(--soft-green);
+		}
+
+		.candidate.rejected {
+			border-color: #efb1ab;
+			background: #fff8f7;
+		}
+
+		.candidate.skipped {
+			border-color: #e4c172;
+			background: #fffaf0;
+		}
+
+		.candidate.demo {
+			border-color: #c9b6ee;
+			background: #faf7ff;
+		}
+
+		.candidate h3 {
+			font-size: 1rem;
+		}
+
+		.pill-row {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+
+		.pill {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			padding: 5px 8px;
+			background: var(--panel);
+			color: var(--muted);
+			font-size: 0.78rem;
+			white-space: nowrap;
+		}
+
+		.dot {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--muted);
+			flex: 0 0 auto;
+		}
+
+		.dot.full,
+		.dot.success {
+			background: var(--green);
+		}
+
+		.dot.partial,
+		.dot.warning,
+		.dot.skipped {
+			background: var(--orange);
+		}
+
+		.dot.none,
+		.dot.failure,
+		.dot.rejected {
+			background: var(--red);
+		}
+
+		.dot.unknown,
+		.dot.pending {
+			background: var(--blue);
+		}
+
+		.detail-list {
+			list-style: none;
+			display: grid;
+			gap: 7px;
+			padding: 0;
+			margin: 0;
+		}
+
+		.detail-list li {
+			color: var(--muted);
+			font-size: 0.88rem;
+		}
+
+		.detail-list strong {
+			color: var(--ink);
+		}
+
+		.two-col {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+			gap: 18px;
+		}
+
+		.body-block {
+			padding: 16px;
+			display: grid;
+			gap: 12px;
+		}
+
+		.bundle-list,
+		.source-list {
+			display: grid;
+			gap: 8px;
+		}
+
+		.bundle,
+		.source {
+			border: 1px solid var(--line);
+			background: #fbfdff;
+			border-radius: 8px;
+			padding: 10px;
+			display: grid;
+			gap: 4px;
+		}
+
+		.bundle strong,
+		.source strong {
+			font-size: 0.93rem;
+		}
+
+		.bundle span,
+		.source span {
+			color: var(--muted);
+			font-size: 0.84rem;
+		}
+
+		a {
+			color: var(--blue);
+			text-decoration: none;
+			border-bottom: 1px solid currentColor;
+		}
+
+		@media (max-width: 1120px) {
+			main,
+			.route-grid,
+			.two-col {
+				grid-template-columns: 1fr;
+			}
+
+			.command-strip,
+			.candidate-grid {
+				grid-template-columns: 1fr;
+			}
+		}
+
+		@media (max-width: 720px) {
+			.flow,
+			.meta-grid {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header>
+		<div>
+			<p class="kicker">Research artifact, not runtime truth</p>
+			<h1>Browser Adapter Router</h1>
+		</div>
+		<p>Static prototype for the V1 routing model. Runtime code owns capability reports, evidence envelope shape, and command contracts.</p>
+	</header>
+
+	<main>
+		<aside class="panel">
+			<div class="panel-head">
+				<p class="kicker">State map</p>
+				<p class="caption">Scenario selection for the Router decision tree.</p>
+			</div>
+			<div class="scenarios" id="scenarioControls"></div>
+		</aside>
+
+		<section class="workspace">
+			<section class="command-strip" aria-label="Router commands">
+				<article class="command">
+					<p class="kicker">report</p>
+					<strong>Capability report discovery</strong>
+					<p>Validates registry-declared self-report output or TypeScript manifests. Check/network only.</p>
+				</article>
+				<article class="command">
+					<p class="kicker">route</p>
+					<strong>Pure adapter selection</strong>
+					<p>Consumes caller-assembled evidence. Does not invoke proof, self-report, or hidden latest files.</p>
+				</article>
+				<article class="command">
+					<p class="kicker">status</p>
+					<strong>Human projection</strong>
+					<p>Runs the same route evaluator and renders the supplied evidence envelope for humans.</p>
+				</article>
+			</section>
+
+			<section class="panel">
+				<div class="route-grid">
+					<div class="summary">
+						<div>
+							<p class="kicker" id="scenarioState"></p>
+							<h2 id="scenarioTitle"></h2>
+							<p class="caption" id="scenarioCopy"></p>
+						</div>
+						<div class="meta-grid" id="metaGrid"></div>
+						<div class="flow">
+							<div class="step">
+								<strong>Warm Chrome Preflight</strong>
+								<span>Browser-entry proof supplied to route.</span>
+							</div>
+							<div class="step">
+								<strong>Browser Adapter Proof</strong>
+								<span>Attachment proof supplied per candidate.</span>
+							</div>
+							<div class="step">
+								<strong>Router report</strong>
+								<span>Validated capability reports with provenance.</span>
+							</div>
+							<div class="step">
+								<strong>Caller envelope</strong>
+								<span>Evidence assembled by skill driver for one Bounded Browser Outcome.</span>
+							</div>
+						</div>
+					</div>
+					<aside class="outcome" id="outcome"></aside>
+				</div>
+			</section>
+
+			<section class="panel">
+				<div class="panel-head">
+					<p class="kicker">Candidate decisions</p>
+					<p class="caption">Concise selected, skipped, and rejected evidence. Raw reports stay out of default output.</p>
+				</div>
+				<div class="candidates">
+					<div class="candidate-grid" id="candidateGrid"></div>
+				</div>
+			</section>
+
+			<section class="two-col">
+				<section class="panel">
+					<div class="panel-head">
+						<p class="kicker">Seed bundles</p>
+						<p class="caption">Task-facing presets. Exact members stay runtime-owned.</p>
+					</div>
+					<div class="body-block">
+						<div class="bundle-list" id="bundleList"></div>
+					</div>
+				</section>
+
+				<section class="panel">
+					<div class="panel-head">
+						<p class="kicker">Research sources</p>
+						<p class="caption">Advisory source stock. Not routable reports.</p>
+					</div>
+					<div class="body-block">
+						<div class="source-list">
+							<div class="source">
+								<strong>Router plan</strong>
+								<span><a href="../../skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md">skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md</a></span>
+							</div>
+							<div class="source">
+								<strong>Research stock</strong>
+								<span><a href="../../skills/browser-use/docs/research/2026-06-02-browser-adapter-router-research-stock.md">skills/browser-use/docs/research/2026-06-02-browser-adapter-router-research-stock.md</a></span>
+							</div>
+							<div class="source">
+								<strong>Runtime owner</strong>
+								<span>skills/browser-use/scripts/browser-adapter-router.ts and tests.</span>
+							</div>
+						</div>
+					</div>
+				</section>
+			</section>
+		</section>
+	</main>
+
+	<script>
+		const adapters = {
+			"chrome-devtools": "Chrome DevTools MCP",
+			"agent-browser": "Agent Browser CLI",
+			"playwright-cdp": "Playwright CDP"
+		};
+
+		const bundles = [
+			{
+				id: "snapshot_page_action",
+				name: "snapshot_page_action",
+				copy: "Ephemeral snapshot refs plus page actions for one bounded outcome."
+			},
+			{
+				id: "visual_proof_capture",
+				name: "visual_proof_capture",
+				copy: "Capture proof artifact and return run-scoped media metadata."
+			},
+			{
+				id: "runtime_debug_inspection",
+				name: "runtime_debug_inspection",
+				copy: "Console, network, and live runtime inspection."
+			},
+			{
+				id: "performance_profile",
+				name: "performance_profile",
+				copy: "Profile or trace capture. DevTools insight remains separate."
+			},
+			{
+				id: "runbook_step_execution",
+				name: "runbook_step_execution",
+				copy: "Adapter mechanics for one Browser Runbook step."
+			}
+		];
+
+		const scenarios = [
+			{
+				id: "initial",
+				state: "Initial",
+				title: "Evidence assembly",
+				copy: "The Router has a Bounded Browser Outcome, but route evidence is not assembled yet.",
+				policy: "auto",
+				bundle: "snapshot_page_action",
+				capabilities: ["snapshot_refs", "element_actions"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "warning",
+				error: "route_evidence_invalid",
+				next: "run_warm_chrome_preflight",
+				summary: "Route waits for caller-supplied evidence. No hidden latest proof files.",
+				constraints: ["no implicit evidence lookup", "caller assembles envelope"],
+				candidates: [
+					decision("chrome-devtools", "skipped", "No route evidence supplied.", "unknown", "n/a"),
+					decision("agent-browser", "skipped", "No route evidence supplied.", "unknown", "n/a"),
+					decision("playwright-cdp", "skipped", "No route evidence supplied.", "unknown", "n/a")
+				]
+			},
+			{
+				id: "full",
+				state: "Full success",
+				title: "Route snapshot page action",
+				copy: "Auto route chooses the fully evidenced candidate for one Bounded Browser Outcome.",
+				policy: "auto",
+				bundle: "snapshot_page_action",
+				capabilities: ["snapshot_refs", "element_actions", "screenshot_media"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser", "auth_session_ready"],
+				result: "success",
+				selected: "agent-browser",
+				next: "use_selected_browser_adapter",
+				summary: "Selected adapter has full support, compatible Warm Chrome attachment, and route confidence above threshold.",
+				routeConfidence: 91,
+				constraints: ["no adapter switching", "no cold-browser fallback", "reroute on task or evidence change"],
+				candidates: [
+					decision("agent-browser", "selected", "Full bundle support with compatible Warm Chrome attachment.", "full", "91"),
+					decision("chrome-devtools", "rejected", "Lower task-bundle priority after filtering.", "full", "84"),
+					decision("playwright-cdp", "skipped", "Adapter proof missing for this route run.", "full", "88", "adapter_attachment_unverified")
+				]
+			},
+			{
+				id: "partial",
+				state: "Partial fail closed",
+				title: "Prefer Playwright for runtime debug",
+				copy: "Preferred adapter has adjacent support but one required capability is partial.",
+				policy: "prefer playwright-cdp, fallback false",
+				bundle: "runtime_debug_inspection",
+				capabilities: ["network_inspection", "console_debug", "devtools_performance_insight"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "failure",
+				error: "adapter_capability_partial",
+				next: "research_adapter_capability",
+				summary: "Partial support explains recovery, but does not route real adapter action in V1.",
+				constraints: ["partial is not runnable", "no degraded route in V1"],
+				candidates: [
+					decision("playwright-cdp", "rejected", "DevTools performance insight is partial or absent.", "partial", "80", "adapter_capability_partial"),
+					decision("chrome-devtools", "skipped", "Fallback not allowed by policy.", "full", "93"),
+					decision("agent-browser", "rejected", "No direct DevTools insight evidence.", "none", "76", "adapter_capability_none")
+				]
+			},
+			{
+				id: "none",
+				state: "Missing fail closed",
+				title: "Memory debugging without support",
+				copy: "Requested capability reports none for the forced adapter.",
+				policy: "force agent-browser",
+				bundle: "performance_profile",
+				capabilities: ["memory_debug"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "failure",
+				error: "adapter_capability_none",
+				next: "research_adapter_capability",
+				summary: "Forced adapter stops. Chrome DevTools may be informational, not fallback.",
+				constraints: ["force is not prefer", "alternatives informational only"],
+				candidates: [
+					decision("agent-browser", "rejected", "memory_debug reports none.", "none", "82", "adapter_capability_none"),
+					decision("chrome-devtools", "skipped", "Full support suggestion only; force forbids fallback.", "full", "94"),
+					decision("playwright-cdp", "rejected", "No memory debugging support.", "none", "78", "adapter_capability_none")
+				]
+			},
+			{
+				id: "stale",
+				state: "Stale or unknown recovery",
+				title: "Capability truth expired",
+				copy: "A valid report exists, but it exceeded its stale-after policy.",
+				policy: "auto",
+				bundle: "performance_profile",
+				capabilities: ["performance_profile"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "warning",
+				error: "adapter_capability_stale",
+				next: "research_adapter_capability",
+				summary: "Research can produce an advisory signal, but only refreshed report evidence can route.",
+				constraints: ["docs-only evidence is advisory", "numeric research signal below route threshold"],
+				candidates: [
+					decision("chrome-devtools", "skipped", "Capability report stale.", "stale", "n/a", "adapter_capability_stale"),
+					decision("agent-browser", "skipped", "No valid current report.", "unknown", "n/a", "adapter_capability_unknown"),
+					decision("playwright-cdp", "skipped", "Capability report stale.", "stale", "n/a", "adapter_capability_stale")
+				]
+			},
+			{
+				id: "forced",
+				state: "Forced failure",
+				title: "Forced adapter lacks proof",
+				copy: "Forced mode asks only the forced adapter and stops when attachment proof is missing.",
+				policy: "force chrome-devtools",
+				bundle: "visual_proof_capture",
+				capabilities: ["screenshot_media"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "failure",
+				error: "adapter_attachment_unverified",
+				next: "prove_adapter_attachment",
+				summary: "Route does not invoke Browser Adapter Proof. It emits recovery for the missing proof.",
+				constraints: ["route consumes proof", "no proof invocation in route"],
+				candidates: [
+					decision("chrome-devtools", "rejected", "Attachment proof missing for this run.", "full", "90", "adapter_attachment_unverified"),
+					decision("agent-browser", "skipped", "Alternative is informational only in force mode.", "full", "88"),
+					decision("playwright-cdp", "skipped", "Alternative is informational only in force mode.", "full", "82")
+				]
+			},
+			{
+				id: "researchPending",
+				state: "Research pending",
+				title: "Docs research in progress",
+				copy: "Stale/unknown capability data emitted a bounded research action.",
+				policy: "auto",
+				bundle: "runtime_debug_inspection",
+				capabilities: ["network_inspection", "console_debug"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "warning",
+				error: "adapter_capability_unknown",
+				next: "research_adapter_capability",
+				summary: "Research action carries query, stale reason, retry posture, and terminal condition.",
+				constraints: ["research does not route", "verification required for report refresh"],
+				candidates: [
+					decision("chrome-devtools", "skipped", "Research pending for current version.", "unknown", "research_signal 48"),
+					decision("agent-browser", "skipped", "Research pending for current version.", "unknown", "research_signal 44"),
+					decision("playwright-cdp", "skipped", "Research pending for current version.", "unknown", "research_signal 39")
+				]
+			},
+			{
+				id: "researchTerminal",
+				state: "Research terminal",
+				title: "Docs complete, still unverified",
+				copy: "Docs-only evidence finished, but cannot promote capability report truth.",
+				policy: "auto",
+				bundle: "performance_profile",
+				capabilities: ["devtools_performance_insight"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "failure",
+				error: "research_complete_unverified",
+				next: "verify_capability_report",
+				summary: "V1 has no verify command. Executable verification remains future/manual recovery path.",
+				constraints: ["human acceptance cannot promote docs-only evidence", "no report --verify in V1"],
+				candidates: [
+					decision("chrome-devtools", "skipped", "Docs look promising but route confidence is unavailable.", "unknown", "advisory_signal 50"),
+					decision("agent-browser", "rejected", "No direct evidence found.", "none", "advisory_signal 20"),
+					decision("playwright-cdp", "rejected", "No direct evidence found.", "none", "advisory_signal 20")
+				]
+			},
+			{
+				id: "degradedDemo",
+				state: "Degraded accepted demo",
+				title: "Prototype-only degraded path",
+				copy: "Shows how accepted partial support might look later. V1 does not route this for real adapter action.",
+				policy: "allow_degraded demo",
+				bundle: "runtime_debug_inspection",
+				capabilities: ["selector_actions", "console_debug"],
+				preconditions: ["warm_chrome_ready", "adapter_attached_verified_browser"],
+				result: "demo",
+				selected: "playwright-cdp",
+				next: "accept_partial_adapter",
+				summary: "Demonstration state only. Real V1 route remains fail closed.",
+				routeConfidence: 72,
+				constraints: ["prototype demonstration", "not V1 route execution"],
+				candidates: [
+					decision("playwright-cdp", "demo", "Partial selector semantics accepted for demonstration.", "partial", "72", "adapter_capability_partial"),
+					decision("chrome-devtools", "skipped", "Higher fidelity available, but demo policy selected partial path.", "full", "90"),
+					decision("agent-browser", "skipped", "Full support available, but demo policy selected partial path.", "full", "88")
+				]
+			}
+		];
+
+		const state = { scenarioId: "full" };
+
+		function decision(adapterId, status, reason, support, confidence, code = "") {
+			return { adapterId, status, reason, support, confidence, code };
+		}
+
+		function currentScenario() {
+			return scenarios.find((scenario) => scenario.id === state.scenarioId);
+		}
+
+		function scenarioButton(scenario) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = `scenario${scenario.id === state.scenarioId ? " active" : ""}`;
+			button.innerHTML = `<strong>${scenario.state}</strong><span>${scenario.title}</span>`;
+			button.addEventListener("click", () => {
+				state.scenarioId = scenario.id;
+				render();
+			});
+			return button;
+		}
+
+		function renderScenarioControls() {
+			const root = document.getElementById("scenarioControls");
+			root.innerHTML = "";
+			for (const scenario of scenarios) root.appendChild(scenarioButton(scenario));
+		}
+
+		function renderMeta(scenario) {
+			const meta = [
+				["Policy", scenario.policy],
+				["Bundle", scenario.bundle],
+				["Capabilities", scenario.capabilities.join(", ")],
+				["Preconditions", scenario.preconditions.join(", ")]
+			];
+			document.getElementById("metaGrid").innerHTML = meta.map(([label, value]) => `
+				<div class="meta">
+					<span>${label}</span>
+					<strong>${value}</strong>
+				</div>
+			`).join("");
+		}
+
+		function renderOutcome(scenario) {
+			const root = document.getElementById("outcome");
+			root.className = `outcome ${scenario.result}`;
+			const selectedLine = scenario.selected ? `selected_adapter = "${scenario.selected}"` : `selected_adapter = "none"`;
+			const errorLine = scenario.error ? `error.code = "${scenario.error}"` : `result = "selected"`;
+			const confidenceLine = scenario.routeConfidence ? `route_confidence = ${scenario.routeConfidence}` : `route_confidence = "n/a"`;
+			root.innerHTML = `
+				<p class="kicker">${scenario.result}</p>
+				<h3>${scenario.summary}</h3>
+				<p>${scenario.copy}</p>
+				<pre>${errorLine}
+${selectedLine}
+next_action_id = "${scenario.next}"
+${confidenceLine}
+constraints =
+${scenario.constraints.map((constraint) => `  - ${constraint}`).join("\n")}</pre>
+			`;
+		}
+
+		function renderCandidates(scenario) {
+			const root = document.getElementById("candidateGrid");
+			root.innerHTML = scenario.candidates.map((candidate) => `
+				<article class="candidate ${candidate.status}">
+					<div>
+						<p class="kicker">${candidate.status}</p>
+						<h3>${adapters[candidate.adapterId]}</h3>
+					</div>
+					<div class="pill-row">
+						<span class="pill"><span class="dot ${candidate.support}"></span>${candidate.support}</span>
+						<span class="pill">${candidate.confidence}</span>
+					</div>
+					<ul class="detail-list">
+						<li><strong>Reason:</strong> ${candidate.reason}</li>
+						<li><strong>Code:</strong> ${candidate.code || "none"}</li>
+					</ul>
+				</article>
+			`).join("");
+		}
+
+		function renderBundles() {
+			document.getElementById("bundleList").innerHTML = bundles.map((bundle) => `
+				<div class="bundle">
+					<strong>${bundle.name}</strong>
+					<span>${bundle.copy}</span>
+				</div>
+			`).join("");
+		}
+
+		function render() {
+			const scenario = currentScenario();
+			renderScenarioControls();
+			document.getElementById("scenarioState").textContent = scenario.state;
+			document.getElementById("scenarioTitle").textContent = scenario.title;
+			document.getElementById("scenarioCopy").textContent = scenario.copy;
+			renderMeta(scenario);
+			renderOutcome(scenario);
+			renderCandidates(scenario);
+			renderBundles();
+		}
+
+		render();
+	</script>
+</body>
+</html>

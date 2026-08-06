@@ -1,89 +1,54 @@
 ---
 name: prompt-system-workflow
-description: "Operator workflow for changing the multi-agent prompt system safely. Classifies, routes, mirrors, renders, and verifies prompt-system changes."
-argument-hint: "[describe the change you want to make]"
+description: "Change startup instructions safely. Triggers on prompt-system, AGENTS.md, CLAUDE.md, or instruction topology changes."
+role: control-plane
+argument-hint: "[describe the instruction change]"
 ---
 
 # Prompt System Workflow
 
 ## Purpose
 
-One entry point for any prompt-system change. Classifies the change, routes it to the correct surface, and verifies the result.
+Route startup-instruction changes to the right owner and prove health after edits.
 
-## Authority
+## Read First
 
-This skill orchestrates the existing contract and runbooks — it does not replace them.
+1. `docs/adr/0011-lean-startup-instructions.md`
+2. `skills/prompt-system-router/SKILL.md`
+3. `CONTEXT.md` for vocabulary
 
-Read order before starting:
-1. `docs/specs/prompt-system.md` — the contract (routing, rendering, rules, context, smoke tests)
-2. `skills/prompt-system-router/SKILL.md` — routing classification
+## Dependencies
+
+- `skills/prompt-system-router/SKILL.md`: hard dependency for classification.
+- `scripts/agent-instructions.sh`: hard dependency for delivery checks.
+- `docs/adr/0011-lean-startup-instructions.md`: owner-reference dependency.
+- Missing router or health contract: blocked.
+- Missing ADR: degraded; use `CONTEXT.md` and startup checks, then report the missing ADR.
+
+## Resume State
+
+- Treat canonical owner files, ADRs, and check output as durable state.
+- Re-read `AGENTS.md`, `CLAUDE.md`, router guidance, and touched owner files before resuming after compaction or a new session.
+- Before stopping mid-change, record touched files, accepted decisions, remaining edits, and remaining checks in the owning tracker or handoff.
+- Do not rely on transcript memory for which startup surface owns the rule.
 
 ## Workflow
 
-### Step 1: Classify the Change
+1. Classify with router skill.
+2. Edit canonical owner:
+   - startup hot rules: `AGENTS.md`
+   - Claude wrapper only if runtime proof requires it: `CLAUDE.md`
+   - workflow depth: owning skill or context doc
+   - deterministic mechanics: code, CLI help, generated docs, or checks
+   - repo facts: repo-local `docs/agents/`
+3. Never edit generated prompt artifacts.
+4. If delivery/check semantics changed, update `scripts/agent-instructions.sh`.
+5. If decision trade-off changed, update or add ADR.
+6. Verify:
 
-Read the router skill and apply its classification procedure. Determine:
-- What kind of instruction is this? (startup, rule, reference)
-- Who needs it? (shared, Claude-only, Codex-only, future harness)
-- Is mirroring required?
-
-Present the classification to the user before proceeding.
-
-### Step 2: Route to the Correct Surface
-
-Based on classification, identify the exact file(s) to create or edit by consulting `docs/specs/prompt-system.md`.
-
-Flag if the change appears to be misrouted (see router skill's misrouting patterns).
-
-### Step 3: Implement the Change
-
-Make the edits in the canonical source locations. Never edit generated artifacts directly.
-
-If mirroring is required, implement the mirrored behavior in the same change.
-
-### Step 4: Update Docs if Contract Changed
-
-If the change modifies the composition model, delivery mechanism, or routing rules, update `docs/specs/prompt-system.md`.
-
-Most changes do not require doc updates. Only flag this for architectural changes.
-
-### Step 5: Render
-
-If any prompt fragments were changed:
 ```bash
-./scripts/render-user-prompts.sh --write
+scripts/agent-instructions.sh check
+bun scripts/multi-agent-smoke.ts --tests boundary,propagation
 ```
 
-If only `rules/` or `context/` changed (with no fragment mirroring), skip this step.
-
-### Step 6: Verify
-
-Run verification in two stages:
-
-**Stage 1 — Render and contract checks:**
-Run `./scripts/render-user-prompts.sh --check` directly.
-
-If shared behavior or propagation logic changed, also run smoke tests. Either run them directly or dispatch the `prompt-smoke-runner` agent:
-- Direct: `bun scripts/multi-agent-smoke.ts`
-- Subset: `bun scripts/multi-agent-smoke.ts --tests boundary,propagation`
-
-**Stage 2 — Contract audit (when architectural):**
-If the change touches the spec, runbooks, render script, or install behavior, dispatch the `prompt-contract-auditor` agent to check for drift between the spec, implementation, and runbooks.
-
-### Step 7: Report
-
-Summarize:
-- Files changed (with paths)
-- Classification used (surface, audience, mirroring)
-- Verification results (pass/fail for each check)
-- Residual risks (anything the automated checks cannot catch)
-
-## Skip-Step Principle
-
-Default to the full workflow unless the spec, the relevant runbook, or the verification surface clearly makes a step unnecessary.
-
-When you skip a step:
-
-- state which step you skipped
-- say why it was safe to skip
-- keep the reason anchored to the contract or the relevant runbook instead of personal preference
+Use focused smoke only when shared startup behavior or delivery changed.

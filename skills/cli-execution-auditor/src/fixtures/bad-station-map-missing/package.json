@@ -1,0 +1,13 @@
+{
+	"name": "fixture-bad-station-map-missing-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Facade CLI fixture with a Branch Station Catalog and no evidence.",
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

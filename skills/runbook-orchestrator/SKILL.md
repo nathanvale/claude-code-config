@@ -1,9 +1,10 @@
 ---
 name: runbook-orchestrator
-description: Orchestrate iterative code-review runbooks driven by /goal. Status, launch, new (via /ce-brainstorm), or audit. Works on any folder following the README.md + seam.md + seam-ledger.md convention.
-argument-hint: [status|launch|new|audit|report] [area-path] [seam-name|--all]
+description: "Orchestrate iterative code-review runbooks driven by /goal. Status, launch, new (via /ce-brainstorm), or audit. Works on any folder following the README.md + seam.md + seam-ledger.md convention."
+role: control-plane
+argument-hint: "[status|launch|new|audit|report] [area-path] [seam-name|--all]"
 disable-model-invocation: true
-allowed-tools: Read, Edit, Write, Glob, Grep, Bash(find:*), Bash(git rev-parse:*), Bash(git status:*), Bash(git cat-file:*), Bash(git log:*)
+allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)", "Bash(git show:*)"]
 ---
 
 # Runbook Orchestrator
@@ -14,6 +15,16 @@ that follows the convention.
 
 For the runbook convention this skill expects, see [convention.md](references/convention.md).
 
+## Dependencies
+
+- `references/preflight.md`: bundled reference, hard dependency.
+- `references/convention.md`: bundled reference, hard dependency.
+- `/ce-brainstorm`: optional handoff for `new` add-seam flow.
+- External `improve-codebase-architecture` skill: optional handoff for bootstrap and report tightness passes.
+- Missing bundled reference: blocked.
+- Missing `/ce-brainstorm`: degraded; draft the seam prompt and ask the user to run the brainstorm manually.
+- Missing `improve-codebase-architecture`: degraded for `status`, `launch`, and `audit`; blocked for bootstrap or report tightness pass.
+
 ## Quick start
 
 ```
@@ -23,8 +34,11 @@ For the runbook convention this skill expects, see [convention.md](references/co
 /runbook-orchestrator audit docs/runbooks/data-table-review
 ```
 
-If no `area-path` is given, the skill scans the current working directory
-for any `docs/runbooks/*/README.md` and asks the user to pick.
+If no `area-path` is given, the skill scans both the current working
+directory for `docs/runbooks/*/README.md` (repo-scope) and
+`~/.claude/runbooks/*/README.md` (user-scope), and asks the user to
+pick. User-scope holds host-neutral workflow runbooks like
+`issue-to-pr-v2` that operate on a target repo passed in at launch.
 
 ## Arguments
 
@@ -35,6 +49,14 @@ string as the `area-path`.
 
 See `## Subcommand dispatch` below for what each one does, and the
 linked reference files for full protocols.
+
+## Resume State
+
+- Treat README, seam files, seam ledgers, and reports as durable state.
+- Re-run `status` or re-read the target ledger before resuming after compaction or a new session.
+- Do not rely on transcript memory for selected area, seam, warnings, or launch command.
+- For `launch`, print the fully resolved invocation again on resume.
+- Before stopping mid-`new` or mid-`report`, persist the draft file or leave a named next-action note in the target README or ledger.
 
 ## Pre-flight checks (shared)
 

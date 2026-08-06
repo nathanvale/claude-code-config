@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Repo Workability Improvements</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f2;
+      --paper: #ffffff;
+      --ink: #202520;
+      --muted: #5f665f;
+      --line: #d9ded5;
+      --accent: #245c73;
+      --accent-soft: #e3f0f4;
+      --green: #2e6a4e;
+      --green-soft: #e6f2eb;
+      --gold: #765b18;
+      --gold-soft: #f5ecd3;
+      --red: #8a3d37;
+      --red-soft: #f3dfdc;
+      --code: #eef1ed;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      font-size: 34px;
+      line-height: 1.15;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 22px;
+      line-height: 1.25;
+      margin: 34px 0 14px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 18px;
+      line-height: 1.3;
+      margin: 0 0 10px;
+      letter-spacing: 0;
+    }
+
+    p {
+      max-width: 76ch;
+      margin: 0 0 12px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    code {
+      background: var(--code);
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .metadata {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .summary-grid,
+    .axis-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin: 18px 0 4px;
+    }
+
+    .summary-card,
+    .idea-card,
+    .note-card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+    }
+
+    .axis-list {
+      padding: 0;
+      list-style: none;
+    }
+
+    .axis-list li {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .jump-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 16px;
+    }
+
+    .jump-list a {
+      background: var(--accent-soft);
+      border: 1px solid #bdd7df;
+      border-radius: 999px;
+      padding: 6px 10px;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .idea-card {
+      margin: 14px 0;
+    }
+
+    .idea-head {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .rank {
+      display: inline-grid;
+      place-items: center;
+      min-width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .idea-title {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .idea-title h3 {
+      margin: 0;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: var(--green-soft);
+      color: var(--green);
+      font-size: 13px;
+      border: 1px solid #c8e1d1;
+    }
+
+    .tag.gold {
+      background: var(--gold-soft);
+      color: var(--gold);
+      border-color: #dfcf9a;
+    }
+
+    .tag.red {
+      background: var(--red-soft);
+      color: var(--red);
+      border-color: #e4c2bf;
+    }
+
+    .diagram {
+      margin: 14px 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      overflow-x: auto;
+    }
+
+    .diagram svg {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      background: #eef2eb;
+      color: #30372f;
+      font-size: 13px;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    footer {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>Ideation: Repo Workability Improvements</h1>
+      <p>Improvement ideas drawn from the recent workability pass over this repo: strong owner maps and contracts, but high orchestration load when an agent needs to know the next safe action.</p>
+      <div class="metadata">
+        <span class="pill">date: <time datetime="2026-06-13">2026-06-13</time></span>
+        <span class="pill">topic: repo-workability-improvements</span>
+        <span class="pill">focus: improvement ideas from workability report</span>
+        <span class="pill">mode: repo-grounded</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Grounding Context</h2>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <strong>Core philosophy</strong>
+          <p><code>AGENTS.md</code> says deterministic contracts belong in code, generated docs, CLI help, or checks. Skills route workflows; owner paths own behavior.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Observed friction</strong>
+          <p>A real run needed tests, hook tests, typecheck, Biome, Fallow, decision logging, plan checkboxes, YAML parsing, startup checks, and skill-feedback closeout.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Known sharp edge</strong>
+          <p><code>scripts/agent-instructions.sh check</code> printed <code>Agent instruction health: ok</code>, then exited through an unbound <code>failures[@]</code> array bug.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Existing assets</strong>
+          <p><code>test-runner</code>, <code>cli-author</code>, <code>fallow</code>, and <code>skill-feedback</code> already point toward compact output, command contracts, and action metadata.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Recent ideation</strong>
+          <p>Recent docs favor benchmark-gated runner proof, thin skill prose, per-finding resolver actions, and review results that distinguish evidence from claims.</p>
+        </div>
+        <div class="summary-card">
+          <strong>External context</strong>
+          <p>Broad agentic-development research reinforces the risk: agent workflows add overhead when setup, check selection, and repair paths are not integrated.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Topic Axes</h2>
+      <ul class="axis-list">
+        <li>Check orchestration</li>
+        <li>Command discovery</li>
+        <li>Feedback and learning loop</li>
+        <li>Governance navigation</li>
+        <li>Analyzer noise and review triage</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Ranked Ideas</h2>
+      <nav class="jump-list" aria-label="Ranked idea links">
+        <a href="#idea-1">1. Task Doctor</a>
+        <a href="#idea-2">2. Command Surface Map</a>
+        <a href="#idea-3">3. Current Task Skill-Feedback Review</a>
+        <a href="#idea-4">4. Decision Log Appender</a>
+        <a href="#idea-5">5. Fallow Noise Profile</a>
+        <a href="#idea-6">6. Workability Pulse</a>
+      </nav>
+
+      <article class="idea-card" id="idea-1">
+        <div class="idea-head">
+          <div class="idea-title">
+            <span class="rank">1</span>
+            <h3>Task Doctor</h3>
+          </div>
+        </div>
+        <p><strong>Description:</strong> Add one repo-local command that reads the current diff, recent plan, touched owner paths, known skill rules, and ignored evidence folders, then emits the next safe check bundle. The output is not a generic CI list; it is a task-local route: focused tests, typecheck, lint, doc parse, startup health, Fallow, skill-feedback closeout, and known caveats.</p>
+        <div class="diagram" aria-label="Task Doctor flow sketch">
+          <svg width="760" height="160" viewBox="0 0 760 160" role="img" aria-labelledby="task-doctor-title">
+            <title id="task-doctor-title">Task Doctor turns repo signals into the next safe check bundle.</title>
+            <rect x="10" y="38" width="155" height="74" rx="8" fill="#e3f0f4" stroke="#bdd7df"/>
+            <text x="28" y="68" font-size="14" fill="#245c73">diff + plan</text>
+            <text x="28" y="90" font-size="13" fill="#245c73">owner paths</text>
+            <path d="M175 75 L245 75" stroke="#245c73" stroke-width="2"/>
+            <polygon points="245,75 235,69 235,81" fill="#245c73"/>
+            <rect x="255" y="28" width="180" height="94" rx="8" fill="#e6f2eb" stroke="#c8e1d1"/>
+            <text x="280" y="65" font-size="15" fill="#2e6a4e">Task Doctor</text>
+            <text x="280" y="88" font-size="13" fill="#2e6a4e">route checks, not policy</text>
+            <path d="M445 75 L515 75" stroke="#245c73" stroke-width="2"/>
+            <polygon points="515,75 505,69 505,81" fill="#245c73"/>
+            <rect x="525" y="20" width="220" height="110" rx="8" fill="#fff" stroke="#d9ded5"/>
+            <text x="548" y="50" font-size="14" fill="#202520">next safe checks</text>
+            <text x="548" y="75" font-size="13" fill="#5f665f">why each check matters</text>
+            <text x="548" y="98" font-size="13" fill="#5f665f">repair hint on failure</text>
+          </svg>
+        </div>
+        <div class="tag-row">
+          <span class="tag">Axis: Check orchestration</span>
+          <span class="tag gold">Confidence: 90%</span>
+          <span class="tag red">Complexity: Medium</span>
+        </div>
+        <p><strong>Basis:</strong> direct: <code>AGENTS.md</code> requires several post-change rituals, while <code>test-runner</code>, <code>context/bun-runner.md</code>, <code>cli-author</code>, <code>fallow</code>, and <code>skill-feedback</code> each own part of the gate. The last task proved the cognitive load: the right checks existed, but the agent had to assemble the route manually.</p>
+        <p><strong>Rationale:</strong> This is the biggest leverage move because it turns repo philosophy into one inspectable runtime answer: what should I run now, and why? It reduces missed rituals without copying every rule into startup prose.</p>
+        <p><strong>Downsides:</strong> Needs careful scope control. If it grows into a universal orchestrator, it becomes the bloat it was meant to remove.</p>
+      </article>
+
+      <article class="idea-card" id="idea-2">
+        <div class="idea-title">
+          <span class="rank">2</span>
+          <h3>Command Surface Map</h3>
+        </div>
+        <p><strong>Description:</strong> Generate a repo-local index of skill CLIs and command surfaces: command name, owner path, side-effect stance, help command, result contract when present, and proof files. The map should be machine-readable first and readable in plain text second.</p>
+        <div class="tag-row">
+          <span class="tag">Axis: Command discovery</span>
+          <span class="tag gold">Confidence: 86%</span>
+          <span class="tag red">Complexity: Medium</span>
+        </div>
+        <p><strong>Basis:</strong> direct: <code>cli-author</code> requires naming contract, model, engine, discovery, CLI, and test owners. <code>skill-feedback</code> has a command-surface proof section naming discovery metadata, rendered help, argv accept/reject, and runtime semantics.</p>
+        <p><strong>Rationale:</strong> The repo is good at building agent-native commands one at a time. A map would let fresh agents discover those surfaces without rereading every skill. It also gives Task Doctor a stable input.</p>
+        <p><strong>Downsides:</strong> If hand-authored, it will drift. It should be generated from command contracts, package scripts, and owner sections, with docs only as fallback.</p>
+      </article>
+
+      <article class="idea-card" id="idea-3">
+        <div class="idea-title">
+          <span class="rank">3</span>
+          <h3>Current Task Skill-Feedback Review</h3>
+        </div>
+        <p><strong>Description:</strong> Add a scoped review mode for skill-feedback that answers: what did this task produce, what closeouts apply, what low-signal capture happened, and what open evidence is relevant to the current touched surfaces? Scope could be by time window, touched path list, or an explicit run id once trusted correlation exists.</p>
+        <div class="diagram" aria-label="Scoped review sketch">
+          <svg width="760" height="150" viewBox="0 0 760 150" role="img" aria-labelledby="scoped-review-title">
+            <title id="scoped-review-title">Scoped review narrows the growing inbox to current task evidence.</title>
+            <rect x="20" y="24" width="200" height="102" rx="8" fill="#fff" stroke="#d9ded5"/>
+            <text x="42" y="55" font-size="14" fill="#202520">full inbox</text>
+            <text x="42" y="78" font-size="13" fill="#5f665f">primary + low-signal</text>
+            <text x="42" y="101" font-size="13" fill="#5f665f">old reports included</text>
+            <path d="M230 75 L322 75" stroke="#245c73" stroke-width="2"/>
+            <polygon points="322,75 312,69 312,81" fill="#245c73"/>
+            <rect x="332" y="36" width="150" height="78" rx="8" fill="#e3f0f4" stroke="#bdd7df"/>
+            <text x="358" y="70" font-size="14" fill="#245c73">scope filter</text>
+            <text x="358" y="92" font-size="13" fill="#245c73">paths / time / run</text>
+            <path d="M492 75 L584 75" stroke="#245c73" stroke-width="2"/>
+            <polygon points="584,75 574,69 574,81" fill="#245c73"/>
+            <rect x="594" y="24" width="150" height="102" rx="8" fill="#e6f2eb" stroke="#c8e1d1"/>
+            <text x="616" y="58" font-size="14" fill="#2e6a4e">task review</text>
+            <text x="616" y="82" font-size="13" fill="#2e6a4e">only relevant</text>
+            <text x="616" y="104" font-size="13" fill="#2e6a4e">next action</text>
+          </svg>
+        </div>
+        <div class="tag-row">
+          <span class="tag">Axis: Feedback and learning loop</span>
+          <span class="tag gold">Confidence: 84%</span>
+          <span class="tag red">Complexity: Medium</span>
+        </div>
+        <p><strong>Basis:</strong> direct: the last implementation filed a closeout to <code>.skill-feedback/</code>, but the review model is inbox-wide. The new <code>inbox_health</code> and low-signal lane make global review safer, but not necessarily easier for a task closeout.</p>
+        <p><strong>Rationale:</strong> The feedback loop becomes much more usable when an agent can ask for this task's learning signal rather than inspecting the whole private inbox. It also turns closeout from a ritual into something visibly useful.</p>
+        <p><strong>Downsides:</strong> True run scoping needs trusted correlation that does not exist yet. A v1 should avoid overclaiming and use path/time filters with clear caveats.</p>
+      </article>
+
+      <article class="idea-card" id="idea-4">
+        <div class="idea-title">
+          <span class="rank">4</span>
+          <h3>Decision Log Appender</h3>
+        </div>
+        <p><strong>Description:</strong> Add a helper that finds the right decision surface, computes the next sequenced id, validates YAML, and appends a decision entry from a compact structured input. It should support dry-run and execute, with a preview diff.</p>
+        <div class="tag-row">
+          <span class="tag">Axis: Governance navigation</span>
+          <span class="tag gold">Confidence: 82%</span>
+          <span class="tag red">Complexity: Low-Medium</span>
+        </div>
+        <p><strong>Basis:</strong> direct: <code>record-decision</code> says to append one fenced YAML decision entry and run the checker when available. In the last task, the accepted decision flow was correct but manual: choose log, number id, format YAML, and avoid copying deterministic contracts.</p>
+        <p><strong>Rationale:</strong> Decisions are high-value but currently fiddly. A small appender would reduce YAML and numbering mistakes while keeping the durable prose shape intact.</p>
+        <p><strong>Downsides:</strong> It must not become an ADR generator or decision-maker. It records accepted decisions only.</p>
+      </article>
+
+      <article class="idea-card" id="idea-5">
+        <div class="idea-title">
+          <span class="rank">5</span>
+          <h3>Fallow Noise Profile</h3>
+        </div>
+        <p><strong>Description:</strong> Teach Fallow about this repo's expected noise zones: integration-heavy CLI tests, facade contract exports, and helper seams that are covered through runner-level tests rather than direct unit tests. The output should separate actionable introduced findings from known-shape noise with a reason.</p>
+        <div class="tag-row">
+          <span class="tag">Axis: Analyzer noise and review triage</span>
+          <span class="tag gold">Confidence: 78%</span>
+          <span class="tag red">Complexity: Medium</span>
+        </div>
+        <p><strong>Basis:</strong> direct: Fallow reported 25 introduced findings on the recent task, but sampled items were mostly test duplication and integration seam coverage. Recent Fallow ideation already points toward per-finding resolver actions and attribution gates.</p>
+        <p><strong>Rationale:</strong> Fallow is useful, but its current output still makes agents do human triage. A repo profile would turn "issues found" into "issues worth attention" without suppressing evidence globally.</p>
+        <p><strong>Downsides:</strong> Suppression can hide real problems if too broad. The profile should explain each downgrade and keep a raw count visible.</p>
+      </article>
+
+      <article class="idea-card" id="idea-6">
+        <div class="idea-title">
+          <span class="rank">6</span>
+          <h3>Workability Pulse</h3>
+        </div>
+        <p><strong>Description:</strong> Produce a periodic or on-demand report that ranks the repo's current agent-work friction from real signals: failed checks, Fallow triage, skill-feedback closeouts, broken owner checks, repeated decision-log edits, and plan checkbox churn.</p>
+        <div class="tag-row">
+          <span class="tag">Axis: Feedback and learning loop</span>
+          <span class="tag gold">Confidence: 72%</span>
+          <span class="tag red">Complexity: Medium-High</span>
+        </div>
+        <p><strong>Basis:</strong> reasoned: this repo already captures many evidence streams, but each is local to its workflow. A pulse would compound them into prioritization, making the next improvement obvious rather than anecdotal.</p>
+        <p><strong>Rationale:</strong> This is the strategic version of Task Doctor: instead of helping one turn finish, it helps the repo decide what to improve next.</p>
+        <p><strong>Downsides:</strong> Needs enough signal volume and careful privacy boundaries. It is less urgent than fixing the immediate task-level routing pain.</p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Idea</th>
+            <th>Reason Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>Plan Gate Blocks</td><td>Good variant, but weaker than Task Doctor because it lives only inside plans.</td></tr>
+          <tr><td>2</td><td>Check Fix Cards</td><td>Useful subfeature of Task Doctor, not a separate product.</td></tr>
+          <tr><td>3</td><td>Skill Closeout Shortcut</td><td>Useful, but lower leverage than scoped review plus Decision Log Appender.</td></tr>
+          <tr><td>4</td><td>Owner Path Graph</td><td>Valuable background, but likely too broad until Command Surface Map exists.</td></tr>
+          <tr><td>5</td><td>Startup Check Repair</td><td>Real fix, but too small as an ideation survivor.</td></tr>
+          <tr><td>6</td><td>Review Watcher Sync</td><td>Too narrow and tied to one review loop.</td></tr>
+          <tr><td>7</td><td>Task Slice Ledger</td><td>Overlaps Task Doctor and skill-feedback closeout.</td></tr>
+          <tr><td>8</td><td>Artifact Index</td><td>Useful but risks becoming a stale catalog without a clearer first consumer.</td></tr>
+          <tr><td>9</td><td>Check Bundle Recipes</td><td>Implementation detail of Task Doctor.</td></tr>
+          <tr><td>10</td><td>Thin Skill Drift Monitor</td><td>Already partially covered by governance; keep as a Task Doctor check.</td></tr>
+          <tr><td>11</td><td>Mode-Aware Ideation Runner</td><td>Valid skill improvement, not central to repo-wide workability.</td></tr>
+          <tr><td>12</td><td>Repo Friction Onboarding Tour</td><td>Likely prose bloat unless backed by generated maps.</td></tr>
+          <tr><td>13</td><td>Contract Help Snapshot Tests</td><td>Already part of cli-author and facade proof direction.</td></tr>
+          <tr><td>14</td><td>Dirty Worktree Companion</td><td>Likely Task Doctor input, not standalone.</td></tr>
+          <tr><td>15</td><td>Quality Gate Router</td><td>Merged into Task Doctor.</td></tr>
+          <tr><td>16</td><td>Decision Surface Resolver</td><td>Merged into Decision Log Appender.</td></tr>
+          <tr><td>17</td><td>Evidence Dossier Builder</td><td>Nice for ce-ideate, not strongest repo-wide DX move.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-13T10:53:45Z by ce-ideate from the conversation prompt and repo-local grounding in <code>claude-code-config</code>.
+    </footer>
+  </main>
+</body>
+</html>

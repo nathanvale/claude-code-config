@@ -1,0 +1,21 @@
+{
+	"folders": [
+		{
+			"name": "root",
+			"path": "."
+		},
+		{
+			"name": "skills",
+			"path": "skills"
+		},
+		{
+			"name": "runtime",
+			"path": "runtime"
+		},
+		{
+			"name": "docs",
+			"path": "docs"
+		}
+	],
+	"settings": {}
+}

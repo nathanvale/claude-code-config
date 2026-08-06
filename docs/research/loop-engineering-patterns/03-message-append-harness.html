@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pattern 3: The Message-Append Harness — Loop Engineering Patterns</title>
+  <style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #2d3148;
+    --quote-bg: #1e2235;
+    --tag-bg: #1e2235;
+    --link: #818cf8;
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    font-size: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.7;
+    padding: 0;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: 0.875rem;
+    color: var(--muted);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .nav a { color: var(--accent2); }
+  .nav .sep { color: var(--border); }
+  .hero {
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 4rem 2rem 3rem;
+    max-width: 860px;
+    margin: 0 auto;
+  }
+  .pattern-num {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+  }
+  h1 {
+    font-size: clamp(1.75rem, 4vw, 2.75rem);
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 1rem;
+    background: linear-gradient(135deg, #e2e8f0 0%, #818cf8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .tagline {
+    font-size: 1.125rem;
+    color: var(--muted);
+    max-width: 600px;
+  }
+  .content {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 3rem 2rem 5rem;
+  }
+  h2 {
+    font-size: 1.375rem;
+    font-weight: 700;
+    margin: 2.5rem 0 1rem;
+    color: var(--text);
+  }
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 1.75rem 0 0.75rem;
+    color: var(--accent2);
+  }
+  p { margin-bottom: 1rem; color: var(--text); }
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    margin: 2rem 0;
+    text-align: center;
+  }
+  .diagram svg { max-width: 100%; }
+  .loop-steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin: 1.5rem 0;
+  }
+  .step {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .arrow {
+    color: var(--accent);
+    font-size: 1.25rem;
+    padding: 0 0.5rem;
+    font-weight: 700;
+  }
+  .cycle-arrow {
+    display: block;
+    text-align: center;
+    color: var(--accent);
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+    letter-spacing: 0.05em;
+  }
+  .evidence-card {
+    background: var(--quote-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .evidence-card .meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .author-link {
+    font-weight: 700;
+    color: var(--accent2);
+    font-size: 0.9rem;
+  }
+  .followers {
+    font-size: 0.75rem;
+    color: var(--muted);
+    background: var(--surface2);
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+  }
+  .source-tag {
+    font-size: 0.7rem;
+    color: var(--muted);
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  blockquote {
+    font-size: 1rem;
+    line-height: 1.65;
+    color: var(--text);
+    font-style: italic;
+    margin-bottom: 0.75rem;
+  }
+  blockquote::before { content: '\201C'; color: var(--accent); font-size: 1.5rem; line-height: 0; vertical-align: -0.4rem; margin-right: 0.25rem; font-style: normal; }
+  .view-link {
+    font-size: 0.8rem;
+    color: var(--link);
+    margin-top: 0.5rem;
+    display: inline-block;
+  }
+  .signals {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin: 1rem 0;
+  }
+  .signal {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .signal.cycle { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+  .signal.stop { background: rgba(248,113,113,0.12); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+  .signal.mechanism { background: rgba(52,211,153,0.1); color: #34d399; border: 1px solid rgba(52,211,153,0.25); }
+  .signal.evidence { background: rgba(251,191,36,0.1); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
+  .tldr {
+    background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(129,140,248,0.04));
+    border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin: 2rem 0;
+  }
+  .tldr h3 { margin-top: 0; color: var(--accent2); }
+  code {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    color: var(--accent2);
+  }
+  pre {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    overflow-x: auto;
+    margin: 1rem 0 1.5rem;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.875rem;
+    color: var(--text);
+  }
+  .nav-posts {
+    display: flex;
+    gap: 1rem;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .nav-posts a {
+    flex: 1;
+    min-width: 200px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    font-size: 0.875rem;
+    color: var(--muted);
+    transition: border-color 0.15s;
+  }
+  .nav-posts a:hover { border-color: var(--accent); text-decoration: none; }
+  .nav-posts a strong { display: block; color: var(--text); margin-bottom: 0.25rem; }
+  .nav-posts .dir { font-size: 0.75rem; color: var(--accent2); margin-bottom: 0.25rem; }
+
+  .stop-condition {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.25);
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #f87171;
+    margin-top: 1rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  .stop-condition::before {
+    content: '■';
+    font-size: 0.6rem;
+  }
+  .diagram-label {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="index.html">Loop Engineering Patterns</a>
+    <span class="sep">/</span>
+    <span>The Message-Append Harness</span>
+  </nav>
+
+  <div class="hero">
+    <div class="pattern-num">Pattern 3 of 10</div>
+    <h1>The Message-Append Harness</h1>
+    <p class="tagline">The atomic unit of every agentic loop: send, respond, run tool, append, repeat.</p>
+    <div class="signals">
+      <span class="signal cycle">Cycle</span>
+      <span class="signal stop">Stop</span>
+      <span class="signal mechanism">Mechanism</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <div class="diagram">
+      <div class="diagram-label">Loop Structure</div>
+      <div class="loop-steps">
+        <div class="step">Send messages</div>
+        <div class="arrow">&#8594;</div>
+        <div class="step">Model responds / calls tool</div>
+        <div class="arrow">&#8594;</div>
+        <div class="step">You run the tool</div>
+        <div class="arrow">&#8594;</div>
+        <div class="step">Append result to messages</div>
+        <div class="arrow">&#8594;</div>
+        <div class="step">Repeat</div>
+      </div>
+      <span class="cycle-arrow">&#8635; cycles until stop condition</span>
+      <br>
+      <span class="stop-condition">stop_reason = end_turn returned by the API</span>
+    </div>
+
+    <p>Before you can design a complex loop, you need to understand the atomic unit all loops are built from: the message-append harness. This is what every agentic framework — Claude Code, LangChain, Codex — implements under the hood.</p>
+    <p>The pattern is simple enough to fit in five steps, but most "AI automation" tools obscure it behind abstractions that make it harder to debug, not easier.</p>
+    <h3>The five steps</h3>
+    <pre><code>messages = [{"role": "user", "content": initial_task}]
+
+while True:
+    response = llm.call(messages)
+    
+    if response.stop_reason == "end_turn":
+        break
+    
+    # Model wants to use a tool
+    tool_result = run_tool(response.tool_use)
+    messages.append(response)
+    messages.append({"role": "tool", "content": tool_result})</code></pre>
+    <h3>Why this matters for loop design</h3>
+    <p>When you understand the message-append harness, you understand that "loop engineering" is just deciding: what goes into the initial messages? What tools can the model call? What is the stop condition? Everything else is composition of this primitive.</p>
+    <p>The before/after from @LCSeekers captures the transition perfectly: before Dynamic Workflows, you were manually playing the role of the harness — copy output, paste into next prompt, fix. Now you design the harness and step back.</p>
+
+    <h2>Evidence</h2>
+
+    <div class="evidence-card">
+      <div class="meta">
+        <a class="author-link" href="https://x.com/i/web/status/2064181646903923159" target="_blank" rel="noopener noreferrer">@dani_avila7</a>
+        <span class="followers">32k followers</span>
+        <span class="source-tag">Reddit</span>
+      </div>
+      <blockquote>1. Send messages to the model 2. Model responds, maybe calls a tool 3. You run the tool 4. Append the result back to messages 5. Repeat until stop_reason is end_turn.</blockquote>
+      <a class="view-link" href="https://x.com/i/web/status/2064181646903923159" target="_blank" rel="noopener noreferrer">View original &#8594;</a>
+    </div>
+
+    <div class="evidence-card">
+      <div class="meta">
+        <a class="author-link" href="https://x.com/i/web/status/2063787909115715892" target="_blank" rel="noopener noreferrer">@LCSeekers</a>
+        <span class="followers">900 followers</span>
+        <span class="source-tag">X Search</span>
+      </div>
+      <blockquote>Before: chain prompts manually. Copy output. Paste into next prompt. Fix. After: Dynamic Workflows shipped in Claude Code on May 28.</blockquote>
+      <a class="view-link" href="https://x.com/i/web/status/2063787909115715892" target="_blank" rel="noopener noreferrer">View original &#8594;</a>
+    </div>
+
+    <div class="nav-posts">
+      <a href="02-bounded-unbounded.html">
+        <div class="dir">&#8592; Previous</div>
+        <strong>Pattern 2</strong>
+        Bounded vs Unbounded Loops
+      </a>
+      <a href="index.html" style="text-align: center; flex: 0 0 auto;">
+        <div class="dir">&#8593;</div>
+        <strong>Index</strong>
+        All Patterns
+      </a>
+      <a href="04-pipeline-audit-chain.html" style="text-align: right;">
+        <div class="dir">Next &#8594;</div>
+        <strong>Pattern 4</strong>
+        The Pipeline Audit Chain
+      </a>
+    </div>
+
+  </div>
+
+</body>
+</html>

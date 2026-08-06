@@ -1,0 +1,10 @@
+{
+	"name": "fixture-bad-front-door-duplicate-station",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture with duplicate station ids across front-door catalogs.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

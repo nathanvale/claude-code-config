@@ -1,0 +1,23 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "matest",
+  "flow_id": "development-snapshot-verify",
+  "flow_name": "verify-development-loaded",
+  "version": "2",
+  "summary": "Read-only MATest proof: open the Development page in the authenticated warm session and capture a fresh interactive snapshot. Dispatches no tenant mutation.",
+  "allowed_origins": ["https://experience-test.elluciancloud.com.au"],
+  "auth_context_ref": "interactive-login",
+  "inputs": [],
+  "steps": [
+    {
+      "kind": "open",
+      "url": "https://experience-test.elluciancloud.com.au/matest/development",
+      "postcondition": {
+        "kind": "url-equals",
+        "url": "https://experience-test.elluciancloud.com.au/matest/development"
+      }
+    },
+    { "kind": "snapshot", "interactive": true }
+  ]
+}

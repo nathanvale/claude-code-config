@@ -25,17 +25,26 @@ auto-discovery.
 
 **Auto-discovery** (when no `area-path` was provided):
 
+Scan both repo-scope and user-scope locations:
+
 ```bash
 find docs/runbooks -maxdepth 2 -name "README.md" -type f 2>/dev/null
+find "$HOME/.claude/runbooks" -maxdepth 2 -name "README.md" -type f 2>/dev/null
 ```
+
+Repo-scope (`docs/runbooks/*/`) holds runbooks tied to a specific
+codebase. User-scope (`~/.claude/runbooks/*/`) holds host-neutral
+workflow runbooks that operate on a *target* repo passed in at launch
+(for example, `issue-to-pr-v2`). Both follow the same convention; only
+the path differs.
 
 Possible outcomes:
 
 | Outcome | Severity | Action |
 | --- | --- | --- |
 | Exactly one match | info | Use it as `area-path`, surface the choice in the output header |
-| Multiple matches | blocker | List them, ask the user to pick. Do not auto-pick. |
-| Zero matches | blocker | "No runbook areas found at `docs/runbooks/*/README.md`. Pass an explicit path or create one with `/runbook-orchestrator new`." |
+| Multiple matches | blocker | List them (label each as repo-scope or user-scope), ask the user to pick. Do not auto-pick. |
+| Zero matches | blocker | "No runbook areas found at `docs/runbooks/*/README.md` or `~/.claude/runbooks/*/README.md`. Pass an explicit path or create one with `/runbook-orchestrator new`." |
 
 **Explicit path:**
 

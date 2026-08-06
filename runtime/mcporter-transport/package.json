@@ -1,0 +1,26 @@
+{
+	"name": "@side-quest/mcporter-transport",
+	"version": "0.1.0",
+	"private": false,
+	"description": "Shared no-shell argv command transport: command-vector resolution, bounded spawn, dependency-missing mapping.",
+	"license": "MIT",
+	"type": "module",
+	"files": [
+		"src"
+	],
+	"publishConfig": {
+		"access": "restricted",
+		"tag": "next"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

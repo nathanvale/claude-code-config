@@ -1,81 +1,77 @@
 # Claude Code Config
 
-Nathan's user-scope Claude Code configuration — prompt system, memory, rules, skills, agents, and QMD federated search.
+Nathan's user-scope Claude Code configuration: prompt system, context routing, rules, skills, agents, and Setup CLI.
 
 ## New Machine Setup
 
 ### Prerequisites
 
 ```sh
-brew install sqlite yq
+brew install yq
 fnm install --lts
 ```
 
 You also need [Homebrew](https://brew.sh) and [fnm](https://github.com/Schniz/fnm) (`brew install fnm`).
-
-### Install QMD
-
-Use **npm**, not bun — `better-sqlite3` must compile against Node's ABI:
-
-```sh
-npm install -g @tobilu/qmd
-```
 
 ### Clone and bootstrap
 
 ```sh
 git clone git@github.com:nathanvale/claude-code-config.git ~/code/claude-code-config
 cd ~/code/claude-code-config
-./install.sh
+./setup sync --check
 ```
 
-This symlinks everything into `~/.claude/` and `~/.config/memory/`.
+Run `./setup sync --check` to preview user startup wiring and direct first-party
+skill links. Run `./setup sync` to apply the safe plan.
 
-### Bootstrap QMD federation
+The root `./setup` command works without preinstalled Bun or workspace
+dependencies. It asks before installing missing Bun, reconciles frozen
+dependencies, then delegates to the facade-backed CLI.
+
+For non-interactive bootstrap, pass `--yes` to consent to Bun installation:
 
 ```sh
-~/.config/memory/scripts/qmd-refresh.sh
+./setup --yes
 ```
 
-This applies the roster, indexes collections, and generates embeddings. Repos not cloned locally are skipped automatically.
-
-Use `--skip-embed` for a faster first run (lexical search only):
-
-```sh
-~/.config/memory/scripts/qmd-refresh.sh --skip-embed
-```
+`--yes` grants Bun installation consent only.
 
 ### Verify
 
 ```sh
-~/.config/memory/scripts/qmd-node.sh status
-```
-
-### Clone more repos
-
-The more roster repos you have cloned locally, the more collections QMD can search. After cloning additional repos, re-run:
-
-```sh
-~/.config/memory/scripts/qmd-refresh.sh
+./setup status
+scripts/agent-instructions.sh check
 ```
 
 ## Existing Machine
 
 ```sh
-./install.sh --status   # check symlink health
-./install.sh            # re-apply symlinks
-./install.sh --unlink   # remove symlinks
+./setup status          # bounded health and next action
+./setup doctor          # diagnose topology and ownership evidence
+./setup sync --check    # preview current evidence
+./setup sync            # apply safe first-party wiring
+./setup unlink --check  # preview managed removal
+./setup unlink          # remove proven Setup-owned links
 ```
+
+Setup reconciles copied hooks only when provenance or recognized migration
+evidence proves ownership. Missing or unproven evidence preserves the hook and
+routes repair to a human; inspect with `./setup status`, `./setup doctor`, or
+`./setup sync --check` before applying a safe plan with `./setup sync`.
+
+Use `./setup catalog <id>` before third-party acquisition. Use
+`bunx skills add <source> -s <skill>` for third-party acquisition. Use the
+`bunx skills` command family for other third-party lifecycle work; Setup never
+acts as a package manager.
 
 ## Structure
 
 | Directory | Purpose |
 |-----------|---------|
 | `rules/` | Auto-applied rules (git safety, code quality, etc.) |
-| `context/` | On-demand context docs loaded with `@~/.claude/context/` |
+| `context/` | Durable context, references, project summaries, and reusable recall |
 | `skills/` | User-invocable skills (`/name`) |
 | `agents/` | Specialized sub-agent definitions |
 | `commands/` | Simple one-shot slash commands |
 | `hooks/` | Shell hooks for Claude Code events |
-| `memory/` | Memory OS — durable recall, federation, scripts |
 | `scripts/` | Prompt rendering and build scripts |

@@ -1,0 +1,17 @@
+{
+	"name": "fallow-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"fallow-runner": "./src/fallow-runner.ts",
+		"test": "bun test src",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

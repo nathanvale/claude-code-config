@@ -1,6 +1,7 @@
 ---
 name: agent-reliability-guardrails
 description: "Add and review agent-friendly CLI contracts with three-prong observability: deterministic stdout envelopes, LogTape stderr diagnostics (including fingers-crossed buffering), and non-blocking events. Use when implementing structured errors, agent hints, retries, and logging hardening."
+role: quality-gate
 disable-model-invocation: true
 ---
 
@@ -17,7 +18,7 @@ Assume gold-standard three-prong architecture:
 Agent hints live inside structured error envelopes on stderr JSON mode.
 
 ## Outcomes
-By the end, the target CLI should have:
+Target CLI outcomes:
 - Stable `schemaVersion` output envelopes.
 - Structured error envelopes with machine-actionable hints.
 - Secret-safe logging and error context redaction.
@@ -32,8 +33,7 @@ By the end, the target CLI should have:
 - Ensure `schemaVersion` is present and increment policy is documented.
 
 ### 2. Verify Structured Error Envelope
-- Check required fields: `code`, `action`, `retryable`, `errorFamily`, `severity`, `recoverability`, `hintVersion`.
-- Ensure `nextCommand`, `suggestedFallbacks`, `recommendedDelayMs`, `canResume` are populated when relevant.
+- Check the envelope carries every required field and populates the conditional ones; `references/error-envelope-schema.md` owns the exact field catalogue.
 - Ensure fallback mapping exists for unknown/internal errors.
 
 ### 3. Verify Hint Mapping Quality
@@ -46,12 +46,14 @@ By the end, the target CLI should have:
 - Debug logs include useful context but no secrets.
 - Sensitive fields are redacted in messages and structured context.
 - Fingers-crossed mode is enabled for quiet defaults and flushes on error.
+- Persisted diagnostics name data class, privacy boundary, retention, deletion route, and review owner.
 
 ### 5. Verify Event Channel Resilience
 - Event URL is validated (`http`/`https` only).
 - Event sends are non-blocking.
 - Event sends have timeout and bounded retries.
 - Event payload includes run correlation ID when available.
+- Event payload fields are allow-listed and redacted before send.
 
 ### 6. Verify Test Matrix
 - Add/confirm tests for:
@@ -67,6 +69,7 @@ By the end, the target CLI should have:
 - Never mix human/log output into machine stdout.
 - Never emit unbounded retry delays to agents.
 - Never block CLI completion on observability event delivery.
+- Never add telemetry, append-only logs, or session summaries without a privacy, retention, deletion, and review owner.
 
 ## Reference Files
 - Checklist: [references/checklist.md](references/checklist.md)

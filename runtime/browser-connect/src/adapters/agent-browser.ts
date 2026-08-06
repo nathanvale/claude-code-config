@@ -1,0 +1,222 @@
+import { fileURLToPath } from "node:url";
+import type { BrowserConnectVerifiedEndpoint } from "../model.ts";
+import {
+	type AdapterCommandResult,
+	type AdapterDefinition,
+	type AdapterInjection,
+	type AdapterPackagePolicy,
+	type AdapterProbeResult,
+	type AdapterProvenanceResult,
+	type AdapterRuntime,
+	errorMessage,
+	extractVersion,
+	isMissingAdapterCommandResult,
+	PROBE_TIMEOUT_MS,
+	VERSION_READ_TIMEOUT_MS,
+} from "./registry.ts";
+
+/**
+ * Executable identity for agent-browser. No implicit PATH/latest fallback —
+ * provenance resolves this to an absolute path or rejects.
+ */
+export const AGENT_BROWSER_EXECUTABLE = "agent-browser" as const;
+
+/**
+ * Version PINNED in the definition (plan Sources, 2026-07 verified):
+ * agent-browser v0.31.2 exposes `--cdp <port|url>` / `AGENT_BROWSER_CDP`.
+ */
+export const AGENT_BROWSER_PINNED_VERSION = "0.31.2" as const;
+
+/**
+ * Maintainer-authored installer policy for agent-browser (KTD13).
+ *
+ * agent-browser 0.31.2 declares a `postinstall` lifecycle script that stages
+ * its platform-native binary (its genuine lock entry carries
+ * `hasInstallScript: true`), so it CANNOT install correctly with lifecycle
+ * scripts disabled: `lifecycleScriptsRequired: true` keeps package automation
+ * operator-owned (R29; plan: a package that cannot install with lifecycle
+ * scripts disabled stays operator-owned). The source manifest and generated
+ * lockfile are still committed as the trusted integrity and lifecycle
+ * evidence behind that claim.
+ *
+ * The safe-upgrade allowlist entry (0.26.0 -> 0.31.2, AE5) is policy-level
+ * truth; automatic upgrade additionally requires the full isolated-install
+ * evidence, which the lifecycle gate withholds.
+ */
+const AGENT_BROWSER_INSTALL_POLICY: AdapterPackagePolicy = {
+	packageName: "agent-browser",
+	packageManager: {
+		approvedAbsoluteCandidates: [
+			"/opt/homebrew/bin/npm",
+			"/usr/local/bin/npm",
+			"/usr/bin/npm",
+		],
+	},
+	canonicalRegistry: "https://registry.npmjs.org",
+	allowedLockOrigins: ["https://registry.npmjs.org"],
+	installScope: "user",
+	installArgv: ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+	integritySource: {
+		manifestPath: fileURLToPath(
+			new URL("../../adapter-install/agent-browser/package.json", import.meta.url),
+		),
+		lockfilePath: fileURLToPath(
+			new URL("../../adapter-install/agent-browser/package-lock.json", import.meta.url),
+		),
+	},
+	lifecycleScriptsRequired: true,
+	expectedBin: AGENT_BROWSER_EXECUTABLE,
+	safeUpgradeTransitions: [{ from: "0.26.0", to: AGENT_BROWSER_PINNED_VERSION }],
+	operatorChoice: {
+		packageOwner: "agent-browser npm package maintainers",
+		docsUrl:
+			"https://github.com/nathanvale/claude-code-config/blob/main/runtime/browser-connect/REPAIR.md#v1-install_adapter",
+	},
+};
+
+/**
+ * Injection flag: agent-browser attaches via `--cdp <ws form>`.
+ */
+export const AGENT_BROWSER_CDP_FLAG = "--cdp" as const;
+
+/**
+ * Injection env channel: alternative to `--cdp`, agent-browser reads the CDP
+ * endpoint from `AGENT_BROWSER_CDP`.
+ */
+export const AGENT_BROWSER_CDP_ENV_VAR = "AGENT_BROWSER_CDP" as const;
+
+/**
+ * Adapter Definition for agent-browser (KTD9 — a plain binary invocation, a
+ * non-MCP shape that forces the Adapter Definition interface to be honest
+ * across two genuinely different invocation models). Validated the seam AFTER
+ * chrome-devtools-mcp proved the interface.
+ *
+ * - Route: `explicit-cdp` verified-live only.
+ * - Injection: `--cdp <ws>` argv array. (`AGENT_BROWSER_CDP` is the documented
+ *   env alternative; slice one injects the explicit flag for determinism.)
+ * - Probe: read-only invocation through its own binary with the injected
+ *   endpoint (R4).
+ */
+export const agentBrowserDefinition = {
+	id: "agent-browser",
+	displayName: "agent-browser",
+	executable: AGENT_BROWSER_EXECUTABLE,
+	pinnedVersion: AGENT_BROWSER_PINNED_VERSION,
+	routes: [
+		{ route: "explicit-cdp", evidence: "verified-live", implemented: true },
+	],
+	installPolicy: AGENT_BROWSER_INSTALL_POLICY,
+
+	async checkProvenance(runtime: AdapterRuntime): Promise<AdapterProvenanceResult> {
+		const resolution = await runtime.resolveExecutable(AGENT_BROWSER_EXECUTABLE);
+		if (!resolution.resolved) {
+			return {
+				installed: false,
+				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
+				detail: `${AGENT_BROWSER_EXECUTABLE} could not be resolved to an absolute path (no PATH/latest fallback).`,
+			};
+		}
+
+		let result: AdapterCommandResult;
+		try {
+			result = await runtime.runCommand({
+				command: resolution.path,
+				args: ["--version"],
+				timeoutMs: VERSION_READ_TIMEOUT_MS,
+			});
+		} catch {
+			return {
+				installed: false,
+				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
+				detail: `${AGENT_BROWSER_EXECUTABLE} could not be started to read its version.`,
+			};
+		}
+		if (result.timedOut || isMissingAdapterCommandResult(result)) {
+			return {
+				installed: false,
+				failureClass: "adapter-not-installed",
+				cause: "executable_absent",
+				detail: `${AGENT_BROWSER_EXECUTABLE} version read failed (binary missing or unresponsive).`,
+			};
+		}
+
+		const version = extractVersion(result.stdout, result.stderr);
+		if (version !== AGENT_BROWSER_PINNED_VERSION) {
+			return {
+				installed: false,
+				failureClass: "adapter-not-installed",
+				cause: "version_mismatch",
+				...(version === undefined ? {} : { observedVersion: version }),
+				detail: `${AGENT_BROWSER_EXECUTABLE} version ${version ?? "unreadable"} does not match pinned ${AGENT_BROWSER_PINNED_VERSION}.`,
+			};
+		}
+		return { installed: true, executablePath: resolution.path, version };
+	},
+
+	inject(endpoint: BrowserConnectVerifiedEndpoint): AdapterInjection {
+		return {
+			argv: [AGENT_BROWSER_CDP_FLAG, endpoint.ws],
+		};
+	},
+
+	async probeAttachment(
+		runtime: AdapterRuntime,
+		endpoint: BrowserConnectVerifiedEndpoint,
+		route,
+	): Promise<AdapterProbeResult> {
+		const resolution = await runtime.resolveExecutable(AGENT_BROWSER_EXECUTABLE);
+		if (!resolution.resolved) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "probe_failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} could not be resolved for the attachment probe.`,
+			};
+		}
+		const injection = this.inject(endpoint);
+		let result: AdapterCommandResult;
+		try {
+			result = await runtime.runCommand({
+				command: resolution.path,
+				// Read-only invocation: attach via injected endpoint and snapshot
+				// (no navigation, no mutation) through the adapter's own binary.
+				args: [...injection.argv, "snapshot"],
+				timeoutMs: PROBE_TIMEOUT_MS,
+			});
+		} catch (error) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "transient_probe_failure",
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe did not start: ${errorMessage(error)}.`,
+			};
+		}
+		if (result.timedOut) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "transient_probe_failure",
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe timed out.`,
+			};
+		}
+		if (result.exitCode !== 0) {
+			return {
+				attached: false,
+				failureClass: "attachment-failed",
+				cause: "probe_failed",
+				detail: `${AGENT_BROWSER_EXECUTABLE} attachment probe exited ${result.exitCode}.`,
+			};
+		}
+		return {
+			attached: true,
+			attachment: {
+				adapter_id: "agent-browser",
+				route,
+				probe_executable: resolution.path,
+			},
+			evidence: `${AGENT_BROWSER_EXECUTABLE} attached and snapshotted read-only.`,
+		};
+	},
+} as const satisfies AdapterDefinition;

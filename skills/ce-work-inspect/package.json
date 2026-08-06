@@ -1,0 +1,14 @@
+{
+	"name": "ce-work-inspect-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"ce-work-inspect": "bun run src/ce-work-inspect.ts",
+		"test": "bun test src/ce-work-inspect.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

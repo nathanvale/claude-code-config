@@ -1,0 +1,56 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		// Keep the first install lint-focused. The repo has substantial
+		// pre-existing formatter drift and a mustache-style HTML template that
+		// Biome's HTML parser treats as syntax errors.
+		"ignoreUnknown": true,
+		"includes": [
+			"**",
+			"!skills/classic-cinema/references/assets/ticket-template.html",
+			// Authored/generated HTML under any docs/ is a research, ideation,
+			// or report artifact, not source. Biome's HTML parser treats
+			// hand-written and mustache-style markup as syntax errors.
+			"!**/docs/**/*.html",
+			// Throwaway prototype spikes (browser-use-prototyper). Fixtures are
+			// deliberately quick-and-dirty (buttons without type, iframes without
+			// title) and captured as worked examples, never source.
+			"!skills/browser-use/src/prototypes/**",
+			// Generated payloads, never source. Excluded path-portably so any
+			// skill bundle's build output is skipped wherever it lands.
+			// Workflow template with mustache-style placeholders that
+			// Biome's parser treats as syntax errors. Not runnable JS.
+			"!skills/pr-review-loop/references/workflow-template.js",
+			"!**/dist",
+			"!**/coverage"
+		]
+	},
+	"formatter": {
+		"enabled": false,
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": false,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
+}

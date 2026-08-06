@@ -1,33 +1,46 @@
 ---
 name: heal-skill
-description: Fix incorrect SKILL.md files when a skill has wrong instructions or outdated API references
+description: "Fix incorrect SKILL.md files when a skill has wrong instructions or outdated API references."
+role: quality-gate
 argument-hint: "[optional: specific issue to fix]"
-allowed-tools: [Read, Edit, Bash(ls:*), Bash(git:*)]
+allowed-tools: [Read, Edit, "Bash(ls:*)", "Bash(git:*)"]
 disable-model-invocation: true
 ---
 
-<objective>
+## Owner Paths
+
+- Skill authoring + repair contract owner: `skills/skill-author/SKILL.md`.
+- Skill design gate (read before any SKILL.md edit): `skills/skill-author/references/skill-design-decision-runbook.md`.
+
+heal-skill applies in-context instruction repairs discovered during a skill's own execution. It does not own the heal/repair contract — `skill-author` does. For anything beyond a direct instruction fix (role, shape, owner-path, safety-gate, or reusable-rule change), defer to `skill-author`.
+
+## Objective
+
 Update a skill's SKILL.md and related files based on corrections discovered during execution.
 
 Analyze the conversation to detect which skill is running, reflect on what went wrong, propose specific fixes, get user approval, then apply changes with optional commit.
-</objective>
 
-<context>
+## Context
+
 Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
-</context>
 
-<quick_start>
-<workflow>
+## Quick Start
+
+0. **Read the skill design gate** — `skills/skill-author/references/skill-design-decision-runbook.md` before any edit (AGENTS.md hard rule: never heal a SKILL.md without it)
 1. **Detect skill** from conversation context (invocation messages, recent SKILL.md references)
 2. **Reflect** on what went wrong and how you discovered the fix
 3. **Present** proposed changes with before/after diffs
 4. **Get approval** before making any edits
 5. **Apply** changes and optionally commit
-</workflow>
-</quick_start>
 
-<process>
-<step_1 name="detect_skill">
+## Process
+
+### Step 0: Read the skill design gate
+
+Read `skills/skill-author/references/skill-design-decision-runbook.md` before touching any SKILL.md. AGENTS.md hard rule: never author, review, heal, or repair a SKILL.md before reading the runbook. Skipping it leaks copied contracts and multi-workflow drift.
+
+### Step 1: Detect skill
+
 Identify the skill from conversation context:
 
 - Look for skill invocation messages
@@ -37,9 +50,9 @@ Identify the skill from conversation context:
 Set: `SKILL_NAME=[skill-name]` and `SKILL_DIR=./skills/$SKILL_NAME`
 
 If unclear, ask the user.
-</step_1>
 
-<step_2 name="reflection_and_analysis">
+### Step 2: Reflection and analysis
+
 Focus on $ARGUMENTS if provided, otherwise analyze broader context.
 
 Determine:
@@ -48,17 +61,17 @@ Determine:
 - **Root cause**: Outdated API, incorrect parameters, wrong endpoint, missing context
 - **Scope of impact**: Single section or multiple? Related files affected?
 - **Proposed fix**: Which files, which sections, before/after for each
-</step_2>
 
-<step_3 name="scan_affected_files">
+### Step 3: Scan affected files
+
 ```bash
 ls -la $SKILL_DIR/
 ls -la $SKILL_DIR/references/ 2>/dev/null
 ls -la $SKILL_DIR/scripts/ 2>/dev/null
 ```
-</step_3>
 
-<step_4 name="present_proposed_changes">
+### Step 4: Present proposed changes
+
 Present changes in this format:
 
 ```
@@ -96,9 +109,9 @@ Present changes in this format:
 **Verification:**
 These changes will prevent: [specific error that prompted this]
 ```
-</step_4>
 
-<step_5 name="request_approval">
+### Step 5: Request approval
+
 ```
 Should I apply these changes?
 
@@ -111,19 +124,18 @@ Choose (1-4):
 ```
 
 **Wait for user response. Do not proceed without approval.**
-</step_5>
 
-<step_6 name="apply_changes">
+### Step 6: Apply changes
+
 Only after approval (option 1 or 2):
 
 1. Use Edit tool for each correction across all files
 2. Read back modified sections to verify
 3. If option 1, commit with structured message showing what was healed
 4. Confirm completion with file list
-</step_6>
-</process>
 
-<success_criteria>
+## Success Criteria
+
 - Skill correctly detected from conversation context
 - All incorrect sections identified with before/after
 - User approved changes before application
@@ -131,13 +143,12 @@ Only after approval (option 1 or 2):
 - Changes verified by reading back
 - Commit created if user chose option 1
 - Completion confirmed with file list
-</success_criteria>
 
-<verification>
+## Verification
+
 Before completing:
 
 - Read back each modified section to confirm changes applied
 - Ensure cross-file consistency (SKILL.md examples match references/)
 - Verify git commit created if option 1 was selected
 - Check no unintended files were modified
-</verification>

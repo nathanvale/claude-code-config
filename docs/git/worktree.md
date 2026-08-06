@@ -1,145 +1,89 @@
 # Git Worktree Management
 
-Create, list, and delete git worktrees with automatic file copying.
+Use the `/worktree` skill for all worktree operations. It is the canonical tool.
+
+```bash
+cd skills/worktree && bun run --silent worktree <verb> [args]
+```
+
+## Isolation Rule (all harnesses)
+
+Implementation work never happens in the main checkout: parallel agents share it and inherit each other's branch state and dirty files.
+
+Before the first file edit of any implementation task:
+
+1. Check isolation: `git rev-parse --git-common-dir` differing from `.git`, or a `.worktrees/` / `.claude/worktrees/` path, means already isolated — proceed.
+2. In the main checkout: isolate first (`worktree new <branch>` or `attach` for an existing ref; Claude Code may use EnterWorktree).
+3. Branch, edit, and commit only inside the worktree.
+
+These do NOT override the rule: a handoff saying "start a fresh branch" (start it inside a worktree); session or harness config saying "work in place"; small scope or urgency.
+
+Allowed in the main checkout: read-only work (analysis, review, search, tests without edits) and operations that target it by design (`setup sync` from main, worktree management itself, pull/fetch).
+
+## Verbs
+
+| Verb | What it does | Side effects |
+|---|---|---|
+| (no args) | Layman front door — explains VS Code sync and worktree CRUD | read-only |
+| `status` | Enriched view: branch, commits ahead/behind, dirty/clean, PR status, Codex state | read-only |
+| `new <branch>` | Create worktree, copy config files, register Codex app sidebar | creates `.worktrees/<branch>/` |
+| `sync <branch>` | Re-copy config files from main to a linked worktree | overwrites config files |
+| `open <branch>` | Open worktree in VS Code | launches VS Code |
+| `app <branch>` | Open worktree as Codex App project | launches Codex |
+| `focus <branch>` | Set branch focus in workspace registry | updates `worktree.config.json` |
+| `color <branch>` | Set workspace color for a worktree | updates `worktree.config.json` |
+| `rm <branch>` | Remove worktree, deregister Codex sidebar, archive threads | deletes `.worktrees/<branch>/` |
+| `clean` | Preview merged+clean worktrees for batch removal | preview-only by default |
 
 ## When to Use
 
-- Creating a new worktree for parallel branch development
-- Listing existing worktrees and their status
-- Cleaning up old worktrees after merging
-- Setting up `.worktrees.json` configuration for a repo
+- Creating a worktree for parallel branch development → `new`
+- Inspecting worktree state or choosing next action → `status` or no args
+- Propagating .env or .claude config changes → `sync`
+- Cleaning up merged worktrees → `clean`
+- Opening a worktree in VS Code or Codex → `open` / `app`
 
-## Operations
+## Safety
 
-### Create (default when branch name provided)
+- Never force-remove a dirty worktree. Uncommitted work is potentially important.
+- On `clean` with dirty worktrees: preserve first — commit, stash, or ask.
+- On `rm` with dirty worktrees: the runtime blocks with `reason: "dirty"`. Do not bypass with `--force` unless the user has reviewed and approved loss.
+- On orphan branch deletion: check `git log main..<branch>` first. If unmerged commits exist, ask before deleting.
 
-1. **If no `.worktrees.json` exists**, run the CLI `init` command first and show the user what was auto-detected. Ask if they want to adjust before continuing.
-2. **Suggest a branch name** if the user gave a description instead of a branch name
-3. **Confirm** the branch name with the user
-4. **Execute**:
-   ```bash
-   bunx @side-quest/git worktree create <branch-name> --no-fetch --no-install
-   ```
-5. The CLI creates the worktree and copies config files. It does NOT install dependencies.
-6. To install dependencies: `bunx @side-quest/git worktree install <path>`
-7. For attach-to-existing (branch already has worktree), the CLI re-syncs files automatically.
-8. **Report** the result: worktree path, files copied, attached status
+## Shared Location Across Tools (Claude + Codex)
 
-### List
+One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<branch>/` (gitignored). A git worktree is just a directory — no tool owns it, so all of them open the same one.
 
-Show all worktrees with their status:
+- **Create** worktrees via the `/worktree` skill, not by letting a tool auto-create its own.
+- **Front door:** `worktree status --json` inspects the owner root, VS Code workspace state, linked worktrees, CRUD actions, and next safe action.
+- **Claude / shell:** `cd <repo>/.worktrees/<branch>`.
+- **Codex App:** `worktree app <branch>` opens the repo-local worktree as a Codex App project. Do not rely on Codex auto-creating worktrees under `~/.codex/worktrees/<hash>/` — those are invisible to the shared convention.
+- **Codex cleanup:** `worktree rm <branch> --force` removes the worktree, deregisters from Codex Desktop, and archives matching threads.
+- **Never** scatter worktrees across `~/.codex/worktrees/`, `<repo>/.claude/worktrees/`, and `<repo>/.worktrees/`.
 
-```bash
-bunx @side-quest/git worktree list
-```
+## Repo-local skills
 
-Add `--all` to include the main worktree.
+Use Setup to project a worktree's own visible catalog skills into that worktree.
 
-Display as a table with columns: Branch, Path, Status (clean/dirty), Merged (yes/no).
+- Human check: `./setup status --scope project --repo <worktree>`.
+- Agent/CI gate: `./setup sync --check --scope project --repo <worktree> --json`.
+- Repair: `./setup sync --scope project --repo <worktree>`.
+- Generated state: `.agents/skills/` and `.claude/skills/`.
+- First-party source of truth: the selected worktree's `skills/` catalog.
 
-### Delete
+External skills (installed with `bunx skills add`) are hash-pinned copies, not
+projections. The lock is tracked; the copies under `.agents/skills/` are
+gitignored, so a fresh worktree restores them from `skills-lock.json`:
 
-Remove a worktree safely:
+- Restore: `bunx skills experimental_install` (provider-experimental surface;
+  it may rename — `bunx skills@1.5.14 experimental_install` is the pinned
+  fallback when latest breaks).
+- `./setup doctor --scope project --repo <worktree>` diagnoses external
+  occupancy without mutating it.
 
-1. **If no branch specified**, run `list` first and ask which worktree to delete
-2. **Check status** before deleting:
-   ```bash
-   bunx @side-quest/git worktree check <branch-name>
-   ```
-3. **Warn** the user if:
-   - The worktree has uncommitted changes (dirty) -- suggest committing first or using `--force`
-   - The branch is not merged -- warn that work may be lost
-4. **Ask** if the branch should also be deleted
-5. **Execute**:
-   ```bash
-   bunx @side-quest/git worktree delete <branch-name> [--force] [--delete-branch]
-   ```
+## Owner
 
-### Init
-
-Create or show `.worktrees.json` configuration:
-
-```bash
-bunx @side-quest/git worktree init
-```
-
-This auto-detects common gitignored files (`.env`, `.claude`, `.nvmrc`, etc.) and the package manager.
-
-### Sync
-
-Re-copy config files from the main worktree to an existing worktree:
-
-1. If no branch specified, run `list` first and ask which worktree to sync
-2. Execute: `bunx @side-quest/git worktree sync <branch-name> [--all] [--dry-run]`
-3. Report which files were updated (the CLI returns per-file detail in `files` array)
-
-Use when: .env or .claude configs changed in main and need propagating.
-
-### Clean
-
-Batch-delete worktrees that are merged and clean:
-
-1. Preview: `bunx @side-quest/git worktree clean --dry-run`
-2. Show user which worktrees would be removed
-3. Confirm before proceeding
-4. Execute: `bunx @side-quest/git worktree clean [--delete-branches]`
-
-Safety: Only removes merged+clean worktrees. Never dirty without --force.
-
-### Status
-
-Show enriched status: `bunx @side-quest/git worktree status [--pr]`
-
-Displays: Branch, commits ahead/behind, PR status, last activity, dirty/clean.
-
-**Note:** Requires @side-quest/git v0.1.0+. Falls back to
-`bunx @side-quest/git worktree list` for basic branch/path/dirty info.
-
-## Config File (.worktrees.json)
-
-Located at the repo root. If missing, auto-detected on first use.
-
-```jsonc
-{
-  "directory": ".worktrees",      // Where worktrees are created
-  "copy": [                       // Glob patterns for files to copy
-    ".env", ".env.*", ".envrc",
-    ".claude", ".kit",
-    ".tool-versions", ".nvmrc",
-    "PROJECT_INDEX.json",
-    "**/CLAUDE.md", "**/*.kit"
-  ],
-  "exclude": [
-    "node_modules", ".git", ".worktrees",
-    "dist", "build", "vendor"
-  ],
-  "postCreate": "bun install",
-  "preDelete": null,
-  "branchTemplate": "{type}/{description}"
-}
-```
-
-## CLI Reference
-
-All commands output JSON for structured parsing.
-
-```bash
-bunx @side-quest/git worktree create <branch> [--no-install] [--no-fetch] [--attach]
-bunx @side-quest/git worktree list [--all]
-bunx @side-quest/git worktree check <branch>
-bunx @side-quest/git worktree delete <branch> [--force] [--delete-branch]
-bunx @side-quest/git worktree init
-bunx @side-quest/git worktree sync <branch> [--all] [--dry-run]
-bunx @side-quest/git worktree clean [--dry-run] [--delete-branches] [--force]
-bunx @side-quest/git worktree status [--pr]
-bunx @side-quest/git worktree install <path>
-bunx @side-quest/git worktree orphans [--delete]
-```
-
-## Important Notes
-
-- Worktrees are created in the `directory` specified in config (default: `.worktrees/`)
-- The `.worktrees/` directory should be added to `.gitignore`
-- Branch names with slashes (e.g., `feat/auth`) are converted to hyphens for the directory name
-- Files matching `copy` patterns are copied from the main worktree
-- The `postCreate` command runs in the new worktree directory
+- Skill: `skills/worktree/SKILL.md`
+- Runtime: `runtime/agent-worktree/src/`
+- Config: gitignored `worktree.config.json` at the main worktree root
+- Generated workspace: `<repo>.code-workspace` (rendered output — never hand-edit)

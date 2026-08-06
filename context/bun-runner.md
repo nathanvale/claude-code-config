@@ -1,28 +1,30 @@
-# Bun Runner (MCP Tools)
+# Code Quality Runners
 
-## Why MCP Over CLI
+Use Agent Runner for Bun tests. Prefer MCP runners for lint, format, and type
+checks when available. Always pass `response_format: "json"` to MCP tools.
 
-MCP tools filter output → token-efficient, failures only
+## Tests
 
-## Testing
+- `skills/test-runner/src/test-runner.sh`: Bun test pass/fail, repair, triage, and detail lookup.
+- Pass Bun coverage args after `--`, for example `-- --coverage`.
+- Use repair mode for hot-context failing files.
+- Use triage mode for cold-context suite failures.
+- Use detail lookup when the compact packet is too terse.
 
-| Tool | Use |
-|------|-----|
-| `bun_runTests` | All tests or filter by pattern |
-| `bun_testFile` | Specific file |
-| `bun_testCoverage` | Coverage summary |
+## Lint And Format
 
-## Linting
+- `biome_lintCheck`: read-only lint/format diagnostics.
+- `biome_lintFix`: auto-fix with `--write`.
+- `biome_formatCheck`: formatting gate.
 
-| Tool | Use |
-|------|-----|
-| `bun_lintCheck` | Check issues (read-only) |
-| `bun_lintFix` | Auto-fix (`--write`) |
-| `bun_formatCheck` | Formatting only |
+## Types
 
-## Hooks (Automatic)
+- `tsc_check`: `tsc --noEmit` from nearest config.
 
-- **PostToolUse** → Biome fix + tsc check after Write/Edit
-- **Stop** → Full lint + type check before session ends
+Exit codes: `0` success, `2` blocking error.
 
-Exit codes → 0 = success, 2 = blocking error
+## Routing
+
+- Use Agent Runner for Bun test gates and failure context.
+- Use Biome MCP for lint and format gates.
+- Use TypeScript MCP for type gates.

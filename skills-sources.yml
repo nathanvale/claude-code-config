@@ -1,0 +1,48 @@
+version: 1
+providers:
+  openclaw/gogcli:
+    ref: 1b261244fc2687d33bccb6d23f85aa3f88c1062a
+    skills:
+      - gog
+      - gog-admin
+      - gog-analytics
+      - gog-appscript
+      - gog-calendar
+      - gog-chat
+      - gog-classroom
+      - gog-contacts
+      - gog-contacts-cleanup
+      - gog-docs
+      - gog-drive
+      - gog-drive-audit
+      - gog-forms
+      - gog-gmail
+      - gog-groups
+      - gog-inbox-triage
+      - gog-keep
+      - gog-maps
+      - gog-meet
+      - gog-meeting-prep
+      - gog-people
+      - gog-photos
+      - gog-save-attachments
+      - gog-searchconsole
+      - gog-sheets
+      - gog-sites
+      - gog-slides
+      - gog-tasks
+      - gog-weekly-digest
+      - gog-youtube
+  mattpocock/skills:
+    ref: 2ab958093e83e0ec752e6c1c5932da465bf23e0c
+    skills:
+      - codebase-design
+      - diagnosing-bugs
+      - domain-modeling
+      - grill-me
+      - grill-with-docs
+      - grilling
+      - improve-codebase-architecture
+      - prototype
+      - tdd
+      - teach

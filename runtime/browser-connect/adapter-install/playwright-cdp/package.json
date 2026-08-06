@@ -1,0 +1,9 @@
+{
+	"name": "browser-connect-adapter-playwright-cdp",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Pinned dependency-integrity source for the playwright-cdp Browser Connect adapter.",
+	"dependencies": {
+		"@playwright/cli": "0.1.17"
+	}
+}

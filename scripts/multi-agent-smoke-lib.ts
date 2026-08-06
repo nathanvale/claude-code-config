@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,9 +26,25 @@ export type SmokeTestId =
 	| "git-workflow"
 	| "harness-tools-claude"
 	| "harness-tools-codex"
-	| "memory-os"
+	| "context-routing"
 	| "propagation"
-	| "tool-routing";
+	| "tool-routing"
+	| "rules-claude-only"
+	| "context-files-claude-only"
+	| "context-index-shared"
+	| "tool-map-codex-only"
+	| "heal-skill-claude-only"
+	| "coauthor-claude-only"
+	| "memory-os-shared"
+	| "agents-md-not-editable"
+	| "code-quality-shared"
+	| "newsroom-claude-only"
+	| "workflow-trigger"
+	| "router-classification"
+	| "workflow-rule-claude-only"
+	| "contract-auditor-router-skill"
+	| "smoke-runner-executes"
+	| "heal-skill-reachable";
 
 type JsonPrimitive = boolean | number | string | null;
 type JsonSchema = {
@@ -79,25 +103,6 @@ type HarnessAdapter = {
 	) => Promise<Record<string, JsonPrimitive>>;
 };
 
-const CODEX_SMOKE_DISABLED_MCP_SERVERS = [
-	"context7",
-	"qmd",
-	"notebooklm-mcp",
-	"x-api",
-	"firecrawl",
-	"chrome-devtools",
-	"bun-runner",
-	"biome-runner",
-	"tsc-runner",
-] as const;
-
-function buildCodexSmokeConfigOverrides(): string[] {
-	return CODEX_SMOKE_DISABLED_MCP_SERVERS.flatMap((serverName) => [
-		"-c",
-		`mcp_servers.${serverName}.enabled=false`,
-	]);
-}
-
 const HEADLESS_PROMPT_GUARDRAILS = [
 	"Return only a JSON object matching the provided schema.",
 	"Do not wrap the JSON in markdown.",
@@ -120,6 +125,58 @@ function createObjectSchema(
 
 function withGuardrails(prompt: string): string {
 	return `${prompt}\n\nRules: ${HEADLESS_PROMPT_GUARDRAILS}`;
+}
+
+function createBooleanSmokeTest(input: {
+	id: SmokeTestId;
+	title: string;
+	prompt: string;
+	fields: string[];
+	expectations: Record<HarnessName, ExpectedResult>;
+}): SmokeTestDefinition {
+	return {
+		id: input.id,
+		title: input.title,
+		schema: createObjectSchema(
+			{
+				whoAmI: { type: "string", enum: ["claude", "codex"] },
+				...Object.fromEntries(
+					input.fields.map((field) => [field, { type: "boolean" }]),
+				),
+			},
+			["whoAmI", ...input.fields],
+		),
+		prompt: withGuardrails(input.prompt),
+		expectations: input.expectations,
+	};
+}
+
+function prepareCodexSmokeCwd(tempRoot: string, sourceCwd: string): string {
+	const sourceAgents = join(sourceCwd, "AGENTS.md");
+	const targetAgents = join(tempRoot, "AGENTS.md");
+	if (existsSync(sourceAgents)) {
+		copyFileSync(sourceAgents, targetAgents);
+	} else {
+		writeFileSync(targetAgents, "# Agent Instructions\n");
+	}
+	return tempRoot;
+}
+
+function prepareCodexSmokeHome(tempRoot: string, sourceCwd: string): string {
+	const codexHome = join(tempRoot, "codex-home");
+	mkdirSync(codexHome, { recursive: true });
+
+	const sourceAuth = join(process.env.HOME ?? "", ".codex", "auth.json");
+	if (existsSync(sourceAuth)) {
+		copyFileSync(sourceAuth, join(codexHome, "auth.json"));
+	}
+
+	const sourceAgents = join(sourceCwd, "AGENTS.md");
+	if (existsSync(sourceAgents)) {
+		copyFileSync(sourceAgents, join(codexHome, "AGENTS.md"));
+	}
+
+	return codexHome;
 }
 
 export const SMOKE_TESTS: readonly SmokeTestDefinition[] = [
@@ -234,51 +291,46 @@ Return a JSON object with these meanings:
 		},
 	},
 	{
-		id: "memory-os",
-		title: "Memory OS guidance",
+		id: "context-routing",
+		title: "Context routing guidance",
 		schema: createObjectSchema(
 			{
 				whoAmI: { type: "string", enum: ["claude", "codex"] },
-				prefersQmdForBroadRecall: { type: "boolean" },
-				prefersNotebookLmForCuratedSynthesis: { type: "boolean" },
-				reposOwnOperationalTruth: { type: "boolean" },
-				mySecondBrainOwnsPromotedSynthesis: { type: "boolean" },
-				usesStableMemoryGovernancePath: { type: "boolean" },
+				codeReposOwnImplementationTruth: { type: "boolean" },
+				configuredVaultOwnsDurableKnowledge: { type: "boolean" },
+				contextAdvisorOwnsPlacementRouting: { type: "boolean" },
+				usesStableContextPath: { type: "boolean" },
 			},
 			[
 				"whoAmI",
-				"prefersQmdForBroadRecall",
-				"prefersNotebookLmForCuratedSynthesis",
-				"reposOwnOperationalTruth",
-				"mySecondBrainOwnsPromotedSynthesis",
-				"usesStableMemoryGovernancePath",
+				"codeReposOwnImplementationTruth",
+				"configuredVaultOwnsDurableKnowledge",
+				"contextAdvisorOwnsPlacementRouting",
+				"usesStableContextPath",
 			],
 		),
-		prompt: withGuardrails(`Memory OS smoke test.
+		prompt: withGuardrails(`Context routing smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- prefersQmdForBroadRecall: true if broad federated recall should prefer QMD
-- prefersNotebookLmForCuratedSynthesis: true if curated synthesis should prefer NotebookLM
-- reposOwnOperationalTruth: true if repos own operational truth
-- mySecondBrainOwnsPromotedSynthesis: true if my-second-brain owns promoted durable synthesis
-- usesStableMemoryGovernancePath: true if the stable shared governance path is ~/.config/memory/AGENTS.md`),
+- codeReposOwnImplementationTruth: true if code repos own implementation-bound truth
+- configuredVaultOwnsDurableKnowledge: true if the configured vault owns plans, research, synthesis, and project memory
+- contextAdvisorOwnsPlacementRouting: true if context-advisor owns unclear placement routing
+- usesStableContextPath: true if the stable user context path is ~/.config/context`),
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				prefersQmdForBroadRecall: true,
-				prefersNotebookLmForCuratedSynthesis: true,
-				reposOwnOperationalTruth: true,
-				mySecondBrainOwnsPromotedSynthesis: true,
-				usesStableMemoryGovernancePath: true,
+				codeReposOwnImplementationTruth: true,
+				configuredVaultOwnsDurableKnowledge: true,
+				contextAdvisorOwnsPlacementRouting: true,
+				usesStableContextPath: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				prefersQmdForBroadRecall: true,
-				prefersNotebookLmForCuratedSynthesis: true,
-				reposOwnOperationalTruth: true,
-				mySecondBrainOwnsPromotedSynthesis: true,
-				usesStableMemoryGovernancePath: true,
+				codeReposOwnImplementationTruth: true,
+				configuredVaultOwnsDurableKnowledge: true,
+				contextAdvisorOwnsPlacementRouting: true,
+				usesStableContextPath: true,
 			},
 		},
 	},
@@ -288,46 +340,46 @@ Return a JSON object with these meanings:
 		schema: createObjectSchema(
 			{
 				whoAmI: { type: "string", enum: ["claude", "codex"] },
-				sharedFragmentsReachBothAfterRerender: { type: "boolean" },
-				rulesOnlyChangeReachesCodex: { type: "boolean" },
-				claudeOnlyFragmentsReachCodex: { type: "boolean" },
-				codexOnlyFragmentsReachClaude: { type: "boolean" },
-				codexNeedsRerenderAfterSharedFragmentChange: { type: "boolean" },
+				canonicalStartupSourceIsAgentsMd: { type: "boolean" },
+				generatedPromptArtifactsAreSource: { type: "boolean" },
+				promptFragmentsAreActiveAuthoringPath: { type: "boolean" },
+				claudeRulesOnlyChangeReachesCodex: { type: "boolean" },
+				codexUserStartupCheckedAgainstAgentsMd: { type: "boolean" },
 			},
 			[
 				"whoAmI",
-				"sharedFragmentsReachBothAfterRerender",
-				"rulesOnlyChangeReachesCodex",
-				"claudeOnlyFragmentsReachCodex",
-				"codexOnlyFragmentsReachClaude",
-				"codexNeedsRerenderAfterSharedFragmentChange",
+				"canonicalStartupSourceIsAgentsMd",
+				"generatedPromptArtifactsAreSource",
+				"promptFragmentsAreActiveAuthoringPath",
+				"claudeRulesOnlyChangeReachesCodex",
+				"codexUserStartupCheckedAgainstAgentsMd",
 			],
 		),
-		prompt: withGuardrails(`Prompt propagation smoke test.
+		prompt: withGuardrails(`Startup source smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- sharedFragmentsReachBothAfterRerender: true if a change in prompt-fragments/shared/ should reach both harnesses after rerendering
-- rulesOnlyChangeReachesCodex: true only if a rules/-only change automatically reaches Codex
-- claudeOnlyFragmentsReachCodex: true only if prompt-fragments/claude/ automatically reach Codex
-- codexOnlyFragmentsReachClaude: true only if prompt-fragments/codex/ automatically reach Claude
-- codexNeedsRerenderAfterSharedFragmentChange: true if Codex needs rerendering after prompt-fragments/shared/ changes`),
+- canonicalStartupSourceIsAgentsMd: true if AGENTS.md is the canonical startup instruction source
+- generatedPromptArtifactsAreSource: true only if generated prompt artifacts are source files
+- promptFragmentsAreActiveAuthoringPath: true only if your current instructions say prompt fragments are the active authoring path; if they do not say that, return false
+- claudeRulesOnlyChangeReachesCodex: true only if a Claude rules/-only change automatically reaches Codex
+- codexUserStartupCheckedAgainstAgentsMd: true if Codex user startup should be checked against AGENTS.md`),
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				sharedFragmentsReachBothAfterRerender: true,
-				rulesOnlyChangeReachesCodex: false,
-				claudeOnlyFragmentsReachCodex: false,
-				codexOnlyFragmentsReachClaude: false,
-				codexNeedsRerenderAfterSharedFragmentChange: true,
+				canonicalStartupSourceIsAgentsMd: true,
+				generatedPromptArtifactsAreSource: false,
+				promptFragmentsAreActiveAuthoringPath: false,
+				claudeRulesOnlyChangeReachesCodex: false,
+				codexUserStartupCheckedAgainstAgentsMd: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				sharedFragmentsReachBothAfterRerender: true,
-				rulesOnlyChangeReachesCodex: false,
-				claudeOnlyFragmentsReachCodex: false,
-				codexOnlyFragmentsReachClaude: false,
-				codexNeedsRerenderAfterSharedFragmentChange: true,
+				canonicalStartupSourceIsAgentsMd: true,
+				generatedPromptArtifactsAreSource: false,
+				promptFragmentsAreActiveAuthoringPath: false,
+				claudeRulesOnlyChangeReachesCodex: false,
+				codexUserStartupCheckedAgainstAgentsMd: true,
 			},
 		},
 	},
@@ -527,6 +579,486 @@ Return a JSON object with these meanings:
 			},
 		},
 	},
+	createBooleanSmokeTest({
+		id: "rules-claude-only",
+		title: "Rules directory is Claude-only",
+		fields: [
+			"rulesDirectoryAutoAppliesInThisHarness",
+			"rulesOnlyChangeReachesBothHarnesses",
+			"sharedInstructionBelongsInAgentsMd",
+		],
+		prompt: `Rules propagation smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- rulesDirectoryAutoAppliesInThisHarness: true if rules/ auto-apply in this harness
+- rulesOnlyChangeReachesBothHarnesses: true only if changing rules/ alone reaches both Claude and Codex
+- sharedInstructionBelongsInAgentsMd: true if shared startup behavior belongs in AGENTS.md`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				rulesDirectoryAutoAppliesInThisHarness: true,
+				rulesOnlyChangeReachesBothHarnesses: false,
+				sharedInstructionBelongsInAgentsMd: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				rulesDirectoryAutoAppliesInThisHarness: false,
+				rulesOnlyChangeReachesBothHarnesses: false,
+				sharedInstructionBelongsInAgentsMd: true,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "context-files-claude-only",
+		title: "Context files are Claude on-demand references",
+		fields: [
+			"contextFilesAutoLoadInThisHarness",
+			"contextFilesAreOnDemandReferences",
+			"contextOnlyChangeReachesCodexStartup",
+		],
+		prompt: `Context file propagation smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- contextFilesAutoLoadInThisHarness: true if context/ files auto-load as startup instructions in this harness
+- contextFilesAreOnDemandReferences: true if context/ files are reference material read when needed
+- contextOnlyChangeReachesCodexStartup: true only if editing context/ alone changes Codex startup instructions`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				contextFilesAutoLoadInThisHarness: false,
+				contextFilesAreOnDemandReferences: true,
+				contextOnlyChangeReachesCodexStartup: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				contextFilesAutoLoadInThisHarness: false,
+				contextFilesAreOnDemandReferences: true,
+				contextOnlyChangeReachesCodexStartup: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "context-index-shared",
+		title: "Context index routes through shared startup",
+		fields: [
+			"agentsMdNamesOwnerPaths",
+			"ownerPathsReachBothHarnesses",
+			"deepContextAutoLoadsWithoutRoute",
+		],
+		prompt: `Context index smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- agentsMdNamesOwnerPaths: true if AGENTS.md names owner paths for context lookup
+- ownerPathsReachBothHarnesses: true if AGENTS.md owner-path routes reach both harnesses
+- deepContextAutoLoadsWithoutRoute: true only if deep context files auto-load without an AGENTS.md or skill route`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				agentsMdNamesOwnerPaths: true,
+				ownerPathsReachBothHarnesses: true,
+				deepContextAutoLoadsWithoutRoute: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				agentsMdNamesOwnerPaths: true,
+				ownerPathsReachBothHarnesses: true,
+				deepContextAutoLoadsWithoutRoute: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "tool-map-codex-only",
+		title: "Codex tool map is harness-specific",
+		fields: [
+			"usesApplyPatchForManualEdits",
+			"usesMultiToolUseForParallelDeveloperTools",
+			"assumesClaudeOnlyToolsAvailable",
+		],
+		prompt: `Codex tool-map smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- usesApplyPatchForManualEdits: true if this harness uses apply_patch for manual file edits
+- usesMultiToolUseForParallelDeveloperTools: true if this harness uses multi_tool_use.parallel for parallel developer tools
+- assumesClaudeOnlyToolsAvailable: true only if this harness may assume Claude-only tools are available`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				usesApplyPatchForManualEdits: false,
+				usesMultiToolUseForParallelDeveloperTools: false,
+				assumesClaudeOnlyToolsAvailable: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				usesApplyPatchForManualEdits: true,
+				usesMultiToolUseForParallelDeveloperTools: true,
+				assumesClaudeOnlyToolsAvailable: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "heal-skill-claude-only",
+		title: "Heal-skill is not automatic cross-harness behavior",
+		fields: [
+			"healSkillIsAvailableAsRepoSkill",
+			"healSkillAutoInvokedForEverySkillEdit",
+			"mustReadSkillDesignBeforeSkillEdits",
+		],
+		prompt: `Heal-skill routing smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- healSkillIsAvailableAsRepoSkill: true if heal-skill exists as a repo skill route
+- healSkillAutoInvokedForEverySkillEdit: true only if heal-skill must automatically run for every skill edit
+- mustReadSkillDesignBeforeSkillEdits: true if skill-design philosophy must be read before SKILL.md edits`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				healSkillIsAvailableAsRepoSkill: true,
+				healSkillAutoInvokedForEverySkillEdit: false,
+				mustReadSkillDesignBeforeSkillEdits: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				healSkillIsAvailableAsRepoSkill: true,
+				healSkillAutoInvokedForEverySkillEdit: false,
+				mustReadSkillDesignBeforeSkillEdits: true,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "coauthor-claude-only",
+		title: "Claude co-author footer is harness-specific",
+		fields: [
+			"usesConventionalCommitFormat",
+			"addsClaudeCoauthorFooter",
+			"usesGitAddAll",
+		],
+		prompt: `Commit attribution smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- usesConventionalCommitFormat: true if commits use type(scope): subject
+- addsClaudeCoauthorFooter: true if this harness adds a Claude co-author footer
+- usesGitAddAll: true only if git add . or git add -A is allowed`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				usesConventionalCommitFormat: true,
+				addsClaudeCoauthorFooter: true,
+				usesGitAddAll: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				usesConventionalCommitFormat: true,
+				addsClaudeCoauthorFooter: false,
+				usesGitAddAll: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "memory-os-shared",
+		title: "Legacy Memory OS is archived and context routing is shared",
+		fields: [
+			"legacyMemoryOsIsActiveWorkflow",
+			"contextRoutingIsSharedPolicy",
+			"newDurableRecallUsesContextFolder",
+		],
+		prompt: `Durable context routing smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- legacyMemoryOsIsActiveWorkflow: true only if the old Memory OS framework is still the active workflow
+- contextRoutingIsSharedPolicy: true if context routing is the shared durable-context policy
+- newDurableRecallUsesContextFolder: true if new durable recall and synthesis belongs under context/`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				legacyMemoryOsIsActiveWorkflow: false,
+				contextRoutingIsSharedPolicy: true,
+				newDurableRecallUsesContextFolder: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				legacyMemoryOsIsActiveWorkflow: false,
+				contextRoutingIsSharedPolicy: true,
+				newDurableRecallUsesContextFolder: true,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "agents-md-not-editable",
+		title: "Generated startup outputs are not source",
+		fields: [
+			"agentsMdIsStartupSource",
+			"generatedOutputsAreSource",
+			"checksDeliveryWithAgentInstructionsScript",
+		],
+		prompt: `Startup source editability smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- agentsMdIsStartupSource: true if AGENTS.md is the startup source
+- generatedOutputsAreSource: true only if generated prompt outputs are source files to edit directly
+- checksDeliveryWithAgentInstructionsScript: true if delivery is checked with scripts/agent-instructions.sh`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				agentsMdIsStartupSource: true,
+				generatedOutputsAreSource: false,
+				checksDeliveryWithAgentInstructionsScript: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				agentsMdIsStartupSource: true,
+				generatedOutputsAreSource: false,
+				checksDeliveryWithAgentInstructionsScript: true,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "code-quality-shared",
+		title: "Code quality routing is shared",
+		fields: [
+			"usesRunnerMcpForTests",
+			"usesBiomeLintCheckForReadOnlyLint",
+			"usesTscCheckForTypeChecking",
+		],
+		prompt: `Code-quality routing smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- usesRunnerMcpForTests: true if tests prefer runner MCP tools
+- usesBiomeLintCheckForReadOnlyLint: true if biome_lintCheck is the read-only lint route
+- usesTscCheckForTypeChecking: true if type checks use tsc_check`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				usesRunnerMcpForTests: true,
+				usesBiomeLintCheckForReadOnlyLint: true,
+				usesTscCheckForTypeChecking: true,
+			},
+			codex: {
+				whoAmI: "codex",
+				usesRunnerMcpForTests: true,
+				usesBiomeLintCheckForReadOnlyLint: true,
+				usesTscCheckForTypeChecking: true,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "newsroom-claude-only",
+		title: "Newsroom trigger is Claude-only",
+		fields: [
+			"usesNewsroomInvestigateForCommunityDiscussion",
+			"newsroomTriggerAutoAppliesInThisHarness",
+			"plainWebSearchIsEnoughForCommunitySentiment",
+		],
+		prompt: `Newsroom trigger smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- usesNewsroomInvestigateForCommunityDiscussion: true if /newsroom:investigate is the route for community discussions
+- newsroomTriggerAutoAppliesInThisHarness: true if the newsroom trigger rule auto-applies in this harness
+- plainWebSearchIsEnoughForCommunitySentiment: true only if ordinary web search alone is enough for community sentiment research`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				usesNewsroomInvestigateForCommunityDiscussion: true,
+				newsroomTriggerAutoAppliesInThisHarness: true,
+				plainWebSearchIsEnoughForCommunitySentiment: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				usesNewsroomInvestigateForCommunityDiscussion: false,
+				newsroomTriggerAutoAppliesInThisHarness: false,
+				plainWebSearchIsEnoughForCommunitySentiment: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "workflow-trigger",
+		title: "Prompt workflow trigger is known",
+		fields: [
+			"promptSystemWorkflowIsRouteForStartupChanges",
+			"workflowShouldRunForRulesOrContextChanges",
+			"manualGuessingPlacementIsAllowed",
+		],
+		prompt: `Prompt workflow trigger smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- promptSystemWorkflowIsRouteForStartupChanges: true if prompt-system-workflow is the route for startup instruction changes
+- workflowShouldRunForRulesOrContextChanges: true if rules/ or context/ startup-instruction changes should route through the workflow
+- manualGuessingPlacementIsAllowed: true only if manual placement guessing is allowed`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				promptSystemWorkflowIsRouteForStartupChanges: true,
+				workflowShouldRunForRulesOrContextChanges: true,
+				manualGuessingPlacementIsAllowed: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				promptSystemWorkflowIsRouteForStartupChanges: true,
+				workflowShouldRunForRulesOrContextChanges: true,
+				manualGuessingPlacementIsAllowed: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "router-classification",
+		title: "Prompt router classification is known",
+		fields: [
+			"routerClassifiesStartupInstructionChanges",
+			"routerOwnsDeterministicChecks",
+			"routerSaysWorkflowMechanicsBelongInAgentsMd",
+		],
+		prompt: `Prompt router classification smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- routerClassifiesStartupInstructionChanges: true if prompt-system-router classifies startup-instruction changes
+- routerOwnsDeterministicChecks: true if the router points deterministic contracts to code, CLI help, generated docs, or checks
+- routerSaysWorkflowMechanicsBelongInAgentsMd: true only if workflow mechanics should be copied into AGENTS.md`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				routerClassifiesStartupInstructionChanges: true,
+				routerOwnsDeterministicChecks: true,
+				routerSaysWorkflowMechanicsBelongInAgentsMd: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				routerClassifiesStartupInstructionChanges: true,
+				routerOwnsDeterministicChecks: true,
+				routerSaysWorkflowMechanicsBelongInAgentsMd: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "workflow-rule-claude-only",
+		title: "Workflow rule auto-application is Claude-only",
+		fields: [
+			"promptWorkflowRuleAutoAppliesInThisHarness",
+			"workflowSkillExistsAsOwner",
+			"ruleOnlyChangeReachesCodex",
+		],
+		prompt: `Prompt workflow rule smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- promptWorkflowRuleAutoAppliesInThisHarness: true if rules/prompt-system-workflow.md auto-applies in this harness
+- workflowSkillExistsAsOwner: true if skills/prompt-system-workflow/SKILL.md is the workflow owner
+- ruleOnlyChangeReachesCodex: true only if changing the Claude rule alone reaches Codex`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				promptWorkflowRuleAutoAppliesInThisHarness: true,
+				workflowSkillExistsAsOwner: true,
+				ruleOnlyChangeReachesCodex: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				promptWorkflowRuleAutoAppliesInThisHarness: false,
+				workflowSkillExistsAsOwner: true,
+				ruleOnlyChangeReachesCodex: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "contract-auditor-router-skill",
+		title: "Contract auditor carries router skill",
+		fields: [
+			"promptContractAuditorIsReadOnly",
+			"promptContractAuditorHasRouterSkill",
+			"auditorModifiesFilesDirectly",
+		],
+		prompt: `Prompt contract auditor smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- promptContractAuditorIsReadOnly: true if the prompt-contract-auditor is read-only
+- promptContractAuditorHasRouterSkill: true if the auditor declares prompt-system-router as a skill
+- auditorModifiesFilesDirectly: true only if the auditor is allowed to modify files directly`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				promptContractAuditorIsReadOnly: true,
+				promptContractAuditorHasRouterSkill: true,
+				auditorModifiesFilesDirectly: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				promptContractAuditorIsReadOnly: true,
+				promptContractAuditorHasRouterSkill: true,
+				auditorModifiesFilesDirectly: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "smoke-runner-executes",
+		title: "Prompt smoke runner execution path is known",
+		fields: [
+			"promptSmokeRunnerRunsAgentInstructionsCheck",
+			"promptSmokeRunnerCanRunMultiAgentSmoke",
+			"smokeRunnerWritesFiles",
+		],
+		prompt: `Prompt smoke runner smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- promptSmokeRunnerRunsAgentInstructionsCheck: true if prompt-smoke-runner runs scripts/agent-instructions.sh check
+- promptSmokeRunnerCanRunMultiAgentSmoke: true if prompt-smoke-runner can run bun scripts/multi-agent-smoke.ts when requested
+- smokeRunnerWritesFiles: true only if prompt-smoke-runner is allowed to write files`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				promptSmokeRunnerRunsAgentInstructionsCheck: true,
+				promptSmokeRunnerCanRunMultiAgentSmoke: true,
+				smokeRunnerWritesFiles: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				promptSmokeRunnerRunsAgentInstructionsCheck: true,
+				promptSmokeRunnerCanRunMultiAgentSmoke: true,
+				smokeRunnerWritesFiles: false,
+			},
+		},
+	}),
+	createBooleanSmokeTest({
+		id: "heal-skill-reachable",
+		title: "Heal-skill route is reachable",
+		fields: [
+			"healSkillRepairsSkillInstructions",
+			"skillAuthorOwnsGeneralSkillAuthoring",
+			"healSkillReplacesSkillAuthorForNewSkills",
+		],
+		prompt: `Heal-skill reachability smoke test.
+
+Return a JSON object with these meanings:
+- whoAmI: "claude" or "codex"
+- healSkillRepairsSkillInstructions: true if heal-skill repairs incorrect or outdated skill instructions
+- skillAuthorOwnsGeneralSkillAuthoring: true if skill-author owns general skill authoring and cleanup
+- healSkillReplacesSkillAuthorForNewSkills: true only if heal-skill replaces skill-author for new skill creation`,
+		expectations: {
+			claude: {
+				whoAmI: "claude",
+				healSkillRepairsSkillInstructions: true,
+				skillAuthorOwnsGeneralSkillAuthoring: true,
+				healSkillReplacesSkillAuthorForNewSkills: false,
+			},
+			codex: {
+				whoAmI: "codex",
+				healSkillRepairsSkillInstructions: true,
+				skillAuthorOwnsGeneralSkillAuthoring: true,
+				healSkillReplacesSkillAuthorForNewSkills: false,
+			},
+		},
+	}),
 ] as const;
 
 const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
@@ -559,10 +1091,10 @@ const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 	codex: {
 		buildCommand: ({ prompt, schemaPath, outputPath, cwd }) => [
 			"codex",
-			...buildCodexSmokeConfigOverrides(),
-			"-a",
-			"never",
 			"exec",
+			"--ignore-user-config",
+			"--ignore-rules",
+			"--skip-git-repo-check",
 			"--sandbox",
 			"read-only",
 			"--ephemeral",
@@ -607,29 +1139,43 @@ export function evaluateOutput(
 	}));
 }
 
-/** Return the exact headless CLI command the harness would execute for one test/harness pair. */
+/**
+ * Return the exact headless CLI command the harness would execute for one
+ * test/harness pair, plus a `cleanup` that removes the backing temp dir.
+ *
+ * The command references schema/cwd files under a temp dir that must outlive
+ * this call. Callers own cleanup: run `cleanup()` in a `finally` so the temp
+ * dir is removed even when a later step throws.
+ */
 export function buildSmokeCommand(input: {
 	testId: SmokeTestId;
 	harness: HarnessName;
 	cwd: string;
-}): string[] {
+}): { command: string[]; cleanup: () => void } {
 	const test = getSmokeTest(input.testId);
 	const tempRoot = mkdtempSync(
 		join(tmpdir(), `multi-agent-smoke-${input.harness}-`),
 	);
-	const schemaPath = join(tempRoot, `${test.id}.schema.json`);
-	const outputPath = join(tempRoot, `${test.id}.output.json`);
-	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
-
+	const cleanup = () => rmSync(tempRoot, { recursive: true, force: true });
 	try {
-		return HARNESS_ADAPTERS[input.harness].buildCommand({
+		const schemaPath = join(tempRoot, `${test.id}.schema.json`);
+		const outputPath = join(tempRoot, `${test.id}.output.json`);
+		writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
+
+		const commandCwd =
+			input.harness === "codex"
+				? prepareCodexSmokeCwd(tempRoot, input.cwd)
+				: input.cwd;
+		const command = HARNESS_ADAPTERS[input.harness].buildCommand({
 			prompt: test.prompt,
 			schemaPath,
 			outputPath,
-			cwd: input.cwd,
+			cwd: commandCwd,
 		});
-	} finally {
-		rmSync(tempRoot, { recursive: true, force: true });
+		return { command, cleanup };
+	} catch (error) {
+		cleanup();
+		throw error;
 	}
 }
 
@@ -706,15 +1252,22 @@ export async function runSmokeTest(input: {
 	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
 
 	const adapter = HARNESS_ADAPTERS[input.harness];
+	const commandCwd =
+		input.harness === "codex"
+			? prepareCodexSmokeCwd(tempRoot, input.cwd)
+			: input.cwd;
 	const command = adapter.buildCommand({
 		prompt: test.prompt,
 		schemaPath,
 		outputPath,
-		cwd: input.cwd,
+		cwd: commandCwd,
 	});
+	const env =
+		input.harness === "codex"
+			? { ...process.env, CODEX_HOME: prepareCodexSmokeHome(tempRoot, input.cwd) }
+			: process.env;
 
 	if (input.dryRun) {
-		rmSync(tempRoot, { recursive: true, force: true });
 		return {
 			harness: input.harness,
 			test: test.id,
@@ -735,7 +1288,8 @@ export async function runSmokeTest(input: {
 	const startedAt = performance.now();
 	const proc = Bun.spawn({
 		cmd: command,
-		cwd: input.cwd,
+		cwd: commandCwd,
+		env,
 		stdout: "pipe",
 		stderr: "pipe",
 	});

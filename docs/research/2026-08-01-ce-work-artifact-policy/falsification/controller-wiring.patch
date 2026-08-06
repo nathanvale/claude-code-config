@@ -1,0 +1,563 @@
+--- /Users/nathanvale/.claude-monash/plugins/cache/compound-engineering-plugin/compound-engineering/3.21.0/skills/ce-work/scripts/unit_workspace_transaction.py	2026-08-01 11:28:32
++++ /private/tmp/ica-artifact-policy-falsify.f72092/controller/unit_workspace_transaction.py	2026-08-01 17:23:53
+@@ -37,7 +37,189 @@
+ MAX_IGNORED_SNAPSHOT_ENTRIES = int(os.environ.get("CE_WORK_MAX_IGNORED_SNAPSHOT_ENTRIES", "512"))
+ MAX_IGNORED_SNAPSHOT_BYTES = int(os.environ.get("CE_WORK_MAX_IGNORED_SNAPSHOT_BYTES", str(64 * 1024 * 1024)))
+ 
++import artifact_policy as ap
+ 
++
++def _artifact_fault(point: str) -> None:
++    """Crash-window injection: soft raises INTERRUPTED, hard kills the process."""
++    configured = {value.strip() for value in os.environ.get("CE_WORK_TEST_FAULT", "").split(",") if value.strip()}
++    if point in configured:
++        if os.environ.get("CE_WORK_FAULT_MODE") == "hard":
++            os._exit(21)
++        raise Operational("INTERRUPTED", f"injected test interruption at {point}")
++
++
++ap.FAULT_HOOK = _artifact_fault
++
++
++def _phase_record_path(run_id: str, transaction_id: str) -> str:
++    return os.path.join(run_dir(run_id), "jobs", f"artifact-phase-{transaction_id}.json")
++
++
++def _write_phase_record(path: str, record: dict) -> None:
++    parent = os.path.dirname(path)
++    validate_private_dir(parent)
++    tmp = os.path.join(parent, f".artifact-phase-{secrets.token_hex(6)}.tmp")
++    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW, 0o600)
++    try:
++        data = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
++        os.write(fd, data)
++        os.fsync(fd)
++    finally:
++        os.close(fd)
++    os.replace(tmp, path)
++
++
++def _serialise_custody(custody) -> dict:
++    return {
++        "root": custody.root,
++        "parent_modes": dict(custody.parent_modes),
++        "records": {
++            rel: {
++                "path": record.path,
++                "kind": record.kind,
++                "mode": record.mode,
++                "mtime_ns": record.mtime_ns,
++                "size": record.size,
++                "sha256": record.sha256,
++                "link_target": record.link_target,
++                "backup": record.backup,
++            }
++            for rel, record in custody.records.items()
++        },
++    }
++
++
++def _custody_from_record(repo: str, payload: dict):
++    records = {rel: ap.PreciousRecord(**row) for rel, row in payload["records"].items()}
++    parent_modes = {rel: int(mode) for rel, mode in payload["parent_modes"].items()}
++    return ap.ExactPreciousCustody(os.path.abspath(repo), payload["root"], records, parent_modes)
++
++
++def _policy_from_document(repo: str, document: dict):
++    rules = [
++        ap.RegenerableRule(
++            row["root"],
++            ap.LifecycleOwner(row["owner"], tuple(row["repair_argv"]), row.get("source", "phase-record")),
++        )
++        for row in document.get("regenerable_roots", [])
++    ]
++    return ap.ArtifactPolicyModule(
++        repo,
++        document.get("precious_roots", []),
++        rules,
++        document.get("regenerable_divergence", "disclose"),
++        document.get("override_source"),
++    )
++
++
++def _artifact_exempt_dir(rel: str, exempt_roots, precious_paths) -> bool:
++    for root in exempt_roots:
++        if rel == root or rel.startswith(root + "/"):
++            return True
++    for path in precious_paths:
++        if path == rel or path.startswith(rel + "/"):
++            return True
++    return False
++
++
++def _filtered_directory_snapshot(repo: str, exempt_roots, precious_paths=()) -> dict[str, int]:
++    return {
++        rel: mode
++        for rel, mode in _directory_snapshot(repo).items()
++        if not _artifact_exempt_dir(rel, exempt_roots, precious_paths)
++    }
++
++
++def _artifact_settle(repo: str, policy, phase_record: dict, custody, verification_exit) -> dict:
++    """Observe post-verification artifact state, restore precious custody, and
++    build truthful receipt fields. Restoration is idempotent: entries already
++    matching their custody record are left untouched."""
++    observation_error = None
++    try:
++        after_entries = ap.inventory_ignored(repo)
++        after_classified = policy.classify(after_entries)
++    except ap.PolicyError as exc:
++        after_classified = None
++        observation_error = {"reason": exc.reason, "detail": exc.detail}
++    before_precious = set(phase_record["before_precious_paths"])
++    if after_classified is not None:
++        after_precious_paths = {row.entry.path for row in after_classified if row.artifact_class == "precious"}
++        introduced_precious = sorted(after_precious_paths - before_precious)
++        after_bulk, after_rules = ap._manifest(after_classified)
++    else:
++        introduced_precious = []
++        after_bulk, after_rules = {}, {}
++    restored_paths, precious_proven, restoration_errors = custody.restore()
++    final_precious_digest = custody.digest()
++    before_bulk = phase_record["before_bulk"]
++    before_rules = {
++        root: ap.RegenerableRule(root, ap.LifecycleOwner(row["owner"], tuple(row["argv"]), row["source"]))
++        for root, row in phase_record["before_rules"].items()
++    }
++    before_set = set(before_bulk)
++    after_set = set(after_bulk)
++    bulk_changed = {path for path in before_set & after_set if before_bulk[path] != after_bulk[path]}
++    bulk_deleted = before_set - after_set
++    bulk_introduced = after_set - before_set
++    precise_restoration = (
++        precious_proven
++        and phase_record["precious_start_digest"] == final_precious_digest
++        and not introduced_precious
++    )
++    actions = ap._repair_actions(bulk_changed, bulk_deleted, bulk_introduced, before_rules, after_rules)
++    if introduced_precious:
++        actions.append({
++            "action": "inspect-preserved-introduced-precious-state",
++            "paths": introduced_precious[:ap.DIFF_PATH_SAMPLE],
++            "reason": "not present at transaction start; controller refused destructive cleanup",
++        })
++    if observation_error:
++        actions.append({
++            "action": "inspect-artifact-state-before-retry",
++            "reason": "post-verification inventory was not trustworthy",
++        })
++    bulk_diverged = bool(bulk_changed or bulk_deleted or bulk_introduced)
++    if not precise_restoration:
++        outcome = "BLOCKED_PRECIOUS_RESTORATION"
++    elif observation_error:
++        outcome = "BLOCKED_ARTIFACT_OBSERVATION"
++    elif verification_exit is None:
++        outcome = "RESUMED_WITH_REGENERABLE_DIVERGENCE" if bulk_diverged else "RESUMED_PRECIOUS_RESTORED"
++    elif verification_exit != 0:
++        outcome = "VERIFICATION_FAILED"
++    elif bulk_diverged and policy.divergence_mode == "block":
++        outcome = "BLOCKED_REGENERABLE_DIVERGENCE"
++    elif bulk_diverged:
++        outcome = "VERIFIED_WITH_REGENERABLE_DIVERGENCE"
++    else:
++        outcome = "VERIFIED"
++    return {
++        "schema": ap.RECEIPT_SCHEMA,
++        "outcome": outcome,
++        "policy_digest": phase_record["policy_digest"],
++        "ignored_state_policy": "typed-artifacts-v1",
++        "precious_contract": list(ap.ExactPreciousCustody.CONTRACT),
++        "precious_captured": len(phase_record["before_precious_paths"]),
++        "precious_restored": restored_paths,
++        "precious_introduced": introduced_precious,
++        "precious_restoration_proven": precise_restoration,
++        "precious_start_digest": phase_record["precious_start_digest"],
++        "precious_final_digest": final_precious_digest,
++        "precious_restoration_errors": restoration_errors,
++        "bulk_changed": ap._diff_summary(bulk_changed),
++        "bulk_deleted": ap._diff_summary(bulk_deleted),
++        "bulk_introduced": ap._diff_summary(bulk_introduced),
++        "bulk_divergence_detected": bulk_diverged,
++        "bulk_observation_complete": observation_error is None,
++        "artifact_observation_error": observation_error,
++        "bulk_restored": False,
++        "canonical_ignored_state_preserved": precise_restoration and not bulk_diverged and observation_error is None,
++        "repair_actions": actions,
++        "introduced_precious_paths": introduced_precious,
++    }
++
++
+ def _args(**values):
+     return SimpleNamespace(**values)
+ 
+@@ -493,21 +675,62 @@
+ ) -> tuple[str, dict]:
+     before = semantic_snapshot(repo)
+     before_paths = status_paths(repo)
+-    before_ignored = _ignored_paths(repo)
+     if not before["status_empty"] or before_paths:
+         raise Operational("BLOCKED", "verify-run requires a clean canonical checkout")
+     _validate_accepted_run_head(repo, units, before["head"])
+     accepted_units = accepted_unit_commit_snapshot(units)
+     if accepted_units is None:
+         raise Operational("BLOCKED", "unit completion evidence changed before plan-wide verification")
+-    _preflight_ignored_artifacts(repo, before_ignored)
+-    before_directory_snapshot = _directory_snapshot(repo)
++
++    # Artifact Policy Module seam: authoritative reload + classification before
++    # any entry, byte, type, ownership, or link enforcement.
++    policy = ap.ArtifactPolicyModule.load(repo)
++    try:
++        policy.require_eligible("authoritative-verification")
++    except ap.PolicyError as exc:
++        raise Operational("REFUSED", f"artifact policy refused authoritative verification: {exc.reason}", exc.detail)
++    _artifact_fault("artifact-after-reclassify")
++    before_entries = ap.inventory_ignored(repo)
++    before_classified = policy.classify(before_entries)
++    precious_before = [row for row in before_classified if row.artifact_class == "precious"]
++    before_precious_paths = sorted(row.entry.path for row in precious_before)
++    before_bulk, before_rules = ap._manifest(before_classified)
++    regenerable_roots = sorted({rule.root for rule in policy.regenerable_rules})
++
++    state_parent = os.path.join(run_dir(args.run_id), "jobs")
++    validate_private_dir(state_parent)
++    try:
++        custody = ap.ExactPreciousCustody.capture(repo, precious_before, state_parent)
++    except ap.PolicyError as exc:
++        raise Operational("BLOCKED", f"precious custody capture failed: {exc.reason}", exc.detail)
++    phase_path = _phase_record_path(args.run_id, attempt_id)
++    phase_record = {
++        "schema": "artifact-transaction.phase.v1",
++        "transaction_id": attempt_id,
++        "run_id": args.run_id,
++        "repo": repo,
++        "phase": "captured",
++        "lock_unit": lock_unit,
++        "policy": policy.policy_document(),
++        "policy_digest": policy.digest,
++        "before_precious_paths": before_precious_paths,
++        "before_bulk": before_bulk,
++        "before_rules": {
++            root: {
++                "owner": rule.lifecycle.owner,
++                "argv": list(rule.lifecycle.repair_argv),
++                "source": rule.lifecycle.source,
++            }
++            for root, rule in before_rules.items()
++        },
++        "precious_start_digest": custody.digest(),
++        "custody": _serialise_custody(custody),
++        "argv": command,
++    }
++    _write_phase_record(phase_path, phase_record)
++
++    before_directory_snapshot = _filtered_directory_snapshot(repo, regenerable_roots)
+     before_directories = set(before_directory_snapshot)
+-    ignored_snapshot = _snapshot_ignored_artifacts(
+-        repo,
+-        before_ignored,
+-        os.path.join(run_dir(args.run_id), "jobs"),
+-    )
+ 
+     verification_log, stream = _run_verification_log(args.run_id)
+     with stream:
+@@ -536,16 +759,47 @@
+             verification_exit = 127
+     test_fault("verify-run-before-receipt")
+ 
++    _artifact_fault("artifact-before-precious-restore")
+     after = semantic_snapshot(repo)
+     after_paths = status_paths(repo)
+-    new_ignored = _ignored_paths(repo) - before_ignored
+-    after_directory_snapshot = _directory_snapshot(repo)
++    artifact = _artifact_settle(repo, policy, phase_record, custody, verification_exit)
++    _artifact_fault("artifact-after-restore-before-receipt")
++    custody_failed = bool(artifact["precious_restoration_errors"])
++    if not custody_failed:
++        phase_record["phase"] = "restored"
++        _write_phase_record(phase_path, phase_record)
++    introduced_precious = list(artifact["introduced_precious_paths"])
++    after_directory_snapshot = _filtered_directory_snapshot(repo, regenerable_roots, introduced_precious)
++    comparable_before_directories = {
++        rel: mode
++        for rel, mode in before_directory_snapshot.items()
++        if not _artifact_exempt_dir(rel, (), introduced_precious)
++    }
+     new_directories = set(after_directory_snapshot) - before_directories
+-    directory_state_changed = after_directory_snapshot != before_directory_snapshot
+-    ignored_directories = _new_parent_directories(new_ignored, before_directories)
+-    _remove_owned_new_paths(repo, new_ignored | new_directories | ignored_directories, before["head"])
+-    restored_ignored = _restore_ignored_artifacts(repo, ignored_snapshot)
+-    cleaned_paths = sorted(new_ignored | new_directories | restored_ignored)
++    directory_state_changed = after_directory_snapshot != comparable_before_directories
++    _remove_owned_new_paths(repo, new_directories, before["head"])
++    cleaned_paths = sorted(set(artifact["precious_restored"]) | new_directories)
++    if custody_failed:
++        with locked_manifest(args.run_id, write=True) as doc:
++            lock = doc.get("integration_lock") or {}
++            doc["blockers"].append({
++                "at": now_iso(),
++                "unit_id": None,
++                "reason": "plan-wide verification precious restoration could not be proven",
++                "retain_integration_lock": True,
++                "integration_lock_nonce": lock.get("nonce"),
++            })
++            event(doc, "run-verification-restore-blocked", None, {"verification_exit": verification_exit})
++        raise Operational(
++            "BLOCKED",
++            "plan-wide verification precious restoration could not be proven",
++            {
++                "verification_exit": verification_exit,
++                "verification_log": verification_log,
++                "restoration_errors": artifact["precious_restoration_errors"],
++                "retain_integration_lock": True,
++            },
++        )
+     if after != before:
+         if after["branch_ref"] != before["branch_ref"] or after["head"] != before["head"]:
+             with locked_manifest(args.run_id, write=True) as doc:
+@@ -569,8 +823,8 @@
+                     "retain_integration_lock": True,
+                 },
+             )
+-        deletion_paths = (after_paths - before_paths) | new_ignored | new_directories
+-        cleaned_paths = sorted(deletion_paths | restored_ignored)
++        deletion_paths = after_paths - before_paths
++        cleaned_paths = sorted(set(cleaned_paths) | deletion_paths)
+         git(repo, "reset", "--hard", before["head"])
+         created_directories = _new_parent_directories(deletion_paths, before_directories)
+         _remove_owned_new_paths(repo, deletion_paths | created_directories, before["head"])
+@@ -582,8 +836,8 @@
+         directory_restore_error = str(exc)
+     cleaned_paths = sorted(set(cleaned_paths) | restored_directories)
+     restored = semantic_snapshot(repo)
+-    restored_directory_snapshot = _directory_snapshot(repo)
+-    if restored != before or restored_directory_snapshot != before_directory_snapshot or directory_restore_error:
++    restored_directory_snapshot = _filtered_directory_snapshot(repo, regenerable_roots, introduced_precious)
++    if restored != before or restored_directory_snapshot != comparable_before_directories or directory_restore_error:
+         with locked_manifest(args.run_id, write=True) as doc:
+             lock = doc.get("integration_lock") or {}
+             blocker = {
+@@ -607,6 +861,8 @@
+             },
+         )
+ 
++    artifact_blocked = artifact["outcome"] not in {"VERIFIED", "VERIFIED_WITH_REGENERABLE_DIVERGENCE"}
++    log_retained = verification_exit != 0 or artifact_blocked
+     log_digest = hashlib.sha256(Path(verification_log).read_bytes()).hexdigest()
+     receipt = {
+         "attempt_id": attempt_id,
+@@ -619,11 +875,18 @@
+         "accepted_units": accepted_units,
+         "canonical_state_changed": after != before or directory_state_changed,
+         "cleaned_paths": cleaned_paths,
+-        "verification_log": verification_log if verification_exit != 0 else None,
+-        "verification_log_retained": verification_exit != 0,
++        "verification_log": verification_log if log_retained else None,
++        "verification_log_retained": log_retained,
++        "artifact": artifact,
+     }
+     receipt["evidence_digest"] = digest_bytes(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode())
+     _record_run_verification_receipt(args, attempt_id, lock_token, receipt)
++    _artifact_fault("artifact-after-receipt-before-release")
++    phase_record["phase"] = "receipted"
++    _write_phase_record(phase_path, phase_record)
++    custody.close()
++    phase_record["phase"] = "complete"
++    _write_phase_record(phase_path, phase_record)
+     if verification_exit != 0:
+         raise Operational(
+             "BLOCKED",
+@@ -635,6 +898,17 @@
+                 "cleaned_paths": cleaned_paths,
+             },
+         )
++    if artifact_blocked:
++        raise Operational(
++            "BLOCKED",
++            "artifact policy blocked plan-wide verification",
++            {
++                "outcome": artifact["outcome"],
++                "evidence_digest": receipt["evidence_digest"],
++                "repair_actions": artifact["repair_actions"],
++                "verification_log": verification_log,
++            },
++        )
+     os.unlink(verification_log)
+     return "RUN_VERIFIED", {
+         "verification_exit": 0,
+@@ -642,6 +916,9 @@
+         "canonical_head": before["head"],
+         "cleaned_paths": cleaned_paths,
+         "verification_log_retained": False,
++        "artifact_outcome": artifact["outcome"],
++        "canonical_ignored_state_preserved": artifact["canonical_ignored_state_preserved"],
++        "repair_actions": artifact["repair_actions"],
+     }
+ 
+ 
+@@ -952,3 +1229,113 @@
+             except (Operational, TrustFailure) as release_failure:
+                 raise _integration_recovery_failure(args, original, release_failure, "release") from release_failure
+         raise
++
++
++def _record_resume_receipt(run_id: str, transaction_id: str, receipt: dict) -> bool:
++    """Idempotently record a resume receipt: exactly one receipt per transaction."""
++    with locked_manifest(run_id, write=True) as doc:
++        if any(v.get("attempt_id") == transaction_id for v in doc.get("verifications", [])):
++            return False
++        attempts = plan_wide_verification_attempts(doc)
++        matches = [a for a in attempts if a.get("attempt_id") == transaction_id]
++        doc.setdefault("verifications", []).append(receipt)
++        if matches:
++            matches[0].update({
++                "status": "receipt-recorded",
++                "completed_at": now_iso(),
++                "evidence_digest": receipt["evidence_digest"],
++            })
++        doc["blockers"].append({
++            "at": now_iso(),
++            "unit_id": None,
++            "reason": "plan-wide verification interrupted; artifact state settled on resume, verification result unknown and must re-run",
++            "attempt_id": transaction_id,
++        })
++        event(doc, "artifact-resume-receipt", None, {"attempt_id": transaction_id})
++    return True
++
++
++def cmd_artifact_resume(args) -> tuple[str, dict]:
++    """Resume interrupted artifact transactions: restore precious custody from the
++    durable phase record, emit exactly one truthful receipt, release the lock.
++    Never deletes state outside controller-private directories."""
++    with locked_manifest(args.run_id) as doc:
++        validate_repo(doc)
++        repo = doc["repository"]["toplevel"]
++        verifications = list(doc.get("verifications", []))
++    jobs = os.path.join(run_dir(args.run_id), "jobs")
++    validate_private_dir(jobs)
++    results = []
++    referenced_roots: set[str] = set()
++    for name in sorted(os.listdir(jobs)):
++        if not name.startswith("artifact-phase-") or not name.endswith(".json"):
++            continue
++        path = os.path.join(jobs, name)
++        record = json.loads(Path(path).read_bytes())
++        tid = record["transaction_id"]
++        referenced_roots.add(record["custody"]["root"])
++        if record["phase"] == "complete":
++            results.append({"transaction_id": tid, "action": "already-complete"})
++            continue
++        receipted = any(v.get("attempt_id") == tid for v in verifications)
++        custody = _custody_from_record(repo, record["custody"])
++        if receipted:
++            custody.close()
++            record["phase"] = "complete"
++            _write_phase_record(path, record)
++            results.append({"transaction_id": tid, "action": "finalized-after-receipt"})
++            continue
++        policy = _policy_from_document(repo, record["policy"])
++        artifact = _artifact_settle(repo, policy, record, custody, None)
++        if artifact["precious_restoration_errors"]:
++            results.append({
++                "transaction_id": tid,
++                "action": "restoration-blocked",
++                "errors": artifact["precious_restoration_errors"],
++            })
++            continue
++        receipt = {
++            "attempt_id": tid,
++            "at": now_iso(),
++            "argv": record.get("argv"),
++            "summary": "resumed after interruption; artifact custody settled, verification result unknown",
++            "verification_exit": None,
++            "canonical_head": None,
++            "resumed": True,
++            "artifact": artifact,
++        }
++        receipt["evidence_digest"] = digest_bytes(
++            json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
++        )
++        recorded = _record_resume_receipt(args.run_id, tid, receipt)
++        record["phase"] = "receipted"
++        _write_phase_record(path, record)
++        custody.close()
++        record["phase"] = "complete"
++        _write_phase_record(path, record)
++        results.append({
++            "transaction_id": tid,
++            "action": "resumed-receipt" if recorded else "receipt-already-present",
++            "artifact_outcome": artifact["outcome"],
++            "canonical_ignored_state_preserved": artifact["canonical_ignored_state_preserved"],
++        })
++    # Orphan custody debris (crash during capture, before the phase record was
++    # durable) lives only under the controller-private jobs directory and holds
++    # copies, never originals. Reference-counted removal is safe.
++    orphans = []
++    for name in sorted(os.listdir(jobs)):
++        candidate = os.path.join(jobs, name)
++        if name.startswith("artifact-policy-custody-") and candidate not in referenced_roots:
++            shutil.rmtree(candidate, ignore_errors=True)
++            orphans.append(name)
++    released = False
++    with locked_manifest(args.run_id) as doc:
++        lock = doc.get("integration_lock")
++    if lock:
++        cmd_integration_release(_args(run_id=args.run_id, unit_id=lock["unit_id"], lock_token=lock["nonce"]))
++        released = True
++    return "ARTIFACT_RESUMED", {
++        "transactions": results,
++        "orphan_custody_removed": orphans,
++        "integration_lock_released": released,
++    }
+--- /Users/nathanvale/.claude-monash/plugins/cache/compound-engineering-plugin/compound-engineering/3.21.0/skills/ce-work/scripts/unit-workspace.py	2026-07-31 12:01:50
++++ /private/tmp/ica-artifact-policy-falsify.f72092/controller/unit-workspace.py	2026-08-01 17:19:34
+@@ -21,7 +21,7 @@
+     cmd_wave_advance,
+ )
+ from unit_workspace_lifecycle import cmd_claim_fallback, cmd_cleanup, cmd_complete_fallback, cmd_reap, cmd_resume, cmd_status
+-from unit_workspace_transaction import cmd_integrate, cmd_verify_run
++from unit_workspace_transaction import cmd_artifact_resume, cmd_integrate, cmd_verify_run
+ 
+ 
+ def build_parser() -> argparse.ArgumentParser:
+@@ -117,6 +117,9 @@
+     p.add_argument("--verification-summary", default="plan-wide authoritative verification passed")
+     p.add_argument("verification_command", nargs=argparse.REMAINDER)
+ 
++    p = sub.add_parser("artifact-resume")
++    p.add_argument("--run-id", required=True)
++
+     p = sub.add_parser("wave-advance")
+     p.add_argument("--run-id", required=True)
+     p.add_argument("--unit-id", required=True)
+@@ -179,6 +182,7 @@
+     "mark-committed": cmd_mark_committed,
+     "integrate": cmd_integrate,
+     "verify-run": cmd_verify_run,
++    "artifact-resume": cmd_artifact_resume,
+     "wave-advance": cmd_wave_advance,
+     "restore": cmd_restore,
+     "status": cmd_status,
+--- /private/tmp/ica-ce-work-artifact-policy.ZJhlo3/artifact_policy.py	2026-08-01 16:42:33
++++ /private/tmp/ica-artifact-policy-falsify.f72092/controller/artifact_policy.py	2026-08-01 17:15:07
+@@ -31,7 +31,11 @@
+ DIFF_PATH_SAMPLE = 20
+ O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+ 
++# Crash-window injection hook for the falsification harness. The wired
++# controller points this at its test_fault implementation.
++FAULT_HOOK = lambda point: None
+ 
++
+ class PolicyError(RuntimeError):
+     """A refusal with structured, user-repairable detail."""
+ 
+@@ -497,6 +501,7 @@
+                     )
+                 else:
+                     raise PolicyError("unsupported precious entry reached custody", {"path": entry.path, "kind": entry.kind})
++                FAULT_HOOK("artifact-during-precious-capture")
+         except Exception:
+             shutil.rmtree(root, ignore_errors=True)
+             raise

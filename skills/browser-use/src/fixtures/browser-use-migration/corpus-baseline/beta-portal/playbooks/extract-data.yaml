@@ -1,0 +1,5 @@
+name: "extract_data"
+version: 1
+status: "candidate"
+allowed_flows:
+  - "extract-data"

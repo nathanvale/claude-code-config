@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
 	buildSmokeCommand,
 	DEFAULT_TIMEOUT_MS,
@@ -10,9 +11,38 @@ import {
 	getDefaultWarnAfterMs,
 	getSmokeTest,
 	runSmokeTest,
+	SMOKE_TESTS,
 } from "./multi-agent-smoke-lib.ts";
 
 describe("multi-agent smoke library", () => {
+	test("includes the prompt-boundary and operator smoke matrix", () => {
+		const taskSmokeIds = [
+			"rules-claude-only",
+			"context-files-claude-only",
+			"context-index-shared",
+			"tool-map-codex-only",
+			"heal-skill-claude-only",
+			"coauthor-claude-only",
+			"memory-os-shared",
+			"agents-md-not-editable",
+			"code-quality-shared",
+			"newsroom-claude-only",
+			"workflow-trigger",
+			"router-classification",
+			"workflow-rule-claude-only",
+			"contract-auditor-router-skill",
+			"smoke-runner-executes",
+			"heal-skill-reachable",
+		] as const;
+
+		expect(SMOKE_TESTS).toHaveLength(24);
+		for (const testId of taskSmokeIds) {
+			expect(SMOKE_TESTS.map((smokeTest) => smokeTest.id)).toContain(testId);
+			expect(getSmokeTest(testId).expectations.claude.whoAmI).toBe("claude");
+			expect(getSmokeTest(testId).expectations.codex.whoAmI).toBe("codex");
+		}
+	});
+
 	test("boundary expectations stay harness-specific where intended", () => {
 		const testDef = getSmokeTest("boundary");
 
@@ -57,15 +87,15 @@ describe("multi-agent smoke library", () => {
 		const testDef = getSmokeTest("propagation");
 		const assertions = evaluateOutput(testDef, "codex", {
 			whoAmI: "codex",
-			sharedFragmentsReachBothAfterRerender: true,
-			rulesOnlyChangeReachesCodex: true,
-			claudeOnlyFragmentsReachCodex: false,
-			codexOnlyFragmentsReachClaude: false,
-			codexNeedsRerenderAfterSharedFragmentChange: true,
+			canonicalStartupSourceIsAgentsMd: true,
+			generatedPromptArtifactsAreSource: false,
+			promptFragmentsAreActiveAuthoringPath: false,
+			claudeRulesOnlyChangeReachesCodex: true,
+			codexUserStartupCheckedAgainstAgentsMd: true,
 		});
 
 		const mismatch = assertions.find(
-			(assertion) => assertion.key === "rulesOnlyChangeReachesCodex",
+			(assertion) => assertion.key === "claudeRulesOnlyChangeReachesCodex",
 		);
 		expect(mismatch?.ok).toBe(false);
 		expect(mismatch?.expected).toBe(false);
@@ -75,27 +105,41 @@ describe("multi-agent smoke library", () => {
 	test("command builders encode the live CLI contract", () => {
 		const cwd = "/tmp/repo";
 
-		const claudeCommand = buildSmokeCommand({
-			testId: "boundary",
-			harness: "claude",
-			cwd,
-		});
-		expect(claudeCommand).toContain("--");
-		expect(claudeCommand[0]).toBe("claude");
-
-		const codexCommand = buildSmokeCommand({
+		const { command: claudeCommand, cleanup: cleanupClaude } =
+			buildSmokeCommand({
+				testId: "boundary",
+				harness: "claude",
+				cwd,
+			});
+		const { command: codexCommand, cleanup: cleanupCodex } = buildSmokeCommand({
 			testId: "boundary",
 			harness: "codex",
 			cwd,
 		});
-		expect(codexCommand.slice(0, 3)).toEqual([
-			"codex",
-			"-c",
-			"mcp_servers.context7.enabled=false",
-		]);
-		expect(codexCommand).toContain("mcp_servers.tsc-runner.enabled=false");
-		expect(codexCommand).toContain("exec");
-		expect(codexCommand).toContain("--sandbox");
+		try {
+			expect(claudeCommand).toContain("--");
+			expect(claudeCommand[0]).toBe("claude");
+
+			expect(codexCommand.slice(0, 4)).toEqual([
+				"codex",
+				"exec",
+				"--ignore-user-config",
+				"--ignore-rules",
+			]);
+			expect(codexCommand).toContain("exec");
+			expect(codexCommand).toContain("--ignore-user-config");
+			expect(codexCommand).toContain("--ignore-rules");
+			expect(codexCommand).toContain("--skip-git-repo-check");
+			expect(codexCommand).toContain("--sandbox");
+
+			const schemaIndex = codexCommand.indexOf("--output-schema") + 1;
+			const cwdIndex = codexCommand.indexOf("-C") + 1;
+			expect(existsSync(codexCommand[schemaIndex])).toBe(true);
+			expect(existsSync(codexCommand[cwdIndex])).toBe(true);
+		} finally {
+			cleanupClaude();
+			cleanupCodex();
+		}
 	});
 
 	test("dry-run smoke results include bounded execution metadata", async () => {

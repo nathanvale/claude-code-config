@@ -1,0 +1,7 @@
+{
+	"record": "activation-epoch",
+	"schema_version": "1",
+	"payload": {
+		"epoch": 1
+	}
+}

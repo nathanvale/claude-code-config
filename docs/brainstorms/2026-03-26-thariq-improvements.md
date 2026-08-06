@@ -24,12 +24,12 @@ Nathan's Claude Code setup has 22+ skills, Memory OS with QMD federation, people
 
 ## Already Done (this session)
 
-- `memory/INDEX.md` created in monash-smst — progressive disclosure entry point
-- `memory/scripts/recon.sh` — composable bash helpers for fast memory navigation
+- `context/INDEX.md` created in monash-smst — progressive disclosure entry point
+- `context/scripts/recon.sh` — composable bash helpers for fast memory navigation
 - Date format rule added to Memory OS contract
-- Key people routing table promoted to `memory/context/` with CLAUDE.md pointer
+- Key people routing table promoted to `context/context/` with CLAUDE.md pointer
 - Extension roadmap created as durable context file
-- Glossary people section slimmed to nickname decoder only (deduplication with `memory/people/`)
+- Glossary people section slimmed to nickname decoder only (deduplication with `context/people/`)
 
 ---
 
@@ -270,7 +270,7 @@ for repo in ~/code/monash-smst ~/code/experience-sdk ~/code/my-second-brain; do
 done
 
 # Find a person across all memory surfaces
-grep -rli "ashwini" ~/code/*/memory/people/
+grep -rli "ashwini" ~/code/*/context/people/
 ```
 
 These sweeps are impossible with file tools (scoped to working directory) but trivial with bash.

@@ -1,53 +1,44 @@
 #!/bin/bash
-# pre-commit hook: block commits that would introduce prompt-system drift.
-# Only fires when staged changes touch prompt-system files.
+# pre-commit hook: block commits that would break instruction health.
 #
-# Install with: ./scripts/install-git-hooks.sh
+# Install and diagnose with: ./setup sync
 
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-RENDER_SCRIPT="${REPO_ROOT}/scripts/render-user-prompts.sh"
+CHECK_SCRIPT="${REPO_ROOT}/scripts/agent-instructions.sh"
+CHECK_LOG="${PROMPT_DRIFT_CHECK_LOG:-$(git rev-parse --git-dir)/prompt-drift-check.log}"
 
-PROMPT_SYSTEM_PATHS=(
-  "prompt-fragments/"
-  "rules/"
-  "context/"
-  "scripts/render-user-prompts.sh"
-  "AGENTS.md"
-  "CLAUDE.md"
-  "generated/"
-)
+{
+  AGENT_INSTRUCTIONS_CHECK_STAGED=1 bash "${CHECK_SCRIPT}" check > "${CHECK_LOG}" 2>&1 &
+  check_pid=$!
+  wait "${check_pid}"
+  check_status=$?
+} 2>> "${CHECK_LOG}"
 
-staged=$(git diff --cached --name-only --diff-filter=ACM)
-
-matches=false
-for path in $staged; do
-  for pattern in "${PROMPT_SYSTEM_PATHS[@]}"; do
-    case "${path}" in
-      "${pattern}"*|"${pattern}")
-        matches=true
-        break 2
-        ;;
-    esac
-  done
-done
-
-if ! $matches; then
+if [[ "${check_status}" -eq 0 ]]; then
   exit 0
 fi
 
-if ! "${RENDER_SCRIPT}" --check > /tmp/prompt-drift-check.log 2>&1; then
+if [[ "${check_status}" -eq 137 ]]; then
   echo ""
-  echo "❌ Prompt system drift detected — commit blocked."
+  echo "Instruction health check was killed by SIGKILL - commit allowed."
   echo ""
-  grep -E "^(DRIFT|BROKEN|HYGIENE|ORPHAN):" /tmp/prompt-drift-check.log || cat /tmp/prompt-drift-check.log
+  echo "Run directly to verify health outside the commit subprocess:"
+  echo "  bash scripts/agent-instructions.sh check --staged"
   echo ""
-  echo "Fix: ${RENDER_SCRIPT} --write"
-  echo "Then stage the re-rendered files and retry the commit."
-  echo ""
-  echo "(Full log: /tmp/prompt-drift-check.log)"
-  exit 1
+  echo "(Full log: ${CHECK_LOG})"
+  exit 0
 fi
 
-exit 0
+echo ""
+echo "Instruction health check failed - commit blocked."
+echo "Exit code: ${check_status}"
+echo ""
+grep -E "^(FAIL|WARN):" "${CHECK_LOG}" || cat "${CHECK_LOG}"
+echo ""
+echo "Fix the reported instruction health issue, then retry the commit."
+echo "Run: bash scripts/agent-instructions.sh check --staged"
+echo ""
+echo "(Full log: ${CHECK_LOG})"
+exit 1

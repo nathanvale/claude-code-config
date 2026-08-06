@@ -1,29 +1,17 @@
-<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
 @AGENTS.md
 
-## Claude Tool Preferences
+## Claude Runtime
 
-**IMPORTANT:** All MCP tools are machine-to-machine interfaces optimized for token efficiency. **ALWAYS use `response_format: "json"`** for structured, token-efficient responses. Never use `"markdown"` unless showing results directly to user.
+- MCP output: pass `response_format: "json"` unless output goes directly to Nathan.
+- Git/search/history reads: prefer MCP tools with JSON.
 
-- **Git reads** → Use MCP tools with JSON format
-- **Git writes** → Use bash or git slash commands
-- **Search** → Use Kit plugin with JSON format
-- **History** → Use Atuin MCP with JSON format
+## Claude Context
 
-## Claude Context Loading
+- Load on-demand docs from `@~/.claude/context/<filename>.md`.
+- Do targeted lookup, not bulk loading.
 
-When you need one of the on-demand context docs, load it from the Claude user-scope context surface with:
+## Claude Notes
 
-- `@~/.claude/context/<filename>.md`
-
-Use this for targeted lookup, not bulk loading.
-
-## Claude-Specific Notes
-
-- **Skills** → Use `skills/name/SKILL.md` for anything that needs reasoning, trigger specs, or references. Use `commands/*.md` for simple one-shot operations (regenerate, open, run). All skills are user-invocable with `/name` by default. Add `disable-model-invocation: true` only to save context budget.
-- **Obsidian** → Use `/para-brain:*` commands for vault content
-- **Newsroom** → When Nathan asks about community discussions/trends, invoke `/newsroom:investigate` immediately
-- **Claude Code docs** → Use `/claude-code-docs:help` (never `claude-code-guide` sub-agent)
-- **Memory skills** → User-invocable memory skills live under `~/.claude/skills/`
-- **Rules** → Auto-applied rules in `~/.claude/rules/` handle context7, tool-routing, and newsroom triggers
-
+- Skills live under `~/.claude/skills/`.
+- Rules under `~/.claude/rules/` auto-apply.
+- Commands handle simple one-shot operations.

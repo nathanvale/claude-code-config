@@ -32,7 +32,7 @@ An older `~/code/my-second-brain` (v1) also existed with stale work that had bee
 - **Verification:** grep confirmed zero remaining `my-second-brain-v2` references across all source files
 - **Deliberately untouched:** `~/.claude/plans/`, `~/.codex/sessions/`, `~/.codex/history.jsonl` (ephemeral historical records)
 - **Codex config.toml:** duplicate key error fixed (old v1 entry + renamed v2 entry collided)
-- **Project memory:** 11 files copied from `~/.claude/projects/-Users-nathanvale-code-my-second-brain-v2/memory/` to new path, MEMORY.md index merged (15 total entries)
+- **Project memory:** 11 files copied from `~/.claude/projects/-Users-nathanvale-code-my-second-brain-v2/context/` to new path, MEMORY.md index merged (15 total entries)
 
 ## Consequences
 

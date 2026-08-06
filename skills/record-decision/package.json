@@ -1,0 +1,19 @@
+{
+	"name": "record-decision-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Bun package for the record-decision skill. Plans and executes accepted decision-log appends through a facade-backed agent-native CLI.",
+	"scripts": {
+		"record-decision": "bun run src/record-decision.ts",
+		"test": "bun test src",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}
