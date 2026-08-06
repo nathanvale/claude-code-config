@@ -1,0 +1,168 @@
+{
+  "contract": "browser-use.reviewed-action-candidate",
+  "schema_version": "1",
+  "action_id": "oncore-submit",
+  "origin": "https://iteraterecruitment.oncoreservices.com",
+  "source": "async ({ inputs }) => {\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n  const whitespacePattern = new RegExp(\"\\\\s+\", \"g\");\n  const isoDatePattern = new RegExp(\"^(\\\\d{4})-(\\\\d{2})-(\\\\d{2})$\");\n  const displayDatePattern = new RegExp(\"\\\\b(\\\\d{1,2})/(\\\\d{1,2})/(\\\\d{4})\\\\b\");\n  const numericPattern = new RegExp(\"^-?\\\\d+(?:\\\\.\\\\d+)?$\");\n  const standardDayPattern = new RegExp(\"\\\\bStandard Day\\\\b\", \"i\");\n  const submittedPattern = new RegExp(\n    \"successfully submitted|timesheet was submitted|submitted for approval\",\n    \"i\",\n  );\n  const ignoredRowPattern = new RegExp(\n    \"No records to display|No timesheet entries|^Add new timesheet entry$\",\n    \"i\",\n  );\n  const submitSelector = \"#MainContent_btnSubmit\";\n  const standardDayValue = \"45548822362\";\n  const normalize = (value) =>\n    String(value || \"\")\n      .replace(whitespacePattern, \" \")\n      .trim();\n  const observedAt = () => new Date().toISOString();\n  const select = (selector) => document.querySelector(selector);\n  const fail = (failureCode, extra = {}) => {\n    const payload = {\n      failure_code: failureCode,\n      timesheet_id: String(inputs.timesheet_id || \"\"),\n      failure_observed_at: observedAt(),\n      ...extra,\n    };\n    const message = JSON.stringify(payload);\n    throw new Error(\n      message.length <= 2000\n        ? message\n        : JSON.stringify({\n            failure_code: failureCode,\n            timesheet_id: payload.timesheet_id,\n            truncated: true,\n          }),\n    );\n  };\n  const pageUrl = () => String(select(\"html\")?.baseURI || \"\");\n  const currentTimesheetId = () => {\n    try {\n      return new URL(pageUrl()).searchParams.get(\"id\") || \"\";\n    } catch (_error) {\n      return \"\";\n    }\n  };\n  const parseYmd = (value) => {\n    const match = String(value || \"\").match(isoDatePattern);\n    if (!match) return null;\n    const date = new Date(\n      Number(match[1]),\n      Number(match[2]) - 1,\n      Number(match[3]),\n    );\n    return date.getFullYear() === Number(match[1]) &&\n      date.getMonth() === Number(match[2]) - 1 &&\n      date.getDate() === Number(match[3])\n      ? date\n      : null;\n  };\n  const parseDisplayDate = (value) => {\n    const match = normalize(value).match(displayDatePattern);\n    return match\n      ? `${match[3]}-${match[2].padStart(2, \"0\")}-${match[1].padStart(2, \"0\")}`\n      : \"\";\n  };\n  const isWithin = (ymd, start, end) => {\n    const date = parseYmd(ymd);\n    const startDate = parseYmd(start);\n    const endDate = parseYmd(end);\n    return Boolean(\n      date && startDate && endDate && date >= startDate && date <= endDate,\n    );\n  };\n  const parseNumber = (value) => {\n    const match = normalize(value).match(numericPattern);\n    return match ? Number(match[0]) : null;\n  };\n  const gridRoot = () =>\n    select(\"#ctl00_MainContent_TimesheetWorkGrid_ctl00\") ||\n    select(\"[id$='TimesheetWorkGrid_ctl00']\");\n  const entries = () => {\n    const root = gridRoot();\n    if (!root) fail(\"timesheet_grid_not_found\");\n    const telerikRows = Array.from(\n      root.querySelectorAll(\"tr.rgRow, tr.rgAltRow\"),\n    );\n    const rows =\n      telerikRows.length > 0\n        ? telerikRows\n        : Array.from(root.querySelectorAll(\"tbody tr\"));\n    return rows\n      .map((row, index) => {\n        const cells = Array.from(row.querySelectorAll(\"td\"))\n          .map((cell) => normalize(cell.innerText || cell.textContent))\n          .filter(Boolean);\n        const joined = cells.join(\" \");\n        return {\n          index,\n          date: parseDisplayDate(joined),\n          units:\n            cells\n              .map(parseNumber)\n              .find((value) => value !== null && value > 0 && value <= 1) ??\n            null,\n          rate_match: cells.some((cell) => standardDayPattern.test(cell)),\n          ignored: ignoredRowPattern.test(joined),\n        };\n      })\n      .filter((entry) => !entry.ignored);\n  };\n  const rowEvidence = (row) =>\n    row\n      ? {\n          index: row.index,\n          date: row.date,\n          units: row.units,\n          rate_match: row.rate_match,\n        }\n      : null;\n\n  const timesheetId = String(inputs.timesheet_id || \"\").trim();\n  if (!timesheetId || currentTimesheetId() !== timesheetId) {\n    fail(\"wrong_timesheet_id_open\", {\n      expected_timesheet_id: timesheetId,\n      current_timesheet_id: currentTimesheetId(),\n      url: pageUrl(),\n    });\n  }\n  const periodStart = String(inputs.period_start || \"\");\n  const periodEnd = String(inputs.period_end || \"\");\n  if (\n    !parseYmd(periodStart) ||\n    !parseYmd(periodEnd) ||\n    periodStart > periodEnd\n  ) {\n    fail(\"period_boundary_rejected\", {\n      period_start: periodStart,\n      period_end: periodEnd,\n    });\n  }\n  if (!Array.isArray(inputs.rows) || inputs.rows.length === 0) {\n    fail(\"rows_required\");\n  }\n  const expectedRows = inputs.rows.map((row) => ({\n    date: String(row.date || \"\"),\n    units: Number(row.units),\n  }));\n  const expectedDates = expectedRows.map((row) => row.date);\n  if (\n    expectedRows.some(\n      (row) =>\n        !isWithin(row.date, periodStart, periodEnd) ||\n        !Number.isFinite(row.units) ||\n        row.units <= 0 ||\n        row.units > 1,\n    ) ||\n    new Set(expectedDates).size !== expectedDates.length\n  ) {\n    fail(\"row_dates_rejected\", {\n      expected_dates: expectedDates.slice(0, 14),\n    });\n  }\n  if (String(inputs.rate_value || \"\").trim() !== standardDayValue) {\n    fail(\"rate_value_rejected\");\n  }\n  const expectedTotalUnits = Number(inputs.expected_total_units);\n  if (\n    !Number.isFinite(expectedTotalUnits) ||\n    expectedTotalUnits <= 0 ||\n    expectedTotalUnits > 7\n  ) {\n    fail(\"aggregate_expectation_rejected\");\n  }\n  const body = select(\"body\");\n  const bodyText = normalize(body?.innerText || body?.textContent || \"\");\n  if (submittedPattern.test(bodyText)) {\n    fail(\"submitted_state_observed\");\n  }\n  const observedRows = entries();\n  if (observedRows.length !== expectedRows.length) {\n    fail(\"row_count_mismatch_before_submit\", {\n      expected_row_count: expectedRows.length,\n      observed_row_count: observedRows.length,\n    });\n  }\n  for (const expected of expectedRows) {\n    const observed = observedRows.find((row) => row.date === expected.date);\n    if (!observed || observed.units !== expected.units || !observed.rate_match) {\n      fail(\"readback_mismatch_before_submit\", {\n        expected,\n        observed: rowEvidence(observed),\n      });\n    }\n  }\n  const observedTotalUnits = observedRows.reduce(\n    (sum, row) => sum + Number(row.units || 0),\n    0,\n  );\n  const totalTolerance =\n    Number.EPSILON *\n    Math.max(1, Math.abs(expectedTotalUnits), Math.abs(observedTotalUnits)) *\n    16;\n  if (Math.abs(observedTotalUnits - expectedTotalUnits) > totalTolerance) {\n    fail(\"aggregate_mismatch_before_submit\", {\n      expected_total_units: expectedTotalUnits,\n      observed_total_units: observedTotalUnits,\n    });\n  }\n\n  const controls = Array.from(document.querySelectorAll(submitSelector));\n  if (controls.length !== 1) {\n    fail(\"ambiguous_submit_control\", {\n      submit_control_count: controls.length,\n    });\n  }\n  const control = controls[0];\n  const controlText = normalize(\n    control.innerText || control.value || control.textContent || \"\",\n  );\n  const controlType = normalize(control.getAttribute?.(\"type\") || control.type);\n  const hidden =\n    control.hidden === true ||\n    control.getAttribute?.(\"aria-hidden\") === \"true\" ||\n    (typeof control.getClientRects === \"function\" &&\n      control.getClientRects().length === 0);\n  const disabled =\n    control.disabled === true ||\n    control.getAttribute?.(\"aria-disabled\") === \"true\";\n  if (\n    !/^Submit timesheet$/i.test(controlText) ||\n    !/^submit$/i.test(controlType) ||\n    hidden ||\n    disabled\n  ) {\n    fail(\"submit_control_rejected\", {\n      control_text: controlText.slice(0, 64),\n      control_type: controlType.slice(0, 32),\n      hidden,\n      disabled,\n    });\n  }\n\n  const beforeUrl = pageUrl();\n  control.scrollIntoView?.({ block: \"center\", inline: \"center\" });\n  control.click();\n  await sleep(2500);\n  return {\n    ok: true,\n    timesheet_id: timesheetId,\n    period_start: periodStart,\n    period_end: periodEnd,\n    row_count: observedRows.length,\n    total_units: observedTotalUnits,\n    control_id: \"MainContent_btnSubmit\",\n    control_text: controlText,\n    before_url: beforeUrl,\n    after_url: pageUrl(),\n  };\n}\n",
+  "containment": "none",
+  "input_schema": {
+    "kind": "object",
+    "fields": {
+      "timesheet_id": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 32,
+          "pattern": "\\d{1,32}"
+        }
+      },
+      "period_start": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10,
+          "pattern": "\\d{4}-\\d{2}-\\d{2}"
+        }
+      },
+      "period_end": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10,
+          "pattern": "\\d{4}-\\d{2}-\\d{2}"
+        }
+      },
+      "rate_value": {
+        "required": true,
+        "schema": {
+          "kind": "enum",
+          "values": [
+            "45548822362"
+          ]
+        }
+      },
+      "expected_total_units": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "exclusive_minimum": 0,
+          "maximum": 7
+        }
+      },
+      "rows": {
+        "required": true,
+        "schema": {
+          "kind": "array",
+          "min_items": 1,
+          "max_items": 7,
+          "items": {
+            "kind": "object",
+            "fields": {
+              "date": {
+                "required": true,
+                "schema": {
+                  "kind": "string",
+                  "max_length": 10,
+                  "pattern": "\\d{4}-\\d{2}-\\d{2}"
+                }
+              },
+              "units": {
+                "required": true,
+                "schema": {
+                  "kind": "number",
+                  "exclusive_minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "result_schema": {
+    "kind": "object",
+    "fields": {
+      "ok": {
+        "required": true,
+        "schema": {
+          "kind": "boolean",
+          "constant": true
+        }
+      },
+      "timesheet_id": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 32
+        }
+      },
+      "period_start": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10
+        }
+      },
+      "period_end": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 10
+        }
+      },
+      "row_count": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "integer": true,
+          "minimum": 1,
+          "maximum": 7
+        }
+      },
+      "total_units": {
+        "required": true,
+        "schema": {
+          "kind": "number",
+          "exclusive_minimum": 0,
+          "maximum": 7
+        }
+      },
+      "control_id": {
+        "required": true,
+        "schema": {
+          "kind": "enum",
+          "values": [
+            "MainContent_btnSubmit"
+          ]
+        }
+      },
+      "control_text": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 64
+        }
+      },
+      "before_url": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 2048
+        }
+      },
+      "after_url": {
+        "required": true,
+        "schema": {
+          "kind": "string",
+          "max_length": 2048
+        }
+      }
+    }
+  },
+  "result_sensitivity": "low",
+  "required_postcondition": {
+    "kind": "url-starts-with",
+    "url": "https://iteraterecruitment.oncoreservices.com/pages/"
+  }
+}
