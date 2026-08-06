@@ -1,12 +1,17 @@
 ---
 name: teams
-description: "Read your own local Microsoft Teams cache: what was said in a channel, who mentioned you, unread items, a ticket's discussion timeline, links or code someone shared, who a person is, or which of two same-named people said something. Triggers include \"what did X say in Teams\", \"Teams digest\", \"who mentioned me\", \"catch me up on the channel\", \"find that Teams message\", \"what was discussed about TICKET-123\". macOS only, read-only, no network to Microsoft."
+description: "Read your own local Microsoft Teams cache, and send or quote-reply to Teams messages. Reading: what was said in a channel, who mentioned you, unread items, a ticket's discussion timeline, links or code someone shared, who a person is, or which of two same-named people said something. Sending: stage a message into a channel or DM via the teams-send / teams-reply commands (see Sending Messages). Triggers include \"what did X say in Teams\", \"Teams digest\", \"who mentioned me\", \"catch me up on the channel\", \"find that Teams message\", \"what was discussed about TICKET-123\", \"send a Teams message\", \"post to the dev channel\", \"reply to that message\". macOS only; reads are local-cache only with no network to Microsoft, sends drive the Teams app UI."
 ---
 
 # Teams Local Reader
 
-Queries the new Teams (v2) IndexedDB cache already on this Mac. Read-only:
-no Graph API, no app registration, no network to Microsoft.
+Queries the new Teams (v2) IndexedDB cache already on this Mac. **Reading** is
+read-only: no Graph API, no app registration, no network to Microsoft.
+
+**Sending is a separate surface.** The `teams_cli.py` commands below never write
+anything to Teams. To actually send a message, use the `teams-send` /
+`teams-reply` commands documented in [Sending Messages](#sending-messages) —
+they live outside this skill directory, in `~/code/dotfiles/bin/`.
 
 ## First Safe Action
 
@@ -121,9 +126,92 @@ Common routes:
 | two people, same name | `disambiguate "<name>"` |
 | what got reacted to | `reactions` |
 | what was asked of me | `requests --to-me` (candidates, judge them) |
+| **send a message** | `teams-send "<channel>" <file>` (see [Sending Messages](#sending-messages)) |
+| **quote-reply to a message** | `teams-reply "<original text>" <file>` (staging only, finish by hand) |
 
 Add `--json` to any command for a structured envelope. Diagnostics go to
 stderr, so `--json` stdout stays parseable.
+
+## Sending Messages
+
+**Not part of `teams_cli.py`.** Sending lives in two standalone commands in
+`~/code/dotfiles/bin/` (symlinked into `~/bin`, so they are on `PATH`). They
+drive the Teams app UI with Peekaboo. They depend on *this* skill: the shared
+lib resolves conversation names through `teams_cli.py`, so the venv must be
+bootstrapped for sending to work.
+
+> **Do not conclude sending is unavailable from this skill's read-only framing.**
+> `teams_cli.py commands --json` lists no send verb by design — the send path is
+> a separate binary. Check `which teams-send` before saying it cannot be done.
+
+### `teams-send` — post a message to a channel or DM
+
+```bash
+teams-send <conversation> <file|-> [--send]
+```
+
+| Argument | Meaning |
+|---|---|
+| `<conversation>` | Channel or person name as it appears in Teams (`"POS Yellow Devs"`, `"Sonny Hartley"`). Resolved against the local cache; ambiguous or unknown names abort and print the candidates. |
+| `<file\|->` | File containing the message body, or `-` to read stdin. Empty/whitespace-only aborts. |
+| `--send` | Also press Enter. **Off by default, on purpose.** |
+
+```bash
+teams-send "POS Yellow Devs" ./message.txt        # stage only — you press Enter
+teams-send "Sonny Hartley" ./msg.txt --send       # stage and send
+echo "quick note" | teams-send "June Xu" -        # from stdin
+```
+
+**Default is staging: the text lands in the compose box and stops.** Prefer this.
+Let the human read it in Teams and hit Enter. Reserve `--send` for messages the
+user has explicitly approved for auto-send.
+
+**Safety gates (why it is hard to misfire):**
+1. Resolves the target to a single conversation id from the local cache, or aborts with candidates.
+2. Requires Teams to be frontmost before any keystroke — otherwise typing goes to the calling terminal.
+3. Navigates by deep link, then **verifies the window title names the requested conversation** before pasting.
+4. With `--send`, **re-verifies focus and conversation immediately before pressing Enter** (focus can move between staging and sending).
+5. On paste failure, puts the text on the clipboard and exits without sending.
+6. Screenshots after staging (and after sending), printing the paths.
+
+**Exit codes:** `0` staged/sent · `1` usage or resolution error · `2` safety gate failed.
+
+### `teams-reply` — quote-reply to an existing message
+
+```bash
+teams-reply <search-text> <file|->
+```
+
+| Argument | Meaning |
+|---|---|
+| `<search-text>` | Distinctive text from the message being replied to. **Use as much of the original as possible** — the exact match then sorts to the top of the results, which is the row the script clicks. |
+| `<file\|->` | File containing your reply, or `-` for stdin. |
+
+```bash
+teams-reply "Joshua Green can this be reviewed today" ./reply.txt
+echo "Thanks" | teams-reply "can this be reviewed today" -
+```
+
+⚠️ **Less robust than `teams-send`, and it does not complete the reply.** Teams
+exposes no accessibility elements for search results or the hover toolbar, so it
+clicks **screen coordinates** derived from the current window geometry. A
+different window size, zoom level, or Teams update moves them.
+
+It stages **navigation only**: it searches, clicks the top result to jump to the
+message, screenshots, and stops — deliberately *not* clicking "Reply with quote",
+because a wrong click quote-replies to the wrong message in front of the channel.
+Your reply text is left on the clipboard. Finish by hand: check the screenshot,
+hover the message, click the 99 icon, paste.
+
+**Prefer `teams-send` whenever a plain message will do.**
+
+### Choosing between them
+
+| Situation | Use |
+|---|---|
+| New message to a channel or person | `teams-send` |
+| Reply that only needs to mention who/what it is about | `teams-send`, naming the person in the text |
+| Reply that genuinely needs the quoted original attached | `teams-reply`, then finish by hand |
 
 ## Pull vs notify
 
@@ -203,8 +291,14 @@ only if `whoami` reports low confidence.
 ## Owner Anchors
 
 - Command contract, flags, JSON envelope: `scripts/teams_cli.py commands --json`.
+  **Reading only** — the send commands are not in this surface.
 - Prerequisites, store layout, troubleshooting: `references/operations.md`.
 - Config keys: `teams-reader.example.yaml`.
+- **Sending**: `~/code/dotfiles/bin/teams-send` and `~/code/dotfiles/bin/teams-reply`
+  (each `--help` is the contract); shared helpers in
+  `~/code/dotfiles/bin/lib/teams-automation.sh`. That lib reads `TEAMS_SKILL`
+  (default `~/.claude/skills/teams`) to resolve conversation names through this
+  skill's venv, so sending breaks if the venv is missing.
 
 ## Verification
 
