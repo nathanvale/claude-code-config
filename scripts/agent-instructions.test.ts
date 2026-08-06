@@ -24,6 +24,7 @@ const registeredOwnerPaths = [
 	"skills/skill-author/CONTEXT.md",
 	"skills/skill-author/references/skill-design-decision-runbook.md",
 	"context/personal.md",
+	"context/vault.md",
 	"context/comms-style.md",
 	"docs/git/conventions.md",
 	"docs/git/workflows.md",
