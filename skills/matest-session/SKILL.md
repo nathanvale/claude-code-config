@@ -14,9 +14,9 @@ server warm. With no arguments, use the extension in the current request.
 - `skills/browser-use/SKILL.md`: hard dependency for browser routing, warm attach,
   browser actions, run state, and recovery. Missing state: blocked. Next repair:
   restore `browser-use` with `setup sync`, then verify `browser-use --help`.
-- `skills/one-password/SKILL.md`: hard dependency only for cold authentication.
-  Missing state: cold authentication is blocked; an authenticated warm session can
-  continue. Next repair: restore the skill and verify its runtime before login.
+- `skills/one-password/SKILL.md`: hard dependency for upload-token process injection.
+  Missing state: deploy and forced-upload dev startup are blocked; an already-running
+  server can continue. Browser login remains owned by `browser-use`.
 - Startup guidance: `$HOME/code/claude-code-config/AGENTS.md` first, then the nearest
   repository agent instructions, context documentation, and extension config.
 
@@ -27,8 +27,9 @@ registration, or page-route repair.
 
 1. Inspect the extension package, card manifest, page route, dev port, and current
    browser state.
-2. Stop the extension dev server before any build, deploy, or handback command. Run the
-   requested command, then restart the dev server in the persistent secret-backed shell.
+2. Stop the extension dev server before any build, deploy, or handback command. Use the
+   one-password wrapper's `inject` mode for deploy and forced-upload dev startup; the
+   target receives only `EXPERIENCE_EXTENSION_UPLOAD_TOKEN`.
 3. Hand browser work to `browser-use`. Use the shipped MATest
    `development-snapshot-verify` runbook for the authenticated Development-page proof.
    Preserve the returned run id for status or recovery, then hand browser state back to
@@ -45,6 +46,8 @@ registration, or page-route repair.
 ## Safety Gate
 
 - Never select **Google Account** as the MATest identity provider.
+- Never use bare `op`, `op run`, `with-env`, or an exported service-account token for
+  extension upload. Use the runbook's wrapper route.
 - Never treat a surviving package-manager PID as proof that webpack is live. Require
   local manifest HTTP 200 before reloading MATest.
 - Never clear warm-browser cookies or storage as routine auth repair. Use a fresh tab
