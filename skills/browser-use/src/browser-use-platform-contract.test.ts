@@ -17,6 +17,7 @@ import {
 	BROWSER_USE_SHARED_RUN_CONTRACT_ID,
 	BROWSER_USE_TASK_INTENTS_CONTRACT_ID,
 	browserUseContracts,
+	browserUseCommandFor,
 } from "./command-contract";
 import { BROWSER_USE_TASK_INTENTS } from "./browser-use-run-model";
 import { parseBrowserUseArgv, renderHelp } from "./browser-use-parser";
@@ -100,10 +101,7 @@ describe("platform family help and discovery", () => {
 	test("every family/subcommand pair resolves to one declared contract", () => {
 		for (const family of BROWSER_USE_FAMILIES) {
 			for (const sub of BROWSER_USE_FAMILY_SUBCOMMANDS[family]) {
-				const contract =
-					browserUseContracts[
-						`${family}-${sub}` as keyof typeof browserUseContracts
-					];
+				const contract = browserUseContracts[browserUseCommandFor(family, sub)];
 				expect(contract).toBeDefined();
 				expect(contract.script).toBe("browser-use");
 			}
