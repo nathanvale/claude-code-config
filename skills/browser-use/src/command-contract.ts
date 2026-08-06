@@ -483,6 +483,7 @@ export const BROWSER_USE_AUTH_SETUP_SUBCOMMANDS = [
 	"reload",
 ] as const;
 export const BROWSER_USE_AUTH_SUBCOMMANDS = [
+	"login",
 	...BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS,
 	...BROWSER_USE_AUTH_SETUP_SUBCOMMANDS,
 ] as const;
@@ -556,7 +557,7 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
-	auth: "Auth readiness checks: the blocked-cause repair continuations as commands.",
+	auth: "Confidential browser authentication transactions, readiness, and typed repair.",
 } as const satisfies Record<BrowserUseFamily, string>;
 
 // Browser Target Discovery modes (migration U1, KTD2). handoff-bound replaced
@@ -607,6 +608,7 @@ export type BrowserUseCommand =
 	| "artifact-list"
 	| "repair-status"
 	| "repair-apply"
+	| "auth-login"
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
@@ -1926,6 +1928,30 @@ const browserUseAuthFlags = {
 	...browserUsePlatformFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseAuthLoginFlags = {
+	"--handoff": {
+		type: "path",
+		description:
+			"Pre-minted Verified Handoff Envelope for the already-authorized browser session. Required; this command never manufactures a runbook or silently changes adapters.",
+	},
+	"--service": {
+		type: "string",
+		description:
+			"Safe service id used to resolve one already-approved item binding.",
+	},
+	"--allowed-origin": {
+		type: "string",
+		description:
+			"Exact HTTP(S) origin of the current login wall. Confidential delivery remains bound to this origin.",
+	},
+	"--run": {
+		type: "string",
+		description:
+			"Existing shared Browser Use run id to resume. Omit to bind a new routine-automation run to the handoff run id.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 const browserUseAuthInstallFlags = {
 	"--from": {
 		type: "string",
@@ -2694,6 +2720,33 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUsePlatformStoreFailureActions,
 			},
 			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-login": {
+			script: "browser-use",
+			summary:
+				"Authenticate the current verified login wall through one confidential, exactly-one-vault Browser Authentication Transaction without creating a runbook.",
+			usage: [
+				"auth login --handoff <path> --service <id> --allowed-origin <origin> [--run <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Auth login creates or resumes a durable shared run and delivers only through the confidential helper after verified handoff, origin, target, and binding admission.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "optional",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseSharedRunResultContract,
+			actionAffordances: {
+				success: browserUseTaskRunSuccessActions,
+				failure: browserUseTaskRunFailureActions,
+			},
+			flags: browserUseAuthLoginFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"auth-enroll-browser-automation-token": {

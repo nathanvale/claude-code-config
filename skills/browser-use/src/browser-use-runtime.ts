@@ -36,6 +36,7 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type { BrowserUseAuthAccessProvider } from "./browser-use-auth-access";
 import type {
 	BrowserUseAuthContext,
 	BrowserUseItemBinding,
@@ -90,6 +91,10 @@ import {
  * custody path. The prod placeholder has no executor because it is never
  * admitted; the earned in-memory fake (tests) supplies both an `admitted`
  * verdict and a capturing executor so the present branch is driven end-to-end.
+ * `createUserPresentAccessProvider`, when supplied by that admitted product,
+ * owns one bounded desktop sign-in or biometric session and returns only a
+ * transaction-scoped credential-delivery lease. It never grants Browser Use
+ * vault administration or ambient `op` session authority.
  */
 export type BrowserUseSecuritySeam = {
 	admission: AdmissionRuntime;
@@ -102,6 +107,11 @@ export type BrowserUseSecuritySeam = {
 		execute: BrowserUseOpExecute;
 		token_handle_id: string;
 	};
+	/**
+	 * Yield the bounded user-present fallback. Only invoked after native product
+	 * admission. Absence is a supported, typed recovery state.
+	 */
+	createUserPresentAccessProvider?: () => BrowserUseAuthAccessProvider;
 };
 
 export type AuthTokenSupervisorInput =
@@ -570,6 +580,25 @@ async function resolveAuthTokenRetrieval(
 		if (verdict.verdict !== "admitted") return undefined;
 		const { execute, token_handle_id } = seam.createTokenExecutor();
 		return createOpTokenRetrievalPort({ execute, token_handle_id });
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Resolve user-present confidential-delivery authority from the admitted
+ * Browser Use Security owner. Never consults shell state or a generic secret
+ * store workflow. Provider construction failure is treated as absence so the
+ * transaction returns its typed recovery continuation.
+ */
+async function resolveUserPresentAuthAccess(
+	seam: BrowserUseSecuritySeam,
+): Promise<BrowserUseAuthAccessProvider | undefined> {
+	if (seam.createUserPresentAccessProvider === undefined) return undefined;
+	try {
+		const verdict = await seam.admission.verifyProduct();
+		if (verdict.verdict !== "admitted") return undefined;
+		return seam.createUserPresentAccessProvider();
 	} catch {
 		return undefined;
 	}
@@ -1190,6 +1219,30 @@ export const __authTokenSupervisorForTest = {
 	openPipe: openAuthTokenPipe,
 } as const;
 
+export type BrowserUseApprovedBindingResolver = (input: {
+	binding_ref: string;
+	service_id: string;
+	auth_context: BrowserUseAuthContext;
+	environment: string;
+	profile: string;
+}) => Promise<BrowserUseItemBinding | null>;
+
+export type BrowserUseAuthTransportFactory = () => {
+	transport: {
+		request(
+			request:
+				| BrowserUseDevToolsRequest
+				| BrowserUseCdpObserverRequest
+				| {
+						method: "Page.navigate";
+						sessionId: string;
+						params: { url: string };
+					  },
+		): Promise<unknown>;
+	};
+	close(): void;
+};
+
 export type BrowserUseRuntime = {
 	env: Record<string, string | undefined>;
 	now: () => number;
@@ -1229,14 +1282,18 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Transaction-scoped managed authority. Receives no browser secret bytes. */
+	authManagedAccess?: BrowserUseAuthAccessProvider;
+	/** One bounded desktop-sign-in or biometric-unlock fallback. */
+	authUserPresentAccess?: BrowserUseAuthAccessProvider;
+	/** Approved binding owner shared by reviewed-runbook and freeform entry modes. */
+	authApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
+	/** Fresh session proof owner shared by both authentication entry modes. */
+	authenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Endpoint-bound transport shared by both entry modes. */
+	authTransport?: BrowserUseAuthTransportFactory;
 	/** Test/composition seam for an already approved binding catalog owner. */
-	runbookApprovedBindingResolver?: (input: {
-		binding_ref: string;
-		service_id: string;
-		auth_context: BrowserUseAuthContext;
-		environment: string;
-		profile: string;
-	}) => Promise<BrowserUseItemBinding | null>;
+	runbookApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
 	/** Present but rejected production verifier pin; absent means not provisioned. */
@@ -1246,21 +1303,7 @@ export type BrowserUseRuntime = {
 	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
 	runbookHumanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */
-	runbookAuthTransport?: () => {
-		transport: {
-			request(
-				request:
-					| BrowserUseDevToolsRequest
-					| BrowserUseCdpObserverRequest
-					| {
-							method: "Page.navigate";
-							sessionId: string;
-							params: { url: string };
-						  },
-			): Promise<unknown>;
-		};
-		close(): void;
-	};
+	runbookAuthTransport?: BrowserUseAuthTransportFactory;
 	/**
 	 * Native token lifecycle boundary. The default child inherits stdin
 	 * directly for install, so token bytes never enter the TypeScript process.
@@ -1344,16 +1387,19 @@ export async function createProductionBrowserUseRuntime(
 	seam?: BrowserUseSecuritySeam,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
+	const securitySeam = seam ?? createNativeAbsentSecuritySeam();
 	// Honor an explicitly injected port; otherwise let the seam decide. Absence
 	// leaves the field undefined so the auth command reports typed absence.
 	if (runtime.authTokenRetrieval === undefined) {
-		const port = await resolveAuthTokenRetrieval(
-			seam ?? createNativeAbsentSecuritySeam(),
-		);
+		const port = await resolveAuthTokenRetrieval(securitySeam);
 		if (port !== undefined) runtime.authTokenRetrieval = port;
 	}
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
+	}
+	if (runtime.authUserPresentAccess === undefined) {
+		const provider = await resolveUserPresentAuthAccess(securitySeam);
+		if (provider !== undefined) runtime.authUserPresentAccess = provider;
 	}
 	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
 	if (

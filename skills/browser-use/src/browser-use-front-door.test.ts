@@ -7,6 +7,7 @@ import {
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_FAMILY_SUBCOMMANDS,
 	type BrowserUseFamily,
+	browserUseContracts,
 } from "./command-contract";
 import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
 import { runForTest } from "./browser-use";
@@ -224,6 +225,18 @@ describe("front door: error identity (D6)", () => {
 		expect(result.stdout).toContain("Usage: browser-use auth status");
 		expect(result.stdout).toContain("--json");
 		expect(result.stdout).not.toContain("Subcommands:");
+	});
+
+	test("freeform auth login is a discoverable Browser Use leaf", async () => {
+		const result = await runForTest(["auth", "login", "--help"], makeRuntime());
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Usage: browser-use auth login");
+		expect(result.stdout).toContain("--handoff");
+		expect(result.stdout).toContain("--service");
+		expect(result.stdout).toContain("--allowed-origin");
+		expect(result.stdout).not.toContain("--vault-id");
+		expect(result.stdout).not.toContain("--item-id");
+		expect(browserUseContracts["auth-login"].interactivity).toBe("optional");
 	});
 });
 

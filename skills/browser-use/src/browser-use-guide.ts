@@ -114,19 +114,29 @@ Common states:
 - Stale or mismatched handoff evidence: rerun the task (connection re-proves
   automatically); with a caller-managed envelope, re-mint it first.
 
-A login or MFA wall reached after a healthy attach is an app step in the warm
-profile, not a connection failure — keep driving the page.
+A login wall reached after a healthy attach is an authentication transaction,
+not a connection failure. Keep the verified handoff, run this discovery command,
+then follow its typed continuation:
+  browser-use auth login --help
 `;
 
 const AUTH_GUIDE = `browser-use guide — auth boundary
 
-- Auth readiness is a check, not a login script:
+- Reviewed Runbooks enter Browser Authentication through their declared
+  auth-context. An already-authorized freeform session uses:
+  browser-use auth login --handoff <path> --service <id> --allowed-origin <origin> --json
+- Both routes use the same confidential delivery transaction. The freeform
+  route never creates a Runbook and never invokes Runbook identity attestation.
+- Auth readiness remains a separate check:
   browser-use auth enroll-browser-automation-token --json
   browser-use auth repair-vault-grant --json
 - Blocked-cause continuations are commands: a blocked run's envelope names the
   exact auth subcommand to dispatch verbatim.
 - Resolve login secrets through the domain's Item Binding at runtime; never
   inline secret values in commands, files, or output.
+- Browser Authentication acquires one short-lived managed service authority or
+  one bounded user-present desktop session. Ambient OP tokens and shell sign-in
+  state are inert; generic vault administration stays in the one-password workflow.
 - Report secret checks by shape only: present/absent, length, status code,
   account or org name. Never print token, cookie, or password values.
 - Treat auth/session state as an operation precondition when the task needs

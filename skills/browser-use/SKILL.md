@@ -18,6 +18,9 @@ attachment.
 - Open-ended task: read `browser-connect dashboard --json`, select a
   connectable adapter from its evidence, then run
   `browser-connect connect <adapter> --json`.
+- Open-ended login wall: keep the verified handoff and run
+  `browser-use auth login --help`. This starts the freeform Browser
+  Authentication Transaction; never create a Runbook only to access auth.
 - Read the selected adapter's native help or tool schema. Use that surface to
   perform and prove the requested outcome. Return only bounded outcome and
   artifact references through Browser Use.
@@ -51,6 +54,8 @@ attachment.
   (`runtime/browser-connect/REPAIR.md#v1-inspect_listener`).
 - Never print tokens, cookies, passwords, or auth-bearing URLs; report secret
   checks by shape only (present/absent, length, status code).
+- Never route a browser login through the generic `one-password` skill or an
+  ambient `op` session. Follow the `browser-use auth login` continuation.
 
 ## Owners
 
@@ -58,6 +63,13 @@ attachment.
 - Bundled guide content: `skills/browser-use/src/browser-use-guide.ts`.
 - Connection, Verified Handoff Envelope, repair paths: `runtime/browser-connect`
   (`src/command-contract.ts`, `REPAIR.md`).
+- Browser Authentication Transaction and its two entry modes:
+  `skills/browser-use/src/browser-use-runbook-auth.ts`.
+- Managed and user-present 1Password access leases:
+  `skills/browser-use/src/browser-use-auth-access.ts`.
+- Admitted native access-provider wiring:
+  `skills/browser-use/src/browser-use-runtime.ts` and
+  `runtime/browser-use-security`.
 
 ## Next Safe Action
 

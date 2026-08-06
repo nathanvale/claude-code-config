@@ -239,6 +239,53 @@ describe("U10 native TokenRetrievalPort wiring", () => {
 		expect(runtime.authTokenRetrieval).toBe(explicitPort);
 		expect(probed).toBe(false);
 	});
+
+	test("an admitted security owner wires one bounded user-present access provider", async () => {
+		const provider = async () =>
+			({ ok: false, cause: "authority-unavailable" }) as const;
+		let providerFactoryCalls = 0;
+		const seam: BrowserUseSecuritySeam = {
+			admission: createInMemoryAdmissionRuntime({ installed: MINTED }),
+			createTokenExecutor: () => {
+				throw new Error("managed authority is unavailable");
+			},
+			createUserPresentAccessProvider: () => {
+				providerFactoryCalls += 1;
+				return provider;
+			},
+		};
+
+		const runtime = await createProductionBrowserUseRuntimeForTest(
+			EMPTY_OVERRIDES,
+			seam,
+		);
+
+		expect(runtime.authTokenRetrieval).toBeUndefined();
+		expect(runtime.authUserPresentAccess).toBe(provider);
+		expect(providerFactoryCalls).toBe(1);
+	});
+
+	test("user-present provider factory stays unreachable without product admission", async () => {
+		let providerFactoryCalls = 0;
+		const seam: BrowserUseSecuritySeam = {
+			admission: createNativeAbsentRuntime(),
+			createTokenExecutor: () => {
+				throw new Error("must not be reached when absent");
+			},
+			createUserPresentAccessProvider: () => {
+				providerFactoryCalls += 1;
+				return async () => ({ ok: false, cause: "authority-unavailable" });
+			},
+		};
+
+		const runtime = await createProductionBrowserUseRuntimeForTest(
+			EMPTY_OVERRIDES,
+			seam,
+		);
+
+		expect(runtime.authUserPresentAccess).toBeUndefined();
+		expect(providerFactoryCalls).toBe(0);
+	});
 });
 
 describe("U10 byte-identical typed absence on this (unsigned) machine", () => {

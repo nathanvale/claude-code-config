@@ -391,6 +391,33 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
+	if (command === "auth-login") {
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("auth login requires --handoff <path>.");
+		}
+		const service = stringField(flagValues["--service"]);
+		if (service === undefined || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(service)) {
+			throw usageError("auth login requires --service <id> as a safe slug.");
+		}
+		const allowedOrigin = stringField(flagValues["--allowed-origin"]);
+		let exactOrigin = false;
+		if (allowedOrigin !== undefined) {
+			try {
+				const parsedOrigin = new URL(allowedOrigin);
+				exactOrigin =
+					(parsedOrigin.protocol === "http:" || parsedOrigin.protocol === "https:") &&
+					parsedOrigin.origin === allowedOrigin;
+			} catch {
+				exactOrigin = false;
+			}
+		}
+		if (!exactOrigin) {
+			throw usageError(
+				"auth login requires --allowed-origin <origin> as an exact HTTP(S) origin.",
+			);
+		}
+	}
 	// Derive from parsed flags, not token scans: a value-bearing flag can
 	// legitimately consume a token that looks like "--dry-run" or "--json"
 	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread

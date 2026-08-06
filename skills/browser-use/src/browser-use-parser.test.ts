@@ -122,6 +122,34 @@ describe("U3 help and version", () => {
 // =========================================================================
 
 describe("U3 parser", () => {
+	test("freeform auth login requires bounded authority inputs", () => {
+		expect(
+			parseBrowserUseArgv([
+				"auth", "login", "--handoff", "handoff.json",
+				"--service", "github", "--allowed-origin", "https://github.com",
+				"--caller", "release-agent", "--json",
+			]),
+		).toMatchObject({ kind: "command", command: "auth-login" });
+
+		const cases: Array<{ argv: string[]; message: string }> = [
+			{
+				argv: ["auth", "login", "--service", "github", "--allowed-origin", "https://github.com"],
+				message: "auth login requires --handoff",
+			},
+			{
+				argv: ["auth", "login", "--handoff", "handoff.json", "--allowed-origin", "https://github.com"],
+				message: "auth login requires --service",
+			},
+			{
+				argv: ["auth", "login", "--handoff", "handoff.json", "--service", "github"],
+				message: "auth login requires --allowed-origin",
+			},
+		];
+		for (const { argv, message } of cases) {
+			expect(() => parseBrowserUseArgv(argv)).toThrow(message);
+		}
+	});
+
 	test("every runbook and action leaf accepts its complete advertised flag surface", () => {
 		const digest = "a".repeat(64);
 		const cases: Array<{ argv: string[]; command: BrowserUseCommand }> = [
