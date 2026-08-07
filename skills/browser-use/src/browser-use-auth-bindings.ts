@@ -11,6 +11,7 @@
 // code-owned blocked-cause table, never minted here.
 // ---------------------------------------------------------------------------
 
+import { createHash } from "node:crypto";
 import type { BrowserUseLaneAuthMethod } from "./browser-use-adapter-model";
 import {
 	type BrowserUseAuthBlockedCause,
@@ -146,6 +147,33 @@ export const BROWSER_USE_ITEM_BINDING_KEYS = [
 	"allowed_auth_methods",
 	"binding_revision",
 ] as const satisfies readonly (keyof BrowserUseItemBinding)[];
+
+/**
+ * Derive one redacted identity reference from an approved opaque binding.
+ *
+ * Lives next to {@link BrowserUseItemBinding} because it is a pure
+ * binding->reference transform over opaque ids: both the Session Identity Proof
+ * owner and the Human Identity Attestation driver consume it without either
+ * depending on the other's module (a shared seam, not attestation-owned).
+ *
+ * @param label - Identity dimension bound into the digest
+ * @param binding - Approved binding containing opaque vault and item ids
+ * @returns Labelled SHA-256 reference containing no secret bytes
+ */
+export function referenceOf(
+	label: string,
+	binding: BrowserUseItemBinding,
+): string {
+	const canonical = JSON.stringify([
+		label,
+		binding.service_id,
+		binding.auth_context,
+		binding.vault_id,
+		binding.item_id,
+		binding.binding_revision,
+	]);
+	return `${label}:sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
 
 // --- Import Candidate (proposes, never binds) -----------------------------------
 

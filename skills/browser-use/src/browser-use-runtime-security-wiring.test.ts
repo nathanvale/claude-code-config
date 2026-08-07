@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	type AdmissionRuntime,
 	buildAdmittedManifest,
@@ -12,6 +13,12 @@ import {
 	type BrowserUseSecuritySeam,
 	createProductionBrowserUseRuntimeForTest,
 } from "./browser-use-test-helpers";
+import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseAccessibilityNode,
+	BrowserUseAccessibilitySnapshot,
+} from "./browser-use-cdp-observer";
+import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import type {
 	BrowserUseOpCommandSpec,
 	BrowserUseOpExecute,
@@ -114,6 +121,221 @@ function presentSeam(): {
 // the runtime never touches real disk; only the auth-readiness path (which
 // reads authTokenRetrieval before any store I/O) matters here.
 const EMPTY_OVERRIDES = { env: {} } as const;
+
+function nativeAbsentProofSeam(): BrowserUseSecuritySeam {
+	return {
+		admission: createNativeAbsentRuntime(),
+		createTokenExecutor: () => {
+			throw new Error("must not be reached when native capability is absent");
+		},
+	};
+}
+
+const PROOF_ORIGIN = "https://github.example";
+const PROOF_TARGET = "target-freeform-proof";
+const PROOF_BINDING: BrowserUseItemBinding = {
+	service_id: "github",
+	auth_context: "interactive-login",
+	allowed_origins: [PROOF_ORIGIN],
+	allowed_login_paths: ["/login"],
+	vault_id: "vault-fixture",
+	item_id: "item-fixture",
+	allowed_auth_methods: ["password"],
+	binding_revision: 1,
+};
+
+function proofNode(
+	nodeId: string,
+	role: string,
+	accessibleName: string,
+): BrowserUseAccessibilityNode {
+	return {
+		node_id: nodeId,
+		role,
+		accessible_name: accessibleName,
+		ignored: false,
+		properties: {},
+	};
+}
+
+function proofSnapshot(
+	nodes: readonly BrowserUseAccessibilityNode[],
+	targetId = PROOF_TARGET,
+): BrowserUseAccessibilitySnapshot {
+	return { target_id: targetId, nodes };
+}
+
+function proofInput(
+	overrides: Partial<Parameters<BrowserUseAuthenticatedStateProof>[0]> = {},
+): Parameters<BrowserUseAuthenticatedStateProof>[0] {
+	return {
+		lane_id: "playwright-cdp",
+		run_id: "freeform-proof-run",
+		target_id: PROOF_TARGET,
+		expected_url: `${PROOF_ORIGIN}/login`,
+		allowed_origins: [PROOF_ORIGIN],
+		binding: PROOF_BINDING,
+		snapshot: proofSnapshot([
+			proofNode("dashboard", "heading", "Dashboard"),
+			proofNode("profile", "button", "Profile"),
+		]),
+		transition: "post-submit",
+		...overrides,
+	};
+}
+
+function referenceOf(label: string, binding: BrowserUseItemBinding): string {
+	const canonical = JSON.stringify([
+		label,
+		binding.service_id,
+		binding.auth_context,
+		binding.vault_id,
+		binding.item_id,
+		binding.binding_revision,
+	]);
+	return `${label}:sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+async function productionProofOwner(): Promise<BrowserUseAuthenticatedStateProof> {
+	const runtime = await createProductionBrowserUseRuntimeForTest(EMPTY_OVERRIDES);
+	expect(runtime.authenticatedStateProof).toBeDefined();
+	if (runtime.authenticatedStateProof === undefined) {
+		throw new Error("production generic Session Identity Proof owner was absent");
+	}
+	return runtime.authenticatedStateProof;
+}
+
+describe("freeform Session Identity Proof production wiring", () => {
+	test("native-absent production still wires the generic in-process proof owner", async () => {
+		const runtime = await createProductionBrowserUseRuntimeForTest(EMPTY_OVERRIDES);
+		expect(runtime.authenticatedStateProof).toBeDefined();
+	});
+
+	test("an override proof owner is wired into the production runtime", async () => {
+		const supplied: BrowserUseAuthenticatedStateProof = async () => ({
+			proven: false,
+			cause: "session-identity-proof-unavailable",
+		});
+		const runtime = await createProductionBrowserUseRuntimeForTest(
+			EMPTY_OVERRIDES,
+			nativeAbsentProofSeam(),
+			supplied,
+		);
+		expect(runtime.authenticatedStateProof).toBeDefined();
+		expect(await runtime.authenticatedStateProof?.(proofInput())).toEqual({
+			proven: false,
+			cause: "session-identity-proof-unavailable",
+		});
+	});
+
+	test("generic owner proves strong post-submit app structure with deterministic identity references", async () => {
+		const owner = await productionProofOwner();
+		const result = await owner(proofInput());
+		expect(result.proven).toBe(true);
+		if (!result.proven) return;
+		expect(result.proof).toMatchObject({
+			target_id: PROOF_TARGET,
+			page_id: PROOF_TARGET,
+			frame_id: PROOF_TARGET,
+			origin: PROOF_ORIGIN,
+			subject_reference: referenceOf("subject", PROOF_BINDING),
+			account_reference: referenceOf("account", PROOF_BINDING),
+			tenant_reference: referenceOf("tenant", PROOF_BINDING),
+		});
+		expect(result.proof.identity_basis_digest).toMatch(/^[a-f0-9]{64}$/);
+
+		const reordered = await owner(
+			proofInput({ snapshot: proofSnapshot([...proofInput().snapshot.nodes].reverse()) }),
+		);
+		expect(reordered).toMatchObject({
+			proven: true,
+			proof: { identity_basis_digest: result.proof.identity_basis_digest },
+		});
+	});
+
+	test.each([
+		{
+			name: "expected origin is outside the allowlist",
+			overrides: { expected_url: "https://evil.example/login" },
+			cause: "origin-mismatch",
+		},
+		{
+			name: "snapshot target differs from the proved target",
+			overrides: {
+				snapshot: proofSnapshot(
+					[
+						proofNode("dashboard", "heading", "Dashboard"),
+						proofNode("profile", "button", "Profile"),
+					],
+					"target-hostile",
+				),
+			},
+			cause: "origin-mismatch",
+		},
+		{
+			name: "weak structural evidence",
+			overrides: {
+				snapshot: proofSnapshot([proofNode("dashboard", "heading", "Dashboard")]),
+			},
+			cause: "session-identity-proof-unavailable",
+		},
+		{
+			name: "conflicting login controls remain",
+			overrides: {
+				snapshot: proofSnapshot([
+					proofNode("signed-in", "heading", "Welcome, signed in"),
+					proofNode("username", "textbox", "Username"),
+					proofNode("continue", "button", "Continue"),
+				]),
+			},
+			cause: "session-identity-proof-unavailable",
+		},
+		{
+			name: "wrong-account or stale pre-existing session has no accepted marker",
+			overrides: {
+				transition: "pre-existing-session" as const,
+				snapshot: proofSnapshot([
+					proofNode("different-account", "heading", "Different account"),
+					proofNode("switch-account", "button", "Switch account"),
+				]),
+			},
+			cause: "session-identity-proof-unavailable",
+		},
+	] as const)("refuses $name with $cause and never requests human attestation", async ({ overrides, cause }) => {
+		const owner = await productionProofOwner();
+		const result = await owner(proofInput(overrides));
+		expect(result).toEqual({ proven: false, cause });
+		if (!result.proven) {
+			expect(result.cause).not.toBe("human-identity-attestation-required");
+		}
+	});
+
+	test("rejects a seam proof record bound to another target", async () => {
+		const hostile: BrowserUseAuthenticatedStateProof = async () => ({
+			proven: true,
+			proof: {
+				target_id: "target-hostile",
+				page_id: "target-hostile",
+				frame_id: "target-hostile",
+				origin: PROOF_ORIGIN,
+				subject_reference: "subject-hostile",
+				account_reference: "account-hostile",
+				tenant_reference: "tenant-hostile",
+				identity_basis_digest: "0".repeat(64),
+			},
+		});
+		const runtime = await createProductionBrowserUseRuntimeForTest(
+			EMPTY_OVERRIDES,
+			nativeAbsentProofSeam(),
+			hostile,
+		);
+		const result = await runtime.authenticatedStateProof?.(proofInput());
+		expect(result).toEqual({ proven: false, cause: "target-proof-invalid" });
+		if (result?.proven === false) {
+			expect(result.cause).not.toBe("human-identity-attestation-required");
+		}
+	});
+});
 
 describe("U10 native TokenRetrievalPort wiring", () => {
 	test("absent seam (production default) leaves authTokenRetrieval undefined", async () => {

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { createNativeAbsentRuntime } from "@side-quest/browser-use-security";
 import {
 	mkdirSync,
 	readdirSync,
@@ -26,7 +28,13 @@ import {
 } from "./browser-use-runs";
 import { encodeDurableRecord } from "./browser-use-schemas";
 import { runForTest } from "./browser-use";
-import { makeRuntime, parseJson } from "./browser-use-test-helpers";
+import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import {
+	type BrowserUseSecuritySeam,
+	createProductionBrowserUseRuntimeForTest,
+	makeRuntime,
+	parseJson,
+} from "./browser-use-test-helpers";
 
 const disposables: Array<{ dispose(): void }> = [];
 afterEach(() => {
@@ -112,6 +120,36 @@ function stubAuthenticatedStateProof(origin: string) {
 			identity_basis_digest: "proof-digest",
 		},
 	});
+}
+
+function nativeAbsentProofSeam(): BrowserUseSecuritySeam {
+	return {
+		admission: createNativeAbsentRuntime(),
+		createTokenExecutor: () => {
+			throw new Error("must not be reached when native capability is absent");
+		},
+	};
+}
+
+function identityReference(
+	label: "subject" | "account" | "tenant",
+	binding: {
+		service_id: string;
+		auth_context: string;
+		vault_id: string;
+		item_id: string;
+		binding_revision: number;
+	},
+): string {
+	const canonical = JSON.stringify([
+		label,
+		binding.service_id,
+		binding.auth_context,
+		binding.vault_id,
+		binding.item_id,
+		binding.binding_revision,
+	]);
+	return `${label}:sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 function tokenPort(
@@ -220,7 +258,7 @@ async function runStatus(
 }
 
 describe("auth login CLI", () => {
-	test("freeform login uses one bounded user-present authority and opaque delivery", async () => {
+	test("production-composed freeform login proves the authenticated homepage without caller-injected proof authority", async () => {
 		const xdg = makeTempXdgEnv();
 		disposables.push(xdg);
 		const origin = "https://github.example";
@@ -241,12 +279,31 @@ describe("auth login CLI", () => {
 		const transport = authTransport(origin);
 		let releaseCalls = 0;
 		const ambientSentinel = "AMBIENT_OP_SENTINEL_MUST_STAY_INERT";
+		const productionOwnerRuntime =
+			await createProductionBrowserUseRuntimeForTest(makeRuntime({ env: {} }));
+		expect(productionOwnerRuntime.authenticatedStateProof).toBeDefined();
+		if (productionOwnerRuntime.authenticatedStateProof === undefined) {
+			throw new Error("production generic Session Identity Proof owner was absent");
+		}
+		const productionOwner = productionOwnerRuntime.authenticatedStateProof;
+		const captured: {
+			result?: Awaited<ReturnType<BrowserUseAuthenticatedStateProof>>;
+		} = {};
+		const binding = {
+			service_id: "github",
+			auth_context: "interactive-login" as const,
+			allowed_origins: [origin],
+			allowed_login_paths: ["/login"],
+			vault_id: "vault-fixture",
+			item_id: "item-fixture",
+			allowed_auth_methods: ["password" as const],
+			binding_revision: 1,
+		};
 		const argv = [
 			"auth", "login", "--handoff", handoffPath,
 			"--service", "github", "--allowed-origin", origin, "--json",
 		];
-		const result = await runForTest(
-			argv,
+		const runtime = await createProductionBrowserUseRuntimeForTest(
 			makeRuntime({
 				env: {
 					...xdg.env,
@@ -267,32 +324,17 @@ describe("auth login CLI", () => {
 						},
 					},
 				}),
-				authApprovedBindingResolver: async () => ({
-					service_id: "github",
-					auth_context: "interactive-login",
-					allowed_origins: [origin],
-					allowed_login_paths: ["/login"],
-					vault_id: "vault-fixture",
-					item_id: "item-fixture",
-					allowed_auth_methods: ["password"],
-					binding_revision: 1,
-				}),
-				authenticatedStateProof: async ({ target_id }) => ({
-					proven: true,
-					proof: {
-						target_id,
-						page_id: "page-authenticated",
-						frame_id: "frame-auth-login",
-						origin,
-						subject_reference: "subject-ref",
-						account_reference: "account-ref",
-						tenant_reference: "tenant-ref",
-						identity_basis_digest: "proof-digest",
-					},
-				}),
+				authApprovedBindingResolver: async () => binding,
 				authTransport: transport.factory,
 			}),
+			nativeAbsentProofSeam(),
+			async (input) => {
+				const result = await productionOwner(input);
+				captured.result = result;
+				return result;
+			},
 		);
+		const result = await runForTest(argv, runtime);
 		expect(result.exitCode).toBe(0);
 		const envelope = parseJson(result.stdout) as {
 			data: {
@@ -312,6 +354,22 @@ describe("auth login CLI", () => {
 		expect(counts.redeems).toBe(2);
 		expect(releaseCalls).toBe(1);
 		expect(transport.closeCalls()).toBe(1);
+		expect(captured.result).toBeDefined();
+		if (captured.result === undefined || !captured.result.proven) {
+			throw new Error("generic Session Identity Proof did not prove the run");
+		}
+		expect(captured.result.proof).toMatchObject({
+			target_id: "target-auth-login",
+			page_id: "target-auth-login",
+			frame_id: "target-auth-login",
+			origin,
+			subject_reference: identityReference("subject", binding),
+			account_reference: identityReference("account", binding),
+			tenant_reference: identityReference("tenant", binding),
+		});
+		expect(captured.result.proof.identity_basis_digest).toMatch(
+			/^[a-f0-9]{64}$/,
+		);
 		expect(argv.join(" ")).not.toContain(ambientSentinel);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain(ambientSentinel);
 		expect(allFileText(xdg.base)).not.toContain(ambientSentinel);
@@ -785,24 +843,24 @@ describe("auth login CLI", () => {
 		// The pre-gate must still refuse before opening any transport, proving it
 		// gates on proof — not merely on absent access.
 		const runtime = makeRuntime({
-			env: xdg.env,
-			platformFs: createDefaultPlatformFs(),
-			readTextFile: async (path) => readFileSync(path, "utf8"),
-			authUserPresentAccess: async () => ({
-				ok: true,
-				lease: {
-					access_path: "user-present-desktop",
-					required_vault_scope: "exactly-one-vault",
-					expires_at_epoch_ms: 31_000,
-					token_retrieval: tokenPort(origin, counts),
-					release: async () => {},
+				env: xdg.env,
+				platformFs: createDefaultPlatformFs(),
+				readTextFile: async (path) => readFileSync(path, "utf8"),
+				authUserPresentAccess: async () => ({
+					ok: true,
+					lease: {
+						access_path: "user-present-desktop",
+						required_vault_scope: "exactly-one-vault",
+						expires_at_epoch_ms: 31_000,
+						token_retrieval: tokenPort(origin, counts),
+						release: async () => {},
+					},
+				}),
+				authTransport: () => {
+					transportCalls += 1;
+					return authTransport(origin).factory();
 				},
-			}),
-			authTransport: () => {
-				transportCalls += 1;
-				return authTransport(origin).factory();
-			},
-		});
+			});
 		const result = await runForTest(
 			[
 				"auth", "login", "--handoff", handoffPath,

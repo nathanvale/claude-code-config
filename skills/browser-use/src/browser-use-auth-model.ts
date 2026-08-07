@@ -1036,8 +1036,20 @@ export const BROWSER_USE_AUTH_ATTESTATION_KEYS = [
 export function authAttestationDigestOf(
 	attestation: BrowserUseAuthAttestation,
 ): string {
-	const canonical = JSON.stringify(
+	return canonicalArraySha256DigestOf(
 		BROWSER_USE_AUTH_ATTESTATION_KEYS.map((key) => attestation[key]),
 	);
-	return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Hash one fixed-order canonical JSON array with the auth model's digest style.
+ *
+ * @param values - Ordered values owned by the calling contract
+ * @returns Full 64-hex-character SHA-256 digest
+ * @internal
+ */
+export function canonicalArraySha256DigestOf(
+	values: readonly unknown[],
+): string {
+	return createHash("sha256").update(JSON.stringify(values)).digest("hex");
 }

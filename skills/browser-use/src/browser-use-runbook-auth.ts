@@ -83,6 +83,30 @@ export type BrowserUseRunbookAuthDeps = {
 	}) => Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }>;
 };
 
+/**
+ * The single home of the "freeform never borrows Human Identity Attestation"
+ * invariant (ADR 0026: attestation is reviewed-runbook-only, one-run-only).
+ *
+ * Both conditions are load-bearing and neither may be dropped:
+ * - `entry_mode === "reviewed-runbook"` refuses the human-attestation fallback
+ *   for freeform even if a driver dep somehow reached this transaction —
+ *   defense in depth, since {@link runBrowserUseFreeformAuth} also strips it.
+ * - `humanIdentityAttestation !== undefined` refuses the fallback when no driver
+ *   is wired, so the engine blocks rather than offering an unreachable route.
+ *
+ * The login engine consumes only the derived boolean; the entry-mode fact never
+ * crosses the engine seam.
+ */
+function humanIdentityAttestationAllowed(
+	entryMode: BrowserUseAuthEntryMode,
+	deps: Pick<BrowserUseRunbookAuthDeps, "humanIdentityAttestation">,
+): boolean {
+	return (
+		entryMode === "reviewed-runbook" &&
+		deps.humanIdentityAttestation !== undefined
+	);
+}
+
 export type BrowserUseRunbookAuthInput = {
 	run: BrowserUseSharedRun;
 	dispatch_claim: LeaseWriteClaim;
@@ -846,9 +870,10 @@ async function runBrowserUseAuthTransaction(
 						}),
 				allowed_origins: input.allowed_origins,
 				binding,
-				allow_human_identity_attestation:
-					input.entry_mode === "reviewed-runbook" &&
-					deps.humanIdentityAttestation !== undefined,
+				allow_human_identity_attestation: humanIdentityAttestationAllowed(
+					input.entry_mode,
+					deps,
+				),
 			},
 		);
 		if (!engine.ok) {

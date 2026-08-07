@@ -361,11 +361,24 @@ export function classifyBrowserUseLoginStep(
 		: { step: "submit", control_node: control };
 }
 
-function authenticatedStateCandidate(
+/** Structural evidence retained by the generic Session Identity Proof owner. */
+export type BrowserUseAuthenticatedStateStructuralEvidence = {
+	has_conflicting_auth_structure: boolean;
+	has_signed_in_marker: boolean;
+	has_app_structure: boolean;
+	evidence_nodes: readonly BrowserUseAccessibilityNode[];
+};
+
+/**
+ * Classify secret-free accessibility structure as an authenticated application.
+ *
+ * @param snapshot - Fresh accessibility snapshot for the target
+ * @returns Bounded marker, conflict, and application-structure facts
+ * @internal
+ */
+export function authenticatedStateStructuralEvidence(
 	snapshot: BrowserUseAccessibilitySnapshot,
-	submitted: boolean,
-	input: BrowserUseLoginEngineInput,
-): boolean {
+): BrowserUseAuthenticatedStateStructuralEvidence {
 	const hasCredentialField = snapshot.nodes.some(
 		(node) =>
 			!node.ignored &&
@@ -385,10 +398,14 @@ function authenticatedStateCandidate(
 		hasAdvanceAffordance ||
 		challengedBy(snapshot) !== undefined
 	) {
-		return false;
+		return {
+			has_conflicting_auth_structure: true,
+			has_signed_in_marker: false,
+			has_app_structure: false,
+			evidence_nodes: [],
+		};
 	}
-	if (submitted) return true;
-	const hasSignedInMarker = snapshot.nodes.some(
+	const signedInMarkers = snapshot.nodes.filter(
 		(node) =>
 			!node.ignored &&
 			["heading", "status", "link", "button"].includes(
@@ -396,7 +413,39 @@ function authenticatedStateCandidate(
 			) &&
 			SIGNED_IN_NAME.test(node.accessible_name),
 	);
-	if (hasSignedInMarker) return true;
+	const appStructure = snapshot.nodes.filter(
+		(node) =>
+			!node.ignored &&
+			node.accessible_name.trim().length > 0 &&
+			["heading", "link", "button"].includes(node.role.toLowerCase()),
+	);
+	const hasAppStructure =
+		appStructure.length >= 2 &&
+		appStructure.some((node) => node.role.toLowerCase() === "heading") &&
+		appStructure.some((node) => node.role.toLowerCase() !== "heading");
+	const evidenceNodeIds = new Set([
+		...signedInMarkers.map((node) => node.node_id),
+		...appStructure.map((node) => node.node_id),
+	]);
+	return {
+		has_conflicting_auth_structure: false,
+		has_signed_in_marker: signedInMarkers.length > 0,
+		has_app_structure: hasAppStructure,
+		evidence_nodes: snapshot.nodes.filter((node) =>
+			evidenceNodeIds.has(node.node_id),
+		),
+	};
+}
+
+function authenticatedStateCandidate(
+	snapshot: BrowserUseAccessibilitySnapshot,
+	submitted: boolean,
+	input: BrowserUseLoginEngineInput,
+): boolean {
+	const evidence = authenticatedStateStructuralEvidence(snapshot);
+	if (evidence.has_conflicting_auth_structure) return false;
+	if (submitted) return true;
+	if (evidence.has_signed_in_marker) return true;
 
 	const observedOrigin =
 		input.observed_url === undefined
@@ -408,24 +457,11 @@ function authenticatedStateCandidate(
 			return normalized === undefined ? [] : [normalized];
 		}),
 	);
-	if (
-		snapshot.target_id !== input.target_id ||
-		observedOrigin === undefined ||
-		!allowedOrigins.has(observedOrigin)
-	) {
-		return false;
-	}
-
-	const appStructure = snapshot.nodes.filter(
-		(node) =>
-			!node.ignored &&
-			node.accessible_name.trim().length > 0 &&
-			["heading", "link", "button"].includes(node.role.toLowerCase()),
-	);
 	return (
-		appStructure.length >= 2 &&
-		appStructure.some((node) => node.role.toLowerCase() === "heading") &&
-		appStructure.some((node) => node.role.toLowerCase() !== "heading")
+		snapshot.target_id === input.target_id &&
+		observedOrigin !== undefined &&
+		allowedOrigins.has(observedOrigin) &&
+		evidence.has_app_structure
 	);
 }
 

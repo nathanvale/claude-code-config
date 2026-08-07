@@ -43,6 +43,7 @@ import type {
 	BrowserUseItemBinding,
 } from "./browser-use-auth-bindings";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import { createBrowserUseSessionIdentityProof } from "./browser-use-session-identity-proof";
 import {
 	BROWSER_USE_APPROVAL_BROKER_ENV,
 	type BrowserUseHumanIdentityAttestationDriver,
@@ -1386,10 +1387,15 @@ export function createDefaultBrowserUseRuntime(
  *
  * @param overrides - Partial runtime overrides, same shape the sync factory takes
  * @param seam - The native security seam; defaults to the native-absent placeholder
+ * @param authenticatedStateProofOverride - Optional stronger Session Identity
+ *   Proof owner (e.g. a native cryptographic prover). Kept OFF the security seam
+ *   because the default in-process structural owner needs no native admission —
+ *   its activation is orthogonal to the admission gate the seam exists to enforce.
  */
 export async function createProductionBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
 	seam?: BrowserUseSecuritySeam,
+	authenticatedStateProofOverride?: BrowserUseAuthenticatedStateProof,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
 	const securitySeam = seam ?? createNativeAbsentSecuritySeam();
@@ -1413,6 +1419,11 @@ export async function createProductionBrowserUseRuntime(
 	if (userPresentNeedsResolution) {
 		const provider = resolveUserPresentAuthAccess(securitySeam, authAdmission);
 		if (provider !== undefined) runtime.authUserPresentAccess = provider;
+	}
+	if (runtime.authenticatedStateProof === undefined) {
+		runtime.authenticatedStateProof = createBrowserUseSessionIdentityProof(
+			authenticatedStateProofOverride,
+		);
 	}
 	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
 	if (
