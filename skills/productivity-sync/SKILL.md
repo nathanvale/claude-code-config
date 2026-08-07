@@ -1,7 +1,6 @@
 ---
 name: productivity-sync
-description: "Sync tasks and refresh workplace context from calendar, email, meeting notes, project trackers, and GitHub."
-role: tool-workflow
+description: Sync tasks and refresh memory from calendar, email, meeting notes, project trackers, and GitHub. Reads .productivity.yml for connector config. Surfaces drift between external sources and TASKS.md (open PRs, merged PRs, awaiting-review), writes back action items extracted from meetings to TASKS.md / memory / people notes, and produces a pre-meeting brief for the next 24h of calendar events. Use --deep for comprehensive scan of chat, sent email, and docs.
 argument-hint: "[--brief] [--deep] [--full]"
 disable-model-invocation: true
 allowed-tools:
@@ -20,38 +19,26 @@ allowed-tools:
 
 # Productivity Sync
 
-Keep your task list and context current. Two modes:
+Keep your task list and memory current. Two modes:
 
-- **Default:** Sync from calendar, email, meeting notes, and project trackers (per `.productivity.yml`), triage stale items, decode tasks, fill context gaps
-- **`--deep`:** Everything in default, plus deep scan of chat, sent email, docs -- flag missed todos and suggest new context
+- **Default:** Sync from calendar, email, meeting notes, and project trackers (per `.productivity.yml`), triage stale items, decode tasks, fill memory gaps
+- **`--deep`:** Everything in default, plus deep scan of chat, sent email, docs -- flag missed todos and suggest new memories
 
-Reference `skills/productivity-connectors/SKILL.md` for available MCP tool names. If a source is unavailable, skip it gracefully.
+Reference the **productivity-connectors** skill for available MCP tool names. If a source is unavailable, skip it gracefully.
 
-## Dependencies
+## Read Order
 
-- `.productivity.yml`: hard dependency.
-- `skills/productivity-connectors/SKILL.md`: support-reference dependency.
-- `skills/context-advisor/SKILL.md`: optional handoff.
-- `skills/context-advisor/references/storage-routing.md`: owner-reference fallback.
-- `skills/imessage-reader/SKILL.md`: optional CLI fallback for iMessage.
-- Missing `.productivity.yml`: blocked.
-- Missing connector support reference: degraded; probe configured tools directly and report reduced routing confidence.
-- Missing `context-advisor`: continue with storage-routing fallback.
-- Missing iMessage MCP tools and CLI fallback: mark messages unavailable and continue other connectors.
-- Next repair: add the missing config, owner path, or connector tool.
-
-## Owner Routing
-
-- Use the owning repo as the local task and context surface by default.
-- Use `skills/context-advisor/SKILL.md` when the owning repo, privacy boundary, cross-repo promotion, or write authority is unclear.
-- If `context-advisor` is unavailable, read `skills/context-advisor/references/storage-routing.md` directly.
+1. `~/.config/memory/docs/memory-os-contract.md`
+2. `~/.config/memory/docs/productivity-integration.md`
 
 ## Prerequisites
 
 Read `.productivity.yml` in the project root. If it doesn't exist, tell the user:
 ```
-No .productivity.yml found. Cannot run productivity-sync. Create .productivity.yml or provide connector config.
+No .productivity.yml found. Run /productivity-setup first to configure connectors for this project.
 ```
+
+**Required for the active-sprint identity check:** when `project-tracker: jira`, `.productivity.yml` must also declare `project-tracker-board: <numeric-board-id>`. This is the load-bearing input for the active-sprint identity check (Step 2's pre-diff audit and Step 11's post-run recheck). If the field is absent, the skill runs a one-shot **board-id discovery procedure** (see Step 2's project-tracker substep) and prompts the operator to persist the resolved id back into `.productivity.yml` before continuing. The skill must never guess a board id.
 
 ## Usage
 
@@ -63,41 +50,9 @@ No .productivity.yml found. Cannot run productivity-sync. Create .productivity.y
 ```
 
 **Flag mutual exclusion:**
-- See **Brief Mode** for `--brief` compatibility rules.
-- `--deep` and `--full` are compatible: `--full` resets cursor state (wide-window invalidation), `--deep` expands connector scope to chat / sent email / docs. Both flags can be passed together.
-
-## Brief Mode
-
-`--brief` is read-only meeting preparation. It builds the next 24 hours of pre-meeting briefs from calendar plus already persisted local context without consuming any external sync window.
-
-**Flag compatibility:**
 - `--brief` and `--deep` are mutually exclusive: if both are passed, emit `"--brief and --deep cannot be used together"` and exit without running.
 - `--brief` and `--full` are mutually exclusive: if both are passed, emit `"--brief and --full cannot be used together"` and exit without running. (`--full` resets cursor state; `--brief` is read-only preparation.)
-
-**Pre-flight contract:**
-- Probe **calendar** normally.
-- Probe `transcriptions` for cheap tool/auth awareness only. Do not search, fetch, inspect transcript metadata, or touch transcript content.
-- Show all other connectors as `⏭ skipped (brief mode)` in the pre-flight table. Skipped connectors are not ❌, not errors, and do not prompt.
-- If calendar is ❌, exit clearly with no prompt: `"Calendar unavailable, cannot build Brief Run. Run full sync or fix calendar connector."`
-- If transcriptions is ❌, show it as `⚠️ transcriptions (...) - unavailable, ignored in brief mode` and continue.
-- If calendar is ✅, continue after pre-flight regardless of skipped connectors and transcriptions warning state.
-
-**Execution contract:**
-- Run **calendar only** after pre-flight.
-- Build pre-meeting briefs from calendar plus already persisted local context (`TASKS.md`, `context/`, and existing `docs/meetings/`).
-- Do not search or fetch transcriptions, inspect transcript metadata, create meeting notes, extract transcript actions, enrich people notes, or run any other connector.
-
-**Read-only guarantee:**
-- Do not advance `last_sync`, append to `run_history`, update `ok`, update `error`, mutate `consecutive_failures`, write commitments, or mutate pending items for any persisted cursor entry.
-- Do not create a `transcriptions` cursor entry. `transcriptions` is source configuration, not brief-mode cursor state.
-
-**Output contract:**
-- Render only the pre-meeting brief section from Step 2.
-- Suppress triage pass, dropped balls, git drift, email/Jira summaries, CLAUDE.md health check, stats line, and cursor advancement note.
-- After the brief section, check the stale-cursor trailer. Count persisted non-brief cursor entries where `last_sync` is absent or `now - last_sync > 4 hours`. Do not count `calendar`, because brief mode probes it normally, and do not count `transcriptions`, because it is connector configuration rather than persisted cursor state. Count `email`, `meetings`, `project-tracker`, `chat`, `messages`, and each git forge independently.
-- If count = 0, suppress the trailer. If count > 0, append one line:
-  - Singular: `"1 connector not checked. Run full sync when you can."`
-  - Plural: `"{N} connectors not checked. Run full sync when you can."`
+- `--deep` and `--full` are compatible: `--full` resets cursor state (wide-window invalidation), `--deep` expands connector scope to chat / sent email / docs. Both flags can be passed together.
 
 ## Pre-flight (30s connector check)
 
@@ -108,19 +63,17 @@ For each connector in `.productivity.yml`:
 | Connector value | Probe (cheap, <1s each) |
 |---|---|
 | `microsoft-365` (calendar/email) | Confirm an `mcp__*` Microsoft Graph tool is loaded; if not → ❌ |
-| `gog` | `which gog >/dev/null`, account set in `.productivity.yml`, and configured account appears in local `gog --client <name> --account <email> auth list --json --no-input` output when a client is set, otherwise in local `gog --account <email> auth list --json --no-input` output → ❌ if any fails |
+| `google-calendar` / `gmail` | Confirm `gcal_*` / `gmail_*` MCP tool is loaded; if not → ❌ |
+| `gog` | `which gog >/dev/null` AND `<connector>-account` set in `.productivity.yml` → ❌ if either fails |
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
 | `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
-| `teams` (via notion-search) | Same probe as `notion`; if missing → ❌ |
-| `imessage` | Confirm `mcp__*imessage*sync_archive` OR `skills/imessage-reader/scripts/query-imessage.ts` exists; if neither → ❌ |
+| `teams` (local cache) | `~/.claude/skills/teams/.venv` exists → ⚠️ "run bootstrap.sh" if missing; else `teams_cli.py doctor --json` returns ok → ❌ if not |
+| `imessage` | Confirm `mcp__*imessage*sync_archive` OR `~/.claude/skills/imessage-reader/scripts/query-imessage.ts` exists; if neither → ❌ |
 | `github` | `gh auth status` exits 0; if not → ❌ |
 | `none` | Skip silently — not an error |
 
-Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per step through `skills/productivity-connectors/SKILL.md`.
-Probe once per unique configured gog `(account, client)` pair. Reuse that result
-only when both values match. Treat an omitted client as distinct from explicit
-`client: default`; owner mapping may resolve them differently.
+Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per-step (per productivity-connectors skill).
 
 **Output — one compact table before any sync begins:**
 
@@ -131,18 +84,21 @@ Pre-flight (2026-05-11 13:15):
   ✅ github (gh authed as nathanvale-bunnings)
   ❌ calendar (microsoft-365) — no Graph MCP tool loaded; skipping
   ❌ email (microsoft-365) — no Graph MCP tool loaded; skipping
-  ⚠️  chat (teams via notion-search) — usable; deferred unless --deep
+  ✅ chat (teams local cache)
 
 Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 ```
 
 **Rules:**
 
-- If `--brief` was passed, follow the **Brief Mode** pre-flight contract above.
-- For non-brief runs, if **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift; the user should consciously accept reduced coverage. Brief Mode handles calendar and transcriptions failures without prompting.
+- If `--brief` was passed, probe **calendar** normally and probe `transcriptions` as cheap informational tool/auth presence only. The transcriptions probe must not search, fetch, or inspect transcript metadata. All other connectors are shown as `⏭ skipped (brief mode)` in the pre-flight table. This is not ❌, not an error, and does not prompt for skipped connectors.
+- If `--brief` was passed and `calendar` is ❌, exit clearly with no prompt: `"Calendar unavailable, cannot build Brief Run. Run full sync or fix calendar connector."`
+- If `--brief` was passed and `transcriptions` is ❌, show it as `⚠️ transcriptions (...) - unavailable, ignored in brief mode` and continue without prompting.
+- If `--brief` was passed and calendar is ✅, continue after pre-flight regardless of skipped connectors and transcriptions warning state.
+- For non-brief runs, if **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift; the user should consciously accept reduced coverage. Brief Run handles calendar and transcriptions failures with the two rules above.
 - If **all declared connectors are ✅**, print the table and continue without prompting.
 - If `--full` was passed, still run pre-flight — the cursor reset doesn't fix a broken connector.
-- For non-brief runs, persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing. Brief Mode does not persist pre-flight results.
+- For non-brief runs, persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing. Brief Run does not persist pre-flight results.
 - **Repeat-failure escalation**: for non-brief runs, when a connector has been ❌ for **3+ consecutive runs**, append a `consecutive_failures: N` count to its cursor entry and surface it in the pre-flight table as `❌ <connector> (Nth consecutive run)`. After 3 runs, also add a one-line recovery hint to the pre-flight prompt (e.g. "M365 has been down 3 runs. Consider running `claude mcp list` to confirm the Graph MCP is loaded"). The prompt itself stays terse; the hint is a single line added beneath the table only when the threshold is hit. Don't repeat it every run after that. Keep nagging signal-to-noise high.
 - Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here (exception: the repeat-failure hint above).
 
@@ -157,12 +113,9 @@ Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 
 ### 1. Load Current State
 
-Read `TASKS.md` and `context/` directory.
-If `TASKS.md` is missing, continue connector reads but do not write task updates; report `TASKS.md missing`.
-If `context/` is missing, skip context enrichment; report `context/ missing`.
-Do not call setup workflows or create scaffolds during sync.
+Read `TASKS.md` and `memory/` directory. If they don't exist, suggest `/productivity-setup` first.
 
-Resolve the owning repo first and treat that repo as the local task and context surface.
+If `~/.config/memory/AGENTS.md` exists, resolve the owning repo first and treat that repo as the local task and memory surface.
 
 **Re-surface deferred action items:** After loading the cursor (Step 1a), check `cursor.pending`. If any entries exist, they will be presented at the **start of the triage pass** (before new action items from this run). Each deferred item is labelled `"Deferred from YYYY-MM-DD: <text> (originally suggested: <routing>)"`.
 
@@ -176,7 +129,7 @@ Resolve the owning repo first and treat that repo as the local task and context 
 
 Read `.productivity-sync-cursor.json` from the owning repo root. This file persists per-connector "last successful sync" timestamps so each connector queries only what's changed.
 
-**Schema:** This example and field table are the source of truth for cursor fields. Later sections describe when fields are written without redefining their shape.
+**Schema:**
 
 ```json
 {
@@ -216,79 +169,91 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
       "defer_count": 1,
       "deferred_at": "2026-05-20T10:00:00+10:00"
     }
-  ]
+  ],
+  "post_run_drift_check": {
+    "enabled_until": "2026-06-11",
+    "first_enabled_at": "2026-05-28",
+    "consecutive_clean_runs": 0,
+    "last_sentinel_seen": "v1-2026-05-28"
+  }
 }
 ```
 
-**Field table:**
+**New sub-key field definitions:**
 
-| Field | Purpose | Default or migration | Write site |
-|---|---|---|---|
-| `version` | Cursor schema version. | Initialise to `1` when creating a cursor. | Cursor initialisation. |
-| `last_full_sync` | Last wide/deep sync checkpoint for deep-mode-specific windows. | Missing means no full/deep checkpoint exists. | Cursor write rule 3 when `--deep` is used. |
-| `connectors` | Map of persisted connector state. | Initialise to `{}` when creating a cursor. | Connector sync completion and pre-flight failure handling. |
-| `connectors.<name>` | State for persisted connectors such as `calendar`, `email`, `messages`, `meetings`, `project-tracker`, and `chat`. | Missing connector entry uses the first-run fallback window. | Connector sync completion or connector failure. |
-| `connectors.<name>.last_sync` | Last successful consumed sync window for that connector. | Missing means stale/first-run for that connector. | Cursor write rule 1 after that connector succeeds. |
-| `connectors.<name>.ok` | Last-known health for that connector. | Missing is treated as unknown health. | Cursor write rules 1-2 and non-brief pre-flight persistence. |
-| `connectors.<name>.error` | Short sanitized failure reason for the last failed connector run. | Omit when the connector is healthy or has no known failure. | Cursor write rule 2 and non-brief pre-flight persistence. |
-| `connectors.<name>.consecutive_failures` | Repeat-failure escalation count for pre-flight failures. | Missing means no repeat-failure count. | Pre-flight repeat-failure escalation. |
-| `connectors.<name>.run_history` | Rolling 7-entry success/failure log: `{ run_at: "<ISO-datetime>", ok: boolean }[]`. | Initialise to `[]` when missing. | Cursor write rule 4 during normal, non-brief syncs. |
-| `connectors.git_forges` | Per-forge cursor state keyed by `.productivity.yml` `git:` names. | If absent and legacy `connectors.github` exists, migrate per the git forge migration rules below. | Git forge migration and per-forge sync completion/failure. |
-| `connectors.git_forges._migrated_from_legacy_github` | Sentinel that throttles the legacy `github:` deprecation note. | Missing means the next legacy migration may surface the note. | First successful legacy GitHub cursor migration. |
-| `connectors.git_forges.<forge-name>` | State for a declared git forge. | Missing forge entry uses the first-run fallback window. | Per-forge sync completion or forge failure. |
-| `connectors.git_forges.<forge-name>.last_sync`, `.ok`, `.error`, `.consecutive_failures`, `.run_history` | Per-forge sync window, health, failure, escalation, and history fields. | Same defaults as the matching `connectors.<name>` fields. | Per-forge sync completion, forge failure, and pre-flight escalation. |
-| `connectors.git_forges.<forge-name>.last_auth` | Last successful forge `auth` mode, used to force a wide-window run after auth changes. | Optional, default unset. | Successful forge cursor write after comparing current auth config. |
-| `commitments` | Cross-connector commitment ledger for Nathan-owned commitments. | Initialise to `[]` when missing. | Commitment extraction, reconciliation, dropped-ball triage, and ledger-cap pruning. |
-| `commitments[].id` | Stable deduplication id: hash of `owner + verb_object + source`. | Required for new entries. | Commitment extraction and duplicate collapse. |
-| `commitments[].owner` | Commitment owner, always `"Nathan"` for self-commitments. | Required for new entries. | Commitment extraction. |
-| `commitments[].text` | Full commitment sentence shown back to the user. | Required for new entries. | Commitment extraction. |
-| `commitments[].verb_object` | Normalized action object used for matching and deduplication. | Required for new entries. | Commitment extraction and reconciliation. |
-| `commitments[].deadline` | ISO date when a deadline is found. | Optional. | Commitment extraction. |
-| `commitments[].source` | Primary meeting note path, chat timestamp, or thread URL where the commitment came from. | Required for new entries. | Commitment extraction. |
-| `commitments[].sources` | Additional source paths merged during cross-source duplicate collapse. | Optional, default absent. | Step 2b duplicate collapse. |
-| `commitments[].extracted_at` | ISO datetime when the commitment was extracted. | Required for new entries. | Commitment extraction. |
-| `commitments[].status` | Commitment state: `open`, `resolved`, or `dismissed`. | New entries start as `open`. | Commitment extraction, reconciliation, duplicate collapse, and dropped-ball triage. |
-| `commitments[].resolved_at` | ISO datetime when a commitment was matched as done. | Optional. | TASKS.md or project-tracker reconciliation. |
-| `commitments[].dismissed_at` | ISO datetime when a commitment was dismissed. | Optional. | Dropped-ball Dismiss action and duplicate collapse. |
-| `commitments[].dismissed_reason` | Reason for dismissal, such as `duplicate of <surviving-id>`. | Optional. | Step 2b duplicate collapse. |
-| `commitments[].deferred_until` | ISO datetime of dropped-ball snooze expiry. | Optional. | Dropped-ball Defer/snooze action. |
-| `pending` | Deferred action item triage queue. | Initialise to `[]` when missing. | Triage defer/re-defer and auto-expiry. |
-| `pending[].id` | Stable pending-item id: hash of `text + source_meeting`. | Required for new entries. | Pending-item defer. |
-| `pending[].text` | Original action item text. | Required for new entries. | Pending-item defer. |
-| `pending[].source_meeting` | Originating meeting note path. | Required for new entries. | Pending-item defer. |
-| `pending[].routing_suggestion` | Original suggested destination. | Required for new entries. | Pending-item defer. |
-| `pending[].defer_count` | Number of times the pending item has been deferred. | New entries start at `1`; missing is invalid for queued items. | Pending-item defer/re-defer and auto-expiry. |
-| `pending[].deferred_at` | ISO datetime of most recent deferral. | Required for new entries. | Pending-item defer/re-defer. |
+`connectors.<name>.run_history` — rolling 7-entry success/failure log per connector:
+```
+{ run_at: "<ISO-datetime>", ok: boolean }[]
+```
+Max 7 entries. Drop the oldest entry before appending if the array already contains 7 entries. Initialise as `[]` when key is missing (first run after schema upgrade). Written in the same atomic cursor pass as `last_sync`.
 
-**Retention rules:** `run_history` keeps at most 7 entries per connector. `commitments` has a target cap of 50 open entries; prune `resolved` entries first, never silently drop `open` or `dismissed` entries, and surface a "commitment ledger over cap" note if the ledger remains over cap. `pending` has a soft cap of about 10 items because entries expire within 3 syncs by design.
+`commitments` (top-level) — cross-connector commitment ledger:
+```
+{
+  id: string,             // hash of owner+verb_object+source — stable across re-extractions
+  owner: string,          // always "Nathan" for self-commitments
+  text: string,           // full commitment sentence
+  verb_object: string,    // extracted action (e.g. "send the onboarding bundle to Kerry")
+  deadline?: string,      // ISO date if a deadline was found
+  source: string,         // path to meeting note or chat source
+  extracted_at: string,   // ISO datetime of extraction
+  status: "open" | "resolved" | "dismissed",
+  resolved_at?: string,   // ISO datetime when resolved
+  dismissed_at?: string,  // ISO datetime when dismissed
+  deferred_until?: string // ISO datetime of snooze expiry (for dropped-ball deferrals)
+}[]
+```
+Target cap: 50 open entries. Prune `resolved` and `dismissed` entries first when the array grows; never silently drop `open` entries. If open entries exceed the cap, keep them all and surface a "commitment ledger over cap" note in the report.
 
-#### Commitment Ledger Policy
+`pending` (top-level) — deferred action item triage queue:
+```
+{
+  id: string,                    // hash of text+source_meeting
+  text: string,                  // original action item text
+  source_meeting: string,        // path to originating meeting note
+  routing_suggestion: string,    // original suggested destination
+  defer_count: number,           // starts at 1, incremented on each re-deferral
+  deferred_at: string            // ISO datetime of most recent deferral
+}[]
+```
+Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry rule above in section 1). The 3rd re-surface fires expiry after the item has been deferred twice. Cap: ~10 items (they expire within 3 syncs by design).
 
-`cursor.commitments` is shared sync state for commitments Nathan owns across connectors. Ledger writes do not require user confirmation because they do not write to `TASKS.md`, `context/`, people notes, or external trackers. The user reviews open ledger entries through dropped-ball surfacing before any task or context write happens.
+`post_run_drift_check` (top-level) — training-wheels state for the post-run TASKS.md drift recheck (see Step 11):
+```
+{
+  enabled_until: string,           // ISO date; while now < enabled_until, the post-run check runs
+  first_enabled_at: string,        // ISO date when the check was first enabled
+  consecutive_clean_runs: number,  // starts at 0; increments each clean run; resets to 0 on drift
+  last_sentinel_seen: string       // version sentinel of SKILL.md the last time the check ran
+}
+```
 
-Shared contract:
-- Write only self-owned commitments where attribution evidence clearly identifies Nathan as the owner. Other people's promises are dependencies, not entries in `cursor.commitments`.
-- Store commitment fields according to the Step 1a field table. Required new-entry fields are `id`, `owner`, `text`, `verb_object`, `source`, `extracted_at`, and `status`; include `deadline` when a nearby `by <date/day>` phrase exists.
-- Use `id = hash(owner + verb_object + source)` for stable deduplication across re-extractions.
-- Do not ledger vague acknowledgements such as "I'll check", "I'll look", or "will do" unless source context supplies a concrete action object.
-- Collapse cross-source duplicates during Step 2b by fuzzy-matching `verb_object`, preserving the earliest entry, merging duplicate sources into `sources`, and dismissing duplicates with `dismissed_reason`.
-- Surface dropped balls from open commitments whose deadlines have passed or whose age threshold has elapsed, unless `deferred_until` is still in the future.
-- Defer/snooze writes `deferred_until: now + 5 days` while keeping `status: open`.
-- Dismiss writes `status: dismissed` and `dismissed_at: now`, preserving the entry as ledger history.
-- Apply the ledger cap by pruning `resolved` entries first; never silently drop `open` or `dismissed` entries.
+Auto-disable when either condition holds:
+- `now >= enabled_until` (the 14-day window has elapsed), OR
+- `consecutive_clean_runs >= 6` (six successful drift-free runs — training wheels off early)
 
-Per-source attribution evidence:
-- **Chat:** sender metadata must unambiguously confirm Nathan authored the message. First-person commitments such as "I'll ..." are allowed only with verified Nathan sender metadata.
-- **Meeting notes and transcripts:** ledger only explicit Nathan-owned patterns such as `Nathan to ...`, `@Nathan ...`, or action items attributed to Nathan. Unattributed first-person transcript phrases are not enough because transcript prose lacks reliable speaker identity.
-- **Future sources:** declare the source's attribution evidence in this policy before writing to `cursor.commitments`.
+Auto-re-enable when `SKILL.md`'s current `post_run_drift_check_sentinel` differs from `last_sentinel_seen` (the skill was healed again; re-run training wheels on the new ruleset).
 
-**Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in process memory with the defaults above. Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
+**Current sentinel:** `v2-2026-06-01`. Bump this string in SKILL.md (search anchor: `post-run-drift-check-sentinel:`) whenever the post-run drift check's logic or scope changes — the bump re-enables training wheels for one fresh 14-day window on the next run.
+
+<!-- post-run-drift-check-sentinel: v2-2026-06-01 -->
+
+**Cursor migration note:** When `commitments`, `pending`, or `post_run_drift_check` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays / objects. For `post_run_drift_check`, the initial shape on first run after a sentinel-bump is:
+```json
+{
+  "enabled_until": "<now + 14 days, ISO>",
+  "first_enabled_at": "<now, ISO>",
+  "consecutive_clean_runs": 0,
+  "last_sentinel_seen": "<current sentinel from SKILL.md>"
+}
+```
+Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
 
 **Parse-error recovery:** If `JSON.parse` of the cursor file throws (truncated bytes, manual edit corruption, OS crash between flush and rename), treat the cursor as missing for this run (wide-window fallback per Step 1a). Emit one line to the report: `cursor file malformed: treating as first run`. Rename the corrupt file to `.productivity-sync-cursor.json.corrupt.<iso-timestamp>` before writing the next clean cursor. The rename preserves the corrupt content for post-mortem without blocking sync continuation.
 
 **Git forge cursor migration (R5 / R7):**
 
-- **Read path** — if `connectors.github` exists and `connectors.git_forges` is absent, migrate the legacy entry into the new shape in process memory only, then write under the new shape; the legacy `connectors.github` key is dropped on first successful write. Choose the migration target forge name as follows:
+- **Read path** — if `connectors.github` exists and `connectors.git_forges` is absent, migrate the legacy entry into the new shape in memory only, then write under the new shape; the legacy `connectors.github` key is dropped on first successful write. Choose the migration target forge name as follows:
   - If `.productivity.yml`'s `git:` map declares **exactly one** `type: github` forge, migrate into that forge's name (preserves `consecutive_failures` history against the user-declared name).
   - If `.productivity.yml` declares **zero** `type: github` forges but the legacy `github:` block triggers the back-compat shim, migrate into `github-default` (matching the shim's synthesised name).
   - If `.productivity.yml` declares **multiple** `type: github` forges, migration is ambiguous — write under `github-default` with `ok: false`, `error: "legacy cursor migration ambiguous (multiple github forges)"` and surface a pre-flight error asking the user to manually rename the cursor entry. Do NOT silently pick the first one.
@@ -308,14 +273,14 @@ Per-source attribution evidence:
   - GitHub: `updatedAt >= -7d`
 - **Subsequent runs** — pass `since: <last_sync>` (or the equivalent JQL / `--search` clause) to each connector. Always apply a 1-hour overlap (subtract 1h from cursor) to absorb clock drift and late-arriving events. iMessage's `sync_archive` already does this internally — match its pattern for the others.
 - **Per-connector independence** — a Jira failure doesn't reset the GitHub cursor. Only update each connector's `last_sync` when *that* connector completed successfully. Persist `ok: false` plus `error: "<short reason>"` on failure so the next run knows to widen its window.
-- **Bounded growth** — connector history, pending items, and commitment pruning follow the retention rules in the field table above.
+- **Bounded growth** — cursors only ever store a single timestamp per connector. The file stays tiny (~500 bytes).
 
 **Cursor write rules (write-after-success, never-before):**
 
 1. At skill end, for each connector that completed without error, set `connectors.<name>.last_sync = now` and `ok = true`.
 2. For each connector that errored, leave `last_sync` unchanged (so next run retries the same window) and set `ok = false`, `error = "<reason>"`.
 3. If `--deep` was used, also bump `last_full_sync` so deep-mode-specific cursors (chat 7d, sent email) shift forward.
-4. For each persisted connector that ran or failed pre-flight during a normal sync, append a `run_history` entry according to the field table retention rules. Track meeting transcript and meeting-note freshness under `connectors.meetings.run_history`. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
+4. For each connector that ran or failed pre-flight during a normal sync, append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry before appending if the array already contains 7 entries. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. Track `knowledge-base` and `transcriptions` separately. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
 5. Write `commitments` and `pending` arrays in the same atomic pass: any new commitment entries appended during this run are flushed here; any `pending` mutations (new deferrals, expiry removals) are flushed here.
 6. Write atomically: serialise to `.productivity-sync-cursor.json.tmp`, then `mv` over the real file. Avoids a half-written cursor if the skill is interrupted.
 7. **Never** write the cursor on user abort (e.g. `--dry-run` or user said "no, don't apply"). Cursor advance = "we successfully consumed this window," not "we ran the skill."
@@ -326,17 +291,17 @@ Per-source attribution evidence:
 - The file is older than 7 days (treat as stale; user probably skipped a week)
 - Connector's previous run had `ok: false`
 - Connector's MCP tool name changed (cursor pre-dates the rename)
-- Forge `auth` field changed since the last successful run (e.g. `auth: env` upgraded to `auth: bb-pr-plugin`). Detect by comparing the current `.productivity.yml`'s forge `auth` value against the cursor's last recorded `connectors.git_forges.<name>.last_auth` value; cache the current auth value per forge on each successful write.
+- Forge `auth` field changed since the last successful run (e.g. `auth: env` upgraded to `auth: bb-pr-plugin`). Detect by comparing the current `.productivity.yml`'s forge `auth` value against the cursor's last recorded value; cache the auth value per forge in `connectors.git_forges.<name>.last_auth` on each successful write. `last_auth` is a new optional field on each git_forges entry, default unset.
 
-**Why a file, not context:** the skill must survive across sessions. `context/` is wrong (durable knowledge, not state). `TASKS.md` is wrong (human-edited). A dot-file at repo root is the right surface — `.gitignore` it so the cursor doesn't churn git.
+**Why a file, not memory:** the skill must survive across sessions. `memory/` is wrong (durable knowledge, not state). `TASKS.md` is wrong (human-edited). A dot-file at repo root is the right surface — `.gitignore` it so the cursor doesn't churn git.
 
 **Before** writing the cursor file for the first time, append `.productivity-sync-cursor.json` to `.gitignore` if not already present. Verify the append succeeded before proceeding to the cursor write. The gitignore update must precede the first cursor write so the file never appears as a tracked candidate.
 
 ### 2. Sync from Connected Sources
 
-Read `.productivity.yml` and sync each declared connector. Reference `skills/productivity-connectors/SKILL.md` for tool name mappings. If a declared connector's MCP tool is unavailable, skip with a note.
+Read `.productivity.yml` and sync each declared connector. Reference the **productivity-connectors** skill for tool name mappings. If a declared connector's MCP tool is unavailable, skip with a note.
 
-**`--brief` mode:** Follow the **Brief Mode** execution contract above. The calendar substep below defines the pre-meeting brief content rendered in brief output.
+**`--brief` mode: Brief Run gating:** When `--brief` is active, run **calendar only** after pre-flight and build the pre-meeting brief from calendar plus already persisted local context (`TASKS.md`, `memory/`, and existing `docs/meetings/`). Transcriptions are pre-flight awareness only: do not search, fetch, inspect transcript metadata, create meeting notes, extract transcript actions, or enrich people notes. All other connectors are skipped silently. No error, no prompt. The pre-meeting brief section is the only output (Step 9 is gated accordingly). `--brief` is read-only: do not advance `last_sync`, append to `run_history`, update `ok`, or mutate `consecutive_failures` for any connector, including calendar and transcriptions. Rationale: brief mode prepares from local context but does not consume any external sync window. After rendering the pre-meeting briefs, check the stale-cursor trailer (see Step 9 `--brief` report section).
 
 **Calendar** (if configured):
 - Window: `since = max(cursor.calendar.last_sync - 1h, now - 2d)`, plus next 3 days. Cursor narrows the past side; future is always +3d.
@@ -358,7 +323,7 @@ For each calendar event in the next 24 hours that meets all of these:
 ### Tue 14:00 — Blackhawk catch-up (Tanya)
 Attendees: Tanya Hopmans, Sonny Hartley, Nathan
 Last interaction with Tanya: 4 days ago (May 7 standup — flagged voucher data field audit)
-Open threads (TASKS.md / context):
+Open threads (TASKS.md / memory):
 - 🟡 Watch: Blackhawk barcode/UPC check-digit confusion (sprint-24.md risks)
 - ⏸ Watch-list: POS-3877 CuC API auth — pull-in candidate now 1.4 ships
 Suggested talking points:
@@ -370,15 +335,15 @@ Last meeting note: docs/meetings/2026-05-07-team-standup-meeting.md
 **Assembly rules — keep it tight:**
 
 - **Header** — `### <Day HH:MM> — <Title> (<organiser-or-key-attendee>)`. One line.
-- **Attendees** — full names resolved via `context/people/` and `context/glossary.md`. Limit to 5 names; if more, suffix `+ N others`. Skip attendees you've never interacted with (no people-note + not in glossary).
-- **Last interaction with key attendee** — derived from `context/people/<person>.md` `## Signals` section's most recent entry. Format: "N days ago (<source> — <one-line summary>)". Skip if the person has no people-note or zero signals.
-- **Open threads** — grep TASKS.md + active project context files for entries that mention any attendee, any keyword from the meeting title, or any topic linked from the meeting description. Cap at 3 items. Prefer items in `🟡 Watch / Blocked`, `🔗 Dependencies`, `⏸ Watch-list` over `📋 Backlog`.
+- **Attendees** — full names resolved via `memory/people/` and `memory/glossary.md`. Limit to 5 names; if more, suffix `+ N others`. Skip attendees you've never interacted with (no people-note + not in glossary).
+- **Last interaction with key attendee** — derived from `memory/people/<person>.md` `## Signals` section's most recent entry. Format: "N days ago (<source> — <one-line summary>)". Skip if the person has no people-note or zero signals.
+- **Open threads** — grep TASKS.md + active project memory files for entries that mention any attendee, any keyword from the meeting title, or any topic linked from the meeting description. Cap at 3 items. Prefer items in `🟡 Watch / Blocked`, `🔗 Dependencies`, `⏸ Watch-list` over `📋 Backlog`.
 - **Suggested talking points** — 2 max, derived from open threads. Skip if the open-threads section was empty.
 - **Last meeting note** — most recent `docs/meetings/*.md` file that mentions a key attendee or the meeting title. Skip if none found in the last 30 days.
 
 **Heuristics for "key attendee":**
 
-- The non-self attendee with the most signal entries in `context/people/`
+- The non-self attendee with the most signal entries in `memory/people/`
 - Tie-breaker: alphabetical
 - 1:1s — easy: the other person
 - Standups / large meetings — pick the organiser if not self, else the highest-signal attendee
@@ -387,7 +352,7 @@ Last meeting note: docs/meetings/2026-05-07-team-standup-meeting.md
 **Routing rules — choose where to surface:**
 
 - **All briefs go in the report (Step 9)** under a new section `### Today's meetings (next 24h)` — this is the morning standup brief
-- **Optionally** persist to `~/.claude/cache/productivity-sync-briefs-<date>.md` (matches the existing kickoff-drafts cache pattern). User can re-open without re-running sync.
+- **Optionally** persist to `~/.claude/cache/productivity-sync-briefs-<date>.md` (matches the existing kickoff-drafts cache pattern from `new-sprint` Step 11). User can re-open without re-running sync.
 - **Never** write briefs to TASKS.md or repo files — they're ephemeral, regenerated each run
 
 **Skip conditions:**
@@ -398,7 +363,7 @@ Last meeting note: docs/meetings/2026-05-07-team-standup-meeting.md
 
 **Cross-cutting integrations (already built, just reuse):**
 
-- People-note `## Signals` reads — pre-meeting prep reads already accepted people-note data and gives those notes a daily payoff.
+- People-note `## Signals` reads — the same surface `productivity-sync` already writes to via `apply-person-update.ts`. Pre-meeting prep is the *read-back* of that data, finally giving the people-notes a daily payoff.
 - TASKS.md grep — same parsing the action item write-back uses.
 - Meeting note glob — same as Step 2 substep 2.
 
@@ -406,9 +371,9 @@ Last meeting note: docs/meetings/2026-05-07-team-standup-meeting.md
 
 - ❌ Generating a brief for every event including focus blocks, DNDs, and own-calendar-blocks (the filter exists for a reason)
 - ❌ Surfacing more than 3 open threads per meeting (the brief becomes wallpaper if it's long)
-- ❌ Persisting briefs to TASKS.md or context files (they're ephemeral)
-- ❌ Inventing "talking points" with no grounding in actual TASKS.md / context entries
-- ❌ Resolving attendee names by guessing — only via context/glossary, fall back to the raw email address
+- ❌ Persisting briefs to TASKS.md or memory files (they're ephemeral)
+- ❌ Inventing "talking points" with no grounding in actual TASKS.md / memory entries
+- ❌ Resolving attendee names by guessing — only via memory/glossary, fall back to the raw email address
 
 **Email** (if configured):
 - Window: `since = cursor.email.last_sync - 1h` (fallback: unread + last 7d)
@@ -421,14 +386,14 @@ Last meeting note: docs/meetings/2026-05-07-team-standup-meeting.md
 - Incremental sync: call `sync_archive(save_dir: "~/code/personal-messages")`
   - Cursor-based with 1-hour overlap safety — persists markdown, manifest, and cursor automatically
   - Returns `commitment_candidates` directly in the response
-- Cross-reference senders against `context/people/` in the owning repo
-- For durable people updates, prepare structured JSON in the sync report; route write placement through `context-advisor` before mutating person notes.
+- Cross-reference senders against `memory/people/` in the owning repo
+- For durable people updates, prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
 - Present returned `commitment_candidates` as "Possible Missing Tasks (from Messages)" for user triage
 - If commitments have actionable follow-ups and the chat is allowlisted, offer to reply via `reply(chat_id, text)`
 - If `owner_status` is `ambiguous` or `unknown`, ask before writing to any repo task surface
-- Write tasks and context updates to the owning repo, not back into the raw corpus repo
+- Write tasks and memory updates to the owning repo, not back into the raw corpus repo
 - Never copy raw message bodies into `my-second-brain`
-- **CLI fallback:** `bun run skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
+- **CLI fallback:** `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
 
 **Chat** (if configured -- `chat: teams` / `chat: slack` in `.productivity.yml`):
 
@@ -439,7 +404,13 @@ Chat is now part of default mode when configured. Reasoning: in projects where `
 - Deep mode (see below): expands to 7d for retrospective scan.
 
 **Sources by `chat:` value:**
-- `chat: teams` — Microsoft Teams via Notion's connected-source search (`notion-search` with Teams as the source). Notion indexes Teams content under the user's account if the connector is set up. Falls back to skipping if Notion search returns no Teams results.
+- `chat: teams` — Microsoft Teams via the local `teams` skill (`~/.claude/skills/teams`), which reads the on-machine Teams v2 IndexedDB cache read-only (no Graph API, no Notion, no network to Microsoft). Dispatch via its CLI (`skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py <command> --json`):
+  - **Windowed pull:** `digest --hours <N> --json` where `N` = hours since `cursor.chat.last_sync` (fallback 24). This is the default-mode chat window. Each message object in `data[]` carries `time` (ISO timestamp), `author` (display name), `creator_mri` (stable identity — use this for attribution), `content` (message text), `conversation_id`, `from_me`, and `message_id`.
+  - **Ticket cross-reference:** for each `POS-NNNN` in the active sprint, `ticket POS-NNNN --json` returns every mention chronologically — more reliable than substring search. Treat an empty `data[]` as "no mentions cached" (normal — older tickets predate the cache window), not an error.
+  - **Attribution:** read `creator_mri` from the JSON, never `author` — display names collide. This is load-bearing given the two-Nathans split (see `project_gift_card_api_backend_pod.md`); Nathan Vale and Nathan Liu appear in the same digest with distinct MRIs (Vale = `8:orgid:f8e08355-…`, per the store's `whoami`). Run `disambiguate "Nathan"` / `whois <query>` if an MRI is unfamiliar, before ledgering any commitment.
+  - **Freshness:** the newest messages lag until Teams flushes its LevelDB memtable — keep Teams running for a current cache; a missing recent message is usually lag, not absence.
+  - Falls back to skip-with-note if `.venv` is missing (`bootstrap.sh` not yet run) or `doctor` reports the store unavailable.
+  - **Indexing order (fast path first):** if this run will use `qmd search`/`qmd query` over the corpus (deep mode, or any historical lookup), run `teams sync` (BM25-only, fast) **before** chat extraction so keyword search is live. Do **not** embed vectors here — the vector pass is slow and is deferred to the end of the skill (see the closing "Refresh vectors" step). Default-mode `digest`/`ticket` read the live cache directly and need no `sync` at all.
 - `chat: slack` — Slack MCP if available (`mcp__slack__*`). Falls back to skip-with-note if not installed.
 - `chat: none` (or omitted) — skip silently, no warning.
 
@@ -471,7 +442,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 | **Dependency** | Someone else promises work Nathan is waiting on | Propose TASKS.md `🔗 I'm waiting on` / dependency update |
 | **Commitment** | "@Nathan can you ...", "Nathan to ...", or first-person "I'll ..." / "I'll send ..." / "Will do X by Y" sent by Nathan, with a concrete verb-object | Propose self-owned action item via the write-back flow |
 
-**Commitment ledger extraction (chat):** Apply the Commitment Ledger Policy from Step 1a. Chat-specific attribution requires sender metadata that unambiguously confirms Nathan authored the message; first-person commitments (`I'll ...`, `I will ...`, `I have ...`) are allowed only with that verified sender metadata. Do not ledger based on message content alone when sender is unknown or `ambiguous`.
+**Commitment ledger extraction (chat):** For each message where sender metadata confirms Nathan is the speaker, check for first-person patterns (`I'll ...`, `I will ...`, `I have ...`) with a concrete verb-object. Do not ledger vague acknowledgements such as "I'll check", "I'll look", or "will do" unless source context supplies the concrete action object. Only ledger commitments when sender identity is unambiguous. Do not ledger based on message content alone when sender is unknown or `ambiguous`. Other people's promises are dependencies, not commitments, and do not enter `cursor.commitments`. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (chat message timestamp or thread URL). Write to `cursor.commitments` per the schema in Step 1a. Deduplicate by id (hash of owner+verb_object+source). Do not require user confirmation for ledger writes because the ledger is sync state; the user reviews ledger entries via "Dropped balls" in the report before any task or memory write.
 
 **Filter aggressively — chat is high-volume:**
 - Drop reactions / acks / pure social messages
@@ -480,7 +451,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 - Drop messages in channels not relevant to the project (use `.productivity.yml` channel allowlist if present, else just the configured project's channels)
 
 **Cross-reference rules:**
-- **Ticket-key mentions** — for every `POS-NNNN` found, check if the ticket appears in TASKS.md. If yes and the message implies a status change ("done", "merged", "in test"), surface as drift. If no and the directive is "pull in", propose a Watch-list → active move.
+- **Ticket-key mentions** — for every `POS-NNNN` found, check if the ticket appears in TASKS.md. If yes and the message implies a status change ("done", "merged", "in test"), surface as drift. If no and the directive is "pull in", **first verify the ticket is in the open sprint**. If yes, propose adding to 🔥 Now. If no, surface as an "Ask <PM>" question — never propose a Watch-list write. TASKS.md is sprint-only.
 - **Verbatim quote capture** — for high-stakes directives ("X outranks Y", "deadline is Friday"), preserve the exact quote with speaker + timestamp. Match the existing `feedback_verify_quote_speaker_with_nathan.md` rule — surface back to user before writing it into a sprint doc.
 - **Multi-channel duplication** — same directive in DM + channel = single ask, not two.
 - **Transcript misclassification** — if any one of the transcript-detection heuristics above hits, route to Meetings persistence BEFORE extraction. Never extract action items from a meeting transcript via the chat path. Even if the signals look identical to chat directives, the source has different evidentiary weight and must land in `docs/meetings/` first.
@@ -491,7 +462,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 >
 > **Ticket directives (1):**
 > - **Sonny → Nathan, Wed 14:32 (DM):** "POS-4058 / POS-4059 are more important than POS-3867 / POS-3795. As they're not ready, pick the others first."
->   → Propose: add to `context/projects/sprint-24.md` Decisions Locked
+>   → Propose: add to `memory/projects/sprint-24.md` Decisions Locked
 >
 > **Dependencies (1):**
 > - **Josh → Nathan, Tue 11:08 (POS Yellow channel):** "I'll get the Octopus pipeline change in by EOD"
@@ -512,7 +483,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 **Messages (deep)** (if `--deep` and messages configured):
 - Expand to 7-day window: `sync_archive(save_dir: "~/code/personal-messages", since: "<7-days-ago-ISO>")`
 - Separate outbound commitments pass: `search_messages(from_me: true, since: "<7-days-ago-ISO>", save: true, save_dir: "~/code/personal-messages")`
-- Surface new contacts not in `context/people/` using `list_contacts()`
+- Surface new contacts not in `memory/people/` using `list_contacts()`
 - Full AI analysis of returned message threads for missed action items
 - Use `search_messages` for targeted follow-up queries on flagged threads
 
@@ -520,7 +491,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 
 **Connector routing:** Read `transcriptions:` from `.productivity.yml` first. If set, use that connector and tool. If absent, fall back to `knowledge-base:`. For most projects where Zoom auto-transcribes into Notion, `transcriptions: notion` + `transcriptions-db: collection://...` is the correct setup — Confluence is for doc lookup, not transcripts.
 
-**Persistence is mandatory.** Every raw meeting transcript in window must produce a `docs/meetings/YYYY-MM-DD-slug.md` file in the owning repo (or be explicitly skipped to a non-owning repo) *before* any signals from that transcript are extracted into TASKS.md or context. The transcript is the canonical source — losing it because "I already pulled the action items" is a contract violation, even if the resulting TASKS.md edits look complete.
+**Persistence is mandatory.** Every raw meeting transcript in window must produce a `docs/meetings/YYYY-MM-DD-slug.md` file in the owning repo (or be explicitly skipped to a non-owning repo) *before* any signals from that transcript are extracted into TASKS.md or memory. The transcript is the canonical source — losing it because "I already pulled the action items" is a contract violation, even if the resulting TASKS.md edits look complete.
 
 This substep runs even when calendar is ❌. Calendar enriches matching (attendee names, event titles); without it, fall back to the transcript's own title and the speakers heard in the content. Do not skip meeting-note creation just because calendar is down.
 
@@ -533,6 +504,25 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
    - If `transcriptions: notion` and no `transcriptions-db:`: call `mcp__notion__notion-search` with a title/content query + date filter. Less precise — may surface other teams' meetings.
    - If `transcriptions: confluence`: use `mcp__mcp-atlassian__confluence_search` with CQL date filter.
 
+3a. **Skip-rule classifier (fail-closed, mandatory before triage)** -- For each transcription returned by substep 3, classify it against the project's documented skip rules BEFORE surfacing it to the user or any downstream substep. The classifier must fetch transcript content, not rely on title or summary metadata.
+
+   **What counts as a skip rule:** any `feedback_skip_*` memory note in `~/.claude/projects/<project>/memory/` (e.g. `feedback_skip_monash_meetings_entirely.md`) whose body documents content-based exclusion for the current project. The classifier loads these once per run and builds a signal list per rule:
+   - For each skip-rule note, extract the documented trigger signals (named people, project codes, domain terminology). The Monash rule's signals are: SLO2, SLO4, SFA, Ellucian, BSA, Banner, FlyWire, OCI, Ashwini, Rita, Nandini, Zai, Kerry, plus any other markers the rule names.
+
+   **How to classify:**
+   1. Call `mcp__notion__notion-fetch` with `include_transcript: true` on the page ID. **Use the `<transcript>` block, not the `<summary>` block** — the AI summary can omit out-of-scope signals (Monash names, project codes), making in-scope misclassification more likely. The full transcript is the only reliable router.
+   2. Scan the transcript text for any signal from any skip rule (case-insensitive, word-boundary match).
+   3. If ≥1 signal matches: tag the transcript `skip: true`, record `skip_reason` as `"<rule-name>: signals matched [<signal1>, <signal2>, ...]"`, and remove it from the candidate set for substeps 4-7. Add it to the Step 9 report as `Skipped per <rule-name>: <transcript title> (signals: <signal list>)`.
+   4. If 0 signals match: pass through to substep 4.
+
+   **Hard rules:**
+   - The classifier MUST run before any user-facing `AskUserQuestion` about transcript routing. A skipped transcript should never appear in a triage prompt.
+   - The classifier MUST use the raw `<transcript>` block, not the `<summary>` or page title. Surface metadata is unreliable for routing: a Monash sprint discussion can be titled "@Today 4:01 PM (GMT+10)" with no domain markers visible until the transcript loads.
+   - Skip-classification is **content-based, not source-based**. Do not assume "this came from the project's transcriptions-db so it must be in scope" — the same workspace can hold transcripts for multiple engagements when calendars overlap (e.g. Nathan's POS Yellow + Monash parallel work per `project_monash_parallel_engagement.md`).
+   - If `include_transcript: true` returns an empty `<transcript>` block: do NOT default to "in scope." Default to **skip with reason "transcript unavailable for classification"** and surface to the user as `⚠️ Could not classify <title> — transcript empty. Treat as skip until manual review.` Fail closed, never open.
+
+   **Why this exists:** discovered 2026-05-29 — a Monash transcript was surface-classified as POS Yellow because its title was `@Today 4:01 PM (GMT+10)` and its preview mentioned "sprint management and ticket tagging" (a phrase that fits multiple engagements). The skill asked the user whether to persist/extract; the user said yes; the downstream persist sub-agent fetched the full transcript, hit Monash signals, and correctly refused. The user-facing decision was made on top of a wrong route. The fix is to run the content-based classifier upstream so wrong routes never reach the user.
+
 4. **Match transcriptions to events** -- Match by time alignment: extract the time from the transcription title (Notion auto-transcripts use `@Day HH:MM (GMT+TZ)` titles) and match to the calendar event whose start time is closest (within 15 minutes). Confirm by checking that the raw transcript content mentions keywords from the calendar event summary.
 
    Once matched, extract the **authoritative participant list** from the calendar event's `attendees` array (filter out room resources and declined invitees). This is the ground truth for who was in the meeting. The Notion-generated title and transcript speaker names are unreliable for this — Notion AI names the page from the meeting topic, not the participants, so a 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Calendar attendees do not have this problem.
@@ -543,13 +533,13 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
    - If `transcriptions: notion`: call `mcp__notion__notion-fetch` with `include_transcript: true` on the page ID. **Use only the `<transcript>` block — never the `<summary>` block.** The summary is Notion AI generated and unreliable (name misattributions, missing context). The raw transcript is the authoritative source.
    - Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`.
    - **Frontmatter title:** use the calendar event `summary` field, not the Notion page title. Notion auto-titles pages as `@Day HH:MM` or generates a title from the transcript topic — neither is reliable as a meeting name.
-   - **Frontmatter attendees:** use the calendar attendee list from step 4, resolved to full names via `context/glossary.md` and `context/people/`. Never derive the attendees list from the Notion title or transcript speaker names.
+   - **Frontmatter attendees:** use the calendar attendee list from step 4, resolved to full names via `memory/glossary.md` and `memory/people/`. Never derive the attendees list from the Notion title or transcript speaker names.
    - Store the source Notion page ID in the `transcription:` frontmatter field — used to skip reprocessing on subsequent runs.
 
    **After the meeting note file is confirmed written**, run the transcript enrichment pass before action-item extraction:
 
    **5a. Transcript speaker enrichment pass:**
-   1. Build a known-names lookup set: read `context/people/*.md` file stems (e.g. `piyush-kumar.md` → candidates: "Piyush Kumar", "Piyush"). Read `context/glossary.md` for any person names listed there. Add all to the lookup set. Full-name matches win; first-name matches count only when exactly one people-note or glossary entry has that first name.
+   1. Build a known-names lookup set: read `memory/people/*.md` file stems (e.g. `piyush-kumar.md` → candidates: "Piyush Kumar", "Piyush"). Read `memory/glossary.md` for any person names listed there. Add all to the lookup set. Full-name matches win; first-name matches count only when exactly one people-note or glossary entry has that first name.
    2. Scan the raw `<transcript>` block text for any string in the lookup set (case-insensitive, word-boundary match). Collect: matched people-note filenames (unambiguous), ambiguous names (first name matches >1 note), and unmatched names (found in transcript but not in people/ or glossary).
    3. For each **unambiguous** matched existing person: build a structured JSON signal payload:
       ```json
@@ -558,11 +548,18 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
         "source_handles": { "transcript": ["<notion-page-id>"] }
       }
       ```
-      Keep the signal short and factual. Do not include raw transcript excerpts, commitments, or dependencies.
-   4. Add the structured payloads to the sync report as people-context proposals. Ask before any durable person-note write. Use `context-advisor` when owner, privacy, write authority, or target path is unclear. If the user skips, keep the meeting note and continue.
+      Keep the signal short and factual. Do not include raw transcript excerpts, commitments, or dependencies. Run a dry-run preview (wrapped with `timeout 15s` to defend against script hangs):
+      ```bash
+      timeout 15s bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
+        --source transcript \
+        --handle <person-file-stem> \
+        --report /tmp/productivity-sync-enrichment-<stem>.json \
+        --output /tmp/productivity-sync-enrichment-<stem>.preview.md
+      ```
+   4. If any previews were generated, ask the user once per meeting before any live write: "Transcript speaker enrichment: preview generated for N people from <meeting title>. Apply?" For each approved person, run `timeout 15s bun run apply-person-update.ts --write` (timeout wrapper applies to the live `--write` call as well). Do **not** pass `--create-if-missing` for transcript speaker matches. If the user skips, keep the meeting note and continue.
    5. Collect enrichment stats: `proposed`, `applied`, `skipped`, `unmatched` count, `ambiguous` names list.
 
-   **Graceful skip:** If no accepted people-note write owner exists, log one line: `"transcript enrichment proposed for <person>; write owner not selected"`. Continue without blocking meeting note creation or action item extraction.
+   **Graceful skip:** If `apply-person-update.ts` is not found at the expected path, or any call exits non-zero, log one line: `"transcript enrichment skipped for <person>: <reason>"`. Continue without blocking meeting note creation or action item extraction. If a `timeout 15s` wrapper fires before exit, treat it identically to non-zero exit: log `transcript enrichment skipped for <person>: timed out` and continue.
 
    **If the `<transcript>` block is absent or empty**, skip enrichment silently, no error.
 
@@ -570,15 +567,17 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
 6. **Extract action items** -- Collect action items from all newly created meeting notes. These feed into the action item write-back below (substep 7) and the report (Step 9).
 
-   **Ordering rule:** Step 5 (persist meeting note file) must complete before any action-item extraction begins. Never extract signals from a transcript that hasn't been written to disk first — even if the user said "skip Monash meetings" or "release-day mode, defer." In those cases, persist the meeting note to the appropriate repo (or to `~/code/my-second-brain/docs/meetings/` if it's not owned by the current repo) and then skip the extraction. *Skipping a meeting* means deferring signal extraction; it never means losing the transcript.
+   **Ordering rule:** Step 5 (persist meeting note file) must complete before any action-item extraction begins. Never extract signals from a transcript that hasn't been written to disk first — even if the user said "release-day mode, defer." In those cases, persist the meeting note to the appropriate repo (or to `~/code/my-second-brain/docs/meetings/` if it's not owned by the current repo) and then skip the extraction. *Skipping a meeting* means deferring signal extraction; it never means losing the transcript.
 
-   After action item extraction, append the enrichment summary to the per-meeting report line: `"1 speaker update proposed, 1 applied, 2 unmatched."` (or `"transcript enrichment proposed; write owner not selected"` on graceful-skip).
+   **Skip-rule transcripts are different.** Transcripts tagged `skip: true` by the substep 3a classifier (e.g. Monash transcripts under the skip-entirely rule) are filtered out *before* substep 4, so they never reach this step. They are not persisted, not extracted, not routed — by the time substep 6 runs, they are already gone. Do not treat the "skipping = skip extraction, keep file" rule as applying to skip-rule transcripts; it applies to transcripts that pass the classifier but the user chooses to defer.
 
-   **Commitment extraction pass (meeting notes):** Apply the Commitment Ledger Policy from Step 1a. After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only Nathan-owned obligations with a concrete verb-object:
+   After action item extraction, append the enrichment summary to the per-meeting report line: `"1 speaker update proposed, 1 applied, 2 unmatched."` (or `"transcript enrichment skipped (apply-person-update.ts not found)"` on graceful-skip).
+
+   **Commitment extraction pass (meeting notes):** After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only Nathan-owned obligations with a concrete verb-object:
    - `(Nathan|@Nathan)( to| can you| please)` followed by a concrete verb-object (e.g. "Nathan to send the onboarding bundle to Kerry by Friday")
    - Patterns attributed to Nathan in the action items section of the note (e.g. `- [ ] Nathan to ...`)
 
-   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up"). Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Any write to `TASKS.md`, `context/`, or people notes remains ask-gated via action item triage.
+   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up"). Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Do not ledger vague acknowledgements like "I'll check" unless the concrete action object is present. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (meeting note path). Write to `cursor.commitments`. Deduplicate by id (hash of owner+verb_object+source). This ledger write is automatic because it is cursor state; any write to `TASKS.md`, `memory/`, or people notes remains ask-gated via action item triage.
 
 7. **Action item write-back** — never let action items vanish into the report. For every action item extracted in substep 6, decide its destination, then ask the user to apply.
 
@@ -591,16 +590,16 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
   - **deadline** — explicit dates (`by Friday`, `before regression`) or relative phrases. Normalise to absolute date when possible.
   - **ticket key** — any `POS-NNNN` (or configured `ticket-prefix`-NNNN) mention in the surrounding bullet.
 - **Filter out** items where `owner != currentUser` AND there's no `Nathan` / `me` mention nearby. Other people's actions are tracked in the `🔗 Dependencies → I'm waiting on` section, not as your own todos.
-- **Deduplicate** against TASKS.md by fuzzy match on the verb+object string. Skip items that already appear in `🔥 Now`, `🎯 Ordered queue`, or any project file's open-checkbox list. If a near-match exists in `📋 Backlog`, surface as "already backlogged — promote?"
+- **Deduplicate** against TASKS.md by fuzzy match on the verb+object string. Skip items that already appear in `🔥 Now`, `🎯 Ordered queue`, or any project file's open-checkbox list. Do NOT assume TASKS.md has a `📋 Backlog` or `⏸ Watch-list` section — these are anti-patterns per Sonny's Operating Manual rule "sprint board is the source of truth." If a ticket isn't in sprint, Jira's backlog is its home, not TASKS.md.
 
 **Ticket key verification gate (mandatory before any durable write):**
 
-Notion / Teams / Zoom transcripts are unreliable for ticket numbers. Speakers misremember keys, transcribers mishear digits (4154 ↔ 4155 ↔ 4145), and verbatim quotes captured by Notion AI carry the same errors forward. Before writing a transcript-extracted ticket key into TASKS.md, meeting notes' Action Items, or `context/projects/*.md`:
+Notion / Teams / Zoom transcripts are unreliable for ticket numbers. Speakers misremember keys, transcribers mishear digits (4154 ↔ 4155 ↔ 4145), and verbatim quotes captured by Notion AI carry the same errors forward. Before writing a transcript-extracted ticket key into TASKS.md, meeting notes' Action Items, or `memory/projects/*.md`:
 
-1. **Cross-check every extracted ticket key against the open-sprint query results** from the project-tracker step (above). Treat the windowed open-sprint query as a fast context cache, not proof that an absent key does not exist. The result is one of:
+1. **Cross-check every extracted ticket key against the open-sprint query results** from the project-tracker step (above). The result is one of:
    - **Match + assignee = currentUser** → safe to write as a Nathan-owned commitment.
    - **Match + assignee ≠ currentUser** → **owner mismatch**. The transcript attributed the ticket to the user, but Jira shows someone else owns it. Surface verbatim quote + Jira ground truth side by side; ask the user to confirm before any write. The Jira owner usually wins — transcripts are lossy.
-   - **No match in the windowed open-sprint results** → do **not** conclude the key is invalid yet. First run an unconditional Jira lookup for the extracted key without the `updated >= cursor...` window (`key = POS-NNNN`, or `sprint in openSprints() AND key = POS-NNNN` when sprint membership matters). If that lookup matches, apply the same assignee rules above. If it still has no match, run a targeted adjacent-digit lookup (`key in (POS-NNNN-1, POS-NNNN, POS-NNNN+1)`) to test for a mishear before concluding the ticket doesn't exist. Only after both lookups fail, surface as "ticket key TBC — transcript said `<key>`, Jira has no such ticket" and **do not** commit the key into 🔥 Now. Use a placeholder like `(ticket TBC — to verify with <owner>)`.
+   - **No match in open-sprint** → either (a) the ticket key was mis-transcribed, or (b) the ticket isn't filed yet. Run a targeted lookup (`key in (POS-NNNN-1, POS-NNNN, POS-NNNN+1)`) to test for an adjacent-digit mishear before concluding the ticket doesn't exist. If still no match, surface as "ticket key TBC — transcript said `<key>`, Jira has no such ticket" and **do not** commit the key into 🔥 Now. Use a placeholder like `(ticket TBC — to verify with <owner>)`.
 2. **Never copy a verbatim transcript ticket key directly into a durable write** without running step 1, even when the transcript is clear. The verification cost is one extra Jira call; the cleanup cost when a wrong key lands in TASKS.md is much higher (it propagates into PR descriptions, commit messages, and follow-up meeting notes).
 3. **The Notion AI `### Action Items` summary is doubly suspect** — it both inherits speaker misattributions AND can hallucinate ticket keys that weren't in the raw transcript. Always run verification against the raw `<transcript>` block, then verify the key against Jira. Two gates, not one.
 
@@ -610,11 +609,13 @@ Notion / Teams / Zoom transcripts are unreliable for ticket numbers. Speakers mi
 
 | Item shape | Destination |
 |---|---|
-| Has a sprint-active ticket key | `🔥 Now` section under that ticket's existing entry, or as a new entry if none |
-| Has a non-active ticket key (backlog / watch-list) | `⏸ Watch-list` annotation: "from <meeting>: <action>" |
-| No ticket key, fits an active project | `context/projects/<project>.md` under an `## Open follow-ups` section |
-| No ticket key, no project anchor | TASKS.md `🔥 Now` as a free-text item |
-| Cross-project commitment to a person | `context/people/<person>.md` `## Open Threads` section |
+| Has a sprint-active ticket key (verified against open-sprint query) | `🔥 Now` section under that ticket's existing entry, or as a new entry if none |
+| Has a ticket key, **NOT in active sprint** | **`❓ Ask <PM>` section** as a pull-in question. Never write to 🔥 Now. Even if the transcript says "Nathan to start X" — if X isn't in sprint, surface the conflict to the user before any write |
+| Has a ticket key that doesn't exist in Jira | Surface as "ticket key TBC" — see ticket-key verification gate |
+| No ticket key, fits an active project | `memory/projects/<project>.md` under an `## Open follow-ups` section |
+| No ticket key, no project anchor, **non-sprint work** | Surface to user — ask whether to write at all. Do NOT auto-route to 🔥 Now |
+| No ticket key, no project anchor, **clearly sprint-relevant** (e.g., logistics, deploy step) | TASKS.md `🔥 Now` as a free-text item |
+| Cross-project commitment to a person | `memory/people/<person>.md` `## Open Threads` section |
 | Personal / non-work | Skip — surface to user, don't write to repo task surface |
 
 **Ask the user (batched ≤4 per `AskUserQuestion` call):**
@@ -626,7 +627,7 @@ For each routed item (new or re-surfaced deferred), present four options:
 > "From May 7 standup: '**Nathan** to respond to Box file sharing process for extension handoff'
 > Suggested destination: TASKS.md `🔥 Now` (no ticket key, no clear project anchor)
 > (a) Apply as suggested
-> (b) Different destination: → `context/projects/monash.md` / `context/people/daniel-waghorn.md`
+> (b) Different destination: → `memory/projects/monash.md` / `memory/people/daniel-waghorn.md`
 > (c) Skip — already handled / not actionable
 > (d) Defer to next sync"
 
@@ -635,7 +636,7 @@ For re-surfaced deferred items, label them: `"Deferred from YYYY-MM-DD (deferred
 When the user selects **(d) Defer to next sync**: write (or update) the item in `cursor.pending`:
 - For a new item: `{ id: hash(text+source_meeting), text, source_meeting, routing_suggestion, defer_count: 1, deferred_at: now }`
 - For a re-deferred item: increment `defer_count`, update `deferred_at: now`
-- Do **not** write to TASKS.md or any context file.
+- Do **not** write to TASKS.md or any memory file.
 
 Group items by source meeting so the user sees them in context, not as a flat list.
 
@@ -644,8 +645,8 @@ Group items by source meeting so the user sees them in context, not as a flat li
 - Always include the source pointer in the written entry: `(from docs/meetings/<file>.md, <date>)`
 - Preserve the original `- [ ]` checkbox state
 - Append, never overwrite — write to the end of the destination section unless the user picks a specific position
-- For `context/people/*.md`, follow the people-note contract from "People Note Writes" above; use structured JSON proposals and do not freehand edit.
-- **Never auto-write** — every item passes through `AskUserQuestion`. The skill's "never auto-add tasks or context without user confirmation" rule applies here too.
+- For `memory/people/*.md`, follow the people-note contract from "People Note Writes" above — use `apply-person-update.ts` with structured JSON, don't freehand edit
+- **Never auto-write** — every item passes through `AskUserQuestion`. The skill's "never auto-add tasks or memories without user confirmation" rule applies here too.
 
 **Cross-source action items:**
 
@@ -656,31 +657,104 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ Writing action items directly without user confirmation
 - ❌ Losing a triage item permanently when the user skips — offer defer instead.
 - ❌ **Using the Notion AI `<summary>` block as the transcript source** — always fetch with `include_transcript: true` and use the `<transcript>` block. The AI summary misattributes speakers, omits context, and fabricates action items. This is a hard rule, not a preference.
+- ❌ **Classifying transcript scope (POS Yellow vs Monash vs other) from page title, page preview, or AI summary alone.** The full `<transcript>` block is the only reliable signal source for routing. A Monash sprint discussion can look indistinguishable from a POS Yellow sprint discussion at the metadata level — both mention "sprint", "ticket", "review", "pickup". Domain signals (named people, project codes, product names) only appear reliably in the transcript body. See substep 3a above.
+- ❌ **Asking the user to route a transcript (persist+extract / persist only / skip) before running the skip-rule classifier on its content.** The user-facing triage assumes the transcript is in scope for the current project. Skipped transcripts must be filtered out before the question is asked, otherwise the user makes a routing decision on top of a misclassification (e.g. saying "persist + extract" for a transcript that should never have been surfaced). Failure mode observed 2026-05-29: a Monash transcript reached the routing prompt; only the downstream persist agent's fail-closed read of the transcript prevented memory contamination.
+- ❌ **Defaulting an empty `<transcript>` block to "in scope" for skip-rule classification.** If the transcript is empty, the classifier cannot make a defensible call — default to skip-with-warning rather than passing the transcript through. Fail closed.
 - ❌ Re-extracting action items from already-processed meeting notes on subsequent runs (use cursor + meeting note's `transcription:` frontmatter ID to skip)
 - ❌ Adding other people's actions to the user's TASKS.md (they go in Dependencies / `🔗 I'm waiting on`)
 - ❌ Filing personal-life items into work repos
-- ❌ **Extracting signals from a transcript without persisting the meeting note first** — even if every signal lands in TASKS.md/context correctly, the source transcript is now invisible to future syncs (the cursor advances past it). Always write `docs/meetings/YYYY-MM-DD-slug.md` *before* extraction, and never let "the user said skip" mean "skip the file, just keep the signals." Skipping = skip extraction, keep file.
+- ❌ **Extracting signals from a transcript without persisting the meeting note first** — even if every signal lands in TASKS.md/memory correctly, the source transcript is now invisible to future syncs (the cursor advances past it). Always write `docs/meetings/YYYY-MM-DD-slug.md` *before* extraction, and never let "the user said skip" mean "skip the file, just keep the signals." Skipping = skip extraction, keep file.
 - ❌ Skipping meeting-note creation because calendar is unavailable — the transcriptions connector alone is sufficient. Calendar is an enrichment layer (attendee resolution, event title matching), not a prerequisite.
 - ❌ Searching `knowledge-base:` for transcripts — transcripts live in `transcriptions:`. Confluence is for doc/page lookup only. Searching Confluence for meeting transcripts will return nothing useful.
 - ❌ Blocking meeting note creation or action item extraction on enrichment failure — graceful skip applies; log the reason and continue.
 - ❌ Creating a people-note stub from transcript speaker matching — transcript enrichment can only propose updates to **existing** unambiguous people notes. Never pass `--create-if-missing` for transcript speaker matches.
 - ❌ Applying first-name matches when more than one people-note has that first name — ambiguous first-name matches are reported, never written.
 - ❌ **Using the Notion page title or transcript speaker names to determine who was in a meeting.** Notion AI generates the page title from the meeting *topic*, not from the *participants*. A 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Always use the calendar event attendees list as the authoritative participant source. If calendar is unavailable, flag the attendees as unverified in the meeting note.
-- ❌ **Writing a transcript-extracted ticket key directly into TASKS.md / meeting notes without verifying against Jira's open-sprint query and the unwindowed key fallback.** Transcripts misattribute ticket keys constantly (4154 ↔ 4155, 4160 ↔ 4116, etc.). Always cross-check via the open-sprint query; if the key isn't there, run an unconditional `key = <key>` lookup before trying adjacent-digit lookups. Use `(ticket TBC)` placeholders rather than committing a wrong key.
+- ❌ **Writing a transcript-extracted ticket key directly into TASKS.md / meeting notes without verifying against Jira's open-sprint query.** Transcripts misattribute ticket keys constantly (4154 ↔ 4155, 4160 ↔ 4116, etc.). Always cross-check via the open-sprint query; if the key isn't there, run an adjacent-digit lookup. Use `(ticket TBC)` placeholders rather than committing a wrong key.
 - ❌ **Stopping the project-tracker step after the my-assignee query because "everything I own is already in TASKS.md."** The my-assignee query alone doesn't surface tickets mentioned in meeting transcripts that are owned by other team members, sibling tickets in the same epic, or just-filed release-train / regression-prep tickets that signal next-sprint shape. The open-sprint query is mandatory, not optional.
+- ❌ **Guessing a Jira board id when `.productivity.yml` doesn't declare `project-tracker-board:`.** The skill MUST run the board-id discovery procedure (above) and persist the resolved id back to `.productivity.yml` via operator confirmation, not pick a plausible-looking number and hope. A wrong id makes every drift detector run against the wrong sprint and silently return false-clean results. Failure mode observed 2026-06-01: probed board 419 (guessed), got `[]`, surfaced as inconclusive — but if 419 had been a real (wrong) board with an active sprint, the entire identity check would have silently false-passed against a sprint that has nothing to do with the operator's project.
+- ❌ **Writing an out-of-sprint ticket into `🔥 Now` because the meeting transcript named it as Nathan's next pickup.** Transcripts often surface "I'll start X next" without speakers checking sprint membership. The skill MUST verify against the open-sprint query before any 🔥 Now write. POS-3275 sat in 🔥 Now for two sync cycles because of this exact failure mode (resolved 2026-05-28 when Sonny explicitly confirmed in standup the ticket was not in sprint).
+- ❌ **Letting `⏸ Watch-list`, `📋 Backlog`, "Smaller items", or "Housekeeping" sections accumulate in TASKS.md.** TASKS.md is sprint-only; Jira's backlog is the backlog. On every run, propose removal of these sections if found.
+- ❌ **Skipping the TASKS.md sprint-membership audit when "nothing has changed."** Drift accumulates exactly when nothing has changed: tickets fall out of sprint at sprint boundaries, transcripts mention things that don't make the cut. The audit must fire every run.
+- ❌ **Trusting the sprint id/name written in TASKS.md's header without verifying against `jira_get_sprints_from_board(state="active")`.** The header is human-edited prose, not a query result, and drifts at every sprint boundary. The pre-diff audit must validate it as step 0 (active-sprint identity check) before the bucket audit; silent header drift means every downstream check runs against a stale frame even when ticket-level queries return correct results. Failure mode observed 2026-05-28: TASKS.md header said `FY2625 id 25194` while the live active sprint was `FY2624 id 25140` — 25194 was a *future* sprint, so every "open-sprint" query was returning correct data, but the header label was wrong and stayed wrong across multiple syncs.
+- ❌ **Treating Nathan-assigned tickets in Ready/To Do as "either auto-add to 🔥 Now or send to backlog."** A third bucket exists: assigned to me + in the active sprint + not in the planning commit. That's an open question for the PM ("stretch card or remove?"), not a directive. The diff-table row was previously permissive; the status-aware split (in-flight → 🔥 Now drift; Ready/To Do → Ask PM drift) is mandatory.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
+
+**Sprint-only TASKS.md contract (READ FIRST):**
+
+TASKS.md is intended to mirror the **active sprint only** — not Jira's full backlog. Per Sonny's Operating Manual (POS Yellow standard) and the durable rule in `feedback_sprint_board_workflow.md`: "Sprint board is the source of truth. Only work tickets currently in the active sprint."
+
+This means productivity-sync MUST:
+
+1. **Never write a non-sprint ticket into `🔥 Now` / `🎯 Queue`** under any code path, even when a meeting transcript says "Nathan to start X" — out-of-sprint commitments surface to "Ask <PM>" instead.
+2. **Audit TASKS.md against open-sprint membership on every run** (see "Mandatory pre-diff audit" below).
+3. **Refuse to create `⏸ Watch-list` or `📋 Backlog` sections** in TASKS.md. If the user already has them, propose removal on the next cleanup pass.
+
+If `feedback_sprint_board_workflow.md` does not exist in the project's memory, the rule still applies — it's the universal "sprint board owns reality" pattern. Document the exception only if the project explicitly disclaims it (and ask the user before assuming).
 
 Run **two** queries in the project-tracker step, not one. Each has a different job:
 
 1. **My-assignee query** (`assignee = currentUser() AND updated >= cursor.project-tracker.last_sync - 1h`, fallback `-7d`) — finds tickets the user owns that moved since the last sync. **This query alone is insufficient** — it shows your own ticket transitions, but not the surrounding context that lets you reconcile a meeting transcript with what's actually on the sprint board.
-2. **Open-sprint context query** (`sprint in openSprints() AND project = <PREFIX>` with the same updated-window filter) — finds every recently-touched ticket in the active sprint, including ones owned by other people. This is what catches: (a) tickets *mentioned* in meeting transcripts but assigned to someone else, (b) sibling tickets in the same epic that affect dependency framing, (c) release-train / regression tickets just filed that signal upcoming sprint shape. Because this query is windowed for drift reporting, it is not sufficient to prove a transcript-extracted ticket key is invalid; the ticket key verification gate must run the unconditional key lookup fallback when the windowed result has no match.
+2. **Open-sprint context query** (`sprint in openSprints() AND project = <PREFIX>` with the same updated-window filter) — finds every recently-touched ticket in the active sprint, including ones owned by other people. This is what catches: (a) tickets *mentioned* in meeting transcripts but assigned to someone else, (b) sibling tickets in the same epic that affect dependency framing, (c) release-train / regression tickets just filed that signal upcoming sprint shape.
 
 **Always diff both queries against TASKS.md** — don't stop after the my-assignee query just because "everything I own is already in TASKS.md." The open-sprint query is the load-bearing drift detector.
 
+**Board-id discovery (run once, persist to `.productivity.yml`):**
+
+If `.productivity.yml` lacks `project-tracker-board:`, run the discovery procedure before the active-sprint identity check below. Never guess a board id — a wrong id makes every drift detector run against the wrong sprint and silently return false-clean results.
+
+1. Call `jira_get_agile_boards(project_key=<configured project>, board_type="scrum")` (or the equivalent for the operator's tracker).
+2. If exactly one scrum board is returned, treat it as the candidate.
+3. If more than one, present the boards (id + name) via `AskUserQuestion` and have the operator pick.
+4. Verify the candidate by calling `jira_get_sprints_from_board(board_id=<candidate>, state="active")`. The result must contain a single sprint object whose name or id matches what TASKS.md's header claims. If it does not, the candidate is wrong — re-prompt the operator (don't auto-pick the next board).
+5. After verification, propose adding `project-tracker-board: <id>` to `.productivity.yml` via `AskUserQuestion`. Never silently write the config file — the operator confirms the addition.
+6. Once persisted, continue with the active-sprint identity check below using the new id.
+
+This block only runs when the field is missing. On steady-state runs (field present), skip directly to the identity check.
+
+**Mandatory pre-diff audit: TASKS.md sprint-membership check**
+
+**0. Active-sprint identity check (run BEFORE the bucket audit):**
+
+Parse TASKS.md's header lines for the active-sprint id and name. Regex hints: `id\s+(\d+)` for the numeric id, `FY\d{4}` or `Sprint\s+\d+` for the label. Cross-check against the result of `jira_get_sprints_from_board(board_id=<configured board>, state="active")` (the only sprint marked `"state": "active"` is the live one).
+
+**Empty-result handling:** if `jira_get_sprints_from_board(board_id=<configured board>, state="active")` returns `[]`:
+
+- If `.productivity.yml`'s `project-tracker-board:` is **missing** → this is a discovery failure, not a drift signal. Surface as `"active-sprint-identity probe inconclusive: project-tracker-board not configured"` and trigger the board-id discovery procedure above. Do not treat `[]` as evidence of "no drift."
+- If `project-tracker-board:` is **present** and the result is genuinely `[]` → the project may be between sprints (last sprint just closed, next sprint not yet started). Cross-check by calling the same tool with `state="future"`. If a future sprint exists, surface as `"no active sprint (next sprint <id> starts <date>)"` — informational, not drift. If no future sprint exists either, surface as drift with `"no active or future sprint — board id may be wrong, please verify"`.
+- Never silently increment `consecutive_clean_runs` on an inconclusive identity probe — treat inconclusive as a finding (counter stays at 0).
+
+If the header's id or name **does not match** the live active sprint:
+
+- Surface as a top-priority drift item in the report: `"TASKS.md header says <header id/name>; Jira live active sprint is <live id/name>."`
+- Propose patching the header to the live values via `AskUserQuestion`. Show both sides: `"TASKS.md header → FY2625 id 25194; Jira live → FY2624 id 25140."`
+- Do NOT auto-write the header — every header rewrite passes through user confirmation like any other durable write.
+- This is the load-bearing detector for "the wrong sprint was named when the doc was written and never rebased." Without it, every downstream check still runs against ticket-level queries that work in isolation, so the stale header survives invisibly.
+
+Then run the bucket audit below.
+
+**1. Per-ticket bucket audit:**
+
+Extract every `POS-NNNN` (or configured ticket-prefix-NNNN) reference from TASKS.md's active sections (`🔥 Now`, `🎯 Ordered queue`, `⏸ Watch-list`, `📋 Backlog`, `🟡 Watch / Blocked`, `🔗 Dependencies → I'm waiting on`). For each, cross-check against the open-sprint query results. Buckets:
+
+| Where in TASKS.md | In open-sprint? | Action |
+|---|---|---|
+| `🔥 Now` / `🎯 Queue` | Yes | Keep (legitimate active work) |
+| `🔥 Now` / `🎯 Queue` | **No** | **DRIFT** — propose move out of active section. Ask: "POS-NNNN is in 🔥 Now but not in active sprint. Move to Ask <PM> / remove?" |
+| `🌐 Surrounding work` | Yes, assignee ≠ user | Keep (visibility-only is the right surface) |
+| `🌐 Surrounding work` | No | Stale — propose removal |
+| `⏸ Watch-list` / `📋 Backlog` (any) | n/a | **PROPOSE REMOVAL** — TASKS.md should be sprint-only per Sonny's Operating Manual. Jira backlog IS the backlog. |
+
+Surface drift to the user explicitly: do not let out-of-sprint tickets sit in 🔥 Now silently. This audit fires on every sync run, not just when transcripts mention tickets.
+
+Then run the diff table below.
+
 | External task | TASKS.md match? | Action |
 |---------------|-----------------|--------|
-| Found in my-assignee, not in TASKS.md | No match | Offer to add |
+| Found in my-assignee + in open-sprint + status ∈ {In Progress, In Review, In Test} | Not in TASKS.md | **DRIFT** — propose adding to `🔥 Now` (assignee + in-flight in active sprint is the strongest signal a ticket belongs in TASKS.md) |
+| Found in my-assignee + in open-sprint + status ∈ {Ready, To Do, On Hold} | Not in TASKS.md | **DRIFT** — surface to `❓ Ask <PM>` with note: "assigned but unscheduled in active sprint — confirm: stretch card to commit to this sprint, or remove from sprint board?" Do NOT auto-add to `🔥 Now` (the May 20 planning commit is the source of truth for what's in scope; an unspoken-for assigned ticket is an open question, not a directive). |
+| Found in my-assignee + **NOT** in open-sprint | Not in TASKS.md | "Assigned but not in active sprint — backlog only, do not add" |
 | Found in my-assignee, already in TASKS.md | Match by title (fuzzy) | Skip |
 | In TASKS.md, not in either query | No match | Flag as potentially stale |
 | Completed externally (Done in my-assignee) | In active section | Offer to mark done |
@@ -788,7 +862,7 @@ git:
     type: github
     ...legacy fields
 ```
-…in process memory only. The legacy key (`github-default`) is itself allowlist-valid. Emit a one-line deprecation note in the final sync report (NOT in pre-flight) recommending migration to the new `git:` shape. Throttle the note to once per cursor cycle, gated on the cursor sentinel described in Step 1a (`connectors.git_forges._migrated_from_legacy_github`).
+…in memory only. The legacy key (`github-default`) is itself allowlist-valid. Emit a one-line deprecation note in the final sync report (NOT in pre-flight) recommending migration to the new `git:` shape. Throttle the note to once per cursor cycle, gated on the cursor sentinel described in Step 1a (`connectors.git_forges._migrated_from_legacy_github`).
 
 **Pre-flight probe table — per-forge rows:**
 
@@ -907,7 +981,7 @@ When a sync would have queried a stub forge, emit exactly this line in the final
 
 **Sentinel uniqueness contract (grep-test enforcement):**
 
-Running the grep `grep -c` for the canonical warning's version-sentinel suffix against `skills/productivity-sync/SKILL.md` from the claude-code-config repo root MUST return **exactly 1** — the canonical warning-text definition above is the sole emission point in spec. This grep is the load-bearing enforcement mechanism for the "MUST NOT re-emit" constraint: after the follow-up real-adapter plan ships, the same grep against the post-adapter SKILL.md must STILL return exactly 1. Any additional appearance is a regression the follow-up plan's reviewer must catch. A pinned context entry in the consuming project (POS Yellow) carries this contract forward (with the exact grep command) for `ce-learnings-researcher` to surface during the follow-up plan's grounding pass.
+Running the grep `grep -c` for the canonical warning's version-sentinel suffix against `skills/productivity-sync/SKILL.md` from the claude-code-config repo root MUST return **exactly 1** — the canonical warning-text definition above is the sole emission point in spec. This grep is the load-bearing enforcement mechanism for the "MUST NOT re-emit" constraint: after the follow-up real-adapter plan ships, the same grep against the post-adapter SKILL.md must STILL return exactly 1. Any additional appearance is a regression the follow-up plan's reviewer must catch. A pinned memory entry in the consuming project (POS Yellow) carries this contract forward (with the exact grep command) for `ce-learnings-researcher` to surface during the follow-up plan's grounding pass.
 
 **Token-scrubbing rule (R9):**
 
@@ -944,12 +1018,21 @@ gh search prs --review-requested "@me" --state open \
   --json number,title,repository,author,updatedAt --limit 20
 ```
 
+**Mandatory post-cursor verification — TASKS.md-tracked PRs:**
+
+Before drift-bucket classification, extract every PR number explicitly tracked in TASKS.md's `🔥 Now`, `🎯 Ordered queue`, or `🔗 Dependencies → I'm waiting on` sections (grep for `#NNN` adjacent to a repo identifier or `gh pr` URL). For each, run `gh pr view <N> --repo <owner/repo> --json number,state,mergedAt,closedAt,reviewDecision,mergeStateStatus,updatedAt` regardless of cursor window. Use this fresh snapshot — not the cursor-windowed `pr list` result — for drift-bucket classification of these PRs.
+
+**Why:** the cursor-windowed query can miss merges that fire minutes before sync runs (`gh pr list --search "updated:>YYYY-MM-DD"` is date-resolution, not timestamp-resolution, and edge-cases at the boundary). PRs that TASKS.md treats as in-flight are load-bearing for the report — a stale-PR drift bucket fires only because the truth wasn't checked.
+
+**Branch-prefix drift detection:** if the PR's `headRefName` does NOT contain the ticket key extracted from the PR title (e.g. PR titled `feat(POS-4058)` but branch is `feature/FERNS-4058-...`), surface a "branch prefix mismatch" warning in the drift report. Jira's PR auto-transition typically keys off branch prefix, not title — a mismatch means the Jira ticket will NOT auto-transition on merge, and a manual transition + merge comment is required.
+
 **Drift buckets — surface only items in these buckets, never the full PR list:**
 
 | Bucket | Trigger | Action |
 |---|---|---|
 | **Open PR, ticket not in TASKS.md** | PR `state=OPEN`, ticket key not in any active section | "Add to 🔥 Now or 🎯 Queue?" |
 | **Merged PR, ticket still in-flight in TASKS.md** | PR `state=MERGED`, ticket appears in 🔥 Now / 🎯 Queue | "Move to ✅ Done table + transition Jira?" |
+| **Branch-prefix mismatch on merged PR** | PR `state=MERGED` AND `headRefName` lacks the PR title's ticket key | "Manual Jira transition + merge comment needed — auto-link missed" |
 | **PR blocked on `REVIEW_REQUIRED`** | `reviewDecision=REVIEW_REQUIRED` for >24h | "Tag a reviewer?" |
 | **PR with failed CI** | Any `statusCheckRollup[].conclusion=FAILURE` | "Re-run failed checks?" (offer the `gh run rerun --failed` command) |
 | **PR with merge conflicts** | `mergeStateStatus=DIRTY` | "Rebase needed" |
@@ -984,12 +1067,15 @@ Drift bucket logic is **unchanged from today** — same buckets, same triggers, 
 - ❌ Enumerating every PR — only the bucket items above
 - ❌ Auto-tagging reviewers (the user picks who, even when surfaced as actionable)
 - ❌ Auto-rerunning CI (it's a write — confirm first)
-- ❌ Auto-transitioning Jira from a merged PR
+- ❌ Auto-transitioning Jira from a merged PR (matches `new-sprint`'s same rule)
 - ❌ Counting PRs you only reviewed as your own work
 - ❌ Re-emitting the canonical stub-warning string from a real adapter — that text is the version sentinel for "still stubbed," not a generic Bitbucket failure marker (see "Sentinel uniqueness contract" above)
 - ❌ Interpolating any token / env-var value / response body into cursor `error` or report text — use the sanitised messages enumerated in the token-scrubbing rule above
 - ❌ Path-resolving or `.git/config`-sniffing repos — `repos:` entries are forge-native identifiers, declared explicitly
 - ❌ Auto-detecting forge type from a remote URL — `type:` is declared, never inferred
+- ❌ Trusting only the cursor-windowed `gh pr list` snapshot for PRs explicitly tracked in TASKS.md `🔥 Now` — always run `gh pr view <N>` on those PRs even when the cursor window is empty. Merges that fire minutes before sync are otherwise invisible.
+- ❌ Treating "PR is open in cursor-windowed query result" as equivalent to "PR is open right now" — the result is a snapshot of the moment the query ran, not a guarantee of current state.
+- ❌ Reporting a PR as `STALE N days` without first running `gh pr view <N>` to confirm it's still open. The stale-PR drift bucket is the most embarrassing one to get wrong.
 
 If no sources are configured or available (no `git:` block, or all forges failed pre-flight), note "No external sources connected -- skipping sync" and continue to Step 3.
 
@@ -1009,29 +1095,28 @@ After all connector steps in Step 2 complete, run a reconciliation pass on `curs
    - **Defer/snooze** — sets `deferred_until: now + 5 days` (commitment stays `status: open`; will not re-surface until snooze expires)
    - **Dismiss** — sets `status: dismissed`, `dismissed_at: now`; does not remove the entry immediately (preserves ledger history)
 
-4. **Ledger cap:** If the ledger exceeds the target cap, prune `resolved` entries first. Keep all `open` and `dismissed` entries. If the ledger remains over cap after pruning resolved entries, add a "commitment ledger over cap (N entries; dismissed history preserved) — consider resolving older open entries" line to the report.
+4. **Ledger cap:** If open entries exceed 50 after pruning resolved/dismissed entries, keep all open entries and add a "commitment ledger over cap (N open entries) — consider resolving older entries" line to the report.
 
 **Note:** Reconciliation depends on the project-tracker connector completing first for Jira matching. TASKS.md matching is unaffected by ordering.
 
 ### 3. Cross-Reference Attendees
 
-If calendar data was fetched, cross-reference attendees against context:
+If calendar data was fetched, cross-reference attendees against memory:
 - Known people: note recent meetings in their context
-- Unknown people: flag for context gap filling in Step 6
+- Unknown people: flag for memory gap filling in Step 6
 
 ### People Note Writes
 
-Treat people context as one shared contract, not a separate sync-owned note system.
+Treat people memory as one shared contract, not a separate sync-owned note system.
 
-When `productivity-sync` proposes a person-note update:
-- do not freehand edit `context/people/*.md`
-- prepare structured JSON in the sync report and route durable writes through `context-advisor`
-- name owner, privacy, write authority, and target path before mutation
+When `productivity-sync` updates a person note:
+- do not freehand edit `memory/people/*.md`
+- prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
 - append short durable observations to `## Signals`
 - place conflicts, ambiguity, and unresolved identity issues in `## Open Questions`
 - keep relationship-profile edits conservative and scoped to explicit H3 blocks
 - use `--create-if-missing` only for safe minimal stubs when identity is unambiguous enough to justify creation
-- prefer creating a minimal stub plus an explicit report note over writing rich profile prose directly
+- prefer creating a minimal stub plus an enqueue for `/people-enrich` over writing rich profile prose directly
 - never copy raw email or message bodies into durable people notes
 
 Structured payload example:
@@ -1050,11 +1135,31 @@ Structured payload example:
 }
 ```
 
-Safe proof for an existing note: report the structured payload, owner path, target note, and proposed `## Signals` or `## Open Questions` diff before mutation.
+Safe dry-run proof for an existing note:
 
-Safe proof for a minimal stub: report the proposed title, source handle, target path, and minimal frontmatter/body before mutation.
+```bash
+bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
+  --people-dir ~/code/my-second-brain/memory/people \
+  --source imessage \
+  --handle +61412667520 \
+  --report /tmp/productivity-sync-person.json \
+  --output /tmp/productivity-sync-person.preview.md
+```
 
-Treat these as the proof path before any live write against real connector output.
+Safe dry-run proof for a minimal stub:
+
+```bash
+bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
+  --people-dir ~/code/my-second-brain/memory/people \
+  --title "Sarah Chen" \
+  --source calendar \
+  --handle sarah.chen@example.com \
+  --create-if-missing \
+  --report /tmp/productivity-sync-person.json \
+  --output /tmp/productivity-sync-person.preview.md
+```
+
+Treat these as the proof path before any live `--write` run against real connector output.
 
 ### 4. Triage Stale Items
 
@@ -1065,7 +1170,7 @@ Review active tasks in TASKS.md and flag:
 
 Present each for triage: Mark done? Reschedule? Move to later?
 
-### 5. Decode Tasks for Context Gaps
+### 5. Decode Tasks for Memory Gaps
 
 For each task, attempt to decode all entities (people, projects, acronyms, tools, links):
 
@@ -1075,7 +1180,7 @@ Task: "Send PSR to Todd re: Phoenix blockers"
 Decode:
 - PSR -> Pipeline Status Report (in glossary)
 - Todd -> Todd Martinez (in people/)
-- Phoenix -> ? Not in context
+- Phoenix -> ? Not in memory
 ```
 
 Track what's fully decoded vs. what has gaps.
@@ -1093,14 +1198,13 @@ I found terms in your tasks I don't have context for:
    -> Who is Maya?
 ```
 
-Add answers to the appropriate context files (`context/people/`, `context/projects/`, `context/glossary.md`).
+Add answers to the appropriate memory files (people/, projects/, glossary.md).
 
-Keep writes local to the owning repo unless the result is clearly durable and cross-context.
-Use `context-advisor` when cross-context ownership is unclear.
+When the shared Memory OS is present, keep those writes local to the owning repo unless the result is clearly durable and cross-context.
 
 ### 7. Capture Enrichment
 
-Tasks often contain richer context than the current context files. Extract and update:
+Tasks often contain richer context than memory. Extract and update:
 - **Links** from tasks -- add to project/people files
 - **Status changes** ("launch done") -- update project status, demote from CLAUDE.md
 - **Relationships** ("Todd's sign-off on Maya's proposal") -- cross-reference people
@@ -1110,10 +1214,10 @@ Recommend promotion to `my-second-brain` only when the enrichment becomes durabl
 
 ### 8. CLAUDE.md Health Check
 
-Scan the canonical repo-level hot context file plus the user-level file for token budget and scaffold markers.
+Scan the canonical repo-level hot-memory file plus the user-level file for token budget and scaffold markers.
 
 **Token budget:**
-- Count words in the canonical repo-level hot context file plus `~/.claude/CLAUDE.md`
+- Count words in the canonical repo-level hot-memory file plus `~/.claude/CLAUDE.md`
 - Estimate tokens (words * 1.3)
 - Compare against norms: global 1-3K, project 3-10K, local 500-2K
 
@@ -1132,7 +1236,14 @@ Include in the report summary (Step 9).
 
 ### 9. Report
 
-**`--brief` mode report:** Follow the **Brief Mode** output contract above: render only the pre-meeting brief section (see "Pre-meeting prep brief" in Step 2), suppress normal sync report sections, and append the stale-cursor trailer only when applicable.
+**`--brief` mode report:** When `--brief` is active, render **only** the pre-meeting brief section (see "Pre-meeting prep brief" in Step 2). Suppress all of the following: triage pass, git drift, email/Jira summaries, CLAUDE.md health check, stats line, and cursor advancement note.
+
+After the brief section, check the stale-cursor trailer: count connectors in `cursor.connectors` where `last_sync` is absent or `now - last_sync > 4 hours`. Only count **non-brief connectors** (i.e. not `calendar` or `transcriptions`). Count `knowledge-base`, email, project-tracker, chat, messages, and each git forge independently. Missing `last_sync` counts as stale. If count > 0, append one line:
+
+- Singular: `"1 connector not checked. Run full sync when you can."`
+- Plural: `"{N} connectors not checked. Run full sync when you can."`
+
+Suppress the trailer entirely if count = 0 (all non-brief connectors are fresh).
 
 Example `--brief` output:
 ```
@@ -1165,13 +1276,13 @@ Update complete (delta sync, cursor: 2026-05-08T07:20+10:00 → 2026-05-11T10:35
   Skipped: (none)
   Cursor not advanced: project-tracker (rate-limited, retry next run)
 - Tasks: +3 from Jira, +2 from meeting notes, 1 completed, 2 triaged
-- Action items: 5 extracted from 2 meetings → 3 written (TASKS.md), 1 to context/projects/monash.md, 1 skipped
+- Action items: 5 extracted from 2 meetings → 3 written (TASKS.md), 1 to memory/projects/monash.md, 1 skipped
 - Deferred items: 2 re-surfaced (1 applied, 1 re-deferred), 1 expired (deferred 3x, never applied)
 - Commitments: 2 new extracted, 1 resolved (matched TASKS.md done), 1 dropped ball surfaced
 - Chat directives: 1 ticket directive (POS-4058 priority), 1 dependency (Josh), 1 commitment (already done)
 - GitHub drift: 1 unreflected open PR, 1 merged-still-in-flight, 2 awaiting your review
 - Pre-meeting briefs: 3 meetings in the next 24h (Tanya 14:00, standup tomorrow 11:30, Sonny 1:1 16:00)
-- Context: 2 gaps filled, 1 project enriched
+- Memory: 2 gaps filled, 1 project enriched
 - All tasks decoded
 - CLAUDE.md: 3,311 tokens (22% of 15K budget), 4 scaffold items (1 actionable)
 - Connector health: email 5/7 ⚠️ | calendar ✅ | project-tracker: insufficient history
@@ -1190,13 +1301,110 @@ Update complete (delta sync, cursor: 2026-05-08T07:20+10:00 → 2026-05-11T10:35
 
 Only show connectors with less than 100% success rate in the health trend line. Connectors with 7/7 or all-green history show ✅ without a score. Suppress the line entirely if all connectors are green and have sufficient history.
 
+**Post-run drift trailer (rendered at the very bottom, after Step 10's deep-scan nudge):** when training wheels are still on, Step 11 appends either a one-line clean trailer or a `### Self-check: drift still present` block. See Step 11 for the exact rules. The trailer is suppressed when training wheels are off (auto-disabled by elapsed window or 6 consecutive clean runs).
+
 ### 10. Suggest Deep Scan
 
-If context gaps remain or sources were skipped:
+If memory gaps remain or sources were skipped:
 ```
 Some gaps remain. Run /productivity-sync --deep for a comprehensive scan
 of chat, sent email, and documents.
 ```
+
+### 11. Post-run drift recheck (training wheels)
+
+**Purpose:** verify that the changes proposed/applied this run actually closed the TASKS.md drift. If drift remains, surface a `/heal-skill productivity-sync` recommendation with the specific finding embedded as the skill argument. The check is self-disabling — once the skill demonstrates it can hold TASKS.md in sync, the trailer stops firing automatically.
+
+**When to run:**
+
+This step runs at the very end of the sync (after Step 10's deep-scan nudge) on non-brief runs only. Skip entirely when:
+- `--brief` mode is active (brief runs don't mutate TASKS.md, so nothing to recheck)
+- The project-tracker connector failed pre-flight or errored mid-run (can't recheck without live sprint data)
+- TASKS.md doesn't exist in the owning repo
+
+**Gating logic — should this run perform the recheck?**
+
+1. Read `cursor.post_run_drift_check`. If absent, initialise per the schema migration note above, then proceed (this is the first run after a sentinel bump).
+2. Read the current `post-run-drift-check-sentinel` from SKILL.md (HTML comment near the schema section). If `cursor.post_run_drift_check.last_sentinel_seen != current_sentinel`, **re-enable**: set `enabled_until = now + 14 days`, `first_enabled_at = now`, `consecutive_clean_runs = 0`, `last_sentinel_seen = current_sentinel`. Emit one line in the report: `Post-run drift check: re-enabled (sentinel <old> → <new>); 14-day training-wheels window restarted.`
+3. Evaluate the disable conditions:
+   - If `now >= cursor.post_run_drift_check.enabled_until` → **skip the recheck**, do not emit any trailer.
+   - If `cursor.post_run_drift_check.consecutive_clean_runs >= 6` → **skip the recheck**, do not emit any trailer.
+4. Otherwise → **run the recheck below**.
+
+**The recheck itself:**
+
+Re-run the three drift detectors from Step 2's project-tracker substep, against the post-sync state of TASKS.md and a fresh Jira query (do not reuse the earlier in-memory snapshot — TASKS.md may have been edited mid-run, and the user may have answered AskUserQuestion prompts that changed durable state):
+
+1. **Active-sprint identity check** — parse TASKS.md header for sprint id/name; cross-check against `jira_get_sprints_from_board(board_id=<configured board>, state="active")`. Mismatch → drift. Apply the same **empty-result handling** as the Step 2 pre-diff audit: `[]` with no `project-tracker-board:` configured → inconclusive finding (counter does not increment); `[]` with the field configured → cross-check `state="future"` to distinguish between-sprints state vs wrong-board-id drift.
+2. **Per-ticket bucket audit** — for every `<prefix>-NNNN` in TASKS.md's active sections, verify open-sprint membership matches the section it sits in. Bucket violations (e.g. ticket in `🔥 Now` but not in open sprint) → drift.
+3. **My-assignee + open-sprint diff** — re-run the my-assignee + open-sprint queries; check that any in-flight tickets assigned to me are reflected in TASKS.md, and that Ready/To Do unscheduled tickets surface in `❓ Ask <PM>`. Missing entries → drift.
+
+Collect findings into a list of `{type, summary, suggested_fix}` records. Examples:
+```
+{
+  type: "active-sprint-identity",
+  summary: "TASKS.md header → FY2625 id 25194; Jira live → FY2624 id 25140",
+  suggested_fix: "patch TASKS.md header to FY2624 id 25140"
+}
+{
+  type: "unsurfaced-assignee-ticket",
+  summary: "POS-3034 (Ready, assigned Nathan) in open sprint, not in TASKS.md",
+  suggested_fix: "add to ❓ Ask <PM> as 'stretch card or remove?'"
+}
+```
+
+**Report rendering:**
+
+If findings is **empty** (clean run):
+1. Increment `cursor.post_run_drift_check.consecutive_clean_runs` by 1.
+2. If `consecutive_clean_runs >= 6` after increment, emit:
+   ```
+   Post-run drift check: 6 consecutive clean runs — training wheels off. The post-run recheck will no longer fire unless /heal-skill productivity-sync bumps the sentinel.
+   ```
+3. Otherwise emit:
+   ```
+   Post-run drift check: clean (<N>/6 toward training wheels off, window ends <enabled_until>).
+   ```
+
+If findings is **non-empty** (drift remains):
+1. Reset `cursor.post_run_drift_check.consecutive_clean_runs = 0`.
+2. Render a `### Self-check: drift still present` section at the bottom of the report:
+   ```
+   ### Self-check: drift still present
+   The post-run recheck found <N> drift item(s) that this sync did not close. This usually means the skill's drift detectors have a gap — consider healing them.
+
+   Findings:
+   - <type>: <summary>
+     → Suggested fix: <suggested_fix>
+   - <type>: <summary>
+     → Suggested fix: <suggested_fix>
+
+   Recommended:
+     /heal-skill productivity-sync — <one-line summary of the most load-bearing finding>
+
+   Training wheels: <consecutive_clean_runs>/6 reset to 0. Window ends <enabled_until>.
+   ```
+3. Do **not** auto-launch `/heal-skill` — the recommendation is informational. The user runs it deliberately.
+
+**Atomic cursor write:** all `post_run_drift_check` mutations land in the same atomic cursor write as Step 9's other cursor advancements (per Step 1a's "Cursor write rules"). On user abort, do not advance.
+
+**Anti-patterns specific to this step:**
+
+- ❌ Running the recheck when the project-tracker connector failed — the comparison would be against stale data, generating false-positive drift findings
+- ❌ Auto-invoking `/heal-skill` — the recommendation is surfaced; the user chooses when to heal. Auto-invocation breaks the human-in-the-loop contract that every other write in this skill respects
+- ❌ Letting `consecutive_clean_runs` increment on a run where TASKS.md was not actually modified by sync (no PR data, no Jira changes, no meeting transcripts). The recheck must still verify state, but the increment is meaningful: it says "the skill held drift at zero across N real runs," not "the skill ran N times without doing anything." Implementation note: increment is gated only on `findings.length == 0`, not on whether the run mutated anything — a no-op run that confirms zero drift IS a successful clean run by design
+- ❌ Continuing to fire the trailer after `enabled_until` has passed — the gate is mandatory; silently keeping training wheels on forever defeats the purpose of the auto-disable
+- ❌ Surfacing every drift finding equally — the `Recommended` line should name the single most load-bearing finding (typically active-sprint-identity > unsurfaced-assignee-ticket > section-mismatch). The user clicks `/heal-skill` once per session, not once per finding
+
+### 12. Refresh chat vectors (deferred, last)
+
+If `chat: teams` is configured **and** this run touched the corpus (ran `teams sync`, i.e. a deep run or any historical lookup), run the deferred vector-embedding pass as the **final action of the skill**, after the report is rendered:
+
+```
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py embed --json
+```
+
+Rationale (measured 2026-07-29): `teams sync` refreshes the BM25 index (fast, sub-second) so keyword search is live during the run, but vector embedding is the slow step. Deferring `embed` to the very end means it never blocks signal extraction, ticket cross-referencing, or the report. It is incremental, so it is cheap when little changed. Skip this step entirely if the run did no `teams sync` (default-mode `digest`/`ticket` read the live cache and never touch the corpus). Never run `embed` mid-flow, and never call `qmd query` before this step has completed on a fresh corpus (vectors would be stale — `qmd search` is the correct engine until then).
 
 ## Deep Mode (`--deep`)
 
@@ -1204,8 +1412,8 @@ Everything in Default Mode, plus a deep scan of recent activity.
 
 ### Extra Step: Scan Activity Sources
 
-Gather data from all configured MCP sources. Reference `skills/productivity-connectors/SKILL.md`.
-- **Chat (deep):** Expand window to 7d (vs 24h default), include channels not on the project allowlist, include reactions / threads. Default-mode chat already covers signal extraction; deep mode is for retrospective scans (e.g. "what did the team discuss about voucher 1.5 last week?").
+Gather data from all configured MCP sources (reference the **productivity-connectors** skill):
+- **Chat (deep):** Expand window to 7d (vs 24h default), include channels not on the project allowlist, include reactions / threads. Default-mode chat already covers signal extraction; deep mode is for retrospective scans (e.g. "what did the team discuss about voucher 1.5 last week?"). For `chat: teams`, prefer the **fast** paths (per the teams skill's retrieval router): `search "<kw>" --since <7d-ago> [--from <name>] --json` for recent keyword recall (live cache), and `qmd search "<kw>" -c teams` for fast keyword recall over older history the live cache has aged out (~0.5s, durable corpus). Only escalate to `qmd query "<question>" -c teams` when a keyword search comes back empty and the question is genuinely semantic — it is slow (10-160s) and must never run inside a tight sync loop. Use `history "<channel>" --since <7d-ago>` for full channel replay.
 - **Sent email:** Search sent messages for commitments made
 - **Documents:** List recently touched docs
 - **Calendar:** Expand to full week scan (vs 2+3 day default)
@@ -1244,12 +1452,12 @@ Everything from the default health check (Step 8), plus:
 - **Suggest new scaffold markers** for any matches found
 - **Token trend** -- if a previous budget comment exists, compare current vs. previous and note direction
 
-### Extra Step: Suggest New Context
+### Extra Step: Suggest New Memories
 
-Surface new entities not in context:
+Surface new entities not in memory:
 
 ```
-## New People (not in context)
+## New People (not in memory)
 | Name | Frequency | Context |
 |------|-----------|---------|
 | Maya Rodriguez | 12 mentions | design, UI reviews |
@@ -1268,7 +1476,7 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
 
 ## Notes
 
-- Never auto-add tasks or context without user confirmation
+- Never auto-add tasks or memories without user confirmation
 - Never auto-transition Jira tickets, auto-tag PR reviewers, or auto-rerun CI — surface only, ask first
 - External source links are preserved when available
 - Fuzzy matching on task titles handles minor wording differences
@@ -1295,26 +1503,25 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
   EOF
   python3 /tmp/decode-email.py /path/to/email.json
   ```
-- Always decode and read the full body before presenting an email — the `email-read-fully` rule and the `productivity-connectors` body-reading invariant require it on every surfaced email; subject + sender is never sufficient. Extract products, amounts, actions, and dates; never ask Nathan what an accessible email says.
+- For most sync purposes, the email subject + sender is sufficient to triage action items — only decode the body when the subject is ambiguous
 
 ### Email search — query is a positional argument, not a flag
 
 `gog email search` takes the Gmail query as a **positional argument**, not a `--query` flag.
 
 - **NEVER** write: `gog email search --account ... --query "is:unread"` — exits code 2 with "unknown flag --query", produces no output, and looks identical to an auth or rate-limit failure
-- **ALWAYS** write the query as a positional arg:
-  `gog --account ... --client ... --readonly --no-input --wrap-untrusted --json email search "<query>"`
+- **ALWAYS** write the query as a positional arg: `gog email search --account ... --client ... --json "<query>"`
 - `gog gmail search` and `gog email search` are both valid aliases for the same command — either works
 - Pagination flag is `--max N` (not `--limit`)
 
 Correct examples:
 ```bash
 # Unread emails since a date
-gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email search "is:unread after:2026/05/18"
+gog email search --account nathan.vale@monash.edu --client monash --json "is:unread after:2026/05/18"
 
 # All unread, more results
-gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email search "is:unread" --max 20
+gog email search --account nathan.vale@monash.edu --client monash --json "is:unread" --max 20
 
 # Read a specific thread body
-gog --account <email> --client <name> --readonly --no-input --wrap-untrusted --json email thread get <threadId>
+gog email get --account nathan.vale@monash.edu --client monash --json <threadId>
 ```

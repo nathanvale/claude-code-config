@@ -1,0 +1,308 @@
+---
+name: teams
+description: "Read your own local Microsoft Teams cache, and send or quote-reply to Teams messages. Reading: what was said in a channel, who mentioned you, unread items, a ticket's discussion timeline, links or code someone shared, who a person is, or which of two same-named people said something. Sending: stage a message into a channel or DM via the teams-send / teams-reply commands (see Sending Messages). Triggers include \"what did X say in Teams\", \"Teams digest\", \"who mentioned me\", \"catch me up on the channel\", \"find that Teams message\", \"what was discussed about TICKET-123\", \"send a Teams message\", \"post to the dev channel\", \"reply to that message\". macOS only; reads are local-cache only with no network to Microsoft, sends drive the Teams app UI."
+---
+
+# Teams Local Reader
+
+Queries the new Teams (v2) IndexedDB cache already on this Mac. **Reading** is
+read-only: no Graph API, no app registration, no network to Microsoft.
+
+**Sending is a separate surface.** The `teams_cli.py` commands below never write
+anything to Teams. To actually send a message, use the `teams-send` /
+`teams-reply` commands documented in [Sending Messages](#sending-messages) —
+they live outside this skill directory, in `~/code/dotfiles/bin/`.
+
+## First Safe Action
+
+Run the CLI with no arguments — it prints a dashboard of what is cached and
+which command to use next.
+
+```bash
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py
+```
+
+If `.venv` does not exist, run `skills/teams/scripts/bootstrap.sh` first
+(one-time; needs network + git + Xcode command line tools).
+
+## Searching: use QMD, not `search`
+
+Every message read is saved as a markdown note in `~/.local/share/teams/` and
+also indexed as the `teams` QMD collection. There are **three retrieval engines**;
+pick by the shape of the question, not by habit.
+
+### Retrieval router
+
+| You want… | Use | Why |
+|---|---|---|
+| An exact string, ticket key, or **recent** message (last days/weeks) | `search "<text>"` / `ticket <KEY>` / `digest [--hours N]` | Direct **live-cache** read. Fast enough (~sub-second to a few seconds) and catches fresh messages not yet in the corpus. |
+| Keyword recall on recent chat, scoped by date or person | `search "<kw>" --since YYYY-MM-DD [--until …] [--from NAME\|MRI]` | Live-cache substring with frontmatter-equivalent filters (`m.time`, author, `creator_mri`). The default for scoped **recent** keyword lookups. |
+| **Fast** keyword recall over **months** of history | `qmd search "<kw>" -c teams` | BM25 over the durable corpus. **Sub-second**, and retains messages the live cache has already aged out. Fastest historical path. |
+| A **meaning-based** question over months — paraphrases, "who worried about X" | `qmd query "<question>" -c teams` | Vector + rerank. The **only** engine that finds paraphrases, but **10s–160s** per call. Deep one-shot recall only. |
+
+**Fast path wins — route by speed, then reach for semantics only when you must.**
+Measured on this corpus (formal A/B, 2026-07-29):
+
+- **Direct CLI** (`search`/`digest`/`ticket`) — reads the **live cache**, ~sub-second
+  to a few seconds. Catches fresh and not-yet-corpused messages. Can miss history that
+  has aged out of the cache. **Default for anything recent.**
+- **`qmd search` (BM25)** — reads the **durable corpus**, **~0.5s**. Retains aged-out
+  history the live cache dropped, and is ~10× faster than the direct CLI for old
+  keyword lookups. **Use it for fast historical keyword recall.** (This is a real niche:
+  it beats the CLI on old messages and beats `qmd query` on speed.)
+- **`qmd query` (vector+rerank)** — **10s–160s**, wildly variable. The only engine that
+  recalls paraphrases with no shared keyword. **Never wire into a sync/batch path** —
+  reserve for deep, one-shot "find where someone said X" questions where waiting is fine.
+
+Rule of thumb: try the **fast** path first (direct CLI for recent, `qmd search` for old),
+and escalate to `qmd query` only when a keyword search comes back empty and the question
+is genuinely about meaning, not words.
+
+**`qmd query` returns references, not attribution — always resolve before quoting.**
+A hit gives you the message's file path (`qmd://teams/YYYY/MM/…​.md:NN`), the date
+(in the path), a text snippet, and a score — but **not** the author, `from_mri`,
+`conversation`, or exact timestamp. Those live in the note's frontmatter. Before you
+attribute or ledger a semantic hit, run `qmd get "<path>"` on it and read the
+frontmatter (`from`, `from_mri`, `conversation`, `sent_at`, `direction`). This
+two-step is what keeps QMD recall attribution-safe when a display name is shared —
+never quote a `qmd query` snippet's implied speaker without the `qmd get` resolve.
+
+```bash
+# semantic recall over the whole corpus
+qmd query "who raised concerns about the deploy" -c teams
+qmd query "bulk print decisions" -c teams -c repo-pos-yellow   # chat + project docs
+
+# scoped keyword recall — fast, deterministic
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py \
+  search "deploy" --since 2026-07-20 --from "Sonny" --json
+```
+
+Scope QMD with `-c teams` for "what did someone say". Repeat the flag to widen;
+comma-separated names do **not** work. Leave it off only for genuine
+cross-source questions — the collection is ~9,000 short chat messages and will
+otherwise outweigh curated docs on general queries.
+
+Note frontmatter carries `from_mri`, `conversation`, `sent_at` and `direction`,
+so retrieved notes can be filtered or attributed without re-reading the store.
+
+`sync` refreshes the **BM25 index only** after writing (fast) — so `qmd search -c
+teams` is live immediately, but **vector embeddings are deferred**. Run vectors as a
+separate, slow step at the end of a batch: `teams embed` (or `sync --embed` to do both
+at once, or `cd ~/.local/share/teams && qmd embed` by hand). This is deliberate: a
+freshly-synced corpus is keyword-searchable at once, and the expensive embed never
+blocks the sync. Until `embed` runs, `qmd query` (vector) may miss the newest messages
+while `qmd search` (BM25) already has them.
+
+(The collection is registered as `teams` → `~/.local/share/teams`; if `qmd query
+-c teams` ever returns nothing, confirm with `qmd collection show teams` that its
+path is the corpus root and not a phantom subdirectory.)
+
+## Choosing a Command
+
+Discover the command surface instead of guessing from this file:
+
+```bash
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py commands --json
+```
+
+Common routes:
+
+| Ask | Command |
+|-----|---------|
+| what happened recently | `digest [--hours N]` |
+| tell me when my channels move | `poll [--once]` |
+| find an exact string (recent) | `search "<text>"` |
+| keyword recall on recent chat, scoped | `search "<kw>" --since YYYY-MM-DD [--from NAME\|MRI]` |
+| fast keyword recall over months | `qmd search "<kw>" -c teams` (durable corpus, ~0.5s) |
+| find a message by meaning over months | `qmd query "..." -c teams` (slow, 10-160s; see router above) |
+| backfill + reindex the corpus | `sync` |
+| who pinged me | `mentions [--unread]` |
+| what is waiting | `unread` |
+| everything about a ticket | `ticket <KEY>` |
+| one channel over a date range | `history "<channel>" --since YYYY-MM-DD` |
+| rebuild a conversation | `thread "<keyword>"` |
+| links / code someone shared | `links`, `code` |
+| who is this person | `whois "<name>"`, `people` |
+| two people, same name | `disambiguate "<name>"` |
+| what got reacted to | `reactions` |
+| what was asked of me | `requests --to-me` (candidates, judge them) |
+| **send a message** | `teams-send "<channel>" <file>` (see [Sending Messages](#sending-messages)) |
+| **quote-reply to a message** | `teams-reply "<original text>" <file>` (staging only, finish by hand) |
+
+Add `--json` to any command for a structured envelope. Diagnostics go to
+stderr, so `--json` stdout stays parseable.
+
+## Sending Messages
+
+**Not part of `teams_cli.py`.** Sending lives in two standalone commands in
+`~/code/dotfiles/bin/` (symlinked into `~/bin`, so they are on `PATH`). They
+drive the Teams app UI with Peekaboo. They depend on *this* skill: the shared
+lib resolves conversation names through `teams_cli.py`, so the venv must be
+bootstrapped for sending to work.
+
+> **Do not conclude sending is unavailable from this skill's read-only framing.**
+> `teams_cli.py commands --json` lists no send verb by design — the send path is
+> a separate binary. Check `which teams-send` before saying it cannot be done.
+
+### `teams-send` — post a message to a channel or DM
+
+```bash
+teams-send <conversation> <file|-> [--send]
+```
+
+| Argument | Meaning |
+|---|---|
+| `<conversation>` | Channel or person name as it appears in Teams (`"POS Yellow Devs"`, `"Sonny Hartley"`). Resolved against the local cache; ambiguous or unknown names abort and print the candidates. |
+| `<file\|->` | File containing the message body, or `-` to read stdin. Empty/whitespace-only aborts. |
+| `--send` | Also press Enter. **Off by default, on purpose.** |
+
+```bash
+teams-send "POS Yellow Devs" ./message.txt        # stage only — you press Enter
+teams-send "Sonny Hartley" ./msg.txt --send       # stage and send
+echo "quick note" | teams-send "June Xu" -        # from stdin
+```
+
+**Default is staging: the text lands in the compose box and stops.** Prefer this.
+Let the human read it in Teams and hit Enter. Reserve `--send` for messages the
+user has explicitly approved for auto-send.
+
+**Safety gates (why it is hard to misfire):**
+1. Resolves the target to a single conversation id from the local cache, or aborts with candidates.
+2. Requires Teams to be frontmost before any keystroke — otherwise typing goes to the calling terminal.
+3. Navigates by deep link, then **verifies the window title names the requested conversation** before pasting.
+4. With `--send`, **re-verifies focus and conversation immediately before pressing Enter** (focus can move between staging and sending).
+5. On paste failure, puts the text on the clipboard and exits without sending.
+6. Screenshots after staging (and after sending), printing the paths.
+
+**Exit codes:** `0` staged/sent · `1` usage or resolution error · `2` safety gate failed.
+
+### `teams-reply` — quote-reply to an existing message
+
+```bash
+teams-reply <search-text> <file|->
+```
+
+| Argument | Meaning |
+|---|---|
+| `<search-text>` | Distinctive text from the message being replied to. **Use as much of the original as possible** — the exact match then sorts to the top of the results, which is the row the script clicks. |
+| `<file\|->` | File containing your reply, or `-` for stdin. |
+
+```bash
+teams-reply "Joshua Green can this be reviewed today" ./reply.txt
+echo "Thanks" | teams-reply "can this be reviewed today" -
+```
+
+⚠️ **Less robust than `teams-send`, and it does not complete the reply.** Teams
+exposes no accessibility elements for search results or the hover toolbar, so it
+clicks **screen coordinates** derived from the current window geometry. A
+different window size, zoom level, or Teams update moves them.
+
+It stages **navigation only**: it searches, clicks the top result to jump to the
+message, screenshots, and stops — deliberately *not* clicking "Reply with quote",
+because a wrong click quote-replies to the wrong message in front of the channel.
+Your reply text is left on the clipboard. Finish by hand: check the screenshot,
+hover the message, click the 99 icon, paste.
+
+**Prefer `teams-send` whenever a plain message will do.**
+
+### Choosing between them
+
+| Situation | Use |
+|---|---|
+| New message to a channel or person | `teams-send` |
+| Reply that only needs to mention who/what it is about | `teams-send`, naming the person in the text |
+| Reply that genuinely needs the quoted original attached | `teams-reply`, then finish by hand |
+
+## Pull vs notify
+
+Two different jobs, two different commands. Keeping them separate is what lets
+each one be simple.
+
+- **`digest --hours N` is the pull path, and covers everything.** The time
+  window IS the filter: a conversation with activity in the window is relevant
+  by definition, one without contributes nothing. It never narrows by channel.
+  (Measured 2026-07-30: a 24h window had 12 active conversations out of 156
+  cached, only 4 of which were on the watch list — the old allowlist behaviour
+  was silently dropping the other 8, including the channel where PRs are
+  reviewed.) Pass `--only-watched` to get the old narrowing back.
+- **`poll` is the notify path, and that is what `watch` is for.** It appends
+  new messages in watched channels, plus any `@mention` wherever it lands, to a
+  tailable log (default `$XDG_STATE_HOME/teams/watch.log`, mode `0600`). Own
+  messages are never reported back. `--once` for cron; bare `poll` loops with
+  `--interval` seconds between passes. Its cursor is
+  `$XDG_STATE_HOME/teams/poll-cursor.json` — separate from the corpus cursor,
+  so polling never consumes a window `digest` or `sync` would otherwise see.
+
+`watch` therefore no longer affects `digest` at all. Its only job is deciding
+what is worth interrupting you for.
+
+## Gotchas That Change Results
+
+- **Freshness.** The newest messages are not in the cache until Teams flushes
+  its LevelDB memtable. Keep Teams running for a current cache. A missing
+  recent message is usually lag, not absence.
+- **Attribution.** Two people can share a display name. Attribute by
+  `creator_mri`, not by `author`, and run `disambiguate` when it matters.
+- **Synthetic `48:*` feeds are not chats.** Teams keeps client-side feeds
+  alongside real conversations, addressed as `48:notifications` (the activity /
+  mentions panel) and `48:calllogs`. Every record in them is stored with *your*
+  MRI as `creator` and `isSentByCurrentUser=True`, because you own the feed —
+  not because you wrote the message. The reader now forces `from_me=False` and
+  `creator_mri=None` on these, so they cannot be misattributed to you; their
+  `author` reads `(unknown)`. They are **not** filtered out, because 10 of the
+  12 notification entries in this store exist only there with no real twin, so
+  dropping them would lose real content. Treat a `48:*` message as "something
+  addressed to you, sender unrecoverable from this record" — find the real
+  sender by searching the message text in its source conversation.
+- **Unread is not per-message.** This cache keeps no per-message read horizon.
+  `unread` reports unread *activity-feed items* and *conversations*; channel
+  threads carry no read flag at all.
+- **`requests`, `decisions` and `standup` retrieve candidates, they do not
+  classify.** Each row carries its evidence — `matched` (which phrase fired),
+  `addressed_to_me`, `is_question`, `automated` — because deciding whether a
+  message *is* a request needs tense, speaker and addressee, which keywords
+  cannot see. Read the evidence and judge; never quote their output as a
+  finding. `requests` ranks addressed-to-you questions first and drops bot
+  PR/deploy traffic (`--include-automated` keeps it, `--to-me` narrows harder).
+
+## The Corpus
+
+Reading is saving. Every command that returns messages writes them as notes:
+
+- corpus: `~/.local/share/teams/YYYY/MM/*.md` (`$XDG_DATA_HOME`), dirs `0700`,
+  files `0600` — this is corporate chat, so it never goes in a repo or in
+  `~/Documents` (which may be iCloud-synced)
+- cursor: `~/.local/state/teams/cursor.json` (`$XDG_STATE_HOME`)
+
+`--no-save` opts a command out; `--save-dir` relocates. The corpus is
+rebuildable from the Teams cache at any time with `sync --full`.
+
+## Configuration
+
+Optional. Copy `teams-reader.example.yaml` to
+`$XDG_CONFIG_HOME/teams/teams-reader.yaml` (default `~/.config/teams/`) to set a
+watch list, a ticket pattern for your tracker, and lookback defaults. An
+in-skill `teams-reader.yaml` (gitignored) still works as a legacy fallback.
+Without any config, everything still works over all cached conversations.
+
+Identity is auto-detected and cross-checked against the store; set `self.mri`
+only if `whoami` reports low confidence.
+
+## Owner Anchors
+
+- Command contract, flags, JSON envelope: `scripts/teams_cli.py commands --json`.
+  **Reading only** — the send commands are not in this surface.
+- Prerequisites, store layout, troubleshooting: `references/operations.md`.
+- Config keys: `teams-reader.example.yaml`.
+- **Sending**: `~/code/dotfiles/bin/teams-send` and `~/code/dotfiles/bin/teams-reply`
+  (each `--help` is the contract); shared helpers in
+  `~/code/dotfiles/bin/lib/teams-automation.sh`. That lib reads `TEAMS_SKILL`
+  (default `~/.claude/skills/teams`) to resolve conversation names through this
+  skill's venv, so sending breaks if the venv is missing.
+
+## Verification
+
+```bash
+skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py doctor --json
+skills/teams/.venv/bin/python -m pytest skills/teams/scripts/teams_reader_test.py -q
+```
