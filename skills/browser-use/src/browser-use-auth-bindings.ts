@@ -175,6 +175,51 @@ export function referenceOf(
 	return `${label}:sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
+/** Portable coordinates used to resolve one local binding without vault identity. */
+export type BrowserUseBindingResolutionKey = {
+	binding_ref: string;
+	service_id: string;
+	auth_context: BrowserUseAuthContext;
+	environment: string;
+	profile: string;
+};
+
+export const BROWSER_USE_BINDING_RESOLUTION_KEY_KEYS = [
+	"binding_ref",
+	"service_id",
+	"auth_context",
+	"environment",
+	"profile",
+] as const satisfies readonly (keyof BrowserUseBindingResolutionKey)[];
+
+/** Complete immutable binding revision signed by the isolated Approval Broker. */
+export type BrowserUseBindingApprovalReceipt = {
+	contract: "browser-use.binding-approval";
+	schema_version: "1";
+	receipt_id: string;
+	disposition: "approved" | "revoked";
+	resolution_key: BrowserUseBindingResolutionKey;
+	binding: BrowserUseItemBinding;
+	predecessor_receipt_id: string | null;
+	issued_at_epoch_ms: number;
+	verifier_key_id: string;
+	signature: string;
+};
+
+const BROWSER_USE_BINDING_APPROVAL_RECEIPT_KEYS = [
+	"contract",
+	"schema_version",
+	"receipt_id",
+	"disposition",
+	"resolution_key",
+	"binding",
+	"predecessor_receipt_id",
+	"issued_at_epoch_ms",
+	"verifier_key_id",
+	"signature",
+] as const satisfies readonly (keyof BrowserUseBindingApprovalReceipt)[];
+
+
 // --- Import Candidate (proposes, never binds) -----------------------------------
 
 /** One Import Candidate proposed from legacy Auth Pointer data. */
@@ -485,6 +530,168 @@ export function validateItemBindingShape(
 		});
 	}
 	return issues;
+}
+
+function exactKeySet(
+	value: Record<string, unknown>,
+	expected: readonly string[],
+): boolean {
+	const actual = Object.keys(value).sort();
+	const wanted = [...expected].sort();
+	return (
+		actual.length === wanted.length &&
+		actual.every((key, index) => key === wanted[index])
+	);
+}
+
+function bindingReceiptFieldIssue(
+	path: string,
+	value: unknown,
+): BrowserUseBindingIssue | undefined {
+	return stringIssueAt(path, value, BINDING_CODES);
+}
+
+/** Exact-shape admission for untrusted signed binding receipt bytes. */
+export function validateBindingApprovalReceiptShape(
+	value: unknown,
+): BrowserUseBindingIssue[] {
+	if (
+		!isPlainObject(value) ||
+		!exactKeySet(value, BROWSER_USE_BINDING_APPROVAL_RECEIPT_KEYS)
+	) {
+		return [
+			{
+				code: "binding_key_set_invalid",
+				path: "binding_receipt",
+				message: "expected the exact signed binding receipt key set.",
+			},
+		];
+	}
+	const issues: BrowserUseBindingIssue[] = [];
+	if (
+		value.contract !== "browser-use.binding-approval" ||
+		value.schema_version !== "1" ||
+		(value.disposition !== "approved" && value.disposition !== "revoked")
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding_receipt",
+			message: "binding receipt contract, schema, or disposition is invalid.",
+		});
+	}
+	for (const field of ["receipt_id", "verifier_key_id"] as const) {
+		const issue = bindingReceiptFieldIssue(
+			`binding_receipt.${field}`,
+			value[field],
+		);
+		if (issue !== undefined) issues.push(issue);
+	}
+	if (
+		value.predecessor_receipt_id !== null &&
+		bindingReceiptFieldIssue(
+			"binding_receipt.predecessor_receipt_id",
+			value.predecessor_receipt_id,
+		) !== undefined
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding_receipt.predecessor_receipt_id",
+			message: "expected null or one bounded predecessor receipt id.",
+		});
+	}
+	if (
+		typeof value.issued_at_epoch_ms !== "number" ||
+		!Number.isSafeInteger(value.issued_at_epoch_ms) ||
+		value.issued_at_epoch_ms < 0
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding_receipt.issued_at_epoch_ms",
+			message: "expected a non-negative safe integer.",
+		});
+	}
+	if (
+		typeof value.signature !== "string" ||
+		value.signature.length === 0 ||
+		value.signature.length > 4_096
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding_receipt.signature",
+			message: "expected a bounded non-empty signature.",
+		});
+	}
+	if (
+		!isPlainObject(value.resolution_key) ||
+		!exactKeySet(
+			value.resolution_key,
+			BROWSER_USE_BINDING_RESOLUTION_KEY_KEYS,
+		)
+	) {
+		issues.push({
+			code: "binding_key_set_invalid",
+			path: "binding_receipt.resolution_key",
+			message: "expected the exact binding resolution key set.",
+		});
+	} else {
+		for (const field of [
+			"binding_ref",
+			"service_id",
+			"environment",
+			"profile",
+		] as const) {
+			const issue = bindingReceiptFieldIssue(
+				`binding_receipt.resolution_key.${field}`,
+				value.resolution_key[field],
+			);
+			if (issue !== undefined) issues.push(issue);
+		}
+		if (!isBrowserUseAuthContext(value.resolution_key.auth_context)) {
+			issues.push({
+				code: "binding_field_invalid",
+				path: "binding_receipt.resolution_key.auth_context",
+				message: "expected a known auth context.",
+			});
+		}
+	}
+	issues.push(...validateItemBindingShape(value.binding));
+	if (
+		isPlainObject(value.resolution_key) &&
+		isPlainObject(value.binding) &&
+		(value.resolution_key.service_id !== value.binding.service_id ||
+			value.resolution_key.auth_context !== value.binding.auth_context)
+	) {
+		issues.push({
+			code: "binding_field_invalid",
+			path: "binding_receipt.binding",
+			message: "binding identity does not match its portable resolution key.",
+		});
+	}
+	return issues;
+}
+
+function canonicalBindingReceiptValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonicalBindingReceiptValue);
+	if (isPlainObject(value)) {
+		return Object.keys(value)
+			.sort()
+			.map((key) => [key, canonicalBindingReceiptValue(value[key])]);
+	}
+	return value;
+}
+
+/** Digest signed by the native broker for one complete immutable revision. */
+export function bindingApprovalReceiptDigestOf(
+	receipt: Omit<BrowserUseBindingApprovalReceipt, "signature">,
+): string {
+	const keys = BROWSER_USE_BINDING_APPROVAL_RECEIPT_KEYS.filter(
+		(key): key is Exclude<keyof BrowserUseBindingApprovalReceipt, "signature"> =>
+			key !== "signature",
+	);
+	const canonical = JSON.stringify(
+		keys.map((key) => canonicalBindingReceiptValue(receipt[key])),
+	);
+	return createHash("sha256").update(canonical).digest("hex");
 }
 
 /**
@@ -1135,6 +1342,7 @@ function staleUsability(
 export function assessBindingUsability(
 	binding: BrowserUseItemBinding,
 	live: BrowserUseLiveItemFact,
+	options: { allow_receipt_approved_origins?: boolean } = {},
 ): BrowserUseBindingUsability {
 	if (live.item === null) return staleUsability("deleted");
 	// The read must be for the bound item itself; a different active item that
@@ -1146,9 +1354,16 @@ export function assessBindingUsability(
 	// from the live evidence — a cache edit that widens the origin set fails
 	// closed as out-of-scope. Grant-approved origin aliases are excepted once
 	// PR2 wires origin-expansion grants; in PR1 no alias authority exists.
-	const liveOrigins = live.item.origins;
-	for (const origin of binding.allowed_origins) {
-		if (!liveOrigins.includes(origin)) return staleUsability("out-of-scope");
+	if (options.allow_receipt_approved_origins !== true) {
+		const liveOrigins = live.item.origins;
+		for (const origin of binding.allowed_origins) {
+			if (!liveOrigins.includes(origin)) return staleUsability("out-of-scope");
+		}
+	}
+	for (const method of binding.allowed_auth_methods) {
+		if (!live.item.supported_methods.includes(method)) {
+			return staleUsability("out-of-scope");
+		}
 	}
 	return { usable: true, binding };
 }

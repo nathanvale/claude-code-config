@@ -11,6 +11,43 @@ import { makeRuntime, parseJson } from "./browser-use-test-helpers";
 // command-contract + barrel-re-export assertions stay in browser-use.test.ts.
 
 describe("U3 help and version", () => {
+	test("auth binding lifecycle is discoverable through the hierarchical public argv", () => {
+		for (const [action, command, flags] of [
+			[
+				"create",
+				"auth-binding-create",
+				[
+					"--binding", "oncore",
+					"--service", "oncore",
+					"--origin", "https://example.test",
+					"--vault-id", "vault-1",
+					"--item-id", "item-1",
+				],
+			],
+			["list", "auth-binding-list", []],
+			[
+				"show",
+				"auth-binding-show",
+				["--binding", "oncore", "--service", "oncore"],
+			],
+			[
+				"revoke",
+				"auth-binding-revoke",
+				["--binding", "oncore", "--service", "oncore"],
+			],
+		] as const) {
+			expect(
+				parseBrowserUseArgv(["auth", "binding", action, ...flags, "--json"]),
+			).toMatchObject({
+				kind: "command",
+				command,
+				family: "auth",
+				subcommand: `binding ${action}`,
+				outputMode: "json",
+			});
+		}
+	});
+
 	// Scenario 1: root help renders both families.
 	test("--help renders targets and operate families", async () => {
 		const result = await runForTest(["--help"], makeRuntime());

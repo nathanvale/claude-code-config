@@ -95,7 +95,7 @@
 - Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
 - Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
-- Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.
+- Before any file edit, in any repo, verify isolation; in the main checkout, isolate first with the `worktree` skill (new/attach). Never edit in the main checkout, because parallel agents share it and inherit dirty files. Edit size, file type, a config-only or one-line change, a repo incidental to the task, handoffs, and harness work-in-place defaults do not override this. Read-only work stays in the main checkout.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
 - Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
@@ -107,6 +107,7 @@
 - Reply shape: answer in one or two lines and stop when enough; otherwise use `Details` bullets, direct `What I need to do`, and brief `Also found`; skip preambles, process narration, padding, and routine offers.
 - Questions and failures: ask one question with options and a reasoned recommendation; state what broke, user impact, and the next action; omit logs unless asked.
 - Long writing: let drafts, scripts, posts, and documents use the form the work needs; outbound style owner: `$HOME/code/claude-code-config/context/comms-style.md`.
+- Tracker and forge identifiers in human-facing surfaces: render as clickable links keeping the key as visible text; never invent a host; owner: `$HOME/code/claude-code-config/context/tracker-links.md`.
 
 ## Personal Context
 

@@ -11,6 +11,8 @@ import { toCandidate } from "./browser-use-core";
 import { SAFE_TAB_ID } from "./browser-use-identifiers";
 
 const CONNECTION_ESTABLISH_ATTEMPTS = 3;
+const POSTCONDITION_VERIFICATION_ATTEMPTS = 3;
+const POSTCONDITION_RETRY_DELAY_MS = 250;
 const CONNECTION_FAILURE_SIGNALS = [
 	"cdp websocket connect failed",
 	"cdp discovery methods failed",
@@ -579,20 +581,36 @@ export async function verifyAgentBrowserPostcondition(
 	) {
 		return "not-achieved";
 	}
-	if ((await reproveAgentBrowserOrigin(run, allowedOrigins)) !== "allowed") {
-		return "unavailable";
+	for (
+		let attempt = 1;
+		attempt <= POSTCONDITION_VERIFICATION_ATTEMPTS;
+		attempt += 1
+	) {
+		const originProof = await reproveAgentBrowserOrigin(run, allowedOrigins);
+		if (originProof === "refused") return "unavailable";
+		const data =
+			originProof === "allowed"
+				? postcondition.kind === "value-equals"
+					? parseSuccessData(
+							await run(["get", "value", postcondition.selector, "--json"]),
+						)
+					: parseSuccessData(
+							await run(["is", "visible", postcondition.selector, "--json"]),
+						)
+				: undefined;
+		if (data !== undefined) {
+			if (postcondition.kind === "value-equals") {
+				return data.value === postcondition.value
+					? "confirmed"
+					: "not-achieved";
+			}
+			return data.visible === true ? "confirmed" : "not-achieved";
+		}
+		if (attempt < POSTCONDITION_VERIFICATION_ATTEMPTS) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, POSTCONDITION_RETRY_DELAY_MS),
+			);
+		}
 	}
-	const data =
-		postcondition.kind === "value-equals"
-			? parseSuccessData(
-					await run(["get", "value", postcondition.selector, "--json"]),
-				)
-			: parseSuccessData(
-					await run(["is", "visible", postcondition.selector, "--json"]),
-				);
-	if (data === undefined) return "unavailable";
-	if (postcondition.kind === "value-equals") {
-		return data.value === postcondition.value ? "confirmed" : "not-achieved";
-	}
-	return data.visible === true ? "confirmed" : "not-achieved";
+	return "unavailable";
 }

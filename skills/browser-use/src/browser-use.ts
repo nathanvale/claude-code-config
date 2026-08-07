@@ -209,8 +209,14 @@ import {
 } from "./browser-use-auth-provider";
 import type {
 	BrowserUseAuthContext,
+	BrowserUseBindingResolutionKey,
 	BrowserUseItemBinding,
 } from "./browser-use-auth-bindings";
+import {
+	isBrowserUseAuthContext,
+	normalizeOrigin,
+} from "./browser-use-auth-bindings";
+import { createBindingCatalog } from "./browser-use-binding-catalog";
 import {
 	type BrowserUseCdpObserverRequest,
 	createBrowserUseCdpObserver,
@@ -835,6 +841,17 @@ async function executeCommand(input: {
 	) {
 		if (parsed.subcommand === "login") {
 			return runOpenEndedAuthLogin({
+				parsed,
+				runtime,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				caller,
+				durationMs: input.durationMs,
+			});
+		}
+		if (parsed.subcommand.startsWith("binding ")) {
+			return runAuthBinding({
 				parsed,
 				runtime,
 				stdout: input.stdout,
@@ -8355,6 +8372,245 @@ async function runAuthTokenLifecycle(
 				: authProjectionWithSourcePresence(projection, sourcePresence),
 		authTokenLifecycleErrorForProjection(projection),
 	);
+}
+
+function bindingResolutionKeyOf(
+	input: PlatformCommandInput,
+): BrowserUseBindingResolutionKey | undefined {
+	const authContext =
+		stringField(input.parsed.flagValues["--auth-context"]) ??
+		"interactive-login";
+	if (!isBrowserUseAuthContext(authContext)) return undefined;
+	const bindingRef = stringField(input.parsed.flagValues["--binding"]);
+	const serviceId = stringField(input.parsed.flagValues["--service"]);
+	if (bindingRef === undefined || serviceId === undefined) return undefined;
+	return {
+		binding_ref: bindingRef,
+		service_id: serviceId,
+		auth_context: authContext,
+		environment:
+			stringField(input.parsed.flagValues["--environment"]) ??
+			BROWSER_CONNECT_ENVIRONMENT_NAME,
+		profile:
+			stringField(input.parsed.flagValues["--profile"]) ??
+			BROWSER_CONNECT_ENVIRONMENT_PROFILE,
+	};
+}
+
+function emitBindingFailure(
+	input: PlatformCommandInput,
+	code: string,
+	message: string,
+	nextAction = "request-binding-selection-grant",
+): number {
+	const safeMessage = redactUnsafeText(message);
+	if (input.parsed.outputMode === "plain") {
+		input.stderr.write(`browser_use ${code}: ${safeMessage} action=${nextAction}\n`);
+		return BINDING_FAIL_CLOSED_EXIT_CODE;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+			data: {
+				command: input.parsed.command,
+				result_kind: RESULT_KIND_BY_FAMILY[input.parsed.family],
+				caller: input.caller,
+			},
+			runtime_actions: [authAction(nextAction as AuthActionId)],
+			continuation: { next_action_id: nextAction },
+			error: createCliRuntimeError({
+				run_id: input.runId,
+				code,
+				message: safeMessage,
+				exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				...retryabilityForRecoverability("repair_state"),
+				failure_domain: "browser_use",
+			}),
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return BINDING_FAIL_CLOSED_EXIT_CODE;
+}
+
+function emitBindingSuccess(
+	input: PlatformCommandInput,
+	evaluation: Record<string, unknown>,
+): number {
+	if (input.parsed.outputMode === "plain") {
+		input.stdout.write(
+			`action=${input.parsed.subcommand} status=${String(evaluation.status ?? "ready")}\n`,
+		);
+		return 0;
+	}
+	writeJsonEnvelope(
+		input.stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: input.runId,
+			data: {
+				contract: BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
+				schema_version: BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+				action: input.parsed.subcommand,
+				evaluation,
+				caller: input.caller,
+			},
+			runtime_actions: [authAction("inspect-auth-readiness")],
+			continuation: { next_action_id: "inspect-auth-readiness" },
+		}),
+		{ runId: input.runId, durationMs: input.durationMs() },
+	);
+	return 0;
+}
+
+async function runAuthBinding(input: PlatformCommandInput): Promise<number> {
+	const verifier = input.runtime.bindingApprovalReceiptVerifier;
+	if (verifier === undefined) {
+		return emitBindingFailure(
+			input,
+			"binding_verifier_unavailable",
+			"the pinned binding receipt verifier is unavailable.",
+			"acquire-native-capability",
+		);
+	}
+	const writing =
+		input.parsed.subcommand === "binding create" ||
+		input.parsed.subcommand === "binding revoke";
+	const opened = writing
+		? await openBrowserUsePaths(input.runtime.platformFs, input.runtime.env)
+		: await inspectBrowserUsePaths(input.runtime.platformFs, input.runtime.env);
+	if (!opened.ok) return emitXdgRefusal(input, opened.refusal);
+	const catalog = createBindingCatalog({
+		fs: input.runtime.platformFs,
+		root: join(opened.paths.resolution.roots.state, "binding-catalog"),
+		verifier,
+	});
+
+	if (input.parsed.subcommand === "binding list") {
+		const listed = await catalog.list();
+		return listed.ok
+			? emitBindingSuccess(input, {
+					status: "binding-list",
+					bindings: listed.bindings,
+				})
+			: emitBindingFailure(input, listed.code, listed.message);
+	}
+	const key = bindingResolutionKeyOf(input);
+	if (key === undefined) {
+		return emitBindingFailure(
+			input,
+			"binding_coordinates_invalid",
+			"the portable binding resolution coordinates are invalid.",
+		);
+	}
+	if (input.parsed.subcommand === "binding show") {
+		const resolved = await catalog.resolve(key);
+		if (!resolved.ok) return emitBindingFailure(input, resolved.code, resolved.message);
+		return emitBindingSuccess(input, {
+			status:
+				resolved.status === "active"
+					? "binding-active"
+					: resolved.status === "revoked"
+						? "binding-revoked"
+						: "binding-missing",
+			binding_ref: key.binding_ref,
+			...(resolved.status === "active"
+				? { revision: resolved.binding.binding_revision }
+				: resolved.status === "revoked"
+					? { revision: resolved.revision }
+					: {}),
+		});
+	}
+	const broker = input.runtime.bindingApprovalBroker;
+	if (broker === undefined) {
+		return emitBindingFailure(
+			input,
+			"binding_approval_broker_unavailable",
+			"the local presence-backed binding approval broker is unavailable.",
+			"acquire-native-capability",
+		);
+	}
+	if (input.parsed.subcommand === "binding create") {
+		const port = input.runtime.authTokenRetrieval;
+		if (port === undefined) {
+			return emitBindingFailure(input, "binding_token_unavailable", "the token retrieval capability is unavailable.", "install-token");
+		}
+		const vaultId = stringField(input.parsed.flagValues["--vault-id"]) ?? "";
+		const itemId = stringField(input.parsed.flagValues["--item-id"]) ?? "";
+		const originInput = stringField(input.parsed.flagValues["--origin"]) ?? "";
+		const normalized = normalizeOrigin(originInput);
+		if (!normalized.ok || normalized.origin !== originInput) {
+			return emitBindingFailure(input, "binding_origin_invalid", "the approved origin must be one exact normalized http(s) origin.");
+		}
+		const live = await port.getLoginItem({ vault_id: vaultId, item_id: itemId });
+		if (
+			!live.ok ||
+			live.item.state !== "active" ||
+			live.item.vault_id !== vaultId ||
+			live.item.item_id !== itemId
+		) {
+			return emitBindingFailure(input, "binding_live_evidence_invalid", "the exact live item does not prove the requested active item identity and state.");
+		}
+		const binding: BrowserUseItemBinding = {
+			service_id: key.service_id,
+			auth_context: key.auth_context,
+			allowed_origins: [normalized.origin],
+			allowed_login_paths: live.item.login_paths,
+			vault_id: live.item.vault_id,
+			item_id: live.item.item_id,
+			allowed_auth_methods: live.item.supported_methods,
+			binding_revision: 1,
+		};
+		const signed = await broker.issueBindingApproval({
+			disposition: "approved",
+			resolution_key: key,
+			binding,
+			predecessor_receipt_id: null,
+			display: [
+				`Service: ${key.service_id}`,
+				`Binding: ${key.binding_ref}`,
+				`Origin: ${normalized.origin}`,
+			],
+		});
+		if (!signed.ok) return emitBindingFailure(input, signed.rejection.code, signed.rejection.message, "request-binding-selection-grant");
+		const committed = await catalog.commit(signed.receipt);
+		return committed.ok
+			? emitBindingSuccess(input, {
+					status: "binding-active",
+					binding_ref: key.binding_ref,
+					revision: signed.receipt.binding.binding_revision,
+				})
+			: emitBindingFailure(input, committed.code, committed.message);
+	}
+
+	const current = await catalog.resolve(key);
+	if (!current.ok) return emitBindingFailure(input, current.code, current.message);
+	if (current.status !== "active") {
+		return emitBindingFailure(input, "binding_not_active", "the requested binding has no active revision.");
+	}
+	const signed = await broker.issueBindingApproval({
+		disposition: "revoked",
+		resolution_key: key,
+		binding: {
+			...current.binding,
+			binding_revision: current.binding.binding_revision + 1,
+		},
+		predecessor_receipt_id: current.receipt_id,
+		display: [
+			`Revoke service: ${key.service_id}`,
+			`Revoke binding: ${key.binding_ref}`,
+		],
+	});
+	if (!signed.ok) return emitBindingFailure(input, signed.rejection.code, signed.rejection.message);
+	const committed = await catalog.commit(signed.receipt);
+	return committed.ok
+		? emitBindingSuccess(input, {
+				status: "binding-revoked",
+				binding_ref: key.binding_ref,
+				revision: signed.receipt.binding.binding_revision,
+			})
+		: emitBindingFailure(input, committed.code, committed.message);
 }
 
 // Map a retrieval block back onto the ONE repair command that discharges it;

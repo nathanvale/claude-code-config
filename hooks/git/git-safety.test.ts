@@ -1,8 +1,12 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PROTECTED_BRANCHES } from './git-policy.ts'
 import {
 	checkCommand,
 	checkFileEdit,
+	checkWorktreeIsolation,
 	getGitSafetyMode,
 	hasImplicitProtectedBranchForceLeasePush,
 	hasProtectedBranchCommitAction,
@@ -1145,5 +1149,85 @@ describe('resolveEffectiveGitCwd', () => {
 		expect(
 			resolveEffectiveGitCwd('git -C "/path with spaces" commit -m "test"', FALLBACK),
 		).toBe('/path with spaces')
+	})
+})
+
+// ---------------------------------------------------------------------------
+// checkWorktreeIsolation: main checkout vs linked worktree
+// ---------------------------------------------------------------------------
+
+describe('checkWorktreeIsolation', () => {
+	let root: string
+	let mainRepo: string
+	let worktree: string
+
+	beforeAll(async () => {
+		root = mkdtempSync(join(tmpdir(), 'wt-isolation-'))
+		mainRepo = join(root, 'repo')
+		worktree = join(root, 'wt')
+
+		const git = async (args: string[], cwd: string) => {
+			const proc = Bun.spawn(['git', ...args], {
+				cwd,
+				stdout: 'ignore',
+				stderr: 'ignore',
+			})
+			await proc.exited
+		}
+
+		await git(['init', '-b', 'main', 'repo'], root)
+		await git(['config', 'user.email', 'test@example.com'], mainRepo)
+		await git(['config', 'user.name', 'Test'], mainRepo)
+		await Bun.write(join(mainRepo, 'seed.txt'), 'seed\n')
+		await git(['add', 'seed.txt'], mainRepo)
+		await git(['commit', '-m', 'seed'], mainRepo)
+		await git(['worktree', 'add', '-b', 'feature', worktree], mainRepo)
+	})
+
+	afterAll(() => {
+		rmSync(root, { recursive: true, force: true })
+	})
+
+	test('blocks an edit to an existing file in the main checkout', async () => {
+		const result = await checkWorktreeIsolation(join(mainRepo, 'seed.txt'))
+		expect(result.blocked).toBe(true)
+		expect(result.branch).toBe('main')
+	})
+
+	test('blocks a new file in a not-yet-existing dir in the main checkout', async () => {
+		const result = await checkWorktreeIsolation(
+			join(mainRepo, 'brand', 'new', 'dir', 'file.txt'),
+		)
+		expect(result.blocked).toBe(true)
+	})
+
+	test('allows an edit inside a linked worktree', async () => {
+		const result = await checkWorktreeIsolation(join(worktree, 'seed.txt'))
+		expect(result.blocked).toBe(false)
+	})
+
+	test('allows a new file in a not-yet-existing dir inside a worktree', async () => {
+		const result = await checkWorktreeIsolation(
+			join(worktree, 'brand', 'new', 'dir', 'file.txt'),
+		)
+		expect(result.blocked).toBe(false)
+	})
+
+	test('allows a path outside any git repository', async () => {
+		const result = await checkWorktreeIsolation(join(root, 'loose.txt'))
+		expect(result.blocked).toBe(false)
+	})
+
+	test('allows a nonexistent path outside any repository', async () => {
+		const result = await checkWorktreeIsolation(
+			join(root, 'no', 'such', 'dir', 'file.txt'),
+		)
+		expect(result.blocked).toBe(false)
+	})
+
+	test('reason names the repo and the isolation remedy', async () => {
+		const result = await checkWorktreeIsolation(join(mainRepo, 'seed.txt'))
+		expect(result.reason).toContain('MAIN CHECKOUT')
+		expect(result.reason).toContain('worktree')
 	})
 })

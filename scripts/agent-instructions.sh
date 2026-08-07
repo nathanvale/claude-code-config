@@ -156,6 +156,7 @@ declare -a REGISTERED_OWNER_PATHS=(
 	"context/personal.md"
 	"context/vault.md"
 	"context/comms-style.md"
+	"context/tracker-links.md"
 	"docs/git/conventions.md"
 	"docs/git/workflows.md"
 	"docs/git/worktree.md"
@@ -237,7 +238,6 @@ check_no_leakage() {
 	fi
 
 	local patterns=(
-		'/Users/nathanvale/code/'
 		'nathanvale/claude-code-config'
 		'Applies in `claude-code-config` repo'
 		'Issues and PRDs for `'
@@ -248,6 +248,13 @@ check_no_leakage() {
 			add_fail "global leakage in ${file#$SCRIPT_DIR/}: $pattern"
 		fi
 	done
+
+	# Any hardcoded home directory breaks the other machines sharing this repo.
+	# Match /Users/<name>/ for any name, not just this machine's, so the check
+	# catches leakage regardless of which checkout runs it. Use $HOME instead.
+	if rg -n '/Users/[^/[:space:]]+/' "$file" >/dev/null 2>&1; then
+		add_fail "global leakage in ${file#$SCRIPT_DIR/}: hardcoded /Users/<name>/ path (use \$HOME)"
+	fi
 }
 
 check_owner_paths() {
