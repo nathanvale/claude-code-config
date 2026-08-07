@@ -106,6 +106,7 @@ export type BrowserUseEnvironmentTokenRetrievalPort =
 			field: BrowserUseOpCredentialField;
 			target_digest?: string;
 			observed_origin?: string;
+			origin_authority?: "live-evidence" | "signed-binding-receipt";
 		}): Promise<BrowserUseEnvironmentCredentialFetchResult>;
 		redeemCredentialField(
 			input: BrowserUseEnvironmentCredentialRedemption,
@@ -660,8 +661,12 @@ export function createEnvironmentTokenRetrievalPort(
 					"the exact item binding was not reproduced.",
 				);
 			}
+			const receiptApprovedOrigin =
+				input.origin_authority === "signed-binding-receipt" &&
+				input.binding.allowed_origins.includes(observed.origin);
 			if (
-				!exactItem.item.origins.includes(observed.origin) ||
+				(!exactItem.item.origins.includes(observed.origin) &&
+					!receiptApprovedOrigin) ||
 				exactItem.item.state !== "active"
 			) {
 				return exactItem.item.state === "active"

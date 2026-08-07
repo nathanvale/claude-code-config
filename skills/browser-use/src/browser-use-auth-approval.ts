@@ -14,14 +14,18 @@
 // Date.now, no Math.random; time enters only via `at_epoch_ms` inputs.
 // ---------------------------------------------------------------------------
 
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import {
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 	type BrowserUseAuthContinuation,
 } from "./browser-use-auth-model";
 import {
 	type BrowserUseAuthContext,
+	type BrowserUseBindingApprovalReceipt,
+	type BrowserUseItemBinding,
+	bindingApprovalReceiptDigestOf,
 	secretShapeFindingOf,
+	validateBindingApprovalReceiptShape,
 } from "./browser-use-auth-bindings";
 
 // --- Vocabularies (R20 — closed) -----------------------------------------------
@@ -106,6 +110,112 @@ export type BrowserUseVerifierIdentity = {
 	key_id: string;
 	public_key: string;
 };
+
+export type BrowserUseBindingApprovalReceiptVerifier = {
+	verify(receipt: unknown):
+		| {
+				ok: true;
+				receipt_id: string;
+				disposition: "approved" | "revoked";
+				binding: BrowserUseItemBinding;
+		  }
+		| { ok: false; code: string };
+};
+
+/** Presence-backed signer kept outside ordinary runbook execution. */
+export type BrowserUseBindingApprovalBrokerPort = {
+	issueBindingApproval(input: {
+		disposition: "approved" | "revoked";
+		resolution_key: import("./browser-use-auth-bindings").BrowserUseBindingResolutionKey;
+		binding: BrowserUseItemBinding;
+		predecessor_receipt_id: string | null;
+		display: readonly string[];
+	}): Promise<
+		| { ok: true; receipt: BrowserUseBindingApprovalReceipt }
+		| { ok: false; rejection: BrowserUseApprovalPresenceRejection }
+	>;
+};
+
+/** Presence-free verifier for complete Item Binding revisions. */
+export function createBindingApprovalReceiptVerifier(deps: {
+	verifier: BrowserUseVerifierIdentity;
+	verifySignature(input: {
+		digest: string;
+		signature: string;
+		key_id: string;
+	}): boolean;
+}): BrowserUseBindingApprovalReceiptVerifier {
+	return {
+		verify(receipt) {
+			if (validateBindingApprovalReceiptShape(receipt).length > 0) {
+				return { ok: false, code: "binding_receipt_invalid" };
+			}
+			const admitted = receipt as BrowserUseBindingApprovalReceipt;
+			if (admitted.verifier_key_id !== deps.verifier.key_id) {
+				return { ok: false, code: "binding_receipt_verifier_stale" };
+			}
+			const { signature, ...unsigned } = admitted;
+			if (
+				!deps.verifySignature({
+					digest: bindingApprovalReceiptDigestOf(unsigned),
+					signature,
+					key_id: admitted.verifier_key_id,
+				})
+			) {
+				return { ok: false, code: "binding_receipt_signature_invalid" };
+			}
+			return {
+				ok: true,
+				receipt_id: admitted.receipt_id,
+				disposition: admitted.disposition,
+				binding: admitted.binding,
+			};
+		},
+	};
+}
+
+/** Production P-256 verifier for binding receipts signed by ApprovalBroker. */
+export function createP256BindingApprovalReceiptVerifier(
+	identity: BrowserUseVerifierIdentity,
+): BrowserUseBindingApprovalReceiptVerifier {
+	let publicKey: ReturnType<typeof createPublicKey> | undefined;
+	try {
+		const raw = Buffer.from(identity.public_key, "base64");
+		if (
+			raw.length === 65 &&
+			raw[0] === 4 &&
+			createHash("sha256").update(raw).digest("hex") === identity.key_id
+		) {
+			publicKey = createPublicKey({
+				key: {
+					kty: "EC",
+					crv: "P-256",
+					x: raw.subarray(1, 33).toString("base64url"),
+					y: raw.subarray(33, 65).toString("base64url"),
+				},
+				format: "jwk",
+			});
+		}
+	} catch {
+		publicKey = undefined;
+	}
+	return createBindingApprovalReceiptVerifier({
+		verifier: identity,
+		verifySignature: ({ digest, signature, key_id }) => {
+			if (publicKey === undefined || key_id !== identity.key_id) return false;
+			try {
+				return verify(
+					"sha256",
+					Buffer.from(digest, "hex"),
+					publicKey,
+					Buffer.from(signature, "base64"),
+				);
+			} catch {
+				return false;
+			}
+		},
+	});
+}
 
 export type BrowserUseGrantSubject =
 	| { purpose: "binding-selection"; selected_item_id: string }

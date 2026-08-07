@@ -170,6 +170,8 @@ export type BrowserUseDeliveryFieldPlan = readonly BrowserUseOpCredentialField[]
 /** Everything the choreography needs; every effect is an injected port. */
 export type BrowserUseDeliveryInput = {
 	binding: BrowserUseItemBinding;
+	/** Authority that admitted any origin alias beyond live item metadata. */
+	origin_authority?: "live-evidence" | "signed-binding-receipt";
 	target: BrowserUseVerifiedTarget;
 	fields: BrowserUseDeliveryFieldPlan;
 	tokenRetrieval: BrowserUseTokenRetrievalPort;
@@ -306,6 +308,7 @@ export async function deliverConfidentialFields(
 		// loss are all legal typed states (never a throw).
 		const fetched = await input.tokenRetrieval.fetchCredentialField({
 			binding: input.binding,
+			origin_authority: input.origin_authority,
 			field,
 			// The successful re-proof freshly reproduced the verified target's
 			// digest. That digest covers frame_origin, so both reservation inputs

@@ -6,6 +6,7 @@ import {
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
+	browserUseCommandFor,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
 	browserUseTargetDiscoveryFailureActions,
@@ -179,7 +180,7 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 		// Command-level help renders flag enum values (the --adapter union), so
 		// it must be in the corpus for this sweep to bite.
 		for (const [family, sub] of ALL_COMMANDS) {
-			const command = `${family}-${sub}` as BrowserUseCommand;
+			const command = browserUseCommandFor(family, sub);
 			corpus.push({ path: `help(${command})`, text: renderHelp(family, command) });
 		}
 		const offenders = corpus
@@ -196,7 +197,7 @@ describe("R4 no-dangle sweep — deleted command surfaces", () => {
 			corpus.push({ path: `help(${family})`, text: renderHelp(family) });
 		}
 		for (const [family, sub] of ALL_COMMANDS) {
-			const command = `${family}-${sub}` as BrowserUseCommand;
+			const command = browserUseCommandFor(family, sub);
 			corpus.push({
 				path: `help(${command})`,
 				text: renderHelp(family, command),

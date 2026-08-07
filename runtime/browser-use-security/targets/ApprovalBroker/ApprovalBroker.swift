@@ -61,6 +61,9 @@ enum BrokerError: Error {
     case signingKeyAmbiguous
     case signingKeyCustodyMismatch
     case signingKeyAlreadyEnrolled
+    case legacySigningKeyMissing
+    case legacySigningKeyReconstructionFailed
+    case legacySigningKeyPresenceFailed
 }
 
 /// The broker's device-bound signing authority.
@@ -96,6 +99,9 @@ struct ApprovalBroker {
     /// call this.
     @discardableResult
     static func requireUserPresence(for mutation: AuthorizationMutation) throws -> LAContext {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.activate(ignoringOtherApps: true)
         let context = LAContext()
         var authError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError) else {
@@ -198,6 +204,51 @@ struct ApprovalBroker {
         return unsigned
     }
 
+    /// Sign one complete immutable Item Binding revision after local review.
+    static func issueBindingApproval(
+        disposition: String,
+        resolutionKey: [String: Any],
+        binding: [String: Any],
+        predecessorReceiptID: Any,
+        signingKey: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        let issuedAt = Int(Date().timeIntervalSince1970 * 1_000)
+        let verifierKeyID = hex(SHA256.hash(data: pinnedPublicVerifier(for: signingKey)))
+        var unsigned: [String: Any] = [
+            "contract": "browser-use.binding-approval",
+            "schema_version": "1",
+            "receipt_id": "binding-\(UUID().uuidString.lowercased())",
+            "disposition": disposition,
+            "resolution_key": resolutionKey,
+            "binding": binding,
+            "predecessor_receipt_id": predecessorReceiptID,
+            "issued_at_epoch_ms": issuedAt,
+            "verifier_key_id": verifierKeyID,
+        ]
+        let digestKeys = [
+            "contract",
+            "schema_version",
+            "receipt_id",
+            "disposition",
+            "resolution_key",
+            "binding",
+            "predecessor_receipt_id",
+            "issued_at_epoch_ms",
+            "verifier_key_id",
+        ]
+        let canonicalValues = try digestKeys.map { key in
+            try canonicalApprovalValue(unsigned[key]!)
+        }
+        let canonical = try JSONSerialization.data(
+            withJSONObject: canonicalValues,
+            options: [.withoutEscapingSlashes]
+        )
+        let digest = Data(SHA256.hash(data: canonical))
+        let signature = try signingKey.signature(for: digest)
+        unsigned["signature"] = signature.derRepresentation.base64EncodedString()
+        return unsigned
+    }
+
     /// The pinned public verifier identity: the SEC1 uncompressed (x9.63) public
     /// key bytes verifiers trust — a 65-byte `0x04 || X || Y` point. The
     /// TypeScript verifier requires this encoding (it reads the `0x04` prefix and
@@ -219,11 +270,14 @@ private enum PromotionCommandError: Error {
 
 /// The only Keychain item allowed to retain the opaque Secure Enclave handle.
 private enum SigningKeyHandleLocator {
-    static let accessGroup = "com.side-quest.browser-use-security.approval-broker"
+    static var accessGroup: String {
+        Bundle.main.bundleIdentifier ?? ""
+    }
     static let service = "com.side-quest.browser-use-security.reviewed-action-signing-key"
     static let account = "device-bound-signing-key-v1"
     static let schemaVersion = "1"
     static let presencePolicy = "secure-enclave-private-key-usage-user-presence-v1"
+    static let legacyDefaultsKey = "reviewed-action-signing-key-handle-v1"
     static let expectedAccessible = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
 }
 
@@ -252,6 +306,14 @@ private enum ApprovalBrokerCommandSupport {
         "mutation_target",
         "mutation_scope",
         "action_policy_hash",
+    ]
+
+    private static let bindingResolutionKeys: Set<String> = [
+        "binding_ref", "service_id", "auth_context", "environment", "profile",
+    ]
+    private static let bindingKeys: Set<String> = [
+        "service_id", "auth_context", "allowed_origins", "allowed_login_paths",
+        "vault_id", "item_id", "allowed_auth_methods", "binding_revision",
     ]
 
     private static func signingKeyItemQuery() throws -> [String: Any] {
@@ -348,6 +410,13 @@ private enum ApprovalBrokerCommandSupport {
         }
 
         let key = try ApprovalBroker.createDeviceBoundSigningKey()
+        try persistSigningKey(key)
+        return try loadSigningKey()
+    }
+
+    private static func persistSigningKey(
+        _ key: SecureEnclave.P256.Signing.PrivateKey
+    ) throws {
         let verifier = verifierIdentity(for: key)
         let custodyRecord = try encodeCustodyRecord(
             representation: key.dataRepresentation,
@@ -358,12 +427,58 @@ private enum ApprovalBrokerCommandSupport {
         item[kSecValueData as String] = custodyRecord
         switch SecItemAdd(item as CFDictionary, nil) {
         case errSecSuccess:
-            return try loadSigningKey()
+            return
         case errSecDuplicateItem:
             throw BrokerError.signingKeyAlreadyEnrolled
         default:
             throw BrokerError.signingKeyCustodyMismatch
         }
+    }
+
+    /// Explicitly migrate the pre-Keychain opaque handle without rotating it.
+    static func migrateLegacySigningKey() throws -> AdmittedSigningKey {
+        do {
+            _ = try loadSigningKey()
+            throw BrokerError.signingKeyAlreadyEnrolled
+        } catch BrokerError.signingKeyMissing {
+            // Continue only from an absent current-format record.
+        }
+        guard
+            let representation = UserDefaults.standard.data(
+                forKey: SigningKeyHandleLocator.legacyDefaultsKey
+            )
+        else {
+            throw BrokerError.legacySigningKeyMissing
+        }
+        let context = try ApprovalBroker.requireUserPresence(for: .replace)
+        context.localizedReason = "Migrate the existing Browser Use signing key"
+        let key: SecureEnclave.P256.Signing.PrivateKey
+        do {
+            key = try SecureEnclave.P256.Signing.PrivateKey(
+                dataRepresentation: representation,
+                authenticationContext: context
+            )
+        } catch {
+            throw BrokerError.legacySigningKeyReconstructionFailed
+        }
+        do {
+            _ = try key.signature(
+                for: Data(SHA256.hash(data: Data("browser-use-key-migration-v1".utf8)))
+            )
+        } catch {
+            throw BrokerError.legacySigningKeyPresenceFailed
+        }
+        try persistSigningKey(key)
+        let migrated = try loadSigningKey()
+        guard
+            verifierIdentity(for: migrated.key).key_id == verifierIdentity(for: key).key_id
+        else {
+            throw BrokerError.signingKeyCustodyMismatch
+        }
+        UserDefaults.standard.removeObject(
+            forKey: SigningKeyHandleLocator.legacyDefaultsKey
+        )
+        return migrated
     }
 
     private static func encodeCustodyRecord(
@@ -479,6 +594,48 @@ private enum ApprovalBrokerCommandSupport {
         }
     }
 
+    static func reviewBindingApproval(
+        disposition: String,
+        resolutionKey: [String: Any],
+        binding: [String: Any],
+        display: [String]
+    ) throws {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.activate(ignoringOtherApps: true)
+
+        let factsData = try JSONSerialization.data(
+            withJSONObject: [
+                "disposition": disposition,
+                "resolution_key": resolutionKey,
+                "binding": binding,
+            ],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        guard let factsText = String(data: factsData, encoding: .utf8) else {
+            throw PromotionCommandError.invalidInput
+        }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.string = "ITEM BINDING REVIEW\n\(display.joined(separator: "\n"))\n\nCOMPLETE SIGNED FACTS\n\(factsText)"
+        let scrollView = NSScrollView(frame: textView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = textView
+
+        let alert = NSAlert()
+        alert.messageText = disposition == "revoked" ? "Revoke Browser Use Item Binding" : "Create Browser Use Item Binding"
+        alert.informativeText = "Approve only if the complete binding revision is correct. Touch ID signs this immutable revision."
+        alert.alertStyle = .warning
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: disposition == "revoked" ? "Revoke and Sign" : "Approve and Sign")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            throw PromotionCommandError.reviewCancelled
+        }
+    }
+
     static func promotionReceipt(
         request: ReviewedActionPromotionRequest,
         admittedKey: AdmittedSigningKey
@@ -557,6 +714,84 @@ private enum ApprovalBrokerCommandSupport {
         )
     }
 
+    static func bindingApprovalReceipt(
+        request: [String: Any],
+        key: SecureEnclave.P256.Signing.PrivateKey
+    ) throws -> [String: Any] {
+        guard
+            Set(request.keys) == Set(["disposition", "resolution_key", "binding", "predecessor_receipt_id", "display"]),
+            let disposition = request["disposition"] as? String,
+            disposition == "approved" || disposition == "revoked",
+            let resolutionKey = request["resolution_key"] as? [String: Any],
+            Set(resolutionKey.keys) == bindingResolutionKeys,
+            let binding = request["binding"] as? [String: Any],
+            Set(binding.keys) == bindingKeys,
+            let display = request["display"] as? [String],
+            !display.isEmpty,
+            display.count <= 16,
+            display.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
+            let revision = binding["binding_revision"] as? Int,
+            revision > 0,
+            let resolutionService = resolutionKey["service_id"] as? String,
+            let resolutionContext = resolutionKey["auth_context"] as? String,
+            binding["service_id"] as? String == resolutionService,
+            binding["auth_context"] as? String == resolutionContext,
+            resolutionContext == "interactive-login",
+            let origins = binding["allowed_origins"] as? [String],
+            !origins.isEmpty,
+            origins.allSatisfy({
+                guard let components = URLComponents(string: $0),
+                      components.scheme == "http" || components.scheme == "https",
+                      components.host != nil,
+                      components.user == nil,
+                      components.password == nil,
+                      components.path.isEmpty,
+                      components.query == nil,
+                      components.fragment == nil,
+                      components.string == $0
+                else { return false }
+                return true
+            }),
+            let paths = binding["allowed_login_paths"] as? [String],
+            paths.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
+            let methods = binding["allowed_auth_methods"] as? [String],
+            !methods.isEmpty,
+            methods.allSatisfy({ $0 == "password" || $0 == "otp" }),
+            let vaultID = binding["vault_id"] as? String,
+            !vaultID.isEmpty,
+            let itemID = binding["item_id"] as? String,
+            !itemID.isEmpty
+        else {
+            throw PromotionCommandError.invalidInput
+        }
+        for field in ["binding_ref", "service_id", "environment", "profile"] {
+            guard let value = resolutionKey[field] as? String,
+                  !value.isEmpty,
+                  value.utf8.count <= 1_024
+            else { throw PromotionCommandError.invalidInput }
+        }
+        let predecessor = request["predecessor_receipt_id"]!
+        if !(predecessor is NSNull) {
+            guard let value = predecessor as? String,
+                  !value.isEmpty,
+                  value.utf8.count <= 512
+            else { throw PromotionCommandError.invalidInput }
+        }
+        try reviewBindingApproval(
+            disposition: disposition,
+            resolutionKey: resolutionKey,
+            binding: binding,
+            display: display
+        )
+        return try ApprovalBroker.issueBindingApproval(
+            disposition: disposition,
+            resolutionKey: resolutionKey,
+            binding: binding,
+            predecessorReceiptID: predecessor,
+            signingKey: key
+        )
+    }
+
     static func write(_ value: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes]) else {
             exit(20)
@@ -582,7 +817,7 @@ private enum ApprovalBrokerCommandSupport {
 enum ApprovalBrokerCommand {
     static func main() {
         guard CommandLine.arguments.count == 2 else {
-            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, verifier, promote, or attest mode"])
+            ApprovalBrokerCommandSupport.write(["ok": false, "code": "invalid-command", "message": "expected enroll, migrate-key, verifier, promote, attest, or bind mode"])
             exit(20)
         }
         do {
@@ -596,6 +831,13 @@ enum ApprovalBrokerCommand {
                 ])
             case "verifier":
                 let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey()
+                let verifier = ApprovalBrokerCommandSupport.verifierIdentity(for: admittedKey.key)
+                ApprovalBrokerCommandSupport.write([
+                    "ok": true,
+                    "verifier": ["key_id": verifier.key_id, "public_key": verifier.public_key],
+                ])
+            case "migrate-key":
+                let admittedKey = try ApprovalBrokerCommandSupport.migrateLegacySigningKey()
                 let verifier = ApprovalBrokerCommandSupport.verifierIdentity(for: admittedKey.key)
                 ApprovalBrokerCommandSupport.write([
                     "ok": true,
@@ -626,6 +868,22 @@ enum ApprovalBrokerCommand {
                     key: admittedKey.key
                 )
                 ApprovalBrokerCommandSupport.write(["ok": true, "grant": grant])
+            case "bind":
+                let admittedKey = try ApprovalBrokerCommandSupport.loadSigningKey(
+                    signingReason: "Sign this Item Binding revision"
+                )
+                let input = FileHandle.standardInput.readDataToEndOfFile()
+                guard
+                    input.count <= 1_048_576,
+                    let request = try JSONSerialization.jsonObject(with: input) as? [String: Any]
+                else {
+                    throw PromotionCommandError.invalidInput
+                }
+                let receipt = try ApprovalBrokerCommandSupport.bindingApprovalReceipt(
+                    request: request,
+                    key: admittedKey.key
+                )
+                ApprovalBrokerCommandSupport.write(["ok": true, "receipt": receipt])
             default:
                 throw PromotionCommandError.invalidInput
             }
@@ -643,6 +901,15 @@ enum ApprovalBrokerCommand {
             exit(20)
         } catch BrokerError.signingKeyAlreadyEnrolled {
             ApprovalBrokerCommandSupport.writeFailure(code: "signing-key-already-enrolled", message: "the approval broker signing key is already enrolled and was not replaced")
+            exit(20)
+        } catch BrokerError.legacySigningKeyMissing {
+            ApprovalBrokerCommandSupport.writeFailure(code: "legacy-signing-key-missing", message: "no legacy signing key handle is available to migrate")
+            exit(20)
+        } catch BrokerError.legacySigningKeyReconstructionFailed {
+            ApprovalBrokerCommandSupport.writeFailure(code: "legacy-signing-key-reconstruction-failed", message: "the legacy Secure Enclave key handle could not be reconstructed under this signed app identity")
+            exit(20)
+        } catch BrokerError.legacySigningKeyPresenceFailed {
+            ApprovalBrokerCommandSupport.writeFailure(code: "legacy-signing-key-presence-failed", message: "the legacy Secure Enclave key could not complete its user-presence-backed migration signature")
             exit(20)
         } catch BrokerError.signingKeyAmbiguous,
                 BrokerError.signingKeyCustodyMismatch {
