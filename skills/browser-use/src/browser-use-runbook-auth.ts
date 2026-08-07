@@ -90,8 +90,10 @@ export type BrowserUseRunbookAuthInput = {
 	auth_context_ref: BrowserUseAuthContext;
 	allowed_origins: readonly string[];
 	expected_url: string;
-	/** Fresh URL observed during target resolution. Only exact about:blank may bootstrap. */
+	/** Fresh URL observed during target resolution. */
 	observed_url?: string;
+	/** The runbook declares an opening navigation that auth must observe first. */
+	declared_navigation_required?: boolean;
 	target_id: string;
 };
 
@@ -408,8 +410,23 @@ export async function runBrowserUseRunbookAuth(
 		}
 	}
 
-	if (input.observed_url === "about:blank") {
+	const declaredNavigationRequired =
+		input.declared_navigation_required === true ||
+		input.observed_url === "about:blank";
+	if (declaredNavigationRequired) {
 		if (!expectedOriginIsAllowed(input)) {
+			return { ok: false, run, blocked: blockedOf("origin-mismatch") };
+		}
+		const observedOrigin =
+			input.observed_url === "about:blank"
+				? undefined
+				: originOf(input.observed_url ?? "");
+		if (
+			input.observed_url !== "about:blank" &&
+			!input.allowed_origins.some(
+				(candidate) => candidate === observedOrigin,
+			)
+		) {
 			return { ok: false, run, blocked: blockedOf("origin-mismatch") };
 		}
 		const navigation = await deps.navigateToDeclaredTarget?.({

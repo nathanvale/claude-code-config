@@ -5809,7 +5809,6 @@ async function runRunbookRun(
 			: undefined;
 	const authExpectedTargetUrl =
 		plan.auth_context_ref !== undefined &&
-		targetResolution.target_url === "about:blank" &&
 		plan.steps[0]?.kind === "open"
 			? plan.steps[0].url
 			: targetResolution.target_url;
@@ -5924,6 +5923,8 @@ async function runRunbookRun(
 					allowed_origins: plan.allowed_origins,
 					expected_url: authExpectedTargetUrl,
 					observed_url: targetResolution.target_url,
+					declared_navigation_required:
+						plan.steps[0]?.kind === "open",
 					target_id: authTarget.target.target_id,
 				},
 			);
