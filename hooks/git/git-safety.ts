@@ -12,10 +12,11 @@
  * timed-out safety check must deny (exit 2), not silently allow (exit 1).
  */
 
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { postEvent } from './event-bus-client'
 import { PROTECTED_BRANCHES } from './git-policy'
-import { getCurrentBranch } from './git-utils'
+import { getCurrentBranch, runGit } from './git-utils'
 import {
 	extractCommandSubstitutions,
 	extractWrappedShellCommand,
@@ -849,6 +850,58 @@ export function checkFileEdit(filePath: string): {
 }
 
 /**
+ * Checks whether a file edit would land in a main checkout rather than a
+ * worktree. Resolves against the file's own directory, not the session cwd:
+ * agents routinely edit a second repo while cwd points at the primary one,
+ * and a cwd-based check silently passes in exactly that case.
+ *
+ * Isolated when the repo's git-common-dir differs from its git-dir (the
+ * signature of a linked worktree). Non-repos and unreadable paths return
+ * blocked: false — this hook guards worktree isolation, not file access.
+ */
+export async function checkWorktreeIsolation(filePath: string): Promise<{
+	blocked: boolean
+	reason?: string
+	branch?: string
+}> {
+	// Walk up to the nearest existing ancestor: the target may be a new file in
+	// a directory that does not exist yet, and spawning git with a missing cwd
+	// throws ENOENT rather than returning a non-zero exit code.
+	let dir = dirname(resolve(filePath))
+	while (dir !== dirname(dir) && !existsSync(dir)) {
+		dir = dirname(dir)
+	}
+	if (!existsSync(dir)) return { blocked: false }
+
+	const gitDir = await runGit(['rev-parse', '--absolute-git-dir'], { cwd: dir })
+	if (gitDir.exitCode !== 0) return { blocked: false }
+
+	const commonDir = await runGit(
+		['rev-parse', '--path-format=absolute', '--git-common-dir'],
+		{ cwd: dir },
+	)
+	if (commonDir.exitCode !== 0) return { blocked: false }
+
+	// In a linked worktree these differ; in the main checkout they are equal.
+	if (gitDir.stdout !== commonDir.stdout) return { blocked: false }
+
+	const branch = (await getCurrentBranch(dir)) ?? undefined
+	const repo = commonDir.stdout.replace(/\/\.git$/, '')
+
+	return {
+		blocked: true,
+		branch,
+		reason:
+			`Worktree isolation: this edit targets the MAIN CHECKOUT of ${repo}` +
+			`${branch ? ` (branch ${branch})` : ''}.\n` +
+			`Isolate first: EnterWorktree, or the \`worktree\` skill (new/attach).\n` +
+			`The trigger is the edit, not the task — edit size, file type ` +
+			`(config/dotfile/gitignore/docs), and "this repo is incidental to the ` +
+			`session" do not exempt it. Read-only work stays in the main checkout.`,
+	}
+}
+
+/**
  * Analyzes a command to determine if it's a git commit and what kind.
  * Uses the shell tokenizer to split segments so heredoc bodies are excluded
  * from flag scanning, and `||` is recognized as a segment boundary.
@@ -1061,6 +1114,27 @@ if (import.meta.main) {
 						mode: safetyMode,
 						reason: fileResult.reason ?? 'Protected file.',
 						filePath,
+					})
+				} catch {
+					// event emission is best-effort
+				}
+			}
+
+			const isolation = await checkWorktreeIsolation(filePath)
+			if (isolation.blocked) {
+				if (safetyMode === 'strict') {
+					await denyAndExit(
+						isolation.reason ?? 'Edit targets the main checkout.',
+						input,
+					)
+				}
+				try {
+					await postEvent(input.cwd || process.cwd(), 'safety.warn', {
+						tool: input.tool_name,
+						mode: safetyMode,
+						reason: isolation.reason ?? 'Edit targets the main checkout.',
+						filePath,
+						branch: isolation.branch,
 					})
 				} catch {
 					// event emission is best-effort
