@@ -296,15 +296,15 @@ Return a JSON object with these meanings:
 		schema: createObjectSchema(
 			{
 				whoAmI: { type: "string", enum: ["claude", "codex"] },
-				reposOwnOperationalTruth: { type: "boolean" },
-				contextFoldersOwnDurableRecall: { type: "boolean" },
+				codeReposOwnImplementationTruth: { type: "boolean" },
+				configuredVaultOwnsDurableKnowledge: { type: "boolean" },
 				contextAdvisorOwnsPlacementRouting: { type: "boolean" },
 				usesStableContextPath: { type: "boolean" },
 			},
 			[
 				"whoAmI",
-				"reposOwnOperationalTruth",
-				"contextFoldersOwnDurableRecall",
+				"codeReposOwnImplementationTruth",
+				"configuredVaultOwnsDurableKnowledge",
 				"contextAdvisorOwnsPlacementRouting",
 				"usesStableContextPath",
 			],
@@ -313,22 +313,22 @@ Return a JSON object with these meanings:
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- reposOwnOperationalTruth: true if repos own operational truth
-- contextFoldersOwnDurableRecall: true if context folders own durable recall and synthesis
+- codeReposOwnImplementationTruth: true if code repos own implementation-bound truth
+- configuredVaultOwnsDurableKnowledge: true if the configured vault owns plans, research, synthesis, and project memory
 - contextAdvisorOwnsPlacementRouting: true if context-advisor owns unclear placement routing
 - usesStableContextPath: true if the stable user context path is ~/.config/context`),
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				reposOwnOperationalTruth: true,
-				contextFoldersOwnDurableRecall: true,
+				codeReposOwnImplementationTruth: true,
+				configuredVaultOwnsDurableKnowledge: true,
 				contextAdvisorOwnsPlacementRouting: true,
 				usesStableContextPath: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				reposOwnOperationalTruth: true,
-				contextFoldersOwnDurableRecall: true,
+				codeReposOwnImplementationTruth: true,
+				configuredVaultOwnsDurableKnowledge: true,
 				contextAdvisorOwnsPlacementRouting: true,
 				usesStableContextPath: true,
 			},

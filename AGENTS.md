@@ -45,8 +45,7 @@
 - Code-structure choices, a new module, or reaching for a design pattern: run the `$HOME/code/claude-code-config/context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
 - Connect browser adapters only through `browser-connect connect --json`; workflow: `$HOME/code/claude-code-config/skills/browser-use/SKILL.md`.
-- For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix, prove.
-- Fix root causes; ask what would have prevented the bug.
+- For hard bugs, use `diagnosing-bugs`: reproduce, hypothesise, instrument, fix root cause, prove; ask what would have prevented it.
 - For architecture candidates, use `improve-codebase-architecture`.
 - For plans and terminology, use `grilling` with `domain-modeling`.
 - After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
@@ -92,8 +91,8 @@
 
 ## Context And Git
 
-- Context placement: use `$HOME/code/claude-code-config/skills/context-advisor/SKILL.md`.
-- Durable recall/synthesis belongs under `$HOME/code/claude-code-config/context/`; repos own operational truth.
+- Durable knowledge: read `~/.config/context/vault.md`; use `context-advisor` for placement.
+- Code repos own implementation truth; the configured vault owns plans, research, synthesis, and project memory.
 - Knowledge: `docs/solutions/` holds categorized solutions with searchable YAML metadata; `CONCEPTS.md` holds shared domain vocabulary; relevant for implementation, debugging, and orientation.
 - Git procedure: `$HOME/code/claude-code-config/docs/git/`.
 - Implementation work starts in a worktree: isolate with the `worktree` skill (new/attach) before the first edit; never build in the main checkout, because parallel agents share it and inherit dirty files. Handoffs and harness work-in-place defaults do not override this.

@@ -54,6 +54,28 @@ This map advises context placement. It does not own content, mutate stores, or m
 - Runtime-owned state belongs in runtime state/data stores.
 - Cross-repo synthesis belongs in the external context owner.
 
+## Configured Super-Vault
+
+When `~/.config/context/vault.md` exists, treat its declared vault root as the
+external user-scope owner for:
+
+- Plans, research, synthesis, and project memory.
+- Project status, next actions, and handoffs.
+- Personal decisions, reasoning, and durable lessons.
+- Cross-repository context and links to implementation owners.
+
+Code repositories remain the owner for:
+
+- Repo-facing `README.md`, `AGENTS.md`, `CLAUDE.md`, and contributor guidance.
+- Repo glossaries and shared domain language.
+- Accepted ADRs and architecture that bind the implementation.
+- API schemas, generated docs, deterministic contracts, code, tests, runtime
+  state, and changelog.
+
+Link between owners. Do not copy the same truth into both places. If the
+configured path is absent or stale, report the broken route; never create a
+second vault as a fallback.
+
 ## `docs/` Placement
 
 - `docs/` means any `**/docs/`, not only repo-root `docs/`.
@@ -211,7 +233,7 @@ This map advises context placement. It does not own content, mutate stores, or m
   - Keep Markdown or generated projections when reviewability matters and projections are redacted or ignored as needed.
 
 - If context is cross-repo recall or synthesis:
-  - Use the external context owner.
+  - Use the configured external context owner.
   - Name the external context owner path/config before writing.
   - If no external context owner is configured, ask one ownership question.
   - Do not default to vendor memory.
@@ -253,7 +275,10 @@ This map advises context placement. It does not own content, mutate stores, or m
 ## Write Gates
 
 - Gate durable writes by owner path and allow-listed writer.
-- Worker agents may propose durable context changes; they do not apply them directly.
+- A foreground agent may apply a scoped durable write when the user explicitly
+  requested it and the selected owner permits it.
+- Delegated, background, or ambiguous agents propose durable context changes
+  unless their handoff explicitly grants owner-scoped write authority.
 - Require data class, owner, target path, diff or preview, and write reason before mutation.
 - Route durable writes through a curator, skill driver, or accepted owner workflow.
 - Record mutation evidence: writer, path, timestamp, data class, source evidence, and content hash when practical.
