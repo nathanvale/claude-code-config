@@ -8,11 +8,13 @@ import { validateRunbook } from "./browser-use-runbook-model";
 const ACTIONS_ROOT = join(import.meta.dir, "..", "actions", "oncore");
 const SUBMIT_ACTION_PATH = join(ACTIONS_ROOT, "submit.js");
 const VERIFY_ACTION_PATH = join(ACTIONS_ROOT, "verify-submitted.js");
-const RUNBOOK_DRAFT_PATH = join(
+const RUNBOOK_PATH = join(
 	import.meta.dir,
 	"..",
-	"drafts",
-	"oncore-submit.runbook.json",
+	"runbooks",
+	"oncore",
+	"submit",
+	"runbook.json",
 );
 const TIMESHEET_ID = "45705908116";
 const PERIOD_START = "2026-08-03";
@@ -456,8 +458,8 @@ describe("Oncore submit authoring closure", () => {
 		}
 	});
 
-	test("draft mirrors FastTrack submit sequencing and exact action digests", async () => {
-		const runbook = JSON.parse(await readFile(RUNBOOK_DRAFT_PATH, "utf8")) as {
+	test("canonical runbook mirrors FastTrack submit sequencing and exact action digests", async () => {
+		const runbook = JSON.parse(await readFile(RUNBOOK_PATH, "utf8")) as {
 			steps: Array<{
 				action_id?: string;
 				expected_digest?: string;
