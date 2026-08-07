@@ -426,14 +426,17 @@ function authContextRunbook(origin: string): BrowserUseRunbook {
 	};
 }
 
-function authContextOpenRunbook(origin: string): BrowserUseRunbook {
+function authContextOpenRunbook(
+	origin: string,
+	path = "/login",
+): BrowserUseRunbook {
 	return {
 		...authContextRunbook(origin),
 		steps: [
 			{
 				kind: "open",
-				url: `${origin}/login`,
-				postcondition: { kind: "url-equals", url: `${origin}/login` },
+				url: `${origin}${path}`,
+				postcondition: { kind: "url-equals", url: `${origin}${path}` },
 			},
 			{ kind: "snapshot", interactive: true },
 		],
@@ -443,10 +446,14 @@ function authContextOpenRunbook(origin: string): BrowserUseRunbook {
 function startAuthCdpFixture(input: {
 	initial: "neutral" | "login" | "ambiguous" | "authenticated";
 	origin?: string;
+	initialUrl?: string;
 }) {
 	let screen = input.initial;
 	const origin = input.origin ?? "http://127.0.0.1:45123";
-	let targetUrl = input.initial === "neutral" ? "about:blank" : `${origin}/login`;
+	let targetUrl =
+		input.initial === "neutral"
+			? "about:blank"
+			: (input.initialUrl ?? `${origin}/login`);
 	const cdpTargetId = "cdp-target-auth";
 	const methods: string[] = [];
 	const navigations: string[] = [];
@@ -641,6 +648,22 @@ function approvedBinding(origin: string, serviceId = "fixture-auth") {
 		item_id: "item-fixture",
 		allowed_auth_methods: ["password" as const],
 		binding_revision: 1,
+	};
+}
+
+function authenticatedStateProof(origin: string, targetId: string) {
+	return {
+		proven: true as const,
+		proof: {
+			target_id: targetId,
+			page_id: "page-authenticated",
+			frame_id: "frame-auth",
+			origin,
+			subject_reference: "subject-fixture",
+			account_reference: "account-fixture",
+			tenant_reference: "tenant-fixture",
+			identity_basis_digest: "identity-basis-fixture",
+		},
 	};
 }
 
@@ -1467,19 +1490,8 @@ describe("runbook family — live (U4 wiring)", () => {
 						};
 					};
 				} else {
-					runtime.runbookAuthenticatedStateProof = async ({ target_id }) => ({
-						proven: true,
-						proof: {
-							target_id,
-							page_id: "page-authenticated",
-							frame_id: "frame-auth",
-							origin,
-							subject_reference: "subject-fixture",
-							account_reference: "account-fixture",
-							tenant_reference: "tenant-fixture",
-							identity_basis_digest: "identity-basis-fixture",
-						},
-					});
+					runtime.runbookAuthenticatedStateProof = async ({ target_id }) =>
+						authenticatedStateProof(origin, target_id);
 				}
 
 				await withCommittedCatalogSource(store.base, async (gitEnv) => {
@@ -1927,19 +1939,7 @@ describe("runbook family — live (U4 wiring)", () => {
 			let proofDispatches = 0;
 			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => {
 				proofDispatches += 1;
-				return {
-					proven: true,
-					proof: {
-						target_id,
-						page_id: "page-authenticated",
-						frame_id: "frame-auth",
-						origin: cdp.origin,
-						subject_reference: "subject-fixture",
-						account_reference: "account-fixture",
-						tenant_reference: "tenant-fixture",
-						identity_basis_digest: "identity-basis-fixture",
-					},
-				};
+				return authenticatedStateProof(cdp.origin, target_id);
 			};
 
 			const result = await runForTest(
@@ -2006,19 +2006,7 @@ describe("runbook family — live (U4 wiring)", () => {
 			};
 			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => {
 				authenticatedStateProven = true;
-				return {
-					proven: true,
-					proof: {
-						target_id,
-						page_id: "page-authenticated",
-						frame_id: "frame-auth",
-						origin: cdp.origin,
-						subject_reference: "subject-fixture",
-						account_reference: "account-fixture",
-						tenant_reference: "tenant-fixture",
-						identity_basis_digest: "identity-basis-fixture",
-					},
-				};
+				return authenticatedStateProof(cdp.origin, target_id);
 			};
 
 			const result = await runForTest(
@@ -2045,6 +2033,82 @@ describe("runbook family — live (U4 wiring)", () => {
 				next_action_id: "request-binding-selection-grant",
 			});
 			expect(authenticatedStateProven).toBe(false);
+		} finally {
+			cdp.transport.close();
+		}
+	});
+
+	test("protected opening navigation exposes an expired session before business dispatch", async () => {
+		const origin = "http://127.0.0.1:45123";
+		const protectedUrl = `${origin}/protected`;
+		const cdp = startAuthCdpFixture({
+			initial: "authenticated",
+			origin,
+			initialUrl: protectedUrl,
+		});
+		try {
+			const store = await makeStore();
+			seedRunbook(
+				store.dataRoot,
+				authContextOpenRunbook(origin, "/protected"),
+			);
+			const runId = "run-runbook-auth-expired-session";
+			const handoffPath = writeHandoff(store.base, "agent-browser", runId);
+			const targetList = {
+				stdout: agentSuccess({
+					tabs: [
+						{
+							tabId: "t1",
+							active: true,
+							type: "page",
+							url: protectedUrl,
+						},
+					],
+				}),
+			};
+			const { runtime, calls } = scriptedRuntime(store.env, [
+				targetList,
+				targetList,
+				targetList,
+				{ stdout: agentSuccess({ selected: true }) },
+				{ stdout: agentSuccess({ url: protectedUrl }) },
+				{ stdout: agentSuccess({ opened: true }) },
+				{ stdout: agentSuccess({ url: protectedUrl }) },
+				{
+					stdout: agentSuccess({
+						snapshot: "@business heading Dashboard",
+						refs: { business: {} },
+					}),
+				},
+			]);
+			runtime.authTokenRetrieval = authTokenPort(origin, "/protected");
+			runtime.runbookApprovedBindingResolver = async () => ({
+				...approvedBinding(origin),
+				allowed_login_paths: ["/protected"],
+			});
+			runtime.runbookAuthTransport = () => cdp.transport;
+			runtime.runbookAuthenticatedStateProof = async ({ target_id }) =>
+				authenticatedStateProof(origin, target_id);
+
+			const result = await runForTest(
+				[
+					"runbook", "run",
+					"--service", "fixture-auth",
+					"--flow", "business-after-login",
+					"--handoff", handoffPath,
+					"--tab", "t1",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(cdp.navigations).toEqual([protectedUrl]);
+			expect(calls.filter((call) => call.includes("open"))).toHaveLength(1);
+			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(1);
+			expect(parseJson(result.stdout).data).toMatchObject({
+				run: { state: "confirmed" },
+			});
 		} finally {
 			cdp.transport.close();
 		}
