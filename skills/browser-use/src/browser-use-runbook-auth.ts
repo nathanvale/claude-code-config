@@ -3,6 +3,7 @@ import type { BrowserUseAuthContext, BrowserUseItemBinding } from "./browser-use
 import {
 	type BrowserUseAuthAttestation,
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseAuthEntryMode,
 	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 	authAttestationDigestOf,
@@ -33,6 +34,7 @@ import {
 	attestationByDigestFrom,
 	writeAuthAttestationRecord,
 } from "./browser-use-runs";
+import type { BrowserAdapterId } from "./discovery-model";
 
 export type BrowserUseRunbookAuthBlocked = {
 	blocked_cause: BrowserUseAuthBlockedCause;
@@ -81,6 +83,30 @@ export type BrowserUseRunbookAuthDeps = {
 	}) => Promise<{ ok: true } | { ok: false; cause: "target-proof-invalid" }>;
 };
 
+/**
+ * The single home of the "freeform never borrows Human Identity Attestation"
+ * invariant (ADR 0026: attestation is reviewed-runbook-only, one-run-only).
+ *
+ * Both conditions are load-bearing and neither may be dropped:
+ * - `entry_mode === "reviewed-runbook"` refuses the human-attestation fallback
+ *   for freeform even if a driver dep somehow reached this transaction —
+ *   defense in depth, since {@link runBrowserUseFreeformAuth} also strips it.
+ * - `humanIdentityAttestation !== undefined` refuses the fallback when no driver
+ *   is wired, so the engine blocks rather than offering an unreachable route.
+ *
+ * The login engine consumes only the derived boolean; the entry-mode fact never
+ * crosses the engine seam.
+ */
+function humanIdentityAttestationAllowed(
+	entryMode: BrowserUseAuthEntryMode,
+	deps: Pick<BrowserUseRunbookAuthDeps, "humanIdentityAttestation">,
+): boolean {
+	return (
+		entryMode === "reviewed-runbook" &&
+		deps.humanIdentityAttestation !== undefined
+	);
+}
+
 export type BrowserUseRunbookAuthInput = {
 	run: BrowserUseSharedRun;
 	dispatch_claim: LeaseWriteClaim;
@@ -95,6 +121,22 @@ export type BrowserUseRunbookAuthInput = {
 	/** The runbook declares an opening navigation that auth must observe first. */
 	declared_navigation_required?: boolean;
 	target_id: string;
+};
+
+export type BrowserUseFreeformAuthInput = Omit<
+	BrowserUseRunbookAuthInput,
+	"flow_id" | "action_policy_hash"
+> & {
+	lane_id: BrowserAdapterId;
+};
+
+type BrowserUseAuthTransactionInput = Omit<
+	BrowserUseRunbookAuthInput,
+	"flow_id"
+> & {
+	entry_mode: BrowserUseAuthEntryMode;
+	lane_id: BrowserAdapterId;
+	flow_id: string | null;
 };
 
 function blockedOf(cause: BrowserUseAuthBlockedCause): BrowserUseRunbookAuthBlocked {
@@ -124,7 +166,7 @@ function originOf(url: string): string | undefined {
 	}
 }
 
-function expectedOriginIsAllowed(input: BrowserUseRunbookAuthInput): boolean {
+function expectedOriginIsAllowed(input: BrowserUseAuthTransactionInput): boolean {
 	const expectedOrigin = originOf(input.expected_url);
 	return (
 		expectedOrigin !== undefined &&
@@ -137,7 +179,7 @@ function expectedOriginIsAllowed(input: BrowserUseRunbookAuthInput): boolean {
 
 function authenticatedProofRefusal(
 	proof: BrowserUseAuthenticatedStateProofRecord,
-	input: BrowserUseRunbookAuthInput,
+	input: BrowserUseAuthTransactionInput,
 ): "origin-mismatch" | "target-proof-invalid" | undefined {
 	if (proof.target_id !== input.target_id) return "target-proof-invalid";
 	const proofOrigin = originOf(proof.origin);
@@ -152,9 +194,9 @@ function authenticatedProofRefusal(
 		: undefined;
 }
 
-export async function runBrowserUseRunbookAuth(
+async function runBrowserUseAuthTransaction(
 	deps: BrowserUseRunbookAuthDeps,
-	input: BrowserUseRunbookAuthInput,
+	input: BrowserUseAuthTransactionInput,
 ): Promise<BrowserUseRunbookAuthResult> {
 	let run = input.run;
 	const persistedCandidate = run.auth_fragment?.fragment;
@@ -182,7 +224,8 @@ export async function runBrowserUseRunbookAuth(
 		const stale =
 			fragment.binding.run_id !== run.run_id ||
 			fragment.binding.handoff_evidence_id !== handoffEvidenceId ||
-			fragment.binding.lane_id !== "agent-browser" ||
+			fragment.binding.lane_id !== input.lane_id ||
+			fragment.binding.entry_mode !== input.entry_mode ||
 			fragment.binding.environment !== run.environment_profile.environment ||
 			fragment.binding.profile !== run.environment_profile.profile ||
 			fragment.binding.service_id !== input.service_id ||
@@ -248,7 +291,8 @@ export async function runBrowserUseRunbookAuth(
 			binding: {
 				run_id: run.run_id,
 				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
-				lane_id: "agent-browser",
+				lane_id: input.lane_id,
+				entry_mode: input.entry_mode,
 				environment: run.environment_profile.environment,
 				profile: run.environment_profile.profile,
 				service_id: input.service_id,
@@ -288,6 +332,7 @@ export async function runBrowserUseRunbookAuth(
 		BrowserUseRunbookAuthResult | undefined
 	> => {
 		if (
+			input.entry_mode !== "reviewed-runbook" ||
 			deps.humanIdentityAttestation === undefined ||
 			binding === undefined ||
 			fragment?.status !== "blocked" ||
@@ -295,7 +340,7 @@ export async function runBrowserUseRunbookAuth(
 		) {
 			return undefined;
 		}
-		if (input.action_policy_hash === null) {
+		if (input.action_policy_hash === null || input.flow_id === null) {
 			return {
 				ok: false,
 				run,
@@ -395,6 +440,7 @@ export async function runBrowserUseRunbookAuth(
 			if (
 				fragment.blocked_cause ===
 					"human-identity-attestation-required" &&
+				input.entry_mode === "reviewed-runbook" &&
 				deps.humanIdentityAttestation !== undefined
 			) {
 				humanAttestationResume = true;
@@ -479,7 +525,8 @@ export async function runBrowserUseRunbookAuth(
 			binding: {
 				run_id: run.run_id,
 				handoff_evidence_id: handoffEvidenceId,
-				lane_id: "agent-browser",
+				lane_id: input.lane_id,
+				entry_mode: input.entry_mode,
 				environment: run.environment_profile.environment,
 				profile: run.environment_profile.profile,
 				service_id: input.service_id,
@@ -548,7 +595,7 @@ export async function runBrowserUseRunbookAuth(
 		const attestation: BrowserUseAuthAttestation = {
 			run_id: run.run_id,
 			handoff_evidence_id: handoffEvidenceId,
-			lane_id: "agent-browser",
+			lane_id: input.lane_id,
 			implementation_integrity_key: deps.implementation_integrity_key,
 			environment: run.environment_profile.environment,
 			profile: run.environment_profile.profile,
@@ -607,7 +654,7 @@ export async function runBrowserUseRunbookAuth(
 				: { ok: false, run, failure: refused };
 		}
 		const fresh = await deps.login.proveAuthenticatedState({
-			lane_id: "agent-browser",
+			lane_id: input.lane_id,
 			run_id: run.run_id,
 			target_id: input.target_id,
 			expected_url: input.expected_url,
@@ -640,7 +687,7 @@ export async function runBrowserUseRunbookAuth(
 				run,
 				{
 					at_epoch_ms: deps.store.clock(),
-					adapter_id: "agent-browser",
+					adapter_id: input.lane_id,
 					handoff_evidence_id: run.handoff_evidence_id,
 				},
 				createBrowserUseAuthContract({
@@ -653,6 +700,19 @@ export async function runBrowserUseRunbookAuth(
 					ok: false,
 					run,
 					blocked: blockedOf("human-identity-attestation-required"),
+				};
+			}
+			if (input.entry_mode === "freeform") {
+				// Unreachable once the staleness gate rejects a freeform run
+				// resuming a reviewed-written fragment (freeform never mints a
+				// human-identity-attestation), but guarded with a
+				// freeform-performable cause so a bundle split or future
+				// regression fails to a typed "use a reviewed runbook" refusal
+				// rather than a continuation freeform can never complete.
+				return {
+					ok: false,
+					run,
+					blocked: blockedOf("freeform-identity-proof-required"),
 				};
 			}
 			const restarted = await restartAuthenticatedReuse(binding);
@@ -673,10 +733,21 @@ export async function runBrowserUseRunbookAuth(
 		}
 		const observed = await deps.login.observer.snapshot({ target_id: input.target_id });
 		if (!observed.ok || deps.login.proveAuthenticatedState === undefined) {
-			return { ok: false, run, blocked: blockedOf("human-identity-attestation-required") };
+			// Freeform reaching here without a proof owner is refused upstream by
+			// the auth-login pre-gate; guard with a freeform-performable cause so
+			// it never parks on a continuation it cannot complete.
+			return {
+				ok: false,
+				run,
+				blocked: blockedOf(
+					input.entry_mode === "freeform"
+						? "freeform-identity-proof-required"
+						: "human-identity-attestation-required",
+				),
+			};
 		}
 		const fresh = await deps.login.proveAuthenticatedState({
-			lane_id: "agent-browser",
+			lane_id: input.lane_id,
 			run_id: run.run_id,
 			target_id: input.target_id,
 			expected_url: input.expected_url,
@@ -694,7 +765,7 @@ export async function runBrowserUseRunbookAuth(
 			run,
 			{
 				at_epoch_ms: deps.store.clock(),
-				adapter_id: "agent-browser",
+				adapter_id: input.lane_id,
 				handoff_evidence_id: run.handoff_evidence_id,
 			},
 			createBrowserUseAuthContract({
@@ -721,7 +792,7 @@ export async function runBrowserUseRunbookAuth(
 
 	const acquired = await deps.provider.acquireSensitiveIntervalLease({
 		run,
-		holder_id: `runbook-auth-${run.run_id}`,
+		holder_id: `${input.entry_mode}-auth-${run.run_id}`,
 		ttl_ms: 30_000,
 		scope: { auth_context_ref: input.auth_context_ref, target_id: input.target_id },
 		key_family: "sensitive-interval",
@@ -804,7 +875,7 @@ export async function runBrowserUseRunbookAuth(
 		const engine = await runBrowserUseLoginEngine(
 			{ ...deps.login, journal: lifecycle },
 			{
-				lane_id: "agent-browser",
+				lane_id: input.lane_id,
 				run_id: run.run_id,
 				target_id: input.target_id,
 				expected_url: input.expected_url,
@@ -822,8 +893,10 @@ export async function runBrowserUseRunbookAuth(
 					approvedBinding === null
 						? "live-evidence"
 						: "signed-binding-receipt",
-				allow_human_identity_attestation:
-					deps.humanIdentityAttestation !== undefined,
+				allow_human_identity_attestation: humanIdentityAttestationAllowed(
+					input.entry_mode,
+					deps,
+				),
 			},
 		);
 		if (!engine.ok) {
@@ -831,6 +904,7 @@ export async function runBrowserUseRunbookAuth(
 			if (
 				fragment?.submission_started &&
 				(cause !== "human-identity-attestation-required" ||
+					input.entry_mode !== "reviewed-runbook" ||
 					deps.humanIdentityAttestation === undefined)
 			) {
 				const unknown = await transition({ type: "submit-outcome-observed", outcome: "timeout-unknown" });
@@ -844,6 +918,7 @@ export async function runBrowserUseRunbookAuth(
 			}
 			if (
 				cause === "human-identity-attestation-required" &&
+				input.entry_mode === "reviewed-runbook" &&
 				deps.humanIdentityAttestation !== undefined
 			) {
 				const completed = await completeHumanIdentityAttestation();
@@ -859,4 +934,31 @@ export async function runBrowserUseRunbookAuth(
 	} finally {
 		await deps.provider.releaseSensitiveIntervalLease({ lease: acquired.lease });
 	}
+}
+
+export async function runBrowserUseRunbookAuth(
+	deps: BrowserUseRunbookAuthDeps,
+	input: BrowserUseRunbookAuthInput,
+): Promise<BrowserUseRunbookAuthResult> {
+	return await runBrowserUseAuthTransaction(deps, {
+		...input,
+		entry_mode: "reviewed-runbook",
+		lane_id: "agent-browser",
+	});
+}
+
+export async function runBrowserUseFreeformAuth(
+	deps: Omit<BrowserUseRunbookAuthDeps, "humanIdentityAttestation">,
+	input: BrowserUseFreeformAuthInput,
+): Promise<BrowserUseRunbookAuthResult> {
+	const {
+		humanIdentityAttestation: _humanIdentityAttestation,
+		...freeformDeps
+	} = deps as BrowserUseRunbookAuthDeps;
+	return await runBrowserUseAuthTransaction(freeformDeps, {
+		...input,
+		entry_mode: "freeform",
+		flow_id: null,
+		action_policy_hash: null,
+	});
 }

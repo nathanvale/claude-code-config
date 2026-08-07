@@ -17,7 +17,7 @@ describe("production package authority boundary", () => {
 	test("production options reject test authority at compile time", () => {
 		const compileOnlyRejections = async () => {
 			// @ts-expect-error production construction cannot inject authenticated-state proof
-			await createProductionBrowserUseRuntime({ runbookAuthenticatedStateProof: async () => ({ proven: false, cause: "human-identity-attestation-required" }) });
+			await createProductionBrowserUseRuntime({ authenticatedStateProof: async () => ({ proven: false, cause: "session-identity-proof-unavailable" }) });
 			// @ts-expect-error production construction cannot inject Reviewed Action approval authority
 			await createProductionBrowserUseRuntime({ reviewedActionApprovalVerifier: { verify: () => ({ ok: true }) } });
 			// @ts-expect-error production construction cannot inject credential authority
@@ -33,13 +33,22 @@ describe("production package authority boundary", () => {
 		const hostileFactory = createProductionBrowserUseRuntime as (
 			options: Record<string, unknown>,
 		) => ReturnType<typeof createProductionBrowserUseRuntime>;
+		const hostileAuthenticatedStateProof = async () => ({
+			proven: true as const,
+			proof: { target_id: "hostile" },
+		});
 		const runtime = await hostileFactory({
 			env: {},
+			authenticatedStateProof: hostileAuthenticatedStateProof,
 			runbookAuthenticatedStateProof: async () => ({ proven: true }),
 			reviewedActionApprovalVerifier: { verify: () => ({ ok: true }) },
 			authTokenRetrieval: { marker: "fixture" },
 			securitySeam: { marker: "fixture" },
 		});
+		expect(runtime.authenticatedStateProof).toBeDefined();
+		expect(runtime.authenticatedStateProof).not.toBe(
+			hostileAuthenticatedStateProof,
+		);
 		expect(runtime.runbookAuthenticatedStateProof).toBeUndefined();
 		expect(runtime.reviewedActionApprovalVerifier).toBeUndefined();
 		expect(runtime.authTokenRetrieval).toBeUndefined();

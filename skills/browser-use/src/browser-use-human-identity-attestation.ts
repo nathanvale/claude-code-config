@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createPublicKey, verify } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type {
 	BrowserUseApprovalBoundFacts,
@@ -12,9 +12,10 @@ import {
 	oneUseGrantDigestOf,
 	validateOneUseGrantShape,
 } from "./browser-use-auth-approval";
-import type {
-	BrowserUseAuthContext,
-	BrowserUseItemBinding,
+import {
+	type BrowserUseAuthContext,
+	type BrowserUseItemBinding,
+	referenceOf,
 } from "./browser-use-auth-bindings";
 import type { BrowserUseAuthAttestation } from "./browser-use-auth-model";
 import type { BrowserUseSharedRun } from "./browser-use-run-model";
@@ -297,18 +298,6 @@ export function createNativeHumanIdentityAttestationDriver(
 		verifier: createP256HumanIdentityApprovalVerifier(verifierIdentity),
 		now: Date.now,
 	});
-}
-
-function referenceOf(label: string, binding: BrowserUseItemBinding): string {
-	const canonical = JSON.stringify([
-		label,
-		binding.service_id,
-		binding.auth_context,
-		binding.vault_id,
-		binding.item_id,
-		binding.binding_revision,
-	]);
-	return `${label}:sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 function exactOriginOf(

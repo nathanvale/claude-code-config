@@ -59,6 +59,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"repair-status",
 	"repair-apply",
 	// R27 auth repair surface (auth plan 2026-07-21-003 U3a).
+	"auth-login",
 	"auth-enroll-browser-automation-token",
 	"auth-repair-vault-grant",
 	"auth-repair-item-binding",

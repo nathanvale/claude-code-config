@@ -137,6 +137,7 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSES = [
 	"rate-limit",
 	"session-identity-proof-unavailable",
 	"human-identity-attestation-required",
+	"freeform-identity-proof-required",
 	"submit-approval-required",
 	"cleanup-failure",
 	"adapter-crash",
@@ -303,6 +304,14 @@ export const BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE: Readonly<
 			summary: "Complete the Touch ID-backed one-run identity attestation.",
 		},
 	},
+	"freeform-identity-proof-required": {
+		run_state: "needs-human",
+		continuation: {
+			next_action_id: "use-reviewed-runbook-for-auth",
+			summary:
+				"Freeform login cannot complete identity attestation; re-run this portal through a reviewed runbook.",
+		},
+	},
 	"submit-approval-required": {
 		run_state: "awaiting-approval",
 		continuation: {
@@ -375,15 +384,35 @@ export type BrowserUseAuthIdentityBasis =
 // --- The secret-free transaction fragment (R6) ----------------------------------
 
 /**
+/**
+ * The two Browser Authentication Transaction entry modes (R14). Owned here as
+ * auth-side vocabulary so the fragment binding can record which mode wrote it
+ * without a cycle back to the transaction driver.
+ */
+export const BROWSER_USE_AUTH_ENTRY_MODES = [
+	"reviewed-runbook",
+	"freeform",
+] as const;
+
+export type BrowserUseAuthEntryMode =
+	(typeof BROWSER_USE_AUTH_ENTRY_MODES)[number];
+
+/**
  * Identity bindings fixed at transaction start (R1/R14): the handoff, lane,
- * environment/profile, service/auth-context, approved origin, and the
- * current target/page/frame identity strings. Identity references only —
- * no endpoint, selector, or secret is legal here.
+ * environment/profile, service/auth-context, approved origin, the entry mode
+ * that owns the fragment, and the current target/page/frame identity strings.
+ * Identity references only — no endpoint, selector, or secret is legal here.
+ *
+ * `entry_mode` is a single-writer fingerprint: a persisted fragment can only
+ * be resumed by a transaction of the same mode, so a freeform login and a
+ * reviewed-runbook run on the same run/service/target never resume each
+ * other's state.
  */
 export type BrowserUseAuthTransactionBinding = {
 	run_id: string;
 	handoff_evidence_id: string;
 	lane_id: BrowserUseAdapterLaneId;
+	entry_mode: BrowserUseAuthEntryMode;
 	environment: string;
 	profile: string;
 	service_id: string;
@@ -460,6 +489,7 @@ export const BROWSER_USE_AUTH_BINDING_KEYS = [
 	"run_id",
 	"handoff_evidence_id",
 	"lane_id",
+	"entry_mode",
 	"environment",
 	"profile",
 	"service_id",
@@ -686,7 +716,7 @@ export function validateAuthFragmentShape(
 		} else {
 			const bindingRecord = binding as Record<string, unknown>;
 			for (const key of BROWSER_USE_AUTH_BINDING_KEYS) {
-				if (key === "lane_id") continue;
+				if (key === "lane_id" || key === "entry_mode") continue;
 				const issue = stringIssueAt(`fragment.binding.${key}`, bindingRecord[key]);
 				if (issue !== undefined) issues.push(issue);
 			}
@@ -695,6 +725,13 @@ export function validateAuthFragmentShape(
 					code: "fragment_field_invalid",
 					path: "fragment.binding.lane_id",
 					message: "unknown adapter lane id.",
+				});
+			}
+			if (!isMemberOf(BROWSER_USE_AUTH_ENTRY_MODES, bindingRecord.entry_mode)) {
+				issues.push({
+					code: "fragment_field_invalid",
+					path: "fragment.binding.entry_mode",
+					message: "unknown auth entry mode.",
 				});
 			}
 		}
@@ -999,8 +1036,20 @@ export const BROWSER_USE_AUTH_ATTESTATION_KEYS = [
 export function authAttestationDigestOf(
 	attestation: BrowserUseAuthAttestation,
 ): string {
-	const canonical = JSON.stringify(
+	return canonicalArraySha256DigestOf(
 		BROWSER_USE_AUTH_ATTESTATION_KEYS.map((key) => attestation[key]),
 	);
-	return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Hash one fixed-order canonical JSON array with the auth model's digest style.
+ *
+ * @param values - Ordered values owned by the calling contract
+ * @returns Full 64-hex-character SHA-256 digest
+ * @internal
+ */
+export function canonicalArraySha256DigestOf(
+	values: readonly unknown[],
+): string {
+	return createHash("sha256").update(JSON.stringify(values)).digest("hex");
 }

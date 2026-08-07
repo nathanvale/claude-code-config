@@ -1929,12 +1929,25 @@ describe("runbook family — live (U4 wiring)", () => {
 				{ stdout: agentSuccess({ selected: true }) },
 				{ stdout: agentSuccess({ url: `${cdp.origin}/login` }) },
 				{ stdout: agentSuccess({ snapshot: "@business heading", refs: { "@business": {} } }) },
-			]);
-			const credentialDispatches = { fetches: 0, redeems: 0 };
-			runtime.authTokenRetrieval = authTokenPort(
-				cdp.origin,
-				credentialDispatches,
-			);
+				]);
+				const credentialDispatches = { fetches: 0, redeems: 0 };
+				const managedPort = authTokenPort(
+					cdp.origin,
+					credentialDispatches,
+				);
+				let managedReleaseCalls = 0;
+				runtime.authManagedAccess = async () => ({
+					ok: true,
+					lease: {
+						access_path: "managed-service-token",
+						required_vault_scope: "exactly-one-vault",
+						expires_at_epoch_ms: 601_000,
+						token_retrieval: managedPort,
+						release: async () => {
+							managedReleaseCalls += 1;
+						},
+					},
+				});
 			runtime.runbookAuthTransport = () => cdp.transport;
 			let proofDispatches = 0;
 			runtime.runbookAuthenticatedStateProof = async ({ target_id }) => {
@@ -1954,8 +1967,10 @@ describe("runbook family — live (U4 wiring)", () => {
 				runtime,
 			);
 			expect(result.exitCode).toBe(0);
-			const data = parseJson(result.stdout).data as Record<string, unknown>;
-			const run = data.run as Record<string, unknown>;
+				const data = parseJson(result.stdout).data as Record<string, unknown>;
+				const run = data.run as Record<string, unknown>;
+				expect(data.entry_mode).toBe("reviewed-runbook");
+				expect(data.auth_access_path).toBe("managed-service-token");
 			expect(run.run_id).toBe(runId);
 			expect(run.handoff_evidence_id).toBeDefined();
 			expect(run.state).toBe("awaiting-approval");
@@ -1963,7 +1978,8 @@ describe("runbook family — live (U4 wiring)", () => {
 				next_action_id: "request-binding-selection-grant",
 			});
 			expect(calls.filter((call) => call.includes("snapshot"))).toHaveLength(0);
-			expect(credentialDispatches).toEqual({ fetches: 0, redeems: 0 });
+				expect(credentialDispatches).toEqual({ fetches: 0, redeems: 0 });
+				expect(managedReleaseCalls).toBe(1);
 			expect(proofDispatches).toBe(0);
 			const durable = await loadSharedRun(store.deps, runId);
 			expect(durable.ok).toBe(true);

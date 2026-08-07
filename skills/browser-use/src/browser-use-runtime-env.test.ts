@@ -120,6 +120,7 @@ function runRepresentativeAuthFlow(
 			run_id: "run-f24-debug",
 			handoff_evidence_id: "evidence-1",
 			lane_id: "agent-browser",
+			entry_mode: "reviewed-runbook",
 			environment: "agent-chrome",
 			profile: "default",
 			service_id: "oncore",

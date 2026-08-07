@@ -39,9 +39,17 @@ _Avoid_: identity override, standing identity exception, trust-me approval
 The local security capability that establishes human authority and confines credential retrieval and delivery for Browser Use. It returns admitted security outcomes without making Browser Adapters, Browser Connect, or One Password owners of browser authorization.
 _Avoid_: auth adapter, credential manager, secret daemon, browser security process
 
-**Environment-Injected OP Lane**:
-The explicitly lower-assurance Browser Use credential path whose service-account authority is made available at process launch. Its vault authority is read-only; host-local persistence is a deployment tradeoff, never signed native admission.
-_Avoid_: env-var OP custody lane, ambient OP access, unsigned Browser Use Security lane, native fallback
+**Browser Authentication Access Lease**:
+The short-lived authority held only for one Browser Authentication Transaction. It exposes the Token Retrieval Port and opaque delivery handles, requires exactly-one-vault scope, and has a mandatory release. It never exposes a raw token, ambient `op` session, vault administration, item mutation, or general secret-store access.
+_Avoid_: OP session, vault session, browser vault access, credential cache, ambient token
+
+**Managed Service Authority**:
+The unattended Browser Authentication Access Lease. A Browser Use security owner injects one managed read-only service authority only into transaction-bounded helper work; the surrounding agent process receives no token bytes. The provider proves that the authority can see exactly one vault before any field delivery.
+_Avoid_: ambient OP_SERVICE_ACCOUNT_TOKEN, inherited shell session, permanent browser token, vault administrator
+
+**User-Present Desktop Authority**:
+The fallback Browser Authentication Access Lease established by one bounded 1Password desktop sign-in or biometric unlock session. Human presence raises the trust level for this transaction; it does not create a separate Browser Use product or grant standing vault authority.
+_Avoid_: runbook-only biometric lane, persistent desktop session, one-password skill fallback, identity override
 
 **Confidential Field Delivery Helper**:
 The disposable, transaction-internal process that receives one raw username, password, or current OTP value through a private inherited pipe and writes it to one pre-proven browser field through a pre-opened verified browser-channel handle. It is one of only two raw-secret processes; the other is the disposable 1Password helper. Task adapters, adapter plugins/daemons, long-lived Browser Use processes, and the approval broker never receive the value. The helper is not a Browser Adapter and never changes the selected task lane.
@@ -167,7 +175,7 @@ The one active durable path for a known browser flow, keyed by `service_id`/`flo
 _Avoid_: automation script, login runbook, CI fixture, raw trace, stored selectors, inline JavaScript, Recorder JSON pairing
 
 **Browser Authentication Transaction**:
-The per-run authentication path entered when a Browser Runbook declares an auth-context ref. It resolves the active Binding Approval Receipt, combines it with live Vault Item Evidence, and lets the generic login engine use the resulting Verified Item Binding for the approved credential fields; Browser Runbooks and Reviewed Actions never own login steps or receive credential values.
+The per-run authentication path entered from either a reviewed Browser Runbook auth-context ref or `browser-use auth login` in an already-authorized freeform session. Both entry modes resolve the active Binding Approval Receipt, acquire one Browser Authentication Access Lease, combine it with live Vault Item Evidence, and let the generic login engine use the resulting Verified Item Binding. Reviewed runs may include Human Identity Attestation; freeform runs never manufacture a runbook or invoke that runbook attestation fallback. Browser Runbooks, Reviewed Actions, adapters, and agents never own login steps or receive credential values.
 _Avoid_: login runbook, auth action, stored login choreography, portal-specific login script
 
 **Reviewed Action**:

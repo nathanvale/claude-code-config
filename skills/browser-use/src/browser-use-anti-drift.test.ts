@@ -140,6 +140,7 @@ const PLACEHOLDER_SUBSTITUTIONS: Readonly<Record<string, string>> = {
 	"--service": "sample-service",
 	"--flow": "sample-flow",
 	"--handoff": "sample-handoff.json",
+	"--allowed-origin": "https://example.test",
 	"--candidate": "1",
 };
 

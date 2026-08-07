@@ -20,6 +20,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 
 - Inject a service-account token per command from a managed source (keychain or a 1Password-backed wrapper). Never park it in `~/.profile`, shell rc, `.env` files, tmux/PTY environment, or exported ambient env.
 - Browser-login secrets and the Browser Automation token are out of scope: `browser-use` owns that custody and delivery end-to-end (`skills/browser-use/src/browser-use-op.ts`, handle-only env spec; typed repair continuations discoverable through the `browser-use` `auth` command family). Never fetch browser-login secrets with this skill.
+- Browser sessions receive no vault or item administration. Keep explicit vault listing and item create/update requests in this workflow; never grant those operations through a Browser Use credential transaction.
 
 ## Workflow
 

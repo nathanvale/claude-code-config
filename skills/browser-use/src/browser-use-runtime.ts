@@ -29,6 +29,7 @@ import {
 import { dirname, join, parse, sep } from "node:path";
 import {
 	type AdmissionRuntime,
+	type ProductAdmissionResult,
 	createNativeAbsentRuntime,
 } from "@side-quest/browser-use-security";
 import {
@@ -36,6 +37,7 @@ import {
 	type BrowserUseTokenRetrievalPort,
 	createOpTokenRetrievalPort,
 } from "./browser-use-op";
+import type { BrowserUseAuthAccessProvider } from "./browser-use-auth-access";
 import type {
 	BrowserUseAuthContext,
 	BrowserUseItemBinding,
@@ -48,6 +50,7 @@ import { createP256BindingApprovalReceiptVerifier } from "./browser-use-auth-app
 import { createNativeBindingApprovalBroker } from "./browser-use-binding-approval-native";
 import { createBindingCatalog } from "./browser-use-binding-catalog";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
+import { createBrowserUseSessionIdentityProof } from "./browser-use-session-identity-proof";
 import {
 	BROWSER_USE_APPROVAL_BROKER_ENV,
 	type BrowserUseHumanIdentityAttestationDriver,
@@ -98,6 +101,10 @@ import {
  * custody path. The prod placeholder has no executor because it is never
  * admitted; the earned in-memory fake (tests) supplies both an `admitted`
  * verdict and a capturing executor so the present branch is driven end-to-end.
+ * `createUserPresentAccessProvider`, when supplied by that admitted product,
+ * owns one bounded desktop sign-in or biometric session and returns only a
+ * transaction-scoped credential-delivery lease. It never grants Browser Use
+ * vault administration or ambient `op` session authority.
  */
 export type BrowserUseSecuritySeam = {
 	admission: AdmissionRuntime;
@@ -110,6 +117,11 @@ export type BrowserUseSecuritySeam = {
 		execute: BrowserUseOpExecute;
 		token_handle_id: string;
 	};
+	/**
+	 * Yield the bounded user-present fallback. Only invoked after native product
+	 * admission. Absence is a supported, typed recovery state.
+	 */
+	createUserPresentAccessProvider?: () => BrowserUseAuthAccessProvider;
 };
 
 export type AuthTokenSupervisorInput =
@@ -559,25 +571,48 @@ function createNativeAbsentSecuritySeam(): BrowserUseSecuritySeam {
 	};
 }
 
-/**
- * Construct the runtime's Token Retrieval Port ONLY when the native seam admits
- * the product. Any non-`admitted` verdict (including the default
- * `native-capability-absent`) leaves the port undefined so the auth command
- * keeps returning the typed absent state. Never throws: a seam probe that
- * rejects — whether the admission probe, `createTokenExecutor()`, or port
- * construction — is treated as absence, fail-closed. Executor/port construction
- * stays inside the guard so an admitted seam whose `createTokenExecutor()`
- * throws (the exact miswiring the native-absent seam's typed throw surfaces)
- * yields absence, never an escaping rejection the CLI awaits unguarded.
- */
-async function resolveAuthTokenRetrieval(
+/** Verify the native auth owner once. A rejected probe is typed absence. */
+async function verifyNativeAuthAdmission(
 	seam: BrowserUseSecuritySeam,
-): Promise<BrowserUseTokenRetrievalPort | undefined> {
+): Promise<ProductAdmissionResult | undefined> {
 	try {
-		const verdict = await seam.admission.verifyProduct();
-		if (verdict.verdict !== "admitted") return undefined;
+		return await seam.admission.verifyProduct();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Construct the Token Retrieval Port only from the shared admitted verdict.
+ * Executor or port construction failure remains fail-closed.
+ */
+function resolveAuthTokenRetrieval(
+	seam: BrowserUseSecuritySeam,
+	admission: ProductAdmissionResult | undefined,
+): BrowserUseTokenRetrievalPort | undefined {
+	try {
+		if (admission?.verdict !== "admitted") return undefined;
 		const { execute, token_handle_id } = seam.createTokenExecutor();
 		return createOpTokenRetrievalPort({ execute, token_handle_id });
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Resolve user-present confidential-delivery authority from the admitted
+ * Browser Use Security owner. Never consults shell state or a generic secret
+ * store workflow. Provider construction failure is treated as absence so the
+ * transaction returns its typed recovery continuation.
+ */
+function resolveUserPresentAuthAccess(
+	seam: BrowserUseSecuritySeam,
+	admission: ProductAdmissionResult | undefined,
+): BrowserUseAuthAccessProvider | undefined {
+	if (seam.createUserPresentAccessProvider === undefined) return undefined;
+	try {
+		if (admission?.verdict !== "admitted") return undefined;
+		return seam.createUserPresentAccessProvider();
 	} catch {
 		return undefined;
 	}
@@ -1198,6 +1233,30 @@ export const __authTokenSupervisorForTest = {
 	openPipe: openAuthTokenPipe,
 } as const;
 
+export type BrowserUseApprovedBindingResolver = (input: {
+	binding_ref: string;
+	service_id: string;
+	auth_context: BrowserUseAuthContext;
+	environment: string;
+	profile: string;
+}) => Promise<BrowserUseItemBinding | null>;
+
+export type BrowserUseAuthTransportFactory = () => {
+	transport: {
+		request(
+			request:
+				| BrowserUseDevToolsRequest
+				| BrowserUseCdpObserverRequest
+				| {
+						method: "Page.navigate";
+						sessionId: string;
+						params: { url: string };
+					  },
+		): Promise<unknown>;
+	};
+	close(): void;
+};
+
 export type BrowserUseRuntime = {
 	env: Record<string, string | undefined>;
 	now: () => number;
@@ -1237,18 +1296,22 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Transaction-scoped managed authority. Receives no browser secret bytes. */
+	authManagedAccess?: BrowserUseAuthAccessProvider;
+	/** One bounded desktop-sign-in or biometric-unlock fallback. */
+	authUserPresentAccess?: BrowserUseAuthAccessProvider;
+	/** Approved binding owner shared by reviewed-runbook and freeform entry modes. */
+	authApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
+	/** Fresh session proof owner shared by both authentication entry modes. */
+	authenticatedStateProof?: BrowserUseAuthenticatedStateProof;
+	/** Endpoint-bound transport shared by both entry modes. */
+	authTransport?: BrowserUseAuthTransportFactory;
 	/** Presence-backed lifecycle signer. Ordinary runbook execution never calls it. */
 	bindingApprovalBroker?: BrowserUseBindingApprovalBrokerPort;
 	/** Presence-free verifier for immutable binding revisions. */
 	bindingApprovalReceiptVerifier?: BrowserUseBindingApprovalReceiptVerifier;
 	/** Test/composition seam for an already approved binding catalog owner. */
-	runbookApprovedBindingResolver?: (input: {
-		binding_ref: string;
-		service_id: string;
-		auth_context: BrowserUseAuthContext;
-		environment: string;
-		profile: string;
-	}) => Promise<BrowserUseItemBinding | null>;
+	runbookApprovedBindingResolver?: BrowserUseApprovedBindingResolver;
 	/** Offline-only Reviewed Action receipt verifier; no broker or signing method. */
 	reviewedActionApprovalVerifier?: BrowserUseReviewedActionApprovalVerifier;
 	/** Present but rejected production verifier pin; absent means not provisioned. */
@@ -1258,21 +1321,7 @@ export type BrowserUseRuntime = {
 	/** Presence-backed one-run fallback for portals without Session Identity Proof. */
 	runbookHumanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
 	/** Endpoint-bound auth transport override for hermetic process-route tests. */
-	runbookAuthTransport?: () => {
-		transport: {
-			request(
-				request:
-					| BrowserUseDevToolsRequest
-					| BrowserUseCdpObserverRequest
-					| {
-							method: "Page.navigate";
-							sessionId: string;
-							params: { url: string };
-						  },
-			): Promise<unknown>;
-		};
-		close(): void;
-	};
+	runbookAuthTransport?: BrowserUseAuthTransportFactory;
 	/**
 	 * Native token lifecycle boundary. The default child inherits stdin
 	 * directly for install, so token bytes never enter the TypeScript process.
@@ -1350,22 +1399,43 @@ export function createDefaultBrowserUseRuntime(
  *
  * @param overrides - Partial runtime overrides, same shape the sync factory takes
  * @param seam - The native security seam; defaults to the native-absent placeholder
+ * @param authenticatedStateProofOverride - Optional stronger Session Identity
+ *   Proof owner (e.g. a native cryptographic prover). Kept OFF the security seam
+ *   because the default in-process structural owner needs no native admission —
+ *   its activation is orthogonal to the admission gate the seam exists to enforce.
  */
 export async function createProductionBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
 	seam?: BrowserUseSecuritySeam,
+	authenticatedStateProofOverride?: BrowserUseAuthenticatedStateProof,
 ): Promise<BrowserUseRuntime> {
 	const runtime = createDefaultBrowserUseRuntime(overrides);
+	const securitySeam = seam ?? createNativeAbsentSecuritySeam();
+	const tokenNeedsResolution = runtime.authTokenRetrieval === undefined;
+	const userPresentNeedsResolution =
+		runtime.authUserPresentAccess === undefined &&
+		securitySeam.createUserPresentAccessProvider !== undefined;
+	const authAdmission =
+		tokenNeedsResolution || userPresentNeedsResolution
+			? await verifyNativeAuthAdmission(securitySeam)
+			: undefined;
 	// Honor an explicitly injected port; otherwise let the seam decide. Absence
 	// leaves the field undefined so the auth command reports typed absence.
-	if (runtime.authTokenRetrieval === undefined) {
-		const port = await resolveAuthTokenRetrieval(
-			seam ?? createNativeAbsentSecuritySeam(),
-		);
+	if (tokenNeedsResolution) {
+		const port = resolveAuthTokenRetrieval(securitySeam, authAdmission);
 		if (port !== undefined) runtime.authTokenRetrieval = port;
 	}
 	if (runtime.authTokenRetrieval === undefined && seam === undefined) {
 		runtime.authTokenRetrieval = environmentTokenRetrievalOf(runtime);
+	}
+	if (userPresentNeedsResolution) {
+		const provider = resolveUserPresentAuthAccess(securitySeam, authAdmission);
+		if (provider !== undefined) runtime.authUserPresentAccess = provider;
+	}
+	if (runtime.authenticatedStateProof === undefined) {
+		runtime.authenticatedStateProof = createBrowserUseSessionIdentityProof(
+			authenticatedStateProofOverride,
+		);
 	}
 	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
 	if (
