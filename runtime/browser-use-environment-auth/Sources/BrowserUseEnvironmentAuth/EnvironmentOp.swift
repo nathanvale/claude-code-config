@@ -71,10 +71,12 @@ private struct ResolvedEnvironmentOpSource: Equatable {
 }
 
 private let officialEnvironmentOpDigests = [
-    // 1Password CLI 2.35.0, Darwin arm64. Update only from the pinned
-    // Homebrew cask artifact after recording its exact extracted binary hash.
+    // 1Password CLI Darwin arm64 releases. Update only from a pinned Homebrew
+    // cask artifact after recording its exact extracted binary hash.
     "1b55776253466a73af55403f1496d85c30ea201e250e89ee01af0c7a59d2f0f6":
         "2.35.0",
+    "00bcb63abbcbdd136afa7cdd2a138b4836bb7d85ea730acece78926beb849b83":
+        "2.38.1",
 ]
 
 private let officialEnvironmentOpPolicy = EnvironmentOpStagingPolicy(
