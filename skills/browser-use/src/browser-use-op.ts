@@ -647,6 +647,8 @@ export type BrowserUseTokenRetrievalPort = {
 		target_digest?: string;
 		/** Freshly observed normalized origin used by env-lane prevalidation. */
 		observed_origin?: string;
+		/** Authority that admitted any origin alias beyond live item metadata. */
+		origin_authority?: "live-evidence" | "signed-binding-receipt";
 	}): Promise<
 		| { ok: true; handle: BrowserUseSecretHandle }
 		| { ok: false; rejection: BrowserUseTokenRetrievalRejection }

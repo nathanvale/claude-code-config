@@ -13,6 +13,7 @@ import {
 	type BrowserUseStandingPolicy,
 	type BrowserUseVerifierIdentity,
 	approvalBoundFactsDigestOf,
+	createBindingApprovalReceiptVerifier,
 	createApprovalRouter,
 	createApprovalVerifier,
 	oneUseGrantDigestOf,
@@ -21,6 +22,10 @@ import {
 	validateOneUseGrantShape,
 	validateStandingPolicyShape,
 } from "./browser-use-auth-approval";
+import {
+	type BrowserUseBindingApprovalReceipt,
+	bindingApprovalReceiptDigestOf,
+} from "./browser-use-auth-bindings";
 
 // =========================================================================
 // ApprovalBrokerPort + human-gated approval routing (auth U3a PR1, R20,
@@ -138,6 +143,76 @@ function verifierHarness(
 		consumed,
 	};
 }
+
+function signedBindingReceipt(
+	overrides: Partial<Omit<BrowserUseBindingApprovalReceipt, "signature">> = {},
+): BrowserUseBindingApprovalReceipt {
+	const unsigned: Omit<BrowserUseBindingApprovalReceipt, "signature"> = {
+		contract: "browser-use.binding-approval",
+		schema_version: "1",
+		receipt_id: "receipt-1",
+		disposition: "approved",
+		resolution_key: {
+			binding_ref: "oncore",
+			service_id: "oncore",
+			auth_context: "interactive-login",
+			environment: "agent-chrome",
+			profile: "oncore-clean",
+		},
+		binding: {
+			service_id: "oncore",
+			auth_context: "interactive-login",
+			allowed_origins: ["https://portal.example.com"],
+			allowed_login_paths: ["/login"],
+			vault_id: "vault-1",
+			item_id: "item-1",
+			allowed_auth_methods: ["password", "otp"],
+			binding_revision: 1,
+		},
+		predecessor_receipt_id: null,
+		issued_at_epoch_ms: 1_000,
+		verifier_key_id: VERIFIER.key_id,
+		...overrides,
+	};
+	return {
+		...unsigned,
+		signature: `sig:${bindingApprovalReceiptDigestOf(unsigned)}`,
+	};
+}
+
+describe("signed Item Binding receipt", () => {
+	test("verifies a complete immutable revision without broker presence", () => {
+		const verifier = createBindingApprovalReceiptVerifier({
+			verifier: VERIFIER,
+			verifySignature: ({ digest, signature, key_id }) =>
+				key_id === VERIFIER.key_id && signature === `sig:${digest}`,
+		});
+		expect(verifier.verify(signedBindingReceipt())).toMatchObject({
+			ok: true,
+			disposition: "approved",
+			binding: { item_id: "item-1", binding_revision: 1 },
+		});
+	});
+
+	test("rejects an origin changed after presence-backed signing", () => {
+		const verifier = createBindingApprovalReceiptVerifier({
+			verifier: VERIFIER,
+			verifySignature: ({ digest, signature }) => signature === `sig:${digest}`,
+		});
+		const receipt = signedBindingReceipt();
+		const tampered = {
+			...receipt,
+			binding: {
+				...receipt.binding,
+				allowed_origins: ["https://other.example.com"],
+			},
+		};
+		expect(verifier.verify(tampered)).toEqual({
+			ok: false,
+			code: "binding_receipt_signature_invalid",
+		});
+	});
+});
 
 function brokerHarness(rejection?: BrowserUseApprovalPresenceRejection) {
 	const calls: unknown[] = [];

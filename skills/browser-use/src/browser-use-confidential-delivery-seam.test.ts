@@ -841,7 +841,7 @@ describe("confidential-delivery seam co-change (U5, R13-R16)", () => {
 				vault_id: "vault-1",
 				origins: ["https://oncore.test"],
 				login_paths: ["/login"],
-				supported_methods: ["password" as const],
+				supported_methods: ["password" as const, "otp" as const],
 				state: "active" as const,
 			});
 			const port = activeVaultPort({

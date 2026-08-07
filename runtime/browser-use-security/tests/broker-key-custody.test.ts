@@ -30,7 +30,7 @@ const launcherEntitlements = readFileSync(
 
 describe("Approval Broker signing-key custody source policy", () => {
 	test("keeps the opaque handle in the private device-only Keychain group", () => {
-		expect(brokerSource).not.toContain("UserDefaults");
+		expect(brokerSource).not.toContain("UserDefaults.standard.set");
 		expect(brokerSource).toContain("SecItemAdd");
 		expect(brokerSource).toContain(
 			"kSecUseDataProtectionKeychain as String: true",
@@ -40,13 +40,24 @@ describe("Approval Broker signing-key custody source policy", () => {
 		);
 		expect(brokerSource).toContain("kSecAttrAccessGroup as String: accessGroup");
 		expect(brokerEntitlements).toContain(
-			"$(AppIdentifierPrefix)com.side-quest.browser-use-security.approval-broker",
+			"$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)",
 		);
 		expect(brokerSource).toContain(
 			"kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly",
 		);
 		expect(brokerSource).not.toContain("SecItemUpdate");
 		expect(brokerSource).not.toContain("SecItemDelete");
+	});
+
+	test("limits legacy defaults access to explicit one-way migration", () => {
+		const migrationBody = brokerSource.match(
+			/static func migrateLegacySigningKey\(\)[\s\S]*?(?=\n {4}private static func encodeCustodyRecord)/,
+		)?.[0];
+		expect(migrationBody).toBeDefined();
+		expect(migrationBody).toContain("UserDefaults.standard.data");
+		expect(migrationBody).toContain("UserDefaults.standard.removeObject");
+		expect(brokerSource).toContain('case "migrate-key":');
+		expect(brokerSource.match(/UserDefaults\.standard/g)).toHaveLength(2);
 	});
 
 	test("loads fail closed and creation stays behind explicit enrollment", () => {

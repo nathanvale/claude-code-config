@@ -23,6 +23,7 @@ import {
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
+	browserUseCommandFor,
 } from "./command-contract";
 import {
 	type OutputMode,
@@ -104,7 +105,10 @@ export function parseBrowserUseArgv(
 	}
 	const familyToken = positionals[0];
 	const family = isFamily(familyToken) ? familyToken : undefined;
-	const subcommandCandidate = positionals[1];
+	const subcommandCandidate =
+		family === "auth" && positionals[1] === "binding" && positionals[2] !== undefined
+			? `binding ${positionals[2]}`
+			: positionals[1];
 	const resolvedCommand =
 		family &&
 		subcommandCandidate &&
@@ -154,7 +158,7 @@ export function parseBrowserUseArgv(
 		);
 	}
 
-	const subcommandToken = positionals[1];
+	const subcommandToken = subcommandCandidate;
 	let subcommand =
 		subcommandToken && subcommandsFor(family).includes(subcommandToken)
 			? subcommandToken
@@ -192,6 +196,7 @@ export function parseBrowserUseArgv(
 			`missing subcommand for ${family}: expected ${subcommandsFor(family).join(", ")}.`,
 		);
 	}
+	if (subcommand.includes(" ")) consumedPositionals = 3;
 
 	const command = toCommand(family, subcommand);
 	// Strip exactly the leading positional tokens, not every occurrence of
@@ -391,6 +396,28 @@ export function parseBrowserUseArgv(
 			);
 		}
 	}
+	if (
+		command === "auth-binding-create" ||
+		command === "auth-binding-show" ||
+		command === "auth-binding-revoke"
+	) {
+		for (const flag of ["--binding", "--service"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (!value || value.startsWith("--")) {
+				throw usageError(
+					`${command.replaceAll("-", " ")} requires ${flag} <id>.`,
+				);
+			}
+		}
+	}
+	if (command === "auth-binding-create") {
+		for (const flag of ["--origin", "--vault-id", "--item-id"] as const) {
+			const value = stringField(flagValues[flag]);
+			if (!value || value.startsWith("--")) {
+				throw usageError(`auth binding create requires ${flag} <value>.`);
+			}
+		}
+	}
 	// Derive from parsed flags, not token scans: a value-bearing flag can
 	// legitimately consume a token that looks like "--dry-run" or "--json"
 	// (e.g. `--title-contains --dry-run`), and a raw includes() would misread
@@ -461,7 +488,7 @@ function toCommand(
 	family: BrowserUseFamily,
 	subcommand: string,
 ): BrowserUseCommand {
-	return `${family}-${subcommand}` as BrowserUseCommand;
+	return browserUseCommandFor(family, subcommand);
 }
 
 type FlagSpec = { type?: string; values?: readonly string[] };

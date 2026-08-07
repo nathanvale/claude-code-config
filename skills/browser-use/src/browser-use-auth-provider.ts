@@ -140,6 +140,8 @@ export type BrowserUseSecretFreePreparationInput = {
 	method: BrowserUseLaneAuthMethod;
 	/** Approved Item Binding, or null for first bind. */
 	binding: BrowserUseItemBinding | null;
+	/** Only the verified catalog resolver may assert receipt-owned origin authority. */
+	origin_authority?: "live-evidence" | "signed-binding-receipt";
 	candidate_hint: Pick<
 		BrowserUseImportCandidate,
 		"hint_item_id" | "legacy_vault_name"
@@ -486,6 +488,17 @@ export function createBrowserUseAuthProvider(
 					{ kind: "binding-repair", repair_hint: repairHint, stale_state: "moved" },
 				);
 			}
+			if (
+				input.target_origins.some(
+					(origin) => !input.binding?.allowed_origins.includes(origin),
+				)
+			) {
+				return preparationBlock(
+					"revoked-binding",
+					continuationOf("revoked-binding"),
+					{ kind: "binding-repair", repair_hint: repairHint, stale_state: "out-of-scope" },
+				);
+			}
 			// Gate 4 — exact bound-item read (R11): never a rescan, never an
 			// auto-selected replacement.
 			const read = await deps.tokenRetrieval.getLoginItem({
@@ -516,7 +529,14 @@ export function createBrowserUseAuthProvider(
 				}
 				return retrievalBlock(read.rejection, repairHint);
 			}
-			const usability = assessBindingUsability(input.binding, { item: read.item });
+			const usability = assessBindingUsability(
+				input.binding,
+				{ item: read.item },
+				{
+					allow_receipt_approved_origins:
+						input.origin_authority === "signed-binding-receipt",
+				},
+			);
 			if (!usability.usable) {
 				return preparationBlock(usability.blocked_cause, usability.continuation, {
 					kind: "binding-repair",

@@ -444,6 +444,8 @@ export async function runBrowserUseRunbookAuth(
 		login_path: loginPath,
 		method: "password",
 		binding: approvedBinding,
+		origin_authority:
+			approvedBinding === null ? "live-evidence" : "signed-binding-receipt",
 		candidate_hint: {
 			hint_item_id: bindingRef,
 			legacy_vault_name: null,
@@ -799,6 +801,10 @@ export async function runBrowserUseRunbookAuth(
 						}),
 				allowed_origins: input.allowed_origins,
 				binding,
+				origin_authority:
+					approvedBinding === null
+						? "live-evidence"
+						: "signed-binding-receipt",
 				allow_human_identity_attestation:
 					deps.humanIdentityAttestation !== undefined,
 			},

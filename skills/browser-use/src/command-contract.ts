@@ -476,6 +476,10 @@ export const BROWSER_USE_AUTH_REPAIR_SUBCOMMANDS = [
 	"request-binding-selection-grant",
 ] as const;
 export const BROWSER_USE_AUTH_SETUP_SUBCOMMANDS = [
+	"binding create",
+	"binding list",
+	"binding show",
+	"binding revoke",
 	"install-token",
 	"remove-token",
 	"status",
@@ -611,11 +615,23 @@ export type BrowserUseCommand =
 	| "auth-repair-vault-grant"
 	| "auth-repair-item-binding"
 	| "auth-request-binding-selection-grant"
+	| "auth-binding-create"
+	| "auth-binding-list"
+	| "auth-binding-show"
+	| "auth-binding-revoke"
 	| "auth-install-token"
 	| "auth-remove-token"
 	| "auth-status"
 	| "auth-doctor"
 	| "auth-reload";
+
+/** Single projection from the discoverable family leaf to its contract id. */
+export function browserUseCommandFor(
+	family: BrowserUseFamily,
+	subcommand: string,
+): BrowserUseCommand {
+	return `${family}-${subcommand.replaceAll(" ", "-")}` as BrowserUseCommand;
+}
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
 // failure codes land with U5/U6/U7; these cover the shell scenarios plus the
@@ -1977,6 +1993,46 @@ const browserUseAuthSelectionFlags = {
 	...browserUseAuthFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseBindingLookupFlags = {
+	"--binding": {
+		type: "string",
+		description: "Portable binding reference with no vault identity.",
+	},
+	"--service": {
+		type: "string",
+		description: "Runbook service id that owns the binding.",
+	},
+	"--auth-context": {
+		type: "string",
+		description: "Code-owned auth context. Defaults to interactive-login.",
+	},
+	"--environment": {
+		type: "string",
+		description: "Environment resolution coordinate. Defaults to production.",
+	},
+	"--profile": {
+		type: "string",
+		description: "Profile resolution coordinate. Defaults to the configured warm profile.",
+	},
+	...browserUsePlatformFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseBindingCreateFlags = {
+	"--origin": {
+		type: "string",
+		description: "Exact normalized origin approved for this binding revision.",
+	},
+	"--vault-id": {
+		type: "string",
+		description: "Exact live vault id shown only at the local approval ceremony.",
+	},
+	"--item-id": {
+		type: "string",
+		description: "Exact live login item id shown only at the local approval ceremony.",
+	},
+	...browserUseBindingLookupFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 export const browserUseContracts = defineCommandFacadeContract(
 	{
 		// Version-matched bundled guidance (design brief D3). Pure render of the
@@ -2786,6 +2842,101 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseAuthRepairFailureActions,
 			},
 			flags: browserUseAuthSelectionFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-binding-create": {
+			script: "browser-use",
+			summary:
+				"Approve and persist one signed Item Binding revision after local user presence.",
+			usage: [
+				"auth binding create --binding <ref> --service <id> --origin <origin> --vault-id <id> --item-id <id> [--auth-context <id>] [--environment <id>] [--profile <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"The command names one exact live item and the native broker displays the complete revision before presence-backed signing.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "required",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseBindingCreateFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-binding-list": {
+			script: "browser-use",
+			summary: "List active portable Item Binding references without vault identity.",
+			usage: ["auth binding list [--caller <label>] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUsePlatformFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-binding-show": {
+			script: "browser-use",
+			summary: "Show one active signed Item Binding projection without local vault identity.",
+			usage: [
+				"auth binding show --binding <ref> --service <id> [--auth-context <id>] [--environment <id>] [--profile <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseBindingLookupFlags,
+			exitCodes: browserUsePlatformExitCodes,
+		},
+		"auth-binding-revoke": {
+			script: "browser-use",
+			summary: "Revoke one active Item Binding after local user presence.",
+			usage: [
+				"auth binding revoke --binding <ref> --service <id> [--auth-context <id>] [--environment <id>] [--profile <id>] [--caller <label>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "write",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"The command names one exact active binding and the native broker confirms revocation before the fenced catalog update.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "required",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseAuthReadinessResultContract,
+			actionAffordances: {
+				success: browserUseAuthRepairActions,
+				failure: browserUseAuthRepairFailureActions,
+			},
+			flags: browserUseBindingLookupFlags,
 			exitCodes: browserUsePlatformExitCodes,
 		},
 		"auth-install-token": {

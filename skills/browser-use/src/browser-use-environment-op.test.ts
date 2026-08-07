@@ -195,13 +195,19 @@ function portOf(
 
 async function mintPassword(
 	port: ReturnType<typeof portOf>,
-	overrides: { target_digest?: string; observed_origin?: string } = {},
+	overrides: {
+		target_digest?: string;
+		observed_origin?: string;
+		origin_authority?: "live-evidence" | "signed-binding-receipt";
+		binding?: BrowserUseItemBinding;
+	} = {},
 ) {
 	return port.fetchCredentialField({
-		binding: binding(),
+		binding: overrides.binding ?? binding(),
 		field: "password",
 		target_digest: overrides.target_digest ?? TARGET_DIGEST,
 		observed_origin: overrides.observed_origin ?? ORIGIN,
+		origin_authority: overrides.origin_authority,
 	});
 }
 
@@ -557,5 +563,33 @@ describe("environment OP metadata and fail-closed causes", () => {
 		expect(result.rejection.code).toBe("binding-shape-invalid");
 		expect(result.blocked_cause).toBe("origin-mismatch");
 		expect(supervisor.calls()).toHaveLength(0);
+	});
+
+	test("signed receipt authority preserves an approved origin alias through minting", async () => {
+		const supervisor = fixture();
+		const receiptOrigin = "https://current.portal.test";
+		const fetched = await mintPassword(portOf(supervisor), {
+			binding: binding({ allowed_origins: [receiptOrigin] }),
+			observed_origin: receiptOrigin,
+			origin_authority: "signed-binding-receipt",
+		});
+
+		expect(fetched.ok).toBe(true);
+		expect(supervisor.calls()).toHaveLength(1);
+	});
+
+	test("live evidence cannot widen the item origin during minting", async () => {
+		const supervisor = fixture();
+		const widenedOrigin = "https://current.portal.test";
+		const fetched = await mintPassword(portOf(supervisor), {
+			binding: binding({ allowed_origins: [widenedOrigin] }),
+			observed_origin: widenedOrigin,
+			origin_authority: "live-evidence",
+		});
+
+		expect(fetched.ok).toBe(false);
+		if (fetched.ok) return;
+		expect(fetched.blocked_cause).toBe("origin-mismatch");
+		expect(supervisor.calls()).toHaveLength(1);
 	});
 });
