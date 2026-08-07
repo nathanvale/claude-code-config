@@ -135,6 +135,8 @@ export type BrowserUseLoginEngineInput = {
 	observed_url?: string;
 	allowed_origins: readonly string[];
 	binding: BrowserUseItemBinding;
+	/** Authority that admitted any origin alias beyond live item metadata. */
+	origin_authority?: "live-evidence" | "signed-binding-receipt";
 	/** Allow an installed presence-backed owner to resolve an explicit proof fallback. */
 	allow_human_identity_attestation?: boolean;
 	/** Bounded no-progress guard. @defaultValue 16 */
@@ -763,6 +765,7 @@ export async function runBrowserUseLoginEngine(
 		}
 		const delivered = await deliverConfidentialFields({
 			binding: input.binding,
+			origin_authority: input.origin_authority,
 			target: proof.target,
 			fields: [classification.field],
 			tokenRetrieval: deps.tokenRetrieval,

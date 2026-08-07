@@ -40,6 +40,13 @@ import type {
 	BrowserUseAuthContext,
 	BrowserUseItemBinding,
 } from "./browser-use-auth-bindings";
+import type {
+	BrowserUseBindingApprovalBrokerPort,
+	BrowserUseBindingApprovalReceiptVerifier,
+} from "./browser-use-auth-approval";
+import { createP256BindingApprovalReceiptVerifier } from "./browser-use-auth-approval";
+import { createNativeBindingApprovalBroker } from "./browser-use-binding-approval-native";
+import { createBindingCatalog } from "./browser-use-binding-catalog";
 import type { BrowserUseAuthenticatedStateProof } from "./browser-use-login-engine";
 import {
 	BROWSER_USE_APPROVAL_BROKER_ENV,
@@ -61,6 +68,7 @@ import {
 	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	fullFsyncDurableFile,
+	inspectBrowserUsePaths,
 	inspectBrowserUseRoot,
 	resolveBrowserUsePaths,
 } from "./browser-use-paths";
@@ -1229,6 +1237,10 @@ export type BrowserUseRuntime = {
 	 * the future U3b wiring inject a port.
 	 */
 	authTokenRetrieval?: BrowserUseTokenRetrievalPort;
+	/** Presence-backed lifecycle signer. Ordinary runbook execution never calls it. */
+	bindingApprovalBroker?: BrowserUseBindingApprovalBrokerPort;
+	/** Presence-free verifier for immutable binding revisions. */
+	bindingApprovalReceiptVerifier?: BrowserUseBindingApprovalReceiptVerifier;
 	/** Test/composition seam for an already approved binding catalog owner. */
 	runbookApprovedBindingResolver?: (input: {
 		binding_ref: string;
@@ -1358,7 +1370,8 @@ export async function createProductionBrowserUseRuntime(
 	let reviewedActionVerifierIdentity: BrowserUseReviewedActionVerifierIdentity | undefined;
 	if (
 		runtime.reviewedActionApprovalVerifier === undefined ||
-		runtime.runbookHumanIdentityAttestation === undefined
+		runtime.runbookHumanIdentityAttestation === undefined ||
+		runtime.bindingApprovalReceiptVerifier === undefined
 	) {
 		const resolution = await productionReviewedActionApprovalVerifierOf(runtime);
 		if (resolution.status === "ready") {
@@ -1382,6 +1395,45 @@ export async function createProductionBrowserUseRuntime(
 				brokerPath,
 				reviewedActionVerifierIdentity,
 			);
+	}
+	if (
+		runtime.bindingApprovalReceiptVerifier === undefined &&
+		reviewedActionVerifierIdentity !== undefined
+	) {
+		runtime.bindingApprovalReceiptVerifier =
+			createP256BindingApprovalReceiptVerifier(reviewedActionVerifierIdentity);
+	}
+	if (
+		runtime.bindingApprovalBroker === undefined &&
+		brokerPath !== undefined &&
+		brokerPath !== ""
+	) {
+		runtime.bindingApprovalBroker = createNativeBindingApprovalBroker(brokerPath);
+	}
+	if (
+		runtime.runbookApprovedBindingResolver === undefined &&
+		runtime.bindingApprovalReceiptVerifier !== undefined
+	) {
+		const verifier = runtime.bindingApprovalReceiptVerifier;
+		runtime.runbookApprovedBindingResolver = async (input) => {
+			const opened = await inspectBrowserUsePaths(runtime.platformFs, runtime.env);
+			if (!opened.ok) return null;
+			const catalog = createBindingCatalog({
+				fs: runtime.platformFs,
+				root: join(opened.paths.resolution.roots.state, "binding-catalog"),
+				verifier,
+			});
+			const resolved = await catalog.resolve({
+				binding_ref: input.binding_ref,
+				service_id: input.service_id,
+				auth_context: input.auth_context,
+				environment: input.environment,
+				profile: input.profile,
+			});
+			return resolved.ok && resolved.status === "active"
+				? resolved.binding
+				: null;
+		};
 	}
 	return runtime;
 }

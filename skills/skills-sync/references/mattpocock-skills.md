@@ -17,21 +17,32 @@ unselected.
 
 ## Selected Baseline
 
+- `ask-matt`
+- `codebase-design`
 - `diagnosing-bugs`
+- `domain-modeling`
 - `grill-me`
 - `grill-with-docs`
 - `grilling`
+- `handoff`
+- `implement`
 - `improve-codebase-architecture`
 - `prototype`
+- `setup-matt-pocock-skills`
 - `tdd`
 - `teach`
-- `codebase-design`
-- `domain-modeling`
+- `to-questionnaire`
+- `to-spec`
+- `to-tickets`
+- `triage`
+- `wait-what`
+- `wayfinder`
+- `writing-for-agents`
 
 `grilling`, `codebase-design`, and `domain-modeling` are upstream dependencies.
-`handoff` and `triage` remain first-party because their local owners add safety
-and durable-state contracts absent upstream. `setup-matt-pocock-skills` is
-unselected; repository scaffolding remains locally owned.
+`handoff` and `triage` use upstream behavior; their former local variants remain
+under `skills/archive/`. `setup-matt-pocock-skills` is selected for per-repo
+configuration.
 
 ## Install
 
