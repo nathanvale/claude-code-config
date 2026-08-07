@@ -801,6 +801,69 @@ describe("Agent Browser native task lane", () => {
 		expect(evaluatedInput?.stdinText).toContain(JSON.stringify(reviewedInputs));
 	});
 
+	test("retries a transiently unavailable reviewed mutation postcondition", async () => {
+		const script =
+			"async () => { document.querySelector('[data-week]').click() }";
+		const runtime = runtimeFor([
+			{
+				stdout: json({
+					tabs: [
+						{
+							tabId: "t8",
+							active: true,
+							type: "page",
+							url: "https://example.test/weeks",
+						},
+					],
+				}),
+			},
+			{ stdout: json({}) },
+			{ stdout: json({ snapshot: "week list", refs: {} }) },
+			{ stdout: json({ url: "https://example.test/weeks" }) },
+			{ stdout: json({ result: {} }) },
+			{ stdout: json({ url: "https://example.test/week" }) },
+			{ stdout: semanticFailure() },
+			{ stdout: json({ url: "https://example.test/week" }) },
+			{ stdout: json({ visible: true }) },
+		]);
+
+		const result = await executeAgentBrowserTask(runtime, {
+			handoff: HANDOFF,
+			run_id: "run-reviewed-navigation-settle",
+			target_tab_id: "t8",
+			allowed_origins: ["https://example.test"],
+			steps: [
+				{ kind: "snapshot", interactive: false },
+				{
+					kind: "evaluate",
+					action_id: "timesheet.open-week",
+					script,
+					script_sha256: createHash("sha256").update(script).digest("hex"),
+					review_status: "approved",
+					allowed_origin: "https://example.test",
+					effect: "mutation",
+					inputs: {},
+					postcondition: {
+						kind: "element-visible",
+						selector: "[data-timesheet-grid]",
+					},
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			outcome: "confirmed",
+			executed_steps: 2,
+			mutation_dispatched: true,
+		});
+		expect(
+			runtime.calls.filter(
+				(call) => call.includes("is") && call.includes("visible"),
+			),
+		).toHaveLength(2);
+	});
+
 	test("refuses an iterated mutation before dispatch without durable item checkpoints", async () => {
 		const script = "async ({ inputs }) => { document.querySelector('#save').click() }";
 		const runtime = runtimeFor([]);
@@ -901,6 +964,11 @@ describe("Agent Browser native task lane", () => {
 			mutation_dispatched: true,
 		});
 		expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+		expect(
+			runtime.calls.filter(
+				(call) => call.includes("is") && call.includes("visible"),
+			),
+		).toHaveLength(1);
 	});
 
 	test("a timed-out iterated mutation checkpoints unknown", async () => {
@@ -1049,6 +1117,11 @@ describe("Agent Browser native task lane", () => {
 			reason: "unknown",
 		});
 		expect(runtime.calls.filter((call) => call.includes("eval"))).toHaveLength(1);
+		expect(
+			runtime.calls.filter(
+				(call) => call.includes("is") && call.includes("visible"),
+			),
+		).toHaveLength(1);
 	});
 
 	test.each([
