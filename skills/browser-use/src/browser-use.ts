@@ -5165,6 +5165,42 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 		run = created.run;
 	}
 
+	// Refuse before browser dispatch when no identity-proof owner is present.
+	// Freeform has no human-attestation fallback (the reviewed-runbook route's
+	// third option), so without a proof owner the login engine would submit real
+	// credentials it can never prove authenticated — a real login attempt that
+	// dead-ends at unknown-post-submit-state. Plan R30 requires an identity basis
+	// of session-identity-proof or human-identity-attestation, never neither, so
+	// this refusal enforces the invariant before any credential leaves the vault.
+	// Checked after terminal-truth and handoff-evidence validation so those
+	// stronger refusals still take precedence; no proof owner is ever wired in
+	// production today, so this is the freeform production path until a native
+	// Session Identity Proof owner exists.
+	if (
+		input.runtime.authenticatedStateProof === undefined &&
+		input.runtime.runbookAuthenticatedStateProof === undefined
+	) {
+		const blocked = await persistFreeformAuthBlock({
+			deps: store.deps,
+			run,
+			cause: "freeform-identity-proof-required",
+		});
+		if (!blocked.ok) return emitPlatformStoreFailure(input, blocked.failure);
+		return emitSharedRunSuccess({
+			command: input,
+			run: blocked.run,
+			continuationId:
+				BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE[
+					"freeform-identity-proof-required"
+				].continuation.next_action_id,
+			dataExtra: {
+				entry_mode: "freeform",
+				auth_access_path: "unavailable",
+				external_effect: "none",
+			},
+		});
+	}
+
 	const dispatchLease = await acquireLease(store.deps, {
 		key: leaseKeyForRun(run),
 		holderId: `freeform-auth-${run.run_id}`,
@@ -5413,7 +5449,10 @@ async function runOpenEndedAuthLogin(input: PlatformCommandInput): Promise<numbe
 async function persistFreeformAuthBlock(input: {
 	deps: RunStoreDeps;
 	run: BrowserUseSharedRun;
-	claim: LeaseWriteClaim;
+	// Omitted by the pre-dispatch identity-proof gate, which runs before any
+	// dispatch lease exists; persistFencedSharedRun then self-acquires a
+	// short-lived lease to fence the write.
+	claim?: LeaseWriteClaim;
 	cause: BrowserUseAuthBlockedCause;
 }): Promise<
 	| { ok: true; run: BrowserUseSharedRun }

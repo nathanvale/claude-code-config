@@ -108,6 +108,7 @@ function persistedFragmentAt(
 			run_id: "shared-run-fixture",
 			handoff_evidence_id: "handoff-fixture",
 			lane_id: "agent-browser",
+			entry_mode: "reviewed-runbook",
 			environment: "agent-chrome",
 			profile: "default",
 			service_id: "fixture",

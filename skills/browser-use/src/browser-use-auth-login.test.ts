@@ -94,6 +94,26 @@ function authTransport(origin: string) {
 	};
 }
 
+// A freeform login now refuses before dispatch when no identity-proof owner is
+// present (plan R30: identity basis is never neither). Tests that exercise the
+// access, delivery, target-proof, or fragment paths must therefore inject a
+// proof owner so they get past the pre-gate to the behaviour under test.
+function stubAuthenticatedStateProof(origin: string) {
+	return async ({ target_id }: { target_id: string }) => ({
+		proven: true as const,
+		proof: {
+			target_id,
+			page_id: "page-authenticated",
+			frame_id: "frame-auth-login",
+			origin,
+			subject_reference: "subject-ref",
+			account_reference: "account-ref",
+			tenant_reference: "tenant-ref",
+			identity_basis_digest: "proof-digest",
+		},
+	});
+}
+
 function tokenPort(
 	origin: string,
 	counts: { vaults: number; items: number; fetches: number; redeems: number },
@@ -383,6 +403,7 @@ describe("auth login CLI", () => {
 					},
 				},
 			}),
+			authenticatedStateProof: stubAuthenticatedStateProof(origin),
 			authTransport: transport.factory,
 		});
 		const result = await runForTest(
@@ -445,6 +466,7 @@ describe("auth login CLI", () => {
 					release: async () => {},
 				},
 			}),
+			authenticatedStateProof: stubAuthenticatedStateProof(origin),
 			authTransport: transport.factory,
 		});
 		const result = await runForTest(
@@ -527,6 +549,7 @@ describe("auth login CLI", () => {
 					release: async () => {},
 				},
 			}),
+			authenticatedStateProof: stubAuthenticatedStateProof(origin),
 			authTransport: transport.factory,
 		});
 		const result = await runForTest(
@@ -660,6 +683,7 @@ describe("auth login CLI", () => {
 					userPresentCalls += 1;
 					return { ok: false, cause: "user-presence-refused" };
 				},
+				authenticatedStateProof: stubAuthenticatedStateProof(origin),
 				authTransport: () => {
 					transportCalls += 1;
 					return authTransport(origin).factory();
@@ -713,6 +737,9 @@ describe("auth login CLI", () => {
 				},
 				platformFs: createDefaultPlatformFs(),
 				readTextFile: async (path) => readFileSync(path, "utf8"),
+				authenticatedStateProof: stubAuthenticatedStateProof(
+					"https://github.example",
+				),
 			}),
 		);
 		expect(result.exitCode).toBe(0);
@@ -733,5 +760,62 @@ describe("auth login CLI", () => {
 		});
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
 		expect(allFileText(xdg.base)).not.toContain(sentinel);
+	});
+
+	test("freeform login without an identity-proof owner refuses before dispatch", async () => {
+		const xdg = makeTempXdgEnv();
+		disposables.push(xdg);
+		const origin = "https://github.example";
+		const runId = "freeform-auth-no-proof-owner";
+		const handoffPath = join(xdg.base, "handoff.json");
+		writeFileSync(
+			handoffPath,
+			verifiedHandoffEnvelope((envelope) => {
+				envelope.run_id = runId;
+				envelope.data.attachment.adapter_id = "playwright-cdp";
+				envelope.data.attachment.route = "explicit-cdp";
+				envelope.data.attachment.probe_executable =
+					"/opt/browser-connect/playwright-cdp";
+			}),
+			{ mode: 0o600 },
+		);
+		const counts = { vaults: 0, items: 0, fetches: 0, redeems: 0 };
+		let transportCalls = 0;
+		// Access authority IS present; only the identity-proof owner is absent.
+		// The pre-gate must still refuse before opening any transport, proving it
+		// gates on proof — not merely on absent access.
+		const runtime = makeRuntime({
+			env: xdg.env,
+			platformFs: createDefaultPlatformFs(),
+			readTextFile: async (path) => readFileSync(path, "utf8"),
+			authUserPresentAccess: async () => ({
+				ok: true,
+				lease: {
+					access_path: "user-present-desktop",
+					required_vault_scope: "exactly-one-vault",
+					expires_at_epoch_ms: 31_000,
+					token_retrieval: tokenPort(origin, counts),
+					release: async () => {},
+				},
+			}),
+			authTransport: () => {
+				transportCalls += 1;
+				return authTransport(origin).factory();
+			},
+		});
+		const result = await runForTest(
+			[
+				"auth", "login", "--handoff", handoffPath,
+				"--service", "github", "--allowed-origin", origin, "--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(await runStatus(runtime, runId)).toMatchObject({
+			state: "needs-human",
+			continuation: { next_action_id: "use-reviewed-runbook-for-auth" },
+		});
+		expect(transportCalls).toBe(0);
+		expect(counts).toEqual({ vaults: 0, items: 0, fetches: 0, redeems: 0 });
 	});
 });

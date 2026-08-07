@@ -3,6 +3,7 @@ import type { BrowserUseAuthContext, BrowserUseItemBinding } from "./browser-use
 import {
 	type BrowserUseAuthAttestation,
 	type BrowserUseAuthBlockedCause,
+	type BrowserUseAuthEntryMode,
 	type BrowserUseAuthTransactionFragment,
 	BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE,
 	authAttestationDigestOf,
@@ -34,8 +35,6 @@ import {
 	writeAuthAttestationRecord,
 } from "./browser-use-runs";
 import type { BrowserAdapterId } from "./discovery-model";
-
-export type BrowserUseAuthEntryMode = "reviewed-runbook" | "freeform";
 
 export type BrowserUseRunbookAuthBlocked = {
 	blocked_cause: BrowserUseAuthBlockedCause;
@@ -200,6 +199,7 @@ async function runBrowserUseAuthTransaction(
 			fragment.binding.run_id !== run.run_id ||
 			fragment.binding.handoff_evidence_id !== handoffEvidenceId ||
 			fragment.binding.lane_id !== input.lane_id ||
+			fragment.binding.entry_mode !== input.entry_mode ||
 			fragment.binding.environment !== run.environment_profile.environment ||
 			fragment.binding.profile !== run.environment_profile.profile ||
 			fragment.binding.service_id !== input.service_id ||
@@ -266,6 +266,7 @@ async function runBrowserUseAuthTransaction(
 				run_id: run.run_id,
 				handoff_evidence_id: run.handoff_evidence_id ?? "handoff-unbound",
 				lane_id: input.lane_id,
+				entry_mode: input.entry_mode,
 				environment: run.environment_profile.environment,
 				profile: run.environment_profile.profile,
 				service_id: input.service_id,
@@ -482,6 +483,7 @@ async function runBrowserUseAuthTransaction(
 				run_id: run.run_id,
 				handoff_evidence_id: handoffEvidenceId,
 				lane_id: input.lane_id,
+				entry_mode: input.entry_mode,
 				environment: run.environment_profile.environment,
 				profile: run.environment_profile.profile,
 				service_id: input.service_id,
@@ -658,10 +660,16 @@ async function runBrowserUseAuthTransaction(
 				};
 			}
 			if (input.entry_mode === "freeform") {
+				// Unreachable once the staleness gate rejects a freeform run
+				// resuming a reviewed-written fragment (freeform never mints a
+				// human-identity-attestation), but guarded with a
+				// freeform-performable cause so a bundle split or future
+				// regression fails to a typed "use a reviewed runbook" refusal
+				// rather than a continuation freeform can never complete.
 				return {
 					ok: false,
 					run,
-					blocked: blockedOf("human-identity-attestation-required"),
+					blocked: blockedOf("freeform-identity-proof-required"),
 				};
 			}
 			const restarted = await restartAuthenticatedReuse(binding);
@@ -682,7 +690,18 @@ async function runBrowserUseAuthTransaction(
 		}
 		const observed = await deps.login.observer.snapshot({ target_id: input.target_id });
 		if (!observed.ok || deps.login.proveAuthenticatedState === undefined) {
-			return { ok: false, run, blocked: blockedOf("human-identity-attestation-required") };
+			// Freeform reaching here without a proof owner is refused upstream by
+			// the auth-login pre-gate; guard with a freeform-performable cause so
+			// it never parks on a continuation it cannot complete.
+			return {
+				ok: false,
+				run,
+				blocked: blockedOf(
+					input.entry_mode === "freeform"
+						? "freeform-identity-proof-required"
+						: "human-identity-attestation-required",
+				),
+			};
 		}
 		const fresh = await deps.login.proveAuthenticatedState({
 			lane_id: input.lane_id,

@@ -43,6 +43,7 @@ function baseFragment(
 			run_id: "run-1",
 			handoff_evidence_id: "evidence-1",
 			lane_id: "agent-browser",
+			entry_mode: "reviewed-runbook",
 			environment: "agent-chrome",
 			profile: "default",
 			service_id: "oncore",
