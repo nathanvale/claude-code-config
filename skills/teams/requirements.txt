@@ -1,0 +1,40 @@
+# Teams local-store reader — pinned dependencies.
+#
+# Interpreter: Python 3.13 (pinned in bootstrap.sh as PYTHON_BIN).
+#   Validated on 3.13.12 and 3.14.3. Do not let the venv default to whatever
+#   `python3` happens to be — the C extensions below ship per-version wheels.
+#
+# ccl_chromium_reader is the load-bearing dependency: it decodes the IndexedDB
+# envelope and Blink/V8 structured-clone payloads. It comes from GitHub, NOT
+# from PyPI. The PyPI package `chromium-reader` is a different, broken project
+# (it hardcodes a 0xC9 global-section byte that is 0x32 in real Teams stores)
+# and must never be installed here.
+#
+# The GitHub repo publishes no releases or tags — `0.3.17` is only the version
+# string in pyproject.toml on master — so `@v0.3.17` will not resolve. Pinned
+# to the validated master commit instead.
+ccl_chromium_reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader.git@9639a318ce0f7b546e1d8d02d89423ab6b4ae202
+
+# Config parsing.
+PyYAML==6.0.2
+
+# --- Transitive dependencies (documented, deliberately NOT pinned here) ------
+#
+# ccl_chromium_reader pulls these in itself:
+#   ccl_simplesnappy @ git+https://github.com/cclgroupltd/ccl_simplesnappy.git
+#                      -> commit 3d085230baa8c46cf2090ebba29bf6e8eab31087
+#   zstd==1.5.7.3      -> resolves from PyPI, but is YANKED upstream
+#                         ("buggy - not thread safe"). pip emits a warning and
+#                         installs it anyway. We read the store single-threaded,
+#                         so the thread-safety defect does not apply. This is a
+#                         known, accepted warning — not an install failure.
+#   Brotli             -> unpinned by upstream, resolves to latest.
+#
+# ccl_simplesnappy is NOT listed as an explicit requirement even though we know
+# its SHA. Adding it here produces a pip ResolutionImpossible: our SHA-pinned
+# direct reference and the parent's bare-URL direct reference are treated as
+# conflicting requirements for the same package, even when they resolve to the
+# same commit. Verified 2026-07-29. Leave it transitive.
+#
+# bootstrap.sh asserts the whole chain imports after install, so a drifted
+# transitive resolution fails loudly rather than silently.
