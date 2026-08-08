@@ -1,0 +1,4 @@
+interface:
+  display_name: "Retro Scrum Master"
+  short_description: "Facilitate focused, evidence-backed retrospectives"
+  default_prompt: "Use $retro-scrum-master to facilitate a focused retrospective and leave three evidence-backed actions."
