@@ -1,7 +1,10 @@
-import { type Dirent, existsSync } from "node:fs"
-import { readdir } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, isAbsolute, relative, resolve, sep } from "node:path"
+import {
+	createRepositoryMatcher,
+	defaultSessionRoots as sharedDefaultSessionRoots,
+	listSessionFiles,
+	type RepositoryMatcher,
+} from "@side-quest/session-corpus"
 import {
 	CONTRACT_ID,
 	SCAN_DEFAULT_LIMIT,
@@ -34,81 +37,6 @@ export class SessionDiscoveryError extends Error {
 	}
 }
 
-function git(path: string, args: string[]): string | undefined {
-	const result = Bun.spawnSync(["git", "-C", path, ...args], {
-		stdout: "pipe",
-		stderr: "ignore",
-	})
-	if (result.exitCode !== 0) return undefined
-	return new TextDecoder().decode(result.stdout).trim() || undefined
-}
-
-function canonicalRepositoryIdentity(url: string | undefined): string | undefined {
-	if (!url) return undefined
-	const value = url.trim()
-	let authority: string
-	let pathname: string
-
-	if (value.includes("://")) {
-		let parsed: URL
-		try {
-			parsed = new URL(value)
-		} catch {
-			return undefined
-		}
-		if (!["http:", "https:", "ssh:"].includes(parsed.protocol)) {
-			return undefined
-		}
-		const port = parsed.protocol === "ssh:" && parsed.port === "22"
-			? ""
-			: parsed.port
-		authority = `${parsed.hostname}${port ? `:${port}` : ""}`
-		pathname = parsed.pathname
-	} else {
-		const scp = value.match(/^(?:[^@/:\s]+@)?(\[[^\]]+\]|[^/:\s]+):(.+)$/)
-		if (!scp?.[1] || !scp[2]) return undefined
-		authority = scp[1]
-		pathname = scp[2]
-	}
-
-	const normalizedPath = pathname
-		.replace(/^\/+|\/+$/g, "")
-		.replace(/\.git$/i, "")
-	const parts = normalizedPath.split("/").filter(Boolean)
-	return parts.length >= 2
-		? `${authority}/${parts.slice(-2).join("/")}`.toLowerCase()
-		: undefined
-}
-
-function pathInside(candidate: string, parent: string): boolean {
-	const rel = relative(parent, candidate)
-	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
-}
-
-async function listJsonl(root: string): Promise<string[]> {
-	if (!existsSync(root)) return []
-	const results: string[] = []
-	const pending = [root]
-	while (pending.length > 0) {
-		const current = pending.pop()
-		if (!current) continue
-		let entries: Dirent[]
-		try {
-			entries = await readdir(current, { withFileTypes: true })
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code
-			if (code === "EACCES" || code === "EPERM") continue
-			throw error
-		}
-		for (const entry of entries) {
-			const path = resolve(current, entry.name)
-			if (entry.isDirectory()) pending.push(path)
-			else if (entry.isFile() && entry.name.endsWith(".jsonl")) results.push(path)
-		}
-	}
-	return results.sort()
-}
-
 /**
  * Resolve default private session roots without requiring ambient shell state.
  *
@@ -117,40 +45,25 @@ async function listJsonl(root: string): Promise<string[]> {
  * @internal
  */
 export function defaultSessionRoots(home = homedir()): SessionRoots {
+	const shared = sharedDefaultSessionRoots(home)
 	return {
-		claude: process.env.DOMAIN_RETRO_CLAUDE_ROOT ?? resolve(home, ".claude", "projects"),
+		claude: process.env.DOMAIN_RETRO_CLAUDE_ROOT ?? shared.claude,
 		codexActive:
-			process.env.DOMAIN_RETRO_CODEX_ROOT ?? resolve(home, ".codex", "sessions"),
+			process.env.DOMAIN_RETRO_CODEX_ROOT ?? shared.codexActive,
 		codexArchived:
 			process.env.DOMAIN_RETRO_CODEX_ARCHIVE_ROOT ??
-			resolve(home, ".codex", "archived_sessions"),
+			shared.codexArchived,
 	}
 }
 
-interface RepositoryIdentity {
-	root: string
-	name: string
-	commonDir?: string
-	remoteIdentity?: string
-}
-
-function repositoryIdentity(repoPath: string): RepositoryIdentity {
-	const rootText = git(repoPath, ["rev-parse", "--show-toplevel"])
-	if (!rootText) {
+function repositoryIdentity(repoPath: string): RepositoryMatcher {
+	try {
+		return createRepositoryMatcher(repoPath)
+	} catch (error) {
 		throw new SessionDiscoveryError(
-			`Not a Git repository: ${repoPath}`,
+			error instanceof Error ? error.message : String(error),
 			"invalid_repo",
 		)
-	}
-	const root = resolve(rootText)
-	const common = git(root, ["rev-parse", "--git-common-dir"])
-	return {
-		root,
-		name: basename(root).toLowerCase(),
-		commonDir: common ? resolve(root, common) : undefined,
-		remoteIdentity: canonicalRepositoryIdentity(
-			git(root, ["remote", "get-url", "origin"]),
-		),
 	}
 }
 
@@ -168,50 +81,9 @@ export function resolveRepositoryRoot(repoPath: string): string {
 
 function matchRepository(
 	metadata: SessionMetadata,
-	repo: RepositoryIdentity,
-	gitIdentityCache: Map<string, { commonDir?: string; remoteIdentity?: string }>,
+	repo: RepositoryMatcher,
 ): RepositoryMatchKind | undefined {
-	if (metadata.cwd && pathInside(resolve(metadata.cwd), repo.root)) return "path"
-
-	const metadataIdentity = canonicalRepositoryIdentity(metadata.repositoryUrl)
-	if (metadataIdentity) {
-		return metadataIdentity === repo.remoteIdentity ? "repository_url" : undefined
-	}
-
-	const nameMatches = metadata.cwd
-		? basename(resolve(metadata.cwd)).toLowerCase() === repo.name
-		: false
-
-	if (metadata.cwd && existsSync(metadata.cwd)) {
-		let identity = gitIdentityCache.get(metadata.cwd)
-		if (!identity) {
-			const common = git(metadata.cwd, ["rev-parse", "--git-common-dir"])
-			const candidateRoot = git(metadata.cwd, ["rev-parse", "--show-toplevel"])
-			identity = {
-				commonDir:
-					common && candidateRoot ? resolve(candidateRoot, common) : undefined,
-				remoteIdentity: canonicalRepositoryIdentity(
-					git(metadata.cwd, ["remote", "get-url", "origin"]),
-				),
-			}
-			gitIdentityCache.set(metadata.cwd, identity)
-		}
-		if (identity.commonDir && repo.commonDir) {
-			return identity.commonDir === repo.commonDir
-				? "git_common_dir"
-				: undefined
-		}
-		if (
-			identity.remoteIdentity &&
-			repo.remoteIdentity
-		) {
-			return identity.remoteIdentity === repo.remoteIdentity
-				? "repository_url"
-				: undefined
-		}
-	}
-
-	return nameMatches ? "repository_name" : undefined
+	return repo.match(metadata)
 }
 
 function countMatches(text: string, pattern: RegExp): number {
@@ -282,24 +154,20 @@ async function sourceFiles(roots: SessionRoots): Promise<{
 	states: ScanResult["sources"]
 	files: Array<{ source: SessionSource; path: string }>
 }> {
-	const groups: Array<{ source: SessionSource; root: string }> = [
-		{ source: "claude", root: roots.claude },
-		{ source: "codex", root: roots.codexActive },
-		{ source: "codex", root: roots.codexArchived },
-	]
-	const states: ScanResult["sources"] = []
-	const files: Array<{ source: SessionSource; path: string }> = []
-	for (const group of groups) {
-		const found = await listJsonl(group.root)
-		states.push({
-			source: group.source,
-			root: group.root,
-			state: existsSync(group.root) ? "available" : "missing",
-			files: found.length,
-		})
-		for (const path of found) files.push({ source: group.source, path })
+	const result = await listSessionFiles(roots)
+	return {
+		files: result.files,
+		states: result.states.map((state) => ({
+			source: state.source,
+			root: state.source === "claude"
+				? roots.claude
+				: state.location === "active"
+					? roots.codexActive
+					: roots.codexArchived,
+			state: state.state,
+			files: state.files,
+		})),
 	}
-	return { states, files }
 }
 
 /**
@@ -319,10 +187,6 @@ export async function discoverRepositorySessions(options: {
 	const repo = repositoryIdentity(options.repoPath)
 	const roots = options.roots ?? defaultSessionRoots()
 	const { states, files } = await sourceFiles(roots)
-	const gitIdentityCache = new Map<
-		string,
-		{ commonDir?: string; remoteIdentity?: string }
-	>()
 	const matches: Array<{
 		metadata: SessionMetadata
 		matchKind: RepositoryMatchKind
@@ -331,7 +195,7 @@ export async function discoverRepositorySessions(options: {
 	for (const file of files) {
 		const metadata = await readMetadata(file.path, file.source)
 		if (!metadata) continue
-		const matchKind = matchRepository(metadata, repo, gitIdentityCache)
+		const matchKind = matchRepository(metadata, repo)
 		if (matchKind) matches.push({ metadata, matchKind })
 	}
 
@@ -386,14 +250,10 @@ export async function resolveRepositorySession(options: {
 	const repo = repositoryIdentity(options.repoPath)
 	const roots = options.roots ?? defaultSessionRoots()
 	const { files } = await sourceFiles(roots)
-	const gitIdentityCache = new Map<
-		string,
-		{ commonDir?: string; remoteIdentity?: string }
-	>()
 	for (const file of files) {
 		const metadata = await readMetadata(file.path, file.source)
 		if (!metadata || metadata.opaqueId !== options.opaqueId) continue
-		if (matchRepository(metadata, repo, gitIdentityCache)) {
+		if (matchRepository(metadata, repo)) {
 			return { metadata, repoRoot: repo.root }
 		}
 		break
