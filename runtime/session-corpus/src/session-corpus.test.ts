@@ -62,7 +62,7 @@ describe("shared session corpus", () => {
 				kind: "primary" as const,
 			}
 
-			expect(extractSessionPage(metadata, {
+			await expect(extractSessionPage(metadata, {
 				offset: 0,
 				limit: 0,
 				maxMessageChars: 2000,
