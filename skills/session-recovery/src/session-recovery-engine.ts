@@ -80,7 +80,7 @@ function cleanHistoricalText(text: string, limit: number): string {
 	value = value
 		.replace(/<recommended_plugins>[\s\S]*?<\/recommended_plugins>/gi, " ")
 		.replace(/# AGENTS\.md instructions[\s\S]*$/gi, " ")
-		.replace(/<(?:environment_context|permissions instructions|apps_instructions|plugins_instructions|skills_instructions)>[\s\S]*?<\/(?:environment_context|permissions instructions|apps_instructions|plugins_instructions|skills_instructions)>/gi, " ")
+		.replace(/<(?:environment_context|permissions_instructions|apps_instructions|plugins_instructions|skills_instructions)>[\s\S]*?<\/(?:environment_context|permissions_instructions|apps_instructions|plugins_instructions|skills_instructions)>/gi, " ")
 		.replace(/<transcript_delta>[\s\S]*?<\/transcript_delta>/gi, " ")
 		.replace(/\s+/g, " ")
 		.trim()
@@ -99,7 +99,7 @@ async function hashFile(path: string): Promise<string> {
 	return hash.digest("hex")
 }
 
-async function summarizeFile(path: string, source: SessionSource): Promise<FileSummary | undefined> {
+async function summarizeFileUnsafe(path: string, source: SessionSource): Promise<FileSummary | undefined> {
 	let metadata = await readMetadata(path, source)
 	if (!metadata) return undefined
 	let createdAt = metadata.startedAt ? Date.parse(metadata.startedAt) : Number.NaN
@@ -148,6 +148,20 @@ async function summarizeFile(path: string, source: SessionSource): Promise<FileS
 	}
 }
 
+type SummarizeOutcome =
+	| { kind: "summary"; summary: FileSummary }
+	| { kind: "unsupported" }
+	| { kind: "failed"; source: SessionSource }
+
+async function summarizeFile(path: string, source: SessionSource): Promise<SummarizeOutcome> {
+	try {
+		const summary = await summarizeFileUnsafe(path, source)
+		return summary ? { kind: "summary", summary } : { kind: "unsupported" }
+	} catch {
+		return { kind: "failed", source }
+	}
+}
+
 function parseWindowBound(value: string, label: "from" | "to"): number {
 	const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
 	if (dateOnly) {
@@ -178,7 +192,11 @@ function parseWindowBound(value: string, label: "from" | "to"): number {
 }
 
 function combineFileSummaries(summaries: FileSummary[]): FileSummary {
-	const ordered = [...summaries].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
+	const ordered = [...summaries].sort(
+		(left, right) =>
+			(left.createdAt ?? Number.POSITIVE_INFINITY) -
+			(right.createdAt ?? Number.POSITIVE_INFINITY),
+	)
 	const latest = [...ordered].sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))[0] as FileSummary
 	const first = ordered[0] as FileSummary
 	const hash = createHash("sha256")
@@ -271,14 +289,19 @@ export async function scanRecoverySessions(options: {
 		.map((state) => `${state.source} ${state.location} source is missing`)
 	const summaries: FileSummary[] = []
 	let unsupportedFiles = 0
+	const failedBySource = new Map<SessionSource, number>()
 	for (let index = 0; index < selectedFiles.length; index += 8) {
 		const batch = await Promise.all(
 			selectedFiles.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)),
 		)
-		for (const summary of batch) {
-			if (summary) summaries.push(summary)
-			else unsupportedFiles += 1
+		for (const outcome of batch) {
+			if (outcome.kind === "summary") summaries.push(outcome.summary)
+			else if (outcome.kind === "unsupported") unsupportedFiles += 1
+			else failedBySource.set(outcome.source, (failedBySource.get(outcome.source) ?? 0) + 1)
 		}
+	}
+	for (const [source, count] of failedBySource) {
+		incompleteReasons.push(`${count} ${source} session file${count === 1 ? "" : "s"} could not be read`)
 	}
 	const grouped = new Map<string, FileSummary[]>()
 	for (const summary of summaries) {
@@ -341,6 +364,7 @@ export async function scanRecoverySessions(options: {
 				scanned_files: selectedFiles.length,
 				native_sessions: combined.length,
 				unsupported_files: unsupportedFiles,
+				failed_files: [...failedBySource.values()].reduce((total, count) => total + count, 0),
 			eligible: ledger.length,
 			ledger_rows: ledger.length,
 			excluded,
@@ -380,12 +404,13 @@ export async function extractRecoverySession(options: {
 	}
 	const { files } = await listSessionFiles(options.roots ?? defaultSessionRoots())
 	let metadata: SessionMetadata | undefined
-	for (const file of files.filter((candidate) => candidate.source === source)) {
-		const candidate = await readMetadata(file.path, file.source)
-		if (candidate?.opaqueId === options.session) {
-			metadata = candidate
-			break
-		}
+	const candidates = files.filter((candidate) => candidate.source === source)
+	for (let index = 0; index < candidates.length && !metadata; index += 8) {
+		const batch = await Promise.all(
+			candidates.slice(index, index + 8).map((file) =>
+				readMetadata(file.path, file.source).catch(() => undefined)),
+		)
+		metadata = batch.find((candidate) => candidate?.opaqueId === options.session)
 	}
 	if (!metadata) {
 		throw new SessionRecoveryError(`Session not found: ${options.session}`, "session_not_found")
@@ -445,13 +470,14 @@ export function validateReviewLedger(
 	const supportingGroups = new Set<string>()
 	let matchedRows = 0
 	for (const row of rows) {
-		if (seen.has(row.session)) issues.push(`duplicate review row: ${row.session}`)
+		const duplicate = seen.has(row.session)
+		if (duplicate) issues.push(`duplicate review row: ${row.session}`)
 		seen.add(row.session)
 		if (!inventoryIds.has(row.session)) {
 			issues.push(`review row not present in inventory: ${row.session}`)
 			continue
 		}
-		matchedRows += 1
+		if (!duplicate) matchedRows += 1
 		if (!CLASSIFICATIONS.has(row.classification)) {
 			issues.push(`invalid classification for ${row.session}`)
 		}

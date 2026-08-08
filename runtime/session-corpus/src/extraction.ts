@@ -48,6 +48,15 @@ export async function extractSessionPage(
 	metadata: SessionMetadata,
 	options: { offset: number; limit: number; maxMessageChars: number },
 ): Promise<ExtractedSessionPage> {
+	if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
+		throw new Error("offset must be a non-negative integer")
+	}
+	if (!Number.isSafeInteger(options.limit) || options.limit <= 0) {
+		throw new Error("limit must be a positive integer")
+	}
+	if (!Number.isSafeInteger(options.maxMessageChars) || options.maxMessageChars < 0) {
+		throw new Error("maxMessageChars must be a non-negative integer")
+	}
 	let totalMessages = 0
 	let redactions = 0
 	const messages: ExtractedSessionMessage[] = []

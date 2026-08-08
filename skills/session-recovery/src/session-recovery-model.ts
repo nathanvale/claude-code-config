@@ -80,6 +80,8 @@ export interface ScanReconciliation {
 	native_sessions: number
 	/** JSONL files that contained no supported native session header. */
 	unsupported_files: number
+	/** Session files that could not be read completely. */
+	failed_files: number
 	/** Sessions overlapping the requested window after optional filters. */
 	eligible: number
 	/** Rows emitted to the accounting ledger. */

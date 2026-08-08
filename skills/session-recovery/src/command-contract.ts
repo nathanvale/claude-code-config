@@ -6,7 +6,9 @@ export const CONTRACT_ID = "session-recovery.review"
 export const SCHEMA_VERSION = "1"
 /** Default number of normalized messages returned by extract. */
 export const EXTRACT_DEFAULT_LIMIT = 40
-/** Default per-message character budget for extract. */
+/** Maximum number of normalized messages returned by one extract call. */
+export const EXTRACT_MAX_LIMIT = 200
+/** Default and maximum per-message character budget for extract. */
 export const MAX_MESSAGE_CHARS = 2000
 
 /** Maintainer-authored discovery text for the public command surface. */
@@ -44,8 +46,8 @@ Options:
   --repo <path>               Optional Git repository filter
   --session <source:id>       Exact session filter; repeatable for scan
   --offset <n>                Extract message offset (default: 0)
-  --limit <n>                 Extract page size (default: ${EXTRACT_DEFAULT_LIMIT})
-  --max-message-chars <n>     Per-message text budget (default: ${MAX_MESSAGE_CHARS})
+  --limit <n>                 Extract page size (default: ${EXTRACT_DEFAULT_LIMIT}; max: ${EXTRACT_MAX_LIMIT})
+  --max-message-chars <n>     Per-message text budget (default/max: ${MAX_MESSAGE_CHARS})
   --inventory <path>          Scan JSON envelope or data payload
   --ledger <path>             One review row per JSONL line
   --json                      Emit a stable JSON envelope
@@ -60,3 +62,19 @@ Exit codes:
 
 /** Closed command set aligned with parser acceptance and help. */
 export const COMMANDS = ["scan", "extract", "validate"] as const
+
+/** Long flags rendered by help and accepted by the parser. */
+export const LONG_OPTIONS = [
+	"--from",
+	"--to",
+	"--source",
+	"--repo",
+	"--session",
+	"--offset",
+	"--limit",
+	"--max-message-chars",
+	"--inventory",
+	"--ledger",
+	"--json",
+	"--help",
+] as const

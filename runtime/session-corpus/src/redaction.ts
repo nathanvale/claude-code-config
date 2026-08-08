@@ -7,6 +7,8 @@ const SECRET_PATTERNS: RegExp[] = [
 	/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
 	/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/gi,
 	/https?:\/\/[^\s/@:]+:[^\s/@]+@[^\s]+/g,
+	/\/(?:Users|home)\/[^/\s]+(?:\/[^\s"'<>),;]*)?/g,
+	/\b[A-Za-z]:\\Users\\[^\\\s]+(?:\\[^\s"'<>),;]*)?/g,
 ]
 
 /**

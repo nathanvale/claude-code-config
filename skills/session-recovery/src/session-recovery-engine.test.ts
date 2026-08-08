@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 import type { SessionRoots } from "@side-quest/session-corpus"
 import {
 	extractRecoverySession,
 	scanRecoverySessions,
+	SessionRecoveryError,
 	validateReviewLedger,
 } from "./session-recovery-engine.ts"
 
@@ -43,7 +44,10 @@ async function fixture(): Promise<{ root: string; repo: string; roots: SessionRo
 			payload: {
 				type: "message",
 				role: "user",
-				content: [{ type: "input_text", text: "Build the recovery project with ghp_abcdefghijklmnopqrstuvwxyz123456." }],
+				content: [{
+					type: "input_text",
+					text: "Build the recovery project with ghp_abcdefghijklmnopqrstuvwxyz123456. <permissions_instructions>private boilerplate</permissions_instructions>",
+				}],
 			},
 		},
 		{
@@ -102,6 +106,76 @@ describe("session recovery engine", () => {
 			const serialized = JSON.stringify(result)
 			expect(serialized).not.toContain(value.root)
 			expect(serialized).not.toContain("ghp_")
+			expect(serialized).not.toContain("private boilerplate")
+		} finally {
+			await rm(value.root, { recursive: true, force: true })
+		}
+	})
+
+	test("records unreadable session files as incomplete without exposing paths", async () => {
+		const value = await fixture()
+		const unreadable = resolve(value.roots.codexActive, "unreadable.jsonl")
+		try {
+			await Bun.write(unreadable, "{}\n")
+			await chmod(unreadable, 0)
+			const result = await scanRecoverySessions({
+				from: "2026-08-01",
+				to: "2026-08-04",
+				roots: value.roots,
+			})
+
+			expect(result.complete).toBe(false)
+			expect(result.reconciliation.failed_files).toBe(1)
+			expect(result.incomplete_reasons).toContain("1 codex session file could not be read")
+			expect(JSON.stringify(result)).not.toContain(unreadable)
+		} finally {
+			await chmod(unreadable, 0o600).catch(() => {})
+			await rm(value.root, { recursive: true, force: true })
+		}
+	})
+
+	test("uses the earliest dated fragment for a combined session summary", async () => {
+		const value = await fixture()
+		try {
+			await Bun.write(resolve(value.roots.codexArchived, "undated.jsonl"), [
+				{
+					type: "session_meta",
+					payload: { id: "codex-one", cwd: value.repo },
+				},
+				{
+					type: "response_item",
+					payload: {
+						type: "message",
+						role: "user",
+						content: "Undated prompt must not win.",
+					},
+				},
+			].map((item) => JSON.stringify(item)).join("\n"))
+			const result = await scanRecoverySessions({
+				from: "2026-08-01",
+				to: "2026-08-04",
+				roots: value.roots,
+			})
+
+			const row = result.ledger.find((candidate) => candidate.session === "codex:codex-one")
+			expect(row?.summary).toContain("Build the recovery project")
+			expect(row?.summary).not.toContain("Undated prompt")
+		} finally {
+			await rm(value.root, { recursive: true, force: true })
+		}
+	})
+
+	test("rejects non-increasing time windows", async () => {
+		const value = await fixture()
+		try {
+			const error = await scanRecoverySessions({
+				from: "2026-08-04",
+				to: "2026-08-04",
+				roots: value.roots,
+			}).catch((failure: unknown) => failure)
+
+			expect(error).toBeInstanceOf(SessionRecoveryError)
+			expect((error as SessionRecoveryError).category).toBe("invalid_window")
 		} finally {
 			await rm(value.root, { recursive: true, force: true })
 		}
@@ -186,9 +260,17 @@ describe("session recovery engine", () => {
 				vault_write_allowed: false,
 				reconciliation: { inventory_rows: 2, review_rows: 2, matched_rows: 2 },
 			})
-			expect(validateReviewLedger(inventory, rows.slice(0, 1))).toMatchObject({
+			const truncated = validateReviewLedger(inventory, rows.slice(0, 1))
+			expect(truncated).toMatchObject({
 				valid: false,
 				vault_write_allowed: false,
+			})
+			expect(truncated.issues).toContain(`missing review row: ${rows[1]?.session}`)
+			const duplicated = validateReviewLedger(inventory, [...rows, rows[0] as typeof rows[number]])
+			expect(duplicated.reconciliation).toMatchObject({
+				inventory_rows: 2,
+				review_rows: 3,
+				matched_rows: 2,
 			})
 		} finally {
 			await rm(value.root, { recursive: true, force: true })

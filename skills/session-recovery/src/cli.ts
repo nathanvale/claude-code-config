@@ -5,9 +5,12 @@ import type { SessionSource } from "@side-quest/session-corpus"
 import {
 	COMMANDS,
 	COMMAND_NAME,
+	CONTRACT_ID,
 	EXTRACT_DEFAULT_LIMIT,
+	EXTRACT_MAX_LIMIT,
 	HELP_TEXT,
 	MAX_MESSAGE_CHARS,
+	SCHEMA_VERSION,
 } from "./command-contract.ts"
 import {
 	extractRecoverySession,
@@ -38,13 +41,20 @@ interface ParsedArgs {
 
 class UsageError extends Error {}
 
-function integer(value: string, flag: string, allowZero = false): number {
+function integer(value: string, flag: string, allowZero = false, max?: number): number {
 	const parsed = Number(value)
-	const valid = Number.isInteger(parsed) && (allowZero ? parsed >= 0 : parsed > 0)
+	const valid = Number.isSafeInteger(parsed) && (allowZero ? parsed >= 0 : parsed > 0)
 	if (!valid) {
 		throw new UsageError(`${flag} requires ${allowZero ? "a non-negative" : "a positive"} integer`)
 	}
+	if (max !== undefined && parsed > max) {
+		throw new UsageError(`${flag} must not exceed ${max}`)
+	}
 	return parsed
+}
+
+function unexpectedCommand(command: never): never {
+	throw new UsageError(`Unknown command: ${String(command)}`)
 }
 
 function rejectPresentOptions(
@@ -58,6 +68,7 @@ function rejectPresentOptions(
 
 function validateCommandArgs(parsed: ParsedArgs): ParsedArgs {
 	if (parsed.help) return parsed
+	if (!parsed.command) throw new UsageError("Command is required")
 	if (parsed.command === "scan") {
 		if (!parsed.from) throw new UsageError("--from is required for scan")
 		if (!parsed.to) throw new UsageError("--to is required for scan")
@@ -85,19 +96,22 @@ function validateCommandArgs(parsed: ParsedArgs): ParsedArgs {
 		parsed.maxMessageChars ??= MAX_MESSAGE_CHARS
 		return parsed
 	}
-	if (!parsed.inventory) throw new UsageError("--inventory is required for validate")
-	if (!parsed.ledger) throw new UsageError("--ledger is required for validate")
-	rejectPresentOptions(parsed.command, [
-		["--from", parsed.from !== undefined],
-		["--to", parsed.to !== undefined],
-		["--source", parsed.sources.length > 0],
-		["--repo", parsed.repo !== undefined],
-		["--session", parsed.sessions.length > 0],
-		["--offset", parsed.offset !== undefined],
-		["--limit", parsed.limit !== undefined],
-		["--max-message-chars", parsed.maxMessageChars !== undefined],
-	])
-	return parsed
+	if (parsed.command === "validate") {
+		if (!parsed.inventory) throw new UsageError("--inventory is required for validate")
+		if (!parsed.ledger) throw new UsageError("--ledger is required for validate")
+		rejectPresentOptions(parsed.command, [
+			["--from", parsed.from !== undefined],
+			["--to", parsed.to !== undefined],
+			["--source", parsed.sources.length > 0],
+			["--repo", parsed.repo !== undefined],
+			["--session", parsed.sessions.length > 0],
+			["--offset", parsed.offset !== undefined],
+			["--limit", parsed.limit !== undefined],
+			["--max-message-chars", parsed.maxMessageChars !== undefined],
+		])
+		return parsed
+	}
+	return unexpectedCommand(parsed.command)
 }
 
 /**
@@ -163,10 +177,10 @@ export function parseArgs(args: string[]): ParsedArgs {
 				parsed.offset = integer(value, argument, true)
 				break
 			case "--limit":
-				parsed.limit = integer(value, argument)
+				parsed.limit = integer(value, argument, false, EXTRACT_MAX_LIMIT)
 				break
 			case "--max-message-chars":
-				parsed.maxMessageChars = integer(value, argument)
+				parsed.maxMessageChars = integer(value, argument, false, MAX_MESSAGE_CHARS)
 				break
 			case "--inventory":
 				parsed.inventory = value
@@ -199,6 +213,12 @@ async function readInventory(path: string): Promise<RecoveryScanResult> {
 	const result = data as Partial<RecoveryScanResult>
 	if (result.action !== "scan" || !Array.isArray(result.ledger)) {
 		throw new SessionRecoveryError("Inventory file is not a session-recovery scan result", "invalid_input")
+	}
+	if (result.contract_id !== CONTRACT_ID || result.schema_version !== SCHEMA_VERSION) {
+		throw new SessionRecoveryError(
+			`Inventory contract mismatch; rerun scan with ${COMMAND_NAME}`,
+			"invalid_input",
+		)
 	}
 	return result as RecoveryScanResult
 }
@@ -240,6 +260,7 @@ export async function runCli(args: string[], io: CliIo = {
 			io.stdout(HELP_TEXT)
 			return 0
 		}
+		if (!parsed.command) throw new UsageError("Command is required")
 		if (parsed.command === "scan") {
 			const result = await scanRecoverySessions({
 				from: parsed.from as string,
@@ -266,26 +287,29 @@ export async function runCli(args: string[], io: CliIo = {
 			io.stdout(parsed.json ? envelope("ok", runId, result) : `${page}\n\n${result.next_safe_action}\n`)
 			return 0
 		}
-		const inventory = await readInventory(parsed.inventory as string)
-		const rows = await readReviewRows(parsed.ledger as string)
-		const result = validateReviewLedger(inventory, rows)
-		if (!result.valid) {
-			const error = {
-				category: "ledger_invalid",
-				message: "Review ledger does not reconcile with the inventory.",
-				retry_safe: true,
-				issues: result.issues,
-				reconciliation: result.reconciliation,
-				next_action: result.next_safe_action,
+		if (parsed.command === "validate") {
+			const inventory = await readInventory(parsed.inventory as string)
+			const rows = await readReviewRows(parsed.ledger as string)
+			const result = validateReviewLedger(inventory, rows)
+			if (!result.valid) {
+				const error = {
+					category: "ledger_invalid",
+					message: "Review ledger does not reconcile with the inventory.",
+					retry_safe: true,
+					issues: result.issues,
+					reconciliation: result.reconciliation,
+					next_action: result.next_safe_action,
+				}
+				if (parsed.json) io.stdout(envelope("error", runId, error))
+				else io.stderr(`${COMMAND_NAME}: ${error.message}\n${result.issues.join("\n")}\n`)
+				return 4
 			}
-			if (parsed.json) io.stdout(envelope("error", runId, error))
-			else io.stderr(`${COMMAND_NAME}: ${error.message}\n${result.issues.join("\n")}\n`)
-			return 4
+			io.stdout(parsed.json
+				? envelope("ok", runId, result)
+				: `Review ledger reconciled.\n${result.next_safe_action}\n`)
+			return 0
 		}
-		io.stdout(parsed.json
-			? envelope("ok", runId, result)
-			: `Review ledger reconciled.\n${result.next_safe_action}\n`)
-		return 0
+		return unexpectedCommand(parsed.command)
 	} catch (error) {
 		const usage = error instanceof UsageError
 		const recovery = error instanceof SessionRecoveryError

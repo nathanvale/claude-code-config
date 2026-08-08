@@ -91,10 +91,13 @@ export function createRepositoryMatcher(repoPath: string): RepositoryMatcher {
 	const match = (metadata: SessionMetadata): RepositoryMatchKind | undefined => {
 		if (metadata.cwd && pathInside(resolve(metadata.cwd), root)) return "path"
 		const metadataRemote = canonicalRepositoryIdentity(metadata.repositoryUrl)
-		if (metadataRemote) return metadataRemote === remoteIdentity ? "repository_url" : undefined
+		if (metadataRemote && metadataRemote === remoteIdentity) return "repository_url"
 		if (!metadata.cwd) return undefined
+		const remoteMismatch = metadataRemote !== undefined && metadataRemote !== remoteIdentity
 		const nameMatches = basename(resolve(metadata.cwd)).toLowerCase() === name
-		if (!existsSync(metadata.cwd)) return nameMatches ? "repository_name" : undefined
+		if (!existsSync(metadata.cwd)) {
+			return !remoteMismatch && nameMatches ? "repository_name" : undefined
+		}
 		let identity = cache.get(metadata.cwd)
 		if (!identity) {
 			const candidateRoot = git(metadata.cwd, ["rev-parse", "--show-toplevel"])
@@ -115,7 +118,7 @@ export function createRepositoryMatcher(repoPath: string): RepositoryMatcher {
 		if (identity.remoteIdentity && remoteIdentity) {
 			return identity.remoteIdentity === remoteIdentity ? "repository_url" : undefined
 		}
-		return nameMatches ? "repository_name" : undefined
+		return !remoteMismatch && nameMatches ? "repository_name" : undefined
 	}
 
 	return {
