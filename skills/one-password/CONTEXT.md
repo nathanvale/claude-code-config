@@ -29,12 +29,16 @@ A stable shell context reused for an interactive 1Password task so sign-in, veri
 _Avoid_: tmux-only rule, fresh shell per `op` command, scattered sign-in
 
 **Direct service-account read**:
-A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It runs as a plain single command when the capability supplies the exact vault, item, field, and expected shape; unattended reads never route through tmux or a persistent PTY, which exist only to preserve interactive sign-in state.
-_Avoid_: ambient read, probing read, service-account enumeration, tmux-wrapped unattended read
+A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It runs as a plain single command when the capability supplies the exact vault, item, field, and expected shape. Persistent shell state never supplies its token; a wrapper may replace itself with a long-lived target only after removing the service-account token.
+_Avoid_: ambient read, probing read, service-account enumeration, session-exported token
 
 **Per-command token injection**:
-The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed or 1Password-backed wrapper, or an owning runtime's helper. The token is never parked in profile files, shell rc, `.env` files, exported ambient env, or tmux/PTY environment.
+The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed wrapper or an owning runtime's helper. The token is never parked in profile files, shell rc, exported ambient env, or tmux/PTY environment. The named Dotfiles bootstrap token lane is a temporary lower-assurance exception for plaintext-at-rest custody, not ambient injection.
 _Avoid_: profile-exported token, ambient token, session-wide export, token in shell history
+
+**Dotfiles bootstrap token lane**:
+Nathan's temporary lower-assurance compatibility path. The dotfiles-owned wrapper reads one exact token declaration from an ignored, owner-only mode-`0600` `.env` without sourcing or evaluating the file, gives it only to the disposable official `op` process, then removes it before launching any target process. Browser Use login credentials and its Browser Automation token never use this lane.
+_Avoid_: general dotenv loader, `source .env`, browser credential lane, hardened custody
 
 **Targeted metadata check**:
 A 1Password metadata command against an exact account, vault, item, or field already declared by an owning capability. It may prove existence or shape, but must not discover candidates by listing broad accounts, vaults, or items.
@@ -66,10 +70,13 @@ Dev: "Does `one-password` literally require tmux in Codex desktop?"
 Domain expert: "No. It requires a persistent shell session for interactive 1Password work. Tmux is the common CLI implementation, but a persistent Codex PTY can satisfy the same session-state boundary."
 
 Dev: "Can a service-account read run outside tmux?"
-Domain expert: "It must. Unattended service-account reads never route through tmux or a persistent PTY; those sessions exist only to preserve interactive desktop sign-in state."
+Domain expert: "Yes. It needs no persistent sign-in state. If its wrapper starts a long-lived target, the wrapper must remove the service-account token before replacing itself with that target."
 
 Dev: "Can the agent export the service-account token from `~/.profile`?"
 Domain expert: "No. Per-command token injection is the custody rule: a managed source supplies the token for the one command that needs it, and it never lives in profile files or ambient env."
+
+Dev: "Can the temporary dotfiles lane source `.env`?"
+Domain expert: "No. Its owner reads only the exact token declaration, validates file custody, and never evaluates unrelated file content."
 
 Dev: "Can an agent list vaults to find the right one?"
 Domain expert: "It cannot enumerate the whole account. A capability may use Vault-scoped discovery inside the service account's granted vault and automatically bind one deterministic match; ambiguity requires human selection."

@@ -17,11 +17,19 @@ new-extension, or page-repair branch.
 From the repo root:
 
 ```bash
-pnpm --filter <package> run deploy
-pnpm --filter <package> dev
+UPLOAD_TOKEN_REF='op://API Credentials/wdkqx7turfueovtyhvjuxacqta/EXPERIENCE_EXTENSION_UPLOAD_TOKEN'
+TOKEN_WRAPPER="$HOME/code/dotfiles/bin/with-one-password-token"
+
+"$TOKEN_WRAPPER" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN "$UPLOAD_TOKEN_REF" -- \
+  pnpm --filter <package> run deploy
+"$TOKEN_WRAPPER" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN "$UPLOAD_TOKEN_REF" -- \
+  pnpm --filter <package> dev
 ```
 
 Use `run deploy`. `pnpm deploy` is pnpm's unrelated built-in deploy command.
+The MATest capability owns this exact upload-token reference. The wrapper owns token-file
+validation, gives `OP_SERVICE_ACCOUNT_TOKEN` only to `op`, and removes it before `pnpm`.
+Never substitute `with-env`, bare `op`, an exported token, or `op run`.
 
 Stop the extension dev server before any production build, deploy, or handback command.
 These commands overwrite physical `dist` assets used by webpack-dev-server. Restart the
@@ -33,8 +41,8 @@ dev server afterwards and require all three checks before touching MATest:
 
 An ESLint or webpack hook failure can terminate the webpack child while leaving its
 package-manager parent alive. Do not trust the PID or terminal alone. If the HTTP check
-fails, stop the exact extension process and restart it in the persistent secret-backed
-shell.
+fails, stop the exact extension process and restart it through the wrapper's `inject`
+route.
 
 The upload output gives the base page path. Append the card's `pageRoute.route` for a
 direct page URL.
@@ -78,8 +86,9 @@ University Users** again. Preserve cookies and storage so the working SSO sessio
 survives. Do not repair the flow by opening a direct Okta or Google Account URL.
 
 Resolve credentials through the domain's Auth Pointer at fill time. The browser-use
-skill owns its safety and Auth Pointer context; `one-password` owns safe resolution.
-Never extract secret values into shell variables or pass them as browser-command
+skill owns the Auth Pointer, credential custody, resolution, and confidential delivery.
+The dotfiles upload-token wrapper is not a browser-login lane. Never extract browser
+secret values into shell variables or pass them as browser-command
 arguments — command args are shell-visible, which the browser owner forbids. Never log
 secret values; report secret checks by shape only (present/absent, length, account
 name).
