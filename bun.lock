@@ -88,6 +88,14 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/session-corpus": {
+      "name": "@side-quest/session-corpus",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "runtime/setup": {
       "name": "@side-quest/setup",
       "version": "0.1.0",
@@ -181,6 +189,9 @@
     },
     "skills/domain-modeling-retrospective": {
       "name": "domain-modeling-retrospective-scripts",
+      "dependencies": {
+        "@side-quest/session-corpus": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
@@ -201,6 +212,16 @@
       "version": "0.0.0",
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "skills/session-recovery": {
+      "name": "session-recovery-scripts",
+      "dependencies": {
+        "@side-quest/session-corpus": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -290,6 +311,8 @@
 
     "@side-quest/mcporter-transport": ["@side-quest/mcporter-transport@workspace:runtime/mcporter-transport"],
 
+    "@side-quest/session-corpus": ["@side-quest/session-corpus@workspace:runtime/session-corpus"],
+
     "@side-quest/setup": ["@side-quest/setup@workspace:runtime/setup"],
 
     "@side-quest/warm-chrome": ["@side-quest/warm-chrome@workspace:runtime/warm-chrome"],
@@ -349,6 +372,8 @@
     "record-decision-scripts": ["record-decision-scripts@workspace:skills/record-decision"],
 
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
+
+    "session-recovery-scripts": ["session-recovery-scripts@workspace:skills/session-recovery"],
 
     "skill-feedback-scripts": ["skill-feedback-scripts@workspace:skills/skill-feedback"],
 
