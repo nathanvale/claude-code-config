@@ -1,6 +1,7 @@
 # Meeting Playbook
 
-Use after the retrospective target and existing evidence are resolved.
+Use after the retrospective target is resolved and available evidence is
+reviewed or explicitly labelled unavailable.
 
 ## Seven phases
 
@@ -10,7 +11,8 @@ Use after the retrospective target and existing evidence are resolved.
 4. **Lessons:** What would the participants do earlier or differently?
 5. **Evidence:** Which conclusions are proven, reported, or still hypotheses?
 6. **Experiments:** What small tests could reduce the biggest uncertainty?
-7. **Commitments:** Which three actions earn owners and success measures?
+7. **Commitments:** Select at most three actions. Give each an owner, first move,
+   success measure, evidence requirement, and stop condition.
 
 Ask one question at a time. Follow answer-created branches before moving phases
 when they affect the current conclusion. Put attractive but non-blocking ideas

@@ -38,14 +38,17 @@ facilitated meeting.
 - When a claim concerns agent behavior, prefer bounded session evidence,
   skill-feedback patterns, and artifact-based qualification over self-report.
 - When the user requests independent gap-finding and the harness permits it,
-  dispatch read-only agents with non-overlapping lenses. Label inline analysis
-  as non-independent.
+  dispatch read-only agents only for bounded follow-ups using existing evidence
+  from the selected retrospective. Give them non-overlapping lenses. Stop when
+  the follow-up is answered or the available evidence is exhausted. Label
+  inline analysis as non-independent. Route broader audits to the separate
+  evidence-audit workflow.
 - Write durable notes only after proving the requested owner and authority.
   Preserve private transcripts and raw evidence outside durable docs.
 - If the durable owner cannot be proven, return the summary in chat and stop
   before writing.
 - Stop before implementation, repository creation, publishing, migration, or
-  cleanup unless the user separately approves that work.
+  cleanup. Route approved follow-up work to a separate task.
 
 ## Close
 
