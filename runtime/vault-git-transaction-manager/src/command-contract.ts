@@ -94,6 +94,7 @@ export const vaultGitActions = VAULT_GIT_NEXT_ACTION_IDS.map((id) => ({
 
 function actionSummary(id: VaultGitNextActionId): string {
 	if (id === "wait_for_runtime") return "Wait for the remaining runtime owner before writing.";
+	if (id === "request_operator_admission") return "Ask an operator to admit runtime activation before canonical vault writes.";
 	if (id === "inspect_commands") return "Use discovery metadata to choose one safe command.";
 	if (id === "change_input") return "Correct the command arguments and retry parsing.";
 	return `Continue with the ${id.replaceAll("_", " ")} action.`;

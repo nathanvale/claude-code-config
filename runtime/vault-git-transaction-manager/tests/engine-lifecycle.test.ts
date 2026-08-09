@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { createVaultGitTransactionEngine } from "../src/engine.ts";
+import { admitActivationForTest } from "./activation-fixture.ts";
 import type {
 	VaultGitClockPort,
 	VaultGitLedgerAppendRequest,
@@ -327,12 +328,34 @@ describe("transaction engine lifecycle", () => {
 		fixture.remote.failReads = true;
 		expect(await fixture.engine.inspect()).toMatchObject({ state: "closed", phase: "closed" });
 	});
+
+	test("refuses write commands with activation_blocked until an operator admits activation", async () => {
+		const fixture = await engineFixture(undefined, { admitActivation: false });
+		const refusedBegin = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
+		expect(refusedBegin).toMatchObject({
+			status: "refused",
+			phase: "blocked",
+			blocker: "activation_blocked",
+			retrySafety: "same_input_safe",
+			nextAction: { id: "request_operator_admission" },
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+		// Status and doctor surface the same blocker read-only.
+		expect(await fixture.engine.inspect()).toMatchObject({ status: "inspected", blocker: "activation_blocked", writePermission: "denied" });
+		expect(await fixture.engine.doctor()).toMatchObject({ status: "diagnosed", finding: "activation_missing", blocker: "activation_blocked" });
+		expect(await fixture.engine.inspectJanitorPreflight("origin")).toMatchObject({ status: "refused", blocker: "activation_blocked" });
+		// Admission is the only gate: the exact same input succeeds afterwards.
+		await admitActivationForTest(fixture.store);
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({ status: "admitted" });
+	});
 });
 
-async function engineFixture(interruptAt?: string) {
+async function engineFixture(interruptAt?: string, options: { admitActivation?: boolean } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "vault-git-engine-"));
 	roots.push(root);
 	const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "canonical-vault" });
+	if (options.admitActivation !== false) await admitActivationForTest(store);
 	const repository = new FakeRepository();
 	const remote = new FakeRemote();
 	const runtime = new FakeRuntime(interruptAt);

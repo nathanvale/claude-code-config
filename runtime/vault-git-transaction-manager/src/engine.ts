@@ -220,6 +220,45 @@ export function createVaultGitTransactionEngine(
 ): VaultGitTransactionEngine {
 	const doctorEngine = createVaultGitDoctor(options);
 	const repairEngine = createVaultGitRepair(options);
+
+	/** R34 activation gate: true only after an operator admitted this runtime. */
+	async function activationAdmitted(): Promise<boolean> {
+		try {
+			return (await options.store.readActivation()) !== null;
+		} catch {
+			// A corrupt admission record fails closed: the runtime stays blocked.
+			return false;
+		}
+	}
+
+	/** Shared write-command refusal until operator admission exists (R34). */
+	function activationRefusal(): VaultGitEngineResult {
+		return refusal(
+			"absent",
+			"blocked",
+			"activation_blocked",
+			"request_operator_admission",
+			ACTIVATION_SUMMARY,
+			"none",
+			"same_input_safe",
+		);
+	}
+
+	/** Read-only doctor surface for the un-admitted runtime. */
+	function activationDoctorResult(): VaultGitDoctorResult {
+		return {
+			status: "diagnosed",
+			state: "absent",
+			phase: "blocked",
+			finding: "activation_missing",
+			changedState: "none",
+			retrySafety: "same_input_safe",
+			nextAction: { id: "request_operator_admission", summary: ACTIVATION_SUMMARY },
+			diagnosticsReference: `doctor:${options.store.repositoryId}`,
+			blocker: "activation_blocked",
+		};
+	}
+
 	async function loadReceipt(): Promise<VaultGitReceipt | VaultGitEngineResult | null> {
 		let quarantine: Awaited<ReturnType<VaultGitReceiptStore["readQuarantine"]>>;
 		try {
@@ -277,14 +316,38 @@ export function createVaultGitTransactionEngine(
 
 	const engine: VaultGitTransactionEngine = {
 		async doctor(input) {
+			if (!(await activationAdmitted())) return activationDoctorResult();
 			return doctorEngine.diagnose(input);
 		},
 
 		async repair(input) {
+			if (!(await activationAdmitted())) {
+				return {
+					status: "refused",
+					action: input.action,
+					state: "absent",
+					phase: "blocked",
+					changedState: "none",
+					retrySafety: "same_input_safe",
+					nextAction: {
+						id: "request_operator_admission",
+						summary: ACTIVATION_SUMMARY,
+					},
+					diagnosticsReference: `doctor:${options.store.repositoryId}`,
+					blocker: "activation_blocked",
+				};
+			}
 			return repairEngine.run(input);
 		},
 
 		async inspectJanitorPreflight(remote) {
+			if (!(await activationAdmitted())) {
+				return {
+					status: "refused",
+					blocker: "activation_blocked",
+					doctor: activationDoctorResult(),
+				};
+			}
 			const doctor = await doctorEngine.diagnose({ issueTakeoverToken: false });
 			if (doctor.state !== "absent" && doctor.state !== "closed") {
 				return {
@@ -420,6 +483,7 @@ export function createVaultGitTransactionEngine(
 
 		async begin(input) {
 			validateBegin(input);
+			if (!(await activationAdmitted())) return activationRefusal();
 			if (input.offline) {
 				return refusal("absent", "blocked", "offline_mode", "capture_private_draft", "Keep the canonical vault read-only while offline.");
 			}
@@ -541,6 +605,7 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async join(input) {
+			if (!(await activationAdmitted())) return activationRefusal();
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one outer transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "join", input.capability);
@@ -579,6 +644,7 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async complete(input) {
+			if (!(await activationAdmitted())) return activationRefusal();
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) return loaded ?? refusal("absent", "blocked", "receipt_conflict", "begin_transaction", "Begin one transaction first.");
 			const authorization = await authorize(options.store, loaded, input.transactionId, "owner", input.capability);
@@ -791,6 +857,23 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async inspect(input = {}) {
+			if (!(await activationAdmitted())) {
+				// Read-only surface of the same blocker: status and the dashboard
+				// show activation_blocked without refusing the inspection itself.
+				return {
+					status: "inspected",
+					state: "absent",
+					phase: "blocked",
+					writePermission: "denied",
+					changedState: "none",
+					retrySafety: "same_input_safe",
+					blocker: "activation_blocked",
+					nextAction: {
+						id: "request_operator_admission",
+						summary: ACTIVATION_SUMMARY,
+					},
+				};
+			}
 			const loaded = await loadReceipt();
 			if (loaded === null) return inspected("absent", "blocked", "begin_transaction", "Begin one transaction before canonical writes.");
 			if ("status" in loaded) return loaded;
@@ -821,6 +904,7 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async recordPhase(input) {
+			if (!(await activationAdmitted())) return activationRefusal();
 			const loaded = await loadReceipt();
 			if (!loaded || "status" in loaded) {
 				return loaded ?? refusal("human_required", "human_required", "transaction_mismatch", "inspect_status", "Inspect the active transaction before recording a phase.");
@@ -847,6 +931,10 @@ export function createVaultGitTransactionEngine(
 	};
 	return engine;
 }
+
+/** One shared operator-admission continuation summary (R34). */
+const ACTIVATION_SUMMARY =
+	"Ask an operator to admit runtime activation; the same input is safe after admission.";
 
 async function authorize(store: VaultGitReceiptStore, receipt: VaultGitReceipt, transactionId: string, role: VaultGitCapabilityRole, capability: Uint8Array): Promise<VaultGitEngineResult | null> {
 	if (receipt.transactionId !== transactionId) return refusal("human_required", receipt.phase, "transaction_mismatch", "inspect_status", "Inspect the active transaction id.");

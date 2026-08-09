@@ -17,7 +17,7 @@ import { describe, expect, test } from "bun:test";
 const repositoryRoot = resolve(import.meta.dir, "..");
 const sourceScript = join(repositoryRoot, "scripts/agent-instructions.sh");
 const vaultGitStartupRule =
-	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; if it reports activation blocked, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time.";
+	"The configured Super-vault in `~/.config/context/vault.md` is the sole exception: route vault writes through the `vault-git` skill; only when its CLI reports the `activation_blocked` blocker, make scoped vault writes directly on `main` and preserve unrelated state; never create vault worktrees; allow only one canonical writer at a time.";
 
 const registeredOwnerPaths = [
 	"skills/productivity-connectors/SKILL.md",
@@ -37,6 +37,7 @@ const registeredOwnerPaths = [
 	"docs/agents/domain.md",
 	"skills/context-advisor/SKILL.md",
 	"skills/context-advisor/references/storage-routing.md",
+	"skills/vault-git/SKILL.md",
 ] as const;
 
 interface ProcessResult {
@@ -179,6 +180,35 @@ describe("agent instruction staged health", () => {
 				vaultGitStartupRule,
 			);
 			expect(runScript(fixture, ["check"]).exitCode).toBe(0);
+
+			// Delivery negative control: a stale managed copy that lost the rule
+			// must fail projection-drift detection, so this test guards the
+			// delivery step itself, not just symlink read-back plumbing.
+			unlinkSync(join(fixture.home, ".codex/AGENTS.md"));
+			writeFileSync(
+				join(fixture.home, ".codex/AGENTS.md"),
+				agents.replace(vaultGitStartupRule, "stale startup without the vault-git route"),
+			);
+			const drifted = runScript(fixture, ["check", "--json"]);
+			expect(drifted.exitCode).toBe(1);
+			expect(parseReport(drifted).failures).toContain(
+				"Codex user startup drift: ~/.codex/AGENTS.md",
+			);
+		});
+	});
+
+	test("fails the check when the registered vault-git skill owner goes missing", () => {
+		withFixture((fixture) => {
+			git(fixture.repository, ["rm", "--quiet", "--", "skills/vault-git/SKILL.md"]);
+
+			const staged = runScript(fixture, ["check", "--staged", "--json"]);
+			const report = parseReport(staged);
+			expect(staged.exitCode).toBe(1);
+			expect(report.staged.decision).toBe("applicable");
+			expect(report.staged.matched_paths).toContain("skills/vault-git/SKILL.md");
+			expect(report.failures).toContain(
+				"owner missing: skills/vault-git/SKILL.md",
+			);
 		});
 	});
 

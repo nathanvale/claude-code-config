@@ -480,6 +480,37 @@ describe("private receipt store", () => {
 		expect((await readdir(store.paths.history)).length).toBe(3);
 	});
 
+	test("persists the runtime activation admission privately and validates its shape", async () => {
+		const root = await fixtureRoot();
+		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
+		expect(await store.readActivation()).toBeNull();
+		await store.admitActivation({
+			schemaVersion: 1,
+			admittedAt: "2026-08-09T00:00:00.000Z",
+			note: "U9 qualification admission",
+		});
+		expect(await store.readActivation()).toEqual({
+			schemaVersion: 1,
+			admittedAt: "2026-08-09T00:00:00.000Z",
+			note: "U9 qualification admission",
+		});
+		expect((await stat(store.paths.activation)).mode & 0o777).toBe(0o600);
+		await expect(
+			store.admitActivation({
+				schemaVersion: 1,
+				admittedAt: "not-a-timestamp",
+				note: "invalid",
+			}),
+		).rejects.toThrow("activation record invalid");
+		await expect(
+			store.admitActivation({
+				schemaVersion: 1,
+				admittedAt: "2026-08-09T00:00:00.000Z",
+				note: "multi\nline",
+			}),
+		).rejects.toThrow("activation record invalid");
+	});
+
 	test("persists admitted checker hashes privately and prunes only closed or stale material", async () => {
 		const root = await fixtureRoot();
 		const store = createReceiptStore({ stateRoot: root, repositoryIdentity: "vault@example" });
