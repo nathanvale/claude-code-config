@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
 
-import { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { Database } from "bun:sqlite"
+import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
+import { homedir } from "node:os"
+import { resolve } from "node:path"
 
 interface ArchivedThreadRow {
-	id: string;
-	updated_at_ms: number;
-	thread_source: string | null;
-	cwd: string;
-	title: string;
-	preview: string;
-	pinned_value: number;
+	id: string
+	updated_at_ms: number
+	thread_source: string | null
+	cwd: string
+	title: string
+	preview: string
+	pinned_value: number
 }
 
 const HELP = `session-picker archived sessions
@@ -28,11 +28,11 @@ Options:
   -h, --help         Show this help.
 
 Read-only. Never changes Codex sessions or local state.
-`;
+`
 
 function valueAfter(arguments_: string[], flag: string): string | undefined {
-	const index = arguments_.indexOf(flag);
-	return index >= 0 ? arguments_[index + 1] : undefined;
+	const index = arguments_.indexOf(flag)
+	return index >= 0 ? arguments_[index + 1] : undefined
 }
 
 function defaultDatabasePath(): string | undefined {
@@ -40,36 +40,36 @@ function defaultDatabasePath(): string | undefined {
 		process.env.SESSION_PICKER_CODEX_STATE_DB,
 		resolve(homedir(), ".codex", "state_5.sqlite"),
 		resolve(homedir(), ".codex", "sqlite", "state_5.sqlite"),
-	];
-	return candidates.find((candidate) => candidate && existsSync(candidate));
+	]
+	return candidates.find((candidate) => candidate && existsSync(candidate))
 }
 
 function displayText(value: string, maximumLength: number): string {
-	const normalized = value.replace(/\s+/g, " ").trim();
-	if (normalized.length <= maximumLength) return normalized;
-	return `${normalized.slice(0, maximumLength - 1)}…`;
+	const normalized = value.replace(/\s+/g, " ").trim()
+	if (normalized.length <= maximumLength) return normalized
+	return `${normalized.slice(0, maximumLength - 1)}…`
 }
 
 function argumentsAreValid(arguments_: string[]): boolean {
-	if (arguments_[0] !== "archived") return false;
-	const seen = new Set<string>();
+	if (arguments_[0] !== "archived") return false
+	const seen = new Set<string>()
 	for (let index = 1; index < arguments_.length; index += 1) {
-		const argument = arguments_[index];
-		if (!argument || seen.has(argument)) return false;
+		const argument = arguments_[index]
+		if (!argument || seen.has(argument)) return false
 		if (argument === "--json") {
-			seen.add(argument);
-			continue;
+			seen.add(argument)
+			continue
 		}
 		if (argument === "--limit" || argument === "--database") {
-			const value = arguments_[index + 1];
-			if (!value || value.startsWith("--")) return false;
-			seen.add(argument);
-			index += 1;
-			continue;
+			const value = arguments_[index + 1]
+			if (!value || value.startsWith("--")) return false
+			seen.add(argument)
+			index += 1
+			continue
 		}
-		return false;
+		return false
 	}
-	return seen.has("--json");
+	return seen.has("--json")
 }
 
 function main(arguments_: string[]): void {
@@ -78,13 +78,14 @@ function main(arguments_: string[]): void {
 		arguments_.includes("--help") ||
 		arguments_.includes("-h")
 	) {
-		process.stdout.write(HELP);
-		return;
+		process.stdout.write(HELP)
+		return
 	}
 
-	const command = arguments_[0];
-	const databasePath = valueAfter(arguments_, "--database") ?? defaultDatabasePath();
-	const limit = Number(valueAfter(arguments_, "--limit") ?? "30");
+	const command = arguments_[0]
+	const databasePath =
+		valueAfter(arguments_, "--database") ?? defaultDatabasePath()
+	const limit = Number(valueAfter(arguments_, "--limit") ?? "30")
 	if (
 		!argumentsAreValid(arguments_) ||
 		!Number.isInteger(limit) ||
@@ -105,15 +106,15 @@ function main(arguments_: string[]): void {
 						"Run archived --json with an integer --limit between 1 and 200.",
 				},
 			})}\n`,
-		);
-		process.exitCode = 2;
-		return;
+		)
+		process.exitCode = 2
+		return
 	}
 
-	let database: Database;
+	let database: Database
 	try {
-		if (!databasePath) throw new Error("Codex state database unavailable");
-		database = new Database(databasePath, { readonly: true });
+		if (!databasePath) throw new Error("Codex state database unavailable")
+		database = new Database(databasePath, { readonly: true })
 	} catch {
 		process.stdout.write(
 			`${JSON.stringify({
@@ -129,24 +130,24 @@ function main(arguments_: string[]): void {
 						"Start Codex Desktop once so its local session index exists, then retry.",
 				},
 			})}\n`,
-		);
-		process.exitCode = 3;
-		return;
+		)
+		process.exitCode = 3
+		return
 	}
-	let rows: ArchivedThreadRow[];
+	let rows: ArchivedThreadRow[]
 	try {
 		const columns = new Set(
 			database
 				.query<{ name: string }, []>("PRAGMA table_info(threads)")
 				.all()
 				.map((column) => column.name),
-		);
+		)
 		const updatedExpression = columns.has("recency_at_ms")
 			? "recency_at_ms"
 			: columns.has("updated_at_ms")
 				? "updated_at_ms"
-				: "updated_at * 1000";
-		const pinnedExpression = columns.has("is_pinned") ? "is_pinned" : "0";
+				: "updated_at * 1000"
+		const pinnedExpression = columns.has("is_pinned") ? "is_pinned" : "0"
 		rows = database
 			.query<ArchivedThreadRow, [number]>(`
 			SELECT
@@ -164,9 +165,9 @@ function main(arguments_: string[]): void {
 			ORDER BY updated_at_ms DESC, id DESC
 			LIMIT ?
 		`)
-			.all(limit);
+			.all(limit)
 	} catch {
-		database.close();
+		database.close()
 		process.stdout.write(
 			`${JSON.stringify({
 				status: "error",
@@ -181,11 +182,11 @@ function main(arguments_: string[]): void {
 						"Update Codex Desktop or the session-picker archived adapter, then retry.",
 				},
 			})}\n`,
-		);
-		process.exitCode = 4;
-		return;
+		)
+		process.exitCode = 4
+		return
 	}
-	database.close();
+	database.close()
 
 	process.stdout.write(
 		`${JSON.stringify({
@@ -208,7 +209,7 @@ function main(arguments_: string[]): void {
 				})),
 			},
 		})}\n`,
-	);
+	)
 }
 
-main(process.argv.slice(2));
+main(process.argv.slice(2))
