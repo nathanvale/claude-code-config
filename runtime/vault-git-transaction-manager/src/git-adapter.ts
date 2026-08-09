@@ -506,10 +506,10 @@ export function createGitAdapter(
 				ledgerRef: request.ledgerRef,
 				timeoutMs: options.timeouts.localMs,
 			});
-			if (reconciled === "closed") {
+			if (reconciled.outcome === "closed") {
 				return { status: "closed", mainCommit: request.mainCommit, ledgerCommit };
 			}
-			if (reconciled === "host_contract_breach") {
+			if (reconciled.outcome === "host_contract_breach") {
 				return {
 					status: "host_contract_breach",
 					mainCommit: request.mainCommit,
@@ -556,7 +556,7 @@ export function createGitAdapter(
 				ledgerRef: request.ledgerRef,
 				timeoutMs: options.timeouts.localMs,
 			});
-			if (reconciled === "closed") {
+			if (reconciled.outcome === "closed") {
 				const [mainPayload, ledgerPayload] = await Promise.all([
 					runGit(
 						["show", "-s", "--format=%B", request.mainCommit],
@@ -595,12 +595,12 @@ export function createGitAdapter(
 					return { status: "host_contract_breach" };
 				}
 			}
-			return reconciled === "unknown"
+			return reconciled.outcome === "unknown"
 				? {
 						status: "unknown",
-						reason: "local_probe_failed",
+						reason: reconciled.reason,
 					} satisfies VaultGitAtomicCloseReconciliation
-				: { status: reconciled };
+				: { status: reconciled.outcome };
 		},
 	};
 }
@@ -1143,19 +1143,26 @@ async function reconcileAtomicClose(input: {
 	readonly ledgerCommit: string;
 	readonly ledgerRef: string;
 	readonly timeoutMs: number;
-}): Promise<"closed" | "unchanged" | "unknown" | "host_contract_breach"> {
+}): Promise<InnerAtomicCloseReconciliation> {
 	const [main, ledger] = await Promise.all([
 		input.fetchExactRef(input.remote, "refs/heads/main"),
 		input.fetchExactRef(input.remote, input.ledgerRef),
 	]);
-	if (main.status === "failed" || ledger.status === "failed") return "unknown";
+	// The fetch failure reason distinguishes an unreachable remote from a
+	// deadline; both stay "unknown" but callers surface the exact cause.
+	if (main.status === "failed") {
+		return { outcome: "unknown", reason: main.reason };
+	}
+	if (ledger.status === "failed") {
+		return { outcome: "unknown", reason: ledger.reason };
+	}
 	// Prove a clean rejection before inspecting objects that may exist only in
 	// the originating clone. Exact unchanged tips are the one retryable result.
 	if (
 		main.commit === input.expectedMainHead &&
 		ledger.commit === input.expectedLedgerGeneration
 	) {
-		return "unchanged";
+		return { outcome: "unchanged" };
 	}
 	const mainAncestry =
 		main.commit === input.mainCommit
@@ -1175,19 +1182,27 @@ async function reconcileAtomicClose(input: {
 					ledger.commit,
 					input.timeoutMs,
 				);
-	if (mainAncestry === "yes" && ledgerAncestry === "yes") return "closed";
+	if (mainAncestry === "yes" && ledgerAncestry === "yes") {
+		return { outcome: "closed" };
+	}
 	// Unknown ancestry proves nothing; the outcome stays push_pending rather
 	// than escalating a transient local failure to host_contract_breach.
-	if (
-		mainAncestry === "timed_out" ||
-		mainAncestry === "unknown" ||
-		ledgerAncestry === "timed_out" ||
-		ledgerAncestry === "unknown"
-	) {
-		return "unknown";
+	if (mainAncestry === "timed_out" || ledgerAncestry === "timed_out") {
+		return { outcome: "unknown", reason: "timed_out" };
 	}
-	return "host_contract_breach";
+	if (mainAncestry === "unknown" || ledgerAncestry === "unknown") {
+		return { outcome: "unknown", reason: "local_probe_failed" };
+	}
+	return { outcome: "host_contract_breach" };
 }
+
+/** Inner reconciliation outcome keeping the exact unknown cause attached. */
+type InnerAtomicCloseReconciliation =
+	| { readonly outcome: "closed" | "unchanged" | "host_contract_breach" }
+	| {
+			readonly outcome: "unknown";
+			readonly reason: "remote_unavailable" | "timed_out" | "local_probe_failed";
+	  };
 
 function isMatchingReleasePayload(
 	value: unknown,

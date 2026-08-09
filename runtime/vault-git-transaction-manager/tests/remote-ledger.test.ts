@@ -239,10 +239,25 @@ describe("remote lease ledger", () => {
 			remote: "origin",
 			expectedGeneration: acquired.generation,
 			transactionId: acquired.transactionId,
+			supersedingActor: "operator",
 		});
 		expect(abandoned).toMatchObject({
 			status: "released",
 			changedState: "remote",
+		});
+		const abandonRecord = await operator.git.readLedger(
+			"origin",
+			VAULT_GIT_LEDGER_REF,
+		);
+		if (abandonRecord.status !== "ok" || !abandonRecord.head?.content) {
+			throw new Error("abandon record missing");
+		}
+		// The superseding actor owns the transition; the stale actor stays in
+		// the lease body for audit.
+		expect(JSON.parse(abandonRecord.head.content)).toMatchObject({
+			operation: "superseding_abandon",
+			superseding_actor: "operator",
+			lease: { actor: "agent-a", state: "released" },
 		});
 		if (abandoned.status !== "released") {
 			throw new Error("fixture abandonment failed");
@@ -304,6 +319,7 @@ describe("remote lease ledger", () => {
 				remote: "origin",
 				expectedGeneration: "a".repeat(40),
 				transactionId: `txn_${"0".repeat(32)}`,
+				supersedingActor: "operator",
 			},
 		);
 		expect(refusal).toMatchObject({

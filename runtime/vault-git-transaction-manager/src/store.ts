@@ -184,8 +184,14 @@ export interface VaultGitQuarantineRecord {
 	readonly transactionId: string;
 	/** Superseded fencing generation. */
 	readonly ledgerGeneration: string;
-	/** Append-only quarantine transition. */
-	readonly status: "quarantined" | "reconciled";
+	/**
+	 * Append-only quarantine transition.
+	 *
+	 * `takeover_pending` marks a superseding abandonment admitted but not yet
+	 * proven remote; doctor reconciles it against the observed ledger
+	 * generation before any host write authority returns.
+	 */
+	readonly status: "takeover_pending" | "quarantined" | "reconciled";
 	/** Injected transition timestamp. */
 	readonly recordedAt: string;
 }
@@ -223,7 +229,12 @@ export interface VaultGitReceiptStore {
 		receipt: VaultGitReceipt,
 		capabilities?: VaultGitCapabilities,
 	): Promise<VaultGitCapabilities>;
-	/** Append one revision without replacing immutable history. */
+	/**
+	 * Append one revision without replacing immutable history.
+	 *
+	 * @throws {VaultGitReceiptExistsError} When a concurrent writer already
+	 * published this history revision; the loser must reload and reclassify.
+	 */
 	append(receipt: VaultGitReceipt): Promise<void>;
 	/** Load and validate current state and complete history. */
 	load(): Promise<VaultGitReceiptLoadResult>;
@@ -376,7 +387,7 @@ export function createReceiptStore(
 			// Capabilities land before the pointer publish: an orphan capability
 			// file with no pointer is harmless, while a pointer without its
 			// capabilities strands the transaction.
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "owner"), capabilities.ownerCapability, durability);
 			await durableBytes(capabilityPath(receipt.receiptId, "join"), capabilities.joinCapability, durability);
 			await durablePublishExclusive(paths.current, receipt, durability);
@@ -388,7 +399,11 @@ export function createReceiptStore(
 			const loaded = await loadReceiptState(paths);
 			if (loaded.status !== "loaded") throw new Error(`cannot append receipt: ${loaded.status}`);
 			assertAppend(loaded.receipt, receipt);
-			await durableWrite(historyPath(paths.history, receipt), receipt, "history", durability);
+			// History publishes through link(2): two racing appends at the same
+			// revision surface VaultGitReceiptExistsError for the loser instead
+			// of silently overwriting the winner's revision. The current pointer
+			// stays rename-published because only the history winner reaches it.
+			await durablePublishExclusiveValue(historyPath(paths.history, receipt), receipt, "history", durability);
 			await durableWrite(paths.current, receipt, "current", durability);
 		},
 		async load() {
@@ -968,7 +983,9 @@ function validateQuarantineRecord(
 		]) ||
 		!isTransactionId(value.transactionId) ||
 		!isObjectId(value.ledgerGeneration) ||
-		(value.status !== "quarantined" && value.status !== "reconciled") ||
+		(value.status !== "takeover_pending" &&
+			value.status !== "quarantined" &&
+			value.status !== "reconciled") ||
 		!isIso(value.recordedAt)
 	) {
 		throw new Error("quarantine record invalid");

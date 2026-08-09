@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,6 +277,147 @@ describe("git adapter atomic close reconciliation", () => {
 		).toMatchObject({ status: "push_pending" });
 	});
 });
+
+const CLOSE_TXN = `txn_${"1".repeat(32)}`;
+
+describe("git adapter atomic close payload verification", () => {
+	test("classifies a landed close with matching trailer and release payload as closed", async () => {
+		const fixture = await landedCloseFixture(CLOSE_TXN);
+		expect(
+			await fixture.adapter.reconcileAtomicClose?.({
+				remote: "origin",
+				transactionId: CLOSE_TXN,
+				expectedMainHead: fixture.baseline,
+				mainCommit: fixture.candidate,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: fixture.generation,
+				ledgerCommit: fixture.release,
+			}),
+		).toEqual({ status: "closed" });
+	});
+
+	test("classifies a landed release naming another transaction as host_contract_breach", async () => {
+		const fixture = await landedCloseFixture(`txn_${"2".repeat(32)}`);
+		expect(
+			await fixture.adapter.reconcileAtomicClose?.({
+				remote: "origin",
+				transactionId: CLOSE_TXN,
+				expectedMainHead: fixture.baseline,
+				mainCommit: fixture.candidate,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: fixture.generation,
+				ledgerCommit: fixture.release,
+			}),
+		).toEqual({ status: "host_contract_breach" });
+	});
+});
+
+/**
+ * Real bare remote whose main and ledger refs already hold a landed atomic
+ * close; `releaseTransactionId` controls the transaction the ledger release
+ * payload names, while the main commit trailer always names {@link CLOSE_TXN}.
+ */
+async function landedCloseFixture(releaseTransactionId: string) {
+	const root = await mkdtemp(join(tmpdir(), "vault-git-close-"));
+	fixtureRoots.push(root);
+	const bare = join(root, "remote.git");
+	const clone = join(root, "clone");
+	git(root, ["init", "--bare", bare]);
+	git(root, ["clone", bare, clone]);
+	git(clone, ["checkout", "-b", "main"]);
+	git(clone, ["config", "user.name", "Fixture"]);
+	git(clone, ["config", "user.email", "fixture@example.invalid"]);
+	writeFileSync(join(clone, "initial.md"), "initial\n");
+	git(clone, ["add", "--", "initial.md"]);
+	git(clone, ["commit", "-m", "initial"]);
+	const baseline = git(clone, ["rev-parse", "HEAD"]);
+	git(clone, ["push", "origin", "refs/heads/main:refs/heads/main"]);
+	const generation = ledgerCommit(
+		clone,
+		ledgerDocument("acquire", CLOSE_TXN, null, baseline),
+		[],
+	);
+	git(clone, ["push", "origin", `${generation}:${VAULT_GIT_LEDGER_REF}`]);
+	writeFileSync(join(clone, "candidate.md"), "candidate\n");
+	git(clone, ["add", "--", "candidate.md"]);
+	git(clone, [
+		"commit",
+		"-m",
+		`docs(vault): record candidate\n\nVault-Transaction: ${CLOSE_TXN}`,
+	]);
+	const candidate = git(clone, ["rev-parse", "HEAD"]);
+	const release = ledgerCommit(
+		clone,
+		ledgerDocument("release", releaseTransactionId, generation, baseline),
+		[generation],
+	);
+	git(clone, [
+		"push",
+		"origin",
+		`${candidate}:refs/heads/main`,
+		`${release}:${VAULT_GIT_LEDGER_REF}`,
+	]);
+	const adapter = createGitAdapter({
+		repositoryPath: clone,
+		process: createNodeProcessPort(),
+		timeouts: { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 },
+	});
+	return { adapter, baseline, candidate, generation, release };
+}
+
+function ledgerDocument(
+	operation: "acquire" | "release",
+	transactionId: string,
+	previousGeneration: string | null,
+	baseline: string,
+): string {
+	return `${JSON.stringify({
+		schema_version: 1,
+		operation,
+		previous_generation: previousGeneration,
+		transitioned_at: "2026-08-09T00:00:01.000Z",
+		lease: {
+			transaction_id: transactionId,
+			actor: "agent-a",
+			host: "host-a",
+			event: "note_created",
+			owned_paths: ["candidate.md"],
+			local_main_head: baseline,
+			remote_main_head: baseline,
+			acquired_at: "2026-08-09T00:00:00.000Z",
+			lease_duration_ms: 60_000,
+			state: operation === "release" ? "released" : "held",
+		},
+	})}\n`;
+}
+
+function ledgerCommit(
+	cwd: string,
+	content: string,
+	parents: readonly string[],
+): string {
+	const blob = gitStdin(cwd, content, ["hash-object", "-w", "--stdin"]);
+	const tree = gitStdin(cwd, `100644 blob ${blob}\tledger.json\n`, ["mktree"]);
+	return execFileSync(
+		"git",
+		[
+			"commit-tree",
+			tree,
+			...parents.flatMap((parent) => ["-p", parent]),
+			"-m",
+			"vault-ledger",
+		],
+		{ cwd, encoding: "utf8" },
+	).trim();
+}
+
+function gitStdin(
+	cwd: string,
+	input: string,
+	args: readonly string[],
+): string {
+	return execFileSync("git", [...args], { cwd, input, encoding: "utf8" }).trim();
+}
 
 describe("git adapter process environment", () => {
 	test("an ambient GIT_DIR cannot retarget the adapter-owned repository", async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -90,6 +90,99 @@ describe("deterministic push_pending repair", () => {
 		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
 			fixture.ledgerHead,
 		);
+
+		// A partial-ref breach also blocks the retry-push executor itself: the
+		// fresh internal doctor pass refuses before any remote mutation.
+		const retried = await fixture.repair.run({
+			action: "retry-push",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(retried).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(
+			fixture.candidate,
+		);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+	});
+
+	test("a server-rejected atomic close leaves both remote refs and the local commit unchanged", async () => {
+		const fixture = await repairFixture();
+		const mainBefore = git(fixture.bare, "rev-parse", "refs/heads/main");
+		writeFileSync(
+			join(fixture.bare, "hooks", "pre-receive"),
+			"#!/bin/sh\nexit 1\n",
+			{ mode: 0o755 },
+		);
+		const result = await fixture.repair.run({
+			action: "retry-push",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			state: "push_pending",
+			phase: "push_pending",
+			blocker: "push_pending",
+			changedState: "partial",
+			retrySafety: "same_input_unsafe",
+			nextAction: { id: "request_operator_review" },
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(mainBefore);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(
+			fixture.candidate,
+		);
+		expect(await fixture.store.load()).toMatchObject({
+			status: "loaded",
+			receipt: { phase: "push_pending" },
+		});
+	});
+
+	test("a concurrently advanced remote main blocks retry-push without moving any ref", async () => {
+		const fixture = await repairFixture();
+		const baseline = git(fixture.clone, "rev-parse", `${fixture.candidate}^`);
+		const baselineTree = git(fixture.clone, "rev-parse", `${baseline}^{tree}`);
+		const concurrent = git(
+			fixture.clone,
+			"commit-tree",
+			baselineTree,
+			"-p",
+			baseline,
+			"-m",
+			"concurrent writer",
+		);
+		git(fixture.bare, "fetch", fixture.clone, concurrent);
+		git(fixture.bare, "update-ref", "refs/heads/main", concurrent);
+		const result = await fixture.repair.run({
+			action: "retry-push",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(result).toMatchObject({
+			status: "refused",
+			state: "human_required",
+			phase: "push_pending",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(concurrent);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			fixture.ledgerHead,
+		);
+		expect(git(fixture.clone, "rev-parse", "refs/heads/main")).toBe(
+			fixture.candidate,
+		);
 	});
 
 	test("recognizes a lost acknowledgement after later main and ledger descendants land", async () => {
@@ -138,6 +231,41 @@ describe("deterministic push_pending repair", () => {
 			repairAction: "close-verified",
 			retrySafety: "same_input_safe",
 		});
+
+		const first = await fixture.repair.run({
+			action: "close-verified",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(first).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "local",
+			nextAction: { id: "none" },
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(laterMain);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			laterLedger,
+		);
+
+		const second = await fixture.repair.run({
+			action: "close-verified",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			capability: fixture.ownerCapability,
+		});
+		expect(second).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "none",
+		});
+		expect(git(fixture.bare, "rev-parse", "refs/heads/main")).toBe(laterMain);
+		expect(git(fixture.bare, "rev-parse", VAULT_GIT_LEDGER_REF)).toBe(
+			laterLedger,
+		);
 	});
 
 	test("prevents a non-originating host from retrying an unpublished local commit", async () => {
@@ -213,6 +341,62 @@ describe("deterministic push_pending repair", () => {
 		expect(await fixture.doctor.diagnose()).toMatchObject({
 			finding: "host_quarantined",
 			repairAction: "reconcile-quarantine",
+		});
+	});
+
+	test("reconcile-quarantine refuses a tampered owned path, then clears after baseline restoration", async () => {
+		const fixture = await repairFixture("host-a", "stale");
+		await fixture.doctor.diagnose({ transactionId: fixture.transactionId });
+		const token = await fixture.store.readDoctorToken(
+			fixture.transactionId,
+			fixture.ledgerHead,
+		);
+		const takeover = await fixture.repair.run({
+			action: "stale-lease-takeover",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+			expectedLedgerGeneration: fixture.ledgerHead,
+			doctorToken: token,
+			priorWriterStopped: true,
+		});
+		expect(takeover).toMatchObject({ status: "repaired", state: "superseded" });
+
+		writeFileSync(
+			join(fixture.clone, "candidate.md"),
+			"tampered after takeover\n",
+		);
+		const refusedReconcile = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+		});
+		expect(refusedReconcile).toMatchObject({
+			status: "refused",
+			blocker: "deterministic_repair_mismatch",
+			changedState: "none",
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "quarantined",
+		});
+
+		// Restoring the admitted-new owned path to its absent baseline makes the
+		// determinism gate provable again.
+		rmSync(join(fixture.clone, "candidate.md"));
+		const reconciled = await fixture.repair.run({
+			action: "reconcile-quarantine",
+			transactionId: fixture.transactionId,
+			remote: "origin",
+		});
+		expect(reconciled).toMatchObject({
+			status: "repaired",
+			state: "closed",
+			phase: "closed",
+			changedState: "local",
+			nextAction: { id: "none" },
+		});
+		expect(await fixture.store.readQuarantine()).toMatchObject({
+			status: "reconciled",
+			transactionId: fixture.transactionId,
 		});
 	});
 
@@ -300,6 +484,26 @@ async function repairFixture(
 		preparedAt,
 	);
 
+	const processPort = createNodeProcessPort();
+	const timeouts = { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 };
+	const remote = createGitAdapter({
+		repositoryPath: clone,
+		process: processPort,
+		timeouts,
+	});
+	const repository = createGitRepositoryAdapter({
+		repositoryPath: clone,
+		repositoryIdentity: "canonical-vault",
+		process: processPort,
+		timeouts,
+	});
+	if (!repository.captureUnrelatedState) {
+		throw new Error("fixture requires the unrelated-state probe");
+	}
+	// The real capture (owned paths excluded) keeps reconcile-quarantine's
+	// determinism gate honest: the index legitimately holds initial.md.
+	const unrelatedState = await repository.captureUnrelatedState(["candidate.md"]);
+
 	const stateRoot = join(root, "state");
 	const store = createReceiptStore({
 		stateRoot,
@@ -322,7 +526,7 @@ async function repairFixture(
 		ownedPaths: [
 			{ path: "candidate.md", baselineHash: null, admittedNewFile: true },
 		],
-		unrelatedState: { statusHex: "", indexHex: "" },
+		unrelatedState,
 		localMainHead: baseline,
 		remoteMainHead: baseline,
 		expectedLeaseGeneration: null,
@@ -343,19 +547,6 @@ async function repairFixture(
 	if (mode === "stale") {
 		git(clone, "update-ref", "refs/heads/main", baseline, candidate);
 	}
-	const processPort = createNodeProcessPort();
-	const timeouts = { fetchMs: 5_000, pushMs: 5_000, localMs: 5_000 };
-	const remote = createGitAdapter({
-		repositoryPath: clone,
-		process: processPort,
-		timeouts,
-	});
-	const repository = createGitRepositoryAdapter({
-		repositoryPath: clone,
-		repositoryIdentity: "canonical-vault",
-		process: processPort,
-		timeouts,
-	});
 	const runtime = new FixedRuntime(runtimeHost);
 	const options = {
 		store,

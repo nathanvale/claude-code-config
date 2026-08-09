@@ -178,6 +178,40 @@ export interface VaultGitReceipt {
 	readonly diagnosticsReference: string;
 }
 
+/**
+ * Build the next append-only receipt revision from the previous one.
+ *
+ * Shared by the engine and repair flows so revision advancement, schema
+ * pinning, and receipt-id preservation cannot drift between call sites.
+ *
+ * @param previous - Latest durable receipt revision
+ * @param changes - Field changes recorded by the next revision
+ * @returns New receipt with the same receipt id and an incremented revision
+ * @throws Never
+ *
+ * @example
+ * ```typescript
+ * const closed = nextVaultGitReceipt(receipt, {
+ *   phase: "closed",
+ *   transition: "closed",
+ *   nextSafeAction: "none",
+ *   recordedAt: now,
+ * })
+ * ```
+ */
+export function nextVaultGitReceipt(
+	previous: VaultGitReceipt,
+	changes: Partial<VaultGitReceipt>,
+): VaultGitReceipt {
+	return {
+		...previous,
+		...changes,
+		schemaVersion: 2,
+		receiptId: previous.receiptId,
+		revision: previous.revision + 1,
+	};
+}
+
 /** Authority granted to the current caller. */
 export const VAULT_GIT_WRITE_PERMISSIONS = ["denied", "join", "owner"] as const;
 

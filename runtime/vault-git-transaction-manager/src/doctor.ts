@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { VAULT_GIT_LEDGER_REF } from "./model.ts";
+import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
 	VaultGitBlockerId,
 	VaultGitDoctorFinding,
@@ -20,6 +20,7 @@ import {
 } from "./remote-ledger.ts";
 import type {
 	VaultGitDoctorProof,
+	VaultGitQuarantineRecord,
 	VaultGitReceiptStore,
 } from "./store.ts";
 
@@ -97,6 +98,8 @@ const summaries = {
 	closeVerified: "Record the already-published atomic close as closed.",
 	operator: "Ask an operator to inspect the conflicting recovery evidence.",
 	takeover: "Attest the prior writer stopped, then run stale-lease-takeover.",
+	takeoverInterrupted:
+		"Run doctor again for a fresh stale-lease proof; the interrupted takeover never reached the remote.",
 	reconcile: "Reconcile preserved local evidence before clearing quarantine.",
 	none: "No transaction action remains.",
 } as const;
@@ -143,6 +146,9 @@ export async function diagnoseVaultGitTransaction(
 	} catch {
 		return report("human_required", "human_required", "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, diagnosticsReference, { blocker: "receipt_corrupt" });
 	}
+	if (quarantine?.status === "takeover_pending") {
+		return reconcileInterruptedTakeover(options, quarantine);
+	}
 	if (quarantine?.status === "quarantined") {
 		return report("superseded", "human_required", "host_quarantined", "operator_required", "reconcile_quarantine", summaries.reconcile, diagnosticsReference, {
 			blocker: "host_quarantined",
@@ -163,7 +169,9 @@ export async function diagnoseVaultGitTransaction(
 		transactionId: receipt.transactionId ?? undefined,
 		ledgerGeneration: receipt.leaseGeneration ?? undefined,
 	};
-	if (input.transactionId && input.transactionId !== receipt.transactionId) {
+	// Receipts persisted before lease acknowledgement carry no transaction id;
+	// mismatch enforcement applies only once the receipt binds one.
+	if (input.transactionId && receipt.transactionId !== null && input.transactionId !== receipt.transactionId) {
 		return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "transaction_mismatch" });
 	}
 	if (receipt.phase === "closed") {
@@ -184,15 +192,43 @@ export async function diagnoseVaultGitTransaction(
 	}
 
 	if (receipt.phase === "push_pending") {
-		if (!receipt.transactionId || !receipt.leaseGeneration || !receipt.expectedMainCommit || !receipt.ledgerReleaseId || !options.ledger.git.reconcileAtomicClose || !options.repository.inspectLocalCommit) {
+		if (!receipt.transactionId || !receipt.leaseGeneration || !receipt.expectedMainCommit || !options.ledger.git.reconcileAtomicClose || !options.repository.inspectLocalCommit) {
 			return report("human_required", receipt.phase, "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, receipt.diagnosticsReference, { ...common, blocker: "receipt_corrupt" });
 		}
-		if (identity.localMainHead !== receipt.expectedMainCommit) {
-			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
+		// Remote reconciliation runs before any local-head comparison: a lost
+		// acknowledgement must classify closed from remote ancestry evidence
+		// even after later transactions or pulls advance local main (R17a).
+		// A null ledgerReleaseId is the documented crash window before
+		// onPrepared recorded the release object; no push began, so the remote
+		// cannot hold the release and reconciliation is skipped.
+		if (receipt.ledgerReleaseId) {
+			const reconciled = await options.ledger.git.reconcileAtomicClose({
+				remote: receipt.remote,
+				transactionId: receipt.transactionId,
+				expectedMainHead: receipt.remoteMainHead,
+				mainCommit: receipt.expectedMainCommit,
+				ledgerRef: VAULT_GIT_LEDGER_REF,
+				expectedLedgerGeneration: receipt.leaseGeneration,
+				ledgerCommit: receipt.ledgerReleaseId,
+			});
+			if (reconciled.status === "closed") {
+				return report("push_pending", receipt.phase, "publication_already_closed", "same_input_safe", "run_repair", summaries.closeVerified, receipt.diagnosticsReference, { ...common, repairAction: "close-verified" });
+			}
+			if (reconciled.status === "host_contract_breach") {
+				return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
+			}
+			if (reconciled.status === "unknown") {
+				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
+			}
 		}
 		const localCommit = await options.repository.inspectLocalCommit(
 			receipt.expectedMainCommit,
 		);
+		// A transient probe failure proves nothing about the commit structure;
+		// breach stays reserved for structurally wrong evidence.
+		if (localCommit.status === "failed") {
+			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
+		}
 		if (
 			localCommit.status !== "ok" ||
 			localCommit.parents.length !== 1 ||
@@ -201,25 +237,13 @@ export async function diagnoseVaultGitTransaction(
 		) {
 			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
 		}
-		const reconciled = await options.ledger.git.reconcileAtomicClose({
-			remote: receipt.remote,
-			transactionId: receipt.transactionId,
-			expectedMainHead: receipt.remoteMainHead,
-			mainCommit: receipt.expectedMainCommit,
-			ledgerRef: VAULT_GIT_LEDGER_REF,
-			expectedLedgerGeneration: receipt.leaseGeneration,
-			ledgerCommit: receipt.ledgerReleaseId,
-		});
-		if (reconciled.status === "closed") {
-			return report("push_pending", receipt.phase, "publication_already_closed", "same_input_safe", "run_repair", summaries.closeVerified, receipt.diagnosticsReference, { ...common, repairAction: "close-verified" });
-		}
-		if (reconciled.status === "host_contract_breach") {
-			return report("human_required", receipt.phase, "remote_contract_breach", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "host_contract_breach" });
-		}
-		if (reconciled.status === "unknown") {
-			return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
-		}
 		if (receipt.host !== options.runtime.host()) {
+			return report("human_required", receipt.phase, "publication_pending", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "push_pending" });
+		}
+		// Deterministic retry-push requires local main to sit exactly on the
+		// prepared commit; a moved head routes to the operator instead of a
+		// breach because the remote outcome above proved nothing partial.
+		if (identity.localMainHead !== receipt.expectedMainCommit) {
 			return report("human_required", receipt.phase, "publication_pending", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "push_pending" });
 		}
 		return report("push_pending", receipt.phase, "publication_pending", "same_input_safe", "run_repair", summaries.retryPush, receipt.diagnosticsReference, { ...common, repairAction: "retry-push" });
@@ -285,6 +309,11 @@ export async function diagnoseVaultGitTransaction(
 			options.repository.inspectLocalCommit
 		) {
 			const commit = await options.repository.inspectLocalCommit(identity.localMainHead);
+			// A transient probe failure proves nothing structural; breach stays
+			// reserved for wrong parents, trailers, or partial remote outcomes.
+			if (commit.status === "failed") {
+				return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "remote_unavailable" });
+			}
 			if (
 				commit.status === "ok" &&
 				commit.parents.length === 1 &&
@@ -308,6 +337,87 @@ export async function diagnoseVaultGitTransaction(
 						? "commit_interrupted"
 						: "deterministic_failure";
 	return report("repairable", receipt.phase, finding, "same_input_safe", "run_repair", summaries.resume, receipt.diagnosticsReference, { ...common, repairAction: "resume" });
+}
+
+/**
+ * Reconcile a durable takeover-pending marker against remote ledger evidence.
+ *
+ * The marker lands before the single-use token burns and before the remote
+ * CAS, so a crash anywhere inside stale-lease takeover stays classifiable:
+ * a landed superseding abandonment finalizes the quarantine locally, an
+ * untouched generation clears the marker and routes back through a fresh
+ * doctor proof, and any other movement refuses to the operator.
+ */
+async function reconcileInterruptedTakeover(
+	options: VaultGitDoctorOptions,
+	marker: VaultGitQuarantineRecord,
+): Promise<VaultGitDoctorResult> {
+	const loaded = await options.store.load();
+	if (loaded.status !== "loaded") {
+		return report("human_required", "human_required", "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, `doctor:${options.store.repositoryId}`, { blocker: "receipt_corrupt" });
+	}
+	const receipt = loaded.receipt;
+	const common = {
+		transactionId: marker.transactionId,
+		ledgerGeneration: marker.ledgerGeneration,
+	};
+	const observed = await observeRemoteLedger(options.ledger, {
+		remote: receipt.remote,
+	});
+	if (observed.status === "refused") {
+		return report("human_required", receipt.phase, "remote_outcome_unknown", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: observed.blocker });
+	}
+	if (observed.generation === marker.ledgerGeneration) {
+		// The old generation still leads: the remote CAS never landed. Clear
+		// the pending marker; the burned token routes the operator back
+		// through one fresh doctor proof before another takeover.
+		try {
+			await options.store.recordQuarantine({
+				transactionId: marker.transactionId,
+				ledgerGeneration: marker.ledgerGeneration,
+				status: "reconciled",
+				recordedAt: options.runtime.now().toISOString(),
+			});
+		} catch {
+			return report("human_required", receipt.phase, "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, receipt.diagnosticsReference, { ...common, blocker: "receipt_corrupt" });
+		}
+		return report("expired", receipt.phase, "lease_expired", "operator_required", "run_doctor", summaries.takeoverInterrupted, receipt.diagnosticsReference, { ...common, changedState: "local" });
+	}
+	if (
+		observed.operation === "superseding_abandon" &&
+		observed.previousGeneration === marker.ledgerGeneration &&
+		observed.lease?.transactionId === marker.transactionId
+	) {
+		// The exact superseding abandonment landed: finalize the quarantine
+		// and the abandoned receipt locally without touching the remote.
+		try {
+			await options.store.recordQuarantine({
+				transactionId: marker.transactionId,
+				ledgerGeneration: marker.ledgerGeneration,
+				status: "quarantined",
+				recordedAt: options.runtime.now().toISOString(),
+			});
+			if (receipt.phase !== "closed") {
+				await options.store.append(nextVaultGitReceipt(receipt, {
+					phase: "closed",
+					transition: "superseded",
+					nextSafeAction: "none",
+					recordedAt: options.runtime.now().toISOString(),
+				}));
+			}
+		} catch {
+			return report("human_required", receipt.phase, "receipt_corrupt", "operator_required", "inspect_private_receipt", summaries.inspectReceipt, receipt.diagnosticsReference, { ...common, blocker: "receipt_corrupt" });
+		}
+		return report("superseded", "human_required", "host_quarantined", "operator_required", "reconcile_quarantine", summaries.reconcile, receipt.diagnosticsReference, {
+			...common,
+			blocker: "host_quarantined",
+			repairAction: "reconcile-quarantine",
+			changedState: "local",
+		});
+	}
+	// The generation moved somewhere this host cannot attribute to its own
+	// CAS; keep the marker and refuse to the operator deterministically.
+	return report("human_required", receipt.phase, "operator_intervention_recorded", "operator_required", "request_operator_review", summaries.operator, receipt.diagnosticsReference, { ...common, blocker: "lease_generation_stale" });
 }
 
 function hasTransactionTrailer(message: string, transactionId: string): boolean {

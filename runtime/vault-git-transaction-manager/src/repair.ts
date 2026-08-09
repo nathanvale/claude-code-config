@@ -1,4 +1,4 @@
-import { VAULT_GIT_LEDGER_REF } from "./model.ts";
+import { VAULT_GIT_LEDGER_REF, nextVaultGitReceipt } from "./model.ts";
 import type {
 	VaultGitBlockerId,
 	VaultGitEngineNextActionId,
@@ -16,6 +16,7 @@ import {
 } from "./doctor.ts";
 import {
 	acquireRemoteLease,
+	buildVaultGitReleaseLedgerContent,
 	observeRemoteLedger,
 	supersedeRemoteLease,
 } from "./remote-ledger.ts";
@@ -25,8 +26,12 @@ import type { VaultGitDoctorProof } from "./store.ts";
 export interface VaultGitRepairInput {
 	/** Exact package-owned action selected by doctor. */
 	readonly action: VaultGitRepairAction;
-	/** Non-secret transaction correlation bound by the receipt. */
-	readonly transactionId: string;
+	/**
+	 * Non-secret transaction correlation bound by the receipt. May be omitted
+	 * only when resuming a receipt persisted before lease acknowledgement,
+	 * which never received a transaction id to echo.
+	 */
+	readonly transactionId?: string;
 	/** Named remote bound at admission. */
 	readonly remote: string;
 	/** Owner capability bytes for ordinary local transaction recovery. */
@@ -129,6 +134,12 @@ export async function repairVaultGitTransaction(
 		return refused(input.action, "human_required", "human_required", "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
 	}
 	let receipt = loaded.receipt;
+	// Identity validation precedes every idempotent early-return: a caller
+	// naming a different transaction or remote gets a refusal, never a
+	// repaired/closed success borrowed from another transaction.
+	if (input.remote !== receipt.remote || (receipt.transactionId && input.transactionId !== receipt.transactionId)) {
+		return refused(input.action, "human_required", receipt.phase, "transaction_mismatch", "request_operator_review", summaries.operator, diagnostics);
+	}
 	if (
 		receipt.phase === "closed" &&
 		(input.action === "close-verified" ||
@@ -139,9 +150,6 @@ export async function repairVaultGitTransaction(
 	}
 	if (receipt.phase === "closed" && input.action === "stale-lease-takeover") {
 		return refused(input.action, "human_required", "closed", "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
-	}
-	if (input.remote !== receipt.remote || (receipt.transactionId && input.transactionId !== receipt.transactionId)) {
-		return refused(input.action, "human_required", receipt.phase, "transaction_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
 
 	if (input.action === "reconcile-quarantine") {
@@ -164,7 +172,7 @@ export async function repairVaultGitTransaction(
 	}
 
 	if (input.action === "close-verified") {
-		receipt = nextReceipt(receipt, {
+		receipt = nextVaultGitReceipt(receipt, {
 			phase: "closed",
 			transition: "closed",
 			pushOutcome: "closed",
@@ -202,7 +210,7 @@ export async function repairVaultGitTransaction(
 			if (acquired.status === "refused") {
 				return refused(input.action, "human_required", receipt.phase, acquired.blocker, "request_operator_review", summaries.operator, diagnostics);
 			}
-			receipt = nextReceipt(receipt, {
+			receipt = nextVaultGitReceipt(receipt, {
 				transactionId: acquired.transactionId,
 				phase: "leased",
 				transition: "lease_won",
@@ -215,9 +223,12 @@ export async function repairVaultGitTransaction(
 		} else if (
 			observed.lease &&
 			observed.generation &&
-			observed.lease.transactionId === input.transactionId
+			// The fresh doctor pass above already proved exact intent binding;
+			// an omitted transaction id adopts the lease it classified.
+			(input.transactionId === undefined ||
+				observed.lease.transactionId === input.transactionId)
 		) {
-			receipt = nextReceipt(receipt, {
+			receipt = nextVaultGitReceipt(receipt, {
 				transactionId: observed.lease.transactionId,
 				phase: "leased",
 				transition: "lease_won",
@@ -240,7 +251,7 @@ export async function repairVaultGitTransaction(
 		receipt.phase === "committing" &&
 		identity.localMainHead !== receipt.localMainHead
 	) {
-		receipt = nextReceipt(receipt, {
+		receipt = nextVaultGitReceipt(receipt, {
 			phase: "push_pending",
 			transition: "push_outcome_unknown",
 			commitId: identity.localMainHead,
@@ -258,7 +269,7 @@ export async function repairVaultGitTransaction(
 	if (receipt.phase === "writing") {
 		return repaired(input.action, "active", "writing", "none", "complete_transaction", summaries.complete, diagnostics);
 	}
-	const writing = nextReceipt(receipt, {
+	const writing = nextVaultGitReceipt(receipt, {
 		phase: "writing",
 		transition: "write_authority_granted",
 		nextSafeAction: "complete_transaction",
@@ -281,7 +292,7 @@ async function publishPrepared(
 	const preparedAt =
 		history.find((entry) => entry.expectedMainCommit === receipt.expectedMainCommit)
 			?.recordedAt ?? receipt.recordedAt;
-	const releaseContent = releaseLedgerContent(receipt, preparedAt);
+	const releaseContent = buildVaultGitReleaseLedgerContent(receipt, preparedAt);
 	let current = receipt;
 	let publication: VaultGitAtomicCloseResult;
 	try {
@@ -300,7 +311,7 @@ async function publishPrepared(
 					throw new Error("prepared release object changed");
 				}
 				if (!current.ledgerReleaseId) {
-					current = nextReceipt(current, {
+					current = nextVaultGitReceipt(current, {
 						transition: "push_outcome_unknown",
 						ledgerReleaseId: evidence.ledgerCommit,
 						recordedAt: options.runtime.now().toISOString(),
@@ -313,7 +324,7 @@ async function publishPrepared(
 		return refused(action, "human_required", current.phase, "host_contract_breach", "request_operator_review", summaries.operator, diagnostics, "partial");
 	}
 	if (publication.status === "closed") {
-		const closed = nextReceipt(current, {
+		const closed = nextVaultGitReceipt(current, {
 			phase: "closed",
 			transition: "closed",
 			pushOutcome: "closed",
@@ -324,7 +335,7 @@ async function publishPrepared(
 		return repaired(action, "closed", "closed", "remote", "none", summaries.none, diagnostics);
 	}
 	if (publication.status === "host_contract_breach") {
-		const breach = nextReceipt(current, {
+		const breach = nextVaultGitReceipt(current, {
 			phase: "human_required",
 			transition: "human_intervention_required",
 			pushOutcome: "host_contract_breach",
@@ -383,23 +394,49 @@ async function staleLeaseTakeover(
 	} catch {
 		return refused(input.action, "human_required", receipt.phase, "doctor_proof_stale", "request_operator_review", summaries.operator, diagnostics);
 	}
+	const transactionId = receipt.transactionId;
+	const ledgerGeneration = receipt.leaseGeneration;
+	// The durable takeover-pending marker lands BEFORE the single-use token
+	// burns and before any remote mutation: a crash after the remote CAS then
+	// leaves evidence doctor can reconcile deterministically. If this write
+	// fails, refuse with nothing burned.
+	try {
+		await options.store.recordQuarantine({
+			transactionId,
+			ledgerGeneration,
+			status: "takeover_pending",
+			recordedAt: options.runtime.now().toISOString(),
+		});
+	} catch {
+		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics);
+	}
 	const consumed = await options.store.consumeDoctorToken(
 		savedProof,
 		input.doctorToken,
 		options.runtime.now().toISOString(),
 	);
 	if (!consumed) {
+		await clearTakeoverPending(options, transactionId, ledgerGeneration);
 		return refused(input.action, "human_required", receipt.phase, "doctor_token_invalid", "request_operator_review", summaries.operator, diagnostics);
 	}
 	const superseded = await supersedeRemoteLease(options.ledger, {
 		remote: receipt.remote,
-		expectedGeneration: receipt.leaseGeneration,
-		transactionId: receipt.transactionId,
+		expectedGeneration: ledgerGeneration,
+		transactionId,
+		supersedingActor: options.runtime.actor(),
 	});
 	if (superseded.status === "refused") {
+		if (superseded.changedState === "none") {
+			// The remote provably did not change: clear the pending marker; the
+			// burned token routes back through one fresh doctor proof.
+			await clearTakeoverPending(options, transactionId, ledgerGeneration);
+			return refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics);
+		}
+		// Unknown remote outcome: keep the pending marker so doctor reconciles
+		// the interrupted takeover against ledger evidence.
 		return refused(input.action, "human_required", receipt.phase, superseded.blocker, "request_operator_review", summaries.operator, diagnostics, superseded.changedState);
 	}
-	const abandoned = nextReceipt(receipt, {
+	const abandoned = nextVaultGitReceipt(receipt, {
 		phase: "closed",
 		transition: "superseded",
 		nextSafeAction: "none",
@@ -407,16 +444,38 @@ async function staleLeaseTakeover(
 	});
 	try {
 		await options.store.recordQuarantine({
-			transactionId: receipt.transactionId,
-			ledgerGeneration: receipt.leaseGeneration,
+			transactionId,
+			ledgerGeneration,
 			status: "quarantined",
 			recordedAt: options.runtime.now().toISOString(),
 		});
 		await options.store.append(abandoned);
 	} catch {
+		// The takeover-pending marker survives; doctor finalizes the landed
+		// abandonment from remote evidence on its next pass.
 		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
 	}
 	return repaired(input.action, "superseded", "closed", "remote", "reconcile_quarantine", summaries.reconcile, diagnostics);
+}
+
+/**
+ * Best-effort clear of a takeover-pending marker whose remote CAS provably
+ * never landed. A failed clear is safe: doctor re-derives the same conclusion
+ * from the unchanged ledger generation and clears it deterministically.
+ */
+async function clearTakeoverPending(
+	options: VaultGitDoctorOptions,
+	transactionId: string,
+	ledgerGeneration: string,
+): Promise<void> {
+	await options.store
+		.recordQuarantine({
+			transactionId,
+			ledgerGeneration,
+			status: "reconciled",
+			recordedAt: options.runtime.now().toISOString(),
+		})
+		.catch(() => undefined);
 }
 
 async function reconcileQuarantine(
@@ -465,11 +524,15 @@ async function reconcileQuarantine(
 	} catch {
 		return refused(input.action, "human_required", receipt.phase, "deterministic_repair_mismatch", "request_operator_review", summaries.operator, diagnostics);
 	}
-	await options.store.recordQuarantine({
-		...marker,
-		status: "reconciled",
-		recordedAt: options.runtime.now().toISOString(),
-	});
+	try {
+		await options.store.recordQuarantine({
+			...marker,
+			status: "reconciled",
+			recordedAt: options.runtime.now().toISOString(),
+		});
+	} catch {
+		return refused(input.action, "human_required", receipt.phase, "receipt_corrupt", "inspect_private_receipt", summaries.inspectReceipt, diagnostics, "partial");
+	}
 	return repaired(input.action, "closed", receipt.phase, "local", "none", summaries.none, diagnostics);
 }
 
@@ -504,40 +567,6 @@ async function authorizeOwner(
 		// Convert private state failures into one bounded refusal.
 	}
 	return refusedWithoutAction("active", receipt.phase, "capability_invalid", "reload_capability", summaries.inspectReceipt, receipt.diagnosticsReference);
-}
-
-function releaseLedgerContent(receipt: VaultGitReceipt, timestamp: string): string {
-	return `${JSON.stringify({
-		schema_version: 1,
-		operation: "release",
-		previous_generation: receipt.leaseGeneration,
-		transitioned_at: timestamp,
-		lease: {
-			transaction_id: receipt.transactionId,
-			actor: receipt.actor,
-			host: receipt.host,
-			event: receipt.event,
-			owned_paths: receipt.ownedPaths.map((entry) => entry.path),
-			local_main_head: receipt.localMainHead,
-			remote_main_head: receipt.remoteMainHead,
-			acquired_at: receipt.leaseAcquiredAt,
-			lease_duration_ms: receipt.leaseDurationMs,
-			state: "released",
-		},
-	})}\n`;
-}
-
-function nextReceipt(
-	previous: VaultGitReceipt,
-	changes: Partial<VaultGitReceipt>,
-): VaultGitReceipt {
-	return {
-		...previous,
-		...changes,
-		schemaVersion: 2,
-		receiptId: previous.receiptId,
-		revision: previous.revision + 1,
-	};
 }
 
 function repaired(
