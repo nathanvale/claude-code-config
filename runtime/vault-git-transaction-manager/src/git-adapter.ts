@@ -272,14 +272,22 @@ export function createGitAdapter(
 				return { status: "failed", reason: "remote_unavailable" };
 			}
 			const head = requireObjectId(localMain.stdout, "local main");
+			// Dry-run only: two collision-resistant synthetic refs shaped like the
+			// real contract (a main-like ref plus a ledger-like ref) exercise the
+			// two-ref atomic capability and vault-system namespace permissions.
+			// refs/heads/main itself is deliberately absent so a behind or
+			// diverged main is classified by inspectMain, never mislabeled as
+			// remote_unavailable by a non-fast-forward dry-run rejection; a fresh
+			// per-call suffix keeps a pre-existing remote ref from colliding.
+			const probeNamespace = `refs/heads/vault-system/probe-${randomUUID().replaceAll("-", "")}`;
 			const probed = await runGit(
 				[
 					"push",
 					...VAULT_GIT_ATOMIC_PUSH_FLAGS,
 					"--dry-run",
 					remote,
-					`${head}:refs/heads/main`,
-					`${head}:refs/heads/vault-system/atomic-capability-probe`,
+					`${head}:${probeNamespace}/main`,
+					`${head}:${probeNamespace}/transaction-ledger`,
 				],
 				options.timeouts.pushMs,
 			);
@@ -772,11 +780,46 @@ export function createGitRepositoryAdapter(
 			) {
 				return { status: "refused", reason: "credential_helper" } as const;
 			}
+			// Repository-local transport-command configuration executes attacker
+			// text: core.sshCommand and remote-level sshCommand variants replace
+			// the transport binary, core.fsmonitor runs on nearly every status,
+			// and protocol.ext.allow re-enables the ext:: command transport.
+			for (const pattern of [
+				"sshcommand$",
+				"^core\\.fsmonitor$",
+				"^protocol\\.ext\\.allow$",
+			]) {
+				const configured = await runGit([
+					"config",
+					"--local",
+					"--get-regexp",
+					pattern,
+				]);
+				if (
+					configured.timedOut ||
+					(configured.exitCode !== 0 && configured.exitCode !== 1) ||
+					(configured.exitCode === 0 && configured.stdout.trim().length > 0)
+				) {
+					return { status: "refused", reason: "transport_command" } as const;
+				}
+			}
 			const hooksDirectory = await runGit(["rev-parse", "--git-path", "hooks"]);
 			if (hooksDirectory.timedOut || hooksDirectory.exitCode !== 0) {
 				return { status: "refused", reason: "repository_hook" } as const;
 			}
-			const hookNames = await readdir(resolve(options.repositoryPath, hooksDirectory.stdout.trim()));
+			// A missing hooks directory proves no hook can run; any other read
+			// failure proves nothing, so it refuses instead of failing open.
+			let hookNames: string[];
+			try {
+				hookNames = await readdir(
+					resolve(options.repositoryPath, hooksDirectory.stdout.trim()),
+				);
+			} catch (error) {
+				if (!isMissingFilesystemEntry(error)) {
+					return { status: "refused", reason: "repository_hook" } as const;
+				}
+				hookNames = [];
+			}
 			if (hookNames.some((name) => !name.endsWith(".sample"))) {
 				return { status: "refused", reason: "repository_hook" } as const;
 			}
@@ -1437,6 +1480,14 @@ async function assertNoConfiguredPushRefspec(
 		"configured pushInsteadOf rewrites are not accepted for ledger writes",
 		timeoutMs,
 	);
+	// url.<base>.insteadOf silently retargets every transport at connect time,
+	// so the URL this adapter validated is not the URL git would contact.
+	await refuseConfiguredValue(
+		runGit,
+		["config", "--get-regexp", "^url\\..*\\.insteadof$"],
+		"configured insteadOf rewrites are not accepted for ledger writes",
+		timeoutMs,
+	);
 	// URL-form remotes cannot carry remote.<name>.* configuration; the explicit
 	// non-force refspec still constrains the push destination for them.
 	if (!/^[A-Za-z0-9._-]+$/.test(remote)) return;
@@ -1652,13 +1703,28 @@ async function assertSafeRemoteTarget(
 	if (configuredUrl && configuredUrl.exitCode !== 0) {
 		throw new Error("configured remote URL is unavailable");
 	}
-	const target = configuredUrl ? configuredUrl.stdout.trim() : remote;
-	if (
-		target.startsWith("ext::") ||
-		/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(target) ||
-		/[\r\n\0]/.test(target)
-	) {
-		throw new Error("remote URL uses an unsafe transport or embedded credentials");
+	// ls-remote --get-url resolves the EFFECTIVE URL after url.*.insteadOf
+	// rewriting without contacting the remote; validating only the configured
+	// value would let an insteadOf rewrite smuggle in an unsafe transport.
+	const effectiveUrl = await runGit(["ls-remote", "--get-url", remote], timeoutMs);
+	if (effectiveUrl.timedOut) {
+		throw new Error("timed out while resolving the effective remote URL");
+	}
+	if (effectiveUrl.exitCode !== 0) {
+		throw new Error("effective remote URL is unavailable");
+	}
+	const targets = [
+		configuredUrl ? configuredUrl.stdout.trim() : remote,
+		effectiveUrl.stdout.trim(),
+	];
+	for (const target of targets) {
+		if (
+			target.startsWith("ext::") ||
+			/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(target) ||
+			/[\r\n\0]/.test(target)
+		) {
+			throw new Error("remote URL uses an unsafe transport or embedded credentials");
+		}
 	}
 }
 

@@ -447,7 +447,8 @@ export interface VaultGitRepositoryPort {
 				readonly reason:
 					| "configured_hooks_path"
 					| "credential_helper"
-					| "repository_hook";
+					| "repository_hook"
+					| "transport_command";
 		  }
 	>;
 	/** Resolve and canonicalize configured repository identity. */

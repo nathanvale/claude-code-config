@@ -40,6 +40,8 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 	test("full success closes atomically and preserves unrelated bytes", async () => {
 		const fixture = await createFixture();
 		const unrelatedBefore = await fixture.unrelatedSnapshot();
+		const remoteBefore = fixture.remoteRefs();
+		expect(remoteBefore).not.toMatch(/vault-system\/probe-/);
 		const transactionId = await fixture.begin("notes/event.md");
 		await writeFile(join(fixture.clone, "notes/event.md"), "completed event\n");
 		const completed = await fixture.owner([
@@ -65,6 +67,56 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			lease: { transaction_id: transactionId, state: "released" },
 		});
 		expect(await fixture.unrelatedSnapshot()).toEqual(unrelatedBefore);
+
+		// The synthetic capability-probe refs must never materialize: the full
+		// remote ref set is exactly the contract pair, with no probe residue.
+		const remoteAfter = fixture.remoteRefs();
+		expect(remoteAfter).not.toMatch(/vault-system\/probe-/);
+		expect(
+			remoteAfter
+				.split("\n")
+				.map((line) => line.split("\0")[0])
+				.sort(),
+		).toEqual(["refs/heads/main", VAULT_GIT_LEDGER_REF].sort());
+
+		// Shim-recorded push mechanics: the capability probe dry-runs TWO
+		// synthetic contract-shaped refs before the one real close, and the
+		// real close is the exact atomic two-refspec push (KTD4).
+		const pushes = await recordedPushes(fixture);
+		const dryRuns = pushes.filter((args) => args.includes("--dry-run"));
+		const closes = pushes.filter(
+			(args) => args.includes("--atomic") && !args.includes("--dry-run"),
+		);
+		expect(dryRuns.length).toBeGreaterThanOrEqual(1);
+		for (const probe of dryRuns) {
+			for (const flag of ["--atomic", "--porcelain", "--no-verify"]) {
+				expect(probe).toContain(flag);
+			}
+			expect(probe).toContain("origin");
+			const refspecs = probe.filter((argument) => argument.includes(":refs/"));
+			expect(refspecs).toHaveLength(2);
+			expect(refspecs[0]).toMatch(
+				/^[0-9a-f]{40,64}:refs\/heads\/vault-system\/probe-[0-9a-f]{32}\/main$/,
+			);
+			expect(refspecs[1]).toMatch(
+				/^[0-9a-f]{40,64}:refs\/heads\/vault-system\/probe-[0-9a-f]{32}\/transaction-ledger$/,
+			);
+		}
+		expect(closes).toHaveLength(1);
+		const close = closes[0] as string[];
+		for (const flag of ["--atomic", "--porcelain", "--no-verify"]) {
+			expect(close).toContain(flag);
+		}
+		expect(close).toContain("origin");
+		const mainCommit = fixture.gitBare("rev-parse", "refs/heads/main");
+		const ledgerCommit = fixture.gitBare("rev-parse", VAULT_GIT_LEDGER_REF);
+		expect(close).toContain(`${mainCommit}:refs/heads/main`);
+		expect(close).toContain(`${ledgerCommit}:${VAULT_GIT_LEDGER_REF}`);
+		// Sequencing: every dry-run probe precedes the sole real atomic close.
+		const closeIndex = pushes.indexOf(close);
+		for (const probe of dryRuns) {
+			expect(pushes.indexOf(probe)).toBeLessThan(closeIndex);
+		}
 	});
 
 	test("two clones admit exactly one writer and fence the stale generation", async () => {
@@ -159,6 +211,18 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 		expect(parseCliProcessJson(pending)).toMatchObject({
 			data: { transaction_state: "push_pending" },
 		});
+		// Independent bare-remote evidence BEFORE doctor classifies anything:
+		// the push landed on the remote even though the acknowledgement was
+		// lost, so doctor's later "already closed" verdict rests on real state.
+		expect(fixture.gitBare("show", "refs/heads/main:notes/event.md")).toBe(
+			"lost ack event",
+		);
+		expect(
+			JSON.parse(fixture.gitBare("show", `${VAULT_GIT_LEDGER_REF}:ledger.json`)),
+		).toMatchObject({
+			operation: "release",
+			lease: { transaction_id: transactionId, state: "released" },
+		});
 		await rm(fixture.shimMarker, { force: true });
 		const doctor = await fixture.run([
 			"doctor",
@@ -194,6 +258,23 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			const transactionId = await fixture.begin("notes/event.md");
 			await writeFile(join(fixture.clone, "notes/event.md"), "resumed event\n");
 			await fixture.interruptComplete(transactionId);
+			// A direct owner complete must refuse mid-interrupt without touching
+			// state: resumption is owned by the doctor/repair path alone.
+			const direct = await fixture.owner([
+				"complete",
+				"--transaction-id",
+				transactionId,
+				"--summary",
+				"docs(vault): bypass doctor",
+				"--json",
+			]);
+			expect(direct.exitCode).toBe(1);
+			expect(parseCliProcessJson(direct)).toMatchObject({
+				status: "error",
+				error: { code: "completion_interrupted" },
+				data: { changed_state: "none" },
+				continuation: { next_action_id: "run_doctor" },
+			});
 			delete fixture.env.VAULT_GIT_CHECK_MARKER;
 			const doctor = await fixture.run([
 				"doctor",
@@ -276,7 +357,16 @@ describe("live acceptance across real CLI and Git process boundaries", () => {
 			const refused = await fixture.run(
 				scenario.args ?? beginArgs(scenario.path ?? "notes/event.md"),
 			);
-			expect(refused.exitCode, scenario.name).not.toBe(0);
+			// Assert the MECHANISM, not just failure: the exact refusal code
+			// proves the intended guard fired rather than an incidental error.
+			expect(refused.exitCode, scenario.name).toBe(
+				scenario.expectedCode === "invalid_usage" ? 2 : 1,
+			);
+			expect(parseCliProcessJson(refused), scenario.name).toMatchObject({
+				status: "error",
+				error: { code: scenario.expectedCode },
+				data: { changed_state: "none" },
+			});
 			expect(fixture.git("rev-parse", "refs/heads/main"), scenario.name).toBe(
 				localBefore,
 			);
@@ -349,6 +439,7 @@ interface Fixture {
 	readonly stateRoot: string;
 	readonly env: NodeJS.ProcessEnv;
 	readonly shimMarker: string;
+	readonly shimLog: string;
 	run(args: readonly string[]): Promise<CliProcessResult>;
 	begin(path: string): Promise<string>;
 	owner(args: readonly string[]): Promise<CliProcessResult>;
@@ -395,6 +486,7 @@ async function createCloneFixture(
 	const stateRoot = join(root, `${name}-state`);
 	const profileRoot = join(root, options.profile ?? `${name}-profile`);
 	const shimMarker = join(root, `${name}-shim-marker`);
+	const shimLog = join(root, `${name}-shim-log`);
 	const checkMarker = join(root, `${name}-check-marker`);
 	git(root, "clone", bare, clone);
 	git(clone, "config", "user.name", "Vault Acceptance Test");
@@ -465,6 +557,7 @@ async function createCloneFixture(
 		VAULT_GIT_REMOTE: "origin",
 		VAULT_GIT_REAL_GIT: realGit,
 		VAULT_GIT_SHIM_MARKER: shimMarker,
+		VAULT_GIT_SHIM_LOG: shimLog,
 		...(options.shimMode ? { VAULT_GIT_SHIM_MODE: options.shimMode } : {}),
 		...(options.blockingCheck ? { VAULT_GIT_CHECK_MARKER: checkMarker } : {}),
 	};
@@ -545,6 +638,7 @@ async function createCloneFixture(
 		stateRoot,
 		env,
 		shimMarker,
+		shimLog,
 		run,
 		begin,
 		owner,
@@ -582,22 +676,26 @@ const hostileScenarios: readonly {
 	readonly name: string;
 	readonly path?: string;
 	readonly args?: readonly string[];
+	readonly expectedCode: string;
 	readonly arrange: (fixture: Fixture) => Promise<void>;
 }[] = [
 	{
 		name: "core.hooksPath",
+		expectedCode: "host_contract_breach",
 		arrange: async (fixture) => {
 			fixture.git("config", "--local", "core.hooksPath", "hostile-hooks");
 		},
 	},
 	{
 		name: "credential helper",
+		expectedCode: "host_contract_breach",
 		arrange: async (fixture) => {
 			fixture.git("config", "--local", "credential.helper", "!false");
 		},
 	},
 	{
 		name: "repository hook",
+		expectedCode: "host_contract_breach",
 		arrange: async (fixture) => {
 			const hook = join(fixture.clone, ".git/hooks/pre-commit");
 			await writeFile(hook, "#!/bin/sh\nexit 1\n");
@@ -606,12 +704,14 @@ const hostileScenarios: readonly {
 	},
 	{
 		name: "ext transport",
+		expectedCode: "host_contract_breach",
 		arrange: async (fixture) => {
 			fixture.git("remote", "set-url", "origin", "ext::false");
 		},
 	},
 	{
 		name: "embedded credentials",
+		expectedCode: "host_contract_breach",
 		arrange: async (fixture) => {
 			fixture.git(
 				"remote",
@@ -622,15 +722,42 @@ const hostileScenarios: readonly {
 		},
 	},
 	{
+		name: "insteadOf rewrite",
+		expectedCode: "host_contract_breach",
+		arrange: async (fixture) => {
+			fixture.git(
+				"config",
+				"--local",
+				"url.https://mirror.invalid/.insteadOf",
+				"https://origin.invalid/",
+			);
+		},
+	},
+	{
+		name: "core.sshCommand",
+		expectedCode: "host_contract_breach",
+		arrange: async (fixture) => {
+			fixture.git("config", "--local", "core.sshCommand", "true");
+		},
+	},
+	{
 		name: "symlink escape",
 		path: "escaped/event.md",
+		expectedCode: "owned_path_not_admitted",
 		arrange: async (fixture) => {
 			await symlink(dirname(fixture.root), join(fixture.clone, "escaped"));
 		},
 	},
 	{
 		name: "option-shaped path",
-		args: ["begin", "--event", "note_created", "--force", "--json"],
+		args: ["begin", "--event", "note_created", "--path", "--force", "--json"],
+		expectedCode: "invalid_usage",
+		arrange: async () => {},
+	},
+	{
+		name: "option-shaped inline path",
+		args: ["begin", "--event", "note_created", "--path=--force", "--json"],
+		expectedCode: "invalid_usage",
 		arrange: async () => {},
 	},
 ];
@@ -672,13 +799,19 @@ function hasRef(bare: string, ref: string): boolean {
 }
 
 function remoteRefs(bare: string): string {
-	return git(
-		bare,
-		"for-each-ref",
-		"--format=%(refname)%00%(objectname)",
-		"refs/heads/main",
-		VAULT_GIT_LEDGER_REF,
-	);
+	// ALL remote refs, not just the contract pair: a synthetic capability-probe
+	// ref materializing anywhere on the remote must fail the before/after
+	// snapshot comparisons, proving the probe stays dry-run only.
+	return git(bare, "for-each-ref", "--format=%(refname)%00%(objectname)");
+}
+
+/** Every git push argv the shim observed, in invocation order. */
+async function recordedPushes(fixture: Fixture): Promise<string[][]> {
+	const raw = await readFile(fixture.shimLog, "utf8").catch(() => "");
+	return raw
+		.split("\n")
+		.filter((line) => line.length > 0)
+		.map((line) => JSON.parse(line) as string[]);
 }
 
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {
@@ -692,11 +825,13 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 
 function gitShimSource(): string {
 	return `#!/usr/bin/env bun
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 const args = Bun.argv.slice(2);
 const realGit = process.env.VAULT_GIT_REAL_GIT ?? "/usr/bin/git";
 const mode = process.env.VAULT_GIT_SHIM_MODE;
 const marker = process.env.VAULT_GIT_SHIM_MARKER ?? "";
+const log = process.env.VAULT_GIT_SHIM_LOG ?? "";
+if (log && args[0] === "push") appendFileSync(log, JSON.stringify(args) + "\\n");
 const atomic = args[0] === "push" && args.includes("--atomic");
 const dryRun = args.includes("--dry-run");
 if (mode === "atomic_unsupported" && atomic && dryRun) {

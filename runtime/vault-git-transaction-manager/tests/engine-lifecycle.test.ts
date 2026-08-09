@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createVaultGitTransactionEngine } from "../src/engine.ts";
 import { admitActivationForTest } from "./activation-fixture.ts";
 import type {
+	VaultGitAtomicPushCapability,
 	VaultGitClockPort,
 	VaultGitLedgerAppendRequest,
 	VaultGitRemotePort,
@@ -329,6 +330,48 @@ describe("transaction engine lifecycle", () => {
 		expect(await fixture.engine.inspect()).toMatchObject({ state: "closed", phase: "closed" });
 	});
 
+	for (const reason of ["timed_out", "remote_unavailable"] as const) {
+		test(`begin refuses with remote_unavailable when the atomic probe fails with ${reason}`, async () => {
+			const fixture = await engineFixture();
+			fixture.remote.probeResult = { status: "failed", reason };
+			expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+				status: "refused",
+				state: "absent",
+				blocker: "remote_unavailable",
+				changedState: "none",
+			});
+			expect(fixture.remote.appendCalls).toBe(0);
+			expect(await fixture.store.load()).toEqual({ status: "absent" });
+		});
+	}
+
+	test("begin fails closed when the composed remote omits probeAtomicPush", async () => {
+		const fixture = await engineFixture();
+		Object.assign(fixture.remote, { probeAtomicPush: undefined });
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			state: "absent",
+			blocker: "host_contract_breach",
+			changedState: "none",
+			nextAction: { id: "request_operator_review" },
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+	});
+
+	test("begin fails closed when the composed repository omits inspectSafety", async () => {
+		const fixture = await engineFixture();
+		Object.assign(fixture.repository, { inspectSafety: undefined });
+		expect(await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 })).toMatchObject({
+			status: "refused",
+			blocker: "host_contract_breach",
+			changedState: "none",
+			nextAction: { id: "request_operator_review" },
+		});
+		expect(fixture.remote.appendCalls).toBe(0);
+		expect(await fixture.store.load()).toEqual({ status: "absent" });
+	});
+
 	test("refuses write commands with activation_blocked until an operator admits activation", async () => {
 		const fixture = await engineFixture(undefined, { admitActivation: false });
 		const refusedBegin = await fixture.engine.begin({ event: "note_created", requestedPaths: ["notes/new.md"], remote: "origin", leaseDurationMs: 60_000 });
@@ -385,6 +428,9 @@ class FakeRepository implements VaultGitRepositoryPort {
 	lastRequested: readonly string[] = [];
 	readonly dirtyPaths = new Set<string>();
 	refusal: "dirty_worktree" | "staged" | "ignored" | "symlink" | "preexisting_untracked" | null = null;
+	// Write-capable engine phases fail closed without this proof (fix: engine
+	// probes are mandatory on composed ports), so the fake provides it.
+	inspectSafety: VaultGitRepositoryPort["inspectSafety"] = async () => ({ status: "safe" as const });
 	async resolveCanonicalIdentity() { return { identity: this.identity, localMainHead: HEAD }; }
 	async inspectOwnedPaths(paths: readonly string[]) {
 		this.admissionCalls += 1;
@@ -407,6 +453,8 @@ class FakeRemote implements VaultGitRemotePort {
 	lastObservedRemote: string | null = null;
 	onAppend?: () => Promise<void>;
 	lease: RemoteLease | null = null;
+	probeResult: VaultGitAtomicPushCapability = { status: "supported" };
+	probeAtomicPush: VaultGitRemotePort["probeAtomicPush"] = async () => this.probeResult;
 	async inspectMain() { return { status: "ok" as const, alignment: "aligned" as const, localHead: HEAD, remoteHead: HEAD }; }
 	async readLedger(remote: string) {
 		this.lastObservedRemote = remote;
