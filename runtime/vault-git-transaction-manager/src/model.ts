@@ -41,6 +41,115 @@ export const VAULT_GIT_TRANSACTION_PHASES = [
 export type VaultGitTransactionPhase =
 	(typeof VAULT_GIT_TRANSACTION_PHASES)[number];
 
+/** Read-side classification of one local transaction receipt. */
+export const VAULT_GIT_TRANSACTION_STATES = [
+	"absent",
+	"active",
+	"expired",
+	"superseded",
+	"unknown",
+	"push_pending",
+	"repairable",
+	"human_required",
+	"closed",
+] as const;
+
+/** Read-side classification of one local transaction receipt. */
+export type VaultGitTransactionState =
+	(typeof VAULT_GIT_TRANSACTION_STATES)[number];
+
+/** Durable receipt transition vocabulary. */
+export const VAULT_GIT_RECEIPT_TRANSITIONS = [
+	"acquisition_intent",
+	"lease_won",
+	"write_authority_granted",
+	"paths_joined",
+	"completion_requested",
+	"push_outcome_unknown",
+	"deterministic_repair_available",
+	"human_intervention_required",
+	"superseded",
+	"closed",
+] as const;
+
+/** One append-only receipt transition. */
+export type VaultGitReceiptTransition =
+	(typeof VAULT_GIT_RECEIPT_TRANSITIONS)[number];
+
+/** Bounded, non-sensitive continuations persisted in private receipts. */
+export const VAULT_GIT_RECEIPT_NEXT_ACTIONS = [
+	"retry_remote",
+	"request_operator_takeover",
+	"preserve_local_edits",
+	"inspect_status",
+	"resume_writing",
+	"complete_transaction",
+	"continue_outer_transaction",
+	"run_owned_path_checks",
+	"retry_push",
+	"run_repair",
+	"request_operator_review",
+	"none",
+] as const;
+
+/** One bounded continuation persisted in a receipt. */
+export type VaultGitReceiptNextAction =
+	(typeof VAULT_GIT_RECEIPT_NEXT_ACTIONS)[number];
+
+/** Admission evidence for one frozen owned leaf path. */
+export interface VaultGitOwnedPathReceipt {
+	/** Repository-relative leaf path. */
+	readonly path: string;
+	/** Hash before admission, or null for an admitted absent file. */
+	readonly baselineHash: string | null;
+	/** Whether the path was absent and may begin untracked. */
+	readonly admittedNewFile: boolean;
+}
+
+/** Private, capability-free state persisted for one transaction transition. */
+export interface VaultGitReceipt {
+	/** Exact receipt schema version. */
+	readonly schemaVersion: 1;
+	/** Store-local opaque acquisition correlation id. */
+	readonly receiptId: string;
+	/** Remote transaction id after lease acquisition. */
+	readonly transactionId: string | null;
+	/** Monotonic history revision. */
+	readonly revision: number;
+	/** Durable transaction phase. */
+	readonly phase: Exclude<VaultGitTransactionPhase, "unavailable" | "inspecting">;
+	/** Transition recorded by this revision. */
+	readonly transition: VaultGitReceiptTransition;
+	/** Injected ISO timestamp. */
+	readonly recordedAt: string;
+	/** Immutable meaningful event. */
+	readonly event: VaultGitEventType;
+	/** Immutable non-secret actor identity. */
+	readonly actor: string;
+	/** Immutable non-secret host identity. */
+	readonly host: string;
+	/** Frozen admitted owned leaf paths and their pre-state. */
+	readonly ownedPaths: readonly VaultGitOwnedPathReceipt[];
+	/** Local main baseline. */
+	readonly localMainHead: string;
+	/** Remote main baseline. */
+	readonly remoteMainHead: string;
+	/** Ledger generation observed before acquisition. */
+	readonly expectedLeaseGeneration: string | null;
+	/** Won fencing generation after acquisition. */
+	readonly leaseGeneration: string | null;
+	/** Lease acquisition time after acquisition. */
+	readonly leaseAcquiredAt: string | null;
+	/** Diagnostic lease duration; expiry does not grant takeover. */
+	readonly leaseDurationMs: number;
+	/** Local candidate commit when one exists. */
+	readonly commitId: string | null;
+	/** Exactly one engine-owned safe continuation id. */
+	readonly nextSafeAction: VaultGitReceiptNextAction;
+	/** Opaque diagnostics reference, never a private path. */
+	readonly diagnosticsReference: string;
+}
+
 /** Authority granted to the current caller. */
 export const VAULT_GIT_WRITE_PERMISSIONS = ["denied", "join", "owner"] as const;
 
@@ -88,6 +197,13 @@ export const VAULT_GIT_BLOCKER_IDS = [
 	"receipt_conflict",
 	"host_contract_breach",
 	"human_required",
+	"offline_mode",
+	"receipt_corrupt",
+	"capability_invalid",
+	"capability_role_mismatch",
+	"vault_identity_changed",
+	"owned_path_not_admitted",
+	"transaction_mismatch",
 ] as const;
 
 /** Stable transaction blocker id. */

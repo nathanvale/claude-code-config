@@ -436,6 +436,12 @@ describe("vault-git KTD16 boundaries", () => {
 	const layeredLocalImports = new Map<string, ReadonlySet<string>>([
 		["git-adapter.ts", new Set(["model.ts", "ports.ts"])],
 		["remote-ledger.ts", new Set(["model.ts", "ports.ts"])],
+		["clock.ts", new Set(["ports.ts"])],
+		["store.ts", new Set(["model.ts"])],
+		[
+			"engine.ts",
+			new Set(["model.ts", "ports.ts", "remote-ledger.ts", "store.ts"]),
+		],
 	]);
 
 	test("keeps model and ports independent from facade, process, filesystem, and Git adapters", () => {

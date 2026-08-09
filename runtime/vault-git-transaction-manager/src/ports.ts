@@ -1,5 +1,6 @@
 import type {
 	VaultGitLifecycleResultPayload,
+	VaultGitOwnedPathReceipt,
 	VaultGitStateSnapshot,
 } from "./model.ts";
 
@@ -185,4 +186,55 @@ export interface VaultGitRemotePort {
 export interface VaultGitClockPort {
 	/** Read current wall-clock time. */
 	now(): Date;
+}
+
+/** Canonical configured-vault identity resolved at one write-capable phase. */
+export interface VaultGitRepositoryIdentity {
+	/** Stable non-secret identity; callers compare it with configured identity. */
+	readonly identity: string;
+	/** Exact local main object id observed during resolution. */
+	readonly localMainHead: string;
+}
+
+/** Owned-path admission refusal category. */
+export type VaultGitOwnedPathRefusalReason =
+	| "dirty_worktree"
+	| "staged"
+	| "ignored"
+	| "symlink"
+	| "preexisting_untracked"
+	| "directory_expansion_failed"
+	| "invalid_path";
+
+/** Frozen owned-path inspection result. */
+export type VaultGitOwnedPathInspection =
+	| {
+			readonly status: "admitted";
+			readonly paths: readonly VaultGitOwnedPathReceipt[];
+	  }
+	| {
+			readonly status: "refused";
+			readonly reason: VaultGitOwnedPathRefusalReason;
+	  };
+
+/** Repository filesystem facts consumed by transaction policy. */
+export interface VaultGitRepositoryPort {
+	/** Resolve and canonicalize configured repository identity. */
+	resolveCanonicalIdentity(): Promise<VaultGitRepositoryIdentity>;
+	/** Expand directories and inspect the frozen leaf set without mutation. */
+	inspectOwnedPaths(
+		requestedPaths: readonly string[],
+	): Promise<VaultGitOwnedPathInspection>;
+}
+
+/** Deterministic process, identity, randomness, and interruption boundary. */
+export interface VaultGitRuntimePort extends VaultGitClockPort {
+	/** Non-secret actor label. */
+	actor(): string;
+	/** Non-secret host label. */
+	host(): string;
+	/** New opaque private-receipt correlation id. */
+	newReceiptId(): string;
+	/** Injected crash/interruption point; production is a no-op. */
+	interrupt(point: string): void;
 }
