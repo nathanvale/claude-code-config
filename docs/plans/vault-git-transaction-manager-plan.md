@@ -10,10 +10,6 @@ artifact_readiness: implementation-ready
 product_contract_source: vault-decision-log
 execution: code
 deepened: 2026-08-08
-related:
-  - ../GOAL.md
-  - ../README.md
-  - ../decisions/vault-git-transaction-manager-decision-log.md
 ---
 
 # Vault Git Transaction Manager - Plan
@@ -50,13 +46,14 @@ Execution profile:
 - Activate live vault writes only after remote access and reconciliation pass.
 - Install no nightly schedule until Nathan selects its Melbourne-time window.
 
-Stop implementation when:
+Refuse live mutation when:
 
 - the configured vault cannot be resolved;
 - remote freshness cannot be proved;
 - the lease owner is active or cannot be proved inactive;
 - local `main` is behind or diverged;
-- a `push_pending` transaction exists;
+- a `push_pending` transaction blocks new admission and non-owner mutation;
+  deterministic owner recovery follows R17a-R17b;
 - declared paths changed outside the transaction;
 - a repair would require semantic judgment, conflict resolution, data loss, or
   secret-bearing output.
@@ -107,18 +104,22 @@ turning every note into a branch or every save into a commit.
 
 #### Transaction admission and single-writer safety
 
-- R1. A caller must invoke `begin` with one event type and an explicit frozen
-  set of owned leaf-file paths before the first canonical vault filesystem
-  mutation. Each owned path must be clean in both index and worktree, or absent
-  for an admitted new file. A move owns both source and destination; a directory
-  request expands to a frozen leaf set before lease grant.
+- R1. A caller must invoke `begin` with one event type and an explicit initial
+  set of owned leaf-file paths. Every owned path must be admitted and baselined
+  before its first canonical vault filesystem mutation. At admission, each path
+  must be clean in both index and worktree, or absent for an admitted new file.
+  A move owns both source and destination; a directory request expands to leaf
+  paths before write permission is granted for them.
 - R2. `begin` must resolve the configured vault, fetch remote state, and require
   local `main` to equal fetched upstream `main` exactly. Behind, ahead,
   diverged, unreachable, or `push_pending` states refuse admission; an ahead
   state without a matching recoverable receipt requires A3.
 - R3. `begin` must acquire one remote lease before allowing writes and bind the
-  lease generation, local HEAD, remote HEAD, event, actor, and owned paths to an
-  opaque transaction ID.
+  lease generation, local HEAD, remote HEAD, event, actor, and initial owned
+  paths to an opaque transaction ID. During the writing phase, `join` may add a
+  fresh path only after the manager validates and baselines it and durably
+  appends it to the receipt. Only then may the nested workflow mutate that path.
+  An admitted path cannot be removed or rebaselined.
 - R4. Only one conforming writer may hold authority. A second writer must make
   no canonical vault filesystem change.
 - R5. Lease expiry alone must never authorize takeover. V1 has no automatic
@@ -136,21 +137,24 @@ turning every note into a branch or every save into a commit.
 - R7. The owning workflow must invoke `complete` explicitly. Idle time, file
   watches, save events, and the Janitor must not infer completion.
 - R8. One meaningful event creates one commit, including its related files and
-  mechanical spelling, link, or formatting corrections.
+  mechanical spelling, link, or formatting corrections. Each such path must be
+  admitted through `begin` or `join` before that path is mutated.
 - R9. Event types include project creation; material goal, scope, or owner
   change; accepted or superseded decision; admitted note creation; durable
   document completion, move, rename, archive, or deletion; and meaningful
   handoff, completion, or reopening.
 - R10. Questions, drafts, candidate wording, conversational progress, and
   private offline captures must not create canonical commits.
-- R11. `complete` must verify declared paths against their recorded baseline,
+- R11. `complete` must commit only paths admitted in the current durable
+  receipt and verify each against its recorded baseline,
   prove unrelated staged, unstaged, and untracked state is unchanged, run the
   vault-owned check, and freeze only declared path content in a private
   temporary index. It must build and verify the exact candidate tree before
-  advancing local `main` with an expected-old-OID ref update, recheck canonical
-  owned-path hashes, and update only owned entries in the real index. Every Git
+  advancing local `main` with an expected-old-OID ref update. The frozen owned
+  blobs must equal the content hashes recorded immediately before the vault
+  check. Only owned entries in the real index may then change. Every Git
   pathspec must use top-level literal encoding; no working-tree reread may occur
-  while creating the commit candidate.
+  after candidate freeze.
 - R12. The manager must accept a meaningful agent-written summary, validate a
   Conventional Commit subject, and append stable `Vault-Event`,
   `Vault-Transaction`, and `Vault-Actor` trailers.
@@ -181,10 +185,11 @@ turning every note into a branch or every save into a commit.
   are ancestors of the current append-only tips, even after later transactions
   land.
 - R17b. After every unsuccessful or unknown atomic push, the manager must fetch
-  exact `main` and ledger refs. Both expected objects means closed; neither may
-  be retryable only while the same lease generation remains owned; exactly one
-  expected object or any unexpected object is `host_contract_breach`, requires
-  A3, and has no automated retry.
+  exact `main` and ledger refs. Any unexpected object takes precedence and is
+  `host_contract_breach`. With no unexpected objects, both expected objects
+  means closed; neither is retryable only while the same lease generation
+  remains owned; exactly one expected object is `host_contract_breach`. A
+  breach requires A3 and has no automated retry.
 - R18. Remote movement during a transaction must stop completion and preserve
   evidence. Recovery must deliberately replay in a new transaction and must
   never auto-rebase or auto-merge.
@@ -217,13 +222,13 @@ turning every note into a branch or every save into a commit.
   contracts, exit behavior, and runtime semantics must be mechanically aligned.
 - R26. Claude Code, Codex, human shell, and scheduled callers must receive the
   same policy. Caller labels grant no extra authority.
-- R26a. Nested vault workflows must join the outer transaction ID and add owned
-  paths through the manager. `begin` issues separate transaction-scoped owner
-  and join capabilities; only the owner capability may complete, repair, or
-  release. Capabilities must never appear in argv, logs, diagnostics, receipts,
-  or remote records. V1 capabilities prevent accidental role misuse inside one
-  trusted Unix account; they are not a security boundary against a hostile
-  process running as that same account.
+- R26a. Nested vault workflows must join the outer transaction ID and add fresh
+  owned paths through the manager before mutating them. `begin` issues separate
+  transaction-scoped owner and join capabilities; only the owner capability may
+  complete, repair, or release. Capabilities must never appear in argv, logs,
+  diagnostics, receipts, or remote records. V1 capabilities prevent accidental
+  role misuse inside one trusted Unix account; they are not a security boundary
+  against a hostile process running as that same account.
 
 #### Janitor and bounded delegation
 
@@ -347,9 +352,15 @@ turning every note into a branch or every save into a commit.
   returns human-required and publishes nothing. Covers R2.
 - AE10. A declared existing path is staged or modified before `begin`.
   Admission fails without altering its bytes or index entry. Covers R1 and R11.
-- AE11. An owned file changes after validation but before local ref update. The
-  frozen candidate contains only validated bytes; the later edit remains
-  uncommitted and completion stops for reconciliation. Covers R11.
+- AE11a. An owned file changes after its checked-content hash is recorded but
+  before private-index freeze. Completion refuses as repairable: no local
+  commit, unchanged `HEAD` and remote refs, a repairable receipt, and unchanged
+  real index and worktree bytes. Covers R11.
+- AE11b. An owned file changes after private-index `write-tree` but before
+  `update-ref`. Completion commits and pushes only the frozen checked bytes;
+  the later edit remains as an unstaged worktree change after the owned index
+  entry updates. The receipt becomes closed after verified atomic close or
+  `push_pending` after an unknown or failed push. Covers R11 and R17.
 - AE12. An atomic push reports failure after exactly one remote ref moves. The
   manager classifies `host_contract_breach`, performs no retry, and routes to
   A3. Covers R17b.
@@ -502,11 +513,11 @@ Human-only:
 - KTD7. Preserve the real Git index and unrelated working-tree state. Freeze
   owned content in a private temporary index seeded from the exact baseline
   HEAD; use top-level literal pathspecs; create the candidate with `write-tree`
-  and `commit-tree`; verify its exact tree delta; re-hash canonical owned paths;
-  then advance local `main` with expected-old-OID `update-ref`. Update only the
-  owned entries in the real index afterward. Never use `git commit --only` as a
-  snapshot boundary, stage the whole tree, or reread the working tree while
-  creating the candidate. Governs R1 and R11.
+  and `commit-tree`; verify its exact tree delta and bind the frozen blobs to
+  the pre-check content hashes; then advance local `main` with expected-old-OID
+  `update-ref`. Update only the owned entries in the real index afterward.
+  Never use `git commit --only` as a snapshot boundary, stage the whole tree,
+  or reread the working tree after candidate freeze. Governs R1 and R11.
 - KTD8. Let the caller supply a concise semantic summary. The manager owns
   Conventional Commit validation, event-to-scope policy, stable trailers,
   redaction, and commit-tree proof. This keeps messages agentic without adding
@@ -612,8 +623,9 @@ stateDiagram-v2
     Checking --> HumanRequired: semantic or hash ambiguity
     Committing --> PushPending: push failed or outcome unknown
     Committing --> Closed: atomic main + ledger release verified
-    PushPending --> Closed: doctor proves and repair completes push
-    PushPending --> HumanRequired: remote moved or evidence conflicts
+    PushPending --> Closed: both expected objects, no unexpected objects
+    PushPending --> Repairable: neither expected, same lease still owned
+    PushPending --> HumanRequired: exactly one expected / any unexpected / lease lost
     Repairable --> Writing: deterministic resume
     Repairable --> Closed: deterministic restore + release
     Blocked --> [*]
@@ -860,7 +872,8 @@ Approach:
 - Separate the current transaction pointer from append-only receipt history.
 - Persist an acquisition-intent receipt before remote CAS, then append the won
   lease generation before returning write authority.
-- Expose `join` to add validated owned paths to the active outer transaction.
+- Expose `join` to admit and durably baseline owned paths before the nested
+  workflow mutates them in the active outer transaction.
 - Exercise the short-lived internal capability launcher across separate CLI
   processes. Keep the same-UID cooperative trust boundary explicit.
 - Resolve and re-prove one canonical configured-vault identity at every
@@ -913,10 +926,11 @@ Approach:
 - Invoke the vault-owned check from the resolved vault root.
 - Freeze admitted owned blobs and deletions in a private temporary index seeded
   from the exact baseline HEAD. Use `:(top,literal)` pathspecs, then
-  `write-tree` and `commit-tree`; inspect the exact tree delta; re-hash canonical
-  owned paths; advance local `main` with exact-old-OID `update-ref`; then update
-  only owned entries in the real index. Never use `git commit --only` as the
-  snapshot boundary.
+  `write-tree` and `commit-tree`; inspect the exact tree delta; bind frozen
+  owned blobs to the pre-check content hashes; advance local `main` with
+  exact-old-OID `update-ref`; then update only owned entries in the real index.
+  Never use `git commit --only` as the snapshot boundary or reread the working
+  tree after candidate freeze.
 - Atomically push explicit full refspecs for `main` and the ledger release with
   `--atomic --porcelain --no-verify` through the sole main-mutation adapter.
 - Preserve the local commit and authority on failed or unknown push.
@@ -931,8 +945,10 @@ Test scenarios:
   tree delta. A directory request freezes its expanded leaf set before lease.
 - Environment pathspec toggles are scrubbed and names containing `:`, `*`,
   brackets, newlines, or leading dashes remain literal.
-- An editor changes an owned path after candidate freeze; the commit keeps the
-  frozen validated blob and the later working-tree edit remains uncommitted.
+- An editor change before candidate freeze refuses repairably without a commit,
+  ref movement, or worktree/index rewrite.
+- An editor change after private-index `write-tree` commits the frozen validated
+  blob; the later worktree edit remains unstaged after close or `push_pending`.
 - Owned path changes outside the receipt block completion.
 - A check failure creates no commit and returns a repair action.
 - Remote movement before close creates no merge or rebase.
