@@ -168,6 +168,7 @@ type FixtureOptions = {
 	proofOrigin?: string;
 	expectedUrl?: string;
 	observedUrl?: string;
+	declaredNavigationRequired?: boolean;
 	passwordFirst?: boolean;
 	initialFragment?: BrowserUseAuthTransactionFragment;
 	initialScreen?: BrowserUseAccessibilitySnapshot;
@@ -338,6 +339,7 @@ async function fixture(options: FixtureOptions) {
 			},
 			navigateToDeclaredTarget: async (input) => {
 				navigations.push(input);
+				screen = form(options.passwordFirst);
 				return { ok: true };
 			},
 		};
@@ -351,6 +353,12 @@ async function fixture(options: FixtureOptions) {
 			...(options.observedUrl !== undefined
 				? { observed_url: options.observedUrl }
 				: {}),
+			...(options.declaredNavigationRequired === undefined
+				? {}
+				: {
+						declared_navigation_required:
+							options.declaredNavigationRequired,
+					}),
 			target_id: "target-fixture",
 		};
 	const result = options.entryMode === "freeform"
@@ -426,6 +434,26 @@ describe("runbook auth route", () => {
 		]);
 	});
 
+	test("navigates a protected target before trusting a stale authenticated-looking page", async () => {
+		const { result, navigations, delivered, proofTransitions } = await fixture({
+			proof: true,
+			expectedUrl: "https://fixture.test/protected",
+			observedUrl: "https://fixture.test/protected",
+			declaredNavigationRequired: true,
+			preExistingSession: true,
+		});
+
+		expect(result).toMatchObject({ ok: true, run: { state: "ready" } });
+		expect(navigations).toEqual([
+			{
+				target_id: "target-fixture",
+				url: "https://fixture.test/protected",
+			},
+		]);
+		expect(delivered).toEqual(["username", "password"]);
+		expect(proofTransitions).toEqual(["post-submit"]);
+	});
+
 	test("refuses a cross-origin neutral bootstrap before navigation or authentication", async () => {
 		const { result, navigations, delivered } = await fixture({
 			proof: true,
@@ -455,6 +483,7 @@ describe("runbook auth route", () => {
 	test("reuses a substantive pre-existing session without credential delivery", async () => {
 		const { result, delivered, proofTransitions } = await fixture({
 			proof: true,
+			expectedUrl: "https://fixture.test/home",
 			observedUrl: "https://fixture.test/home",
 			preExistingSession: true,
 		});
